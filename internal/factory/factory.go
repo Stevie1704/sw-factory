@@ -97,6 +97,7 @@ func New(configPath string) *Service {
 }
 
 // NewWithDependencies creates a Service with the specified configuration path and dependencies.
+// NewWithDependencies creates a Service with the specified configuration path and dependencies.
 // Missing dependencies are replaced with their default implementations.
 func NewWithDependencies(configPath string, dependencies Dependencies) *Service {
 	if dependencies.Config == nil {
@@ -266,7 +267,7 @@ func validateOperationalPath(repositoryPath, operationalPath string) error {
 
 // resolvePath returns an absolute, cleaned path with symlinks resolved where possible.
 // It preserves unresolved trailing components and falls back to the absolute path when
-// resolution cannot reach an existing ancestor.
+// resolvePath returns an absolute, cleaned path with existing symlinks resolved. It preserves unresolved path components and falls back to the absolute path when resolution fails.
 func resolvePath(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {

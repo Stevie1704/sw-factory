@@ -14,7 +14,9 @@ import (
 
 // Run dispatches a CLI command and returns its exit code.
 // It supports the init, register, and status commands and reports usage or
-// setup errors to errorsOutput.
+// Run dispatches the requested CLI command and returns its exit status.
+// It returns 0 for successful execution, 1 for operational errors, and 2 for
+// missing or unknown commands. Errors are written to errorsOutput.
 func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int {
 	if len(args) == 0 {
 		writeError(errorsOutput, errors.New("a command is required: init, register, or status"))
@@ -109,7 +111,8 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 }
 
 // runStatus displays the host configuration, repository registration, and active-run status.
-// It returns an exit code indicating whether argument parsing, status retrieval, and output succeeded.
+// runStatus reports the current configuration, repository registration, and active run.
+// It returns 0 on success, 1 when status retrieval fails, or 2 when arguments are invalid.
 func runStatus(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -141,7 +144,7 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 	return 0
 }
 
-// writeError writes a formatted error message when err is non-nil.
+// writeError writes a non-nil error to output using the format "error: <message>".
 func writeError(output io.Writer, err error) {
 	if err != nil {
 		fmt.Fprintf(output, "error: %v\n", err)

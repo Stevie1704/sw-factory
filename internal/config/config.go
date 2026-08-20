@@ -187,7 +187,9 @@ func NewHostConfig() HostConfig {
 
 // DefaultHostConfigPath returns the configured host configuration path or the default
 // user configuration path. It returns an error if the configured path or user
-// configuration directory cannot be resolved.
+// DefaultHostConfigPath returns the host configuration path from FACTORY_CONFIG when set,
+// or the default factory/config.yaml path in the user's configuration directory. It returns
+// an error if the configured path or user configuration directory cannot be resolved.
 func DefaultHostConfigPath() (string, error) {
 	if configured := strings.TrimSpace(os.Getenv("FACTORY_CONFIG")); configured != "" {
 		return filepath.Abs(configured)
@@ -211,7 +213,8 @@ func DefaultRepositoryConfigPath(repositoryPath string) string {
 
 // LoadHost reads and validates a host configuration from a YAML file. It returns the
 // decoded configuration or an error if the file cannot be loaded or the configuration
-// is invalid.
+// LoadHost loads and validates a host configuration from a YAML file.
+// It returns the configuration or an error if the file cannot be loaded or the configuration is invalid.
 func LoadHost(path string) (HostConfig, error) {
 	var config HostConfig
 	if err := loadYAML(path, &config); err != nil {
@@ -275,6 +278,7 @@ func SaveHost(path string, config HostConfig) error {
 }
 
 // CreateHost creates and saves a default host configuration at path.
+// CreateHost creates and saves a default host configuration at path.
 // It returns an error if the path already exists or cannot be checked or written.
 func CreateHost(path string) (HostConfig, error) {
 	if _, err := os.Stat(path); err == nil {
@@ -306,7 +310,8 @@ func ValidateHost(config HostConfig) error {
 	return nil
 }
 
-// invalid field.
+// ValidateRepository validates a repository configuration and reports the first invalid field.
+// It returns nil when the configuration satisfies all supported repository requirements.
 func ValidateRepository(config RepositoryConfig) error {
 	if err := validateSchema("repository", config.SchemaVersion); err != nil {
 		return err
@@ -442,7 +447,7 @@ func ValidateRepository(config RepositoryConfig) error {
 	return nil
 }
 
-// validateRegistration validates repository paths, GitHub metadata, authorized users, polling durations, and the optional cmux socket path.
+// validateRegistration validates a repository registration and its associated paths, metadata, users, polling settings, and optional cmux socket.
 func validateRegistration(prefix string, repository RepositoryRegistration) error {
 	if strings.TrimSpace(repository.Path) == "" {
 		return validation(prefix+".path", "is required")
@@ -484,7 +489,8 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 }
 
 // validateSchema validates a configuration schema version against the supported range. It
-// reports missing, non-positive, and newer-than-supported versions.
+// validateSchema validates a configuration schema version and reports an error for missing,
+// non-positive, or unsupported versions.
 func validateSchema(kind string, version int) error {
 	if version == 0 {
 		return validation("schema_version", "is required")
@@ -522,7 +528,7 @@ func validateUniqueStrings(field string, values []string) error {
 }
 
 // validateOptionalUniqueStrings validates that provided values are nonempty and unique.
-// An empty slice is valid.
+// validateOptionalUniqueStrings validates that each value is nonempty and unique; an empty slice is valid.
 func validateOptionalUniqueStrings(field string, values []string) error {
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
@@ -559,7 +565,7 @@ func validation(field, message string) error {
 
 // loadYAML reads a single YAML document from path into destination and rejects
 // unknown fields. It returns a ConfigFileError for file access, decoding, or
-// multiple-document errors.
+// loadYAML reads a single YAML document from path into destination and rejects unknown fields or additional documents. Errors are wrapped in ConfigFileError.
 func loadYAML(path string, destination any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {

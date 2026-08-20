@@ -82,7 +82,9 @@ type Store struct {
 
 // Open opens the operational store at path, creating or migrating its database as needed.
 // Existing databases are backed up before migration, and databases with unsupported or
-// missing schema metadata are rejected.
+// Open opens or creates an operational store at path, applying supported schema migrations as needed.
+// It requires a private parent directory and rejects empty databases, unsupported schema versions,
+// and databases with missing or unreadable schema metadata. Existing databases are backed up before migration.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("operational store path is required")
@@ -267,7 +269,9 @@ func databaseState(path string) (bool, bool, error) {
 	return true, info.Size() == 0, nil
 }
 
-// openConfiguredDatabase opens, protects, and configures the SQLite database at path.
+// openConfiguredDatabase opens the SQLite database at path, restricts its file permissions,
+// limits it to a single connection, and applies the store configuration. It closes the
+// database and returns an error if setup fails.
 func openConfiguredDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -319,6 +323,7 @@ func initializeMetadata(ctx context.Context, database *sql.DB) error {
 }
 
 // readSchemaVersion reads the schema version from the database metadata.
+// readSchemaVersion reads the schema version recorded in the database metadata.
 // It returns an UnversionedDatabaseError if the metadata cannot be read.
 func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int, error) {
 	var version int
@@ -328,7 +333,7 @@ func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int,
 	return version, nil
 }
 
-// migrate applies all supported schema migrations from the specified version through the current schema version within a transaction. A migration error leaves the database unchanged.
+// migrate applies supported schema migrations from the specified version through the current schema version in a single transaction. It records each completed migration and leaves the database unchanged if a migration fails.
 func migrate(ctx context.Context, database *sql.DB, from int) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -369,7 +374,8 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 }
 
 // backupDatabase creates a private, uniquely named backup copy of the store at path.
-// It removes an incomplete backup if copying fails and returns the backup path on success.
+// backupDatabase creates a private 0600 backup of the database and returns its path.
+// It removes an incomplete backup when copying fails.
 func backupDatabase(path string) (string, error) {
 	for attempt := 0; attempt < 100; attempt++ {
 		suffix := time.Now().UTC().Format("20060102T150405.000000000Z07:00")
