@@ -2,7 +2,7 @@
 
 - **Issue**: #2 (parent spec #1, user story 91)
 - **Date**: 2026-08-20
-- **Status**: in progress — automated evidence complete, keyboard checks pending
+- **Status**: in progress — both harnesses proven headlessly, cmux keyboard checks pending
 - **Reproduction**: `spike/issue-2/` (throwaway; not merged into product packages)
 
 ## Question
@@ -13,15 +13,17 @@ inside a cmux surface?
 
 ## Answer so far
 
-Yes for Codex, end to end. A Codex session survived destruction of its
-container, was resumed from the same pinned image, and recalled a token given
-before the container was destroyed. The nested pseudo-terminal carries window
-size, `SIGWINCH`, ANSI colour, and `SIGINT` correctly.
+Yes, for both harnesses. Each survived destruction of its container, was
+resumed from the same pinned image, and recalled a token given before the
+container was destroyed — Codex `SPIKE-TOKEN-7731`, Claude Code
+`SPIKE-TOKEN-4402`. The nested pseudo-terminal carries window size, `SIGWINCH`,
+ANSI colour, and `SIGINT` correctly.
 
-Three findings change the architecture and are described below: Codex's own
+Four findings change the architecture and are described below: Codex's own
 sandbox cannot run inside a hardened worker, Claude Code cannot be credential
-seeded from a macOS host the way Codex can, and the cmux control socket refuses
-callers that cmux did not start.
+seeded from a macOS host the way Codex can, Claude Code keeps state *outside*
+the directory an obvious mount would persist, and the cmux control socket
+refuses callers that cmux did not start.
 
 ## Environment
 
@@ -45,24 +47,26 @@ is the single most important structural decision: because no harness is PID 1,
 Ctrl+C reaches the harness and can never take the container down with it, and a
 harness can exit and relaunch without disturbing the container.
 
-Harness home directories are named volumes (`swf-spike-claude-home`,
-`swf-spike-codex-home`). The worktree and the invocation result directory are
-bind mounts. Destroying the container therefore destroys no session state.
+The **whole home directory** is a named volume (`swf-spike-home`), with
+per-harness volumes nested inside it (`swf-spike-claude-home`,
+`swf-spike-codex-home`). Mounting only `~/.claude` and `~/.codex` is not enough —
+see failure mode 3. The worktree and the invocation result directory are bind
+mounts. Destroying the container therefore destroys no session state.
 
 ## Verdict per acceptance criterion
 
 | # | Criterion | Verdict | Evidence |
 | --- | --- | --- | --- |
-| 1 | Interactive terminal app in a container pseudo-terminal via cmux, explicit terminal type | Codex proven headlessly; cmux surfacing pending | `TERM=xterm-256color`, `tput colors` = 256, `[ -t 1 ]` true under `docker exec -t` |
-| 2 | Colours and layout render correctly | Partly proven | ANSI SGR sequences arrive intact through both layers; final judgement is visual |
-| 3 | Human keystrokes reach the harness | Pending keyboard | pty probe proves byte delivery into the container |
+| 1 | Interactive terminal app in a container pseudo-terminal, explicit terminal type | Proven for both through Docker; cmux layer pending | `TERM=xterm-256color`, `tput colors` = 256, `[ -t 1 ]` true under `docker exec -t`; operator ran both TUIs interactively |
+| 2 | Colours and layout render correctly | Partly proven | ANSI SGR sequences arrive intact through the Docker pseudo-terminal; final judgement is visual, in cmux |
+| 3 | Human keystrokes reach the harness | Proven through Docker; cmux layer pending | Operator typed into both TUIs in the container and both answered |
 | 4 | Resize without corruption | Proven | `tty-probe`: 24×80 → 40×132 observed inside the container, `SIGWINCH` raised |
 | 5 | Approval prompt raised and answered | Pending keyboard | — |
 | 6 | Ctrl+C interrupts the harness, container survives | Proven | `SIGINT` reaches the foreground group, the process dies, container stays `Running` |
-| 7 | Stage completes by writing schema-versioned JSON, no screen parsing | Proven for Codex | Codex ran `factory-report`; `.run/results/inv-codex-1.json` has `schema_version: 1` |
-| 8 | Container destroyed and recreated from the same pinned image, session resumes with context | **Proven for Codex** | New container id, same image digest, `codex exec resume` returned `SPIKE-TOKEN-7731` |
+| 7 | Stage completes by writing schema-versioned JSON, no screen parsing | Proven for Codex; Claude pending the interactive approval check | Codex ran `factory-report`; `.run/results/inv-codex-1.json` carries `schema_version: 1` |
+| 8 | Container destroyed and recreated from the same pinned image, session resumes with context | **Proven for both** | New container ids, same image digest; Codex returned `SPIKE-TOKEN-7731`, Claude Code returned `SPIKE-TOKEN-4402` |
 | 9 | cmux restarted, surfaces recoverable | Pending keyboard | — |
-| 10 | Native session identifier observed and documented | Proven for Codex; interface known for Claude | See below |
+| 10 | Native session identifier observed and documented | **Proven for both** | See below |
 | 11 | Findings written up, spike code not merged into product packages | This document; code confined to `spike/issue-2/` | — |
 
 ## Native session identifiers
@@ -82,6 +86,14 @@ non-interactively.
 Claude Code lets the caller **assign** the identifier with `--session-id <uuid>`
 instead of discovering it afterwards. The coordinator should generate the run's
 session id and pass it in; that removes an entire class of discovery race.
+Verified: a coordinator-generated uuid was accepted and became the session.
+
+On disk the session is at
+`~/.claude/projects/<cwd-with-slashes-replaced-by-dashes>/<uuid>.jsonl`. For a
+worktree mounted at `/work` that is `~/.claude/projects/-work/<uuid>.jsonl`, so
+the path depends on the container mount point, not the host path — an argument
+for keeping the worktree mount point stable across runs.
+
 Resume is `-r/--resume <session_id>`, and `--fork-session` produces a new id
 when resuming — which is the natural fit for the spec's "fresh reviewer" role.
 
@@ -115,16 +127,45 @@ narrowly scoped copy" works: one file, streamed into the container, and
 `codex login status` reports `Logged in using ChatGPT`.
 
 Claude Code on macOS keeps its credential in the **login Keychain**; there is no
-`~/.claude/.credentials.json` to copy. Whether the Linux build inside the
-container stores its credential as a plain file is **not yet observed** — verify
-it against the harness home volume before ticket #73 relies on it.
+`~/.claude/.credentials.json` to copy. The Linux build inside the container does
+use a plain file: after an in-container login, `~/.claude/.credentials.json`
+exists as a 0600 file owned by the container user, and it survives container
+recreation in the harness home volume. Seeding therefore works in one direction
+only — a container can keep its own credential, but a macOS host cannot hand one
+over as a file.
 
 **Workaround**: either log in once inside the container, which persists in the
 harness home volume, or use `claude setup-token` to mint a long-lived token and
 inject it as `CLAUDE_CODE_OAUTH_TOKEN`. Ticket #73 must not assume the two
 harnesses seed the same way.
 
-### 3. `docker cp` breaks non-root workers
+### 3. Claude Code keeps state outside `~/.claude`
+
+The obvious mount — a volume at `~/.claude` — silently loses state. Claude Code
+writes `~/.claude.json` **beside** that directory, not inside it, so it lands in
+the container's writable layer and dies with the container. It holds project
+trust, MCP configuration, and onboarding state.
+
+The first recreate produced:
+
+```
+Claude configuration file not found at: /home/factory/.claude.json
+A backup file exists at: /home/factory/.claude/backups/.claude.json.backup.<ts>
+```
+
+Resume still worked, because Claude Code keeps its own backups *inside*
+`~/.claude`, which was persisted. That self-healing is what makes this dangerous:
+the symptom is a warning, not a failure, so it would have shipped unnoticed and
+left every recreated worker re-prompting for directory trust.
+
+**Workaround**: persist the entire home directory as a volume and nest the
+per-harness volumes inside it. Verified: after this change `~/.claude.json`
+survives recreation and resume runs with no warnings. `CLAUDE_CONFIG_DIR` was
+not found in the installed build, so relocating the file is not an option here.
+
+Codex does not have this problem — everything it needs is under `~/.codex`.
+
+### 4. `docker cp` breaks non-root workers
 
 `docker cp` preserves the host uid. A credential copied from the macOS host
 lands as uid 501, mode 0600, and the container user (uid 10001) cannot read it —
@@ -140,21 +181,21 @@ docker exec -i <container> bash -lc 'umask 077; cat > ~/.codex/auth.json' < src
 Removing a bad copy works because the parent directory is owned by the container
 user, so `rm` succeeds where `write` does not.
 
-### 4. Bind mounts carry host ownership
+### 5. Bind mounts carry host ownership
 
 `/work` and `/results` are bind mounts and appear inside the container with the
 host uid, so uid 10001 cannot write to them. The spike chmods them `0777`. The
 product should either run the worker with a uid matching the host user or use
 named volumes for the result directory.
 
-### 5. Codex global flags must precede the `resume` subcommand
+### 6. Codex global flags must precede the `resume` subcommand
 
 `codex exec resume <uuid> -s danger-full-access` fails with `unexpected argument
 '-s' found`. `codex exec -s danger-full-access resume <uuid>` works. The Codex
 adapter must build argv in that order. Likewise `codex exec --full-auto` does
 not exist; `--full-auto` is an interactive-only flag.
 
-### 6. The cmux control socket rejects outside callers
+### 7. The cmux control socket rejects outside callers
 
 ```
 Error: ERROR: Access denied - only processes started inside cmux can connect
@@ -169,14 +210,14 @@ cosmetic. A coordinator launched from an ordinary shell or a `launchd` job
 cannot drive cmux at all. `TerminalRuntime` needs an explicit story for
 obtaining socket access.
 
-### 7. cmux workspace layout is the right surfacing primitive
+### 8. cmux workspace layout is the right surfacing primitive
 
 `cmux new-workspace --layout <json>` creates a workspace whose panes each run
 their own command, which maps directly onto the spec's run surfaces (status,
 test agent, implementation agent, checks, spec review, standards review). See
 `spike/issue-2/cmux-surfaces`.
 
-### 8. Terminal echo defeats naive output matching
+### 9. Terminal echo defeats naive output matching
 
 Any automated driver that types a command into a pty and waits for a marker will
 match the terminal's **echo** of the command before the command has produced
@@ -189,6 +230,9 @@ rule empirically.
 
 - **#14 / #73 (harness adapters, auth)**: model credential seeding per harness.
   Codex is a file copy; Claude Code is not on macOS.
+- **#72 (mounts)**: persist the whole role home, not just the harness config
+  directory. Add a contract test asserting `~/.claude.json` survives recreation,
+  because its loss degrades silently rather than failing.
 - **#69 (startup capability check)**: assert `codex login status` and the Claude
   equivalent inside the worker, not on the host.
 - **#72 (worker isolation)**: keep `--cap-drop ALL` and default seccomp; disable

@@ -10,6 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTAINER=swf-spike
 IMAGE_TAG=sw-factory-spike:issue-2
 PIN_FILE="$HERE/image.pin"
+HOME_VOLUME=swf-spike-home
 CLAUDE_HOME_VOLUME=swf-spike-claude-home
 CODEX_HOME_VOLUME=swf-spike-codex-home
 RUN_DIR="$HERE/.run"
@@ -34,6 +35,7 @@ cmd_up() {
   local image
   image="$(pinned_image)"
 
+  docker volume create "$HOME_VOLUME" >/dev/null
   docker volume create "$CLAUDE_HOME_VOLUME" >/dev/null
   docker volume create "$CODEX_HOME_VOLUME" >/dev/null
 
@@ -48,6 +50,7 @@ cmd_up() {
     --user 10001:10001 \
     --security-opt no-new-privileges \
     --cap-drop ALL \
+    --mount "type=volume,src=$HOME_VOLUME,dst=/home/factory" \
     --mount "type=volume,src=$CLAUDE_HOME_VOLUME,dst=/home/factory/.claude" \
     --mount "type=volume,src=$CODEX_HOME_VOLUME,dst=/home/factory/.codex" \
     --mount "type=bind,src=$WORK_DIR,dst=/work" \
@@ -70,7 +73,7 @@ cmd_recreate() {
 
 cmd_reset() {
   cmd_down
-  docker volume rm -f "$CLAUDE_HOME_VOLUME" "$CODEX_HOME_VOLUME" >/dev/null 2>&1 || true
+  docker volume rm -f "$HOME_VOLUME" "$CLAUDE_HOME_VOLUME" "$CODEX_HOME_VOLUME" >/dev/null 2>&1 || true
   rm -rf "$RUN_DIR"
   echo "removed home volumes and run directory"
 }
