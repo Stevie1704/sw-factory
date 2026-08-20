@@ -45,7 +45,9 @@ repositories:
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 
-`authentication.codex_auth_path` is optional and names one host-side Codex
+`cmux.socket_path` is optional and is passed to the cmux adapter as its
+connection endpoint; the coordinator still keeps cmux identifiers behind the
+`TerminalRuntime` seam. `authentication.codex_auth_path` is optional and names one host-side Codex
 `auth.json` file. The factory stores only this path. During an implementation
 invocation the worker adapter streams the file into a separate,
 factory-managed credential volume and links that copy into the role home; it

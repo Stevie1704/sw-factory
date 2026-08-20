@@ -349,8 +349,13 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 	}
 	observed := make(map[string]struct{}, len(context.ObservedChanges))
 	for _, path := range context.ObservedChanges {
-		if clean, err := cleanRelativePath(path); err == nil {
-			observed[clean] = struct{}{}
+		clean, err := cleanRelativePath(path)
+		if err != nil {
+			return fmt.Errorf("observed worktree path %q: %w", path, err)
+		}
+		observed[clean] = struct{}{}
+		if len(context.PermittedPaths) > 0 && !withinAnyPrefix(clean, context.PermittedPaths) {
+			return fmt.Errorf("observed worktree path %q is outside permitted paths", path)
 		}
 	}
 	for index, path := range value.ProductionFilesChanged {
@@ -394,6 +399,9 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 // with an invocation and reused when its report is accepted.
 func ValidatePermittedPaths(values []string) error {
 	for index, value := range values {
+		if strings.TrimSpace(value) == "." {
+			continue
+		}
 		if _, err := cleanRelativePath(value); err != nil {
 			return fmt.Errorf("permitted_paths[%d]: %w", index, err)
 		}
@@ -464,6 +472,9 @@ func cleanRelativePath(path string) (string, error) {
 // repository-relative permitted prefix.
 func withinAnyPrefix(path string, prefixes []string) bool {
 	for _, prefix := range prefixes {
+		if strings.TrimSpace(prefix) == "." {
+			return true
+		}
 		clean, err := cleanRelativePath(prefix)
 		if err != nil {
 			continue

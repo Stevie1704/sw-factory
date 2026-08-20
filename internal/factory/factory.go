@@ -27,8 +27,11 @@ type Factory interface {
 	BootstrapLabels(context.Context) (BootstrapLabelsResult, error)
 	RunCoordinator
 	RunGate(context.Context, RunGateRequest) (gate.Result, error)
+	// StartAgent launches the visible Codex implementation role for an active run.
 	StartAgent(context.Context, AgentRequest) (AgentLaunchResult, error)
+	// AcceptAgentReport validates and accepts one structured visible-agent handoff.
 	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
+	// RunAgent launches a visible agent and accepts its already-written report.
 	RunAgent(context.Context, AgentRequest) (AgentResult, error)
 	Status(context.Context) (StatusResult, error)
 }
@@ -91,12 +94,12 @@ type Dependencies struct {
 	Worktree        gitadapter.WorktreeManager
 	Worker          worker.WorkerRuntime
 	// Terminal owns visible control and run workspaces.
-	Terminal        terminal.TerminalRuntime
+	Terminal terminal.TerminalRuntime
 	// Harness owns interactive role lifecycle and native session recovery.
-	Harness         harness.Runtime
-	Now             Clock
-	NewRunID        RunIDGenerator
-	Coordinator     string
+	Harness     harness.Runtime
+	Now         Clock
+	NewRunID    RunIDGenerator
+	Coordinator string
 }
 
 type Service struct {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -140,10 +141,13 @@ type CmuxRuntime struct {
 	// Runner is injectable for contract tests; nil uses cmux from PATH.
 	Runner CommandRunner
 	// Binary overrides the cmux executable name.
-	Binary  string
-	mu      sync.Mutex
-	control Workspace
-	runs    map[string]RunWorkspace
+	Binary string
+	// SocketPath is passed to cmux as CMUX_SOCKET_PATH when configured by the
+	// host registration.
+	SocketPath string
+	mu         sync.Mutex
+	control    Workspace
+	runs       map[string]RunWorkspace
 }
 
 // NewCmuxRuntime creates a cmux-backed terminal runtime.
@@ -158,12 +162,11 @@ func (r *CmuxRuntime) EnsureControlWorkspace(ctx context.Context, request Worksp
 		return Workspace{}, err
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.control.ID != "" {
 		control := r.control
-		r.mu.Unlock()
 		return control, nil
 	}
-	r.mu.Unlock()
 	output, err := r.run(ctx, []string{
 		"new-workspace",
 		"--name", request.Name,
@@ -179,9 +182,7 @@ func (r *CmuxRuntime) EnsureControlWorkspace(ctx context.Context, request Worksp
 	if err != nil {
 		return Workspace{}, err
 	}
-	r.mu.Lock()
 	r.control = control
-	r.mu.Unlock()
 	return control, nil
 }
 
@@ -198,11 +199,10 @@ func (r *CmuxRuntime) EnsureRunWorkspace(ctx context.Context, request RunWorkspa
 		return RunWorkspace{}, err
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if run, ok := r.runs[request.RunID]; ok {
-		r.mu.Unlock()
 		return run, nil
 	}
-	r.mu.Unlock()
 	output, err := r.run(ctx, []string{
 		"new-workspace",
 		"--name", request.Name,
@@ -218,12 +218,10 @@ func (r *CmuxRuntime) EnsureRunWorkspace(ctx context.Context, request RunWorkspa
 	if err != nil {
 		return RunWorkspace{}, err
 	}
-	r.mu.Lock()
 	if r.runs == nil {
 		r.runs = make(map[string]RunWorkspace)
 	}
 	r.runs[request.RunID] = decoded
-	r.mu.Unlock()
 	return decoded, nil
 }
 
@@ -336,6 +334,9 @@ func (r *CmuxRuntime) run(ctx context.Context, args []string, input []byte) ([]b
 		binary = "cmux"
 	}
 	command := exec.CommandContext(ctx, binary, args...)
+	if strings.TrimSpace(r.SocketPath) != "" {
+		command.Env = append(os.Environ(), "CMUX_SOCKET_PATH="+r.SocketPath)
+	}
 	command.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout

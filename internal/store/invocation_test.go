@@ -84,3 +84,30 @@ func TestStoreRejectsAnInvocationForTheWrongRun(t *testing.T) {
 		t.Fatalf("Invocation() = %#v, want no cross-run result", got)
 	}
 }
+
+// TestStoreFindsOnlyTheNewestActiveInvocation verifies the restart guard's
+// store query ignores completed sessions and orders active sessions reliably.
+func TestStoreFindsOnlyTheNewestActiveInvocation(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	created := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	for _, invocation := range []store.Invocation{
+		{ID: "inv-complete", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusCompleted, CreatedAt: created, UpdatedAt: created},
+		{ID: "inv-active-old", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusActive, CreatedAt: created, UpdatedAt: created.Add(time.Minute)},
+		{ID: "inv-active-new", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusActive, CreatedAt: created, UpdatedAt: created.Add(2 * time.Minute)},
+	} {
+		if err := opened.SaveInvocation(context.Background(), invocation); err != nil {
+			t.Fatalf("SaveInvocation(%s) error = %v", invocation.ID, err)
+		}
+	}
+	active, err := opened.ActiveInvocation(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("ActiveInvocation() error = %v", err)
+	}
+	if active == nil || active.ID != "inv-active-new" {
+		t.Fatalf("ActiveInvocation() = %#v, want newest active invocation", active)
+	}
+}

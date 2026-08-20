@@ -64,12 +64,13 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 		return gate.Result{}, fmt.Errorf("prepare worker git metadata: %w", err)
 	}
 	if err := s.deps.Worker.Start(ctx, worker.StartRequest{
-		RunID:           run.ID,
-		WorktreePath:    run.Worktree,
-		GitMetadataPath: gitMetadataPath,
-		Image:           packet.RepositoryConfig.WorkerBuild.Image,
-		ImageDigest:     run.ImageDigest,
-		Caches:          workerCaches(packet.RepositoryConfig.Caches),
+		RunID:             run.ID,
+		WorktreePath:      run.Worktree,
+		GitMetadataPath:   gitMetadataPath,
+		Image:             packet.RepositoryConfig.WorkerBuild.Image,
+		ImageDigest:       run.ImageDigest,
+		Caches:            workerCaches(packet.RepositoryConfig.Caches),
+		CredentialStoreID: registration.Path,
 	}); err != nil {
 		return gate.Result{}, err
 	}

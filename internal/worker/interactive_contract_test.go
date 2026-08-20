@@ -71,6 +71,42 @@ func TestDockerRuntimeMountsInvocationAndResultDirectories(t *testing.T) {
 	}
 }
 
+// TestDockerRuntimeRecreatesAnExistingWorkerForInvocationMounts verifies that
+// a gate-created worker is safely rebuilt before a visible invocation starts.
+func TestDockerRuntimeRecreatesAnExistingWorkerForInvocationMounts(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	worktree := makeDirectory(t, "worktree")
+	gitMetadata := makeDirectory(t, "git-metadata")
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	base := worker.StartRequest{
+		RunID:           "run-reconfigure",
+		WorktreePath:    worktree,
+		GitMetadataPath: gitMetadata,
+		Role:            "implementation",
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     interactiveWorkerDigest,
+	}
+	if err := runtime.Start(context.Background(), base); err != nil {
+		t.Fatalf("base Start() error = %v", err)
+	}
+	if err := runtime.Start(context.Background(), worker.StartRequest{
+		RunID:           base.RunID,
+		WorktreePath:    worktree,
+		GitMetadataPath: gitMetadata,
+		InvocationPath:  makeDirectory(t, "invocation"),
+		ResultPath:      makeDirectory(t, "results"),
+		Role:            base.Role,
+		Image:           base.Image,
+		ImageDigest:     base.ImageDigest,
+	}); err != nil {
+		t.Fatalf("visible Start() error = %v", err)
+	}
+	lines := readStubLog(t, logPath)
+	if countLogLines(lines, " run ") != 2 || countLogLines(lines, " rm ") != 1 {
+		t.Fatalf("Docker reconfiguration calls = %#v, want stop/rm and replacement run", lines)
+	}
+}
+
 // TestDockerRuntimeSeedsOnlyTheCodexCredentialFile verifies that seeding reads
 // one explicit host file and does not mount or copy the host harness directory.
 func TestDockerRuntimeSeedsOnlyTheCodexCredentialFile(t *testing.T) {

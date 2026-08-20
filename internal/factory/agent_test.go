@@ -3,6 +3,7 @@ package factory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -51,9 +53,41 @@ func TestStartAgentPersistsAReadOnlyPacketAndRecoverableSurfaceState(t *testing.
 	}
 }
 
-// TestAcceptAgentReportUsesOnlyTheStructuredReportAndClosesTheSession verifies
+// TestStartAgentRejectsADuplicateActiveInvocation verifies restart-safe
+// coordination prevents a second visible session for one active run.
+func TestStartAgentRejectsADuplicateActiveInvocation(t *testing.T) {
+	service, runStore, runtime, _, _ := newAgentService(t)
+	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err != nil {
+		t.Fatalf("first StartAgent() error = %v", err)
+	}
+	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err == nil {
+		t.Fatal("second StartAgent() succeeded with an active invocation")
+	}
+	if len(runtime.starts) != 1 || len(runStore.invocations) != 1 {
+		t.Fatalf("duplicate launch side effects: starts=%d invocations=%d", len(runtime.starts), len(runStore.invocations))
+	}
+}
+
+// TestStartAgentRollsBackASetupFailure verifies a partially launched session
+// cannot remain active after the harness fails to start.
+func TestStartAgentRollsBackASetupFailure(t *testing.T) {
+	service, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	harnessRuntime.startErr = errors.New("harness unavailable")
+	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err == nil {
+		t.Fatal("StartAgent() succeeded while the harness was unavailable")
+	}
+	invocation, ok := runStore.invocations["inv-generated"]
+	if !ok || invocation.Status != store.InvocationStatusCannotProceed {
+		t.Fatalf("rolled-back invocation = %#v, want cannot_proceed", invocation)
+	}
+	if runtime.stops != 1 || len(terminalRuntime.closed) != 1 || terminalRuntime.closed[0] != "surface-implementation" {
+		t.Fatalf("rollback side effects: stops=%d closed=%v", runtime.stops, terminalRuntime.closed)
+	}
+}
+
+// TestAcceptAgentReportUsesOnlyTheStructuredReportAndFinishesTheSession verifies
 // that a valid completion changes state only after report validation.
-func TestAcceptAgentReportUsesOnlyTheStructuredReportAndClosesTheSession(t *testing.T) {
+func TestAcceptAgentReportUsesOnlyTheStructuredReportAndFinishesTheSession(t *testing.T) {
 	service, runStore, runtime, _, harnessRuntime := newAgentService(t)
 	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
 	if err != nil {
@@ -74,7 +108,8 @@ func TestAcceptAgentReportUsesOnlyTheStructuredReportAndClosesTheSession(t *test
 			ProductionFilesChanged: []string{"internal/factory/agent.go"},
 			FocusedCommands:        []string{"go test ./internal/factory"},
 		},
-		ReportedAt: time.Now().UTC(),
+		NativeSessionID: "session-1",
+		ReportedAt:      time.Now().UTC(),
 	}
 	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
 		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
@@ -87,7 +122,7 @@ func TestAcceptAgentReportUsesOnlyTheStructuredReportAndClosesTheSession(t *test
 		t.Fatalf("accepted result = %#v, want completed report and invocation", accepted)
 	}
 	if runStore.runs[launch.Invocation.RunID].Status != store.StatusActive || len(harnessRuntime.finished) != 1 || harnessRuntime.finished[0].Surface.ID != "surface-implementation" {
-		t.Fatalf("run state = %#v, finished = %#v, want active run and closed surface", runStore.runs[launch.Invocation.RunID], harnessRuntime.finished)
+		t.Fatalf("run state = %#v, finished = %#v, want active run and recoverable surface", runStore.runs[launch.Invocation.RunID], harnessRuntime.finished)
 	}
 	if runtime.starts[0].WorktreePath == "" {
 		t.Fatal("worker start did not receive the run worktree")
@@ -116,23 +151,37 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 		t.Fatal(err)
 	}
 	created := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
-	run := store.Run{ID: "run-agent", RepositoryPath: repositoryPath, IssueNumber: 6, Stage: store.StageClaim, Status: store.StatusActive, Worktree: worktreePath, CheckpointSHA: "base", ImageDigest: policy.WorkerBuild.Digest, SpecificationPacket: string(packetData), CreatedAt: created, UpdatedAt: created}
+	run := store.Run{ID: "run-agent", RepositoryPath: repositoryPath, IssueNumber: 6, Stage: store.StageClaim, Status: store.StatusActive, StatusCommentID: "comment-1", Worktree: worktreePath, CheckpointSHA: "base", ImageDigest: policy.WorkerBuild.Digest, SpecificationPacket: string(packetData), CreatedAt: created, UpdatedAt: created}
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml")}}}
 	runStore := &agentRunStore{runs: map[string]store.Run{run.ID: run}, current: &run, invocations: map[string]store.Invocation{}}
 	runtime := &agentWorker{}
 	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
+	githubRuntime := &fakeGitHub{issueValue: githubIssueFixture()}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:    &fakeConfig{value: host},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		Worker:    runtime,
 		Terminal:  terminalRuntime,
 		Harness:   harnessRuntime,
+		GitHub:    githubRuntime,
 		Now:       func() time.Time { return created },
 		NewRunID:  func() (string, error) { return "generated", nil },
-		Worktree:  &fakeWorktree{},
+		Worktree:  &inspectingWorktree{state: gitadapter.WorktreeState{HeadSHA: "base", ChangedPaths: []string{"internal/factory/agent.go"}}},
 	})
 	return service, runStore, runtime, terminalRuntime, harnessRuntime
+}
+
+// inspectingWorktree adds the read-only report inspection seam to the shared
+// claim-test worktree fake.
+type inspectingWorktree struct {
+	fakeWorktree
+	state gitadapter.WorktreeState
+}
+
+// Inspect returns the deterministic state used by report acceptance tests.
+func (w *inspectingWorktree) Inspect(context.Context, string) (gitadapter.WorktreeState, error) {
+	return w.state, nil
 }
 
 // githubIssueFixture returns the frozen issue used by agent tests.
@@ -172,12 +221,24 @@ func (s *agentRunStore) Invocation(_ context.Context, runID, invocationID string
 	return &value, nil
 }
 
+// ActiveInvocation returns the only active invocation for the fake run.
+func (s *agentRunStore) ActiveInvocation(_ context.Context, runID string) (*store.Invocation, error) {
+	for _, value := range s.invocations {
+		if value.RunID == runID && value.Status == store.InvocationStatusActive {
+			copy := value
+			return &copy, nil
+		}
+	}
+	return nil, nil
+}
+
 // Close implements the operational-store seam.
 func (*agentRunStore) Close() error { return nil }
 
 // agentWorker records the worker start request without running Docker.
 type agentWorker struct {
 	starts []worker.StartRequest
+	stops  int
 }
 
 // Start records one worker start.
@@ -195,7 +256,10 @@ func (*agentWorker) RunCommand(context.Context, worker.CommandRequest) (worker.C
 }
 
 // Stop implements WorkerRuntime.
-func (*agentWorker) Stop(context.Context, string) error { return nil }
+func (w *agentWorker) Stop(context.Context, string) error {
+	w.stops++
+	return nil
+}
 
 // Inspect implements WorkerRuntime.
 func (*agentWorker) Inspect(context.Context, string) (worker.Inspection, error) {
@@ -205,6 +269,7 @@ func (*agentWorker) Inspect(context.Context, string) (worker.Inspection, error) 
 // agentTerminal records terminal handles and notifications.
 type agentTerminal struct {
 	notifications []terminal.Notification
+	closed        []terminal.SurfaceID
 }
 
 // EnsureControlWorkspace returns the control workspace handle.
@@ -237,7 +302,10 @@ func (t *agentTerminal) Notify(_ context.Context, notification terminal.Notifica
 }
 
 // CloseSurface implements TerminalRuntime.
-func (*agentTerminal) CloseSurface(context.Context, terminal.SurfaceID) error { return nil }
+func (t *agentTerminal) CloseSurface(_ context.Context, surfaceID terminal.SurfaceID) error {
+	t.closed = append(t.closed, surfaceID)
+	return nil
+}
 
 // CloseWorkspace implements TerminalRuntime.
 func (*agentTerminal) CloseWorkspace(context.Context, terminal.WorkspaceID) error { return nil }
@@ -246,11 +314,15 @@ func (*agentTerminal) CloseWorkspace(context.Context, terminal.WorkspaceID) erro
 type agentHarness struct {
 	starts   []harness.StartRequest
 	finished []harness.Session
+	startErr error
 }
 
 // Start records the coordinator-owned prompt request.
 func (h *agentHarness) Start(_ context.Context, request harness.StartRequest) (harness.Session, error) {
 	h.starts = append(h.starts, request)
+	if h.startErr != nil {
+		return harness.Session{}, h.startErr
+	}
 	return harness.Session{InvocationID: request.InvocationID, Surface: request.Surface}, nil
 }
 

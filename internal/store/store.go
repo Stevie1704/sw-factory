@@ -444,6 +444,25 @@ func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*In
 	return scanInvocation(row)
 }
 
+// ActiveInvocation returns the newest active visible invocation for one run.
+// The coordinator uses it to avoid launching duplicate harness sessions after
+// a process restart or a repeated operator command.
+func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation, error) {
+	if runID == "" {
+		return nil, errors.New("invocation run id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort,
+		       native_session_id, workspace_id, status_surface_id,
+		       implementation_surface_id, checks_surface_id, invocation_directory,
+		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		FROM invocations
+		WHERE run_id = ? AND status = ?
+		ORDER BY updated_at DESC
+		LIMIT 1`, runID, InvocationStatusActive)
+	return scanInvocation(row)
+}
+
 // scanInvocation decodes one invocation row and its RFC3339 timestamps.
 func scanInvocation(row *sql.Row) (*Invocation, error) {
 	var invocation Invocation

@@ -76,16 +76,16 @@ func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
 	}
 }
 
-// TestCodexFinishClosesOnlyTheVisibleSurface verifies that accepted completion
-// detaches the harness surface without destroying worker state.
-func TestCodexFinishClosesOnlyTheVisibleSurface(t *testing.T) {
+// TestCodexFinishLeavesTheSurfaceRecoverable verifies that accepted completion
+// exits Codex without destroying its cmux surface or worker state.
+func TestCodexFinishLeavesTheSurfaceRecoverable(t *testing.T) {
 	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
 	runtime := harness.NewCodex(&fakeWorker{}, terminalRuntime)
 	if err := runtime.Finish(context.Background(), harness.Session{Surface: terminalRuntime.surface}); err != nil {
 		t.Fatalf("Finish() error = %v", err)
 	}
-	if terminalRuntime.closed != "surface-implementation" {
-		t.Fatalf("closed surface = %q, want implementation surface", terminalRuntime.closed)
+	if terminalRuntime.closed != "" || string(terminalRuntime.inputs[0]) != "/exit\n" {
+		t.Fatalf("finish operations = closed=%q inputs=%q, want graceful exit with recoverable surface", terminalRuntime.closed, terminalRuntime.inputs)
 	}
 }
 

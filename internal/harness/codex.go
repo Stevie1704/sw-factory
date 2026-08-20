@@ -89,8 +89,8 @@ func (c *Codex) Resume(ctx context.Context, request StartRequest) (Session, erro
 	return c.launch(ctx, request)
 }
 
-// Finish closes only the visible surface, retaining the worker and its native
-// session state for inspection or later recovery.
+// Finish requests a graceful Codex exit while leaving the opaque surface open
+// so cmux can recover it and a later coordinator can reattach or resume.
 func (c *Codex) Finish(ctx context.Context, session Session) error {
 	if c.Terminal == nil {
 		return errors.New("Codex terminal runtime is required")
@@ -101,7 +101,7 @@ func (c *Codex) Finish(ctx context.Context, session Session) error {
 	if err := c.Terminal.SendInput(ctx, session.Surface.ID, []byte("/exit\n")); err != nil {
 		return fmt.Errorf("request Codex session exit: %w", err)
 	}
-	return c.Terminal.CloseSurface(ctx, session.Surface.ID)
+	return nil
 }
 
 // launch builds the safe Codex command, creates a visible surface, and types
@@ -171,9 +171,11 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	nativeSessionID := request.ResumeSessionID
 	if nativeSessionID == "" {
 		if provider, ok := c.Worker.(worker.NativeSessionProvider); ok {
-			if discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"}); discoverErr == nil {
-				nativeSessionID = discovered
+			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
+			if discoverErr != nil {
+				return Session{}, fmt.Errorf("discover Codex native session: %w", discoverErr)
 			}
+			nativeSessionID = discovered
 		}
 	}
 	return Session{InvocationID: request.InvocationID, NativeSessionID: nativeSessionID, Surface: surface}, nil

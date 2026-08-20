@@ -214,6 +214,31 @@ func TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment(t *testing.T)
 	}
 }
 
+// TestDockerRuntimeRejectsAHostHarnessDirectoryAsACache verifies that a
+// repository cache cannot smuggle the full host Codex or Claude state home
+// into a worker.
+func TestDockerRuntimeRejectsAHostHarnessDirectoryAsACache(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	harnessDirectory := filepath.Join(t.TempDir(), ".codex")
+	if err := os.MkdirAll(harnessDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if err := runtime.Start(context.Background(), worker.StartRequest{
+		RunID:           "run-host-harness-cache",
+		WorktreePath:    makeDirectory(t, "worktree"),
+		GitMetadataPath: makeDirectory(t, "git-metadata"),
+		Caches:          []worker.CacheMount{{Name: "codex", HostPath: harnessDirectory}},
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+	}); err == nil || !strings.Contains(err.Error(), "host harness") {
+		t.Fatalf("Start() error = %v, want host harness cache rejection", err)
+	}
+	if lines := readStubLog(t, logPath); len(lines) != 0 {
+		t.Fatalf("Docker was invoked after rejecting host harness cache: %#v", lines)
+	}
+}
+
 // TestDockerRuntimeReturnsACommandExitResult verifies a deterministic command
 // failure remains a command result and is not confused with runtime failure.
 func TestDockerRuntimeReturnsACommandExitResult(t *testing.T) {
@@ -307,6 +332,10 @@ case "$command_name" in
     ;;
   stop)
     printf 'stopped\n' > "$WORKER_DOCKER_STATE"
+    printf 'stub-container\n'
+    ;;
+  rm)
+    rm -f "$WORKER_DOCKER_STATE"
     printf 'stub-container\n'
     ;;
   exec)

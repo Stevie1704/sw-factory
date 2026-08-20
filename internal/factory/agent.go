@@ -11,6 +11,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -25,6 +26,12 @@ type InvocationStore interface {
 	RunStore
 	SaveInvocation(context.Context, store.Invocation) error
 	Invocation(context.Context, string, string) (*store.Invocation, error)
+}
+
+// ActiveInvocationStore is the optional restart-safe lookup used to prevent
+// duplicate visible sessions for one active run.
+type ActiveInvocationStore interface {
+	ActiveInvocation(context.Context, string) (*store.Invocation, error)
 }
 
 // AgentRequest selects one coordinator-owned visible role invocation.
@@ -104,7 +111,7 @@ const (
 
 // StartAgent prepares the frozen invocation packet, starts the pinned worker,
 // creates the visible run surfaces, and launches the interactive Codex role.
-func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (AgentLaunchResult, error) {
+func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result AgentLaunchResult, returnErr error) {
 	request = normalizeAgentRequest(request)
 	if err := validateAgentRequest(request); err != nil {
 		return AgentLaunchResult{}, err
@@ -127,6 +134,18 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (AgentLa
 	if request.RunID != "" && request.RunID != run.ID {
 		return AgentLaunchResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
+	if err := validateAgentRunState(*run); err != nil {
+		return AgentLaunchResult{}, err
+	}
+	if activeStore, ok := invocationStore.(ActiveInvocationStore); ok {
+		active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
+		if lookupErr != nil {
+			return AgentLaunchResult{}, fmt.Errorf("look up active visible invocation: %w", lookupErr)
+		}
+		if active != nil {
+			return AgentLaunchResult{}, fmt.Errorf("run %q already has active invocation %q", run.ID, active.ID)
+		}
+	}
 	if !filepath.IsAbs(run.Worktree) {
 		return AgentLaunchResult{}, errors.New("active run worktree must be absolute")
 	}
@@ -140,6 +159,18 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (AgentLa
 	}
 	if harnessName != config.HarnessCodex {
 		return AgentLaunchResult{}, fmt.Errorf("harness %q is not supported by the Codex implementation agent", harnessName)
+	}
+	authPath := request.CodexAuthPath
+	if authPath == "" {
+		authPath = registration.Authentication.CodexAuthPath
+	}
+	var seeder worker.CredentialSeeder
+	if authPath != "" {
+		var ok bool
+		seeder, ok = s.deps.Worker.(worker.CredentialSeeder)
+		if !ok {
+			return AgentLaunchResult{}, errors.New("worker runtime does not support Codex credential seeding")
+		}
 	}
 	runID, err := s.deps.NewRunID()
 	if err != nil {
@@ -197,13 +228,27 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (AgentLa
 		CreatedAt:           createdAt,
 		UpdatedAt:           createdAt,
 	}
+	invocationPersisted := false
+	workerStarted := false
+	cleanupSurface := terminal.Surface{}
+	defer func() {
+		if returnErr == nil || !invocationPersisted {
+			return
+		}
+		invocation.Status = store.InvocationStatusCannotProceed
+		invocation.UpdatedAt = s.deps.Now().UTC()
+		_ = invocationStore.SaveInvocation(ctx, invocation)
+		if workerStarted {
+			_ = s.deps.Worker.Stop(ctx, run.ID)
+		}
+		if cleanupSurface.ID != "" {
+			_ = s.deps.Terminal.CloseSurface(ctx, cleanupSurface.ID)
+		}
+	}()
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist visible invocation: %w", err)
 	}
-	authPath := request.CodexAuthPath
-	if authPath == "" {
-		authPath = registration.Authentication.CodexAuthPath
-	}
+	invocationPersisted = true
 	credentialStoreID := ""
 	if authPath != "" {
 		credentialStoreID = registration.Path
@@ -226,14 +271,14 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (AgentLa
 	}); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("start worker for visible agent: %w", err)
 	}
+	workerStarted = true
 	if authPath != "" {
-		seeder, ok := s.deps.Worker.(worker.CredentialSeeder)
-		if !ok {
-			return AgentLaunchResult{}, errors.New("worker runtime does not support Codex credential seeding")
-		}
 		if err := seeder.SeedCodexCredentials(ctx, worker.CredentialSeedRequest{RunID: run.ID, AuthPath: authPath}); err != nil {
 			return AgentLaunchResult{}, err
 		}
+	}
+	if cmux, ok := s.deps.Terminal.(*terminal.CmuxRuntime); ok {
+		cmux.SocketPath = registration.Cmux.SocketPath
 	}
 	control, err := s.deps.Terminal.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
 		Name:             defaultString(registration.Cmux.ControlWorkspace, "factory-control"),
@@ -252,6 +297,7 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (AgentLa
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
+	cleanupSurface = runWorkspace.Implementation
 	invocation.WorkspaceID = string(runWorkspace.ID)
 	invocation.StatusSurfaceID = string(runWorkspace.Status.ID)
 	invocation.ImplementationSurfaceID = string(runWorkspace.Implementation.ID)
@@ -282,10 +328,11 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (AgentLa
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist Codex session identity: %w", err)
 	}
+	previousRun := *run
 	run.Stage = store.StageImplementation
 	run.Status = store.StatusActive
 	run.UpdatedAt = s.deps.Now().UTC()
-	if err := saveRunWithRetry(ctx, runStore, *run); err != nil {
+	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist implementation stage: %w", err)
 	}
 	return AgentLaunchResult{Invocation: invocation, Prompt: promptText}, nil
@@ -298,7 +345,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if strings.TrimSpace(request.InvocationID) == "" {
 		return AgentResult{}, errors.New("invocation id is required")
 	}
-	_, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openActiveRunStore(ctx)
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -322,6 +369,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	if invocation.Status != store.InvocationStatusActive {
 		return AgentResult{}, fmt.Errorf("invocation %q is already %s", invocation.ID, invocation.Status)
+	}
+	if err := validateAgentRunState(*run); err != nil {
+		return AgentResult{}, err
 	}
 	if run.Stage != invocation.Stage {
 		return AgentResult{}, fmt.Errorf("invocation stage %q does not match active run stage %q", invocation.Stage, run.Stage)
@@ -348,26 +398,33 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		WorktreePath:   run.Worktree,
 		PermittedPaths: invocation.PermittedPaths,
 	}
-	if inspector, ok := s.deps.Worktree.(gitadapter.WorktreeInspector); ok {
-		state, inspectErr := inspector.Inspect(ctx, run.Worktree)
-		if inspectErr != nil {
-			return AgentResult{}, fmt.Errorf("inspect worktree for agent report: %w", inspectErr)
-		}
-		validationContext.ObservedChanges = state.ChangedPaths
-		validationContext.WorktreeObserved = true
-		if run.CheckpointSHA != "" && state.HeadSHA != run.CheckpointSHA {
-			return AgentResult{}, fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", state.HeadSHA, run.CheckpointSHA)
-		}
+	inspector, ok := s.deps.Worktree.(gitadapter.WorktreeInspector)
+	if !ok {
+		return AgentResult{}, errors.New("worktree runtime does not support report inspection")
+	}
+	state, inspectErr := inspector.Inspect(ctx, run.Worktree)
+	if inspectErr != nil {
+		return AgentResult{}, fmt.Errorf("inspect worktree for agent report: %w", inspectErr)
+	}
+	validationContext.ObservedChanges = state.ChangedPaths
+	validationContext.WorktreeObserved = true
+	if run.CheckpointSHA != "" && state.HeadSHA != run.CheckpointSHA {
+		return AgentResult{}, fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", state.HeadSHA, run.CheckpointSHA)
 	}
 	if err := report.Validate(value, validationContext); err != nil {
 		return AgentResult{}, err
 	}
-	if err := s.deps.Harness.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID, Surface: terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID), Name: invocation.Role}}); err != nil {
+	nativeSessionID := invocation.NativeSessionID
+	if value.NativeSessionID != "" {
+		nativeSessionID = value.NativeSessionID
+	}
+	if nativeSessionID == "" {
+		return AgentResult{}, errors.New("accepted agent report must retain a native session identifier")
+	}
+	if err := s.deps.Harness.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: nativeSessionID, Surface: terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID), Name: invocation.Role}}); err != nil {
 		return AgentResult{}, fmt.Errorf("finish accepted harness session: %w", err)
 	}
-	if value.NativeSessionID != "" {
-		invocation.NativeSessionID = value.NativeSessionID
-	}
+	invocation.NativeSessionID = nativeSessionID
 	switch value.Outcome {
 	case report.OutcomeCompleted:
 		invocation.Status = store.InvocationStatusCompleted
@@ -380,6 +437,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if err := invocationStore.SaveInvocation(ctx, *invocation); err != nil {
 		return AgentResult{}, fmt.Errorf("persist accepted invocation: %w", err)
 	}
+	previousRun := *run
 	run.Stage = store.StageImplementation
 	switch value.Outcome {
 	case report.OutcomeNeedsClarification:
@@ -390,7 +448,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		run.Status = store.StatusActive
 	}
 	run.UpdatedAt = s.deps.Now().UTC()
-	if err := saveRunWithRetry(ctx, runStore, *run); err != nil {
+	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist accepted agent state: %w", err)
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
@@ -413,6 +471,9 @@ func normalizeAgentRequest(request AgentRequest) AgentRequest {
 	}
 	if request.Stage == "" {
 		request.Stage = store.StageImplementation
+	}
+	if len(request.PermittedPaths) == 0 {
+		request.PermittedPaths = []string{"."}
 	}
 	return request
 }
@@ -501,6 +562,43 @@ func sameStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+// validateAgentRunState enforces the implementation role's legal predecessor
+// stages before it starts or resumes a visible harness session.
+func validateAgentRunState(run store.Run) error {
+	if run.Status != store.StatusActive {
+		return fmt.Errorf("cannot start implementation agent from run status %q", run.Status)
+	}
+	switch run.Stage {
+	case store.StageClaim, store.StageTest, store.StageImplementation:
+		return nil
+	default:
+		return fmt.Errorf("cannot start implementation agent from run stage %q", run.Stage)
+	}
+}
+
+// persistAgentRunState uses the coordinator's GitHub label/comment transition
+// when the claimed run has a status comment, retaining a direct-store fallback
+// for legacy runs that predate that supervision record.
+func (s *Service) persistAgentRunState(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run) error {
+	if next.StatusCommentID == "" || s.deps.GitHub == nil {
+		return saveRunWithRetry(ctx, runStore, next)
+	}
+	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	issue, err := s.deps.GitHub.Issue(ctx, repository, next.IssueNumber)
+	if err != nil {
+		return fmt.Errorf("read issue for agent state transition: %w", err)
+	}
+	if _, err := s.applyStateTransition(ctx, runStore, stateTransition{
+		Repository: repository,
+		Issue:      issue,
+		Previous:   previous,
+		Next:       next,
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // writeInvocationPacket atomically writes the worker-readable packet and

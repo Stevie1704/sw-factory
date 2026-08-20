@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -205,6 +206,12 @@ type Inspection struct {
 	Running bool
 	// Image is the exact image reference recorded by the runtime, when present.
 	Image string
+	// mountIdentities maps stable in-worker destinations to adapter-private
+	// mount identities used to detect stale bind or volume configuration.
+	mountIdentities map[string]string
+	// mountDestinations is the compatibility fallback for runtimes that expose
+	// only destination names rather than Docker's structured inspect payload.
+	mountDestinations map[string]struct{}
 }
 
 // WorkerRuntime is the secondary product seam for isolated run execution.
@@ -253,15 +260,19 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		if inspection.Image != imageReference(request.Image, request.ImageDigest) {
 			return fmt.Errorf("worker %q uses image %q, want frozen image %q", request.RunID, inspection.Image, imageReference(request.Image, request.ImageDigest))
 		}
-		if inspection.Running {
-			return nil
+		if workerMountsPresent(request, inspection) {
+			if inspection.Running {
+				return nil
+			}
+			if _, err := prepareWorkerMounts(request); err != nil {
+				return fmt.Errorf("prepare worker mounts: %w", err)
+			}
+			return r.startContainer(ctx, name)
 		}
-		if _, err := prepareWorkerMounts(request); err != nil {
-			return fmt.Errorf("prepare worker mounts: %w", err)
+		if err := r.recreateWorker(ctx, name, inspection.Running); err != nil {
+			return fmt.Errorf("recreate worker %q for required mounts: %w", request.RunID, err)
 		}
-		return r.startContainer(ctx, name)
-	}
-	if !isContainerNotFound(err) {
+	} else if !isContainerNotFound(err) {
 		return fmt.Errorf("inspect worker %q before start: %w", request.RunID, err)
 	}
 	groupIDs, err := prepareWorkerMounts(request)
@@ -541,17 +552,36 @@ func (r *DockerRuntime) startContainer(ctx context.Context, name string) error {
 	return nil
 }
 
-// inspectContainer reads only lifecycle and image fields from Docker.
+// recreateWorker removes a worker whose immutable container configuration
+// predates a newly required invocation mount. Its named role and credential
+// volumes and bind-mounted worktree remain intact for the replacement.
+func (r *DockerRuntime) recreateWorker(ctx context.Context, name string, running bool) error {
+	if running {
+		if _, err := r.runDocker(ctx, []string{"stop", name}); err != nil {
+			return fmt.Errorf("stop worker before recreation: %w", err)
+		}
+	}
+	if _, err := r.runDocker(ctx, []string{"rm", name}); err != nil {
+		return fmt.Errorf("remove worker before recreation: %w", err)
+	}
+	return nil
+}
+
+// inspectContainer reads lifecycle, image, and stable mount fields from Docker.
 func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Inspection, error) {
 	result, err := r.runDocker(ctx, []string{
 		"container", "inspect",
-		"--format", "{{.State.Running}}\t{{.Config.Image}}",
+		"--format", "{{json .}}",
 		name,
 	})
 	if err != nil {
 		return Inspection{}, err
 	}
-	fields := strings.SplitN(strings.TrimSpace(result.Stdout), "\t", 2)
+	trimmed := strings.TrimSpace(result.Stdout)
+	if strings.HasPrefix(trimmed, "{") {
+		return parseDockerInspectionJSON([]byte(trimmed))
+	}
+	fields := strings.SplitN(trimmed, "\t", 3)
 	if len(fields) != 2 {
 		return Inspection{}, fmt.Errorf("docker inspect returned malformed worker state %q", result.Stdout)
 	}
@@ -559,7 +589,70 @@ func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Insp
 	if err != nil {
 		return Inspection{}, fmt.Errorf("docker inspect returned invalid running state %q: %w", fields[0], err)
 	}
-	return Inspection{Exists: true, Running: running, Image: fields[1]}, nil
+	mountDestinations := make(map[string]struct{})
+	if len(fields) == 3 {
+		for _, mount := range strings.Split(strings.TrimSuffix(fields[2], ","), ",") {
+			if strings.TrimSpace(mount) != "" {
+				mountDestinations[mount] = struct{}{}
+			}
+		}
+	}
+	return Inspection{Exists: true, Running: running, Image: fields[1], mountDestinations: mountDestinations}, nil
+}
+
+// dockerInspection is the private subset of Docker's inspect document needed
+// to detect stale worker configuration without exposing host paths through the
+// WorkerRuntime seam.
+type dockerInspection struct {
+	State struct {
+		Running bool `json:"Running"`
+	} `json:"State"`
+	Config struct {
+		Image string `json:"Image"`
+	} `json:"Config"`
+	Mounts []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Name        string `json:"Name"`
+		Destination string `json:"Destination"`
+	} `json:"Mounts"`
+}
+
+// parseDockerInspectionJSON converts Docker's structured inspection response
+// into the adapter-private lifecycle and mount representation.
+func parseDockerInspectionJSON(data []byte) (Inspection, error) {
+	var document dockerInspection
+	if err := json.Unmarshal(data, &document); err != nil {
+		return Inspection{}, fmt.Errorf("docker inspect returned malformed JSON: %w", err)
+	}
+	mountIdentities := make(map[string]string, len(document.Mounts))
+	for _, mount := range document.Mounts {
+		if strings.TrimSpace(mount.Destination) == "" {
+			continue
+		}
+		identity := dockerMountIdentity(mount.Type, mount.Source, mount.Name)
+		if identity != "" {
+			mountIdentities[mount.Destination] = identity
+		}
+	}
+	return Inspection{
+		Exists:          true,
+		Running:         document.State.Running,
+		Image:           document.Config.Image,
+		mountIdentities: mountIdentities,
+	}, nil
+}
+
+// dockerMountIdentity reduces a Docker mount to the stable source identity
+// needed for reuse checks while keeping the source private to this adapter.
+func dockerMountIdentity(_ string, source, name string) string {
+	if strings.TrimSpace(name) != "" {
+		return "volume:" + strings.TrimSpace(name)
+	}
+	if strings.TrimSpace(source) != "" {
+		return "bind:" + filepath.Clean(source)
+	}
+	return ""
 }
 
 // runDocker executes one host-side Docker CLI invocation and captures both
@@ -685,6 +778,66 @@ func validateStartRequest(request StartRequest) error {
 	return nil
 }
 
+// workerMountsPresent reports whether an existing container already has the
+// complete immutable mount set requested by the coordinator. A legacy runtime
+// inspection that contains only destinations is accepted as a compatibility
+// fallback, but Docker's structured inspection must match each source too.
+func workerMountsPresent(request StartRequest, inspection Inspection) bool {
+	wanted := expectedWorkerMounts(request)
+	if inspection.mountIdentities != nil {
+		for destination, identity := range wanted {
+			if inspection.mountIdentities[destination] != identity {
+				return false
+			}
+		}
+		return true
+	}
+	for _, destination := range requiredInvocationMounts(request) {
+		if _, found := inspection.mountDestinations[destination]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+// requiredInvocationMounts returns the mounts introduced by the visible
+// invocation seam; older adapters cannot safely compare the base mount sources.
+func requiredInvocationMounts(request StartRequest) []string {
+	required := make([]string, 0, 2)
+	if request.InvocationPath != "" {
+		required = append(required, InvocationPath)
+	}
+	if request.ResultPath != "" {
+		required = append(required, ResultPath)
+	}
+	return required
+}
+
+// expectedWorkerMounts returns the source identity for every immutable mount
+// that must be present before a worker can be reused.
+func expectedWorkerMounts(request StartRequest) map[string]string {
+	role := request.Role
+	if strings.TrimSpace(role) == "" {
+		role = "implementation"
+	}
+	wanted := map[string]string{
+		WorktreePath:    "bind:" + filepath.Clean(request.WorktreePath),
+		GitMetadataPath: "bind:" + filepath.Clean(request.GitMetadataPath),
+		CredentialPath:  "volume:" + credentialVolumeName(request.RunID, request.CredentialStoreID),
+		"/home/factory": "volume:" + roleVolumeName(request.RunID, role),
+	}
+	if request.InvocationPath != "" {
+		wanted[InvocationPath] = "bind:" + filepath.Clean(request.InvocationPath)
+	}
+	if request.ResultPath != "" {
+		wanted[ResultPath] = "bind:" + filepath.Clean(request.ResultPath)
+	}
+	for _, cache := range request.Caches {
+		wanted[filepath.Join(CachePath, cache.Name)] = "bind:" + filepath.Clean(cache.HostPath)
+	}
+	return wanted
+}
+
 // validateResumeRequest validates the worker run ID, image name, and immutable
 // image digest for a resume request.
 func validateResumeRequest(request ResumeRequest) error {
@@ -732,11 +885,25 @@ func validateCacheMount(cache CacheMount, seen map[string]struct{}) error {
 	if !validName(cache.Name) {
 		return fmt.Errorf("cache name %q is invalid", cache.Name)
 	}
+	if hostHarnessDirectory(cache.HostPath) {
+		return fmt.Errorf("cache path %q targets a host harness directory", cache.HostPath)
+	}
 	if _, exists := seen[cache.Name]; exists {
 		return fmt.Errorf("cache name %q is duplicated", cache.Name)
 	}
 	seen[cache.Name] = struct{}{}
 	return ensureCacheDirectory(cache.HostPath)
+}
+
+// hostHarnessDirectory identifies the full Codex or Claude state directories
+// that may never cross the worker boundary as repository caches.
+func hostHarnessDirectory(path string) bool {
+	for _, component := range strings.Split(filepath.ToSlash(filepath.Clean(path)), "/") {
+		if component == ".codex" || component == ".claude" {
+			return true
+		}
+	}
+	return false
 }
 
 // validateEnvironmentEntry validates an environment variable name and value
