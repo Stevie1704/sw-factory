@@ -72,6 +72,41 @@ type Comment struct {
 	Body string
 }
 
+// CommitStatusState is the GitHub state vocabulary used for deterministic
+// checkpoint results.
+type CommitStatusState string
+
+const (
+	// CommitStatusPending is an in-progress status state.
+	CommitStatusPending CommitStatusState = "pending"
+	// CommitStatusSuccess marks a successful checkpoint result.
+	CommitStatusSuccess CommitStatusState = "success"
+	// CommitStatusFailure marks a declared command that exited unsuccessfully.
+	CommitStatusFailure CommitStatusState = "failure"
+	// CommitStatusError marks setup or runtime infrastructure failure.
+	CommitStatusError CommitStatusState = "error"
+)
+
+// CommitStatus identifies one status attached to one exact commit SHA.
+type CommitStatus struct {
+	// SHA is the immutable commit being reported.
+	SHA string
+	// State is the GitHub status state.
+	State CommitStatusState
+	// Context is the stable status context used for repeated reports.
+	Context string
+	// Description is a content-free human-readable summary.
+	Description string
+	// TargetURL is an optional operator-facing evidence URL.
+	TargetURL string
+}
+
+// CommitStatusPublisher is the host-side seam for publishing exact-SHA
+// Commit Statuses without exposing GitHub credentials to workflow code.
+type CommitStatusPublisher interface {
+	CreateCommitStatus(context.Context, Repository, CommitStatus) error
+}
+
 // Client is the small host-side seam used by the claim coordinator. It keeps
 // GitHub credentials inside the local gh process and returns only workflow
 // data to the coordinator.
@@ -223,6 +258,35 @@ func (c *GhClient) EditIssueComment(ctx context.Context, repository Repository, 
 	return nil
 }
 
+// CreateCommitStatus publishes one deterministic result for an exact commit.
+// The status context is caller-defined but must be stable and single-line.
+func (c *GhClient) CreateCommitStatus(ctx context.Context, repository Repository, status CommitStatus) error {
+	if !validCommitSHA(status.SHA) {
+		return errors.New("commit status SHA must contain 40 to 64 lowercase hexadecimal characters")
+	}
+	if status.State != CommitStatusPending && status.State != CommitStatusSuccess && status.State != CommitStatusFailure && status.State != CommitStatusError {
+		return fmt.Errorf("unsupported commit status state %q", status.State)
+	}
+	if strings.TrimSpace(status.Context) == "" || strings.ContainsAny(status.Context, "\r\n") {
+		return errors.New("commit status context must be a nonempty single line")
+	}
+	if len(status.Description) > 140 {
+		return errors.New("commit status description must be at most 140 characters")
+	}
+	payload := map[string]string{
+		"state":       string(status.State),
+		"context":     status.Context,
+		"description": status.Description,
+	}
+	if status.TargetURL != "" {
+		payload["target_url"] = status.TargetURL
+	}
+	if err := c.call(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/statuses/%s", repository.String(), status.SHA), "--method", "POST"}, payload); err != nil {
+		return fmt.Errorf("publish commit status for %s: %w", status.SHA, err)
+	}
+	return nil
+}
+
 // callJSON executes a GitHub CLI request and decodes its JSON response.
 func (c *GhClient) callJSON(ctx context.Context, args []string, payload any, destination any) error {
 	output, err := c.callBytes(ctx, args, payload)
@@ -253,6 +317,21 @@ func (c *GhClient) callBytes(ctx context.Context, args []string, payload any) ([
 		args = append(args, "--input", "-")
 	}
 	return c.runner().Run(ctx, args, input)
+}
+
+// validCommitSHA accepts full Git object IDs and their common abbreviated
+// forms while rejecting values that could alter a GitHub API path.
+func validCommitSHA(value string) bool {
+	if len(value) < 40 || len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // issueResponse is the subset of the GitHub issue API response needed by a

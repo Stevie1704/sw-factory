@@ -1,0 +1,710 @@
+// Package worker contains the portable worker-execution seam and its Docker
+// adapter. Workflow code addresses workers by run identity only; Docker
+// names, paths, and process details remain private to this package.
+package worker
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+const (
+	// WorktreePath is the stable in-worker path for the run's writable checkout.
+	WorktreePath = "/work"
+	// GitMetadataPath is the stable in-worker path for read-only Git metadata.
+	GitMetadataPath = "/git"
+	// CachePath is the stable in-worker parent path for repository caches.
+	CachePath = "/cache"
+	// WorkerUser is the fixed non-root identity used for worker processes.
+	WorkerUser = "10001:10001"
+	// workerImageDigestPrefix is the only image digest algorithm accepted by
+	// version one.
+	workerImageDigestPrefix = "sha256:"
+)
+
+// EnvironmentPolicy controls which explicit environment a worker command may
+// receive. Clean commands are used for coordinator setup and gates; role
+// commands additionally identify the workflow role that owns the invocation.
+type EnvironmentPolicy string
+
+const (
+	// EnvironmentPolicyClean removes ambient command environment and retains
+	// only the worker baseline plus explicitly supplied values.
+	EnvironmentPolicyClean EnvironmentPolicy = "clean"
+	// EnvironmentPolicyRole identifies an explicit role environment while still
+	// excluding ambient host variables and credentials.
+	EnvironmentPolicyRole EnvironmentPolicy = "role"
+)
+
+// CacheMount describes one explicitly declared repository cache.
+type CacheMount struct {
+	// Name is the repository configuration name and becomes part of the stable
+	// in-worker cache path.
+	Name string
+	// HostPath is the host directory mounted into the worker.
+	HostPath string
+	// ReadOnly controls whether the worker may update the cache.
+	ReadOnly bool
+}
+
+// StartRequest contains the host-side inputs needed to create one worker.
+// ImageDigest is mandatory so the worker cannot start from a mutable tag.
+type StartRequest struct {
+	// RunID identifies the workflow run and is the only worker identity exposed
+	// to callers.
+	RunID string
+	// WorktreePath is the host path mounted read-write at /work.
+	WorktreePath string
+	// GitMetadataPath is the host Git metadata path mounted read-only at /git.
+	GitMetadataPath string
+	// Image is the repository worker image name without its digest.
+	Image string
+	// ImageDigest is the frozen sha256 image digest for the run.
+	ImageDigest string
+	// Caches are the only additional host paths made visible to the worker.
+	Caches []CacheMount
+}
+
+// ResumeRequest contains the immutable image identity needed to resume an
+// existing worker after a coordinator or container interruption.
+type ResumeRequest struct {
+	// RunID selects the worker to resume without exposing its Docker name.
+	RunID string
+	// Image is the image name recorded for the run.
+	Image string
+	// ImageDigest is the digest that must match the existing worker.
+	ImageDigest string
+}
+
+// CommandRequest describes one deterministic command executed inside a worker.
+type CommandRequest struct {
+	// RunID selects the worker that receives the command.
+	RunID string
+	// Command is interpreted by the worker's POSIX shell at the fixed /work path.
+	Command string
+	// EnvironmentPolicy selects clean or role execution.
+	EnvironmentPolicy EnvironmentPolicy
+	// Role names the coordinator-defined workflow role for the command.
+	Role string
+	// Environment contains explicit non-secret variables for this invocation.
+	Environment map[string]string
+}
+
+// CommandResult reports a command's deterministic process result. A non-zero
+// ExitCode is a command failure, not a worker-runtime failure.
+type CommandResult struct {
+	// ExitCode is the command's process exit code.
+	ExitCode int
+	// Stdout is the command's captured standard output.
+	Stdout string
+	// Stderr is the command's captured standard error.
+	Stderr string
+}
+
+// Inspection reports worker lifecycle state without exposing a runtime ID.
+type Inspection struct {
+	// Exists reports whether the run's worker container exists.
+	Exists bool
+	// Running reports whether the existing worker is currently running.
+	Running bool
+	// Image is the exact image reference recorded by the runtime, when present.
+	Image string
+}
+
+// WorkerRuntime is the secondary product seam for isolated run execution.
+// Implementations own container paths, runtime identifiers, role homes,
+// invocation packets, result files, and process tracking.
+type WorkerRuntime interface {
+	// Start creates or reuses a worker from the frozen image digest.
+	Start(context.Context, StartRequest) error
+	// Resume starts an existing stopped worker without changing its image.
+	Resume(context.Context, ResumeRequest) error
+	// RunCommand executes one command inside the selected worker.
+	RunCommand(context.Context, CommandRequest) (CommandResult, error)
+	// Stop stops a worker while retaining it for a later resume.
+	Stop(context.Context, string) error
+	// Inspect reports whether the selected worker exists and is running.
+	Inspect(context.Context, string) (Inspection, error)
+}
+
+// DockerRuntime implements WorkerRuntime with the host Docker executable.
+// Docker container names are derived privately from RunID and never appear in
+// the WorkerRuntime interface or its results.
+type DockerRuntime struct {
+	// DockerBinary overrides the executable name for controlled contract tests.
+	// An empty value uses docker from PATH.
+	DockerBinary string
+}
+
+// NewDockerRuntime creates a Docker-backed WorkerRuntime adapter.
+func NewDockerRuntime() *DockerRuntime {
+	return &DockerRuntime{}
+}
+
+// Start creates a hardened worker from the exact image@digest reference. A
+// running matching worker is reused, while a stopped matching worker is
+// started in place.
+func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
+	if err := validateStartRequest(request); err != nil {
+		return err
+	}
+	name := containerName(request.RunID)
+	inspection, err := r.inspectContainer(ctx, name)
+	if err == nil {
+		if inspection.Image != imageReference(request.Image, request.ImageDigest) {
+			return fmt.Errorf("worker %q uses image %q, want frozen image %q", request.RunID, inspection.Image, imageReference(request.Image, request.ImageDigest))
+		}
+		if inspection.Running {
+			return nil
+		}
+		return r.startContainer(ctx, name)
+	}
+	if !isContainerNotFound(err) {
+		return fmt.Errorf("inspect worker %q before start: %w", request.RunID, err)
+	}
+
+	args := []string{
+		"run",
+		"-d",
+		"--name", name,
+		"--user", WorkerUser,
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--network", "bridge",
+		"--workdir", WorktreePath,
+		"--mount", bindMount(request.WorktreePath, WorktreePath, false),
+		"--mount", bindMount(request.GitMetadataPath, GitMetadataPath, true),
+	}
+	for _, cache := range request.Caches {
+		cachePath := filepath.Join(CachePath, cache.Name)
+		args = append(args, "--mount", bindMount(cache.HostPath, cachePath, cache.ReadOnly))
+	}
+	for _, value := range baselineEnvironment(request.RunID, "worker") {
+		args = append(args, "--env", value)
+	}
+	args = append(args, imageReference(request.Image, request.ImageDigest), "sleep", "infinity")
+	if _, err := r.runDocker(ctx, args); err != nil {
+		return fmt.Errorf("start worker %q: %w", request.RunID, err)
+	}
+	return nil
+}
+
+// Resume starts a stopped worker after verifying that its image remains the
+// frozen image recorded for the run.
+func (r *DockerRuntime) Resume(ctx context.Context, request ResumeRequest) error {
+	if err := validateResumeRequest(request); err != nil {
+		return err
+	}
+	name := containerName(request.RunID)
+	inspection, err := r.inspectContainer(ctx, name)
+	if err != nil {
+		if isContainerNotFound(err) {
+			return fmt.Errorf("worker %q does not exist and cannot be resumed", request.RunID)
+		}
+		return fmt.Errorf("inspect worker %q before resume: %w", request.RunID, err)
+	}
+	wantedImage := imageReference(request.Image, request.ImageDigest)
+	if inspection.Image != wantedImage {
+		return fmt.Errorf("worker %q uses image %q, want frozen image %q", request.RunID, inspection.Image, wantedImage)
+	}
+	if inspection.Running {
+		return nil
+	}
+	return r.startContainer(ctx, name)
+}
+
+// RunCommand executes a shell command with an explicitly constructed worker
+// environment. Host environment variables and credential-bearing names never
+// enter the command environment.
+func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) (CommandResult, error) {
+	if err := validateCommandRequest(request); err != nil {
+		return CommandResult{}, err
+	}
+	inspection, err := r.inspectContainer(ctx, containerName(request.RunID))
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("inspect worker %q before command: %w", request.RunID, err)
+	}
+	if !inspection.Running {
+		return CommandResult{}, fmt.Errorf("worker %q is not running", request.RunID)
+	}
+
+	environment := commandEnvironment(request)
+	args := []string{"exec", "--workdir", WorktreePath}
+	for _, value := range environment {
+		args = append(args, "--env", value)
+	}
+	args = append(args, containerName(request.RunID), "/usr/bin/env", "-i")
+	args = append(args, environment...)
+	args = append(args, "/bin/sh", "-lc", request.Command)
+	result, err := r.runDocker(ctx, args)
+	if err == nil {
+		return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, nil
+	}
+	if ctx.Err() != nil {
+		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, ctx.Err())
+	}
+	var commandErr *dockerCommandError
+	if errors.As(err, &commandErr) && commandErr.ExitCode > 0 && commandErr.ExitCode < 125 {
+		return CommandResult{ExitCode: commandErr.ExitCode, Stdout: commandErr.Stdout, Stderr: commandErr.Stderr}, nil
+	}
+	return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, err)
+}
+
+// Stop stops an existing worker while retaining its writable state and role
+// storage for a future Resume call. Stopping an absent or already stopped
+// worker is idempotent.
+func (r *DockerRuntime) Stop(ctx context.Context, runID string) error {
+	if err := validateRunID(runID); err != nil {
+		return err
+	}
+	name := containerName(runID)
+	inspection, err := r.inspectContainer(ctx, name)
+	if err != nil {
+		if isContainerNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect worker %q before stop: %w", runID, err)
+	}
+	if !inspection.Running {
+		return nil
+	}
+	if _, err := r.runDocker(ctx, []string{"stop", name}); err != nil {
+		return fmt.Errorf("stop worker %q: %w", runID, err)
+	}
+	return nil
+}
+
+// Inspect reports a run worker's state and returns an empty inspection when
+// no corresponding Docker container exists.
+func (r *DockerRuntime) Inspect(ctx context.Context, runID string) (Inspection, error) {
+	if err := validateRunID(runID); err != nil {
+		return Inspection{}, err
+	}
+	inspection, err := r.inspectContainer(ctx, containerName(runID))
+	if err != nil {
+		if isContainerNotFound(err) {
+			return Inspection{}, nil
+		}
+		return Inspection{}, fmt.Errorf("inspect worker %q: %w", runID, err)
+	}
+	return inspection, nil
+}
+
+// startContainer starts one existing stopped container by its private name.
+func (r *DockerRuntime) startContainer(ctx context.Context, name string) error {
+	if _, err := r.runDocker(ctx, []string{"start", name}); err != nil {
+		return fmt.Errorf("start existing worker: %w", err)
+	}
+	return nil
+}
+
+// inspectContainer reads only lifecycle and image fields from Docker.
+func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Inspection, error) {
+	result, err := r.runDocker(ctx, []string{
+		"container", "inspect",
+		"--format", "{{.State.Running}}\t{{.Config.Image}}",
+		name,
+	})
+	if err != nil {
+		return Inspection{}, err
+	}
+	fields := strings.SplitN(strings.TrimSpace(result.Stdout), "\t", 2)
+	if len(fields) != 2 {
+		return Inspection{}, fmt.Errorf("Docker inspect returned malformed worker state %q", result.Stdout)
+	}
+	running, err := strconv.ParseBool(fields[0])
+	if err != nil {
+		return Inspection{}, fmt.Errorf("Docker inspect returned invalid running state %q: %w", fields[0], err)
+	}
+	return Inspection{Exists: true, Running: running, Image: fields[1]}, nil
+}
+
+// runDocker executes one host-side Docker CLI invocation and captures both
+// output streams without ever returning the private container name to callers.
+func (r *DockerRuntime) runDocker(ctx context.Context, args []string) (dockerCommandResult, error) {
+	binary := r.DockerBinary
+	if strings.TrimSpace(binary) == "" {
+		binary = "docker"
+	}
+	command := exec.CommandContext(ctx, binary, args...)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	result := dockerCommandResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: 0,
+	}
+	if err == nil {
+		return result, nil
+	}
+	result.ExitCode = 1
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		result.ExitCode = exitErr.ExitCode()
+	}
+	return result, &dockerCommandError{
+		Args:     append([]string(nil), args...),
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		Cause:    err,
+	}
+}
+
+// dockerCommandResult is the internal output of one Docker CLI invocation.
+type dockerCommandResult struct {
+	// Stdout is the captured standard output.
+	Stdout string
+	// Stderr is the captured standard error.
+	Stderr string
+	// ExitCode is zero on success or the Docker process exit code.
+	ExitCode int
+}
+
+// dockerCommandError preserves Docker output for internal classification.
+type dockerCommandError struct {
+	// Args are the private Docker command arguments.
+	Args []string
+	// ExitCode is the failed Docker process exit code.
+	ExitCode int
+	// Stdout is output produced before failure.
+	Stdout string
+	// Stderr is output produced before failure.
+	Stderr string
+	// Cause is the underlying process error.
+	Cause error
+}
+
+// Error reports a redacted Docker command failure without exposing output that
+// may contain repository content or credentials.
+func (e *dockerCommandError) Error() string {
+	return fmt.Sprintf("docker command failed with exit code %d", e.ExitCode)
+}
+
+// Unwrap returns the underlying process error.
+func (e *dockerCommandError) Unwrap() error { return e.Cause }
+
+// validateStartRequest rejects mutable images and host paths that cannot be
+// safely represented by Docker bind mounts.
+func validateStartRequest(request StartRequest) error {
+	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if err := validateDirectory(request.WorktreePath, "worktree path"); err != nil {
+		return err
+	}
+	if err := validateDirectory(request.GitMetadataPath, "Git metadata path"); err != nil {
+		return err
+	}
+	if err := validateImageName(request.Image); err != nil {
+		return err
+	}
+	if !validDigest(request.ImageDigest) {
+		return errors.New("worker image digest must be a sha256 digest with 64 lowercase hexadecimal characters")
+	}
+	seen := make(map[string]struct{}, len(request.Caches))
+	for _, cache := range request.Caches {
+		if err := validateCacheMount(cache, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateResumeRequest validates the immutable identity needed to resume a
+// worker without requiring host paths or a Docker identifier.
+func validateResumeRequest(request ResumeRequest) error {
+	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if err := validateImageName(request.Image); err != nil {
+		return err
+	}
+	if !validDigest(request.ImageDigest) {
+		return errors.New("worker image digest must be a sha256 digest with 64 lowercase hexadecimal characters")
+	}
+	return nil
+}
+
+// validateCommandRequest enforces the small worker command interface and
+// rejects environment keys commonly used for credentials or host forwarding.
+func validateCommandRequest(request CommandRequest) error {
+	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(request.Command) == "" {
+		return errors.New("worker command is required")
+	}
+	if request.EnvironmentPolicy != EnvironmentPolicyClean && request.EnvironmentPolicy != EnvironmentPolicyRole {
+		return errors.New("worker environment policy must be clean or role")
+	}
+	if strings.TrimSpace(request.Role) == "" {
+		return errors.New("worker command role is required")
+	}
+	if !validName(request.Role) {
+		return fmt.Errorf("worker command role %q contains unsafe characters", request.Role)
+	}
+	for name, value := range request.Environment {
+		if err := validateEnvironmentEntry(name, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateCacheMount validates one explicitly declared cache and its stable
+// destination name.
+func validateCacheMount(cache CacheMount, seen map[string]struct{}) error {
+	if !validName(cache.Name) {
+		return fmt.Errorf("cache name %q is invalid", cache.Name)
+	}
+	if _, exists := seen[cache.Name]; exists {
+		return fmt.Errorf("cache name %q is duplicated", cache.Name)
+	}
+	seen[cache.Name] = struct{}{}
+	return ensureCacheDirectory(cache.HostPath)
+}
+
+// validateEnvironmentEntry rejects malformed or credential-bearing explicit
+// environment values before any Docker process is launched.
+func validateEnvironmentEntry(name, value string) error {
+	if !validEnvironmentName(name) {
+		return fmt.Errorf("environment name %q is invalid", name)
+	}
+	if strings.ContainsAny(value, "\x00\r\n") {
+		return fmt.Errorf("environment value for %q contains a forbidden character", name)
+	}
+	if forbiddenEnvironmentName(name) {
+		return fmt.Errorf("environment variable %q is not allowed in a worker", name)
+	}
+	if reservedEnvironmentName(name) {
+		return fmt.Errorf("environment variable %q is reserved by the worker", name)
+	}
+	return nil
+}
+
+// validateImageName rejects image arguments that could be mistaken for Docker
+// flags or create an ambiguous mutable image reference.
+func validateImageName(image string) error {
+	trimmed := strings.TrimSpace(image)
+	if trimmed == "" {
+		return errors.New("worker image is required")
+	}
+	if trimmed != image || strings.HasPrefix(trimmed, "-") || strings.ContainsAny(trimmed, "\x00\t\r\n,@") {
+		return fmt.Errorf("worker image %q contains unsafe characters", image)
+	}
+	return nil
+}
+
+// validateDirectory requires an absolute existing directory without Docker
+// mount-syntax delimiters.
+func validateDirectory(path, field string) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%s must be absolute", field)
+	}
+	if strings.ContainsAny(path, "\x00\r\n,") {
+		return fmt.Errorf("%s contains a character unsafe for a Docker bind mount", field)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", field, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s %q is not a directory", field, path)
+	}
+	return nil
+}
+
+// ensureCacheDirectory validates a declared cache and creates its final
+// directory when it has not been materialized yet.
+func ensureCacheDirectory(path string) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("cache path must be absolute")
+	}
+	if strings.ContainsAny(path, "\x00\r\n,") {
+		return errors.New("cache path contains a character unsafe for a Docker bind mount")
+	}
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return fmt.Errorf("create cache path %q: %w", path, err)
+		}
+		info, err = os.Stat(path)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect cache path: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("cache path %q is not a directory", path)
+	}
+	return nil
+}
+
+// validateRunID rejects values that could escape the private container-name
+// derivation or become an argument boundary.
+func validateRunID(runID string) error {
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("worker run id is required")
+	}
+	if !validName(runID) {
+		return fmt.Errorf("worker run id %q contains unsafe characters", runID)
+	}
+	return nil
+}
+
+// validName accepts the portable identifier subset used for run and cache
+// names.
+func validName(value string) bool {
+	if value == "" || value == "." || value == ".." {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '-' || character == '_' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// validEnvironmentName accepts POSIX variable names.
+func validEnvironmentName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index, character := range name {
+		if index == 0 && !((character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || character == '_') {
+			return false
+		}
+		if !((character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// forbiddenEnvironmentName identifies common host credential and socket
+// variables that must never cross into a worker.
+func forbiddenEnvironmentName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "ANTHROPIC_API_KEY", "CODEX_API_KEY":
+		return true
+	default:
+		return strings.HasSuffix(strings.ToUpper(name), "_TOKEN") || strings.HasSuffix(strings.ToUpper(name), "_API_KEY")
+	}
+}
+
+// reservedEnvironmentName prevents callers from replacing worker identity,
+// stable Git paths, or the clean-environment controls.
+func reservedEnvironmentName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "HOME", "PATH", "TERM", "LANG", "LC_ALL", "FACTORY_RUN_ID", "FACTORY_ROLE", "GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2", "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS":
+		return true
+	default:
+		return false
+	}
+}
+
+// validDigest accepts the lowercase SHA-256 form required for image pinning.
+func validDigest(value string) bool {
+	if len(value) != len(workerImageDigestPrefix)+64 || !strings.HasPrefix(value, workerImageDigestPrefix) {
+		return false
+	}
+	for _, character := range strings.TrimPrefix(value, workerImageDigestPrefix) {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// imageReference combines an image name and its immutable digest.
+func imageReference(image, digest string) string {
+	return strings.TrimSpace(image) + "@" + strings.TrimSpace(digest)
+}
+
+// bindMount formats a Docker bind mount using the stable destination paths.
+func bindMount(hostPath, destination string, readOnly bool) string {
+	mount := "type=bind,src=" + hostPath + ",dst=" + destination
+	if readOnly {
+		mount += ",readonly"
+	}
+	return mount
+}
+
+// baselineEnvironment returns the fixed worker environment independent of the
+// host process environment.
+func baselineEnvironment(runID, role string) []string {
+	return []string{
+		"HOME=/home/factory",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"TERM=xterm-256color",
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+		"FACTORY_RUN_ID=" + runID,
+		"FACTORY_ROLE=" + role,
+		"GIT_DIR=" + GitMetadataPath,
+		"GIT_WORK_TREE=" + WorktreePath,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_COUNT=3",
+		"GIT_CONFIG_KEY_0=remote.origin.url",
+		"GIT_CONFIG_VALUE_0=disabled://factory",
+		"GIT_CONFIG_KEY_1=remote.origin.pushurl",
+		"GIT_CONFIG_VALUE_1=disabled://factory",
+		"GIT_CONFIG_KEY_2=credential.helper",
+		"GIT_CONFIG_VALUE_2=",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ASKPASS=/bin/false",
+		"SSH_ASKPASS=/bin/false",
+	}
+}
+
+// commandEnvironment creates sorted, deterministic environment entries for a
+// command and keeps role identity explicit even under the clean policy.
+func commandEnvironment(request CommandRequest) []string {
+	entries := baselineEnvironment(request.RunID, request.Role)
+	keys := make([]string, 0, len(request.Environment))
+	for key := range request.Environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		entries = append(entries, key+"="+request.Environment[key])
+	}
+	return entries
+}
+
+// containerName derives an internal Docker name from a run without exposing
+// that name through the worker seam.
+func containerName(runID string) string {
+	digest := sha256.Sum256([]byte(runID))
+	return "factory-worker-" + hex.EncodeToString(digest[:])[:24]
+}
+
+// isContainerNotFound identifies the expected missing-container result used by
+// idempotent start, stop, and inspection operations.
+func isContainerNotFound(err error) bool {
+	var commandErr *dockerCommandError
+	if !errors.As(err, &commandErr) {
+		return false
+	}
+	message := strings.ToLower(commandErr.Stderr)
+	return strings.Contains(message, "no such object") || strings.Contains(message, "not found") || strings.Contains(message, "no such container")
+}
+
+var _ WorkerRuntime = (*DockerRuntime)(nil)

@@ -99,6 +99,39 @@ func TestGhClientPreservesThePullRequestIndicator(t *testing.T) {
 	}
 }
 
+// TestGhClientPublishesAnExactCommitStatus verifies the host GitHub adapter
+// uses the immutable SHA path and a stable caller-provided context.
+func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{[]byte("")}}
+	client := &github.GhClient{Runner: runner}
+	sha := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	err := client.CreateCommitStatus(context.Background(), github.Repository{Owner: "example", Name: "project"}, github.CommitStatus{
+		SHA:         sha,
+		State:       github.CommitStatusSuccess,
+		Context:     "factory/gate/test",
+		Description: "factory setup and gate passed",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommitStatus() error = %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("GitHub calls = %d, want one", len(runner.calls))
+	}
+	call := runner.calls[0]
+	if !containsArgs(call.args, "repos/example/project/statuses/"+sha, "--method", "POST", "--input", "-") {
+		t.Fatalf("status args = %#v, want exact status endpoint", call.args)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(call.input, &payload); err != nil {
+		t.Fatalf("decode status payload: %v", err)
+	}
+	if payload["state"] != "success" || payload["context"] != "factory/gate/test" {
+		t.Fatalf("status payload = %#v, want success and stable context", payload)
+	}
+}
+
 // commandCall records one fake gh invocation.
 type commandCall struct {
 	args  []string

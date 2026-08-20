@@ -98,7 +98,14 @@ base_synchronization:
 
 The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
-Issue #3 establishes and validates this repository-declared gate contract. Running setup and gates with baseline health, dependency skipping, timeouts, and checkpoint-keyed results is the gate-runner work in issue #9; this binary does not execute arbitrary repository commands yet. The commands declared by this repository's `factory.yaml` are run as part of the repository verification suite.
+Issue #3 establishes and validates this repository-declared gate contract. Issue #5 adds the worker runtime and the coordinator path that runs setup plus one selected gate in the pinned worker and publishes its result to the exact checkpoint SHA. Full baseline health, dependency skipping, independent-gate execution, manifest-triggered setup, and retained checkpoint-keyed gate results remain the expanded gate model in issue #9. The commands declared by this repository's `factory.yaml` are also run as part of the repository verification suite.
+
+Worker execution uses stable in-container paths (`/work`, `/git`, and
+`/cache/<name>`), a non-root uid, dropped capabilities, disabled privilege
+escalation, and no Docker socket. Setup and gates receive a clean explicit
+environment; they do not inherit the coordinator's host environment or
+credentials. See [Worker runtime](worker-runtime.md) for the runtime seam and
+its isolation contract.
 
 ## Claiming an issue
 

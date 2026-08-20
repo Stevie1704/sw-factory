@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/google/uuid"
 )
 
@@ -22,6 +24,7 @@ type Factory interface {
 	Register(context.Context, RegisterRequest) (RegisterResult, error)
 	BootstrapLabels(context.Context) (BootstrapLabelsResult, error)
 	RunCoordinator
+	RunGate(context.Context, RunGateRequest) (gate.Result, error)
 	Status(context.Context) (StatusResult, error)
 }
 
@@ -79,7 +82,9 @@ type Dependencies struct {
 	CheckRepository RepositoryChecker
 	LoadRepository  RepositoryConfigLoader
 	GitHub          github.Client
+	CommitStatuses  github.CommitStatusPublisher
 	Worktree        gitadapter.WorktreeManager
+	Worker          worker.WorkerRuntime
 	Now             Clock
 	NewRunID        RunIDGenerator
 	Coordinator     string
@@ -162,8 +167,16 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.GitHub == nil {
 		dependencies.GitHub = github.NewClient()
 	}
+	if dependencies.CommitStatuses == nil {
+		if publisher, ok := dependencies.GitHub.(github.CommitStatusPublisher); ok {
+			dependencies.CommitStatuses = publisher
+		}
+	}
 	if dependencies.Worktree == nil {
 		dependencies.Worktree = gitadapter.NewWorktreeManager()
+	}
+	if dependencies.Worker == nil {
+		dependencies.Worker = worker.NewDockerRuntime()
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
