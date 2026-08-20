@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Container lifecycle for the issue #2 spike.
+#
+# Harness home directories live in named volumes, so `./worker recreate`
+# destroys the container and rebuilds it from the same pinned image with every
+# native session still present.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONTAINER=swf-spike
+IMAGE_TAG=sw-factory-spike:issue-2
+PIN_FILE="$HERE/image.pin"
+HOME_VOLUME=swf-spike-home
+CLAUDE_HOME_VOLUME=swf-spike-claude-home
+CODEX_HOME_VOLUME=swf-spike-codex-home
+RUN_DIR="$HERE/.run"
+WORK_DIR="$RUN_DIR/work"
+RESULT_DIR="$RUN_DIR/results"
+
+# Acceptance criterion 8 needs the container rebuilt from the *same* image, so
+# an absent pin is a hard error rather than a fallback to whatever the tag
+# currently points at.
+pinned_image() {
+  if [[ ! -s "$PIN_FILE" ]]; then
+    echo "no pinned image: run ./worker build first" >&2
+    exit 1
+  fi
+  tr -d '[:space:]' <"$PIN_FILE"
+}
+
+cmd_build() {
+  docker build -t "$IMAGE_TAG" "$HERE"
+  docker image inspect "$IMAGE_TAG" --format '{{.Id}}' >"$PIN_FILE"
+  echo "pinned $(pinned_image)"
+}
+
+cmd_up() {
+  local image
+  image="$(pinned_image)"
+
+  docker volume create "$HOME_VOLUME" >/dev/null
+  docker volume create "$CLAUDE_HOME_VOLUME" >/dev/null
+  docker volume create "$CODEX_HOME_VOLUME" >/dev/null
+
+  # The container user is uid 10001 but bind mounts carry host ownership, so
+  # the shared directories have to be group/other writable.
+  mkdir -p "$WORK_DIR" "$RESULT_DIR"
+  chmod 0777 "$WORK_DIR" "$RESULT_DIR"
+
+  docker run -d \
+    --name "$CONTAINER" \
+    --hostname swf-spike \
+    --user 10001:10001 \
+    --security-opt no-new-privileges \
+    --cap-drop ALL \
+    --mount "type=volume,src=$HOME_VOLUME,dst=/home/factory" \
+    --mount "type=volume,src=$CLAUDE_HOME_VOLUME,dst=/home/factory/.claude" \
+    --mount "type=volume,src=$CODEX_HOME_VOLUME,dst=/home/factory/.codex" \
+    --mount "type=bind,src=$WORK_DIR,dst=/work" \
+    --mount "type=bind,src=$RESULT_DIR,dst=/results" \
+    -e FACTORY_RUN_ID=spike-issue-2 \
+    "$image" >/dev/null
+
+  echo "started $CONTAINER from $image"
+}
+
+cmd_down() {
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  echo "removed $CONTAINER (home volumes kept)"
+}
+
+cmd_recreate() {
+  cmd_down
+  cmd_up
+}
+
+cmd_reset() {
+  cmd_down
+  docker volume rm -f "$HOME_VOLUME" "$CLAUDE_HOME_VOLUME" "$CODEX_HOME_VOLUME" >/dev/null 2>&1 || true
+  rm -rf "$RUN_DIR"
+  echo "removed home volumes and run directory"
+}
+
+cmd_status() {
+  docker ps -a --filter "name=^/$CONTAINER$" \
+    --format 'container {{.Names}} {{.Status}} image={{.Image}}'
+  echo "pinned image: $(pinned_image)"
+}
+
+# An interactive pseudo-terminal into the running container. PID 1 stays
+# `sleep infinity`, so Ctrl+C in here reaches the harness only.
+cmd_shell() {
+  exec docker exec -it "$CONTAINER" bash -l
+}
+
+cmd_claude() {
+  exec docker exec -it \
+    -e FACTORY_HARNESS=claude \
+    -e DISABLE_AUTOUPDATER=1 \
+    -e "FACTORY_INVOCATION_ID=${FACTORY_INVOCATION_ID:-inv-claude}" \
+    -e "FACTORY_ROLE=${FACTORY_ROLE:-implementation}" \
+    "$CONTAINER" claude "$@"
+}
+
+# Codex's own bubblewrap sandbox cannot start inside this container, because
+# Docker's default seccomp profile blocks unshare(CLONE_NEWUSER). The container
+# is the security boundary, so Codex's inner sandbox is disabled. Approvals stay
+# on, so a person still sees and answers each command the harness wants to run.
+cmd_codex() {
+  exec docker exec -it \
+    -e FACTORY_HARNESS=codex \
+    -e "FACTORY_INVOCATION_ID=${FACTORY_INVOCATION_ID:-inv-codex}" \
+    -e "FACTORY_ROLE=${FACTORY_ROLE:-implementation}" \
+    "$CONTAINER" codex -a untrusted -s danger-full-access "$@"
+}
+
+usage() {
+  cat <<'USAGE'
+usage: ./worker <command> [args]
+
+  build       build the image and write image.pin
+  up          start the container from the pinned image
+  down        remove the container, keep the harness home volumes
+  recreate    down then up, to prove sessions survive
+  reset       remove the container, the home volumes, and .run
+  status      show the container and the pinned image
+  shell       interactive shell in the container
+  claude ...  run Claude Code in an interactive pseudo-terminal
+  codex ...   run Codex in an interactive pseudo-terminal
+USAGE
+}
+
+case "${1:-}" in
+  build|up|down|recreate|reset|status|shell) "cmd_$1" ;;
+  claude|codex) subcommand="$1"; shift; "cmd_$subcommand" "$@" ;;
+  *) usage; exit 1 ;;
+esac

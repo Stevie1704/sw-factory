@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Type into the Codex TUI, answer its approval, and report the session id."""
+import fcntl, json, os, pty, re, select, signal, struct, subprocess, sys, termios, time
+
+CONTAINER = "swf-spike"
+INVOCATION = "inv-codex-tui"
+REQUEST = ('Remember the token SPIKE-TOKEN-9915. Then run exactly this command and stop: '
+           'factory-report --stage test --outcome completed --summary "codex tui stage"')
+
+def strip_ansi(d):
+    t = d.decode(errors="replace")
+    t = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", t)
+    return re.sub(r"\x1b\][^\x07]*\x07", "", t)
+
+def drain(fd, secs):
+    buf=b""; end=time.time()+secs
+    while time.time()<end:
+        r,_,_=select.select([fd],[],[],0.4)
+        if not r: continue
+        try: c=os.read(fd,65536)
+        except OSError: break
+        if not c: break
+        buf+=c
+    return buf
+
+def visible(t): return "\n".join(l for l in t.splitlines() if l.strip())
+
+def newest_session():
+    out = subprocess.run(["docker","exec",CONTAINER,"bash","-lc",
+        "ls -t ~/.codex/sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -1"],
+        capture_output=True, text=True)
+    return out.stdout.strip()
+
+def main():
+    subprocess.run(["docker","exec",CONTAINER,"rm","-f",f"/results/{INVOCATION}.json"],
+                   capture_output=True)
+    before = newest_session()
+
+    pid, fd = pty.fork()
+    if pid==0:
+        os.execvp("docker",["docker","exec","-it",
+            "-e",f"FACTORY_INVOCATION_ID={INVOCATION}",
+            "-e","FACTORY_HARNESS=codex","-e","FACTORY_ROLE=test",
+            CONTAINER,"codex","-a","untrusted","-s","danger-full-access"])
+        os._exit(127)
+
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH",45,120,0,0))
+    ready = strip_ansi(drain(fd,25))
+    print("=== 1. Codex TUI ready ===")
+    print(visible(ready)[-400:])
+
+    for piece in REQUEST.split(" "):
+        os.write(fd,(piece+" ").encode()); time.sleep(0.02)
+    time.sleep(1.0)
+    typed = strip_ansi(drain(fd,3))
+    print("\n=== 2. keystrokes reached the harness ===")
+    print("request visible:", "factory-report" in typed or "SPIKE-TOKEN-9915" in typed)
+
+    os.write(fd,b"\r")
+    prompt = strip_ansi(drain(fd,60))
+    print("\n=== 3. response / approval prompt ===")
+    print(visible(prompt)[-1400:])
+    low = prompt.lower()
+    approval = any(m in low for m in ("allow","approve","do you want","proceed","y/n","yes"))
+    print("\napproval prompt raised:", approval)
+    if approval:
+        os.write(fd,b"\r")
+        after = strip_ansi(drain(fd,60))
+        print("\n=== 4. after approving ===")
+        print(visible(after)[-900:])
+
+    time.sleep(2)
+    res = subprocess.run(["docker","exec",CONTAINER,"cat",f"/results/{INVOCATION}.json"],
+                         capture_output=True, text=True)
+    print("\n=== 5. stage result file ===")
+    print(json.dumps(json.loads(res.stdout), indent=2) if res.returncode==0
+          else f"no result file: {res.stderr.strip()}")
+
+    after_session = newest_session()
+    print("\n=== 6. native session id ===")
+    print("session file:", after_session, "(new)" if after_session!=before else "(unchanged)")
+    pathlib_id = re.search(r"rollout-[\dT:-]+-([0-9a-f-]{36})\.jsonl", after_session)
+    if pathlib_id:
+        print("session uuid:", pathlib_id.group(1))
+        open("/tmp/codex-tui-session","w").write(pathlib_id.group(1))
+
+    try: os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError: pass
+    os.close(fd)
+    return 0
+
+if __name__=="__main__":
+    sys.exit(main())

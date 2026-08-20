@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+// Stage completion for the issue #2 spike.
+//
+// The harness calls this instead of printing a result the coordinator would
+// have to read off the screen. It writes schema-versioned JSON atomically into
+// the invocation's mounted result directory, so terminal content is never
+// parsed for correctness.
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const SCHEMA_VERSION = 1;
+const OUTCOMES = ['completed', 'needs_clarification', 'cannot_proceed'];
+
+function parseArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i += 2) {
+    const flag = argv[i];
+    if (!flag.startsWith('--')) {
+      throw new Error(`expected a --flag, got "${flag}"`);
+    }
+    if (i + 1 >= argv.length) {
+      throw new Error(`flag "${flag}" has no value`);
+    }
+    args[flag.slice(2).replace(/-/g, '_')] = argv[i + 1];
+  }
+  return args;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+
+  const resultDir = process.env.FACTORY_RESULT_DIR;
+  if (!resultDir) {
+    throw new Error('FACTORY_RESULT_DIR is not set');
+  }
+  const invocationId = args.invocation || process.env.FACTORY_INVOCATION_ID;
+  if (!invocationId) {
+    throw new Error('no invocation id: pass --invocation or set FACTORY_INVOCATION_ID');
+  }
+  const outcome = args.outcome || 'completed';
+  if (!OUTCOMES.includes(outcome)) {
+    throw new Error(`unknown outcome "${outcome}", expected one of ${OUTCOMES.join(', ')}`);
+  }
+  if (!args.stage) {
+    throw new Error('--stage is required');
+  }
+
+  const report = {
+    schema_version: SCHEMA_VERSION,
+    invocation_id: invocationId,
+    run_id: process.env.FACTORY_RUN_ID || null,
+    harness: process.env.FACTORY_HARNESS || null,
+    role: process.env.FACTORY_ROLE || null,
+    stage: args.stage,
+    outcome,
+    summary: args.summary || '',
+    reported_at: new Date().toISOString(),
+  };
+
+  // Same-directory rename, so a reader never observes a partial file.
+  const target = path.join(resultDir, `${invocationId}.json`);
+  const temp = path.join(resultDir, `.${invocationId}.json.partial`);
+  const handle = fs.openSync(temp, 'w', 0o600);
+  try {
+    fs.writeFileSync(handle, JSON.stringify(report, null, 2) + '\n');
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+  fs.renameSync(temp, target);
+
+  process.stdout.write(`reported ${outcome} for stage ${args.stage} -> ${target}\n`);
+}
+
+try {
+  main();
+} catch (error) {
+  process.stderr.write(`factory-report: ${error.message}\n`);
+  process.exit(2);
+}

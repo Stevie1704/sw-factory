@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Prove the nested pseudo-terminal plumbing for issue #2.
+
+Drives `docker exec -it` from a real pty on the host and checks that window
+size, SIGWINCH, and Ctrl+C survive both layers of terminal indirection.
+"""
+import errno
+import fcntl
+import os
+import pty
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+CONTAINER = "swf-spike"
+
+
+def set_winsize(fd, rows, cols):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
+def read_until(fd, marker, timeout=15.0):
+    deadline = time.time() + timeout
+    buffer = b""
+    while time.time() < deadline:
+        remaining = deadline - time.time()
+        try:
+            ready, _, _ = select.select([fd], [], [], remaining)
+        except InterruptedError:
+            continue
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError as error:
+            if error.errno in (errno.EIO, errno.EBADF):
+                break
+            raise
+        if not chunk:
+            break
+        buffer += chunk
+        if marker in buffer:
+            return buffer
+    return buffer
+
+
+def container_running():
+    result = subprocess.run(
+        ["docker", "inspect", CONTAINER, "--format", "{{.State.Running}}"],
+        capture_output=True, text=True,
+    )
+    return result.stdout.strip() == "true"
+
+
+def main():
+    checks = []
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp("docker", ["docker", "exec", "-it", CONTAINER, "bash", "--noprofile", "--norc"])
+        os._exit(127)
+
+    set_winsize(fd, 24, 80)
+    time.sleep(1.0)
+
+    # 1. The harness side sees a real terminal with the size we set.
+    os.write(fd, b"printf 'SI''ZE:'; stty size; echo EN''DSIZE\n")
+    out = read_until(fd, b"ENDSIZE").decode(errors="replace")
+    match = re.search(r"SIZE:(\d+)\s+(\d+)", out)
+    checks.append(("initial window size reaches the container", match is not None and match.groups() == ("24", "80"), match.groups() if match else out[-120:]))
+
+    # 2. Resizing the host pty raises SIGWINCH inside the container.
+    os.write(fd, b"trap 'echo GOT_SIG''WINCH' WINCH\n")
+    time.sleep(0.5)
+    read_until(fd, b"$", timeout=1.0)
+    set_winsize(fd, 40, 132)
+    got = read_until(fd, b"GOT_SIGWINCH", timeout=8.0).decode(errors="replace")
+    checks.append(("resize raises SIGWINCH inside the container", "GOT_SIGWINCH" in got, got[-120:]))
+
+    # 3. The container agrees with the new size.
+    os.write(fd, b"printf 'SI''ZE2:'; stty size; echo EN''DSIZE2\n")
+    out2 = read_until(fd, b"ENDSIZE2").decode(errors="replace")
+    match2 = re.search(r"SIZE2:(\d+)\s+(\d+)", out2)
+    checks.append(("resized window size reaches the container", match2 is not None and match2.groups() == ("40", "132"), match2.groups() if match2 else out2[-120:]))
+
+    # 4. Ctrl+C interrupts the foreground process without killing the container.
+    # SIGINT reaches the whole foreground process group, so interactive bash
+    # abandons the command list and redraws its prompt. The proof is that the
+    # 30 second sleep dies immediately and leaves no process behind.
+    os.write(fd, b"sleep 30; echo AFTER_SL''EEP\n")
+    time.sleep(1.5)
+    started = time.time()
+    os.write(fd, b"\x03")
+    # The terminal echoes "^C" whether or not the child died, so it proves
+    # nothing on its own. The surviving evidence is that the 30 second sleep is
+    # gone long before it could have finished.
+    read_until(fd, b"^C", timeout=10.0)
+    elapsed = time.time() - started
+    checks.append((
+        "Ctrl+C ends the foreground process early",
+        elapsed < 5,
+        f"elapsed={elapsed:.2f}s",
+    ))
+
+    time.sleep(0.5)
+    leftover = subprocess.run(
+        ["docker", "exec", CONTAINER, "pgrep", "-f", "sleep 30"],
+        capture_output=True, text=True,
+    )
+    checks.append(("the interrupted process is gone", leftover.returncode != 0, leftover.stdout.strip()))
+
+    checks.append(("container survives Ctrl+C", container_running(), None))
+
+    # 5. The session is still usable afterwards.
+    os.write(fd, b"printf 'STI''LL:'; echo ALI''VE\n")
+    alive = read_until(fd, b"STILL:ALIVE", timeout=8.0).decode(errors="replace")
+    checks.append(("shell still responsive after Ctrl+C", "STILL:ALIVE" in alive, alive[-120:]))
+
+    os.write(fd, b"exit\n")
+    time.sleep(0.5)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    os.close(fd)
+
+    checks.append(("container survives the client detaching", container_running(), None))
+
+    failed = 0
+    for name, ok, detail in checks:
+        print(f"{'PASS' if ok else 'FAIL'}  {name}")
+        if not ok:
+            failed += 1
+            print(f"      detail: {detail!r}")
+    print()
+    print(f"{len(checks) - failed}/{len(checks)} checks passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

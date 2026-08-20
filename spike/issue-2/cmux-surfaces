@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Create the spike's cmux run workspace.
+#
+# Run this from a terminal *inside* cmux. The cmux control socket rejects
+# callers that cmux did not start, so this cannot be driven from an outside
+# shell without the socket password.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKER="$HERE/worker"
+CONTAINER=swf-spike
+
+if ! cmux ping >/dev/null 2>&1; then
+  echo "cmux control socket is not reachable from here." >&2
+  echo "Open a terminal inside cmux and run this script again." >&2
+  exit 1
+fi
+
+if ! docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+  "$WORKER" up
+fi
+
+layout=$(cat <<JSON
+{
+  "direction": "horizontal",
+  "split": 0.5,
+  "children": [
+    { "pane": { "surfaces": [ { "type": "terminal", "command": "$WORKER claude" } ] } },
+    { "pane": { "surfaces": [ { "type": "terminal", "command": "$WORKER codex" } ] } }
+  ]
+}
+JSON
+)
+
+cmux new-workspace \
+  --name "spike-issue-2" \
+  --description "Nested harness TTYs through cmux and Docker" \
+  --cwd "$HERE" \
+  --focus true \
+  --layout "$layout"
+
+echo
+echo "Left surface  : Claude Code inside the container"
+echo "Right surface : Codex inside the container"

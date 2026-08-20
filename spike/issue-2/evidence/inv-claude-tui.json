@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "invocation_id": "inv-claude-tui",
+  "run_id": "spike-issue-2",
+  "harness": "claude",
+  "role": "test",
+  "stage": "test",
+  "outcome": "completed",
+  "summary": "claude tui stage",
+  "reported_at": "2026-08-20T08:48:56.065Z"
+}

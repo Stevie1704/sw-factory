@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Type a real stage request into the Claude Code TUI and answer its approval.
+
+This exercises the interactive path end to end: keystrokes reach the harness,
+the harness raises a tool-approval prompt, the prompt is answered, and the
+stage result arrives as schema-versioned JSON rather than as screen text.
+"""
+import fcntl
+import json
+import os
+import pty
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+CONTAINER = "swf-spike"
+INVOCATION = "inv-claude-tui"
+REQUEST = (
+    "Run this exact shell command and then stop: "
+    'factory-report --stage test --outcome completed --summary "claude tui stage"'
+)
+
+
+def strip_ansi(data):
+    text = data.decode(errors="replace")
+    text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text)
+    return re.sub(r"\x1b\][^\x07]*\x07", "", text)
+
+
+def drain(fd, seconds):
+    buffer = b""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        ready, _, _ = select.select([fd], [], [], 0.4)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buffer += chunk
+    return buffer
+
+
+def visible(text):
+    return "\n".join(line for line in text.splitlines() if line.strip())
+
+
+def main():
+    subprocess.run(["docker", "exec", CONTAINER, "rm", "-f", f"/results/{INVOCATION}.json"],
+                   capture_output=True)
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp("docker", [
+            "docker", "exec", "-it",
+            "-e", f"FACTORY_INVOCATION_ID={INVOCATION}",
+            "-e", "FACTORY_HARNESS=claude",
+            "-e", "FACTORY_ROLE=test",
+            "-e", "DISABLE_AUTOUPDATER=1",
+            CONTAINER, "claude",
+        ])
+        os._exit(127)
+
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 120, 0, 0))
+    ready = strip_ansi(drain(fd, 25))
+    print("=== 1. TUI ready ===")
+    print(visible(ready)[-300:])
+
+    # Type the request one chunk at a time, the way a person would.
+    for piece in REQUEST.split(" "):
+        os.write(fd, (piece + " ").encode())
+        time.sleep(0.02)
+    time.sleep(1.0)
+    typed = strip_ansi(drain(fd, 3))
+    print("\n=== 2. keystrokes reached the harness ===")
+    print("request visible in the composer:", "factory-report" in typed or "factory-report" in ready)
+
+    os.write(fd, b"\r")
+    prompt = strip_ansi(drain(fd, 45))
+    print("\n=== 3. harness response / approval prompt ===")
+    print(visible(prompt)[-1600:])
+
+    lowered = prompt.lower()
+    approval = any(m in lowered for m in
+                   ("do you want", "proceed", "allow", "yes, and", "1. yes", "❯ 1."))
+    print("\napproval prompt raised:", approval)
+
+    if approval:
+        os.write(fd, b"\r")            # accept the highlighted option
+        after = strip_ansi(drain(fd, 45))
+        print("\n=== 4. after approving ===")
+        print(visible(after)[-1200:])
+
+    time.sleep(2)
+    result = subprocess.run(
+        ["docker", "exec", CONTAINER, "cat", f"/results/{INVOCATION}.json"],
+        capture_output=True, text=True,
+    )
+    print("\n=== 5. stage result file ===")
+    if result.returncode == 0:
+        print(json.dumps(json.loads(result.stdout), indent=2))
+    else:
+        print("no result file:", result.stderr.strip())
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    os.close(fd)
+    return 0 if result.returncode == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

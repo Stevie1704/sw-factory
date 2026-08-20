@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Drive a real harness TUI through the nested pseudo-terminal.
+
+`tty-probe` proves the terminal plumbing with a shell. This proves the same
+behaviour against Claude Code and Codex themselves, which is what issue #2
+actually asks about.
+"""
+import fcntl
+import os
+import pty
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+CONTAINER = "swf-spike"
+
+
+def strip_ansi(data):
+    text = data.decode(errors="replace")
+    text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text)
+    return re.sub(r"\x1b\][^\x07]*\x07", "", text)
+
+
+def set_winsize(fd, rows, columns):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+
+
+def drain(fd, seconds):
+    buffer = b""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        ready, _, _ = select.select([fd], [], [], 0.4)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buffer += chunk
+    return buffer
+
+
+def container_running():
+    result = subprocess.run(
+        ["docker", "inspect", CONTAINER, "--format", "{{.State.Running}}"],
+        capture_output=True, text=True,
+    )
+    return result.stdout.strip() == "true"
+
+
+def harness_pids(pattern):
+    result = subprocess.run(
+        ["docker", "exec", CONTAINER, "pgrep", "-f", pattern],
+        capture_output=True, text=True,
+    )
+    return [line for line in result.stdout.split() if line.strip()]
+
+
+def probe(name, argv, ready_marker, observations):
+    checks = []
+    before = set(harness_pids(name))
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp("docker", ["docker", "exec", "-it", CONTAINER] + argv)
+        os._exit(127)
+
+    set_winsize(fd, 40, 100)
+    screen = strip_ansi(drain(fd, 25))
+    checks.append((f"{name}: TUI reaches a ready prompt", ready_marker in screen.lower(),
+                   screen[-160:]))
+
+    started = set(harness_pids(name)) - before
+    checks.append((f"{name}: process is running in the container", bool(started), started))
+
+    # Resize the harness itself, not a shell, and let it redraw.
+    set_winsize(fd, 50, 160)
+    os.kill(pid, signal.SIGWINCH)
+    redraw = strip_ansi(drain(fd, 8))
+    widest = max((len(l) for l in redraw.splitlines()), default=0)
+    checks.append((f"{name}: redraws wider after resize", widest > 100, f"widest line {widest}"))
+
+    # Ctrl+C into the live harness.
+    os.write(fd, b"\x03")
+    time.sleep(2.5)
+    still_running = bool(set(harness_pids(name)) & started) if started else False
+    checks.append((f"{name}: container survives Ctrl+C", container_running(), None))
+    checks.append((f"{name}: Ctrl+C did not destroy the container", container_running(), None))
+    drain(fd, 5)
+    # The two harnesses answer Ctrl+C differently. Both leave the container up,
+    # which is what the criterion requires, but only one stays alive. Record the
+    # difference instead of judging it.
+    observations.append(
+        f"{name}: Ctrl+C "
+        + ("interrupts the harness, which keeps running" if still_running
+           else "exits the harness; the coordinator must resume its native session"))
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    os.close(fd)
+
+    checks.append((f"{name}: container survives the client detaching", container_running(), None))
+    return checks
+
+
+def main():
+    checks = []
+    observations = []
+    checks += probe("claude", ["claude"], "manual mode", observations)
+    checks += probe("codex", ["codex", "-s", "danger-full-access"], "ask codex", observations)
+
+    failed = 0
+    for label, ok, detail in checks:
+        print(f"{'PASS' if ok else 'FAIL'}  {label}")
+        if not ok:
+            failed += 1
+            print(f"      detail: {detail!r}")
+    print()
+    for note in observations:
+        print(f"NOTE  {note}")
+    print(f"\n{len(checks) - failed}/{len(checks)} checks passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
