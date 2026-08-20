@@ -115,8 +115,9 @@ narrowly scoped copy" works: one file, streamed into the container, and
 `codex login status` reports `Logged in using ChatGPT`.
 
 Claude Code on macOS keeps its credential in the **login Keychain**; there is no
-`~/.claude/.credentials.json` to copy. On Linux it does use a plain file, so the
-credential exists as a file *inside* the container once logged in there.
+`~/.claude/.credentials.json` to copy. Whether the Linux build inside the
+container stores its credential as a plain file is **not yet observed** — verify
+it against the harness home volume before ticket #73 relies on it.
 
 **Workaround**: either log in once inside the container, which persists in the
 harness home volume, or use `claude setup-token` to mint a long-lived token and
