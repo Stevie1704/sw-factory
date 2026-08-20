@@ -1,0 +1,61 @@
+schema_version: 1
+target_branch: main
+setup: go mod download
+gates:
+  - name: format
+    command: test -z "$(gofmt -l .)"
+    timeout: 2m
+    blocking: true
+    environment_policy: clean
+  - name: vet
+    command: go vet ./...
+    timeout: 5m
+    blocking: true
+    depends_on: [format]
+    environment_policy: clean
+  - name: test
+    command: go test ./...
+    timeout: 10m
+    blocking: true
+    depends_on: [vet]
+    environment_policy: clean
+  - name: build
+    command: go build ./cmd/factory
+    timeout: 5m
+    blocking: true
+    depends_on: [test]
+    environment_policy: clean
+role_harness_defaults:
+  test: codex
+  implementation: codex
+  spec_review: codex
+  standards_review: codex
+model_options:
+  test: [gpt-5]
+  implementation: [gpt-5]
+  spec_review: [gpt-5]
+  standards_review: [gpt-5]
+timeouts:
+  setup: 10m
+  agent: 30m
+  gate: 10m
+  review: 15m
+retry_limits:
+  check_repair: 3
+  review_repair: 2
+  test_revision: 2
+test_policy:
+  mode: required
+  allow_human_exemption: true
+  allow_technical_exemption: true
+allowed_overrides: [model, reasoning_effort]
+caches:
+  - name: go-build
+    path: /tmp/sw-factory-cache/go-build
+    read_only: false
+worker_build:
+  image: ghcr.io/stevie1704/sw-factory-worker
+  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  definition: worker/Dockerfile
+base_synchronization:
+  mode: never

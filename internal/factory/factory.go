@@ -154,6 +154,15 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("resolve repository configuration path: %w", err)
 	}
+	if pathWithin(repositoryPath, operationalPath) {
+		return RegisterResult{}, &config.ValidationError{Field: "repositories[0].operational_data_path", Message: "must be outside the registered repository checkout"}
+	}
+	if !pathWithin(repositoryPath, repositoryConfigPath) {
+		return RegisterResult{}, &config.ValidationError{Field: "repositories[0].repository_config_path", Message: "must be inside the registered repository checkout"}
+	}
+	if _, err := config.LoadRepository(repositoryConfigPath); err != nil {
+		return RegisterResult{}, err
+	}
 	registration := config.RepositoryRegistration{
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: strings.TrimSpace(request.GitHubOwner), Repository: strings.TrimSpace(request.GitHubRepository)},
@@ -228,4 +237,12 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func pathWithin(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }

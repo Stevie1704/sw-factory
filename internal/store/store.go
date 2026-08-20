@@ -16,6 +16,30 @@ import (
 
 const CurrentSchemaVersion = 1
 
+type Stage string
+
+const (
+	StageClaim          Stage = "claim"
+	StagePreflight      Stage = "preflight"
+	StageTest           Stage = "test"
+	StageImplementation Stage = "implementation"
+	StageCheck          Stage = "check"
+	StageDraftPR        Stage = "draft_pr"
+	StageReview         Stage = "review"
+	StageReady          Stage = "ready"
+)
+
+type Status string
+
+const (
+	StatusActive            Status = "active"
+	StatusWaitingForHuman   Status = "waiting_for_human"
+	StatusWaitingForHarness Status = "waiting_for_harness"
+	StatusFailed            Status = "failed"
+	StatusCancelled         Status = "cancelled"
+	StatusComplete          Status = "complete"
+)
+
 type UnknownSchemaVersionError struct {
 	Version   int
 	Supported int
@@ -40,8 +64,8 @@ type Run struct {
 	ID             string
 	RepositoryPath string
 	IssueNumber    int
-	Stage          string
-	Status         string
+	Stage          Stage
+	Status         Status
 	Branch         string
 	Worktree       string
 	CheckpointSHA  string
@@ -67,13 +91,24 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o700); err != nil {
 		return nil, fmt.Errorf("create operational store directory: %w", err)
 	}
-	existed, err := databaseHasContent(absolutePath)
+	existed, empty, err := databaseState(absolutePath)
 	if err != nil {
 		return nil, err
+	}
+	if existed && empty {
+		return nil, &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
 	}
 	database, err := sql.Open("sqlite", absolutePath)
 	if err != nil {
 		return nil, fmt.Errorf("open operational store: %w", err)
+	}
+	if err := database.PingContext(ctx); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("open operational store: %w", err)
+	}
+	if err := os.Chmod(absolutePath, 0o600); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("protect operational store: %w", err)
 	}
 	database.SetMaxOpenConns(1)
 	database.SetMaxIdleConns(1)
@@ -99,22 +134,22 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	if version < CurrentSchemaVersion {
-		if err := database.Close(); err != nil {
-			return nil, fmt.Errorf("close store before migration: %w", err)
-		}
-		backupPath, err := backupDatabase(absolutePath)
-		if err != nil {
-			return nil, err
-		}
-		_ = backupPath
-		database, err = sql.Open("sqlite", absolutePath)
-		if err != nil {
-			return nil, fmt.Errorf("reopen operational store for migration: %w", err)
-		}
-		database.SetMaxOpenConns(1)
-		database.SetMaxIdleConns(1)
-		if err := configure(ctx, database); err != nil {
-			return nil, err
+		if existed {
+			if err := database.Close(); err != nil {
+				return nil, fmt.Errorf("close store before migration: %w", err)
+			}
+			if _, err := backupDatabase(absolutePath); err != nil {
+				return nil, err
+			}
+			database, err = sql.Open("sqlite", absolutePath)
+			if err != nil {
+				return nil, fmt.Errorf("reopen operational store for migration: %w", err)
+			}
+			database.SetMaxOpenConns(1)
+			database.SetMaxIdleConns(1)
+			if err := configure(ctx, database); err != nil {
+				return nil, err
+			}
 		}
 		if err := migrate(ctx, database, version); err != nil {
 			return nil, err
@@ -141,9 +176,9 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, created_at, updated_at
 		FROM operational_runs
-		WHERE status NOT IN ('complete', 'cancelled', 'failed')
+		WHERE status NOT IN (?, ?, ?)
 		ORDER BY updated_at DESC
-		LIMIT 1`)
+		LIMIT 1`, StatusComplete, StatusCancelled, StatusFailed)
 	var run Run
 	var createdAt, updatedAt string
 	if err := row.Scan(
@@ -226,18 +261,18 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	return nil
 }
 
-func databaseHasContent(path string) (bool, error) {
+func databaseState(path string) (bool, bool, error) {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("inspect operational store: %w", err)
+		return false, false, fmt.Errorf("inspect operational store: %w", err)
 	}
 	if info.IsDir() {
-		return false, fmt.Errorf("operational store path %q is a directory", path)
+		return false, false, fmt.Errorf("operational store path %q is a directory", path)
 	}
-	return info.Size() > 0, nil
+	return true, info.Size() == 0, nil
 }
 
 func configure(ctx context.Context, database *sql.DB) error {

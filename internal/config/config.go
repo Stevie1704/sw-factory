@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -358,6 +357,15 @@ func ValidateRepository(config RepositoryConfig) error {
 	if strings.TrimSpace(config.WorkerBuild.Image) == "" {
 		return validation("worker_build.image", "is required")
 	}
+	if strings.TrimSpace(config.WorkerBuild.Digest) == "" {
+		return validation("worker_build.digest", "is required")
+	}
+	if !validSHA256Digest(config.WorkerBuild.Digest) {
+		return validation("worker_build.digest", "must be a sha256 digest with 64 hexadecimal characters")
+	}
+	if strings.TrimSpace(config.WorkerBuild.Definition) == "" {
+		return validation("worker_build.definition", "is required")
+	}
 	if config.BaseSynchronization.Mode != "never" && config.BaseSynchronization.Mode != "before_ready" {
 		return validation("base_synchronization.mode", "must be never or before_ready")
 	}
@@ -394,6 +402,9 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	}
 	if !filepath.IsAbs(repository.OperationalDataPath) {
 		return validation(prefix+".operational_data_path", "must be absolute")
+	}
+	if repository.Cmux.SocketPath != "" && !filepath.IsAbs(repository.Cmux.SocketPath) {
+		return validation(prefix+".cmux.socket_path", "must be absolute when set")
 	}
 	if strings.TrimSpace(repository.RepositoryConfigPath) == "" {
 		return validation(prefix+".repository_config_path", "is required")
@@ -472,11 +483,14 @@ func loadYAML(path string, destination any) error {
 	return nil
 }
 
-func SortedRoles(values map[string]string) []string {
-	roles := make([]string, 0, len(values))
-	for role := range values {
-		roles = append(roles, role)
+func validSHA256Digest(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
 	}
-	sort.Strings(roles)
-	return roles
+	for _, character := range value[len("sha256:"):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }

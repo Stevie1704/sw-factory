@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,12 +26,26 @@ func TestOpenCreatesVersionedStoreWithNoActiveRun(t *testing.T) {
 	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
 		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("store permissions = %#o, want 0600", got)
+	}
 	current, err := opened.CurrentRun(context.Background())
 	if err != nil {
 		t.Fatalf("CurrentRun() error = %v", err)
 	}
 	if current != nil {
 		t.Fatalf("CurrentRun() = %#v, want empty store", current)
+	}
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("fresh store backups = %v, want none", backups)
 	}
 }
 
@@ -57,6 +72,21 @@ func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
 	}
 	if schemaErr.Version != 99 {
 		t.Fatalf("schema error = %#v", schemaErr)
+	}
+}
+
+func TestOpenRejectsAnExistingEmptyDatabaseFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "factory.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.Open(context.Background(), path)
+	var unversionedErr *store.UnversionedDatabaseError
+	if !errors.As(err, &unversionedErr) {
+		t.Fatalf("error = %v, want UnversionedDatabaseError", err)
 	}
 }
 

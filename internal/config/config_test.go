@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -54,7 +55,7 @@ caches:
     read_only: false
 worker_build:
   image: ghcr.io/example/factory-worker
-  digest: sha256:0123456789abcdef
+  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   definition: worker/Dockerfile
 base_synchronization:
   mode: before_ready
@@ -121,5 +122,22 @@ repositories:
 	}
 	if validationErr.Field != "repositories[0].path" {
 		t.Fatalf("field = %q, want repositories[0].path", validationErr.Field)
+	}
+}
+
+func TestProjectRepositoryConfigIsValid(t *testing.T) {
+	t.Parallel()
+
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() failed")
+	}
+	path := filepath.Join(filepath.Dir(filename), "..", "..", config.RepositoryConfigFileName)
+	loaded, err := config.LoadRepository(path)
+	if err != nil {
+		t.Fatalf("LoadRepository(%q) error = %v", path, err)
+	}
+	if len(loaded.Gates) < 4 {
+		t.Fatalf("project gates = %d, want format, vet, test, and build", len(loaded.Gates))
 	}
 }

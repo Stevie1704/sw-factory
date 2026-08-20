@@ -23,6 +23,7 @@ func TestFactoryInitializesRegistersAndReportsAnEmptyRunStore(t *testing.T) {
 	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeRepositoryConfig(t, repositoryPath)
 	operationalPath := filepath.Join(root, "state", "factory.db")
 	service := factory.New(configPath)
 
@@ -93,6 +94,78 @@ func TestFactoryRefusesAnInvalidRegistrationBeforePersistingIt(t *testing.T) {
 	}
 }
 
+func TestFactoryRefusesAnOperationalStoreInsideTheRepositoryCheckout(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: filepath.Join(repositoryPath, ".factory", "factory.db"),
+	})
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("error = %v, want ValidationError", err)
+	}
+	if validationErr.Field != "repositories[0].operational_data_path" {
+		t.Fatalf("field = %q, want repositories[0].operational_data_path", validationErr.Field)
+	}
+}
+
+func TestFactoryRefusesAnInvalidRepositoryConfigurationBeforePersistingRegistration(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repositoryPath, config.RepositoryConfigFileName), []byte("schema_version: 99\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	_, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: operationalPath,
+	})
+	var schemaErr *config.UnknownSchemaVersionError
+	if !errors.As(err, &schemaErr) {
+		t.Fatalf("error = %v, want UnknownSchemaVersionError", err)
+	}
+	if _, err := os.Stat(operationalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("operational store exists after invalid registration: %v", err)
+	}
+	host, err := config.LoadHost(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(host.Repositories) != 0 {
+		t.Fatalf("host repositories = %#v, want none", host.Repositories)
+	}
+}
+
 func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -142,4 +215,43 @@ func (f *fakeConfigRepository) Save(_ string, value config.HostConfig) error {
 func (f *fakeConfigRepository) Create(string) (config.HostConfig, error) {
 	f.value = config.NewHostConfig()
 	return f.value, nil
+}
+
+func writeRepositoryConfig(t *testing.T, repositoryPath string) {
+	t.Helper()
+	contents := `schema_version: 1
+target_branch: main
+setup: go mod download
+gates:
+  - name: test
+    command: go test ./...
+    timeout: 5m
+    blocking: true
+    environment_policy: clean
+role_harness_defaults:
+  implementation: codex
+model_options:
+  implementation: [gpt-5]
+timeouts:
+  setup: 5m
+  agent: 30m
+  gate: 5m
+  review: 10m
+retry_limits:
+  check_repair: 3
+  review_repair: 2
+  test_revision: 2
+test_policy:
+  mode: required
+allowed_overrides: [model]
+worker_build:
+  image: ghcr.io/example/factory-worker
+  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  definition: worker/Dockerfile
+base_synchronization:
+  mode: never
+`
+	if err := os.WriteFile(filepath.Join(repositoryPath, config.RepositoryConfigFileName), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }

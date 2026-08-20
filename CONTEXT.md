@@ -35,3 +35,15 @@ _Avoid_: Local evaluation summary
 **Pilot**:
 An evidence-gathering delivery phase that compares the supervised factory with a direct-harness baseline before more elaborate workflow automation is authorized.
 _Avoid_: Production readiness, tracer bullet
+
+**Host configuration**:
+Host-local YAML that registers the one repository, its GitHub identity, authorized users, polling and cmux settings, and the external operational-data location.
+_Avoid_: Repository policy
+
+**Repository configuration**:
+Checked-in `factory.yaml` that declares the repository's target branch, setup, deterministic gates, harness and model policy, budgets, worker build, and base synchronization.
+_Avoid_: Host configuration
+
+**Operational store**:
+The versioned, host-local SQLite store for current run state. It is separate from repository configuration, disposable run artifacts, and local evaluation summaries.
+_Avoid_: Event journal, telemetry, transcript archive

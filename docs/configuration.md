@@ -89,7 +89,7 @@ caches:
     read_only: false
 worker_build:
   image: ghcr.io/example/factory-worker
-  digest: sha256:0123456789abcdef
+  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   definition: worker/Dockerfile
 base_synchronization:
   mode: before_ready
@@ -100,6 +100,6 @@ The validator checks the schema version, target branch, setup, ordered unique ga
 
 ## Operational SQLite store
 
-The operational store contains only current workflow state needed by later tickets. It is created beneath the configured operational-data path and never inside the repository checkout. The store has an explicit schema version. A newer schema refuses to open; an older supported schema is copied to a timestamped `.bak-*` file before its migration runs. There is no silent guessing or destructive migration.
+The operational store contains only current workflow state needed by later tickets. It is created beneath the configured operational-data path and never inside the repository checkout; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration.
 
 Issue #25 will add separate content-free local evaluation summaries. Those summaries remain local and are not outbound telemetry.
