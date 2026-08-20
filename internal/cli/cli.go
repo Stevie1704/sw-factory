@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
 // Run dispatches the requested CLI command and returns its exit status.
@@ -17,11 +19,11 @@ import (
 // missing or unknown commands. Errors are written to errorsOutput.
 func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int {
 	if len(args) == 0 {
-		writeError(errorsOutput, errors.New("a command is required: init, register, or status"))
+		writeError(errorsOutput, errors.New("a command is required: init, register, bootstrap-labels, issue, or status"))
 		return 2
 	}
-	if args[0] != "init" && args[0] != "register" && args[0] != "status" {
-		writeError(errorsOutput, fmt.Errorf("unknown command %q: expected init, register, or status", args[0]))
+	if args[0] != "init" && args[0] != "register" && args[0] != "bootstrap-labels" && args[0] != "issue" && args[0] != "status" {
+		writeError(errorsOutput, fmt.Errorf("unknown command %q: expected init, register, bootstrap-labels, issue, or status", args[0]))
 		return 2
 	}
 	configPath, err := config.DefaultHostConfigPath()
@@ -34,9 +36,73 @@ func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int
 		return runInit(ctx, args[1:], configPath, output, errorsOutput)
 	case "register":
 		return runRegister(ctx, args[1:], configPath, output, errorsOutput)
+	case "bootstrap-labels":
+		return runBootstrapLabels(ctx, args[1:], configPath, output, errorsOutput)
+	case "issue":
+		return runIssue(ctx, args[1:], configPath, output, errorsOutput)
 	default:
 		return runStatus(ctx, args[1:], configPath, output, errorsOutput)
 	}
+}
+
+// runBootstrapLabels handles explicit creation of the factory-owned labels.
+func runBootstrapLabels(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("bootstrap-labels", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("bootstrap-labels does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).BootstrapLabels(ctx)
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	fmt.Fprintf(output, "bootstrapped factory labels for %s: %s\n", result.Repository, strings.Join(result.Labels, ", "))
+	return 0
+}
+
+// runIssue handles the one-shot issue claim command.
+func runIssue(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("issue", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	issueFlag := flags.Int("issue", 0, "GitHub issue number")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 1 {
+		writeError(errorsOutput, errors.New("issue accepts one issue number as a positional argument"))
+		return 2
+	}
+	issueNumber := *issueFlag
+	if flags.NArg() == 1 {
+		if issueNumber != 0 {
+			writeError(errorsOutput, errors.New("issue number must be provided either positionally or with --issue, not both"))
+			return 2
+		}
+		parsed, err := strconv.Atoi(flags.Arg(0))
+		if err != nil {
+			writeError(errorsOutput, fmt.Errorf("invalid issue number %q: %w", flags.Arg(0), err))
+			return 2
+		}
+		issueNumber = parsed
+	}
+	if issueNumber <= 0 {
+		writeError(errorsOutput, errors.New("issue requires a positive issue number"))
+		return 2
+	}
+	result, err := factory.New(*configPath).ClaimIssue(ctx, issueNumber)
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	fmt.Fprintf(output, "claimed issue #%d\nrun: %s\nbranch: %s\nworktree: %s\nstage: %s\nstatus: %s\n", result.Run.IssueNumber, result.Run.ID, result.Run.Branch, result.Run.Worktree, result.Run.Stage, result.Run.Status)
+	return 0
 }
 
 // runInit handles the init command, creating the host configuration at the requested path and reporting its result.
@@ -134,10 +200,14 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 	} else {
 		fmt.Fprintf(output, "repository: %s\n", result.RepositoryPath)
 	}
-	if result.ActiveRun == nil {
+	if result.LatestRun == nil {
 		fmt.Fprintln(output, "active run: none")
 	} else {
-		fmt.Fprintf(output, "active run: %s (stage=%s status=%s)\n", result.ActiveRun.ID, result.ActiveRun.Stage, result.ActiveRun.Status)
+		label := "active run"
+		if result.LatestRun.Status == store.StatusComplete || result.LatestRun.Status == store.StatusCancelled || result.LatestRun.Status == store.StatusFailed {
+			label = "last run"
+		}
+		fmt.Fprintf(output, "%s: %s (stage=%s status=%s branch=%s worktree=%s)\n", label, result.LatestRun.ID, result.LatestRun.Stage, result.LatestRun.Status, result.LatestRun.Branch, result.LatestRun.Worktree)
 	}
 	return 0
 }

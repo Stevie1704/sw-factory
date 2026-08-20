@@ -14,7 +14,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentSchemaVersion = 1
+// CurrentSchemaVersion is the latest operational-store schema understood by
+// this binary.
+const CurrentSchemaVersion = 2
 
 type Stage string
 
@@ -60,18 +62,22 @@ func (e *UnversionedDatabaseError) Error() string {
 
 func (e *UnversionedDatabaseError) Unwrap() error { return e.Err }
 
+// Run is the persisted operational identity and current state of one run.
 type Run struct {
-	ID             string
-	RepositoryPath string
-	IssueNumber    int
-	Stage          Stage
-	Status         Status
-	Branch         string
-	Worktree       string
-	CheckpointSHA  string
-	ImageDigest    string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                  string
+	RepositoryPath      string
+	IssueNumber         int
+	Stage               Stage
+	Status              Status
+	Branch              string
+	Worktree            string
+	CheckpointSHA       string
+	ImageDigest         string
+	Coordinator         string
+	StatusCommentID     string
+	SpecificationPacket string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type Store struct {
@@ -163,14 +169,34 @@ func (s *Store) Path() string { return s.path }
 
 func (s *Store) SchemaVersion() int { return s.schemaVersion }
 
+// CurrentRun returns the newest non-terminal run, if one is active.
 func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, image_digest, created_at, updated_at
+		       checkpoint_sha, image_digest, coordinator, status_comment_id,
+		       specification_packet, created_at, updated_at
 		FROM operational_runs
 		WHERE status NOT IN (?, ?, ?)
 		ORDER BY updated_at DESC
 		LIMIT 1`, StatusComplete, StatusCancelled, StatusFailed)
+	return scanRun(row)
+}
+
+// LatestRun returns the most recently updated claimed run, including terminal
+// runs so status can show the last known branch and worktree.
+func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
+		       checkpoint_sha, image_digest, coordinator, status_comment_id,
+		       specification_packet, created_at, updated_at
+		FROM operational_runs
+		ORDER BY updated_at DESC
+		LIMIT 1`)
+	return scanRun(row)
+}
+
+// scanRun decodes one operational run row and its RFC3339 timestamps.
+func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var createdAt, updatedAt string
 	if err := row.Scan(
@@ -183,6 +209,9 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		&run.Worktree,
 		&run.CheckpointSHA,
 		&run.ImageDigest,
+		&run.Coordinator,
+		&run.StatusCommentID,
+		&run.SpecificationPacket,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -203,6 +232,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	return &run, nil
 }
 
+// SaveRun validates and upserts one operational run record.
 func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	if run.ID == "" {
 		return errors.New("run id is required")
@@ -222,8 +252,9 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
-			checkpoint_sha, image_digest, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			checkpoint_sha, image_digest, coordinator, status_comment_id,
+			specification_packet, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
 			issue_number = excluded.issue_number,
@@ -233,6 +264,9 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 			worktree = excluded.worktree,
 			checkpoint_sha = excluded.checkpoint_sha,
 			image_digest = excluded.image_digest,
+			coordinator = excluded.coordinator,
+			status_comment_id = excluded.status_comment_id,
+			specification_packet = excluded.specification_packet,
 			updated_at = excluded.updated_at`,
 		run.ID,
 		run.RepositoryPath,
@@ -243,6 +277,9 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 		run.Worktree,
 		run.CheckpointSHA,
 		run.ImageDigest,
+		run.Coordinator,
+		run.StatusCommentID,
+		run.SpecificationPacket,
 		run.CreatedAt.UTC().Format(time.RFC3339Nano),
 		run.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -355,6 +392,16 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				updated_at TEXT NOT NULL
 			)`); err != nil {
 				return fmt.Errorf("apply store migration 1: %w", err)
+			}
+		case 2:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN coordinator TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN status_comment_id TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN specification_packet TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 2: %w", err)
+				}
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

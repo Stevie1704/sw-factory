@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
@@ -265,6 +266,55 @@ func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapt
 	}
 	if status.RepositoryPath != "/work/repository" {
 		t.Fatalf("RepositoryPath = %q", status.RepositoryPath)
+	}
+}
+
+// TestFactoryStatusReportsTheLatestTerminalRun verifies status retains the
+// branch and worktree after a run reaches a terminal state.
+func TestFactoryStatusReportsTheLatestTerminalRun(t *testing.T) {
+	t.Parallel()
+
+	operationalPath := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveRun(context.Background(), store.Run{
+		ID:             "run-complete",
+		RepositoryPath: "/work/repository",
+		IssueNumber:    42,
+		Stage:          store.StageReady,
+		Status:         store.StatusComplete,
+		Branch:         "factory/run-complete",
+		Worktree:       "/worktrees/run-complete",
+		CreatedAt:      time.Unix(100, 0).UTC(),
+		UpdatedAt:      time.Unix(200, 0).UTC(),
+	}); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config: &fakeConfigRepository{value: config.HostConfig{
+			SchemaVersion: 1,
+			Repositories: []config.RepositoryRegistration{{
+				Path:                "/work/repository",
+				OperationalDataPath: operationalPath,
+			}},
+		}},
+		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
+			return store.Open(ctx, path)
+		},
+	})
+	status, err := service.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ActiveRun == nil || status.ActiveRun.Status != store.StatusComplete || status.ActiveRun.Branch != "factory/run-complete" || status.ActiveRun.Worktree != "/worktrees/run-complete" {
+		t.Fatalf("status.ActiveRun = %#v, want latest terminal run details", status.ActiveRun)
 	}
 }
 

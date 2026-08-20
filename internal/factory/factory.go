@@ -7,15 +7,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/google/uuid"
 )
 
+// Factory is the high-level interface exposed by the command-line coordinator.
 type Factory interface {
 	Init(context.Context) (InitResult, error)
 	Register(context.Context, RegisterRequest) (RegisterResult, error)
+	BootstrapLabels(context.Context) (BootstrapLabelsResult, error)
+	RunCoordinator
 	Status(context.Context) (StatusResult, error)
+}
+
+// RunCoordinator is the single claim/state-transition seam used by the
+// one-shot command and the future poller.
+type RunCoordinator interface {
+	ClaimIssue(context.Context, int) (IssueResult, error)
+	Transition(context.Context, TransitionRequest) (store.Run, error)
 }
 
 type ConfigRepository interface {
@@ -29,13 +43,46 @@ type OperationalStore interface {
 	Close() error
 }
 
+// RunStore is the operational-store seam required by claim and transition
+// operations.
+type RunStore interface {
+	OperationalStore
+	SaveRun(context.Context, store.Run) error
+}
+
+// LatestRunStore extends the operational-store seam with the most recently
+// claimed run, including terminal runs used by status reporting.
+type LatestRunStore interface {
+	OperationalStore
+	LatestRun(context.Context) (*store.Run, error)
+}
+
+// StoreOpener opens the host-local operational store.
 type StoreOpener func(context.Context, string) (OperationalStore, error)
+
+// RepositoryChecker validates a registered repository path.
 type RepositoryChecker func(string) error
 
+// RepositoryConfigLoader loads the checked-in repository configuration.
+type RepositoryConfigLoader func(string) (config.RepositoryConfig, error)
+
+// Clock supplies the coordinator's current time.
+type Clock func() time.Time
+
+// RunIDGenerator supplies an immutable identifier for a new run.
+type RunIDGenerator func() (string, error)
+
+// Dependencies are the adapters at the high-level factory seam.
 type Dependencies struct {
 	Config          ConfigRepository
 	OpenStore       StoreOpener
 	CheckRepository RepositoryChecker
+	LoadRepository  RepositoryConfigLoader
+	GitHub          github.Client
+	Worktree        gitadapter.WorktreeManager
+	Now             Clock
+	NewRunID        RunIDGenerator
+	Coordinator     string
 }
 
 type Service struct {
@@ -65,10 +112,15 @@ type RegisterResult struct {
 	OperationalDataPath string
 }
 
+// StatusResult reports the registered repository and the latest known run.
+// ActiveRun is retained as the foundation field name for compatibility; it is
+// an alias of LatestRun and may contain a terminal run when no run is active.
 type StatusResult struct {
 	ConfigPath     string
 	RepositoryPath string
-	ActiveRun      *store.Run
+	LatestRun      *store.Run
+	// Deprecated: use LatestRun.
+	ActiveRun *store.Run
 }
 
 type fileConfigRepository struct{}
@@ -87,13 +139,7 @@ func (fileConfigRepository) Create(path string) (config.HostConfig, error) {
 
 // New creates a Service configured with the specified host configuration path and default dependencies.
 func New(configPath string) *Service {
-	return NewWithDependencies(configPath, Dependencies{
-		Config: fileConfigRepository{},
-		OpenStore: func(ctx context.Context, path string) (OperationalStore, error) {
-			return store.Open(ctx, path)
-		},
-		CheckRepository: checkRepository,
-	})
+	return NewWithDependencies(configPath, Dependencies{})
 }
 
 // NewWithDependencies creates a Service with the specified configuration path and dependencies.
@@ -109,6 +155,24 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	}
 	if dependencies.CheckRepository == nil {
 		dependencies.CheckRepository = checkRepository
+	}
+	if dependencies.LoadRepository == nil {
+		dependencies.LoadRepository = config.LoadRepository
+	}
+	if dependencies.GitHub == nil {
+		dependencies.GitHub = github.NewClient()
+	}
+	if dependencies.Worktree == nil {
+		dependencies.Worktree = gitadapter.NewWorktreeManager()
+	}
+	if dependencies.Now == nil {
+		dependencies.Now = func() time.Time { return time.Now().UTC() }
+	}
+	if dependencies.NewRunID == nil {
+		dependencies.NewRunID = func() (string, error) { return "run-" + uuid.NewString(), nil }
+	}
+	if strings.TrimSpace(dependencies.Coordinator) == "" {
+		dependencies.Coordinator = defaultCoordinator()
 	}
 	return &Service{configPath: configPath, deps: dependencies}
 }
@@ -214,7 +278,12 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 		return StatusResult{}, err
 	}
 	defer func() { _ = opened.Close() }()
-	result.ActiveRun, err = opened.CurrentRun(ctx)
+	if latestStore, ok := opened.(LatestRunStore); ok {
+		result.LatestRun, err = latestStore.LatestRun(ctx)
+	} else {
+		result.LatestRun, err = opened.CurrentRun(ctx)
+	}
+	result.ActiveRun = result.LatestRun
 	if err != nil {
 		return StatusResult{}, err
 	}

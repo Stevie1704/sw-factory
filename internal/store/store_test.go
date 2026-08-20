@@ -442,3 +442,87 @@ func TestCurrentRunReturnsThePersistedOperationalState(t *testing.T) {
 		t.Fatalf("CurrentRun() = %#v, want %#v", got, wanted)
 	}
 }
+
+// TestCurrentRunPersistsSpecificationAndStatusCommentIdentity verifies the
+// frozen packet and editable-comment identity survive reopening SQLite.
+func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := store.Run{
+		ID:                  "run-claim",
+		RepositoryPath:      "/work/repository",
+		IssueNumber:         42,
+		Stage:               store.StageClaim,
+		Status:              store.StatusActive,
+		Branch:              "factory/run-claim",
+		Worktree:            "/worktrees/run-claim",
+		CheckpointSHA:       "0123456789abcdef",
+		ImageDigest:         "sha256:worker",
+		Coordinator:         "host-a",
+		StatusCommentID:     "12345",
+		SpecificationPacket: `{"version":1,"issue":{"number":42}}`,
+		CreatedAt:           time.Unix(100, 0).UTC(),
+		UpdatedAt:           time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), wanted); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("CurrentRun() = nil, want persisted run")
+	}
+	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket {
+		t.Fatalf("persisted claim metadata = %#v, want coordinator/comment/packet from %#v", got, wanted)
+	}
+}
+
+// TestLatestRunIncludesTerminalState verifies status can report the last
+// claimed run after the active workflow has ended.
+func TestLatestRunIncludesTerminalState(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	wanted := store.Run{
+		ID:             "run-complete",
+		RepositoryPath: "/work/repository",
+		IssueNumber:    42,
+		Stage:          store.StageReady,
+		Status:         store.StatusComplete,
+		Branch:         "factory/run-complete",
+		Worktree:       "/worktrees/run-complete",
+		CreatedAt:      time.Unix(100, 0).UTC(),
+		UpdatedAt:      time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), wanted); err != nil {
+		t.Fatal(err)
+	}
+	got, err := opened.LatestRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != wanted.ID || got.Status != store.StatusComplete || got.Branch != wanted.Branch || got.Worktree != wanted.Worktree {
+		t.Fatalf("LatestRun() = %#v, want terminal run %#v", got, wanted)
+	}
+}
