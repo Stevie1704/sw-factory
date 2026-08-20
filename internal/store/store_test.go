@@ -149,6 +149,187 @@ func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsAnEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := store.Open(context.Background(), "")
+	if err == nil {
+		t.Fatal("Open() succeeded with an empty path")
+	}
+	if !strings.Contains(err.Error(), "path is required") {
+		t.Fatalf("error = %v, want a path-required diagnostic", err)
+	}
+}
+
+func TestOpenRejectsAPathThatIsADirectory(t *testing.T) {
+	t.Parallel()
+
+	privateParent := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(privateParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	storePath := filepath.Join(privateParent, "factory.db")
+	if err := os.Mkdir(storePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Open(context.Background(), storePath)
+	if err == nil {
+		t.Fatal("Open() succeeded when the path is a directory")
+	}
+	if !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("error = %v, want a directory diagnostic", err)
+	}
+}
+
+func TestStorePathReturnsTheResolvedAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	want, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.Path(); got != want {
+		t.Fatalf("Path() = %q, want %q", got, want)
+	}
+}
+
+func TestSaveRunRequiresAnID(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	err = opened.SaveRun(context.Background(), store.Run{RepositoryPath: "/work/repository", Status: store.StatusActive})
+	if err == nil || !strings.Contains(err.Error(), "id is required") {
+		t.Fatalf("SaveRun() error = %v, want an id-required diagnostic", err)
+	}
+}
+
+func TestSaveRunRequiresARepositoryPath(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	err = opened.SaveRun(context.Background(), store.Run{ID: "run-1", Status: store.StatusActive})
+	if err == nil || !strings.Contains(err.Error(), "repository path is required") {
+		t.Fatalf("SaveRun() error = %v, want a repository-path-required diagnostic", err)
+	}
+}
+
+func TestSaveRunRequiresAStatus(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	err = opened.SaveRun(context.Background(), store.Run{ID: "run-1", RepositoryPath: "/work/repository"})
+	if err == nil || !strings.Contains(err.Error(), "status is required") {
+		t.Fatalf("SaveRun() error = %v, want a status-required diagnostic", err)
+	}
+}
+
+func TestSaveRunUpdatesAnExistingRunInPlace(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	initial := store.Run{
+		ID:             "run-1",
+		RepositoryPath: "/work/repository",
+		Stage:          store.StageClaim,
+		Status:         store.StatusActive,
+		CreatedAt:      time.Unix(100, 0).UTC(),
+		UpdatedAt:      time.Unix(100, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), initial); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+
+	updated := initial
+	updated.Stage = store.StageReady
+	updated.Status = store.StatusComplete
+	updated.UpdatedAt = time.Unix(500, 0).UTC()
+	if err := opened.SaveRun(context.Background(), updated); err != nil {
+		t.Fatalf("second SaveRun() error = %v", err)
+	}
+
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("CurrentRun() = %#v, want nil since the only run is now complete", got)
+	}
+}
+
+func TestCurrentRunExcludesTerminalStatusesRegardlessOfRecency(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	runs := []store.Run{
+		{
+			ID:             "run-old-active",
+			RepositoryPath: "/work/repository",
+			Status:         store.StatusActive,
+			CreatedAt:      time.Unix(100, 0).UTC(),
+			UpdatedAt:      time.Unix(100, 0).UTC(),
+		},
+		{
+			ID:             "run-newer-waiting",
+			RepositoryPath: "/work/repository",
+			Status:         store.StatusWaitingForHuman,
+			CreatedAt:      time.Unix(200, 0).UTC(),
+			UpdatedAt:      time.Unix(200, 0).UTC(),
+		},
+		{
+			ID:             "run-newest-complete",
+			RepositoryPath: "/work/repository",
+			Status:         store.StatusComplete,
+			CreatedAt:      time.Unix(300, 0).UTC(),
+			UpdatedAt:      time.Unix(300, 0).UTC(),
+		},
+	}
+	for _, run := range runs {
+		if err := opened.SaveRun(context.Background(), run); err != nil {
+			t.Fatalf("SaveRun(%s) error = %v", run.ID, err)
+		}
+	}
+
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ID != "run-newer-waiting" {
+		t.Fatalf("CurrentRun() = %#v, want the most recent non-terminal run", got)
+	}
+}
+
 func TestCurrentRunReturnsThePersistedOperationalState(t *testing.T) {
 	t.Parallel()
 

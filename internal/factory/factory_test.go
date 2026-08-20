@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -232,6 +233,160 @@ func TestFactoryRefusesAnInvalidRepositoryConfigurationBeforePersistingRegistrat
 	}
 }
 
+func TestFactoryRegisterRejectsASecondRegistrationInVersionOne(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	request := factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"),
+	}
+	if _, err := service.Register(context.Background(), request); err != nil {
+		t.Fatalf("first Register() error = %v", err)
+	}
+
+	_, err := service.Register(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "already has a registered repository") {
+		t.Fatalf("second Register() error = %v, want an already-registered error", err)
+	}
+}
+
+func TestFactoryRegisterFailsWhenTheRepositoryPathDoesNotExist(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      filepath.Join(root, "does-not-exist"),
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"),
+	})
+	if err == nil {
+		t.Fatal("Register() succeeded for a nonexistent repository path")
+	}
+	host, loadErr := config.LoadHost(configPath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(host.Repositories) != 0 {
+		t.Fatalf("host repositories = %#v, want none after a failed registration", host.Repositories)
+	}
+}
+
+func TestFactoryRegisterAppliesDefaultPollingAndRepositoryConfigPathWhenOmitted(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"),
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	host, err := config.LoadHost(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(host.Repositories) != 1 {
+		t.Fatalf("host repositories = %#v, want one registration", host.Repositories)
+	}
+	registration := host.Repositories[0]
+	if registration.Polling.Interval != "30s" || registration.Polling.Backoff != "5m" {
+		t.Fatalf("Polling = %#v, want default 30s/5m", registration.Polling)
+	}
+	wantRepositoryConfigPath := filepath.Join(repositoryPath, config.RepositoryConfigFileName)
+	if registration.RepositoryConfigPath != wantRepositoryConfigPath {
+		t.Fatalf("RepositoryConfigPath = %q, want %q", registration.RepositoryConfigPath, wantRepositoryConfigPath)
+	}
+}
+
+func TestFactoryStatusReturnsAnEmptyResultWhenNoRepositoryIsRegistered(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := service.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.ConfigPath != configPath {
+		t.Fatalf("ConfigPath = %q, want %q", status.ConfigPath, configPath)
+	}
+	if status.RepositoryPath != "" {
+		t.Fatalf("RepositoryPath = %q, want empty", status.RepositoryPath)
+	}
+	if status.ActiveRun != nil {
+		t.Fatalf("ActiveRun = %#v, want nil", status.ActiveRun)
+	}
+}
+
+func TestFactoryRegisterPropagatesAConfigLoadFailure(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("boom: could not load host configuration")
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config: &failingConfigRepository{loadErr: wantErr},
+		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
+			t.Fatal("OpenStore should not be called when the configuration cannot be loaded")
+			return nil, nil
+		},
+		CheckRepository: func(string) error {
+			t.Fatal("CheckRepository should not be called when the configuration cannot be loaded")
+			return nil
+		},
+	})
+
+	_, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      "/work/repository",
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: "/work/state/factory.db",
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Register() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -281,6 +436,22 @@ func (f *fakeConfigRepository) Save(_ string, value config.HostConfig) error {
 func (f *fakeConfigRepository) Create(string) (config.HostConfig, error) {
 	f.value = config.NewHostConfig()
 	return f.value, nil
+}
+
+type failingConfigRepository struct {
+	loadErr error
+}
+
+func (f *failingConfigRepository) Load(string) (config.HostConfig, error) {
+	return config.HostConfig{}, f.loadErr
+}
+
+func (f *failingConfigRepository) Save(string, config.HostConfig) error {
+	return errors.New("Save should not be called")
+}
+
+func (f *failingConfigRepository) Create(string) (config.HostConfig, error) {
+	return config.HostConfig{}, errors.New("Create should not be called")
 }
 
 func writeRepositoryConfig(t *testing.T, repositoryPath string) {
