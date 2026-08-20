@@ -125,6 +125,72 @@ func TestFactoryRefusesAnOperationalStoreInsideTheRepositoryCheckout(t *testing.
 	}
 }
 
+func TestFactoryRefusesASymlinkedOperationalStoreInsideTheRepositoryCheckout(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	aliasPath := filepath.Join(root, "repository-alias")
+	if err := os.Symlink(repositoryPath, aliasPath); err != nil {
+		t.Fatal(err)
+	}
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: filepath.Join(aliasPath, "factory.db"),
+	})
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("error = %v, want ValidationError", err)
+	}
+	if validationErr.Field != "repositories[0].operational_data_path" {
+		t.Fatalf("field = %q, want repositories[0].operational_data_path", validationErr.Field)
+	}
+}
+
+func TestFactoryStatusRefusesAHandEditedOperationalStoreInsideTheRepositoryCheckout(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registration := config.RepositoryRegistration{
+		Path:                 repositoryPath,
+		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+		AuthorizedUsers:      []string{"alice"},
+		Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+		OperationalDataPath:  filepath.Join(repositoryPath, "factory.db"),
+		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
+	}
+	if err := config.SaveHost(configPath, config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := factory.New(configPath).Status(context.Background())
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("error = %v, want ValidationError", err)
+	}
+	if validationErr.Field != "repositories[0].operational_data_path" {
+		t.Fatalf("field = %q, want repositories[0].operational_data_path", validationErr.Field)
+	}
+}
+
 func TestFactoryRefusesAnInvalidRepositoryConfigurationBeforePersistingRegistration(t *testing.T) {
 	t.Parallel()
 
@@ -169,7 +235,7 @@ func TestFactoryRefusesAnInvalidRepositoryConfigurationBeforePersistingRegistrat
 func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapter(t *testing.T) {
 	t.Parallel()
 
-	operationalPath := filepath.Join(t.TempDir(), "factory.db")
+	operationalPath := filepath.Join(t.TempDir(), "data", "factory.db")
 	fake := &fakeConfigRepository{value: config.HostConfig{
 		SchemaVersion: 1,
 		Repositories: []config.RepositoryRegistration{{

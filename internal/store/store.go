@@ -88,8 +88,14 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve operational store path: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o700); err != nil {
+	storeDirectory := filepath.Dir(absolutePath)
+	if err := os.MkdirAll(storeDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("create operational store directory: %w", err)
+	}
+	if info, err := os.Stat(storeDirectory); err != nil {
+		return nil, fmt.Errorf("inspect operational store directory: %w", err)
+	} else if info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("operational store directory %q is not private; expected no group or other permissions", storeDirectory)
 	}
 	existed, empty, err := databaseState(absolutePath)
 	if err != nil {

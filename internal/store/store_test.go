@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +53,10 @@ func TestOpenCreatesVersionedStoreWithNoActiveRun(t *testing.T) {
 func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "factory.db")
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +82,10 @@ func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
 func TestOpenRejectsAnExistingEmptyDatabaseFile(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "factory.db")
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +97,29 @@ func TestOpenRejectsAnExistingEmptyDatabaseFile(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsANonPrivateExistingStoreDirectory(t *testing.T) {
+	t.Parallel()
+
+	directory := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Open(context.Background(), filepath.Join(directory, "factory.db"))
+	if err == nil {
+		t.Fatal("Open() succeeded in a non-private directory")
+	}
+	if !strings.Contains(err.Error(), "not private") {
+		t.Fatalf("error = %v, want private-directory diagnostic", err)
+	}
+}
+
 func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "factory.db")
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +152,7 @@ func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
 func TestCurrentRunReturnsThePersistedOperationalState(t *testing.T) {
 	t.Parallel()
 
-	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "factory.db"))
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

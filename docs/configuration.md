@@ -98,8 +98,12 @@ base_synchronization:
 
 The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, role harnesses, model options, positive durations, positive retry limits, test policy, unique overrides and caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field.
 
+Issue #3 establishes and validates this repository-declared gate contract. Running setup and gates with baseline health, dependency skipping, timeouts, and checkpoint-keyed results is the gate-runner work in issue #9; this binary does not execute arbitrary repository commands yet. The commands declared by this repository's `factory.yaml` are run as part of the repository verification suite.
+
 ## Operational SQLite store
 
-The operational store contains only current workflow state needed by later tickets. It is created beneath the configured operational-data path and never inside the repository checkout; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration.
+The operational store contains only current workflow state needed by later tickets. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration.
 
 Issue #25 will add separate content-free local evaluation summaries. Those summaries remain local and are not outbound telemetry.
+
+The high-level `Factory` seam injects configuration, repository checking, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; GitHub, Git/worktree, worker, terminal, harness, and clock adapters are introduced by the later workflow tickets that first need them.

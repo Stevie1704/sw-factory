@@ -154,8 +154,8 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("resolve repository configuration path: %w", err)
 	}
-	if pathWithin(repositoryPath, operationalPath) {
-		return RegisterResult{}, &config.ValidationError{Field: "repositories[0].operational_data_path", Message: "must be outside the registered repository checkout"}
+	if err := validateOperationalPath(repositoryPath, operationalPath); err != nil {
+		return RegisterResult{}, err
 	}
 	if !pathWithin(repositoryPath, repositoryConfigPath) {
 		return RegisterResult{}, &config.ValidationError{Field: "repositories[0].repository_config_path", Message: "must be inside the registered repository checkout"}
@@ -203,6 +203,9 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	}
 	registration := host.Repositories[0]
 	result.RepositoryPath = registration.Path
+	if err := validateOperationalPath(registration.Path, registration.OperationalDataPath); err != nil {
+		return StatusResult{}, err
+	}
 	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
 	if err != nil {
 		return StatusResult{}, err
@@ -240,9 +243,40 @@ func defaultString(value, fallback string) string {
 }
 
 func pathWithin(root, target string) bool {
-	relative, err := filepath.Rel(root, target)
+	relative, err := filepath.Rel(resolvePath(root), resolvePath(target))
 	if err != nil {
 		return false
 	}
 	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+func validateOperationalPath(repositoryPath, operationalPath string) error {
+	if pathWithin(repositoryPath, operationalPath) {
+		return &config.ValidationError{Field: "repositories[0].operational_data_path", Message: "must be outside the registered repository checkout"}
+	}
+	return nil
+}
+
+func resolvePath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	suffix := []string{}
+	current := abs
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return filepath.Clean(resolved)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return abs
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
