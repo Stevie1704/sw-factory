@@ -110,7 +110,7 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if strings.TrimSpace(request.RunID) == "" {
 		return Result{}, errors.New("gate run id is required")
 	}
-	if !validCheckpoint(request.CheckpointSHA) {
+	if !github.ValidCommitSHA(request.CheckpointSHA) {
 		return Result{}, errors.New("gate checkpoint SHA must contain 40 to 64 lowercase hexadecimal characters")
 	}
 	if strings.TrimSpace(request.Setup) == "" {
@@ -217,18 +217,3 @@ func workerEnvironmentPolicy(policy config.EnvironmentPolicy) worker.Environment
 
 // statusContext returns the stable status namespace for one declared gate.
 func statusContext(name string) string { return "factory/gate/" + strings.TrimSpace(name) }
-
-// validCheckpoint accepts Git object IDs while keeping the GitHub API path
-// safe and stable.
-func validCheckpoint(value string) bool {
-	if len(value) < 40 || len(value) > 64 {
-		return false
-	}
-	for _, character := range value {
-		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
-			continue
-		}
-		return false
-	}
-	return true
-}

@@ -80,6 +80,11 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 			t.Errorf("mutation call %#v does not send JSON through stdin", call.args)
 		}
 	}
+	for _, index := range []int{0, 2, 3, 4, 5} {
+		if hasArgs(runner.calls[index].args, "--repo") {
+			t.Errorf("gh api call %d still uses unsupported --repo: %#v", index, runner.calls[index].args)
+		}
+	}
 }
 
 // TestGhClientPreservesThePullRequestIndicator verifies issue API responses
@@ -122,6 +127,9 @@ func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
 	call := runner.calls[0]
 	if !containsArgs(call.args, "repos/example/project/statuses/"+sha, "--method", "POST", "--input", "-") {
 		t.Fatalf("status args = %#v, want exact status endpoint", call.args)
+	}
+	if hasArgs(call.args, "--repo") {
+		t.Fatalf("status args = %#v, want the repository encoded only in the endpoint", call.args)
 	}
 	var payload map[string]string
 	if err := json.Unmarshal(call.input, &payload); err != nil {

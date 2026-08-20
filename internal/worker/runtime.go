@@ -189,7 +189,7 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		cachePath := filepath.Join(CachePath, cache.Name)
 		args = append(args, "--mount", bindMount(cache.HostPath, cachePath, cache.ReadOnly))
 	}
-	for _, value := range baselineEnvironment(request.RunID, "worker") {
+	for _, value := range baselineEnvironment(request.RunID) {
 		args = append(args, "--env", value)
 	}
 	args = append(args, imageReference(request.Image, request.ImageDigest), "sleep", "infinity")
@@ -245,7 +245,7 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	}
 	args = append(args, containerName(request.RunID), "/usr/bin/env", "-i")
 	args = append(args, environment...)
-	args = append(args, "/bin/sh", "-lc", request.Command)
+	args = append(args, "/bin/sh", "-c", request.Command)
 	result, err := r.runDocker(ctx, args)
 	if err == nil {
 		return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, nil
@@ -254,7 +254,7 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, ctx.Err())
 	}
 	var commandErr *dockerCommandError
-	if errors.As(err, &commandErr) && commandErr.ExitCode > 0 && commandErr.ExitCode < 125 {
+	if errors.As(err, &commandErr) && commandErr.ProcessStarted && commandErr.ExitCode >= 0 && commandErr.ExitCode != 125 && !isDockerRuntimeFailure(commandErr) {
 		return CommandResult{ExitCode: commandErr.ExitCode, Stdout: commandErr.Stdout, Stderr: commandErr.Stderr}, nil
 	}
 	return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, err)
@@ -320,11 +320,11 @@ func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Insp
 	}
 	fields := strings.SplitN(strings.TrimSpace(result.Stdout), "\t", 2)
 	if len(fields) != 2 {
-		return Inspection{}, fmt.Errorf("Docker inspect returned malformed worker state %q", result.Stdout)
+		return Inspection{}, fmt.Errorf("docker inspect returned malformed worker state %q", result.Stdout)
 	}
 	running, err := strconv.ParseBool(fields[0])
 	if err != nil {
-		return Inspection{}, fmt.Errorf("Docker inspect returned invalid running state %q: %w", fields[0], err)
+		return Inspection{}, fmt.Errorf("docker inspect returned invalid running state %q: %w", fields[0], err)
 	}
 	return Inspection{Exists: true, Running: running, Image: fields[1]}, nil
 }
@@ -350,16 +350,19 @@ func (r *DockerRuntime) runDocker(ctx context.Context, args []string) (dockerCom
 		return result, nil
 	}
 	result.ExitCode = 1
+	processStarted := false
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		result.ExitCode = exitErr.ExitCode()
+		processStarted = true
 	}
 	return result, &dockerCommandError{
-		Args:     append([]string(nil), args...),
-		ExitCode: result.ExitCode,
-		Stdout:   result.Stdout,
-		Stderr:   result.Stderr,
-		Cause:    err,
+		Args:           append([]string(nil), args...),
+		ExitCode:       result.ExitCode,
+		ProcessStarted: processStarted,
+		Stdout:         result.Stdout,
+		Stderr:         result.Stderr,
+		Cause:          err,
 	}
 }
 
@@ -379,6 +382,9 @@ type dockerCommandError struct {
 	Args []string
 	// ExitCode is the failed Docker process exit code.
 	ExitCode int
+	// ProcessStarted reports whether the Docker executable ran and returned an
+	// exit code rather than failing before process creation.
+	ProcessStarted bool
 	// Stdout is output produced before failure.
 	Stdout string
 	// Stderr is output produced before failure.
@@ -504,6 +510,10 @@ func validateImageName(image string) error {
 	}
 	if trimmed != image || strings.HasPrefix(trimmed, "-") || strings.ContainsAny(trimmed, "\x00\t\r\n,@") {
 		return fmt.Errorf("worker image %q contains unsafe characters", image)
+	}
+	lastComponent := trimmed[strings.LastIndex(trimmed, "/")+1:]
+	if strings.Contains(lastComponent, ":") {
+		return fmt.Errorf("worker image %q must not include a mutable tag", image)
 	}
 	return nil
 }
@@ -646,8 +656,8 @@ func bindMount(hostPath, destination string, readOnly bool) string {
 }
 
 // baselineEnvironment returns the fixed worker environment independent of the
-// host process environment.
-func baselineEnvironment(runID, role string) []string {
+// host process environment. Role identity is added only by role commands.
+func baselineEnvironment(runID string) []string {
 	return []string{
 		"HOME=/home/factory",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -655,7 +665,6 @@ func baselineEnvironment(runID, role string) []string {
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
 		"FACTORY_RUN_ID=" + runID,
-		"FACTORY_ROLE=" + role,
 		"GIT_DIR=" + GitMetadataPath,
 		"GIT_WORK_TREE=" + WorktreePath,
 		"GIT_CONFIG_NOSYSTEM=1",
@@ -675,9 +684,13 @@ func baselineEnvironment(runID, role string) []string {
 }
 
 // commandEnvironment creates sorted, deterministic environment entries for a
-// command and keeps role identity explicit even under the clean policy.
+// command. Role identity is available only under the role policy, while both
+// policies use the same exact entries for Docker --env and env -i.
 func commandEnvironment(request CommandRequest) []string {
-	entries := baselineEnvironment(request.RunID, request.Role)
+	entries := baselineEnvironment(request.RunID)
+	if request.EnvironmentPolicy == EnvironmentPolicyRole {
+		entries = append(entries, "FACTORY_ROLE="+request.Role)
+	}
 	keys := make([]string, 0, len(request.Environment))
 	for key := range request.Environment {
 		keys = append(keys, key)
@@ -700,11 +713,31 @@ func containerName(runID string) string {
 // idempotent start, stop, and inspection operations.
 func isContainerNotFound(err error) bool {
 	var commandErr *dockerCommandError
-	if !errors.As(err, &commandErr) {
+	if !errors.As(err, &commandErr) || commandErr.ExitCode != 1 {
 		return false
 	}
 	message := strings.ToLower(commandErr.Stderr)
-	return strings.Contains(message, "no such object") || strings.Contains(message, "not found") || strings.Contains(message, "no such container")
+	return strings.Contains(message, "no such object") || strings.Contains(message, "no such container")
+}
+
+// isDockerRuntimeFailure identifies Docker daemon and CLI failures that must
+// remain runtime errors even when Docker returned a non-reserved exit code.
+func isDockerRuntimeFailure(commandErr *dockerCommandError) bool {
+	message := strings.ToLower(commandErr.Stderr)
+	for _, marker := range []string{
+		"error response from daemon",
+		"cannot connect to the docker daemon",
+		"is the docker daemon running",
+		"unknown flag",
+		"unknown command",
+		"requires at least",
+		"invalid reference format",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 var _ WorkerRuntime = (*DockerRuntime)(nil)

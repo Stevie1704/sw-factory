@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -56,10 +59,14 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 	if s.deps.CommitStatuses == nil {
 		return gate.Result{}, errors.New("GitHub client does not support Commit Statuses")
 	}
+	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
+	if err != nil {
+		return gate.Result{}, fmt.Errorf("prepare worker Git metadata: %w", err)
+	}
 	if err := s.deps.Worker.Start(ctx, worker.StartRequest{
 		RunID:           run.ID,
 		WorktreePath:    run.Worktree,
-		GitMetadataPath: filepath.Join(registration.Path, ".git"),
+		GitMetadataPath: gitMetadataPath,
 		Image:           packet.RepositoryConfig.WorkerBuild.Image,
 		ImageDigest:     run.ImageDigest,
 		Caches:          workerCaches(packet.RepositoryConfig.Caches),
@@ -77,6 +84,187 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 		SetupTimeout:  packet.RepositoryConfig.Timeouts.Setup,
 		Gate:          declaredGate,
 	})
+}
+
+// prepareGitMetadataProjection creates the read-only Git view mounted into a
+// worker. It copies history and refs without copying repository configuration,
+// remotes, hooks, or other files that could carry credentials or host paths.
+// The projection is stable for the run so a reused worker keeps the same
+// mounted metadata after a coordinator restart.
+func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (string, error) {
+	if strings.TrimSpace(runID) == "" || filepath.Base(runID) != runID || runID == "." || runID == ".." || strings.ContainsAny(runID, `/\`) {
+		return "", fmt.Errorf("run id %q cannot name a Git metadata projection", runID)
+	}
+	if !filepath.IsAbs(worktreePath) {
+		return "", errors.New("worktree path must be absolute for a Git metadata projection")
+	}
+	source := filepath.Join(repositoryPath, ".git")
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		return "", fmt.Errorf("inspect repository Git metadata: %w", err)
+	}
+	if !sourceInfo.IsDir() {
+		return "", errors.New("repository Git metadata must be a directory")
+	}
+
+	projectionParent := filepath.Join(filepath.Dir(worktreePath), ".factory-git")
+	projection := filepath.Join(projectionParent, runID)
+	if projectionInfo, statErr := os.Stat(projection); statErr == nil {
+		if !projectionInfo.IsDir() {
+			return "", fmt.Errorf("Git metadata projection %q is not a directory", projection)
+		}
+		if _, statErr := os.Stat(filepath.Join(projection, "HEAD")); statErr != nil {
+			return "", fmt.Errorf("Git metadata projection %q is incomplete: %w", projection, statErr)
+		}
+		if _, statErr := os.Stat(filepath.Join(projection, "config")); statErr == nil {
+			return "", fmt.Errorf("Git metadata projection %q contains forbidden configuration", projection)
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect Git metadata projection configuration: %w", statErr)
+		}
+		return projection, nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect Git metadata projection: %w", statErr)
+	}
+	if err := os.MkdirAll(projectionParent, 0o700); err != nil {
+		return "", fmt.Errorf("create Git metadata projection parent: %w", err)
+	}
+	temporary, err := os.MkdirTemp(projectionParent, "."+runID+".git-projection-")
+	if err != nil {
+		return "", fmt.Errorf("create temporary Git metadata projection: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(temporary) }()
+	if err := copyGitMetadata(source, temporary); err != nil {
+		return "", fmt.Errorf("copy Git metadata: %w", err)
+	}
+	if err := overlayWorktreeGitState(worktreePath, temporary); err != nil {
+		return "", fmt.Errorf("overlay worktree Git state: %w", err)
+	}
+	if err := os.Chmod(temporary, 0o700); err != nil {
+		return "", fmt.Errorf("protect Git metadata projection: %w", err)
+	}
+	if err := os.Rename(temporary, projection); err != nil {
+		return "", fmt.Errorf("publish Git metadata projection: %w", err)
+	}
+	return projection, nil
+}
+
+// copyGitMetadata copies regular Git metadata files while omitting all local
+// configuration and files that can define remotes, commands, or host paths.
+func copyGitMetadata(source, destination string) error {
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		if skipGitMetadata(relative, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		target := filepath.Join(destination, relative)
+		if entry.IsDir() {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
+				return err
+			}
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported Git metadata entry %q", relative)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		return copyGitMetadataFile(path, target, info.Mode().Perm())
+	})
+}
+
+// skipGitMetadata reports whether a relative Git metadata path can contain
+// configuration, credentials, executable hooks, or host-specific indirection.
+func skipGitMetadata(relative string, directory bool) bool {
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	for _, part := range parts {
+		switch part {
+		case "hooks", "modules", "remotes", "branches", "worktrees":
+			return true
+		}
+	}
+	if directory {
+		return false
+	}
+	base := filepath.Base(relative)
+	return base == "config" || base == "config.worktree" || base == "FETCH_HEAD" || base == "alternates"
+}
+
+// copyGitMetadataFile streams one Git metadata file into the projection while
+// preserving its non-secret permission bits.
+func copyGitMetadataFile(source, destination string, mode fs.FileMode) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = input.Close() }()
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(output, input)
+	closeErr := output.Close()
+	return errors.Join(copyErr, closeErr)
+}
+
+// overlayWorktreeGitState copies the run worktree's HEAD and index from its
+// private worktree admin directory onto the common projected metadata.
+func overlayWorktreeGitState(worktreePath, projection string) error {
+	pointer, err := os.ReadFile(filepath.Join(worktreePath, ".git"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	line := strings.TrimSpace(strings.SplitN(string(pointer), "\n", 2)[0])
+	if !strings.HasPrefix(line, "gitdir:") {
+		return nil
+	}
+	adminPath := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+	if adminPath == "" {
+		return errors.New("worktree Git pointer has no admin path")
+	}
+	if !filepath.IsAbs(adminPath) {
+		adminPath = filepath.Join(worktreePath, adminPath)
+	}
+	for _, name := range []string{"HEAD", "index"} {
+		source := filepath.Join(adminPath, name)
+		info, statErr := os.Stat(source)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("worktree Git state %q is not a regular file", name)
+		}
+		if err := copyGitMetadataFile(source, filepath.Join(projection, name), info.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // decodeSpecificationPacket loads the immutable packet retained by issue #4.

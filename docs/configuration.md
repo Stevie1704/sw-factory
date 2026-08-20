@@ -102,10 +102,12 @@ Issue #3 establishes and validates this repository-declared gate contract. Issue
 
 Worker execution uses stable in-container paths (`/work`, `/git`, and
 `/cache/<name>`), a non-root uid, dropped capabilities, disabled privilege
-escalation, and no Docker socket. Setup and gates receive a clean explicit
-environment; they do not inherit the coordinator's host environment or
-credentials. See [Worker runtime](worker-runtime.md) for the runtime seam and
-its isolation contract.
+escalation, and no Docker socket. The coordinator prepares `/git` as a
+credential-free projection of Git history, refs, and run worktree state while
+omitting Git configuration, remotes, and hooks. Setup and gates receive a clean
+explicit environment; they do not inherit the coordinator's host environment
+or credentials. See [Worker runtime](worker-runtime.md) for the runtime seam
+and its isolation contract.
 
 ## Claiming an issue
 
@@ -135,4 +137,4 @@ The operational store contains current workflow state, the active run's frozen s
 
 Issue #25 will add separate content-free local evaluation summaries. Those summaries remain local and are not outbound telemetry.
 
-The high-level `Factory` seam injects configuration, repository checking, GitHub, Git/worktree, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Worker, terminal, and harness adapters remain owned by later workflow tickets.
+The high-level `Factory` seam injects configuration, repository checking, GitHub, Git/worktree, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; terminal and harness adapters remain owned by later workflow tickets.

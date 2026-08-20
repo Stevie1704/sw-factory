@@ -56,6 +56,14 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	if result.ExitCode != 0 || result.Stdout != "command-ok\n" {
 		t.Fatalf("RunCommand() result = %#v, want successful command result", result)
 	}
+	if _, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
+		RunID:             request.RunID,
+		Command:           "printf role-ok",
+		EnvironmentPolicy: worker.EnvironmentPolicyRole,
+		Role:              "gate",
+	}); err != nil {
+		t.Fatalf("RunCommand() with role policy error = %v", err)
+	}
 
 	inspection, err := runtime.Inspect(context.Background(), request.RunID)
 	if err != nil {
@@ -92,8 +100,21 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	if strings.Contains(runLine, "docker.sock") {
 		t.Fatalf("worker start mounted the Docker socket: %q", runLine)
 	}
-	execLine := findLogLine(t, lines, " exec ")
-	assertContainsAll(t, execLine, "/work", "/git", "FACTORY_CHECKPOINT_SHA=0123456789abcdef", "gate")
+	execLines := findLogLines(lines, " exec ")
+	if len(execLines) != 2 {
+		t.Fatalf("Docker exec calls = %d, want clean and role calls; calls = %#v", len(execLines), lines)
+	}
+	execLine := execLines[0]
+	assertContainsAll(t, execLine, "/work", "/git", "FACTORY_CHECKPOINT_SHA=0123456789abcdef", "/bin/sh -c")
+	if strings.Contains(execLine, "FACTORY_ROLE=gate") {
+		t.Fatalf("clean environment included role identity: %q", execLine)
+	}
+	if !strings.Contains(execLines[1], "FACTORY_ROLE=gate") {
+		t.Fatalf("role environment omitted role identity: %q", execLines[1])
+	}
+	if strings.Contains(execLine, " -lc ") {
+		t.Fatalf("worker command used a login shell: %q", execLine)
+	}
 	if strings.Contains(execLine, worktreePath) || strings.Contains(execLine, gitMetadataPath) {
 		t.Fatalf("host path leaked into worker command: %q", execLine)
 	}
@@ -154,7 +175,11 @@ func TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment(t *testing.T)
 		ImageDigest:     "sha256:not-a-digest",
 	}
 	if err := runtime.Start(context.Background(), request); err == nil {
-		t.Fatal("Start() accepted a mutable or invalid image reference")
+		t.Fatal("Start() accepted a malformed image digest")
+	}
+	request.ImageDigest = testWorkerDigest
+	if err := runtime.Start(context.Background(), request); err == nil {
+		t.Fatal("Start() accepted a mutable image tag with a valid digest")
 	}
 	if _, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
 		RunID:             request.RunID,
@@ -185,17 +210,39 @@ func TestDockerRuntimeReturnsACommandExitResult(t *testing.T) {
 	if err := runtime.Start(context.Background(), request); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	result, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
-		RunID:             request.RunID,
-		Command:           "fail-command",
-		EnvironmentPolicy: worker.EnvironmentPolicyClean,
-		Role:              "gate",
-	})
-	if err != nil {
-		t.Fatalf("RunCommand() error = %v, want a command result", err)
+	for _, test := range []struct {
+		command  string
+		exitCode int
+		stderr   string
+	}{
+		{command: "fail-command", exitCode: 7, stderr: "command-failed\n"},
+		{command: "fail-126", exitCode: 126, stderr: "command-failed-126\n"},
+		{command: "fail-127", exitCode: 127, stderr: "command-failed-127\n"},
+		{command: "fail-137", exitCode: 137, stderr: "command-failed-137\n"},
+	} {
+		result, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
+			RunID:             request.RunID,
+			Command:           test.command,
+			EnvironmentPolicy: worker.EnvironmentPolicyClean,
+			Role:              "gate",
+		})
+		if err != nil {
+			t.Fatalf("RunCommand(%q) error = %v, want a command result", test.command, err)
+		}
+		if result.ExitCode != test.exitCode || result.Stderr != test.stderr {
+			t.Fatalf("RunCommand(%q) result = %#v, want exit code %d", test.command, result, test.exitCode)
+		}
 	}
-	if result.ExitCode != 7 || result.Stderr != "command-failed\n" {
-		t.Fatalf("RunCommand() result = %#v, want exit code 7", result)
+}
+
+// TestDockerRuntimeKeepsUnrelatedInspectFailuresAsRuntimeErrors verifies that
+// only the Docker inspect missing-container response is treated as absence.
+func TestDockerRuntimeKeepsUnrelatedInspectFailuresAsRuntimeErrors(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	t.Setenv("WORKER_DOCKER_INSPECT_ERROR", "resource not found")
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if _, err := runtime.Inspect(context.Background(), "run-contract-inspect-error"); err == nil {
+		t.Fatal("Inspect() converted an unrelated 'not found' error into absence")
 	}
 }
 
@@ -216,6 +263,10 @@ if [ "$command_name" = "container" ]; then
 fi
 case "$command_name" in
   inspect)
+    if [ -n "${WORKER_DOCKER_INSPECT_ERROR:-}" ]; then
+      printf '%s\n' "$WORKER_DOCKER_INSPECT_ERROR" >&2
+      exit "${WORKER_DOCKER_INSPECT_EXIT:-1}"
+    fi
     if [ ! -f "$WORKER_DOCKER_STATE" ]; then
       echo "No such object" >&2
       exit 1
@@ -241,6 +292,18 @@ case "$command_name" in
     ;;
   exec)
     case "$*" in
+      *fail-126*)
+        printf 'command-failed-126\n' >&2
+        exit 126
+        ;;
+      *fail-127*)
+        printf 'command-failed-127\n' >&2
+        exit 127
+        ;;
+      *fail-137*)
+        printf 'command-failed-137\n' >&2
+        exit 137
+        ;;
       *fail-command*)
         printf 'command-failed\n' >&2
         exit 7
@@ -302,6 +365,17 @@ func findLogLine(t *testing.T, lines []string, marker string) string {
 	}
 	t.Fatalf("no Docker invocation contains %q: %#v", marker, lines)
 	return ""
+}
+
+// findLogLines returns every invocation containing the requested marker.
+func findLogLines(lines []string, marker string) []string {
+	result := make([]string, 0)
+	for _, line := range lines {
+		if strings.Contains(" "+line+" ", marker) {
+			result = append(result, line)
+		}
+	}
+	return result
 }
 
 // countLogLines counts invocations containing the requested marker.

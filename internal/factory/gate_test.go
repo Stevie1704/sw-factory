@@ -31,6 +31,12 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(gitMetadataPath, "config"), []byte("[remote \"origin\"]\n\turl = https://user:secret@example.invalid/project.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitMetadataPath, "HEAD"), []byte("ref: refs/heads/factory/run-gate-coordinator\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	policy := validRepositoryConfig()
 	policy.Setup = "setup-from-frozen-packet"
@@ -87,8 +93,14 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 		t.Fatalf("worker starts = %#v, want one start", runtime.starts)
 	}
 	started := runtime.starts[0]
-	if started.Image != policy.WorkerBuild.Image || started.ImageDigest != policy.WorkerBuild.Digest || started.WorktreePath != worktreePath || started.GitMetadataPath != gitMetadataPath {
+	if started.Image != policy.WorkerBuild.Image || started.ImageDigest != policy.WorkerBuild.Digest || started.WorktreePath != worktreePath || started.GitMetadataPath == gitMetadataPath {
 		t.Fatalf("worker start = %#v, want frozen worker identity and stable paths", started)
+	}
+	if _, err := os.Stat(filepath.Join(started.GitMetadataPath, "config")); !os.IsNotExist(err) {
+		t.Fatalf("worker Git projection contains a configuration file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(started.GitMetadataPath, "HEAD")); err != nil {
+		t.Fatalf("worker Git projection did not preserve HEAD metadata: %v", err)
 	}
 	if len(runtime.commands) != 2 || runtime.commands[0].Command != policy.Setup || runtime.commands[1].Command != policy.Gates[0].Command {
 		t.Fatalf("worker commands = %#v, want frozen setup then gate", runtime.commands)

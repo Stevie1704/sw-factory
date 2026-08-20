@@ -18,7 +18,7 @@ The Docker adapter uses these stable paths regardless of the host checkout:
 | Worker path | Access | Contents |
 | --- | --- | --- |
 | `/work` | read-write | The run worktree |
-| `/git` | read-only | Git metadata needed for history and diffs |
+| `/git` | read-only | A credential-free projection of Git metadata needed for history and diffs |
 | `/cache/<name>` | declared per cache | A repository cache |
 
 Workers run as uid/gid `10001:10001`, drop all capabilities, disable privilege
@@ -29,8 +29,14 @@ configured image digest. Git prompting and the ordinary `origin` push URL are
 disabled in the worker environment, so an in-worker push cannot use the
 coordinator's GitHub credentials.
 
+The coordinator prepares `/git` from the repository's objects, refs, and
+worktree state. Git configuration, remote definitions, hooks, submodules, and
+host-specific worktree indirection are omitted, so repository history and diff
+operations remain available without exposing remote credentials.
+
 Setup and the selected repository-declared gate run with `env -i` plus an
-explicit worker baseline and coordinator-defined role variables. The gate
+explicit worker baseline. Role-policy commands additionally receive the
+coordinator-defined role identity; clean-policy commands do not. The gate
 runner publishes one final Commit Status at the run's exact checkpoint SHA
 under the stable context `factory/gate/<gate-name>`; command output is not used
 to decide success.
