@@ -159,13 +159,43 @@ the symptom is a warning, not a failure, so it would have shipped unnoticed and
 left every recreated worker re-prompting for directory trust.
 
 **Workaround**: persist the entire home directory as a volume and nest the
-per-harness volumes inside it. Verified: after this change `~/.claude.json`
-survives recreation and resume runs with no warnings. `CLAUDE_CONFIG_DIR` was
-not found in the installed build, so relocating the file is not an option here.
+per-harness volumes inside it. `CLAUDE_CONFIG_DIR` was not found in the
+installed build, so relocating the file is not an option here.
 
 Codex does not have this problem — everything it needs is under `~/.codex`.
 
-### 4. `docker cp` breaks non-root workers
+**Do not hand-restore `~/.claude.json`.** Recovering the file by copying a saved
+copy back in looks like it works and is not enough — see failure mode 4. Mount
+the whole home *before* the first login instead.
+
+### 4. Headless authentication and interactive readiness are not the same state
+
+`claude -p` and the interactive TUI gate on different files, and only the first
+one is covered by the credential.
+
+After the home directory was persisted and `~/.claude.json` was restored by
+hand, `claude -p 'say ok'` answered normally — the credential in
+`~/.claude/.credentials.json` was valid and had survived recreation. The
+interactive TUI in the same container nevertheless replayed onboarding: theme
+picker, then `Select login method`.
+
+The cause is that the restored `~/.claude.json` carried `userID` and
+`oauthAccount` but **not `hasCompletedOnboarding`**. The interactive path gates
+on onboarding state; the headless path does not.
+
+Two consequences for the product:
+
+- A capability check that runs `claude -p` **does not prove** an interactive
+  session will come up authenticated. Ticket #69 must probe the interactive path
+  or assert on `hasCompletedOnboarding` directly.
+- Reconstructing harness state by copying config files is unreliable. Persist
+  the whole role home from the first login and never rebuild it by hand.
+
+This was found the hard way: the automated evidence for failure mode 3 was
+gathered through `claude -p` only, and reported the fix as verified. The
+operator then had to log in again in the cmux surface.
+
+### 5. `docker cp` breaks non-root workers
 
 `docker cp` preserves the host uid. A credential copied from the macOS host
 lands as uid 501, mode 0600, and the container user (uid 10001) cannot read it —
@@ -181,21 +211,21 @@ docker exec -i <container> bash -lc 'umask 077; cat > ~/.codex/auth.json' < src
 Removing a bad copy works because the parent directory is owned by the container
 user, so `rm` succeeds where `write` does not.
 
-### 5. Bind mounts carry host ownership
+### 6. Bind mounts carry host ownership
 
 `/work` and `/results` are bind mounts and appear inside the container with the
 host uid, so uid 10001 cannot write to them. The spike chmods them `0777`. The
 product should either run the worker with a uid matching the host user or use
 named volumes for the result directory.
 
-### 6. Codex global flags must precede the `resume` subcommand
+### 7. Codex global flags must precede the `resume` subcommand
 
 `codex exec resume <uuid> -s danger-full-access` fails with `unexpected argument
 '-s' found`. `codex exec -s danger-full-access resume <uuid>` works. The Codex
 adapter must build argv in that order. Likewise `codex exec --full-auto` does
 not exist; `--full-auto` is an interactive-only flag.
 
-### 7. The cmux control socket rejects outside callers
+### 8. The cmux control socket rejects outside callers
 
 ```
 Error: ERROR: Access denied - only processes started inside cmux can connect
@@ -210,14 +240,14 @@ cosmetic. A coordinator launched from an ordinary shell or a `launchd` job
 cannot drive cmux at all. `TerminalRuntime` needs an explicit story for
 obtaining socket access.
 
-### 8. cmux workspace layout is the right surfacing primitive
+### 9. cmux workspace layout is the right surfacing primitive
 
 `cmux new-workspace --layout <json>` creates a workspace whose panes each run
 their own command, which maps directly onto the spec's run surfaces (status,
 test agent, implementation agent, checks, spec review, standards review). See
 `spike/issue-2/cmux-surfaces`.
 
-### 9. Terminal echo defeats naive output matching
+### 10. Terminal echo defeats naive output matching
 
 Any automated driver that types a command into a pty and waits for a marker will
 match the terminal's **echo** of the command before the command has produced
@@ -234,7 +264,9 @@ rule empirically.
   directory. Add a contract test asserting `~/.claude.json` survives recreation,
   because its loss degrades silently rather than failing.
 - **#69 (startup capability check)**: assert `codex login status` and the Claude
-  equivalent inside the worker, not on the host.
+  equivalent inside the worker, not on the host — and probe the **interactive**
+  path for Claude Code, because `claude -p` succeeds while the TUI still demands
+  login.
 - **#72 (worker isolation)**: keep `--cap-drop ALL` and default seccomp; disable
   the harness's own sandbox rather than weakening the container.
 - **#84 (`factory doctor`)**: check cmux socket reachability from the
