@@ -17,6 +17,9 @@ import (
 // specificationPacketVersion identifies the persisted claim packet shape.
 const specificationPacketVersion = 1
 
+// stateTransitionRetryDelay bounds the pause before the one persistence retry.
+const stateTransitionRetryDelay = 10 * time.Millisecond
+
 // SpecificationPacket is the immutable issue and resolved repository
 // configuration captured when a run is claimed.
 type SpecificationPacket struct {
@@ -139,6 +142,9 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if issue.Number != issueNumber {
 		return IssueResult{}, fmt.Errorf("GitHub returned issue #%d while claiming #%d", issue.Number, issueNumber)
 	}
+	if issue.IsPullRequest {
+		return IssueResult{}, fmt.Errorf("issue #%d is a pull request; pull requests cannot be claimed", issueNumber)
+	}
 	if !strings.EqualFold(strings.TrimSpace(issue.State), "open") {
 		return IssueResult{}, fmt.Errorf("issue #%d is %s; only open issues can be claimed", issueNumber, defaultString(issue.State, "not open"))
 	}
@@ -170,6 +176,12 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err != nil {
 		return IssueResult{}, err
 	}
+	cleanupWorkspace := func(cause error) error {
+		if cleanupErr := s.deps.Worktree.Remove(ctx, registration.Path, workspace); cleanupErr != nil {
+			return errors.Join(cause, fmt.Errorf("remove claim workspace: %w", cleanupErr))
+		}
+		return cause
+	}
 	run := store.Run{
 		ID:                  runID,
 		RepositoryPath:      registration.Path,
@@ -186,7 +198,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		UpdatedAt:           startedAt,
 	}
 	if err := runStore.SaveRun(ctx, run); err != nil {
-		return IssueResult{}, fmt.Errorf("persist frozen specification packet: %w", err)
+		return IssueResult{}, cleanupWorkspace(fmt.Errorf("persist frozen specification packet: %w", err))
 	}
 
 	run, err = s.applyStateTransition(ctx, runStore, stateTransition{
@@ -196,7 +208,8 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		CreateComment: true,
 	})
 	if err != nil {
-		return s.failClaim(ctx, runStore, run, repository, issue, err)
+		_, failureErr := s.failClaim(ctx, runStore, run, repository, issue, err)
+		return IssueResult{}, cleanupWorkspace(failureErr)
 	}
 	return IssueResult{Run: run, Packet: packet}, nil
 }
@@ -281,10 +294,7 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 		}
 	}
 	next.UpdatedAt = s.deps.Now().UTC()
-	if err := runStore.SaveRun(ctx, next); err != nil {
-		if retryErr := runStore.SaveRun(ctx, next); retryErr == nil {
-			return next, nil
-		}
+	if err := saveRunWithRetry(ctx, runStore, next); err != nil {
 		if !transition.CreateComment {
 			compensationErrors := []error{
 				s.deps.GitHub.EditIssueComment(ctx, transition.Repository, transition.Previous.StatusCommentID, statusCommentBody(transition.Previous)),
@@ -295,6 +305,33 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 		return next, fmt.Errorf("persist claim state: %w", err)
 	}
 	return next, nil
+}
+
+// saveRunWithRetry retries one failed persistence operation after a short,
+// cancellable delay so transient SQLite contention can clear without delaying
+// a cancelled transition.
+func saveRunWithRetry(ctx context.Context, runStore RunStore, run store.Run) error {
+	err := runStore.SaveRun(ctx, run)
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return err
+	}
+	timer := time.NewTimer(stateTransitionRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return err
+	case <-timer.C:
+	}
+	if ctx.Err() != nil {
+		return err
+	}
+	if retryErr := runStore.SaveRun(ctx, run); retryErr == nil {
+		return nil
+	}
+	return err
 }
 
 // registration loads the one configured repository registration.

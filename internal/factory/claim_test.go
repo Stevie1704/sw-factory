@@ -98,18 +98,23 @@ func TestIssueRefusesClosedOrUnauthorizedIssuesBeforeCreatingAWorkspace(t *testi
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		state   string
-		labels  []string
-		message string
+		name          string
+		state         string
+		labels        []string
+		isPullRequest bool
+		issueErr      error
+		message       string
 	}{
 		{name: "closed", state: "closed", labels: []string{github.LabelAgentReady}, message: "only open issues"},
 		{name: "not ready", state: "open", labels: []string{"enhancement"}, message: "not labeled"},
+		{name: "pull request", state: "open", labels: []string{github.LabelAgentReady}, isPullRequest: true, message: "pull requests cannot be claimed"},
+		{name: "conflicting factory label", state: "open", labels: []string{github.LabelAgentReady, github.LabelAgentRunning}, message: "another factory state label"},
+		{name: "GitHub issue lookup", state: "open", labels: []string{github.LabelAgentReady}, issueErr: errors.New("GitHub unavailable"), message: "GitHub unavailable"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: tc.state, Labels: tc.labels}}
+			githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: tc.state, Labels: tc.labels, IsPullRequest: tc.isPullRequest}, issueErr: tc.issueErr}
 			worktree := &fakeWorktree{}
 			runStore := &fakeRunStore{}
 			service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
@@ -140,7 +145,8 @@ func TestClaimFailureMarksTheIssueFailed(t *testing.T) {
 		createCommentErr: errors.New("GitHub unavailable"),
 	}
 	runStore := &fakeRunStore{}
-	service := newClaimService(githubAdapter, &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}, runStore, validRepositoryConfig())
+	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
+	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
 	_, err := service.ClaimIssue(context.Background(), 42)
 	if err == nil || !strings.Contains(err.Error(), "GitHub unavailable") {
 		t.Fatalf("ClaimIssue() error = %v, want comment failure", err)
@@ -150,6 +156,9 @@ func TestClaimFailureMarksTheIssueFailed(t *testing.T) {
 	}
 	if got := runStore.saved[len(runStore.saved)-1].Status; got != store.StatusFailed {
 		t.Fatalf("persisted failure status = %q, want failed", got)
+	}
+	if !worktree.removed {
+		t.Fatal("failed claim did not remove its workspace")
 	}
 }
 
@@ -161,7 +170,8 @@ func TestClaimRetriesAndCompensatesWhenTheFinalPersistenceFails(t *testing.T) {
 
 	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
 	runStore := &fakeRunStore{saveErrors: []error{nil, errors.New("store unavailable"), errors.New("store unavailable"), nil}}
-	service := newClaimService(githubAdapter, &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}, runStore, validRepositoryConfig())
+	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
+	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
 	_, err := service.ClaimIssue(context.Background(), 42)
 	if err == nil || !strings.Contains(err.Error(), "store unavailable") {
 		t.Fatalf("ClaimIssue() error = %v, want persistent save failure", err)
@@ -174,6 +184,73 @@ func TestClaimRetriesAndCompensatesWhenTheFinalPersistenceFails(t *testing.T) {
 	}
 	if len(githubAdapter.editedComments) != 1 {
 		t.Fatalf("edited comments = %d, want one failure update", len(githubAdapter.editedComments))
+	}
+	if !worktree.removed {
+		t.Fatal("failed claim did not remove its workspace")
+	}
+}
+
+// TestClaimSucceedsAfterRetryingFinalPersistence verifies a transient final
+// save failure does not turn an otherwise successful claim into a failure.
+func TestClaimSucceedsAfterRetryingFinalPersistence(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	runStore := &fakeRunStore{saveErrors: []error{nil, errors.New("store unavailable"), nil}}
+	service := newClaimService(githubAdapter, &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}, runStore, validRepositoryConfig())
+	result, err := service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+	if result.Run.StatusCommentID != "comment-1" {
+		t.Fatalf("status comment id = %q, want comment-1", result.Run.StatusCommentID)
+	}
+	if len(runStore.saved) != 2 {
+		t.Fatalf("SaveRun calls = %d, want initial save plus successful retry", len(runStore.saved))
+	}
+}
+
+// TestClaimRemovesWorkspaceWhenInitialPersistenceFails verifies a run that
+// never reaches the external transition is cleaned up immediately.
+func TestClaimRemovesWorkspaceWhenInitialPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	worktree := &fakeWorktree{
+		workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"},
+	}
+	runStore := &fakeRunStore{saveErrors: []error{errors.New("unique active run")}}
+	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
+	_, err := service.ClaimIssue(context.Background(), 42)
+	if err == nil || !strings.Contains(err.Error(), "unique active run") {
+		t.Fatalf("ClaimIssue() error = %v, want persistence failure", err)
+	}
+	if !worktree.removed {
+		t.Fatal("initial persistence failure did not remove workspace")
+	}
+	if len(githubAdapter.replacedHistory) != 0 || len(githubAdapter.createdComments) != 0 {
+		t.Fatal("claim mutated GitHub before initial persistence succeeded")
+	}
+}
+
+// TestClaimPreservesTheOriginalErrorWhenWorkspaceCleanupFails verifies
+// cleanup diagnostics are joined without replacing the claim failure.
+func TestClaimPreservesTheOriginalErrorWhenWorkspaceCleanupFails(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &fakeGitHub{
+		issueValue:       github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}},
+		createCommentErr: errors.New("GitHub unavailable"),
+	}
+	worktree := &fakeWorktree{
+		workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"},
+		removeErr: errors.New("cleanup unavailable"),
+	}
+	runStore := &fakeRunStore{}
+	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
+	_, err := service.ClaimIssue(context.Background(), 42)
+	if err == nil || !strings.Contains(err.Error(), "GitHub unavailable") || !strings.Contains(err.Error(), "cleanup unavailable") {
+		t.Fatalf("ClaimIssue() error = %v, want claim and cleanup failures", err)
 	}
 }
 
@@ -332,6 +409,7 @@ func validRepositoryConfig() config.RepositoryConfig {
 // fakeGitHub records the GitHub mutations made by the coordinator.
 type fakeGitHub struct {
 	issueValue       github.Issue
+	issueErr         error
 	createdLabels    []github.Label
 	replacedLabels   []string
 	replacedHistory  [][]string
@@ -344,6 +422,9 @@ type fakeGitHub struct {
 
 // Issue returns the configured issue snapshot.
 func (f *fakeGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+	if f.issueErr != nil {
+		return github.Issue{}, f.issueErr
+	}
 	return f.issueValue, nil
 }
 
@@ -392,6 +473,8 @@ type editedComment struct {
 type fakeWorktree struct {
 	workspace gitadapter.Workspace
 	called    bool
+	removed   bool
+	removeErr error
 }
 
 // Create records a worktree request and returns the configured workspace.
@@ -401,6 +484,12 @@ func (f *fakeWorktree) Create(context.Context, string, string, string) (gitadapt
 		return gitadapter.Workspace{}, errors.New("unexpected workspace call")
 	}
 	return f.workspace, nil
+}
+
+// Remove records cleanup of a created workspace.
+func (f *fakeWorktree) Remove(context.Context, string, gitadapter.Workspace) error {
+	f.removed = true
+	return f.removeErr
 }
 
 // fakeRunStore keeps run records in insertion order for coordinator tests.

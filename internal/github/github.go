@@ -50,12 +50,13 @@ func (r Repository) String() string { return r.Owner + "/" + r.Name }
 
 // Issue is the content-free GitHub issue snapshot needed by a claim.
 type Issue struct {
-	Number    int
-	Title     string
-	Body      string
-	State     string
-	Labels    []string
-	UpdatedAt time.Time
+	Number        int
+	Title         string
+	Body          string
+	State         string
+	Labels        []string
+	IsPullRequest bool
+	UpdatedAt     time.Time
 }
 
 // Label describes a factory-owned GitHub label.
@@ -140,12 +141,13 @@ func (c *GhClient) Issue(ctx context.Context, repository Repository, number int)
 		labels = append(labels, label.Name)
 	}
 	return Issue{
-		Number:    response.Number,
-		Title:     response.Title,
-		Body:      response.Body,
-		State:     response.State,
-		Labels:    labels,
-		UpdatedAt: response.UpdatedAt,
+		Number:        response.Number,
+		Title:         response.Title,
+		Body:          response.Body,
+		State:         response.State,
+		Labels:        labels,
+		IsPullRequest: response.PullRequest != nil,
+		UpdatedAt:     response.UpdatedAt,
 	}, nil
 }
 
@@ -196,13 +198,15 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository,
 	if strings.TrimSpace(marker) == "" {
 		return Comment{}, errors.New("status comment marker is required")
 	}
-	var responses []commentResponse
-	if err := c.callJSON(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number)}, nil, &responses); err != nil {
+	var pages [][]commentResponse
+	if err := c.callJSON(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
 		return Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
 	}
-	for _, response := range responses {
-		if strings.Contains(response.Body, marker) {
-			return Comment{ID: fmt.Sprint(response.ID), Body: response.Body}, nil
+	for _, page := range pages {
+		for _, response := range page {
+			if strings.Contains(response.Body, marker) {
+				return Comment{ID: fmt.Sprint(response.ID), Body: response.Body}, nil
+			}
 		}
 	}
 	return Comment{}, nil
@@ -254,11 +258,12 @@ func (c *GhClient) callBytes(ctx context.Context, args []string, payload any) ([
 // issueResponse is the subset of the GitHub issue API response needed by a
 // specification packet.
 type issueResponse struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	State  string `json:"state"`
-	Labels []struct {
+	Number      int       `json:"number"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body"`
+	State       string    `json:"state"`
+	PullRequest *struct{} `json:"pull_request"`
+	Labels      []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 	UpdatedAt time.Time `json:"updated_at"`

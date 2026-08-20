@@ -16,7 +16,11 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
+
+// runTimestampLayout keeps serialized run timestamps fixed-width so SQLite
+// text ordering matches chronological ordering for sub-second timestamps.
+const runTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 type Stage string
 
@@ -218,7 +222,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read current run: %w", err)
+		return nil, fmt.Errorf("read run row: %w", err)
 	}
 	var err error
 	run.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -280,8 +284,8 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 		run.Coordinator,
 		run.StatusCommentID,
 		run.SpecificationPacket,
-		run.CreatedAt.UTC().Format(time.RFC3339Nano),
-		run.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		run.CreatedAt.UTC().Format(runTimestampLayout),
+		run.UpdatedAt.UTC().Format(runTimestampLayout),
 	)
 	if err != nil {
 		return fmt.Errorf("save run: %w", err)
@@ -402,6 +406,12 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 2: %w", err)
 				}
+			}
+		case 3:
+			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_run_per_repository
+				ON operational_runs (repository_path)
+				WHERE status NOT IN ('complete', 'cancelled', 'failed')`); err != nil {
+				return fmt.Errorf("apply store migration 3: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

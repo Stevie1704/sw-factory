@@ -373,7 +373,7 @@ func TestCurrentRunExcludesTerminalStatusesAndReturnsTheMostRecentlyUpdatedRun(t
 		{ID: "run-complete", RepositoryPath: "/work/repository", Status: store.StatusComplete, UpdatedAt: time.Unix(400, 0).UTC(), CreatedAt: time.Unix(400, 0).UTC()},
 		{ID: "run-cancelled", RepositoryPath: "/work/repository", Status: store.StatusCancelled, UpdatedAt: time.Unix(300, 0).UTC(), CreatedAt: time.Unix(300, 0).UTC()},
 		{ID: "run-failed", RepositoryPath: "/work/repository", Status: store.StatusFailed, UpdatedAt: time.Unix(500, 0).UTC(), CreatedAt: time.Unix(500, 0).UTC()},
-		{ID: "run-waiting", RepositoryPath: "/work/repository", Status: store.StatusWaitingForHarness, UpdatedAt: time.Unix(100, 0).UTC(), CreatedAt: time.Unix(100, 0).UTC()},
+		{ID: "run-waiting", RepositoryPath: "/work/waiting-repository", Status: store.StatusWaitingForHarness, UpdatedAt: time.Unix(100, 0).UTC(), CreatedAt: time.Unix(100, 0).UTC()},
 		{ID: "run-active", RepositoryPath: "/work/repository", Status: store.StatusActive, UpdatedAt: time.Unix(200, 0).UTC(), CreatedAt: time.Unix(200, 0).UTC()},
 	}
 	for _, run := range runs {
@@ -491,6 +491,133 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 	}
 	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket {
 		t.Fatalf("persisted claim metadata = %#v, want coordinator/comment/packet from %#v", got, wanted)
+	}
+}
+
+// TestSchemaOneMigrationPreservesClaimMetadata verifies schema 1 databases
+// receive the claim columns before the current store is reopened.
+func TestSchemaOneMigrationPreservesClaimMetadata(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
+		INSERT INTO schema_metadata(singleton, version) VALUES (1, 1);
+		CREATE TABLE operational_runs (
+			id TEXT PRIMARY KEY,
+			repository_path TEXT NOT NULL,
+			issue_number INTEGER NOT NULL,
+			stage TEXT NOT NULL,
+			status TEXT NOT NULL,
+			branch TEXT NOT NULL DEFAULT '',
+			worktree TEXT NOT NULL DEFAULT '',
+			checkpoint_sha TEXT NOT NULL DEFAULT '',
+			image_digest TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`)
+	if err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() migration error = %v", err)
+	}
+	wanted := store.Run{
+		ID:                  "run-migrated",
+		RepositoryPath:      "/work/repository",
+		IssueNumber:         42,
+		Stage:               store.StageClaim,
+		Status:              store.StatusActive,
+		Coordinator:         "host-a",
+		StatusCommentID:     "12345",
+		SpecificationPacket: `{"version":1,"issue":{"number":42}}`,
+		CreatedAt:           time.Unix(100, 0).UTC(),
+		UpdatedAt:           time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), wanted); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveRun() after migration error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() after migration error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("CurrentRun() = nil, want migrated run")
+	}
+	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket {
+		t.Fatalf("migrated claim metadata = %#v, want %#v", got, wanted)
+	}
+}
+
+// TestSaveRunEnforcesOneActiveRunPerRepository verifies the store-level
+// invariant that protects concurrent claimers from creating two active runs.
+func TestSaveRunEnforcesOneActiveRunPerRepository(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	base := store.Run{RepositoryPath: "/work/repository", Stage: store.StageClaim, Status: store.StatusActive}
+	if err := opened.SaveRun(context.Background(), store.Run{ID: "run-1", RepositoryPath: base.RepositoryPath, Stage: base.Stage, Status: base.Status}); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveRun(context.Background(), store.Run{ID: "run-2", RepositoryPath: base.RepositoryPath, Stage: base.Stage, Status: base.Status}); err == nil {
+		t.Fatal("SaveRun() accepted a second active run for the repository")
+	}
+	if err := opened.SaveRun(context.Background(), store.Run{ID: "run-2", RepositoryPath: base.RepositoryPath, Stage: base.Stage, Status: store.StatusFailed}); err != nil {
+		t.Fatalf("SaveRun() terminal run error = %v", err)
+	}
+}
+
+// TestRunTimestampOrderingUsesSubsecondPrecision verifies latest-run queries
+// preserve chronological order when timestamps share the same second.
+func TestRunTimestampOrderingUsesSubsecondPrecision(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	base := time.Date(2026, 8, 20, 10, 11, 12, 0, time.UTC)
+	for _, run := range []store.Run{
+		{ID: "run-earlier", RepositoryPath: "/work/repository-a", Stage: store.StageClaim, Status: store.StatusComplete, UpdatedAt: base.Add(120 * time.Millisecond)},
+		{ID: "run-later", RepositoryPath: "/work/repository-b", Stage: store.StageClaim, Status: store.StatusComplete, UpdatedAt: base.Add(900 * time.Millisecond)},
+	} {
+		if err := opened.SaveRun(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := opened.LatestRun(context.Background())
+	if err != nil {
+		t.Fatalf("LatestRun() error = %v", err)
+	}
+	if got == nil || got.ID != "run-later" {
+		t.Fatalf("LatestRun() = %#v, want run-later", got)
 	}
 }
 

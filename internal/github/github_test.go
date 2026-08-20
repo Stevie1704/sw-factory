@@ -20,7 +20,7 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 		[]byte("[]"),
 		[]byte(`{"id":12345,"body":"status"}`),
 		[]byte(""),
-		[]byte(`[{"id":12345,"body":"<!-- factory-status: run-1 --> status"}]`),
+		[]byte(`[[{"id":7,"body":"older status"}],[{"id":12345,"body":"<!-- factory-status: run-1 --> status"}]]`),
 	}}
 	client := &github.GhClient{Runner: runner}
 	repository := github.Repository{Owner: "example", Name: "project"}
@@ -31,6 +31,9 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	}
 	if issue.Title != "Claim me" || issue.Body != "frozen body" || issue.State != "open" || len(issue.Labels) != 2 {
 		t.Fatalf("issue = %#v, want decoded GitHub issue", issue)
+	}
+	if issue.IsPullRequest {
+		t.Fatal("ordinary issue was identified as a pull request")
 	}
 	if err := client.CreateLabel(context.Background(), repository, github.Label{Name: github.LabelAgentRunning, Color: "1d76db", Description: "active"}); err != nil {
 		t.Fatalf("CreateLabel() error = %v", err)
@@ -55,6 +58,9 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	if recovered.ID != "12345" {
 		t.Fatalf("recovered comment id = %q, want 12345", recovered.ID)
 	}
+	if !hasArgs(runner.calls[5].args, "--paginate", "--slurp") {
+		t.Fatalf("FindStatusComment args = %#v, want pagination", runner.calls[5].args)
+	}
 
 	if len(runner.calls) != 6 {
 		t.Fatalf("CLI calls = %d, want six", len(runner.calls))
@@ -73,6 +79,23 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 		if !containsArgs(call.args, "--input", "-") {
 			t.Errorf("mutation call %#v does not send JSON through stdin", call.args)
 		}
+	}
+}
+
+// TestGhClientPreservesThePullRequestIndicator verifies issue API responses
+// distinguish pull requests before the claim coordinator creates a worktree.
+func TestGhClientPreservesThePullRequestIndicator(t *testing.T) {
+	t.Parallel()
+
+	client := &github.GhClient{Runner: &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`{"number":42,"title":"A pull request","state":"open","pull_request":{"url":"https://api.github.com/repos/example/project/pulls/42"},"labels":[{"name":"agent-ready"}]}`),
+	}}}
+	issue, err := client.Issue(context.Background(), github.Repository{Owner: "example", Name: "project"}, 42)
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+	if !issue.IsPullRequest {
+		t.Fatal("pull request indicator was not preserved")
 	}
 }
 

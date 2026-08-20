@@ -23,6 +23,7 @@ type Workspace struct {
 // WorktreeManager creates an isolated branch and worktree from a target branch.
 type WorktreeManager interface {
 	Create(context.Context, string, string, string) (Workspace, error)
+	Remove(context.Context, string, Workspace) error
 }
 
 // CommandRunner is the executable seam for host-side Git commands.
@@ -113,6 +114,35 @@ func (m *LocalWorktreeManager) Create(ctx context.Context, repositoryPath, targe
 		return Workspace{}, fmt.Errorf("create worktree %q: %w", worktree, err)
 	}
 	return Workspace{BaseSHA: baseSHA, Branch: branch, Worktree: worktree}, nil
+}
+
+// Remove deletes a run worktree and its factory branch after a claim failure.
+// It attempts both operations so a partial cleanup still reports every error.
+func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string, workspace Workspace) error {
+	if strings.TrimSpace(repositoryPath) == "" {
+		return errors.New("repository path is required")
+	}
+	if strings.TrimSpace(workspace.Branch) == "" {
+		return errors.New("workspace branch is required")
+	}
+	if strings.TrimSpace(workspace.Worktree) == "" {
+		return errors.New("workspace path is required")
+	}
+	if _, err := os.Stat(repositoryPath); err != nil {
+		return fmt.Errorf("inspect repository for worktree removal: %w", err)
+	}
+	if err := validateRefPart(workspace.Branch); err != nil {
+		return fmt.Errorf("workspace branch: %w", err)
+	}
+
+	var cleanupErrors []error
+	if _, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "remove", "--force", workspace.Worktree}); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove worktree %q: %w", workspace.Worktree, err))
+	}
+	if _, err := m.runner().Run(ctx, repositoryPath, []string{"branch", "-D", workspace.Branch}); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove branch %q: %w", workspace.Branch, err))
+	}
+	return errors.Join(cleanupErrors...)
 }
 
 // worktreePath returns the configured or default sibling worktree location.

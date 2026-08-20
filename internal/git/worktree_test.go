@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 )
@@ -69,12 +70,23 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	if string(contents) != "base\n" {
 		t.Fatalf("worktree README = %q, want target branch contents", contents)
 	}
+	if err := manager.Remove(context.Background(), repository, workspace); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if _, err := os.Stat(workspace.Worktree); !os.IsNotExist(err) {
+		t.Fatalf("worktree path still exists after Remove(): err = %v", err)
+	}
+	if got := strings.TrimSpace(runGit(t, repository, "branch", "--list", workspace.Branch)); got != "" {
+		t.Fatalf("run branch = %q, want branch removed", got)
+	}
 }
 
 // runGit executes one Git command in a temporary test repository.
 func runGit(t *testing.T, directory string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", args...)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = directory
 	output, err := command.CombinedOutput()
 	if err != nil {
