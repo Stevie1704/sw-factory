@@ -61,7 +61,7 @@ func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 99);`); err != nil {
+	if _, err := database.ExecContext(t.Context(), `CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 99);`); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 0);`); err != nil {
+	if _, err := database.ExecContext(t.Context(), `CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 0);`); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}
@@ -507,7 +507,7 @@ func TestSchemaOneMigrationPreservesClaimMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
 		INSERT INTO schema_metadata(singleton, version) VALUES (1, 1);
 		CREATE TABLE operational_runs (
 			id TEXT PRIMARY KEY,
@@ -568,6 +568,82 @@ func TestSchemaOneMigrationPreservesClaimMetadata(t *testing.T) {
 	}
 	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket {
 		t.Fatalf("migrated claim metadata = %#v, want %#v", got, wanted)
+	}
+}
+
+// TestSchemaTwoMigrationReconcilesDuplicateActiveRuns verifies migration 3
+// keeps the newest legacy run and makes older duplicates terminal before the
+// active-run uniqueness index is created.
+func TestSchemaTwoMigrationReconcilesDuplicateActiveRuns(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
+		INSERT INTO schema_metadata(singleton, version) VALUES (1, 2);
+		CREATE TABLE operational_runs (
+			id TEXT PRIMARY KEY,
+			repository_path TEXT NOT NULL,
+			issue_number INTEGER NOT NULL,
+			stage TEXT NOT NULL,
+			status TEXT NOT NULL,
+			branch TEXT NOT NULL DEFAULT '',
+			worktree TEXT NOT NULL DEFAULT '',
+			checkpoint_sha TEXT NOT NULL DEFAULT '',
+			image_digest TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			coordinator TEXT NOT NULL DEFAULT '',
+			status_comment_id TEXT NOT NULL DEFAULT '',
+			specification_packet TEXT NOT NULL DEFAULT ''
+		);
+		INSERT INTO operational_runs (id, repository_path, issue_number, stage, status, created_at, updated_at)
+		VALUES ('run-old', '/work/repository', 42, 'claim', 'active', '2026-08-20T10:00:00Z', '2026-08-20T10:00:00Z');
+		INSERT INTO operational_runs (id, repository_path, issue_number, stage, status, created_at, updated_at)
+		VALUES ('run-new', '/work/repository', 42, 'implementation', 'waiting_for_harness', '2026-08-20T10:01:00Z', '2026-08-20T10:01:00Z')`)
+	if err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open() migration error = %v", err)
+	}
+	current, err := opened.CurrentRun(t.Context())
+	if err != nil {
+		_ = opened.Close()
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if current == nil || current.ID != "run-new" {
+		_ = opened.Close()
+		t.Fatalf("CurrentRun() = %#v, want newest reconciled run", current)
+	}
+	current.Status = store.StatusComplete
+	if err := opened.SaveRun(t.Context(), *current); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveRun() terminal update error = %v", err)
+	}
+	remaining, err := opened.CurrentRun(t.Context())
+	if err != nil {
+		_ = opened.Close()
+		t.Fatalf("CurrentRun() after terminal update error = %v", err)
+	}
+	if remaining != nil {
+		_ = opened.Close()
+		t.Fatalf("CurrentRun() = %#v, want no legacy duplicate after reconciliation", remaining)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

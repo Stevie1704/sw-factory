@@ -408,6 +408,20 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				}
 			}
 		case 3:
+			if _, err := tx.ExecContext(ctx, `UPDATE operational_runs
+				SET status = 'failed'
+				WHERE status NOT IN ('complete', 'cancelled', 'failed')
+				  AND id NOT IN (
+					SELECT id FROM (
+						SELECT id, ROW_NUMBER() OVER (
+							PARTITION BY repository_path ORDER BY updated_at DESC, id DESC
+						) AS position
+						FROM operational_runs
+						WHERE status NOT IN ('complete', 'cancelled', 'failed')
+					) WHERE position = 1
+				)`); err != nil {
+				return fmt.Errorf("reconcile runs before store migration 3: %w", err)
+			}
 			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_run_per_repository
 				ON operational_runs (repository_path)
 				WHERE status NOT IN ('complete', 'cancelled', 'failed')`); err != nil {
