@@ -104,29 +104,16 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if existed && empty {
 		return nil, &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
 	}
-	database, err := sql.Open("sqlite", absolutePath)
+	database, err := openConfiguredDatabase(ctx, absolutePath)
 	if err != nil {
-		return nil, fmt.Errorf("open operational store: %w", err)
+		return nil, err
 	}
-	if err := database.PingContext(ctx); err != nil {
-		_ = database.Close()
-		return nil, fmt.Errorf("open operational store: %w", err)
-	}
-	if err := os.Chmod(absolutePath, 0o600); err != nil {
-		_ = database.Close()
-		return nil, fmt.Errorf("protect operational store: %w", err)
-	}
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
 	closeOnError := true
 	defer func() {
-		if closeOnError {
+		if closeOnError && database != nil {
 			_ = database.Close()
 		}
 	}()
-	if err := configure(ctx, database); err != nil {
-		return nil, err
-	}
 	if !existed {
 		if err := initializeMetadata(ctx, database); err != nil {
 			return nil, err
@@ -147,14 +134,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			if _, err := backupDatabase(absolutePath); err != nil {
 				return nil, err
 			}
-			database, err = sql.Open("sqlite", absolutePath)
+			database, err = openConfiguredDatabase(ctx, absolutePath)
 			if err != nil {
 				return nil, fmt.Errorf("reopen operational store for migration: %w", err)
-			}
-			database.SetMaxOpenConns(1)
-			database.SetMaxIdleConns(1)
-			if err := configure(ctx, database); err != nil {
-				return nil, err
 			}
 		}
 		if err := migrate(ctx, database, version); err != nil {
@@ -279,6 +261,28 @@ func databaseState(path string) (bool, bool, error) {
 		return false, false, fmt.Errorf("operational store path %q is a directory", path)
 	}
 	return true, info.Size() == 0, nil
+}
+
+func openConfiguredDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open operational store: %w", err)
+	}
+	if err := database.PingContext(ctx); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("open operational store: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("protect operational store: %w", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	if err := configure(ctx, database); err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	return database, nil
 }
 
 func configure(ctx context.Context, database *sql.DB) error {

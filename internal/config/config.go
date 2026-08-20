@@ -52,24 +52,31 @@ type RepositoryConfig struct {
 	TargetBranch        string              `yaml:"target_branch"`
 	Setup               string              `yaml:"setup"`
 	Gates               []GateConfig        `yaml:"gates"`
-	RoleHarnessDefaults map[string]string   `yaml:"role_harness_defaults"`
+	RoleHarnessDefaults map[string]Harness  `yaml:"role_harness_defaults"`
 	ModelOptions        map[string][]string `yaml:"model_options"`
 	Timeouts            TimeoutConfig       `yaml:"timeouts"`
 	RetryLimits         RetryLimits         `yaml:"retry_limits"`
 	TestPolicy          TestPolicy          `yaml:"test_policy"`
-	AllowedOverrides    []string            `yaml:"allowed_overrides"`
+	AllowedOverrides    []OverrideName      `yaml:"allowed_overrides"`
 	Caches              []CacheConfig       `yaml:"caches"`
 	WorkerBuild         WorkerBuildConfig   `yaml:"worker_build"`
 	BaseSynchronization BaseSynchronization `yaml:"base_synchronization"`
 }
 
+type EnvironmentPolicy string
+
+const (
+	EnvironmentPolicyClean EnvironmentPolicy = "clean"
+	EnvironmentPolicyRole  EnvironmentPolicy = "role"
+)
+
 type GateConfig struct {
-	Name              string   `yaml:"name"`
-	Command           string   `yaml:"command"`
-	Timeout           string   `yaml:"timeout"`
-	Blocking          bool     `yaml:"blocking"`
-	DependsOn         []string `yaml:"depends_on"`
-	EnvironmentPolicy string   `yaml:"environment_policy"`
+	Name              string            `yaml:"name"`
+	Command           string            `yaml:"command"`
+	Timeout           string            `yaml:"timeout"`
+	Blocking          bool              `yaml:"blocking"`
+	DependsOn         []string          `yaml:"depends_on"`
+	EnvironmentPolicy EnvironmentPolicy `yaml:"environment_policy"`
 }
 
 type TimeoutConfig struct {
@@ -85,10 +92,18 @@ type RetryLimits struct {
 	TestRevision int `yaml:"test_revision"`
 }
 
+type TestMode string
+
+const (
+	TestModeRequired TestMode = "required"
+	TestModeAdvisory TestMode = "advisory"
+	TestModeDisabled TestMode = "disabled"
+)
+
 type TestPolicy struct {
-	Mode                    string `yaml:"mode"`
-	AllowHumanExemption     bool   `yaml:"allow_human_exemption"`
-	AllowTechnicalExemption bool   `yaml:"allow_technical_exemption"`
+	Mode                    TestMode `yaml:"mode"`
+	AllowHumanExemption     bool     `yaml:"allow_human_exemption"`
+	AllowTechnicalExemption bool     `yaml:"allow_technical_exemption"`
 }
 
 type CacheConfig struct {
@@ -103,10 +118,32 @@ type WorkerBuildConfig struct {
 	Definition string `yaml:"definition"`
 }
 
+type BaseSynchronizationMode string
+
+const (
+	BaseSynchronizationNever       BaseSynchronizationMode = "never"
+	BaseSynchronizationBeforeReady BaseSynchronizationMode = "before_ready"
+)
+
 type BaseSynchronization struct {
-	Mode   string `yaml:"mode"`
-	Branch string `yaml:"branch"`
+	Mode   BaseSynchronizationMode `yaml:"mode"`
+	Branch string                  `yaml:"branch"`
 }
+
+type Harness string
+
+const (
+	HarnessCodex  Harness = "codex"
+	HarnessClaude Harness = "claude"
+)
+
+type OverrideName string
+
+const (
+	OverrideModel           OverrideName = "model"
+	OverrideReasoningEffort OverrideName = "reasoning_effort"
+	OverrideHarness         OverrideName = "harness"
+)
 
 type ValidationError struct {
 	Field   string
@@ -119,12 +156,17 @@ func (e *ValidationError) Error() string {
 
 type UnknownSchemaVersionError struct {
 	Kind      string
+	Field     string
 	Version   int
 	Supported int
 }
 
 func (e *UnknownSchemaVersionError) Error() string {
-	return fmt.Sprintf("%s configuration schema version %d is newer than supported version %d", e.Kind, e.Version, e.Supported)
+	field := e.Field
+	if field == "" {
+		field = "schema_version"
+	}
+	return fmt.Sprintf("%s configuration invalid: %s %d is newer than supported version %d", e.Kind, field, e.Version, e.Supported)
 }
 
 type ConfigFileError struct {
@@ -282,7 +324,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		if err := validateDuration(prefix+".timeout", gate.Timeout, false); err != nil {
 			return err
 		}
-		if gate.EnvironmentPolicy != "clean" && gate.EnvironmentPolicy != "role" {
+		if gate.EnvironmentPolicy != EnvironmentPolicyClean && gate.EnvironmentPolicy != EnvironmentPolicyRole {
 			return validation(prefix+".environment_policy", "must be clean or role")
 		}
 		for dependencyIndex, dependency := range gate.DependsOn {
@@ -298,7 +340,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		if strings.TrimSpace(role) == "" {
 			return validation("role_harness_defaults", "role names must not be empty")
 		}
-		if harness != "codex" && harness != "claude" {
+		if harness != HarnessCodex && harness != HarnessClaude {
 			return validation("role_harness_defaults."+role, "must be codex or claude")
 		}
 	}
@@ -313,6 +355,16 @@ func ValidateRepository(config RepositoryConfig) error {
 			if strings.TrimSpace(model) == "" {
 				return validation(fmt.Sprintf("model_options.%s[%d]", role, index), "must not be empty")
 			}
+		}
+	}
+	for role := range config.RoleHarnessDefaults {
+		if _, exists := config.ModelOptions[role]; !exists {
+			return validation("model_options."+role, "must declare a model option for every harness role")
+		}
+	}
+	for role := range config.ModelOptions {
+		if _, exists := config.RoleHarnessDefaults[role]; !exists {
+			return validation("role_harness_defaults."+role, "must declare a harness for every model role")
 		}
 	}
 	for field, value := range map[string]string{
@@ -334,10 +386,10 @@ func ValidateRepository(config RepositoryConfig) error {
 			return validation(field, "must be greater than zero")
 		}
 	}
-	if config.TestPolicy.Mode != "required" && config.TestPolicy.Mode != "advisory" && config.TestPolicy.Mode != "disabled" {
+	if config.TestPolicy.Mode != TestModeRequired && config.TestPolicy.Mode != TestModeAdvisory && config.TestPolicy.Mode != TestModeDisabled {
 		return validation("test_policy.mode", "must be required, advisory, or disabled")
 	}
-	if err := validateOptionalUniqueStrings("allowed_overrides", config.AllowedOverrides); err != nil {
+	if err := validateOptionalOverrides(config.AllowedOverrides); err != nil {
 		return err
 	}
 	seenCaches := make(map[string]struct{}, len(config.Caches))
@@ -366,10 +418,10 @@ func ValidateRepository(config RepositoryConfig) error {
 	if strings.TrimSpace(config.WorkerBuild.Definition) == "" {
 		return validation("worker_build.definition", "is required")
 	}
-	if config.BaseSynchronization.Mode != "never" && config.BaseSynchronization.Mode != "before_ready" {
+	if config.BaseSynchronization.Mode != BaseSynchronizationNever && config.BaseSynchronization.Mode != BaseSynchronizationBeforeReady {
 		return validation("base_synchronization.mode", "must be never or before_ready")
 	}
-	if config.BaseSynchronization.Mode == "before_ready" && strings.TrimSpace(config.BaseSynchronization.Branch) == "" {
+	if config.BaseSynchronization.Mode == BaseSynchronizationBeforeReady && strings.TrimSpace(config.BaseSynchronization.Branch) == "" {
 		return validation("base_synchronization.branch", "is required when synchronization is enabled")
 	}
 	return nil
@@ -420,7 +472,7 @@ func validateSchema(kind string, version int) error {
 		return validation("schema_version", "is required")
 	}
 	if version > CurrentSchemaVersion {
-		return &UnknownSchemaVersionError{Kind: kind, Version: version, Supported: CurrentSchemaVersion}
+		return &UnknownSchemaVersionError{Kind: kind, Field: "schema_version", Version: version, Supported: CurrentSchemaVersion}
 	}
 	if version < 1 {
 		return validation("schema_version", "must be positive")
@@ -457,6 +509,20 @@ func validateOptionalUniqueStrings(field string, values []string) error {
 		}
 		if _, exists := seen[value]; exists {
 			return validation(fmt.Sprintf("%s[%d]", field, index), "must be unique")
+		}
+		seen[value] = struct{}{}
+	}
+	return nil
+}
+
+func validateOptionalOverrides(values []OverrideName) error {
+	seen := make(map[OverrideName]struct{}, len(values))
+	for index, value := range values {
+		if value != OverrideModel && value != OverrideReasoningEffort && value != OverrideHarness {
+			return validation(fmt.Sprintf("allowed_overrides[%d]", index), "must be model, reasoning_effort, or harness")
+		}
+		if _, exists := seen[value]; exists {
+			return validation(fmt.Sprintf("allowed_overrides[%d]", index), "must be unique")
 		}
 		seen[value] = struct{}{}
 	}

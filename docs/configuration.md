@@ -96,7 +96,7 @@ base_synchronization:
   branch: main
 ```
 
-The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, role harnesses, model options, positive durations, positive retry limits, test policy, unique overrides and caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field.
+The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 Issue #3 establishes and validates this repository-declared gate contract. Running setup and gates with baseline health, dependency skipping, timeouts, and checkpoint-keyed results is the gate-runner work in issue #9; this binary does not execute arbitrary repository commands yet. The commands declared by this repository's `factory.yaml` are run as part of the repository verification suite.
 

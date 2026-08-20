@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -96,6 +97,42 @@ func TestLoadRepositoryUnknownSchemaFailsClosed(t *testing.T) {
 	if schemaErr.Version != 99 || schemaErr.Supported != config.CurrentSchemaVersion {
 		t.Fatalf("schema error = %#v", schemaErr)
 	}
+	if schemaErr.Field != "schema_version" {
+		t.Fatalf("schema field = %q, want schema_version", schemaErr.Field)
+	}
+	if !strings.Contains(schemaErr.Error(), "schema_version") {
+		t.Fatalf("schema error = %q, want schema_version field", schemaErr.Error())
+	}
+}
+
+func TestValidateRepositoryRequiresMatchingHarnessAndModelRoles(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.ModelOptions = map[string][]string{"test": {"gpt-5"}}
+	err := config.ValidateRepository(policy)
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	}
+	if validationErr.Field != "model_options.implementation" {
+		t.Fatalf("field = %q, want model_options.implementation", validationErr.Field)
+	}
+}
+
+func TestValidateRepositoryRejectsUnsupportedOverrides(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.AllowedOverrides = []config.OverrideName{"shell_args"}
+	err := config.ValidateRepository(policy)
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	}
+	if validationErr.Field != "allowed_overrides[0]" {
+		t.Fatalf("field = %q, want allowed_overrides[0]", validationErr.Field)
+	}
 }
 
 func TestLoadHostRejectsTheOffendingField(t *testing.T) {
@@ -139,5 +176,31 @@ func TestProjectRepositoryConfigIsValid(t *testing.T) {
 	}
 	if len(loaded.Gates) < 4 {
 		t.Fatalf("project gates = %d, want format, vet, test, and build", len(loaded.Gates))
+	}
+}
+
+func validRepositoryConfig() config.RepositoryConfig {
+	return config.RepositoryConfig{
+		SchemaVersion: 1,
+		TargetBranch:  "main",
+		Setup:         "go mod download",
+		Gates: []config.GateConfig{{
+			Name:              "test",
+			Command:           "go test ./...",
+			Timeout:           "5m",
+			Blocking:          true,
+			EnvironmentPolicy: config.EnvironmentPolicyClean,
+		}},
+		RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex},
+		ModelOptions:        map[string][]string{"implementation": {"gpt-5"}},
+		Timeouts: config.TimeoutConfig{
+			Setup: "5m", Agent: "30m", Gate: "5m", Review: "10m",
+		},
+		RetryLimits: config.RetryLimits{CheckRepair: 3, ReviewRepair: 2, TestRevision: 2},
+		TestPolicy:  config.TestPolicy{Mode: config.TestModeRequired},
+		WorkerBuild: config.WorkerBuildConfig{
+			Image: "ghcr.io/example/factory-worker", Digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Definition: "worker/Dockerfile",
+		},
+		BaseSynchronization: config.BaseSynchronization{Mode: config.BaseSynchronizationNever},
 	}
 }
