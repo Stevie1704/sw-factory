@@ -2,7 +2,7 @@
 
 - **Issue**: #2 (parent spec #1, user story 91)
 - **Date**: 2026-08-20
-- **Status**: in progress — the central risk is answered; five criteria still need a person at a keyboard
+- **Status**: the central risk is answered; criterion 9 is open and criteria 2, 4, and 5 need a person to confirm
 - **Reproduction**: `spike/issue-2/` (throwaway; not merged into product packages)
 
 ## Question
@@ -63,21 +63,27 @@ works. It cannot show that the result looks right. The table separates the two.
 
 | # | Criterion | Verdict | Evidence |
 | --- | --- | --- | --- |
-| 1 | Interactive terminal app in a container pseudo-terminal via cmux, explicit terminal type | Proven for both | Both TUIs read out of their own cmux surfaces, with the returned surface id checked against the requested one. Claude Code v2.1.232 and Codex v0.148.0, both at `/work`. See `spike/issue-2/evidence/` |
-| 2 | Colours and layout render correctly | Mechanism proven; appearance needs a person | Claude surface: 408 box-drawing characters, palette `#D77757/#888888/#999999`. Codex surface: 108 box-drawing characters, 10 colours. The grids contain no broken rows. Whether the result looks correct is a human judgement |
-| 3 | Human keystrokes reach the harness | Proven through Docker; cmux layer needs a person | The operator typed into both TUIs in the container and both answered |
-| 4 | Resize without corruption | Mechanism proven at both layers; appearance needs a person | `tty-probe` moved 24×80 to 40×132 inside the container and `SIGWINCH` arrived. `harness-probe` resized both live TUIs and each redrew wider. Neither test can judge corruption |
-| 5 | Approval prompt raised and answered | Not proven | Claude Code raised its folder-trust prompt and accepted an answer, but the criterion asks for a human answering a tool approval |
-| 6 | Ctrl+C interrupts the harness, container survives | Proven for both | `harness-probe` sends Ctrl+C to the live TUIs. The container stays `Running` in both cases. The two harnesses behave differently — see failure mode 2 |
-| 7 | Stage completes by writing schema-versioned JSON, no screen parsing | Proven for Codex; not proven for Claude Code | Codex ran `factory-report`. The result is committed at `spike/issue-2/evidence/inv-codex-1.json` |
-| 8 | Container destroyed and recreated from the same pinned image, session resumes with context | Proven for both headless; proven interactively for Claude Code only | Codex returned `SPIKE-TOKEN-7731` and Claude Code returned `SPIKE-TOKEN-4402`. After a later recreate the Claude TUI started with no theme, login, or trust prompt. Codex interactive resume after a recreate was not tested |
+| 1 | Interactive terminal app in a container pseudo-terminal via cmux, explicit terminal type | Proven for both | Both TUIs read out of their own cmux surfaces, with the returned surface id checked against the requested one. See `spike/issue-2/evidence/` |
+| 2 | Colours and layout render correctly | Mechanism proven; appearance needs a person | Claude surface: 408 box-drawing characters, palette `#D77757/#888888/#999999`. Codex surface: 108 box-drawing characters, 10 colours. No broken rows in either grid. Whether the result looks correct is a human judgement |
+| 3 | Human keystrokes reach the harness | Proven for both | `stage-probe` and `codex-stage-probe` type a request one word at a time into each TUI. Both harnesses received the text and acted on it |
+| 4 | Resize without corruption | Mechanism proven; appearance needs a person | `tty-probe` moved 24×80 to 40×132 inside the container and `SIGWINCH` arrived. `harness-probe` resized both live TUIs and each redrew wider. Neither test can judge corruption |
+| 5 | Approval prompt raised and answered | Raised and answered for both, by a driver rather than a person | Claude Code: `This command requires approval / Do you want to proceed? / 1. Yes`. Codex: `Would you like to run the following command? / 1. Yes, proceed (y)`. Both accepted the answer and ran the command |
+| 6 | Ctrl+C interrupts the harness, container survives | Proven for both | `harness-probe` sends Ctrl+C to the live TUIs. The container stays `Running` in both cases. The harnesses differ — see failure mode 2 |
+| 7 | Stage completes by writing schema-versioned JSON, no screen parsing | Proven for both | Codex headless and both harnesses interactively. Results committed in `spike/issue-2/evidence/` |
+| 8 | Container destroyed and recreated from the same pinned image, session resumes with context | Proven for both, headless and interactive | Headless: `SPIKE-TOKEN-7731` (Codex), `SPIKE-TOKEN-4402` (Claude Code). Interactive after a recreate: the Claude TUI started with no theme, login, or trust prompt; `codex resume <uuid>` showed the earlier turn and returned `SPIKE-TOKEN-9915` |
 | 9 | cmux restarted, surfaces recoverable | Not proven | — |
 | 10 | Native session identifier observed and documented | Proven for both | See below |
 | 11 | Findings written up, spike code not merged into product packages | Done | This document. Code stays in `spike/issue-2/` |
 
-Criteria 2, 3, 4, 5, and 9 still need a person at a keyboard. Criterion 7 needs
-one more interactive check for Claude Code, and criterion 8 needs one more
-interactive check for Codex.
+Two limits on the automated evidence:
+
+- Criteria 2 and 4 cover appearance. A test can show that the mechanism works
+  and that no row is broken. Only a person can say the result looks correct.
+- Criterion 5 asks for a human answer. A driver raised and answered the prompt
+  in both harnesses, which proves the prompt renders and accepts input through
+  both layers of indirection. A person should still answer one.
+
+Criterion 9 has no evidence yet.
 
 ## Native session identifiers
 
@@ -342,15 +348,11 @@ rule empirically.
 A person must do these at a keyboard, in the cmux workspace created by
 `spike/issue-2/cmux-surfaces`:
 
-1. Type into both surfaces and confirm the harness receives the keystrokes.
-2. Confirm that colours and layout look correct in both surfaces.
-3. Resize a surface and confirm the redraw has no corruption.
-4. Ask Claude Code in its surface to run `factory-report`. Approve the prompt
-   that the harness raises. This closes criteria 5 and 7.
-5. Quit cmux, start it again, and record whether `cmux restore-session` returns
-   the surfaces. This closes criterion 9.
-6. Resume a Codex session interactively after `./worker recreate`. This closes
-   the remaining half of criterion 8.
+1. Confirm that colours and layout look correct in both surfaces (criterion 2).
+2. Resize a surface and confirm the redraw has no corruption (criterion 4).
+3. Answer one harness approval prompt by hand (criterion 5).
+4. Quit cmux, start it again, and record whether `cmux restore-session` returns
+   the surfaces (criterion 9). This is the only criterion with no evidence.
 
 ## Notes on scope
 

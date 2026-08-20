@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "invocation_id": "inv-codex-tui",
+  "run_id": "spike-issue-2",
+  "harness": "codex",
+  "role": "test",
+  "stage": "test",
+  "outcome": "completed",
+  "summary": "codex tui stage",
+  "reported_at": "2026-08-20T08:51:57.021Z"
+}
