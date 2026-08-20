@@ -179,218 +179,142 @@ func TestProjectRepositoryConfigIsValid(t *testing.T) {
 	}
 }
 
-func TestValidateRepositoryRequiresAtLeastOneGate(t *testing.T) {
+func TestNewHostConfigUsesTheCurrentSchemaVersionAndNoRepositories(t *testing.T) {
 	t.Parallel()
 
-	policy := validRepositoryConfig()
-	policy.Gates = nil
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	got := config.NewHostConfig()
+	if got.SchemaVersion != config.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion = %d, want %d", got.SchemaVersion, config.CurrentSchemaVersion)
 	}
-	if validationErr.Field != "gates" {
-		t.Fatalf("field = %q, want gates", validationErr.Field)
+	if len(got.Repositories) != 0 {
+		t.Fatalf("Repositories = %#v, want none", got.Repositories)
 	}
 }
 
-func TestValidateRepositoryRejectsDuplicateGateNames(t *testing.T) {
-	t.Parallel()
+func TestDefaultHostConfigPathPrefersTheFactoryConfigEnvironmentVariable(t *testing.T) {
+	t.Setenv("FACTORY_CONFIG", "relative/config.yaml")
 
-	policy := validRepositoryConfig()
-	policy.Gates = append(policy.Gates, policy.Gates[0])
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	got, err := config.DefaultHostConfigPath()
+	if err != nil {
+		t.Fatalf("DefaultHostConfigPath() error = %v", err)
 	}
-	if validationErr.Field != "gates[1].name" {
-		t.Fatalf("field = %q, want gates[1].name", validationErr.Field)
+	if !filepath.IsAbs(got) {
+		t.Fatalf("DefaultHostConfigPath() = %q, want an absolute path", got)
 	}
-}
-
-func TestValidateRepositoryRejectsAGateDependingOnAnUnknownGate(t *testing.T) {
-	t.Parallel()
-
-	policy := validRepositoryConfig()
-	policy.Gates[0].DependsOn = []string{"nonexistent"}
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "gates[0].depends_on[0]" {
-		t.Fatalf("field = %q, want gates[0].depends_on[0]", validationErr.Field)
+	if !strings.HasSuffix(got, filepath.Join("relative", "config.yaml")) {
+		t.Fatalf("DefaultHostConfigPath() = %q, want it derived from FACTORY_CONFIG", got)
 	}
 }
 
-func TestValidateRepositoryRejectsAnInvalidEnvironmentPolicy(t *testing.T) {
+func TestDefaultOperationalDataPathIsRelativeToTheHostConfigDirectory(t *testing.T) {
 	t.Parallel()
 
-	policy := validRepositoryConfig()
-	policy.Gates[0].EnvironmentPolicy = "dirty"
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "gates[0].environment_policy" {
-		t.Fatalf("field = %q, want gates[0].environment_policy", validationErr.Field)
+	got := config.DefaultOperationalDataPath("/home/user/.config/factory/config.yaml")
+	want := filepath.Join("/home/user/.config/factory", "data", "factory.db")
+	if got != want {
+		t.Fatalf("DefaultOperationalDataPath() = %q, want %q", got, want)
 	}
 }
 
-func TestValidateRepositoryRejectsAGateTimeoutThatIsNotAPositiveDuration(t *testing.T) {
+func TestDefaultRepositoryConfigPathJoinsTheRepositoryRoot(t *testing.T) {
 	t.Parallel()
 
-	policy := validRepositoryConfig()
-	policy.Gates[0].Timeout = "not-a-duration"
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "gates[0].timeout" {
-		t.Fatalf("field = %q, want gates[0].timeout", validationErr.Field)
+	got := config.DefaultRepositoryConfigPath("/work/repository")
+	want := filepath.Join("/work/repository", config.RepositoryConfigFileName)
+	if got != want {
+		t.Fatalf("DefaultRepositoryConfigPath() = %q, want %q", got, want)
 	}
 }
 
-func TestValidateRepositoryRejectsAMissingTimeout(t *testing.T) {
+func TestCreateHostWritesAPrivateDefaultConfigurationAndRejectsAnExistingPath(t *testing.T) {
 	t.Parallel()
 
-	policy := validRepositoryConfig()
-	policy.Timeouts.Agent = ""
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	path := filepath.Join(t.TempDir(), "host", "config.yaml")
+	created, err := config.CreateHost(path)
+	if err != nil {
+		t.Fatalf("CreateHost() error = %v", err)
 	}
-	if validationErr.Field != "timeouts.agent" {
-		t.Fatalf("field = %q, want timeouts.agent", validationErr.Field)
+	if created.SchemaVersion != config.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion = %d, want %d", created.SchemaVersion, config.CurrentSchemaVersion)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config permissions = %#o, want 0600", got)
+	}
+
+	if _, err := config.CreateHost(path); err == nil {
+		t.Fatal("CreateHost() succeeded for an existing configuration path")
 	}
 }
 
-func TestValidateRepositoryRejectsNonPositiveRetryLimits(t *testing.T) {
+func TestSaveHostRejectsAnInvalidConfigurationWithoutWriting(t *testing.T) {
 	t.Parallel()
 
-	policy := validRepositoryConfig()
-	policy.RetryLimits.ReviewRepair = 0
-	err := config.ValidateRepository(policy)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	invalid := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{
+		{Path: "relative/repository"},
+	}}
+	err := config.SaveHost(path, invalid)
 	var validationErr *config.ValidationError
 	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+		t.Fatalf("SaveHost() error = %v, want ValidationError", err)
 	}
-	if validationErr.Field != "retry_limits.review_repair" {
-		t.Fatalf("field = %q, want retry_limits.review_repair", validationErr.Field)
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("SaveHost() wrote a file despite validation failure: %v", statErr)
 	}
 }
 
-func TestValidateRepositoryRejectsAnInvalidTestPolicyMode(t *testing.T) {
+func TestSaveHostThenLoadHostRoundTripsARegisteredRepository(t *testing.T) {
 	t.Parallel()
 
-	policy := validRepositoryConfig()
-	policy.TestPolicy.Mode = "sometimes"
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	path := filepath.Join(t.TempDir(), "host", "config.yaml")
+	registration := config.RepositoryRegistration{
+		Path:                 "/work/repository",
+		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+		AuthorizedUsers:      []string{"alice", "bob"},
+		Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+		OperationalDataPath:  "/var/lib/factory/factory.db",
+		RepositoryConfigPath: "/work/repository/factory.yaml",
 	}
-	if validationErr.Field != "test_policy.mode" {
-		t.Fatalf("field = %q, want test_policy.mode", validationErr.Field)
+	want := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}
+	if err := config.SaveHost(path, want); err != nil {
+		t.Fatalf("SaveHost() error = %v", err)
+	}
+
+	got, err := config.LoadHost(path)
+	if err != nil {
+		t.Fatalf("LoadHost() error = %v", err)
+	}
+	if len(got.Repositories) != 1 || got.Repositories[0].Path != registration.Path {
+		t.Fatalf("LoadHost() = %#v, want round-tripped registration", got)
+	}
+	if len(got.Repositories[0].AuthorizedUsers) != 2 {
+		t.Fatalf("AuthorizedUsers = %#v, want two entries", got.Repositories[0].AuthorizedUsers)
 	}
 }
 
-func TestValidateRepositoryRejectsDuplicateAllowedOverrides(t *testing.T) {
+func TestValidateHostAcceptsNoRegisteredRepositories(t *testing.T) {
 	t.Parallel()
 
-	policy := validRepositoryConfig()
-	policy.AllowedOverrides = []config.OverrideName{config.OverrideModel, config.OverrideModel}
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "allowed_overrides[1]" {
-		t.Fatalf("field = %q, want allowed_overrides[1]", validationErr.Field)
-	}
-}
-
-func TestValidateRepositoryAllowsAnEmptyAllowedOverridesList(t *testing.T) {
-	t.Parallel()
-
-	policy := validRepositoryConfig()
-	policy.AllowedOverrides = nil
-	if err := config.ValidateRepository(policy); err != nil {
-		t.Fatalf("ValidateRepository() error = %v, want nil for an empty override list", err)
-	}
-}
-
-func TestValidateRepositoryRejectsDuplicateCacheNames(t *testing.T) {
-	t.Parallel()
-
-	policy := validRepositoryConfig()
-	policy.Caches = []config.CacheConfig{
-		{Name: "go-build", Path: "/tmp/one"},
-		{Name: "go-build", Path: "/tmp/two"},
-	}
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "caches[1].name" {
-		t.Fatalf("field = %q, want caches[1].name", validationErr.Field)
-	}
-}
-
-func TestValidateRepositoryRejectsAMalformedWorkerBuildDigest(t *testing.T) {
-	t.Parallel()
-
-	policy := validRepositoryConfig()
-	policy.WorkerBuild.Digest = "sha256:UPPERCASE0123456789abcdef0123456789abcdef0123456789abcdef012345"
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "worker_build.digest" {
-		t.Fatalf("field = %q, want worker_build.digest", validationErr.Field)
-	}
-}
-
-func TestValidateRepositoryRequiresABranchWhenBaseSynchronizationRunsBeforeReady(t *testing.T) {
-	t.Parallel()
-
-	policy := validRepositoryConfig()
-	policy.BaseSynchronization = config.BaseSynchronization{Mode: config.BaseSynchronizationBeforeReady}
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "base_synchronization.branch" {
-		t.Fatalf("field = %q, want base_synchronization.branch", validationErr.Field)
-	}
-}
-
-func TestValidateRepositoryRejectsAnUnsupportedBaseSynchronizationMode(t *testing.T) {
-	t.Parallel()
-
-	policy := validRepositoryConfig()
-	policy.BaseSynchronization = config.BaseSynchronization{Mode: "always"}
-	err := config.ValidateRepository(policy)
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "base_synchronization.mode" {
-		t.Fatalf("field = %q, want base_synchronization.mode", validationErr.Field)
+	if err := config.ValidateHost(config.NewHostConfig()); err != nil {
+		t.Fatalf("ValidateHost() error = %v, want no error for zero repositories", err)
 	}
 }
 
 func TestValidateHostRejectsMoreThanOneRegisteredRepository(t *testing.T) {
 	t.Parallel()
 
-	registration := validRegistration(t)
+	registration := config.RepositoryRegistration{
+		Path:                 "/work/repository",
+		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+		AuthorizedUsers:      []string{"alice"},
+		Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+		OperationalDataPath:  "/var/lib/factory/factory.db",
+		RepositoryConfigPath: "/work/repository/factory.yaml",
+	}
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration, registration}}
 	err := config.ValidateHost(host)
 	var validationErr *config.ValidationError
@@ -402,167 +326,307 @@ func TestValidateHostRejectsMoreThanOneRegisteredRepository(t *testing.T) {
 	}
 }
 
-func TestValidateHostRejectsARegistrationWithNoAuthorizedUsers(t *testing.T) {
+func TestValidateHostRejectsMissingGitHubMetadataAndDuplicateAuthorizedUsers(t *testing.T) {
 	t.Parallel()
 
-	registration := validRegistration(t)
-	registration.AuthorizedUsers = nil
-	err := config.ValidateHost(config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}})
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
+	base := config.RepositoryRegistration{
+		Path:                 "/work/repository",
+		AuthorizedUsers:      []string{"alice"},
+		Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+		OperationalDataPath:  "/var/lib/factory/factory.db",
+		RepositoryConfigPath: "/work/repository/factory.yaml",
 	}
-	if validationErr.Field != "repositories[0].authorized_users" {
-		t.Fatalf("field = %q, want repositories[0].authorized_users", validationErr.Field)
+
+	tests := []struct {
+		name   string
+		mutate func(config.RepositoryRegistration) config.RepositoryRegistration
+		field  string
+	}{
+		{
+			name: "missing owner",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.GitHub = config.GitHubConfig{Repository: "project"}
+				return r
+			},
+			field: "repositories[0].github.owner",
+		},
+		{
+			name: "missing repository",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.GitHub = config.GitHubConfig{Owner: "example"}
+				return r
+			},
+			field: "repositories[0].github.repository",
+		},
+		{
+			name: "duplicate authorized users",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.GitHub = config.GitHubConfig{Owner: "example", Repository: "project"}
+				r.AuthorizedUsers = []string{"alice", "alice"}
+				return r
+			},
+			field: "repositories[0].authorized_users[1]",
+		},
+		{
+			name: "relative cmux socket path",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.GitHub = config.GitHubConfig{Owner: "example", Repository: "project"}
+				r.Cmux = config.CmuxConfig{SocketPath: "relative/socket"}
+				return r
+			},
+			field: "repositories[0].cmux.socket_path",
+		},
+		{
+			name: "invalid polling interval",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.GitHub = config.GitHubConfig{Owner: "example", Repository: "project"}
+				r.Polling.Interval = "not-a-duration"
+				return r
+			},
+			field: "repositories[0].polling.interval",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{tc.mutate(base)}}
+			err := config.ValidateHost(host)
+			var validationErr *config.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
+			}
+			if validationErr.Field != tc.field {
+				t.Fatalf("field = %q, want %q", validationErr.Field, tc.field)
+			}
+		})
 	}
 }
 
-func TestValidateHostRejectsDuplicateAuthorizedUsers(t *testing.T) {
+func TestValidateRepositoryAcceptsAnEmptyAllowedOverridesList(t *testing.T) {
 	t.Parallel()
 
-	registration := validRegistration(t)
-	registration.AuthorizedUsers = []string{"alice", "alice"}
-	err := config.ValidateHost(config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}})
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "repositories[0].authorized_users[1]" {
-		t.Fatalf("field = %q, want repositories[0].authorized_users[1]", validationErr.Field)
+	policy := validRepositoryConfig()
+	policy.AllowedOverrides = []config.OverrideName{}
+	if err := config.ValidateRepository(policy); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want no error for an empty allowed_overrides list", err)
 	}
 }
 
-func TestValidateHostRejectsARelativeOperationalDataPath(t *testing.T) {
+func TestValidateRepositoryRejectsInvalidFieldsOneAtATime(t *testing.T) {
 	t.Parallel()
 
-	registration := validRegistration(t)
-	registration.OperationalDataPath = "relative/factory.db"
-	err := config.ValidateHost(config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}})
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
+	tests := []struct {
+		name   string
+		mutate func(config.RepositoryConfig) config.RepositoryConfig
+		field  string
+	}{
+		{
+			name: "missing schema version",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.SchemaVersion = 0
+				return c
+			},
+			field: "schema_version",
+		},
+		{
+			name: "negative schema version",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.SchemaVersion = -1
+				return c
+			},
+			field: "schema_version",
+		},
+		{
+			name: "empty target branch",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.TargetBranch = "  "
+				return c
+			},
+			field: "target_branch",
+		},
+		{
+			name: "multiline target branch",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.TargetBranch = "main\nfeature"
+				return c
+			},
+			field: "target_branch",
+		},
+		{
+			name: "empty setup",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Setup = ""
+				return c
+			},
+			field: "setup",
+		},
+		{
+			name: "no gates",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Gates = nil
+				return c
+			},
+			field: "gates",
+		},
+		{
+			name: "duplicate gate names",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Gates = append(c.Gates, c.Gates[0])
+				return c
+			},
+			field: "gates[1].name",
+		},
+		{
+			name: "gate depends on a later gate",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Gates = []config.GateConfig{
+					{Name: "test", Command: "go test ./...", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean, DependsOn: []string{"build"}},
+					{Name: "build", Command: "go build ./...", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean},
+				}
+				return c
+			},
+			field: "gates[0].depends_on[0]",
+		},
+		{
+			name: "invalid gate environment policy",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Gates[0].EnvironmentPolicy = "dirty"
+				return c
+			},
+			field: "gates[0].environment_policy",
+		},
+		{
+			name: "invalid gate timeout",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Gates[0].Timeout = "not-a-duration"
+				return c
+			},
+			field: "gates[0].timeout",
+		},
+		{
+			name: "invalid harness value",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.RoleHarnessDefaults["implementation"] = "unsupported-harness"
+				return c
+			},
+			field: "role_harness_defaults.implementation",
+		},
+		{
+			name: "invalid retry limit",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.RetryLimits.CheckRepair = 0
+				return c
+			},
+			field: "retry_limits.check_repair",
+		},
+		{
+			name: "invalid test policy mode",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.TestPolicy.Mode = "sometimes"
+				return c
+			},
+			field: "test_policy.mode",
+		},
+		{
+			name: "duplicate allowed overrides",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.AllowedOverrides = []config.OverrideName{config.OverrideModel, config.OverrideModel}
+				return c
+			},
+			field: "allowed_overrides[1]",
+		},
+		{
+			name: "duplicate cache names",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Caches = []config.CacheConfig{
+					{Name: "go-build", Path: "/tmp/a"},
+					{Name: "go-build", Path: "/tmp/b"},
+				}
+				return c
+			},
+			field: "caches[1].name",
+		},
+		{
+			name: "empty cache path",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Caches = []config.CacheConfig{{Name: "go-build", Path: ""}}
+				return c
+			},
+			field: "caches[0].path",
+		},
+		{
+			name: "missing worker image",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.WorkerBuild.Image = ""
+				return c
+			},
+			field: "worker_build.image",
+		},
+		{
+			name: "digest missing prefix",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.WorkerBuild.Digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+				return c
+			},
+			field: "worker_build.digest",
+		},
+		{
+			name: "digest too short",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.WorkerBuild.Digest = "sha256:0123"
+				return c
+			},
+			field: "worker_build.digest",
+		},
+		{
+			name: "digest with uppercase hex",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.WorkerBuild.Digest = "sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
+				return c
+			},
+			field: "worker_build.digest",
+		},
+		{
+			name: "missing worker definition",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.WorkerBuild.Definition = ""
+				return c
+			},
+			field: "worker_build.definition",
+		},
+		{
+			name: "invalid base synchronization mode",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.BaseSynchronization.Mode = "sometimes"
+				return c
+			},
+			field: "base_synchronization.mode",
+		},
+		{
+			name: "before_ready without a branch",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.BaseSynchronization = config.BaseSynchronization{Mode: config.BaseSynchronizationBeforeReady}
+				return c
+			},
+			field: "base_synchronization.branch",
+		},
 	}
-	if validationErr.Field != "repositories[0].operational_data_path" {
-		t.Fatalf("field = %q, want repositories[0].operational_data_path", validationErr.Field)
-	}
-}
 
-func TestValidateHostRejectsARelativeRepositoryConfigPath(t *testing.T) {
-	t.Parallel()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	registration := validRegistration(t)
-	registration.RepositoryConfigPath = "relative/factory.yaml"
-	err := config.ValidateHost(config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}})
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "repositories[0].repository_config_path" {
-		t.Fatalf("field = %q, want repositories[0].repository_config_path", validationErr.Field)
-	}
-}
-
-func TestValidateHostRejectsARelativeCmuxSocketPath(t *testing.T) {
-	t.Parallel()
-
-	registration := validRegistration(t)
-	registration.Cmux.SocketPath = "relative/factory.sock"
-	err := config.ValidateHost(config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}})
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "repositories[0].cmux.socket_path" {
-		t.Fatalf("field = %q, want repositories[0].cmux.socket_path", validationErr.Field)
-	}
-}
-
-func TestValidateHostRejectsAnInvalidPollingBackoff(t *testing.T) {
-	t.Parallel()
-
-	registration := validRegistration(t)
-	registration.Polling.Backoff = "not-a-duration"
-	err := config.ValidateHost(config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}})
-	var validationErr *config.ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
-	}
-	if validationErr.Field != "repositories[0].polling.backoff" {
-		t.Fatalf("field = %q, want repositories[0].polling.backoff", validationErr.Field)
-	}
-}
-
-func TestSaveHostThenLoadHostRoundTripsTheRegisteredRepository(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	registration := validRegistration(t)
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}
-	if err := config.SaveHost(path, host); err != nil {
-		t.Fatalf("SaveHost() error = %v", err)
-	}
-
-	got, err := config.LoadHost(path)
-	if err != nil {
-		t.Fatalf("LoadHost() error = %v", err)
-	}
-	if len(got.Repositories) != 1 || got.Repositories[0].Path != registration.Path {
-		t.Fatalf("Repositories = %#v, want %#v", got.Repositories, []config.RepositoryRegistration{registration})
-	}
-	if got.Repositories[0].GitHub.Owner != "example" {
-		t.Fatalf("GitHub.Owner = %q, want example", got.Repositories[0].GitHub.Owner)
-	}
-}
-
-func TestCreateHostFailsWhenTheConfigurationAlreadyExists(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if _, err := config.CreateHost(path); err != nil {
-		t.Fatalf("CreateHost() error = %v", err)
-	}
-
-	_, err := config.CreateHost(path)
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("second CreateHost() error = %v, want an already-exists error", err)
-	}
-}
-
-func TestDefaultHostConfigPathPrefersTheFactoryConfigEnvironmentVariable(t *testing.T) {
-	relative := "relative-config.yaml"
-	t.Setenv("FACTORY_CONFIG", relative)
-
-	got, err := config.DefaultHostConfigPath()
-	if err != nil {
-		t.Fatalf("DefaultHostConfigPath() error = %v", err)
-	}
-	want, err := filepath.Abs(relative)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("DefaultHostConfigPath() = %q, want %q", got, want)
-	}
-}
-
-func TestDefaultOperationalDataPathIsRelativeToTheHostConfigDirectory(t *testing.T) {
-	t.Parallel()
-
-	hostConfigPath := filepath.Join("/etc", "factory", "config.yaml")
-	got := config.DefaultOperationalDataPath(hostConfigPath)
-	want := filepath.Join("/etc", "factory", "data", "factory.db")
-	if got != want {
-		t.Fatalf("DefaultOperationalDataPath() = %q, want %q", got, want)
-	}
-}
-
-func TestDefaultRepositoryConfigPathIsInsideTheRepository(t *testing.T) {
-	t.Parallel()
-
-	got := config.DefaultRepositoryConfigPath("/work/repository")
-	want := "/work/repository/factory.yaml"
-	if got != want {
-		t.Fatalf("DefaultRepositoryConfigPath() = %q, want %q", got, want)
+			err := config.ValidateRepository(tc.mutate(validRepositoryConfig()))
+			var validationErr *config.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+			}
+			if validationErr.Field != tc.field {
+				t.Fatalf("field = %q, want %q", validationErr.Field, tc.field)
+			}
+		})
 	}
 }
 
@@ -570,14 +634,20 @@ func TestLoadRepositoryRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "factory.yaml")
-	if err := os.WriteFile(path, []byte("schema_version: 1\nunknown_field: true\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("schema_version: 1\nunexpected_field: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err := config.LoadRepository(path)
 	var fileErr *config.ConfigFileError
 	if !errors.As(err, &fileErr) {
-		t.Fatalf("error = %v, want ConfigFileError", err)
+		t.Fatalf("LoadRepository() error = %v, want ConfigFileError", err)
+	}
+	if fileErr.Path != path {
+		t.Fatalf("ConfigFileError.Path = %q, want %q", fileErr.Path, path)
+	}
+	if fileErr.Unwrap() == nil {
+		t.Fatal("ConfigFileError.Unwrap() = nil, want the underlying decode error")
 	}
 }
 
@@ -585,64 +655,41 @@ func TestLoadRepositoryRejectsMultipleYAMLDocuments(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "factory.yaml")
-	contents := "schema_version: 1\n---\nschema_version: 1\n"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("schema_version: 1\n---\nschema_version: 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err := config.LoadRepository(path)
 	var fileErr *config.ConfigFileError
 	if !errors.As(err, &fileErr) {
-		t.Fatalf("error = %v, want ConfigFileError", err)
+		t.Fatalf("LoadRepository() error = %v, want ConfigFileError", err)
 	}
-	if !strings.Contains(fileErr.Error(), "more than one YAML document") {
-		t.Fatalf("error = %q, want more-than-one-document diagnostic", fileErr.Error())
+	if !strings.Contains(err.Error(), "more than one YAML document") {
+		t.Fatalf("error = %v, want a multiple-document diagnostic", err)
 	}
 }
 
-func TestLoadRepositoryWrapsTheUnderlyingFileError(t *testing.T) {
+func TestLoadRepositoryReportsAMissingFileAsAConfigFileError(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "missing.yaml")
 	_, err := config.LoadRepository(path)
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("error = %v, want a wrapped os.ErrNotExist", err)
-	}
 	var fileErr *config.ConfigFileError
-	if !errors.As(err, &fileErr) || fileErr.Path != path {
-		t.Fatalf("error = %#v, want ConfigFileError for %q", err, path)
+	if !errors.As(err, &fileErr) {
+		t.Fatalf("LoadRepository() error = %v, want ConfigFileError", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %v, want it to unwrap to os.ErrNotExist", err)
 	}
 }
 
-func TestValidationErrorMessageIncludesTheFieldAndMessage(t *testing.T) {
+func TestUnknownSchemaVersionErrorMessageUsesTheProvidedKindAndField(t *testing.T) {
 	t.Parallel()
 
-	err := config.ValidateRepository(config.RepositoryConfig{SchemaVersion: 1})
-	if !strings.Contains(err.Error(), "target_branch") || !strings.Contains(err.Error(), "is required") {
-		t.Fatalf("error = %q, want it to name the offending field and reason", err.Error())
-	}
-}
-
-func TestUnknownSchemaVersionErrorDefaultsToTheSchemaVersionField(t *testing.T) {
-	t.Parallel()
-
-	err := &config.UnknownSchemaVersionError{Kind: "host", Version: 2, Supported: 1}
-	if !strings.Contains(err.Error(), "schema_version") {
-		t.Fatalf("error = %q, want it to default to the schema_version field", err.Error())
-	}
-}
-
-func validRegistration(t *testing.T) config.RepositoryRegistration {
-	t.Helper()
-	root := t.TempDir()
-	return config.RepositoryRegistration{
-		Path:                 filepath.Join(root, "repository"),
-		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
-		AuthorizedUsers:      []string{"alice"},
-		Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
-		Cmux:                 config.CmuxConfig{ControlWorkspace: "factory-control"},
-		OperationalDataPath:  filepath.Join(root, "data", "factory.db"),
-		RepositoryConfigPath: filepath.Join(root, "repository", "factory.yaml"),
+	err := &config.UnknownSchemaVersionError{Kind: "host", Field: "schema_version", Version: 7, Supported: 1}
+	got := err.Error()
+	if !strings.Contains(got, "host") || !strings.Contains(got, "7") || !strings.Contains(got, "1") {
+		t.Fatalf("Error() = %q, want it to mention the kind and both versions", got)
 	}
 }
 

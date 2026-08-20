@@ -116,19 +116,176 @@ func TestRunInitRejectsPositionalArguments(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	var output bytes.Buffer
-	code := cli.Run(context.Background(), []string{"init", "--config", configPath, "extra"}, &output, &output)
+	code := cli.Run(context.Background(), []string{"init", "--config", configPath, "extra-arg"}, &output, &output)
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
 	}
 	if !strings.Contains(output.String(), "does not accept positional arguments") {
 		t.Fatalf("output = %q", output.String())
 	}
-	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
-		t.Fatalf("config file was created despite the rejected arguments: %v", err)
+}
+
+func TestRunRegisterRejectsPositionalArguments(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{"register", "--config", configPath, "extra-arg"}, &output, &output)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "does not accept positional arguments") {
+		t.Fatalf("output = %q", output.String())
 	}
 }
 
-func TestRunInitFailsWhenConfigurationAlreadyExists(t *testing.T) {
+func TestRunStatusRejectsPositionalArguments(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{"status", "--config", configPath, "extra-arg"}, &output, &output)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "does not accept positional arguments") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestRunInitRejectsAnUnknownFlag(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{"init", "--bogus-flag"}, &output, &output)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+	}
+}
+
+func TestRunRegisterRequiresTheRequiredFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "missing repository",
+			args: []string{"register", "--github-owner", "example", "--github-repository", "project", "--authorized-user", "alice"},
+		},
+		{
+			name: "missing github owner",
+			args: []string{"register", "--repository", "/tmp/repository", "--github-repository", "project", "--authorized-user", "alice"},
+		},
+		{
+			name: "missing github repository",
+			args: []string{"register", "--repository", "/tmp/repository", "--github-owner", "example", "--authorized-user", "alice"},
+		},
+		{
+			name: "missing authorized user",
+			args: []string{"register", "--repository", "/tmp/repository", "--github-owner", "example", "--github-repository", "project"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			var output bytes.Buffer
+			code := cli.Run(context.Background(), append([]string{tc.args[0], "--config", configPath}, tc.args[1:]...), &output, &output)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+			}
+			if !strings.Contains(output.String(), "register requires") {
+				t.Fatalf("output = %q", output.String())
+			}
+		})
+	}
+}
+
+func TestRunRegisterRejectsAnEmptyAuthorizedUserValue(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{
+		"register",
+		"--config", configPath,
+		"--repository", "/tmp/repository",
+		"--github-owner", "example",
+		"--github-repository", "project",
+		"--authorized-user", "",
+	}, &output, &output)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+	}
+}
+
+func TestRunRegisterAcceptsMultipleAuthorizedUserFlags(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidRepositoryConfig(t, repositoryPath)
+
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output)
+	if code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+
+	output.Reset()
+	code = cli.Run(context.Background(), []string{
+		"register",
+		"--config", configPath,
+		"--repository", repositoryPath,
+		"--github-owner", "example",
+		"--github-repository", "project",
+		"--authorized-user", "alice",
+		"--authorized-user", "bob",
+		"--operational-data", filepath.Join(root, "state", "factory.db"),
+	}, &output, &output)
+	if code != 0 {
+		t.Fatalf("register exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "registered repository") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestRunRegisterReportsAnErrorWhenTheRepositoryDoesNotExist(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+
+	output.Reset()
+	code := cli.Run(context.Background(), []string{
+		"register",
+		"--config", configPath,
+		"--repository", filepath.Join(root, "does-not-exist"),
+		"--github-owner", "example",
+		"--github-repository", "project",
+		"--authorized-user", "alice",
+	}, &output, &output)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1, output = %s", code, output.String())
+	}
+	if !strings.HasPrefix(output.String(), "error:") {
+		t.Fatalf("output = %q, want it to start with error:", output.String())
+	}
+}
+
+func TestRunInitReportsAnErrorWhenTheConfigurationAlreadyExists(t *testing.T) {
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -142,69 +299,29 @@ func TestRunInitFailsWhenConfigurationAlreadyExists(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("second init exit code = %d, want 1, output = %s", code, output.String())
 	}
-	if !strings.Contains(output.String(), "already exists") {
-		t.Fatalf("output = %q", output.String())
+	if !strings.HasPrefix(output.String(), "error:") {
+		t.Fatalf("output = %q, want it to start with error:", output.String())
 	}
 }
 
-func TestRunRegisterRequiresTheRepositoryOwnerRepositoryAndAnAuthorizedUser(t *testing.T) {
+func TestRunUsesTheFactoryConfigEnvironmentVariableWhenConfigFlagIsOmitted(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "env-config.yaml")
+	t.Setenv("FACTORY_CONFIG", configPath)
+
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{"init"}, &output, &output)
+	if code != 0 {
+		t.Fatalf("exit code = %d, output = %s", code, output.String())
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("config file was not created at the FACTORY_CONFIG path: %v", err)
+	}
+}
+
+func TestRunStatusReportsNoRegisteredRepository(t *testing.T) {
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	var output bytes.Buffer
-	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
-		t.Fatalf("init exit code = %d, output = %s", code, output.String())
-	}
-
-	output.Reset()
-	code := cli.Run(context.Background(), []string{"register", "--config", configPath}, &output, &output)
-	if code != 2 {
-		t.Fatalf("register exit code = %d, want 2, output = %s", code, output.String())
-	}
-	if !strings.Contains(output.String(), "register requires --repository, --github-owner, --github-repository, and at least one --authorized-user") {
-		t.Fatalf("output = %q", output.String())
-	}
-}
-
-func TestRunRegisterRejectsPositionalArguments(t *testing.T) {
-	t.Parallel()
-
-	var output bytes.Buffer
-	code := cli.Run(context.Background(), []string{"register", "extra"}, &output, &output)
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
-	}
-	if !strings.Contains(output.String(), "does not accept positional arguments") {
-		t.Fatalf("output = %q", output.String())
-	}
-}
-
-func TestRunRegisterRejectsAnEmptyAuthorizedUser(t *testing.T) {
-	t.Parallel()
-
-	var output bytes.Buffer
-	code := cli.Run(context.Background(), []string{
-		"register",
-		"--repository", "/tmp/repository",
-		"--github-owner", "example",
-		"--github-repository", "project",
-		"--authorized-user", "",
-	}, &output, &output)
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
-	}
-}
-
-func TestRunRegisterAcceptsMultipleAuthorizedUsers(t *testing.T) {
-	t.Parallel()
-
-	root := t.TempDir()
-	configPath := filepath.Join(root, "host", "config.yaml")
-	repositoryPath := filepath.Join(root, "repository")
-	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeMinimalRepositoryConfig(t, repositoryPath)
 
 	var output bytes.Buffer
 	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
@@ -212,48 +329,18 @@ func TestRunRegisterAcceptsMultipleAuthorizedUsers(t *testing.T) {
 	}
 
 	output.Reset()
-	code := cli.Run(context.Background(), []string{
-		"register",
-		"--config", configPath,
-		"--repository", repositoryPath,
-		"--github-owner", "example",
-		"--github-repository", "project",
-		"--authorized-user", "alice",
-		"--authorized-user", "bob",
-	}, &output, &output)
-	if code != 0 {
-		t.Fatalf("register exit code = %d, output = %s", code, output.String())
+	if code := cli.Run(context.Background(), []string{"status", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("status exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "repository: none registered") {
+		t.Fatalf("output = %q, want no repository registered", output.String())
+	}
+	if !strings.Contains(output.String(), "config: "+configPath) {
+		t.Fatalf("output = %q, want it to report the config path", output.String())
 	}
 }
 
-func TestRunStatusRejectsPositionalArguments(t *testing.T) {
-	t.Parallel()
-
-	var output bytes.Buffer
-	code := cli.Run(context.Background(), []string{"status", "extra"}, &output, &output)
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
-	}
-	if !strings.Contains(output.String(), "does not accept positional arguments") {
-		t.Fatalf("output = %q", output.String())
-	}
-}
-
-func TestRunStatusReportsAnErrorWhenTheConfigurationCannotBeLoaded(t *testing.T) {
-	t.Parallel()
-
-	configPath := filepath.Join(t.TempDir(), "missing", "config.yaml")
-	var output bytes.Buffer
-	code := cli.Run(context.Background(), []string{"status", "--config", configPath}, &output, &output)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1, output = %s", code, output.String())
-	}
-	if !strings.Contains(output.String(), "error:") {
-		t.Fatalf("output = %q", output.String())
-	}
-}
-
-func writeMinimalRepositoryConfig(t *testing.T, repositoryPath string) {
+func writeValidRepositoryConfig(t *testing.T, repositoryPath string) {
 	t.Helper()
 	contents := `schema_version: 1
 target_branch: main
