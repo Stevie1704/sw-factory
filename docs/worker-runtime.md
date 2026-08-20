@@ -29,6 +29,13 @@ configured image digest. Git prompting and the ordinary `origin` push URL are
 disabled in the worker environment, so an in-worker push cannot use the
 coordinator's GitHub credentials.
 
+Before starting Docker, the adapter applies the same owner-independent
+permission strategy to every explicit bind mount: writable worktree and cache
+directories/files use `0777`/`0666` (preserving executable bits), while the
+read-only Git projection and caches use `0755`/`0644`; Docker's read-only mount
+flag prevents container writes. This lets the fixed worker UID access host
+paths without changing their ownership.
+
 The coordinator prepares `/git` from the repository's objects, refs, and
 worktree state. Git configuration, remote definitions, hooks, submodules, and
 host-specific worktree indirection are omitted, so repository history and diff

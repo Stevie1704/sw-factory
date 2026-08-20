@@ -25,6 +25,15 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, path := range []string{
+		filepath.Join(worktreePath, "existing.txt"),
+		filepath.Join(gitMetadataPath, "HEAD"),
+		filepath.Join(cachePath, "existing.cache"),
+	} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	runtime := &worker.DockerRuntime{DockerBinary: stub}
 	request := worker.StartRequest{
@@ -42,6 +51,12 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	if err := runtime.Start(context.Background(), request); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	assertMode(t, worktreePath, 0o777)
+	assertMode(t, filepath.Join(worktreePath, "existing.txt"), 0o666)
+	assertMode(t, gitMetadataPath, 0o755)
+	assertMode(t, filepath.Join(gitMetadataPath, "HEAD"), 0o644)
+	assertMode(t, cachePath, 0o777)
+	assertMode(t, filepath.Join(cachePath, "existing.cache"), 0o666)
 
 	result, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
 		RunID:             request.RunID,
@@ -396,6 +411,19 @@ func assertContainsAll(t *testing.T, value string, fragments ...string) {
 		if !strings.Contains(value, fragment) {
 			t.Errorf("value %q does not contain %q", value, fragment)
 		}
+	}
+}
+
+// assertMode verifies the owner-independent permissions applied to one worker
+// mount entry before Docker starts the fixed non-root worker.
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %q: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("permissions for %q = %#o, want %#o", path, got, want)
 	}
 }
 

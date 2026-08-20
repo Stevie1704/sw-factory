@@ -111,7 +111,7 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 		return Result{}, errors.New("gate run id is required")
 	}
 	if !github.ValidCommitSHA(request.CheckpointSHA) {
-		return Result{}, errors.New("gate checkpoint SHA must contain 40 to 64 lowercase hexadecimal characters")
+		return Result{}, errors.New("gate checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
 	}
 	if strings.TrimSpace(request.Setup) == "" {
 		return Result{}, errors.New("gate setup command is required")

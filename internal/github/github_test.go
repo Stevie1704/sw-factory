@@ -140,6 +140,23 @@ func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
 	}
 }
 
+// TestValidCommitSHARejectsAbbreviatedObjectIDs verifies checkpoint validation
+// does not accept intermediate-length values as exact commit identities.
+func TestValidCommitSHARejectsAbbreviatedObjectIDs(t *testing.T) {
+	t.Parallel()
+
+	for _, length := range []int{39, 41, 63, 65} {
+		if github.ValidCommitSHA(strings.Repeat("a", length)) {
+			t.Errorf("ValidCommitSHA(%d characters) = true, want false", length)
+		}
+	}
+	for _, length := range []int{40, 64} {
+		if !github.ValidCommitSHA(strings.Repeat("a", length)) {
+			t.Errorf("ValidCommitSHA(%d characters) = false, want true", length)
+		}
+	}
+}
+
 // commandCall records one fake gh invocation.
 type commandCall struct {
 	args  []string

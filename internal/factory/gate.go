@@ -121,6 +121,9 @@ func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (s
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return "", fmt.Errorf("inspect git metadata projection configuration: %w", statErr)
 		}
+		if err := makeGitProjectionReadable(projection); err != nil {
+			return "", fmt.Errorf("prepare git metadata projection permissions: %w", err)
+		}
 		return projection, nil
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return "", fmt.Errorf("inspect git metadata projection: %w", statErr)
@@ -139,8 +142,8 @@ func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (s
 	if err := overlayWorktreeGitState(worktreePath, temporary); err != nil {
 		return "", fmt.Errorf("overlay worktree git state: %w", err)
 	}
-	if err := os.Chmod(temporary, 0o700); err != nil {
-		return "", fmt.Errorf("protect git metadata projection: %w", err)
+	if err := makeGitProjectionReadable(temporary); err != nil {
+		return "", fmt.Errorf("prepare git metadata projection permissions: %w", err)
 	}
 	if err := os.Rename(temporary, projection); err != nil {
 		return "", fmt.Errorf("publish git metadata projection: %w", err)
@@ -170,11 +173,7 @@ func copyGitMetadata(source, destination string) error {
 		}
 		target := filepath.Join(destination, relative)
 		if entry.IsDir() {
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
+			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
 			return nil
@@ -189,7 +188,34 @@ func copyGitMetadata(source, destination string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return err
 		}
-		return copyGitMetadataFile(path, target, info.Mode().Perm())
+		return copyGitMetadataFile(path, target, 0o644)
+	})
+}
+
+// makeGitProjectionReadable gives the fixed worker identity read and execute
+// access to an existing projection without granting it write access.
+func makeGitProjectionReadable(projection string) error {
+	return filepath.WalkDir(projection, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported git metadata entry %q", path)
+		}
+		mode := fs.FileMode(0o644)
+		if info.IsDir() {
+			mode = 0o755
+		} else if info.Mode().Perm()&0o111 != 0 {
+			mode |= 0o111
+		}
+		return os.Chmod(path, mode)
 	})
 }
 
@@ -218,13 +244,17 @@ func copyGitMetadataFile(source, destination string, mode fs.FileMode) error {
 		return err
 	}
 	defer func() { _ = input.Close() }()
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err := os.Chmod(destination, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	_, copyErr := io.Copy(output, input)
+	chmodErr := output.Chmod(mode)
 	closeErr := output.Close()
-	return errors.Join(copyErr, closeErr)
+	return errors.Join(copyErr, chmodErr, closeErr)
 }
 
 // overlayWorktreeGitState copies the run worktree's HEAD and index from its
@@ -260,7 +290,7 @@ func overlayWorktreeGitState(worktreePath, projection string) error {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("worktree git state %q is not a regular file", name)
 		}
-		if err := copyGitMetadataFile(source, filepath.Join(projection, name), info.Mode().Perm()); err != nil {
+		if err := copyGitMetadataFile(source, filepath.Join(projection, name), 0o644); err != nil {
 			return err
 		}
 	}

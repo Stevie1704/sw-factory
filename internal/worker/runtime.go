@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -167,10 +168,16 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		if inspection.Running {
 			return nil
 		}
+		if err := prepareWorkerMounts(request); err != nil {
+			return fmt.Errorf("prepare worker mounts: %w", err)
+		}
 		return r.startContainer(ctx, name)
 	}
 	if !isContainerNotFound(err) {
 		return fmt.Errorf("inspect worker %q before start: %w", request.RunID, err)
+	}
+	if err := prepareWorkerMounts(request); err != nil {
+		return fmt.Errorf("prepare worker mounts: %w", err)
 	}
 
 	args := []string{
@@ -516,6 +523,81 @@ func validateImageName(image string) error {
 		return fmt.Errorf("worker image %q must not include a mutable tag", image)
 	}
 	return nil
+}
+
+// prepareWorkerMounts makes every explicit bind mount accessible to the fixed
+// non-root WorkerUser without relying on the coordinator's host UID. Writable
+// mounts receive owner-independent read/write/execute permissions; read-only
+// mounts receive owner-independent read/execute permissions.
+func prepareWorkerMounts(request StartRequest) error {
+	mounts := []struct {
+		name     string
+		path     string
+		readOnly bool
+	}{
+		{name: "worktree", path: request.WorktreePath},
+		{name: "Git metadata", path: request.GitMetadataPath, readOnly: true},
+	}
+	for _, mount := range mounts {
+		if err := prepareWorkerMount(mount.path, mount.readOnly); err != nil {
+			return fmt.Errorf("prepare %s mount: %w", mount.name, err)
+		}
+	}
+	for _, cache := range request.Caches {
+		if err := prepareWorkerMount(cache.HostPath, cache.ReadOnly); err != nil {
+			return fmt.Errorf("prepare cache %q mount: %w", cache.Name, err)
+		}
+	}
+	return nil
+}
+
+// prepareWorkerMount recursively applies the permission strategy used by all
+// worker bind mounts. Symlinks are left untouched so permission preparation
+// never follows a link outside the declared mount.
+func prepareWorkerMount(path string, readOnly bool) error {
+	return filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported mount entry %q", currentPath)
+		}
+		wanted := workerMountPermissions(info.Mode(), readOnly)
+		if info.Mode().Perm() == wanted {
+			return nil
+		}
+		return os.Chmod(currentPath, wanted)
+	})
+}
+
+// workerMountPermissions returns owner-independent permissions for one worker
+// mount entry while preserving executable intent on regular files.
+func workerMountPermissions(mode os.FileMode, readOnly bool) os.FileMode {
+	if mode.IsDir() {
+		if readOnly {
+			return 0o755
+		}
+		return 0o777
+	}
+	if readOnly {
+		permissions := os.FileMode(0o644)
+		if mode.Perm()&0o111 != 0 {
+			permissions |= 0o111
+		}
+		return permissions
+	}
+	permissions := os.FileMode(0o666)
+	if mode.Perm()&0o111 != 0 {
+		permissions |= 0o111
+	}
+	return permissions
 }
 
 // validateDirectory requires an absolute existing directory without Docker

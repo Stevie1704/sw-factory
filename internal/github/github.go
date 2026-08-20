@@ -262,7 +262,7 @@ func (c *GhClient) EditIssueComment(ctx context.Context, repository Repository, 
 // The status context is caller-defined but must be stable and single-line.
 func (c *GhClient) CreateCommitStatus(ctx context.Context, repository Repository, status CommitStatus) error {
 	if !ValidCommitSHA(status.SHA) {
-		return errors.New("commit status SHA must contain 40 to 64 lowercase hexadecimal characters")
+		return errors.New("commit status SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
 	}
 	if status.State != CommitStatusPending && status.State != CommitStatusSuccess && status.State != CommitStatusFailure && status.State != CommitStatusError {
 		return fmt.Errorf("unsupported commit status state %q", status.State)
@@ -319,10 +319,10 @@ func (c *GhClient) callBytes(ctx context.Context, args []string, payload any) ([
 	return c.runner().Run(ctx, args, input)
 }
 
-// ValidCommitSHA accepts 40 to 64 lowercase hexadecimal characters while
-// rejecting values that could alter a GitHub API path.
+// ValidCommitSHA accepts only full 40- or 64-character lowercase hexadecimal
+// object IDs while rejecting values that could alter a GitHub API path.
 func ValidCommitSHA(value string) bool {
-	if len(value) < 40 || len(value) > 64 {
+	if len(value) != 40 && len(value) != 64 {
 		return false
 	}
 	for _, character := range value {
