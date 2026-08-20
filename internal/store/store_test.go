@@ -1,0 +1,444 @@
+package store_test
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/store"
+	_ "modernc.org/sqlite"
+)
+
+func TestOpenCreatesVersionedStoreWithNoActiveRun(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("store permissions = %#o, want 0600", got)
+	}
+	current, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if current != nil {
+		t.Fatalf("CurrentRun() = %#v, want empty store", current)
+	}
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("fresh store backups = %v, want none", backups)
+	}
+}
+
+func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 99);`); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.Open(context.Background(), path)
+	var schemaErr *store.UnknownSchemaVersionError
+	if !errors.As(err, &schemaErr) {
+		t.Fatalf("error = %v, want UnknownSchemaVersionError", err)
+	}
+	if schemaErr.Version != 99 {
+		t.Fatalf("schema error = %#v", schemaErr)
+	}
+}
+
+func TestOpenRejectsAnExistingEmptyDatabaseFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.Open(context.Background(), path)
+	var unversionedErr *store.UnversionedDatabaseError
+	if !errors.As(err, &unversionedErr) {
+		t.Fatalf("error = %v, want UnversionedDatabaseError", err)
+	}
+}
+
+func TestOpenRejectsANonPrivateExistingStoreDirectory(t *testing.T) {
+	t.Parallel()
+
+	directory := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Open(context.Background(), filepath.Join(directory, "factory.db"))
+	if err == nil {
+		t.Fatal("Open() succeeded in a non-private directory")
+	}
+	if !strings.Contains(err.Error(), "not private") {
+		t.Fatalf("error = %v, want private-directory diagnostic", err)
+	}
+}
+
+func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 0);`); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
+	}
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("backup files = %v, want one backup", backups)
+	}
+}
+
+func TestOpenReopensAnExistingCurrentVersionStoreWithoutCreatingABackup(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	first, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	wanted := store.Run{
+		ID:             "run-1",
+		RepositoryPath: "/work/repository",
+		Stage:          store.StagePreflight,
+		Status:         store.StatusActive,
+	}
+	if err := first.SaveRun(context.Background(), wanted); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() (reopen) error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got := reopened.SchemaVersion(); got != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
+	}
+	current, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if current == nil || current.ID != "run-1" {
+		t.Fatalf("CurrentRun() = %#v, want the persisted run to survive reopening", current)
+	}
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("backups after reopening a current-version store = %v, want none", backups)
+	}
+}
+
+func TestOpenRejectsAnOperationalStorePathThatIsADirectory(t *testing.T) {
+	t.Parallel()
+
+	directory := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nestedDirectoryAsFile := filepath.Join(directory, "factory.db")
+	if err := os.MkdirAll(nestedDirectoryAsFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.Open(context.Background(), nestedDirectoryAsFile)
+	if err == nil {
+		t.Fatal("Open() succeeded for a store path that is a directory")
+	}
+	if !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("error = %v, want a directory diagnostic", err)
+	}
+}
+
+func TestOpenRejectsAnEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := store.Open(context.Background(), "")
+	if err == nil {
+		t.Fatal("Open() succeeded for an empty path")
+	}
+}
+
+func TestStoreCloseIsSafeOnANilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var opened *store.Store
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() on a nil *Store error = %v, want nil", err)
+	}
+}
+
+func TestStorePathReturnsTheResolvedAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	relative := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(relative, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(relative, "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	want, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.Path(); got != want {
+		t.Fatalf("Path() = %q, want %q", got, want)
+	}
+}
+
+func TestSaveRunRejectsMissingRequiredFields(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	tests := []struct {
+		name string
+		run  store.Run
+	}{
+		{name: "missing id", run: store.Run{RepositoryPath: "/work/repository", Status: store.StatusActive}},
+		{name: "missing repository path", run: store.Run{ID: "run-1", Status: store.StatusActive}},
+		{name: "missing status", run: store.Run{ID: "run-1", RepositoryPath: "/work/repository"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := opened.SaveRun(context.Background(), tc.run); err == nil {
+				t.Fatalf("SaveRun(%#v) succeeded, want an error", tc.run)
+			}
+		})
+	}
+}
+
+func TestSaveRunDefaultsTimestampsWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	before := time.Now().UTC()
+	run := store.Run{ID: "run-1", RepositoryPath: "/work/repository", Status: store.StatusActive}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	after := time.Now().UTC()
+
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("CurrentRun() = nil, want the saved run")
+	}
+	if got.CreatedAt.Before(before) || got.CreatedAt.After(after) {
+		t.Fatalf("CreatedAt = %v, want it between %v and %v", got.CreatedAt, before, after)
+	}
+	if !got.UpdatedAt.Equal(got.CreatedAt) {
+		t.Fatalf("UpdatedAt = %v, want it to default to CreatedAt = %v", got.UpdatedAt, got.CreatedAt)
+	}
+}
+
+func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	initial := store.Run{
+		ID:             "run-1",
+		RepositoryPath: "/work/repository",
+		Stage:          store.StageClaim,
+		Status:         store.StatusActive,
+		CreatedAt:      time.Unix(100, 0).UTC(),
+		UpdatedAt:      time.Unix(100, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), initial); err != nil {
+		t.Fatalf("SaveRun() initial error = %v", err)
+	}
+
+	updated := initial
+	updated.Stage = store.StageReview
+	updated.Status = store.StatusWaitingForHuman
+	updated.CreatedAt = time.Time{}
+	updated.UpdatedAt = time.Unix(200, 0).UTC()
+	if err := opened.SaveRun(context.Background(), updated); err != nil {
+		t.Fatalf("SaveRun() update error = %v", err)
+	}
+
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("CurrentRun() = nil, want the upserted run")
+	}
+	if got.Stage != store.StageReview || got.Status != store.StatusWaitingForHuman {
+		t.Fatalf("CurrentRun() = %#v, want the updated stage and status", got)
+	}
+	if !got.UpdatedAt.Equal(updated.UpdatedAt) {
+		t.Fatalf("UpdatedAt = %v, want %v", got.UpdatedAt, updated.UpdatedAt)
+	}
+	if !got.CreatedAt.Equal(initial.CreatedAt) {
+		t.Fatalf("CreatedAt = %v, want original %v", got.CreatedAt, initial.CreatedAt)
+	}
+}
+
+func TestCurrentRunExcludesTerminalStatusesAndReturnsTheMostRecentlyUpdatedRun(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	runs := []store.Run{
+		{ID: "run-complete", RepositoryPath: "/work/repository", Status: store.StatusComplete, UpdatedAt: time.Unix(400, 0).UTC(), CreatedAt: time.Unix(400, 0).UTC()},
+		{ID: "run-cancelled", RepositoryPath: "/work/repository", Status: store.StatusCancelled, UpdatedAt: time.Unix(300, 0).UTC(), CreatedAt: time.Unix(300, 0).UTC()},
+		{ID: "run-failed", RepositoryPath: "/work/repository", Status: store.StatusFailed, UpdatedAt: time.Unix(500, 0).UTC(), CreatedAt: time.Unix(500, 0).UTC()},
+		{ID: "run-waiting", RepositoryPath: "/work/repository", Status: store.StatusWaitingForHarness, UpdatedAt: time.Unix(100, 0).UTC(), CreatedAt: time.Unix(100, 0).UTC()},
+		{ID: "run-active", RepositoryPath: "/work/repository", Status: store.StatusActive, UpdatedAt: time.Unix(200, 0).UTC(), CreatedAt: time.Unix(200, 0).UTC()},
+	}
+	for _, run := range runs {
+		if err := opened.SaveRun(context.Background(), run); err != nil {
+			t.Fatalf("SaveRun(%q) error = %v", run.ID, err)
+		}
+	}
+
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ID != "run-active" {
+		t.Fatalf("CurrentRun() = %#v, want the most recently updated non-terminal run (run-active)", got)
+	}
+}
+
+func TestUnknownSchemaVersionErrorMessageIncludesBothVersions(t *testing.T) {
+	t.Parallel()
+
+	err := &store.UnknownSchemaVersionError{Version: 42, Supported: store.CurrentSchemaVersion}
+	got := err.Error()
+	if !strings.Contains(got, "42") {
+		t.Fatalf("Error() = %q, want it to mention the found version", got)
+	}
+}
+
+func TestUnversionedDatabaseErrorUnwrapsTheUnderlyingError(t *testing.T) {
+	t.Parallel()
+
+	underlying := errors.New("boom")
+	err := &store.UnversionedDatabaseError{Path: "/tmp/factory.db", Err: underlying}
+	if !errors.Is(err, underlying) {
+		t.Fatalf("errors.Is(err, underlying) = false, want true")
+	}
+}
+
+func TestCurrentRunReturnsThePersistedOperationalState(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	wanted := store.Run{
+		ID:             "run-1",
+		RepositoryPath: "/work/repository",
+		IssueNumber:    3,
+		Stage:          "preflight",
+		Status:         "active",
+		Branch:         "factory/run-1",
+		Worktree:       "/worktrees/run-1",
+		CheckpointSHA:  "",
+		CreatedAt:      time.Unix(100, 0).UTC(),
+		UpdatedAt:      time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), wanted); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ID != wanted.ID || got.Status != wanted.Status || !got.UpdatedAt.Equal(wanted.UpdatedAt) {
+		t.Fatalf("CurrentRun() = %#v, want %#v", got, wanted)
+	}
+}
