@@ -22,7 +22,7 @@ func TestOpenCreatesVersionedStoreWithNoActiveRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 
 	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
 		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
@@ -62,7 +62,7 @@ func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 99);`); err != nil {
-		database.Close()
+		_ = database.Close()
 		t.Fatal(err)
 	}
 	if err := database.Close(); err != nil {
@@ -125,7 +125,7 @@ func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 0);`); err != nil {
-		database.Close()
+		_ = database.Close()
 		t.Fatal(err)
 	}
 	if err := database.Close(); err != nil {
@@ -136,7 +136,7 @@ func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
 		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
 	}
@@ -174,7 +174,7 @@ func TestOpenReopensAnExistingCurrentVersionStoreWithoutCreatingABackup(t *testi
 	if err != nil {
 		t.Fatalf("Open() (reopen) error = %v", err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	if got := reopened.SchemaVersion(); got != store.CurrentSchemaVersion {
 		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
 	}
@@ -245,7 +245,7 @@ func TestStorePathReturnsTheResolvedAbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 	want, err := filepath.Abs(path)
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +262,7 @@ func TestSaveRunRejectsMissingRequiredFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 
 	tests := []struct {
 		name string
@@ -288,7 +288,7 @@ func TestSaveRunDefaultsTimestampsWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 
 	before := time.Now().UTC()
 	run := store.Run{ID: "run-1", RepositoryPath: "/work/repository", Status: store.StatusActive}
@@ -319,7 +319,7 @@ func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 
 	initial := store.Run{
 		ID:             "run-1",
@@ -336,6 +336,7 @@ func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
 	updated := initial
 	updated.Stage = store.StageReview
 	updated.Status = store.StatusWaitingForHuman
+	updated.CreatedAt = time.Time{}
 	updated.UpdatedAt = time.Unix(200, 0).UTC()
 	if err := opened.SaveRun(context.Background(), updated); err != nil {
 		t.Fatalf("SaveRun() update error = %v", err)
@@ -354,6 +355,9 @@ func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
 	if !got.UpdatedAt.Equal(updated.UpdatedAt) {
 		t.Fatalf("UpdatedAt = %v, want %v", got.UpdatedAt, updated.UpdatedAt)
 	}
+	if !got.CreatedAt.Equal(initial.CreatedAt) {
+		t.Fatalf("CreatedAt = %v, want original %v", got.CreatedAt, initial.CreatedAt)
+	}
 }
 
 func TestCurrentRunExcludesTerminalStatusesAndReturnsTheMostRecentlyUpdatedRun(t *testing.T) {
@@ -363,7 +367,7 @@ func TestCurrentRunExcludesTerminalStatusesAndReturnsTheMostRecentlyUpdatedRun(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 
 	runs := []store.Run{
 		{ID: "run-complete", RepositoryPath: "/work/repository", Status: store.StatusComplete, UpdatedAt: time.Unix(400, 0).UTC(), CreatedAt: time.Unix(400, 0).UTC()},
@@ -414,7 +418,7 @@ func TestCurrentRunReturnsThePersistedOperationalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 	wanted := store.Run{
 		ID:             "run-1",
 		RepositoryPath: "/work/repository",

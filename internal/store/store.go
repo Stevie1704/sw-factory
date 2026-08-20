@@ -81,7 +81,6 @@ type Store struct {
 }
 
 // Open opens the operational store at path, creating or migrating its database as needed.
-// Existing databases are backed up before migration, and databases with unsupported or
 // Open opens or creates an operational store at path, applying supported schema migrations as needed.
 // It requires a private parent directory and rejects empty databases, unsupported schema versions,
 // and databases with missing or unreadable schema metadata. Existing databases are backed up before migration.
@@ -234,7 +233,6 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 			worktree = excluded.worktree,
 			checkpoint_sha = excluded.checkpoint_sha,
 			image_digest = excluded.image_digest,
-			created_at = excluded.created_at,
 			updated_at = excluded.updated_at`,
 		run.ID,
 		run.RepositoryPath,
@@ -322,7 +320,6 @@ func initializeMetadata(ctx context.Context, database *sql.DB) error {
 	return nil
 }
 
-// readSchemaVersion reads the schema version from the database metadata.
 // readSchemaVersion reads the schema version recorded in the database metadata.
 // It returns an UnversionedDatabaseError if the metadata cannot be read.
 func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int, error) {
@@ -339,7 +336,7 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 	if err != nil {
 		return fmt.Errorf("begin store migration: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	version := from
 	for version < CurrentSchemaVersion {
 		switch version + 1 {
@@ -373,7 +370,6 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 	return nil
 }
 
-// backupDatabase creates a private, uniquely named backup copy of the store at path.
 // backupDatabase creates a private 0600 backup of the database and returns its path.
 // It removes an incomplete backup when copying fails.
 func backupDatabase(path string) (string, error) {
@@ -394,7 +390,7 @@ func backupDatabase(path string) (string, error) {
 		}
 		output, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
-			input.Close()
+			_ = input.Close()
 			return "", fmt.Errorf("create store backup: %w", err)
 		}
 		_, copyErr := io.Copy(output, input)

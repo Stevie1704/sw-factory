@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -185,8 +186,6 @@ func NewHostConfig() HostConfig {
 	return HostConfig{SchemaVersion: CurrentSchemaVersion, Repositories: []RepositoryRegistration{}}
 }
 
-// DefaultHostConfigPath returns the configured host configuration path or the default
-// user configuration path. It returns an error if the configured path or user
 // DefaultHostConfigPath returns the host configuration path from FACTORY_CONFIG when set,
 // or the default factory/config.yaml path in the user's configuration directory. It returns
 // an error if the configured path or user configuration directory cannot be resolved.
@@ -211,8 +210,6 @@ func DefaultRepositoryConfigPath(repositoryPath string) string {
 	return filepath.Join(repositoryPath, RepositoryConfigFileName)
 }
 
-// LoadHost reads and validates a host configuration from a YAML file. It returns the
-// decoded configuration or an error if the file cannot be loaded or the configuration
 // LoadHost loads and validates a host configuration from a YAML file.
 // It returns the configuration or an error if the file cannot be loaded or the configuration is invalid.
 func LoadHost(path string) (HostConfig, error) {
@@ -255,17 +252,17 @@ func SaveHost(path string, config HostConfig) error {
 		return fmt.Errorf("create temporary configuration: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("protect temporary configuration: %w", err)
 	}
 	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("write configuration: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("sync configuration: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
@@ -277,7 +274,6 @@ func SaveHost(path string, config HostConfig) error {
 	return nil
 }
 
-// CreateHost creates and saves a default host configuration at path.
 // CreateHost creates and saves a default host configuration at path.
 // It returns an error if the path already exists or cannot be checked or written.
 func CreateHost(path string) (HostConfig, error) {
@@ -348,6 +344,9 @@ func ValidateRepository(config RepositoryConfig) error {
 			return validation(prefix+".environment_policy", "must be clean or role")
 		}
 		for dependencyIndex, dependency := range gate.DependsOn {
+			if dependency == gate.Name {
+				return validation(fmt.Sprintf("%s.depends_on[%d]", prefix, dependencyIndex), "must not reference the gate itself")
+			}
 			if _, exists := seenGates[dependency]; !exists {
 				return validation(fmt.Sprintf("%s.depends_on[%d]", prefix, dependencyIndex), "must reference an earlier gate")
 			}
@@ -488,7 +487,6 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	return nil
 }
 
-// validateSchema validates a configuration schema version against the supported range. It
 // validateSchema validates a configuration schema version and reports an error for missing,
 // non-positive, or unsupported versions.
 func validateSchema(kind string, version int) error {
@@ -527,7 +525,6 @@ func validateUniqueStrings(field string, values []string) error {
 	return validateOptionalUniqueStrings(field, values)
 }
 
-// validateOptionalUniqueStrings validates that provided values are nonempty and unique.
 // validateOptionalUniqueStrings validates that each value is nonempty and unique; an empty slice is valid.
 func validateOptionalUniqueStrings(field string, values []string) error {
 	seen := make(map[string]struct{}, len(values))
@@ -563,15 +560,13 @@ func validation(field, message string) error {
 	return &ValidationError{Field: field, Message: message}
 }
 
-// loadYAML reads a single YAML document from path into destination and rejects
-// unknown fields. It returns a ConfigFileError for file access, decoding, or
 // loadYAML reads a single YAML document from path into destination and rejects unknown fields or additional documents. Errors are wrapped in ConfigFileError.
 func loadYAML(path string, destination any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return &ConfigFileError{Path: path, Err: err}
 	}
-	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(destination); err != nil {
 		return &ConfigFileError{Path: path, Err: err}

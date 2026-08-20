@@ -12,14 +12,16 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 )
 
-// Run dispatches a CLI command and returns its exit code.
-// It supports the init, register, and status commands and reports usage or
 // Run dispatches the requested CLI command and returns its exit status.
 // It returns 0 for successful execution, 1 for operational errors, and 2 for
 // missing or unknown commands. Errors are written to errorsOutput.
 func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int {
 	if len(args) == 0 {
 		writeError(errorsOutput, errors.New("a command is required: init, register, or status"))
+		return 2
+	}
+	if args[0] != "init" && args[0] != "register" && args[0] != "status" {
+		writeError(errorsOutput, fmt.Errorf("unknown command %q: expected init, register, or status", args[0]))
 		return 2
 	}
 	configPath, err := config.DefaultHostConfigPath()
@@ -32,11 +34,8 @@ func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int
 		return runInit(ctx, args[1:], configPath, output, errorsOutput)
 	case "register":
 		return runRegister(ctx, args[1:], configPath, output, errorsOutput)
-	case "status":
-		return runStatus(ctx, args[1:], configPath, output, errorsOutput)
 	default:
-		writeError(errorsOutput, fmt.Errorf("unknown command %q: expected init, register, or status", args[0]))
-		return 2
+		return runStatus(ctx, args[1:], configPath, output, errorsOutput)
 	}
 }
 
@@ -110,7 +109,6 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	return 0
 }
 
-// runStatus displays the host configuration, repository registration, and active-run status.
 // runStatus reports the current configuration, repository registration, and active run.
 // It returns 0 on success, 1 when status retrieval fails, or 2 when arguments are invalid.
 func runStatus(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {

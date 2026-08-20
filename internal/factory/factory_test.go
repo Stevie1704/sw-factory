@@ -548,6 +548,35 @@ func TestServiceRegisterReturnsAnErrorWhenTheOperationalStoreFailsToClose(t *tes
 	}
 }
 
+func TestServiceRegisterIncludesTheOperationalPathWhenHostSaveFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	configRepository := &saveFailingConfigRepository{}
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{Config: configRepository})
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	_, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: operationalPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), operationalPath) || !strings.Contains(err.Error(), "save boom") {
+		t.Fatalf("error = %v, want the save failure and created operational path", err)
+	}
+}
+
 func TestServiceStatusReturnsAnEmptyResultWhenNoRepositoryIsRegistered(t *testing.T) {
 	t.Parallel()
 
@@ -593,6 +622,14 @@ func (closeFailingStore) Close() error { return errors.New("close boom") }
 
 type fakeConfigRepository struct {
 	value config.HostConfig
+}
+
+type saveFailingConfigRepository struct {
+	fakeConfigRepository
+}
+
+func (*saveFailingConfigRepository) Save(string, config.HostConfig) error {
+	return errors.New("save boom")
 }
 
 func (f *fakeConfigRepository) Load(string) (config.HostConfig, error) { return f.value, nil }

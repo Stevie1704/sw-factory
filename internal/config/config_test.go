@@ -490,6 +490,14 @@ func TestValidateRepositoryRejectsInvalidFieldsOneAtATime(t *testing.T) {
 			field: "gates[0].depends_on[0]",
 		},
 		{
+			name: "gate depends on itself",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.Gates[0].DependsOn = []string{"test"}
+				return c
+			},
+			field: "gates[0].depends_on[0]",
+		},
+		{
 			name: "invalid gate environment policy",
 			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
 				c.Gates[0].EnvironmentPolicy = "dirty"

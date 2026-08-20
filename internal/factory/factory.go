@@ -97,7 +97,6 @@ func New(configPath string) *Service {
 }
 
 // NewWithDependencies creates a Service with the specified configuration path and dependencies.
-// NewWithDependencies creates a Service with the specified configuration path and dependencies.
 // Missing dependencies are replaced with their default implementations.
 func NewWithDependencies(configPath string, dependencies Dependencies) *Service {
 	if dependencies.Config == nil {
@@ -188,7 +187,7 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		return RegisterResult{}, fmt.Errorf("close operational store after initialization: %w", err)
 	}
 	if err := s.deps.Config.Save(s.configPath, host); err != nil {
-		return RegisterResult{}, err
+		return RegisterResult{}, fmt.Errorf("save host configuration after creating operational store %q: %w", operationalPath, err)
 	}
 	return RegisterResult{RepositoryPath: repositoryPath, OperationalDataPath: operationalPath}, nil
 }
@@ -214,7 +213,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	if err != nil {
 		return StatusResult{}, err
 	}
-	defer opened.Close()
+	defer func() { _ = opened.Close() }()
 	result.ActiveRun, err = opened.CurrentRun(ctx)
 	if err != nil {
 		return StatusResult{}, err
@@ -267,7 +266,7 @@ func validateOperationalPath(repositoryPath, operationalPath string) error {
 
 // resolvePath returns an absolute, cleaned path with symlinks resolved where possible.
 // It preserves unresolved trailing components and falls back to the absolute path when
-// resolvePath returns an absolute, cleaned path with existing symlinks resolved. It preserves unresolved path components and falls back to the absolute path when resolution fails.
+// resolution fails.
 func resolvePath(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
