@@ -61,7 +61,7 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 	}
 	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
 	if err != nil {
-		return gate.Result{}, fmt.Errorf("prepare worker Git metadata: %w", err)
+		return gate.Result{}, fmt.Errorf("prepare worker git metadata: %w", err)
 	}
 	if err := s.deps.Worker.Start(ctx, worker.StartRequest{
 		RunID:           run.ID,
@@ -93,57 +93,57 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 // mounted metadata after a coordinator restart.
 func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (string, error) {
 	if strings.TrimSpace(runID) == "" || filepath.Base(runID) != runID || runID == "." || runID == ".." || strings.ContainsAny(runID, `/\`) {
-		return "", fmt.Errorf("run id %q cannot name a Git metadata projection", runID)
+		return "", fmt.Errorf("run id %q cannot name a git metadata projection", runID)
 	}
 	if !filepath.IsAbs(worktreePath) {
-		return "", errors.New("worktree path must be absolute for a Git metadata projection")
+		return "", errors.New("worktree path must be absolute for a git metadata projection")
 	}
 	source := filepath.Join(repositoryPath, ".git")
 	sourceInfo, err := os.Stat(source)
 	if err != nil {
-		return "", fmt.Errorf("inspect repository Git metadata: %w", err)
+		return "", fmt.Errorf("inspect repository git metadata: %w", err)
 	}
 	if !sourceInfo.IsDir() {
-		return "", errors.New("repository Git metadata must be a directory")
+		return "", errors.New("repository git metadata must be a directory")
 	}
 
 	projectionParent := filepath.Join(filepath.Dir(worktreePath), ".factory-git")
 	projection := filepath.Join(projectionParent, runID)
 	if projectionInfo, statErr := os.Stat(projection); statErr == nil {
 		if !projectionInfo.IsDir() {
-			return "", fmt.Errorf("Git metadata projection %q is not a directory", projection)
+			return "", fmt.Errorf("git metadata projection %q is not a directory", projection)
 		}
 		if _, statErr := os.Stat(filepath.Join(projection, "HEAD")); statErr != nil {
-			return "", fmt.Errorf("Git metadata projection %q is incomplete: %w", projection, statErr)
+			return "", fmt.Errorf("git metadata projection %q is incomplete: %w", projection, statErr)
 		}
 		if _, statErr := os.Stat(filepath.Join(projection, "config")); statErr == nil {
-			return "", fmt.Errorf("Git metadata projection %q contains forbidden configuration", projection)
+			return "", fmt.Errorf("git metadata projection %q contains forbidden configuration", projection)
 		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return "", fmt.Errorf("inspect Git metadata projection configuration: %w", statErr)
+			return "", fmt.Errorf("inspect git metadata projection configuration: %w", statErr)
 		}
 		return projection, nil
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return "", fmt.Errorf("inspect Git metadata projection: %w", statErr)
+		return "", fmt.Errorf("inspect git metadata projection: %w", statErr)
 	}
 	if err := os.MkdirAll(projectionParent, 0o700); err != nil {
-		return "", fmt.Errorf("create Git metadata projection parent: %w", err)
+		return "", fmt.Errorf("create git metadata projection parent: %w", err)
 	}
 	temporary, err := os.MkdirTemp(projectionParent, "."+runID+".git-projection-")
 	if err != nil {
-		return "", fmt.Errorf("create temporary Git metadata projection: %w", err)
+		return "", fmt.Errorf("create temporary git metadata projection: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(temporary) }()
 	if err := copyGitMetadata(source, temporary); err != nil {
-		return "", fmt.Errorf("copy Git metadata: %w", err)
+		return "", fmt.Errorf("copy git metadata: %w", err)
 	}
 	if err := overlayWorktreeGitState(worktreePath, temporary); err != nil {
-		return "", fmt.Errorf("overlay worktree Git state: %w", err)
+		return "", fmt.Errorf("overlay worktree git state: %w", err)
 	}
 	if err := os.Chmod(temporary, 0o700); err != nil {
-		return "", fmt.Errorf("protect Git metadata projection: %w", err)
+		return "", fmt.Errorf("protect git metadata projection: %w", err)
 	}
 	if err := os.Rename(temporary, projection); err != nil {
-		return "", fmt.Errorf("publish Git metadata projection: %w", err)
+		return "", fmt.Errorf("publish git metadata projection: %w", err)
 	}
 	return projection, nil
 }
@@ -184,7 +184,7 @@ func copyGitMetadata(source, destination string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported Git metadata entry %q", relative)
+			return fmt.Errorf("unsupported git metadata entry %q", relative)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return err
@@ -243,7 +243,7 @@ func overlayWorktreeGitState(worktreePath, projection string) error {
 	}
 	adminPath := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
 	if adminPath == "" {
-		return errors.New("worktree Git pointer has no admin path")
+		return errors.New("worktree git pointer has no admin path")
 	}
 	if !filepath.IsAbs(adminPath) {
 		adminPath = filepath.Join(worktreePath, adminPath)
@@ -258,7 +258,7 @@ func overlayWorktreeGitState(worktreePath, projection string) error {
 			return statErr
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("worktree Git state %q is not a regular file", name)
+			return fmt.Errorf("worktree git state %q is not a regular file", name)
 		}
 		if err := copyGitMetadataFile(source, filepath.Join(projection, name), info.Mode().Perm()); err != nil {
 			return err
