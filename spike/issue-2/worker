@@ -104,13 +104,14 @@ cmd_claude() {
 
 # Codex's own bubblewrap sandbox cannot start inside this container, because
 # Docker's default seccomp profile blocks unshare(CLONE_NEWUSER). The container
-# is the security boundary, so Codex's inner sandbox is disabled.
+# is the security boundary, so Codex's inner sandbox is disabled. Approvals stay
+# on, so a person still sees and answers each command the harness wants to run.
 cmd_codex() {
   exec docker exec -it \
     -e FACTORY_HARNESS=codex \
     -e "FACTORY_INVOCATION_ID=${FACTORY_INVOCATION_ID:-inv-codex}" \
     -e "FACTORY_ROLE=${FACTORY_ROLE:-implementation}" \
-    "$CONTAINER" codex -s danger-full-access "$@"
+    "$CONTAINER" codex -a untrusted -s danger-full-access "$@"
 }
 
 usage() {

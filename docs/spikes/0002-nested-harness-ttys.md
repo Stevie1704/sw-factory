@@ -2,7 +2,7 @@
 
 - **Issue**: #2 (parent spec #1, user story 91)
 - **Date**: 2026-08-20
-- **Status**: the central risk is answered; criterion 9 is open and criteria 2, 4, and 5 need a person to confirm
+- **Status**: ten of eleven criteria proven; criteria 2 and 4 need a person to confirm appearance
 - **Reproduction**: `spike/issue-2/` (throwaway; not merged into product packages)
 
 ## Question
@@ -67,23 +67,17 @@ works. It cannot show that the result looks right. The table separates the two.
 | 2 | Colours and layout render correctly | Mechanism proven; appearance needs a person | Claude surface: 408 box-drawing characters, palette `#D77757/#888888/#999999`. Codex surface: 108 box-drawing characters, 10 colours. No broken rows in either grid. Whether the result looks correct is a human judgement |
 | 3 | Human keystrokes reach the harness | Proven for both | `stage-probe` and `codex-stage-probe` type a request one word at a time into each TUI. Both harnesses received the text and acted on it |
 | 4 | Resize without corruption | Mechanism proven; appearance needs a person | `tty-probe` moved 24×80 to 40×132 inside the container and `SIGWINCH` arrived. `harness-probe` resized both live TUIs and each redrew wider. Neither test can judge corruption |
-| 5 | Approval prompt raised and answered | Raised and answered for both, by a driver rather than a person | Claude Code: `This command requires approval / Do you want to proceed? / 1. Yes`. Codex: `Would you like to run the following command? / 1. Yes, proceed (y)`. Both accepted the answer and ran the command |
+| 5 | Approval prompt raised and answered | Proven for both, by a person | The operator answered every approval in a live cmux session. Both harnesses then wrote their file and reported the stage: `inv-claude.json` at 09:29:38, `inv-codex.json` at 09:29:40 |
 | 6 | Ctrl+C interrupts the harness, container survives | Proven for both | `harness-probe` sends Ctrl+C to the live TUIs. The container stays `Running` in both cases. The harnesses differ — see failure mode 2 |
 | 7 | Stage completes by writing schema-versioned JSON, no screen parsing | Proven for both | Codex headless and both harnesses interactively. Results committed in `spike/issue-2/evidence/` |
 | 8 | Container destroyed and recreated from the same pinned image, session resumes with context | Proven for both, headless and interactive | Headless: `SPIKE-TOKEN-7731` (Codex), `SPIKE-TOKEN-4402` (Claude Code). Interactive after a recreate: the Claude TUI started with no theme, login, or trust prompt; `codex resume <uuid>` showed the earlier turn and returned `SPIKE-TOKEN-9915` |
-| 9 | cmux restarted, surfaces recoverable | Not proven | — |
+| 9 | cmux restarted, surfaces recoverable | Proven, with a limit | cmux restored the workspace, layout, surface UUIDs, titles, and scrollback. It did not reattach the harness — see failure mode 14 |
 | 10 | Native session identifier observed and documented | Proven for both | See below |
 | 11 | Findings written up, spike code not merged into product packages | Done | This document. Code stays in `spike/issue-2/` |
 
-Two limits on the automated evidence:
-
-- Criteria 2 and 4 cover appearance. A test can show that the mechanism works
-  and that no row is broken. Only a person can say the result looks correct.
-- Criterion 5 asks for a human answer. A driver raised and answered the prompt
-  in both harnesses, which proves the prompt renders and accepts input through
-  both layers of indirection. A person should still answer one.
-
-Criterion 9 has no evidence yet.
+Criteria 2 and 4 cover appearance. A test can show that the mechanism works and
+that no row is broken. Only a person can say the result looks correct. Those two
+are the last open items.
 
 ## Native session identifiers
 
@@ -314,7 +308,32 @@ and would succeed if the image were ever built with a writable prefix. Set
 `DISABLE_AUTOUPDATER=1` for Claude Code so a run cannot change harness version
 mid-flight, as the spec requires.
 
-### 13. Terminal echo defeats naive output matching
+### 13. A cmux restart returns the surface but not the harness
+
+The operator quit cmux and started it again. The workspace, the pane layout, the
+surface UUIDs, the titles, and the scrollback all came back without
+`cmux restore-session`. Short refs were renumbered; UUIDs were not. This
+satisfies the criterion.
+
+The harness did not come back. Each restored surface holds a new host shell. The
+command that the surface was created with is not run again.
+
+The harness also did not stop. It keeps running inside the container with no
+client attached. After three cmux restarts the container held three orphaned
+Codex process pairs, the oldest 41 minutes old, and a matching set of Claude
+Code processes. They still hold their sessions and their memory.
+
+Two consequences:
+
+- **The coordinator owns reattachment.** After a cmux restart it must recreate
+  each surface with a native resume command for the stored session id. cmux
+  supports a custom resume command per surface, which is the right mechanism.
+- **The coordinator owns process cleanup.** A closed surface does not stop a
+  harness, so `WorkerRuntime.stop` must terminate the process inside the
+  container. Without it every restart leaks a harness. This affects #21, #22,
+  and #61.
+
+### 14. Terminal echo defeats naive output matching
 
 Any automated driver that types a command into a pty and waits for a marker will
 match the terminal's **echo** of the command before the command has produced
@@ -339,6 +358,9 @@ rule empirically.
 - **#84 (`factory doctor`)**: check cmux socket reachability from the
   coordinator's own process, since that is the failure that silently disables
   every terminal operation.
+- **#21 / #22 / #61 (recovery)**: a cmux restart orphans the harness rather than
+  stopping it. Reconciliation must find and stop orphans, then reattach through
+  native resume.
 - **`TerminalRuntime`**: specify how the coordinator obtains cmux socket access,
   and store cmux handles as UUIDs. Short refs are positional and change while
   the coordinator runs.
@@ -350,9 +372,8 @@ A person must do these at a keyboard, in the cmux workspace created by
 
 1. Confirm that colours and layout look correct in both surfaces (criterion 2).
 2. Resize a surface and confirm the redraw has no corruption (criterion 4).
-3. Answer one harness approval prompt by hand (criterion 5).
-4. Quit cmux, start it again, and record whether `cmux restore-session` returns
-   the surfaces (criterion 9). This is the only criterion with no evidence.
+Criteria 5 and 9 are closed. The remaining two are judgements about appearance,
+not about mechanism.
 
 ## Notes on scope
 
