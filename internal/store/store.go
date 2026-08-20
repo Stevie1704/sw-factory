@@ -408,18 +408,7 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				}
 			}
 		case 3:
-			if _, err := tx.ExecContext(ctx, `UPDATE operational_runs
-				SET status = 'failed'
-				WHERE status NOT IN ('complete', 'cancelled', 'failed')
-				  AND id NOT IN (
-					SELECT id FROM (
-						SELECT id, ROW_NUMBER() OVER (
-							PARTITION BY repository_path ORDER BY updated_at DESC, id DESC
-						) AS position
-						FROM operational_runs
-						WHERE status NOT IN ('complete', 'cancelled', 'failed')
-					) WHERE position = 1
-				)`); err != nil {
+			if err := reconcileDuplicateRuns(ctx, tx); err != nil {
 				return fmt.Errorf("reconcile runs before store migration 3: %w", err)
 			}
 			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_run_per_repository
@@ -437,6 +426,61 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit store migration: %w", err)
+	}
+	return nil
+}
+
+// reconcileDuplicateRuns keeps the newest non-terminal run per repository
+// while migrating legacy rows whose timestamp text may have variable-width
+// fractional seconds. Go's RFC3339Nano parser provides chronological ordering
+// at nanosecond precision before older duplicates are marked failed.
+func reconcileDuplicateRuns(ctx context.Context, tx *sql.Tx) error {
+	type runCandidate struct {
+		id        string
+		updatedAt time.Time
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, repository_path, updated_at
+		FROM operational_runs
+		WHERE status NOT IN (?, ?, ?)`, StatusComplete, StatusCancelled, StatusFailed)
+	if err != nil {
+		return fmt.Errorf("list non-terminal runs: %w", err)
+	}
+	newestByRepository := make(map[string]runCandidate)
+	duplicates := make([]string, 0)
+	for rows.Next() {
+		var id, repositoryPath, updatedAt string
+		if err := rows.Scan(&id, &repositoryPath, &updatedAt); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan run for reconciliation: %w", err)
+		}
+		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("parse run updated_at for reconciliation: %w", err)
+		}
+		candidate := runCandidate{id: id, updatedAt: parsedUpdatedAt}
+		current, exists := newestByRepository[repositoryPath]
+		if !exists || parsedUpdatedAt.After(current.updatedAt) || (parsedUpdatedAt.Equal(current.updatedAt) && id > current.id) {
+			if exists {
+				duplicates = append(duplicates, current.id)
+			}
+			newestByRepository[repositoryPath] = candidate
+		} else {
+			duplicates = append(duplicates, candidate.id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read runs for reconciliation: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close runs for reconciliation: %w", err)
+	}
+	for _, id := range duplicates {
+		if _, err := tx.ExecContext(ctx, "UPDATE operational_runs SET status = ? WHERE id = ?", StatusFailed, id); err != nil {
+			return fmt.Errorf("mark duplicate run %q failed: %w", id, err)
+		}
 	}
 	return nil
 }

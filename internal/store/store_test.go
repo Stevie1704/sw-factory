@@ -604,9 +604,9 @@ func TestSchemaTwoMigrationReconcilesDuplicateActiveRuns(t *testing.T) {
 			specification_packet TEXT NOT NULL DEFAULT ''
 		);
 		INSERT INTO operational_runs (id, repository_path, issue_number, stage, status, created_at, updated_at)
-		VALUES ('run-old', '/work/repository', 42, 'claim', 'active', '2026-08-20T10:00:00Z', '2026-08-20T10:00:00Z');
+		VALUES ('run-old', '/work/repository', 42, 'claim', 'active', '2026-08-20T10:00:00.1Z', '2026-08-20T10:00:00.1Z');
 		INSERT INTO operational_runs (id, repository_path, issue_number, stage, status, created_at, updated_at)
-		VALUES ('run-new', '/work/repository', 42, 'implementation', 'waiting_for_harness', '2026-08-20T10:01:00Z', '2026-08-20T10:01:00Z')`)
+		VALUES ('run-new', '/work/repository', 42, 'implementation', 'waiting_for_harness', '2026-08-20T10:00:00.12Z', '2026-08-20T10:00:00.12Z')`)
 	if err != nil {
 		_ = database.Close()
 		t.Fatal(err)
@@ -624,9 +624,10 @@ func TestSchemaTwoMigrationReconcilesDuplicateActiveRuns(t *testing.T) {
 		_ = opened.Close()
 		t.Fatalf("CurrentRun() error = %v", err)
 	}
-	if current == nil || current.ID != "run-new" {
+	wantUpdatedAt := time.Date(2026, 8, 20, 10, 0, 0, 120_000_000, time.UTC)
+	if current == nil || current.ID != "run-new" || current.Status != store.StatusWaitingForHarness || !current.UpdatedAt.Equal(wantUpdatedAt) {
 		_ = opened.Close()
-		t.Fatalf("CurrentRun() = %#v, want newest reconciled run", current)
+		t.Fatalf("CurrentRun() = %#v, want newest .12Z run to remain active", current)
 	}
 	current.Status = store.StatusComplete
 	if err := opened.SaveRun(t.Context(), *current); err != nil {
