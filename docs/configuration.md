@@ -96,7 +96,7 @@ base_synchronization:
   branch: main
 ```
 
-The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, role harnesses, model options, positive durations, positive retry limits, test policy, unique overrides and caches, worker image, and base-synchronization mode. Validation errors are typed and identify the offending field.
+The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, role harnesses, model options, positive durations, positive retry limits, test policy, unique overrides and caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field.
 
 ## Operational SQLite store
 

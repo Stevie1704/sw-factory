@@ -337,7 +337,7 @@ func ValidateRepository(config RepositoryConfig) error {
 	if config.TestPolicy.Mode != "required" && config.TestPolicy.Mode != "advisory" && config.TestPolicy.Mode != "disabled" {
 		return validation("test_policy.mode", "must be required, advisory, or disabled")
 	}
-	if err := validateUniqueStrings("allowed_overrides", config.AllowedOverrides); err != nil {
+	if err := validateOptionalUniqueStrings("allowed_overrides", config.AllowedOverrides); err != nil {
 		return err
 	}
 	seenCaches := make(map[string]struct{}, len(config.Caches))
@@ -446,6 +446,10 @@ func validateUniqueStrings(field string, values []string) error {
 	if len(values) == 0 {
 		return validation(field, "must contain at least one value")
 	}
+	return validateOptionalUniqueStrings(field, values)
+}
+
+func validateOptionalUniqueStrings(field string, values []string) error {
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
 		if strings.TrimSpace(value) == "" {
