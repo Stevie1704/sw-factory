@@ -180,10 +180,14 @@ func (e *ConfigFileError) Error() string {
 
 func (e *ConfigFileError) Unwrap() error { return e.Err }
 
+// NewHostConfig creates an empty host configuration using the current schema version.
 func NewHostConfig() HostConfig {
 	return HostConfig{SchemaVersion: CurrentSchemaVersion, Repositories: []RepositoryRegistration{}}
 }
 
+// DefaultHostConfigPath returns the configured host configuration path or the default
+// user configuration path. It returns an error if the configured path or user
+// configuration directory cannot be resolved.
 func DefaultHostConfigPath() (string, error) {
 	if configured := strings.TrimSpace(os.Getenv("FACTORY_CONFIG")); configured != "" {
 		return filepath.Abs(configured)
@@ -195,14 +199,19 @@ func DefaultHostConfigPath() (string, error) {
 	return filepath.Join(configDir, "factory", "config.yaml"), nil
 }
 
+// DefaultOperationalDataPath returns the default operational data file path relative to the host configuration file.
 func DefaultOperationalDataPath(hostConfigPath string) string {
 	return filepath.Join(filepath.Dir(hostConfigPath), "data", "factory.db")
 }
 
+// DefaultRepositoryConfigPath returns the path to the repository configuration file within the specified repository directory.
 func DefaultRepositoryConfigPath(repositoryPath string) string {
 	return filepath.Join(repositoryPath, RepositoryConfigFileName)
 }
 
+// LoadHost reads and validates a host configuration from a YAML file. It returns the
+// decoded configuration or an error if the file cannot be loaded or the configuration
+// is invalid.
 func LoadHost(path string) (HostConfig, error) {
 	var config HostConfig
 	if err := loadYAML(path, &config); err != nil {
@@ -214,6 +223,7 @@ func LoadHost(path string) (HostConfig, error) {
 	return config, nil
 }
 
+// LoadRepository reads, decodes, and validates a repository configuration from a YAML file.
 func LoadRepository(path string) (RepositoryConfig, error) {
 	var config RepositoryConfig
 	if err := loadYAML(path, &config); err != nil {
@@ -225,6 +235,7 @@ func LoadRepository(path string) (RepositoryConfig, error) {
 	return config, nil
 }
 
+// SaveHost validates and atomically writes a host configuration to the specified path.
 func SaveHost(path string, config HostConfig) error {
 	if err := ValidateHost(config); err != nil {
 		return err
@@ -263,6 +274,8 @@ func SaveHost(path string, config HostConfig) error {
 	return nil
 }
 
+// CreateHost creates and saves a default host configuration at path.
+// It returns an error if the path already exists or cannot be checked or written.
 func CreateHost(path string) (HostConfig, error) {
 	if _, err := os.Stat(path); err == nil {
 		return HostConfig{}, fmt.Errorf("configuration already exists at %q", path)
@@ -276,6 +289,7 @@ func CreateHost(path string) (HostConfig, error) {
 	return config, nil
 }
 
+// ValidateHost validates a host configuration, including its schema version and repository registrations.
 func ValidateHost(config HostConfig) error {
 	if err := validateSchema("host", config.SchemaVersion); err != nil {
 		return err
@@ -292,6 +306,7 @@ func ValidateHost(config HostConfig) error {
 	return nil
 }
 
+// invalid field.
 func ValidateRepository(config RepositoryConfig) error {
 	if err := validateSchema("repository", config.SchemaVersion); err != nil {
 		return err
@@ -427,6 +442,7 @@ func ValidateRepository(config RepositoryConfig) error {
 	return nil
 }
 
+// validateRegistration validates repository paths, GitHub metadata, authorized users, polling durations, and the optional cmux socket path.
 func validateRegistration(prefix string, repository RepositoryRegistration) error {
 	if strings.TrimSpace(repository.Path) == "" {
 		return validation(prefix+".path", "is required")
@@ -467,6 +483,8 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	return nil
 }
 
+// validateSchema validates a configuration schema version against the supported range. It
+// reports missing, non-positive, and newer-than-supported versions.
 func validateSchema(kind string, version int) error {
 	if version == 0 {
 		return validation("schema_version", "is required")
@@ -480,6 +498,7 @@ func validateSchema(kind string, version int) error {
 	return nil
 }
 
+// validateDuration validates that a duration value is positive, or empty when allowEmpty is true.
 func validateDuration(field, value string, allowEmpty bool) error {
 	if strings.TrimSpace(value) == "" {
 		if allowEmpty {
@@ -494,6 +513,7 @@ func validateDuration(field, value string, allowEmpty bool) error {
 	return nil
 }
 
+// validateUniqueStrings requires at least one nonempty, unique string in values.
 func validateUniqueStrings(field string, values []string) error {
 	if len(values) == 0 {
 		return validation(field, "must contain at least one value")
@@ -501,6 +521,8 @@ func validateUniqueStrings(field string, values []string) error {
 	return validateOptionalUniqueStrings(field, values)
 }
 
+// validateOptionalUniqueStrings validates that provided values are nonempty and unique.
+// An empty slice is valid.
 func validateOptionalUniqueStrings(field string, values []string) error {
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
@@ -515,6 +537,7 @@ func validateOptionalUniqueStrings(field string, values []string) error {
 	return nil
 }
 
+// validateOptionalOverrides validates allowed override names when provided, including their supported values and uniqueness.
 func validateOptionalOverrides(values []OverrideName) error {
 	seen := make(map[OverrideName]struct{}, len(values))
 	for index, value := range values {
@@ -529,10 +552,14 @@ func validateOptionalOverrides(values []OverrideName) error {
 	return nil
 }
 
+// validation creates an error describing an invalid configuration field and the reason it is invalid.
 func validation(field, message string) error {
 	return &ValidationError{Field: field, Message: message}
 }
 
+// loadYAML reads a single YAML document from path into destination and rejects
+// unknown fields. It returns a ConfigFileError for file access, decoding, or
+// multiple-document errors.
 func loadYAML(path string, destination any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -553,6 +580,7 @@ func loadYAML(path string, destination any) error {
 	return nil
 }
 
+// validSHA256Digest reports whether value is a lowercase hexadecimal SHA-256 digest with the "sha256:" prefix.
 func validSHA256Digest(value string) bool {
 	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
 		return false

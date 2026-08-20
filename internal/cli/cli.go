@@ -12,6 +12,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 )
 
+// Run dispatches a CLI command and returns its exit code.
+// It supports the init, register, and status commands and reports usage or
+// setup errors to errorsOutput.
 func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int {
 	if len(args) == 0 {
 		writeError(errorsOutput, errors.New("a command is required: init, register, or status"))
@@ -35,6 +38,7 @@ func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int
 	}
 }
 
+// runInit handles the init command, creating the host configuration at the requested path and reporting its result.
 func runInit(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -56,6 +60,7 @@ func runInit(ctx context.Context, args []string, defaultConfigPath string, outpu
 	return 0
 }
 
+// runRegister registers a repository using command-line options and reports the resulting repository and operational store paths.
 func runRegister(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("register", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -103,6 +108,8 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	return 0
 }
 
+// runStatus displays the host configuration, repository registration, and active-run status.
+// It returns an exit code indicating whether argument parsing, status retrieval, and output succeeded.
 func runStatus(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -134,6 +141,7 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 	return 0
 }
 
+// writeError writes a formatted error message when err is non-nil.
 func writeError(output io.Writer, err error) {
 	if err != nil {
 		fmt.Fprintf(output, "error: %v\n", err)

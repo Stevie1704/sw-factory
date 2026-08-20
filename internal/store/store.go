@@ -80,6 +80,9 @@ type Store struct {
 	schemaVersion int
 }
 
+// Open opens the operational store at path, creating or migrating its database as needed.
+// Existing databases are backed up before migration, and databases with unsupported or
+// missing schema metadata are rejected.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("operational store path is required")
@@ -249,6 +252,7 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	return nil
 }
 
+// databaseState reports whether the path identifies an existing database file and whether that file is empty.
 func databaseState(path string) (bool, bool, error) {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -263,6 +267,7 @@ func databaseState(path string) (bool, bool, error) {
 	return true, info.Size() == 0, nil
 }
 
+// openConfiguredDatabase opens, protects, and configures the SQLite database at path.
 func openConfiguredDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -285,6 +290,7 @@ func openConfiguredDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	return database, nil
 }
 
+// configure applies the SQLite settings required by the operational store.
 func configure(ctx context.Context, database *sql.DB) error {
 	for _, statement := range []string{
 		"PRAGMA foreign_keys = ON",
@@ -298,6 +304,7 @@ func configure(ctx context.Context, database *sql.DB) error {
 	return nil
 }
 
+// initializeMetadata creates the schema metadata table and initializes its version to zero.
 func initializeMetadata(ctx context.Context, database *sql.DB) error {
 	if _, err := database.ExecContext(ctx, `CREATE TABLE schema_metadata (
 		singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -311,6 +318,8 @@ func initializeMetadata(ctx context.Context, database *sql.DB) error {
 	return nil
 }
 
+// readSchemaVersion reads the schema version from the database metadata.
+// It returns an UnversionedDatabaseError if the metadata cannot be read.
 func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int, error) {
 	var version int
 	if err := database.QueryRowContext(ctx, "SELECT version FROM schema_metadata WHERE singleton = 1").Scan(&version); err != nil {
@@ -319,6 +328,7 @@ func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int,
 	return version, nil
 }
 
+// migrate applies all supported schema migrations from the specified version through the current schema version within a transaction. A migration error leaves the database unchanged.
 func migrate(ctx context.Context, database *sql.DB, from int) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -358,6 +368,8 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 	return nil
 }
 
+// backupDatabase creates a private, uniquely named backup copy of the store at path.
+// It removes an incomplete backup if copying fails and returns the backup path on success.
 func backupDatabase(path string) (string, error) {
 	for attempt := 0; attempt < 100; attempt++ {
 		suffix := time.Now().UTC().Format("20060102T150405.000000000Z07:00")

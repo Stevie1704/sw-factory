@@ -85,6 +85,7 @@ func (fileConfigRepository) Create(path string) (config.HostConfig, error) {
 	return config.CreateHost(path)
 }
 
+// New creates a Service configured with the specified host configuration path and default dependencies.
 func New(configPath string) *Service {
 	return NewWithDependencies(configPath, Dependencies{
 		Config: fileConfigRepository{},
@@ -95,6 +96,8 @@ func New(configPath string) *Service {
 	})
 }
 
+// NewWithDependencies creates a Service with the specified configuration path and dependencies.
+// Missing dependencies are replaced with their default implementations.
 func NewWithDependencies(configPath string, dependencies Dependencies) *Service {
 	if dependencies.Config == nil {
 		dependencies.Config = fileConfigRepository{}
@@ -218,6 +221,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	return result, nil
 }
 
+// checkRepository validates that path is an absolute path to an existing directory.
 func checkRepository(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return &config.ValidationError{Field: "repositories[0].path", Message: "is required"}
@@ -235,6 +239,7 @@ func checkRepository(path string) error {
 	return nil
 }
 
+// defaultString returns fallback when value is blank; otherwise, it returns value.
 func defaultString(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -242,6 +247,7 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
+// pathWithin reports whether target is equal to or contained within root after resolving both paths.
 func pathWithin(root, target string) bool {
 	relative, err := filepath.Rel(resolvePath(root), resolvePath(target))
 	if err != nil {
@@ -250,6 +256,7 @@ func pathWithin(root, target string) bool {
 	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
+// validateOperationalPath verifies that the operational data path is outside the registered repository checkout.
 func validateOperationalPath(repositoryPath, operationalPath string) error {
 	if pathWithin(repositoryPath, operationalPath) {
 		return &config.ValidationError{Field: "repositories[0].operational_data_path", Message: "must be outside the registered repository checkout"}
@@ -257,6 +264,9 @@ func validateOperationalPath(repositoryPath, operationalPath string) error {
 	return nil
 }
 
+// resolvePath returns an absolute, cleaned path with symlinks resolved where possible.
+// It preserves unresolved trailing components and falls back to the absolute path when
+// resolution cannot reach an existing ancestor.
 func resolvePath(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
