@@ -124,6 +124,18 @@ type Inspection struct {
 	Running bool
 	// Image is the exact image reference recorded by the runtime, when present.
 	Image string
+	// Mounts are the container's configured bind mounts.
+	Mounts []ContainerMount
+}
+
+// ContainerMount describes one configured container bind mount.
+type ContainerMount struct {
+	// Source is the host path.
+	Source string
+	// Destination is the in-container path.
+	Destination string
+	// ReadOnly reports whether the mount is read-only.
+	ReadOnly bool
 }
 
 // WorkerRuntime is the secondary product seam for isolated run execution.
@@ -158,7 +170,7 @@ func NewDockerRuntime() *DockerRuntime {
 
 // Start creates a hardened worker from the exact image@digest reference. A
 // running matching worker is reused, while a stopped matching worker is
-// started in place.
+// started in place when its mount contract matches the request.
 func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 	if err := validateStartRequest(request); err != nil {
 		return err
@@ -171,6 +183,9 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		}
 		if inspection.Running {
 			return nil
+		}
+		if err := validateMountContract(inspection.Mounts, request); err != nil {
+			return fmt.Errorf("worker %q mount contract mismatch: %w", request.RunID, err)
 		}
 		if _, err := prepareWorkerMounts(request); err != nil {
 			return fmt.Errorf("prepare worker mounts: %w", err)
@@ -323,25 +338,45 @@ func (r *DockerRuntime) startContainer(ctx context.Context, name string) error {
 	return nil
 }
 
-// inspectContainer reads only lifecycle and image fields from Docker.
+// inspectContainer reads lifecycle, image, and mount fields from Docker.
 func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Inspection, error) {
 	result, err := r.runDocker(ctx, []string{
 		"container", "inspect",
-		"--format", "{{.State.Running}}\t{{.Config.Image}}",
+		"--format", "{{.State.Running}}\t{{.Config.Image}}\t{{range .Mounts}}{{.Source}}\t{{.Destination}}\t{{.RW}}\n{{end}}",
 		name,
 	})
 	if err != nil {
 		return Inspection{}, err
 	}
-	fields := strings.SplitN(strings.TrimSpace(result.Stdout), "\t", 2)
-	if len(fields) != 2 {
+	fields := strings.SplitN(strings.TrimSpace(result.Stdout), "\t", 3)
+	if len(fields) < 2 {
 		return Inspection{}, fmt.Errorf("docker inspect returned malformed worker state %q", result.Stdout)
 	}
 	running, err := strconv.ParseBool(fields[0])
 	if err != nil {
 		return Inspection{}, fmt.Errorf("docker inspect returned invalid running state %q: %w", fields[0], err)
 	}
-	return Inspection{Exists: true, Running: running, Image: fields[1]}, nil
+	image := fields[1]
+	var mounts []ContainerMount
+	if len(fields) == 3 && strings.TrimSpace(fields[2]) != "" {
+		mountLines := strings.Split(strings.TrimSpace(fields[2]), "\n")
+		for _, line := range mountLines {
+			mountFields := strings.Split(line, "\t")
+			if len(mountFields) != 3 {
+				continue
+			}
+			rw, err := strconv.ParseBool(mountFields[2])
+			if err != nil {
+				continue
+			}
+			mounts = append(mounts, ContainerMount{
+				Source:      mountFields[0],
+				Destination: mountFields[1],
+				ReadOnly:    !rw,
+			})
+		}
+	}
+	return Inspection{Exists: true, Running: running, Image: image, Mounts: mounts}, nil
 }
 
 // runDocker executes one host-side Docker CLI invocation and captures both
@@ -531,6 +566,62 @@ func validateImageName(image string) error {
 	if strings.Contains(lastComponent, ":") {
 		return fmt.Errorf("worker image %q must not include a mutable tag", image)
 	}
+	return nil
+}
+
+// validateMountContract verifies that the existing container's configured
+// mounts match the incoming start request's mount requirements.
+func validateMountContract(existingMounts []ContainerMount, request StartRequest) error {
+	requiredMounts := make(map[string]ContainerMount)
+	requiredMounts[WorktreePath] = ContainerMount{
+		Source:      request.WorktreePath,
+		Destination: WorktreePath,
+		ReadOnly:    false,
+	}
+	requiredMounts[GitMetadataPath] = ContainerMount{
+		Source:      request.GitMetadataPath,
+		Destination: GitMetadataPath,
+		ReadOnly:    true,
+	}
+	for _, cache := range request.Caches {
+		cachePath := filepath.Join(CachePath, cache.Name)
+		requiredMounts[cachePath] = ContainerMount{
+			Source:      cache.HostPath,
+			Destination: cachePath,
+			ReadOnly:    cache.ReadOnly,
+		}
+	}
+
+	existingMountMap := make(map[string]ContainerMount)
+	for _, mount := range existingMounts {
+		existingMountMap[mount.Destination] = mount
+	}
+
+	if len(existingMountMap) != len(requiredMounts) {
+		return fmt.Errorf("container has %d mounts, want %d mounts", len(existingMountMap), len(requiredMounts))
+	}
+
+	for destination, required := range requiredMounts {
+		existing, found := existingMountMap[destination]
+		if !found {
+			return fmt.Errorf("container missing mount at %q", destination)
+		}
+		if existing.Source != required.Source {
+			return fmt.Errorf("mount at %q uses host path %q, want %q", destination, existing.Source, required.Source)
+		}
+		if existing.ReadOnly != required.ReadOnly {
+			readOnlyState := "read-write"
+			wantState := "read-write"
+			if existing.ReadOnly {
+				readOnlyState = "read-only"
+			}
+			if required.ReadOnly {
+				wantState = "read-only"
+			}
+			return fmt.Errorf("mount at %q is %s, want %s", destination, readOnlyState, wantState)
+		}
+	}
+
 	return nil
 }
 
