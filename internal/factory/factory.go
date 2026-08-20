@@ -148,7 +148,7 @@ func New(configPath string) *Service {
 }
 
 // NewWithDependencies creates a Service with the specified configuration path and dependencies.
-// Missing dependencies are replaced with their default implementations.
+// NewWithDependencies creates a Service and fills missing dependencies with their default implementations.
 func NewWithDependencies(configPath string, dependencies Dependencies) *Service {
 	if dependencies.Config == nil {
 		dependencies.Config = fileConfigRepository{}

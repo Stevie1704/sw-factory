@@ -193,7 +193,7 @@ func (r Runner) publish(ctx context.Context, status github.CommitStatus) error {
 	return nil
 }
 
-// positiveDuration parses one checked-in positive duration.
+// positiveDuration parses a trimmed duration string and returns an error unless the duration is greater than zero.
 func positiveDuration(field, value string) (time.Duration, error) {
 	duration, err := time.ParseDuration(strings.TrimSpace(value))
 	if err != nil || duration <= 0 {
@@ -203,7 +203,7 @@ func positiveDuration(field, value string) (time.Duration, error) {
 }
 
 // workerEnvironmentPolicy keeps the config and worker packages decoupled at
-// their shared execution seam.
+// workerEnvironmentPolicy converts a configured environment policy to the corresponding worker policy, defaulting unknown values to a clean environment.
 func workerEnvironmentPolicy(policy config.EnvironmentPolicy) worker.EnvironmentPolicy {
 	switch policy {
 	case config.EnvironmentPolicyClean:
@@ -215,5 +215,5 @@ func workerEnvironmentPolicy(policy config.EnvironmentPolicy) worker.Environment
 	}
 }
 
-// statusContext returns the stable status namespace for one declared gate.
+// statusContext returns the stable status context for the specified gate name.
 func statusContext(name string) string { return "factory/gate/" + strings.TrimSpace(name) }

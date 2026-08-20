@@ -90,7 +90,9 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 // worker. It copies history and refs without copying repository configuration,
 // remotes, hooks, or other files that could carry credentials or host paths.
 // The projection is stable for the run so a reused worker keeps the same
-// mounted metadata after a coordinator restart.
+// prepareGitMetadataProjection creates or reuses a sanitized Git metadata projection for a run.
+// It returns the projection path or an error if the run ID, worktree, repository metadata, or
+// projection is invalid.
 func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (string, error) {
 	if strings.TrimSpace(runID) == "" || filepath.Base(runID) != runID || runID == "." || runID == ".." || strings.ContainsAny(runID, `/\`) {
 		return "", fmt.Errorf("run id %q cannot name a git metadata projection", runID)
@@ -149,7 +151,9 @@ func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (s
 }
 
 // copyGitMetadata copies regular Git metadata files while omitting all local
-// configuration and files that can define remotes, commands, or host paths.
+// copyGitMetadata copies permitted Git metadata from source to destination,
+// preserving file permission bits and rejecting symbolic links and other
+// non-regular entries. It returns an error if traversal or copying fails.
 func copyGitMetadata(source, destination string) error {
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -194,7 +198,7 @@ func copyGitMetadata(source, destination string) error {
 }
 
 // skipGitMetadata reports whether a relative Git metadata path can contain
-// configuration, credentials, executable hooks, or host-specific indirection.
+// skipGitMetadata reports whether a Git metadata path should be excluded from a projection.
 func skipGitMetadata(relative string, directory bool) bool {
 	parts := strings.Split(filepath.ToSlash(relative), "/")
 	for _, part := range parts {
@@ -211,7 +215,7 @@ func skipGitMetadata(relative string, directory bool) bool {
 }
 
 // copyGitMetadataFile streams one Git metadata file into the projection while
-// preserving its non-secret permission bits.
+// copyGitMetadataFile copies a regular Git metadata file to the destination while preserving its specified non-secret permission bits.
 func copyGitMetadataFile(source, destination string, mode fs.FileMode) error {
 	input, err := os.Open(source)
 	if err != nil {
@@ -228,7 +232,7 @@ func copyGitMetadataFile(source, destination string, mode fs.FileMode) error {
 }
 
 // overlayWorktreeGitState copies the run worktree's HEAD and index from its
-// private worktree admin directory onto the common projected metadata.
+// overlayWorktreeGitState copies the worktree's HEAD and index files into the projected Git metadata when available.
 func overlayWorktreeGitState(worktreePath, projection string) error {
 	pointer, err := os.ReadFile(filepath.Join(worktreePath, ".git"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -267,7 +271,8 @@ func overlayWorktreeGitState(worktreePath, projection string) error {
 	return nil
 }
 
-// decodeSpecificationPacket loads the immutable packet retained by issue #4.
+// decodeSpecificationPacket decodes and validates a serialized frozen specification packet.
+// It returns an error when the packet is missing, malformed, or uses an unsupported version.
 func decodeSpecificationPacket(serialized string) (SpecificationPacket, error) {
 	if strings.TrimSpace(serialized) == "" {
 		return SpecificationPacket{}, errors.New("active run has no frozen specification packet")
@@ -282,7 +287,9 @@ func decodeSpecificationPacket(serialized string) (SpecificationPacket, error) {
 	return packet, nil
 }
 
-// declaredGate resolves one gate by its frozen configuration name.
+// declaredGate finds a gate with the specified name in the frozen configuration.
+// It returns the matching gate and true, or an empty gate configuration and false
+// when no match exists.
 func declaredGate(packet SpecificationPacket, name string) (config.GateConfig, bool) {
 	for _, candidate := range packet.RepositoryConfig.Gates {
 		if candidate.Name == name {
@@ -292,7 +299,7 @@ func declaredGate(packet SpecificationPacket, name string) (config.GateConfig, b
 	return config.GateConfig{}, false
 }
 
-// workerCaches maps repository configuration caches to the worker seam.
+// workerCaches converts repository cache configurations into worker cache mounts.
 func workerCaches(caches []config.CacheConfig) []worker.CacheMount {
 	result := make([]worker.CacheMount, 0, len(caches))
 	for _, cache := range caches {

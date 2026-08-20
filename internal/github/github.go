@@ -320,7 +320,7 @@ func (c *GhClient) callBytes(ctx context.Context, args []string, payload any) ([
 }
 
 // ValidCommitSHA accepts 40 to 64 lowercase hexadecimal characters while
-// rejecting values that could alter a GitHub API path.
+// ValidCommitSHA reports whether value is a 40- to 64-character lowercase hexadecimal commit SHA.
 func ValidCommitSHA(value string) bool {
 	if len(value) < 40 || len(value) > 64 {
 		return false
