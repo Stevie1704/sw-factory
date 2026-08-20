@@ -93,17 +93,21 @@ cmd_shell() {
 cmd_claude() {
   exec docker exec -it \
     -e FACTORY_HARNESS=claude \
+    -e DISABLE_AUTOUPDATER=1 \
     -e "FACTORY_INVOCATION_ID=${FACTORY_INVOCATION_ID:-inv-claude}" \
     -e "FACTORY_ROLE=${FACTORY_ROLE:-implementation}" \
     "$CONTAINER" claude "$@"
 }
 
+# Codex's own bubblewrap sandbox cannot start inside this container, because
+# Docker's default seccomp profile blocks unshare(CLONE_NEWUSER). The container
+# is the security boundary, so Codex's inner sandbox is disabled.
 cmd_codex() {
   exec docker exec -it \
     -e FACTORY_HARNESS=codex \
     -e "FACTORY_INVOCATION_ID=${FACTORY_INVOCATION_ID:-inv-codex}" \
     -e "FACTORY_ROLE=${FACTORY_ROLE:-implementation}" \
-    "$CONTAINER" codex "$@"
+    "$CONTAINER" codex -s danger-full-access "$@"
 }
 
 usage() {

@@ -2,7 +2,7 @@
 
 - **Issue**: #2 (parent spec #1, user story 91)
 - **Date**: 2026-08-20
-- **Status**: in progress — both harnesses proven headlessly, cmux keyboard checks pending
+- **Status**: in progress — both harnesses proven through cmux; three keyboard checks pending
 - **Reproduction**: `spike/issue-2/` (throwaway; not merged into product packages)
 
 ## Question
@@ -57,14 +57,14 @@ mounts. Destroying the container therefore destroys no session state.
 
 | # | Criterion | Verdict | Evidence |
 | --- | --- | --- | --- |
-| 1 | Interactive terminal app in a container pseudo-terminal, explicit terminal type | Proven for both through Docker; cmux layer pending | `TERM=xterm-256color`, `tput colors` = 256, `[ -t 1 ]` true under `docker exec -t`; operator ran both TUIs interactively |
-| 2 | Colours and layout render correctly | Partly proven | ANSI SGR sequences arrive intact through the Docker pseudo-terminal; final judgement is visual, in cmux |
-| 3 | Human keystrokes reach the harness | Proven through Docker; cmux layer pending | Operator typed into both TUIs in the container and both answered |
+| 1 | Interactive terminal app in a container pseudo-terminal via cmux, explicit terminal type | **Proven for both** | Both TUIs read out of their cmux surfaces: Claude Code v2.1.232 welcome panel at `/work`, Codex v0.148.0 panel at `/work` |
+| 2 | Colours and layout render correctly | **Proven for both** | Claude surface: 408 box-drawing characters, palette `#D77757/#888888/#999999`. Codex surface: 108 box-drawing characters, 10-colour palette. No corruption in either grid |
+| 3 | Human keystrokes reach the harness | Proven through Docker; cmux layer pending operator | Operator typed into both TUIs in the container and both answered |
 | 4 | Resize without corruption | Proven | `tty-probe`: 24×80 → 40×132 observed inside the container, `SIGWINCH` raised |
-| 5 | Approval prompt raised and answered | Pending keyboard | — |
+| 5 | Approval prompt raised and answered | Pending keyboard | Claude Code raised its folder-trust approval and accepted an answer, but the criterion wants a human answering a tool approval |
 | 6 | Ctrl+C interrupts the harness, container survives | Proven | `SIGINT` reaches the foreground group, the process dies, container stays `Running` |
 | 7 | Stage completes by writing schema-versioned JSON, no screen parsing | Proven for Codex; Claude pending the interactive approval check | Codex ran `factory-report`; `.run/results/inv-codex-1.json` carries `schema_version: 1` |
-| 8 | Container destroyed and recreated from the same pinned image, session resumes with context | **Proven for both** | New container ids, same image digest; Codex returned `SPIKE-TOKEN-7731`, Claude Code returned `SPIKE-TOKEN-4402` |
+| 8 | Container destroyed and recreated from the same pinned image, session resumes with context | **Proven for both, headless and interactive** | Codex returned `SPIKE-TOKEN-7731`, Claude Code returned `SPIKE-TOKEN-4402`; after a later recreate the Claude TUI came up with no theme, login, or trust prompt |
 | 9 | cmux restarted, surfaces recoverable | Pending keyboard | — |
 | 10 | Native session identifier observed and documented | **Proven for both** | See below |
 | 11 | Findings written up, spike code not merged into product packages | This document; code confined to `spike/issue-2/` | — |
@@ -245,9 +245,43 @@ obtaining socket access.
 `cmux new-workspace --layout <json>` creates a workspace whose panes each run
 their own command, which maps directly onto the spec's run surfaces (status,
 test agent, implementation agent, checks, spec review, standards review). See
-`spike/issue-2/cmux-surfaces`.
+`spike/issue-2/cmux-surfaces`. Both harness TUIs came up correctly this way.
 
-### 10. Terminal echo defeats naive output matching
+Two ref-resolution traps, both of which produced wrong answers before they were
+noticed:
+
+- Short refs such as `pane:6` resolve **relative to the caller's workspace**.
+  `cmux focus-pane pane:6` fails with `Pane not found` unless
+  `--workspace <id>` names the owning workspace.
+- Short refs are positional and **shift as workspaces come and go**. Resolve
+  handles to UUIDs once and store those, exactly as `TerminalRuntime` intends.
+
+### 10. `terminal.replay` ignores the surface it is asked for
+
+`cmux rpc terminal.replay '{"surface": "<id>"}'` returns the **active** surface's
+render grid regardless of the argument. A deliberately invalid id returns the
+caller's own surface rather than an error, and the response's `surface_id` field
+then disagrees with the request.
+
+Reading a specific surface requires focusing it first, and focus follows the
+caller, so a coordinator cannot passively read a surface it is not sitting in.
+
+This is only a problem for anything that wants to *read* terminals — which the
+factory must never do for control flow. It reinforces the spec's rule: stage
+results travel through `factory-report`, never through the screen. Always
+compare the returned `surface_id` against the requested one before trusting
+anything read this way.
+
+### 11. A pinned worker must disable harness auto-update
+
+The Claude Code TUI reported `Auto-update failed: no write permission to npm
+prefix`. The failure is benign — the non-root user cannot write the global npm
+prefix, which is what keeps the pinned version pinned — but the attempt is noise
+and would succeed if the image were ever built with a writable prefix. Set
+`DISABLE_AUTOUPDATER=1` for Claude Code so a run cannot change harness version
+mid-flight, as the spec requires.
+
+### 12. Terminal echo defeats naive output matching
 
 Any automated driver that types a command into a pty and waits for a marker will
 match the terminal's **echo** of the command before the command has produced
@@ -272,4 +306,6 @@ rule empirically.
 - **#84 (`factory doctor`)**: check cmux socket reachability from the
   coordinator's own process, since that is the failure that silently disables
   every terminal operation.
-- **`TerminalRuntime`**: specify how the coordinator obtains cmux socket access.
+- **`TerminalRuntime`**: specify how the coordinator obtains cmux socket access,
+  and store cmux handles as UUIDs rather than short refs, which are positional
+  and shift underneath a running coordinator.
