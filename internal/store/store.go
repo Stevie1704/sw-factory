@@ -14,7 +14,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentSchemaVersion = 1
+// CurrentSchemaVersion is the latest operational-store schema understood by
+// this binary.
+const CurrentSchemaVersion = 3
+
+// runTimestampLayout keeps serialized run timestamps fixed-width so SQLite
+// text ordering matches chronological ordering for sub-second timestamps.
+const runTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 type Stage string
 
@@ -60,18 +66,22 @@ func (e *UnversionedDatabaseError) Error() string {
 
 func (e *UnversionedDatabaseError) Unwrap() error { return e.Err }
 
+// Run is the persisted operational identity and current state of one run.
 type Run struct {
-	ID             string
-	RepositoryPath string
-	IssueNumber    int
-	Stage          Stage
-	Status         Status
-	Branch         string
-	Worktree       string
-	CheckpointSHA  string
-	ImageDigest    string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                  string
+	RepositoryPath      string
+	IssueNumber         int
+	Stage               Stage
+	Status              Status
+	Branch              string
+	Worktree            string
+	CheckpointSHA       string
+	ImageDigest         string
+	Coordinator         string
+	StatusCommentID     string
+	SpecificationPacket string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type Store struct {
@@ -163,14 +173,34 @@ func (s *Store) Path() string { return s.path }
 
 func (s *Store) SchemaVersion() int { return s.schemaVersion }
 
+// CurrentRun returns the newest non-terminal run, if one is active.
 func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, image_digest, created_at, updated_at
+		       checkpoint_sha, image_digest, coordinator, status_comment_id,
+		       specification_packet, created_at, updated_at
 		FROM operational_runs
 		WHERE status NOT IN (?, ?, ?)
 		ORDER BY updated_at DESC
 		LIMIT 1`, StatusComplete, StatusCancelled, StatusFailed)
+	return scanRun(row)
+}
+
+// LatestRun returns the most recently updated claimed run, including terminal
+// runs so status can show the last known branch and worktree.
+func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
+		       checkpoint_sha, image_digest, coordinator, status_comment_id,
+		       specification_packet, created_at, updated_at
+		FROM operational_runs
+		ORDER BY updated_at DESC
+		LIMIT 1`)
+	return scanRun(row)
+}
+
+// scanRun decodes one operational run row and its RFC3339 timestamps.
+func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var createdAt, updatedAt string
 	if err := row.Scan(
@@ -183,13 +213,16 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		&run.Worktree,
 		&run.CheckpointSHA,
 		&run.ImageDigest,
+		&run.Coordinator,
+		&run.StatusCommentID,
+		&run.SpecificationPacket,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read current run: %w", err)
+		return nil, fmt.Errorf("read run row: %w", err)
 	}
 	var err error
 	run.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -203,6 +236,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	return &run, nil
 }
 
+// SaveRun validates and upserts one operational run record.
 func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	if run.ID == "" {
 		return errors.New("run id is required")
@@ -222,8 +256,9 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
-			checkpoint_sha, image_digest, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			checkpoint_sha, image_digest, coordinator, status_comment_id,
+			specification_packet, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
 			issue_number = excluded.issue_number,
@@ -233,6 +268,9 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 			worktree = excluded.worktree,
 			checkpoint_sha = excluded.checkpoint_sha,
 			image_digest = excluded.image_digest,
+			coordinator = excluded.coordinator,
+			status_comment_id = excluded.status_comment_id,
+			specification_packet = excluded.specification_packet,
 			updated_at = excluded.updated_at`,
 		run.ID,
 		run.RepositoryPath,
@@ -243,8 +281,11 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 		run.Worktree,
 		run.CheckpointSHA,
 		run.ImageDigest,
-		run.CreatedAt.UTC().Format(time.RFC3339Nano),
-		run.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		run.Coordinator,
+		run.StatusCommentID,
+		run.SpecificationPacket,
+		run.CreatedAt.UTC().Format(runTimestampLayout),
+		run.UpdatedAt.UTC().Format(runTimestampLayout),
 	)
 	if err != nil {
 		return fmt.Errorf("save run: %w", err)
@@ -356,6 +397,25 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			)`); err != nil {
 				return fmt.Errorf("apply store migration 1: %w", err)
 			}
+		case 2:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN coordinator TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN status_comment_id TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN specification_packet TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 2: %w", err)
+				}
+			}
+		case 3:
+			if err := reconcileDuplicateRuns(ctx, tx); err != nil {
+				return fmt.Errorf("reconcile runs before store migration 3: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_run_per_repository
+				ON operational_runs (repository_path)
+				WHERE status NOT IN ('complete', 'cancelled', 'failed')`); err != nil {
+				return fmt.Errorf("apply store migration 3: %w", err)
+			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
 		}
@@ -366,6 +426,114 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit store migration: %w", err)
+	}
+	return nil
+}
+
+// reconcileDuplicateRuns keeps the newest non-terminal run per repository
+// while migrating legacy rows whose timestamp text may have variable-width
+// fractional seconds. Go's RFC3339Nano parser provides chronological ordering
+// at nanosecond precision before older duplicates are marked failed.
+func reconcileDuplicateRuns(ctx context.Context, tx *sql.Tx) error {
+	type runCandidate struct {
+		id        string
+		updatedAt time.Time
+	}
+	// First, normalize all legacy timestamps to the canonical fixed-width format
+	// so that subsequent SQL ORDER BY operations on created_at/updated_at produce
+	// correct chronological results via lexical string comparison.
+	allRows, err := tx.QueryContext(ctx, `SELECT id, created_at, updated_at FROM operational_runs`)
+	if err != nil {
+		return fmt.Errorf("list runs for timestamp normalization: %w", err)
+	}
+	type timestampUpdate struct {
+		id        string
+		createdAt string
+		updatedAt string
+	}
+	updates := make([]timestampUpdate, 0)
+	for allRows.Next() {
+		var id, createdAt, updatedAt string
+		if err := allRows.Scan(&id, &createdAt, &updatedAt); err != nil {
+			_ = allRows.Close()
+			return fmt.Errorf("scan run for timestamp normalization: %w", err)
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			_ = allRows.Close()
+			return fmt.Errorf("parse run created_at for normalization: %w", err)
+		}
+		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			_ = allRows.Close()
+			return fmt.Errorf("parse run updated_at for normalization: %w", err)
+		}
+		normalizedCreatedAt := parsedCreatedAt.Format(runTimestampLayout)
+		normalizedUpdatedAt := parsedUpdatedAt.Format(runTimestampLayout)
+		if createdAt != normalizedCreatedAt || updatedAt != normalizedUpdatedAt {
+			updates = append(updates, timestampUpdate{
+				id:        id,
+				createdAt: normalizedCreatedAt,
+				updatedAt: normalizedUpdatedAt,
+			})
+		}
+	}
+	if err := allRows.Err(); err != nil {
+		_ = allRows.Close()
+		return fmt.Errorf("read runs for timestamp normalization: %w", err)
+	}
+	if err := allRows.Close(); err != nil {
+		return fmt.Errorf("close runs for timestamp normalization: %w", err)
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE operational_runs SET created_at = ?, updated_at = ? WHERE id = ?`,
+			update.createdAt, update.updatedAt, update.id); err != nil {
+			return fmt.Errorf("normalize timestamps for run %q: %w", update.id, err)
+		}
+	}
+	// Now reconcile duplicates using the normalized timestamps
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, repository_path, updated_at
+		FROM operational_runs
+		WHERE status NOT IN (?, ?, ?)`, StatusComplete, StatusCancelled, StatusFailed)
+	if err != nil {
+		return fmt.Errorf("list non-terminal runs: %w", err)
+	}
+	newestByRepository := make(map[string]runCandidate)
+	duplicates := make([]string, 0)
+	for rows.Next() {
+		var id, repositoryPath, updatedAt string
+		if err := rows.Scan(&id, &repositoryPath, &updatedAt); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan run for reconciliation: %w", err)
+		}
+		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("parse run updated_at for reconciliation: %w", err)
+		}
+		candidate := runCandidate{id: id, updatedAt: parsedUpdatedAt}
+		current, exists := newestByRepository[repositoryPath]
+		if !exists || parsedUpdatedAt.After(current.updatedAt) || (parsedUpdatedAt.Equal(current.updatedAt) && id > current.id) {
+			if exists {
+				duplicates = append(duplicates, current.id)
+			}
+			newestByRepository[repositoryPath] = candidate
+		} else {
+			duplicates = append(duplicates, candidate.id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read runs for reconciliation: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close runs for reconciliation: %w", err)
+	}
+	for _, id := range duplicates {
+		if _, err := tx.ExecContext(ctx, "UPDATE operational_runs SET status = ? WHERE id = ?", StatusFailed, id); err != nil {
+			return fmt.Errorf("mark duplicate run %q failed: %w", id, err)
+		}
 	}
 	return nil
 }
