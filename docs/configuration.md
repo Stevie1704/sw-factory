@@ -98,7 +98,18 @@ base_synchronization:
 
 The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
-Issue #3 establishes and validates this repository-declared gate contract. Running setup and gates with baseline health, dependency skipping, timeouts, and checkpoint-keyed results is the gate-runner work in issue #9; this binary does not execute arbitrary repository commands yet. The commands declared by this repository's `factory.yaml` are run as part of the repository verification suite.
+Issue #3 establishes and validates this repository-declared gate contract. Issue #5 adds the worker runtime and the coordinator path that runs setup plus one selected gate in the pinned worker and publishes its result to the exact checkpoint SHA. Full baseline health, dependency skipping, independent-gate execution, manifest-triggered setup, and retained checkpoint-keyed gate results remain the expanded gate model in issue #9. The commands declared by this repository's `factory.yaml` are also run as part of the repository verification suite.
+
+Worker execution uses stable in-container paths (`/work`, `/git`, and
+`/cache/<name>`), a non-root uid, dropped capabilities, disabled privilege
+escalation, and no Docker socket. The coordinator prepares `/git` as a
+credential-free projection of Git history, refs, and run worktree state while
+omitting Git configuration, remotes, and hooks. Setup and gates receive a clean
+explicit environment; they do not inherit the coordinator's host environment
+or credentials. Explicit worker mounts receive owner-plus-group permissions,
+and the runtime passes their existing non-root host groups to Docker as
+supplemental groups; other-user access is removed. See [Worker runtime](worker-runtime.md)
+for the runtime seam and its isolation contract.
 
 ## Claiming an issue
 
@@ -128,4 +139,4 @@ The operational store contains current workflow state, the active run's frozen s
 
 Issue #25 will add separate content-free local evaluation summaries. Those summaries remain local and are not outbound telemetry.
 
-The high-level `Factory` seam injects configuration, repository checking, GitHub, Git/worktree, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Worker, terminal, and harness adapters remain owned by later workflow tickets.
+The high-level `Factory` seam injects configuration, repository checking, GitHub, Git/worktree, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; terminal and harness adapters remain owned by later workflow tickets.

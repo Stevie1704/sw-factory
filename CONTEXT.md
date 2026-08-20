@@ -20,6 +20,14 @@ _Avoid_: Snapshot, latest code
 A repository-declared deterministic command whose result is tied to an exact checkpoint and does not depend on model judgment.
 _Avoid_: Agent check, review
 
+**Worker**:
+The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, and explicitly declared repository caches.
+_Avoid_: Container in workflow decisions
+
+**WorkerRuntime**:
+The portable seam that starts, resumes, commands, stops, and inspects a worker while hiding runtime identifiers, container paths, role homes, invocation packets, result files, and process tracking.
+_Avoid_: Docker API
+
 **Review blocker**:
 A concrete correctness, security, specification, or documented-standards violation that prevents readiness.
 _Avoid_: Suggestion, preference, advisory finding

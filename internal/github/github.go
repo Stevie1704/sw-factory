@@ -72,6 +72,41 @@ type Comment struct {
 	Body string
 }
 
+// CommitStatusState is the GitHub state vocabulary used for deterministic
+// checkpoint results.
+type CommitStatusState string
+
+const (
+	// CommitStatusPending is an in-progress status state.
+	CommitStatusPending CommitStatusState = "pending"
+	// CommitStatusSuccess marks a successful checkpoint result.
+	CommitStatusSuccess CommitStatusState = "success"
+	// CommitStatusFailure marks a declared command that exited unsuccessfully.
+	CommitStatusFailure CommitStatusState = "failure"
+	// CommitStatusError marks setup or runtime infrastructure failure.
+	CommitStatusError CommitStatusState = "error"
+)
+
+// CommitStatus identifies one status attached to one exact commit SHA.
+type CommitStatus struct {
+	// SHA is the immutable commit being reported.
+	SHA string
+	// State is the GitHub status state.
+	State CommitStatusState
+	// Context is the stable status context used for repeated reports.
+	Context string
+	// Description is a content-free human-readable summary.
+	Description string
+	// TargetURL is an optional operator-facing evidence URL.
+	TargetURL string
+}
+
+// CommitStatusPublisher is the host-side seam for publishing exact-SHA
+// Commit Statuses without exposing GitHub credentials to workflow code.
+type CommitStatusPublisher interface {
+	CreateCommitStatus(context.Context, Repository, CommitStatus) error
+}
+
 // Client is the small host-side seam used by the claim coordinator. It keeps
 // GitHub credentials inside the local gh process and returns only workflow
 // data to the coordinator.
@@ -133,7 +168,7 @@ func (c *GhClient) Issue(ctx context.Context, repository Repository, number int)
 		return Issue{}, errors.New("issue number must be positive")
 	}
 	var response issueResponse
-	if err := c.callJSON(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/issues/%d", repository.String(), number)}, nil, &response); err != nil {
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d", repository.String(), number)}, nil, &response); err != nil {
 		return Issue{}, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 	labels := make([]string, 0, len(response.Labels))
@@ -174,7 +209,7 @@ func (c *GhClient) ReplaceIssueLabels(ctx context.Context, repository Repository
 	if number <= 0 {
 		return errors.New("issue number must be positive")
 	}
-	if err := c.call(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/issues/%d/labels", repository.String(), number), "--method", "PUT"}, map[string][]string{"labels": labels}); err != nil {
+	if err := c.call(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/labels", repository.String(), number), "--method", "PUT"}, map[string][]string{"labels": labels}); err != nil {
 		return fmt.Errorf("replace labels on issue #%d: %w", number, err)
 	}
 	return nil
@@ -183,7 +218,7 @@ func (c *GhClient) ReplaceIssueLabels(ctx context.Context, repository Repository
 // CreateIssueComment creates one issue comment and returns its immutable id.
 func (c *GhClient) CreateIssueComment(ctx context.Context, repository Repository, number int, body string) (Comment, error) {
 	var response commentResponse
-	if err := c.callJSON(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--method", "POST"}, map[string]string{"body": body}, &response); err != nil {
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--method", "POST"}, map[string]string{"body": body}, &response); err != nil {
 		return Comment{}, fmt.Errorf("create status comment on issue #%d: %w", number, err)
 	}
 	return Comment{ID: fmt.Sprint(response.ID), Body: response.Body}, nil
@@ -199,7 +234,7 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository,
 		return Comment{}, errors.New("status comment marker is required")
 	}
 	var pages [][]commentResponse
-	if err := c.callJSON(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
 		return Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
 	}
 	for _, page := range pages {
@@ -217,8 +252,37 @@ func (c *GhClient) EditIssueComment(ctx context.Context, repository Repository, 
 	if strings.TrimSpace(commentID) == "" {
 		return errors.New("status comment id is required")
 	}
-	if err := c.call(ctx, []string{"api", "--repo", repository.String(), fmt.Sprintf("repos/%s/issues/comments/%s", repository.String(), commentID), "--method", "PATCH"}, map[string]string{"body": body}); err != nil {
+	if err := c.call(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/comments/%s", repository.String(), commentID), "--method", "PATCH"}, map[string]string{"body": body}); err != nil {
 		return fmt.Errorf("edit status comment %s: %w", commentID, err)
+	}
+	return nil
+}
+
+// CreateCommitStatus publishes one deterministic result for an exact commit.
+// The status context is caller-defined but must be stable and single-line.
+func (c *GhClient) CreateCommitStatus(ctx context.Context, repository Repository, status CommitStatus) error {
+	if !ValidCommitSHA(status.SHA) {
+		return errors.New("commit status SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
+	}
+	if status.State != CommitStatusPending && status.State != CommitStatusSuccess && status.State != CommitStatusFailure && status.State != CommitStatusError {
+		return fmt.Errorf("unsupported commit status state %q", status.State)
+	}
+	if strings.TrimSpace(status.Context) == "" || strings.ContainsAny(status.Context, "\r\n") {
+		return errors.New("commit status context must be a nonempty single line")
+	}
+	if len(status.Description) > 140 {
+		return errors.New("commit status description must be at most 140 characters")
+	}
+	payload := map[string]string{
+		"state":       string(status.State),
+		"context":     status.Context,
+		"description": status.Description,
+	}
+	if status.TargetURL != "" {
+		payload["target_url"] = status.TargetURL
+	}
+	if err := c.call(ctx, []string{"api", fmt.Sprintf("repos/%s/statuses/%s", repository.String(), status.SHA), "--method", "POST"}, payload); err != nil {
+		return fmt.Errorf("publish commit status for %s: %w", status.SHA, err)
 	}
 	return nil
 }
@@ -253,6 +317,21 @@ func (c *GhClient) callBytes(ctx context.Context, args []string, payload any) ([
 		args = append(args, "--input", "-")
 	}
 	return c.runner().Run(ctx, args, input)
+}
+
+// ValidCommitSHA reports whether value is a full 40- or 64-character lowercase
+// hexadecimal commit SHA while rejecting values that could alter a GitHub API path.
+func ValidCommitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // issueResponse is the subset of the GitHub issue API response needed by a

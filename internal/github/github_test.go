@@ -80,6 +80,11 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 			t.Errorf("mutation call %#v does not send JSON through stdin", call.args)
 		}
 	}
+	for _, index := range []int{0, 2, 3, 4, 5} {
+		if hasArgs(runner.calls[index].args, "--repo") {
+			t.Errorf("gh api call %d still uses unsupported --repo: %#v", index, runner.calls[index].args)
+		}
+	}
 }
 
 // TestGhClientPreservesThePullRequestIndicator verifies issue API responses
@@ -96,6 +101,59 @@ func TestGhClientPreservesThePullRequestIndicator(t *testing.T) {
 	}
 	if !issue.IsPullRequest {
 		t.Fatal("pull request indicator was not preserved")
+	}
+}
+
+// TestGhClientPublishesAnExactCommitStatus verifies the host GitHub adapter
+// uses the immutable SHA path and a stable caller-provided context.
+func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{[]byte("")}}
+	client := &github.GhClient{Runner: runner}
+	sha := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	err := client.CreateCommitStatus(context.Background(), github.Repository{Owner: "example", Name: "project"}, github.CommitStatus{
+		SHA:         sha,
+		State:       github.CommitStatusSuccess,
+		Context:     "factory/gate/test",
+		Description: "factory setup and gate passed",
+	})
+	if err != nil {
+		t.Fatalf("CreateCommitStatus() error = %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("GitHub calls = %d, want one", len(runner.calls))
+	}
+	call := runner.calls[0]
+	if !containsArgs(call.args, "repos/example/project/statuses/"+sha, "--method", "POST", "--input", "-") {
+		t.Fatalf("status args = %#v, want exact status endpoint", call.args)
+	}
+	if hasArgs(call.args, "--repo") {
+		t.Fatalf("status args = %#v, want the repository encoded only in the endpoint", call.args)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(call.input, &payload); err != nil {
+		t.Fatalf("decode status payload: %v", err)
+	}
+	if payload["state"] != "success" || payload["context"] != "factory/gate/test" {
+		t.Fatalf("status payload = %#v, want success and stable context", payload)
+	}
+}
+
+// TestValidCommitSHARejectsAbbreviatedObjectIDs verifies checkpoint validation
+// does not accept intermediate-length values as exact commit identities.
+func TestValidCommitSHARejectsAbbreviatedObjectIDs(t *testing.T) {
+	t.Parallel()
+
+	for _, length := range []int{39, 41, 63, 65} {
+		if github.ValidCommitSHA(strings.Repeat("a", length)) {
+			t.Errorf("ValidCommitSHA(%d characters) = true, want false", length)
+		}
+	}
+	for _, length := range []int{40, 64} {
+		if !github.ValidCommitSHA(strings.Repeat("a", length)) {
+			t.Errorf("ValidCommitSHA(%d characters) = false, want true", length)
+		}
 	}
 }
 
