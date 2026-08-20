@@ -409,8 +409,8 @@ func (e *dockerCommandError) Error() string {
 // Unwrap returns the underlying process error.
 func (e *dockerCommandError) Unwrap() error { return e.Cause }
 
-// validateStartRequest rejects mutable images and host paths that cannot be
-// safely represented by Docker bind mounts.
+// validateStartRequest validates the worker identity, directories, immutable
+// image reference, and cache mounts used to start a worker.
 func validateStartRequest(request StartRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
@@ -436,8 +436,8 @@ func validateStartRequest(request StartRequest) error {
 	return nil
 }
 
-// validateResumeRequest validates the immutable identity needed to resume a
-// worker without requiring host paths or a Docker identifier.
+// validateResumeRequest validates the worker run ID, image name, and immutable
+// image digest for a resume request.
 func validateResumeRequest(request ResumeRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
@@ -451,8 +451,8 @@ func validateResumeRequest(request ResumeRequest) error {
 	return nil
 }
 
-// validateCommandRequest enforces the small worker command interface and
-// rejects environment keys commonly used for credentials or host forwarding.
+// validateCommandRequest validates a worker command request and its explicit
+// environment entries.
 func validateCommandRequest(request CommandRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
@@ -477,8 +477,8 @@ func validateCommandRequest(request CommandRequest) error {
 	return nil
 }
 
-// validateCacheMount validates one explicitly declared cache and its stable
-// destination name.
+// validateCacheMount validates a cache name, rejects duplicates, records the
+// name, and ensures that the host path exists or can be created.
 func validateCacheMount(cache CacheMount, seen map[string]struct{}) error {
 	if !validName(cache.Name) {
 		return fmt.Errorf("cache name %q is invalid", cache.Name)
@@ -490,8 +490,9 @@ func validateCacheMount(cache CacheMount, seen map[string]struct{}) error {
 	return ensureCacheDirectory(cache.HostPath)
 }
 
-// validateEnvironmentEntry rejects malformed or credential-bearing explicit
-// environment values before any Docker process is launched.
+// validateEnvironmentEntry validates an environment variable name and value
+// for worker execution. It returns an error for invalid names, forbidden
+// characters, disallowed variables, or worker-reserved variables.
 func validateEnvironmentEntry(name, value string) error {
 	if !validEnvironmentName(name) {
 		return fmt.Errorf("environment name %q is invalid", name)
@@ -508,8 +509,8 @@ func validateEnvironmentEntry(name, value string) error {
 	return nil
 }
 
-// validateImageName rejects image arguments that could be mistaken for Docker
-// flags or create an ambiguous mutable image reference.
+// validateImageName validates that image is a nonempty image name without
+// unsafe characters, command-line flags, or mutable tags.
 func validateImageName(image string) error {
 	trimmed := strings.TrimSpace(image)
 	if trimmed == "" {
@@ -600,8 +601,8 @@ func workerMountPermissions(mode os.FileMode, readOnly bool) os.FileMode {
 	return permissions
 }
 
-// validateDirectory requires an absolute existing directory without Docker
-// mount-syntax delimiters.
+// validateDirectory verifies that path is an absolute, existing directory safe
+// for use as a Docker bind mount.
 func validateDirectory(path, field string) error {
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("%s must be absolute", field)
@@ -619,8 +620,8 @@ func validateDirectory(path, field string) error {
 	return nil
 }
 
-// ensureCacheDirectory validates a declared cache and creates its final
-// directory when it has not been materialized yet.
+// ensureCacheDirectory ensures that path is an absolute, Docker-safe directory,
+// creating it when necessary.
 func ensureCacheDirectory(path string) error {
 	if !filepath.IsAbs(path) {
 		return errors.New("cache path must be absolute")
@@ -644,8 +645,8 @@ func ensureCacheDirectory(path string) error {
 	return nil
 }
 
-// validateRunID rejects values that could escape the private container-name
-// derivation or become an argument boundary.
+// validateRunID validates that a worker run ID is nonempty and contains only
+// safe characters.
 func validateRunID(runID string) error {
 	if strings.TrimSpace(runID) == "" {
 		return errors.New("worker run id is required")
@@ -656,8 +657,8 @@ func validateRunID(runID string) error {
 	return nil
 }
 
-// validName accepts the portable identifier subset used for run and cache
-// names.
+// validName reports whether value contains at least one permitted character and
+// is not "." or "..".
 func validName(value string) bool {
 	if value == "" || value == "." || value == ".." {
 		return false
@@ -671,7 +672,7 @@ func validName(value string) bool {
 	return true
 }
 
-// validEnvironmentName accepts POSIX variable names.
+// validEnvironmentName determines whether name is a valid POSIX environment variable name.
 func validEnvironmentName(name string) bool {
 	if name == "" {
 		return false
@@ -687,8 +688,9 @@ func validEnvironmentName(name string) bool {
 	return true
 }
 
-// forbiddenEnvironmentName identifies common host credential and socket
-// variables that must never cross into a worker.
+// forbiddenEnvironmentName reports whether an environment variable name
+// contains a credential that must not be passed to a worker. Names are matched
+// case-insensitively.
 func forbiddenEnvironmentName(name string) bool {
 	switch strings.ToUpper(name) {
 	case "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "ANTHROPIC_API_KEY", "CODEX_API_KEY":
@@ -698,8 +700,8 @@ func forbiddenEnvironmentName(name string) bool {
 	}
 }
 
-// reservedEnvironmentName prevents callers from replacing worker identity,
-// stable Git paths, or the clean-environment controls.
+// reservedEnvironmentName reports whether name is reserved for worker identity,
+// stable paths, Git configuration, or clean-environment controls.
 func reservedEnvironmentName(name string) bool {
 	switch strings.ToUpper(name) {
 	case "HOME", "PATH", "TERM", "LANG", "LC_ALL", "FACTORY_RUN_ID", "FACTORY_ROLE", "GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2", "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS":
@@ -737,8 +739,9 @@ func bindMount(hostPath, destination string, readOnly bool) string {
 	return mount
 }
 
-// baselineEnvironment returns the fixed worker environment independent of the
-// host process environment. Role identity is added only by role commands.
+// baselineEnvironment builds the fixed environment used for worker commands,
+// including the run identity, stable paths, locale, executable path, and Git
+// isolation settings.
 func baselineEnvironment(runID string) []string {
 	return []string{
 		"HOME=/home/factory",
@@ -784,15 +787,15 @@ func commandEnvironment(request CommandRequest) []string {
 	return entries
 }
 
-// containerName derives an internal Docker name from a run without exposing
-// that name through the worker seam.
+// containerName returns the private Docker container name derived from a worker
+// run ID.
 func containerName(runID string) string {
 	digest := sha256.Sum256([]byte(runID))
 	return "factory-worker-" + hex.EncodeToString(digest[:])[:24]
 }
 
-// isContainerNotFound identifies the expected missing-container result used by
-// idempotent start, stop, and inspection operations.
+// isContainerNotFound reports whether err indicates that Docker could not find a
+// container.
 func isContainerNotFound(err error) bool {
 	var commandErr *dockerCommandError
 	if !errors.As(err, &commandErr) || commandErr.ExitCode != 1 {
@@ -802,8 +805,8 @@ func isContainerNotFound(err error) bool {
 	return strings.Contains(message, "no such object") || strings.Contains(message, "no such container")
 }
 
-// isDockerRuntimeFailure identifies Docker daemon and CLI failures that must
-// remain runtime errors even when Docker returned a non-reserved exit code.
+// isDockerRuntimeFailure identifies Docker command errors that indicate a
+// runtime or invocation failure rather than a command exit status.
 func isDockerRuntimeFailure(commandErr *dockerCommandError) bool {
 	message := strings.ToLower(commandErr.Stderr)
 	for _, marker := range []string{
