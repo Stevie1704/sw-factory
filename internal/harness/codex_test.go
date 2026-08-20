@@ -1,0 +1,175 @@
+package harness_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
+	"github.com/Stevie1704/sw-factory/internal/worker"
+)
+
+// TestCodexStartsAnInteractiveSessionThroughThePortableSeams verifies the
+// Codex command, role environment, visible surface, and initial prompt input.
+func TestCodexStartsAnInteractiveSessionThroughThePortableSeams(t *testing.T) {
+	workerRuntime := &fakeWorker{}
+	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
+	runtime := harness.NewCodex(workerRuntime, terminalRuntime)
+	session, err := runtime.Start(context.Background(), harness.StartRequest{
+		InvocationID: "inv-1",
+		RunID:        "run-1",
+		Role:         "implementation",
+		Stage:        "implementation",
+		WorkspaceID:  "workspace-run",
+		Surface:      terminalRuntime.surface,
+		Prompt:       "Implement the frozen specification.",
+		Model:        "gpt-5",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if session.Surface.ID != "surface-implementation" {
+		t.Fatalf("session surface = %#v, want visible implementation surface", session.Surface)
+	}
+	if len(workerRuntime.requests) != 1 {
+		t.Fatalf("interactive worker requests = %#v, want one", workerRuntime.requests)
+	}
+	request := workerRuntime.requests[0]
+	if strings.Join(request.Command, " ") != "codex -a untrusted -s danger-full-access -m gpt-5" {
+		t.Fatalf("Codex command = %#v, want sandbox flags before command", request.Command)
+	}
+	if request.Environment["FACTORY_INVOCATION_ID"] != "inv-1" || request.Environment["FACTORY_STAGE"] != "implementation" {
+		t.Fatalf("Codex environment = %#v, want invocation and stage identity", request.Environment)
+	}
+	if string(terminalRuntime.inputs[0]) != "Implement the frozen specification.\n" {
+		t.Fatalf("surface input = %q, want initial prompt", terminalRuntime.inputs[0])
+	}
+	if terminalRuntime.launched.Executable != "factory-worker-attach" {
+		t.Fatalf("surface launch = %#v, want attach helper in the existing implementation surface", terminalRuntime.launched)
+	}
+	if strings.Contains(terminalRuntime.reads, "replay") {
+		t.Fatalf("Codex runtime read terminal output: %q", terminalRuntime.reads)
+	}
+}
+
+// TestCodexResumesWithNativeSessionIdentifier verifies the resume command's
+// global flags precede the resume subcommand as required by the spike.
+func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
+	workerRuntime := &fakeWorker{}
+	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
+	_, err := harness.NewCodex(workerRuntime, terminalRuntime).Resume(context.Background(), harness.StartRequest{
+		InvocationID:    "inv-2",
+		RunID:           "run-1",
+		Role:            "implementation",
+		Stage:           "implementation",
+		WorkspaceID:     "workspace-run",
+		Surface:         terminalRuntime.surface,
+		ResumeSessionID: "session-1",
+		Prompt:          "Continue the implementation.",
+	})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if got := strings.Join(workerRuntime.requests[0].Command, " "); got != "codex -a untrusted -s danger-full-access resume session-1" {
+		t.Fatalf("resume command = %q, want native resume command", got)
+	}
+}
+
+// TestCodexFinishClosesOnlyTheVisibleSurface verifies that accepted completion
+// detaches the harness surface without destroying worker state.
+func TestCodexFinishClosesOnlyTheVisibleSurface(t *testing.T) {
+	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
+	runtime := harness.NewCodex(&fakeWorker{}, terminalRuntime)
+	if err := runtime.Finish(context.Background(), harness.Session{Surface: terminalRuntime.surface}); err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+	if terminalRuntime.closed != "surface-implementation" {
+		t.Fatalf("closed surface = %q, want implementation surface", terminalRuntime.closed)
+	}
+}
+
+// fakeWorker implements the worker seams used by Codex contract tests.
+type fakeWorker struct {
+	requests []worker.InteractiveRequest
+}
+
+// Start implements WorkerRuntime for the harness test.
+func (*fakeWorker) Start(context.Context, worker.StartRequest) error { return nil }
+
+// Resume implements WorkerRuntime for the harness test.
+func (*fakeWorker) Resume(context.Context, worker.ResumeRequest) error { return nil }
+
+// RunCommand implements WorkerRuntime for the harness test.
+func (*fakeWorker) RunCommand(context.Context, worker.CommandRequest) (worker.CommandResult, error) {
+	return worker.CommandResult{}, nil
+}
+
+// Stop implements WorkerRuntime for the harness test.
+func (*fakeWorker) Stop(context.Context, string) error { return nil }
+
+// Inspect implements WorkerRuntime for the harness test.
+func (*fakeWorker) Inspect(context.Context, string) (worker.Inspection, error) {
+	return worker.Inspection{Exists: true, Running: true}, nil
+}
+
+// InteractiveCommand records one interactive worker request.
+func (w *fakeWorker) InteractiveCommand(_ context.Context, request worker.InteractiveRequest) (worker.InteractiveCommand, error) {
+	w.requests = append(w.requests, request)
+	return worker.InteractiveCommand{Executable: "factory-worker-attach", Args: []string{"--run-id", request.RunID}}, nil
+}
+
+// fakeTerminal records visible surface operations without reading a screen.
+type fakeTerminal struct {
+	surface  terminal.Surface
+	inputs   [][]byte
+	closed   string
+	reads    string
+	launched terminal.Command
+}
+
+// EnsureControlWorkspace implements TerminalRuntime for the harness test.
+func (*fakeTerminal) EnsureControlWorkspace(context.Context, terminal.WorkspaceRequest) (terminal.Workspace, error) {
+	return terminal.Workspace{ID: "workspace-control"}, nil
+}
+
+// EnsureRunWorkspace implements TerminalRuntime for the harness test.
+func (*fakeTerminal) EnsureRunWorkspace(context.Context, terminal.RunWorkspaceRequest) (terminal.RunWorkspace, error) {
+	return terminal.RunWorkspace{}, nil
+}
+
+// CreateSurface records the command-backed visible surface.
+func (t *fakeTerminal) CreateSurface(_ context.Context, request terminal.SurfaceRequest) (terminal.Surface, error) {
+	if request.WorkspaceID != t.surface.WorkspaceID {
+		return terminal.Surface{}, nil
+	}
+	return t.surface, nil
+}
+
+// LaunchSurface records the command launched in a layout-created surface.
+func (t *fakeTerminal) LaunchSurface(_ context.Context, _ terminal.SurfaceID, command terminal.Command) error {
+	t.launched = command
+	return nil
+}
+
+// SendInput records exact bytes sent to the surface.
+func (t *fakeTerminal) SendInput(_ context.Context, _ terminal.SurfaceID, input []byte) error {
+	t.inputs = append(t.inputs, input)
+	return nil
+}
+
+// Notify implements TerminalRuntime for the harness test.
+func (*fakeTerminal) Notify(context.Context, terminal.Notification) error { return nil }
+
+// CloseSurface records the detached surface.
+func (t *fakeTerminal) CloseSurface(_ context.Context, surfaceID terminal.SurfaceID) error {
+	t.closed = string(surfaceID)
+	return nil
+}
+
+// CloseWorkspace implements TerminalRuntime for the harness test.
+func (*fakeTerminal) CloseWorkspace(context.Context, terminal.WorkspaceID) error { return nil }
+
+var _ worker.WorkerRuntime = (*fakeWorker)(nil)
+var _ worker.InteractiveRuntime = (*fakeWorker)(nil)
+var _ terminal.TerminalRuntime = (*fakeTerminal)(nil)

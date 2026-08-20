@@ -13,7 +13,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/google/uuid"
 )
@@ -25,6 +27,9 @@ type Factory interface {
 	BootstrapLabels(context.Context) (BootstrapLabelsResult, error)
 	RunCoordinator
 	RunGate(context.Context, RunGateRequest) (gate.Result, error)
+	StartAgent(context.Context, AgentRequest) (AgentLaunchResult, error)
+	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
+	RunAgent(context.Context, AgentRequest) (AgentResult, error)
 	Status(context.Context) (StatusResult, error)
 }
 
@@ -85,6 +90,10 @@ type Dependencies struct {
 	CommitStatuses  github.CommitStatusPublisher
 	Worktree        gitadapter.WorktreeManager
 	Worker          worker.WorkerRuntime
+	// Terminal owns visible control and run workspaces.
+	Terminal        terminal.TerminalRuntime
+	// Harness owns interactive role lifecycle and native session recovery.
+	Harness         harness.Runtime
 	Now             Clock
 	NewRunID        RunIDGenerator
 	Coordinator     string
@@ -109,6 +118,8 @@ type RegisterRequest struct {
 	PollingBackoff       string
 	CmuxSocketPath       string
 	CmuxControlWorkspace string
+	// CodexAuthPath is an optional host-side Codex auth.json path.
+	CodexAuthPath        string
 	RepositoryConfigPath string
 }
 
@@ -177,6 +188,12 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	}
 	if dependencies.Worker == nil {
 		dependencies.Worker = worker.NewDockerRuntime()
+	}
+	if dependencies.Terminal == nil {
+		dependencies.Terminal = terminal.NewCmuxRuntime(nil)
+	}
+	if dependencies.Harness == nil {
+		dependencies.Harness = harness.NewCodex(dependencies.Worker, dependencies.Terminal)
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
@@ -249,6 +266,7 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		AuthorizedUsers:      request.AuthorizedUsers,
 		Polling:              config.PollingConfig{Interval: defaultString(request.PollingInterval, "30s"), Backoff: defaultString(request.PollingBackoff, "5m")},
 		Cmux:                 config.CmuxConfig{SocketPath: request.CmuxSocketPath, ControlWorkspace: request.CmuxControlWorkspace},
+		Authentication:       config.AuthenticationConfig{CodexAuthPath: request.CodexAuthPath},
 		OperationalDataPath:  operationalPath,
 		RepositoryConfigPath: repositoryConfigPath,
 	}

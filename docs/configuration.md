@@ -37,11 +37,19 @@ repositories:
     cmux:
       socket_path: ''
       control_workspace: factory-control
+    authentication:
+      codex_auth_path: /Users/me/.codex/auth.json
     operational_data_path: /Users/me/.local/share/factory/factory.db
     repository_config_path: /Users/me/src/project/factory.yaml
 ```
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
+
+`authentication.codex_auth_path` is optional and names one host-side Codex
+`auth.json` file. The factory stores only this path. During an implementation
+invocation the worker adapter streams the file into a separate,
+factory-managed credential volume and links that copy into the role home; it
+never mounts the host harness directory or writes back to the host source.
 
 ## Checked-in repository configuration
 
@@ -133,10 +141,19 @@ The coordinator then fetches `origin/<target_branch>`, records that fetched comm
 
 The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
 
+After a claim, `factory agent` starts the visible Codex implementation role and
+prints the run, invocation, workspace, and surface handles. The role receives a
+read-only invocation packet and reports through `factory-report`; use
+`factory agent-report --invocation-id <id>` to ask the coordinator to validate
+and accept the structured report. Terminal output is never treated as a stage
+result. The operational store schema is version 5 and persists invocation
+identity, opaque surface handles, prompt version, result directory, native
+session identifier, and permitted handoff paths in addition to run state.
+
 ## Operational SQLite store
 
 The operational store contains current workflow state, the active run's frozen specification packet, and the status-comment identity needed by later transitions. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
 
 Issue #25 will add separate content-free local evaluation summaries. Those summaries remain local and are not outbound telemetry.
 
-The high-level `Factory` seam injects configuration, repository checking, GitHub, Git/worktree, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; terminal and harness adapters remain owned by later workflow tickets.
+The high-level `Factory` seam injects configuration, repository checking, GitHub, Git/worktree, worker, terminal, harness, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; issue #6 adds the portable `TerminalRuntime`, Codex harness, invocation packet, and structured report boundary.

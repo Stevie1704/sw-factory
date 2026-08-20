@@ -30,6 +30,8 @@ var commandTable = []commandDefinition{
 	{name: "register", handler: runRegister},
 	{name: "bootstrap-labels", handler: runBootstrapLabels},
 	{name: "issue", handler: runIssue},
+	{name: "agent", handler: runAgent},
+	{name: "agent-report", handler: runAgentReport},
 	{name: "status", handler: runStatus},
 }
 
@@ -138,6 +140,78 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 	return 0
 }
 
+// runAgent starts the visible implementation agent for the active run.
+func runAgent(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "active factory run identifier")
+	role := flags.String("role", "implementation", "workflow role")
+	stage := flags.String("stage", "implementation", "workflow stage")
+	harnessName := flags.String("harness", "", "validated harness override")
+	model := flags.String("model", "", "validated model override")
+	reasoningEffort := flags.String("reasoning-effort", "", "validated reasoning-effort override")
+	codexAuthPath := flags.String("codex-auth", "", "explicit Codex auth.json source")
+	permittedPaths := stringList{}
+	flags.Var(&permittedPaths, "permitted-path", "repository-relative handoff path prefix; may be repeated")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("agent does not accept positional arguments"))
+		return 2
+	}
+	launch, err := factory.New(*configPath).StartAgent(ctx, factory.AgentRequest{
+		RunID:           *runID,
+		Role:            *role,
+		Stage:           store.Stage(*stage),
+		Harness:         config.Harness(*harnessName),
+		Model:           *model,
+		ReasoningEffort: *reasoningEffort,
+		CodexAuthPath:   *codexAuthPath,
+		PermittedPaths:  append([]string(nil), permittedPaths...),
+	})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "agent started\nrun: %s\ninvocation: %s\nworkspace: %s\nimplementation surface: %s\nchecks surface: %s\n", launch.Invocation.RunID, launch.Invocation.ID, launch.Invocation.WorkspaceID, launch.Invocation.ImplementationSurfaceID, launch.Invocation.ChecksSurfaceID) {
+		return 1
+	}
+	return 0
+}
+
+// runAgentReport accepts the structured report written by one visible agent.
+func runAgentReport(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("agent-report", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "active factory run identifier")
+	invocationID := flags.String("invocation-id", "", "invocation identifier")
+	permittedPaths := stringList{}
+	flags.Var(&permittedPaths, "permitted-path", "repository-relative handoff path prefix; may be repeated")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("agent-report does not accept positional arguments"))
+		return 2
+	}
+	if strings.TrimSpace(*invocationID) == "" {
+		writeError(errorsOutput, errors.New("agent-report requires --invocation-id"))
+		return 2
+	}
+	result, err := factory.New(*configPath).AcceptAgentReport(ctx, factory.AgentReportRequest{RunID: *runID, InvocationID: *invocationID, PermittedPaths: append([]string(nil), permittedPaths...)})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "agent report accepted\nrun: %s\ninvocation: %s\noutcome: %s\nstatus: %s\n", result.Invocation.RunID, result.Invocation.ID, result.Report.Outcome, result.Invocation.Status) {
+		return 1
+	}
+	return 0
+}
+
 // runInit handles the init command, creating the host configuration at the requested path and reporting its result.
 func runInit(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
@@ -175,6 +249,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	pollingBackoff := flags.String("poll-backoff", "5m", "transport backoff")
 	cmuxSocketPath := flags.String("cmux-socket", "", "cmux socket path")
 	cmuxWorkspace := flags.String("cmux-workspace", "", "cmux control workspace")
+	codexAuthPath := flags.String("codex-auth", "", "host Codex auth.json path")
 	repositoryConfigPath := flags.String("repository-config", "", "checked-in repository configuration path")
 	authorizedUsers := stringList{}
 	flags.Var(&authorizedUsers, "authorized-user", "authorized GitHub username; may be repeated")
@@ -200,6 +275,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		PollingBackoff:       *pollingBackoff,
 		CmuxSocketPath:       *cmuxSocketPath,
 		CmuxControlWorkspace: *cmuxWorkspace,
+		CodexAuthPath:        *codexAuthPath,
 		RepositoryConfigPath: *repositoryConfigPath,
 	})
 	if err != nil {

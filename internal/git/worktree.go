@@ -20,10 +20,25 @@ type Workspace struct {
 	Worktree string
 }
 
+// WorktreeState is the coordinator-observed state used to validate a harness
+// handoff against the actual checkout.
+type WorktreeState struct {
+	// HeadSHA is the current full commit identity.
+	HeadSHA string
+	// ChangedPaths contains repository-relative paths reported by Git.
+	ChangedPaths []string
+}
+
 // WorktreeManager creates an isolated branch and worktree from a target branch.
 type WorktreeManager interface {
 	Create(context.Context, string, string, string) (Workspace, error)
 	Remove(context.Context, string, Workspace) error
+}
+
+// WorktreeInspector is the optional read-only worktree observation seam.
+type WorktreeInspector interface {
+	// Inspect reads the current commit and changed paths without mutating Git.
+	Inspect(context.Context, string) (WorktreeState, error)
 }
 
 // CommandRunner is the executable seam for host-side Git commands.
@@ -62,6 +77,22 @@ type LocalWorktreeManager struct {
 
 // NewWorktreeManager returns a Git-backed worktree manager.
 func NewWorktreeManager() *LocalWorktreeManager { return &LocalWorktreeManager{} }
+
+// Inspect reads the current HEAD and porcelain status of one run worktree.
+func (m *LocalWorktreeManager) Inspect(ctx context.Context, worktreePath string) (WorktreeState, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return WorktreeState{}, errors.New("worktree path is required")
+	}
+	headOutput, err := m.runner().Run(ctx, worktreePath, []string{"rev-parse", "HEAD"})
+	if err != nil {
+		return WorktreeState{}, fmt.Errorf("inspect worktree HEAD: %w", err)
+	}
+	statusOutput, err := m.runner().Run(ctx, worktreePath, []string{"status", "--porcelain=v1", "--untracked-files=all"})
+	if err != nil {
+		return WorktreeState{}, fmt.Errorf("inspect worktree changes: %w", err)
+	}
+	return WorktreeState{HeadSHA: strings.TrimSpace(string(headOutput)), ChangedPaths: porcelainPaths(string(statusOutput))}, nil
+}
 
 // runner returns the injected command runner or the production Git runner.
 func (m *LocalWorktreeManager) runner() CommandRunner {
@@ -151,6 +182,24 @@ func (m *LocalWorktreeManager) worktreePath(repositoryPath, runID string) string
 		return filepath.Join(m.WorktreeDir, runID)
 	}
 	return filepath.Join(filepath.Dir(repositoryPath), ".factory-worktrees", filepath.Base(repositoryPath), runID)
+}
+
+// porcelainPaths extracts the path column from Git porcelain-v1 output.
+func porcelainPaths(output string) []string {
+	paths := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if arrow := strings.Index(path, " -> "); arrow >= 0 {
+			path = path[arrow+4:]
+		}
+		if path != "" {
+			paths = append(paths, filepath.ToSlash(path))
+		}
+	}
+	return paths
 }
 
 // validateRefPart prevents user-controlled ref fragments from becoming

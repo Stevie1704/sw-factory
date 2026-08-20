@@ -1,0 +1,86 @@
+package store_test
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/store"
+)
+
+// TestStorePersistsRecoverableInvocationState verifies that surface and native
+// session identities survive coordinator restart in the operational store.
+func TestStorePersistsRecoverableInvocationState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	created := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	want := store.Invocation{
+		ID:                      "inv-1",
+		RunID:                   "run-1",
+		Harness:                 "codex",
+		Role:                    "implementation",
+		Stage:                   store.StageImplementation,
+		Model:                   "gpt-5",
+		ReasoningEffort:         "medium",
+		NativeSessionID:         "session-1",
+		WorkspaceID:             "workspace-run",
+		StatusSurfaceID:         "surface-status",
+		ImplementationSurfaceID: "surface-implementation",
+		ChecksSurfaceID:         "surface-checks",
+		InvocationDirectory:     "/tmp/invocation",
+		ResultDirectory:         "/tmp/results",
+		PermittedPaths:          []string{"internal/factory"},
+		PromptVersion:           "implementation-v1",
+		Status:                  store.InvocationStatusActive,
+		CreatedAt:               created,
+		UpdatedAt:               created,
+	}
+	if err := opened.SaveInvocation(context.Background(), want); err != nil {
+		t.Fatalf("SaveInvocation() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.Invocation(context.Background(), "run-1", "inv-1")
+	if err != nil {
+		t.Fatalf("Invocation() error = %v", err)
+	}
+	if got == nil || got.NativeSessionID != want.NativeSessionID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
+		t.Fatalf("Invocation() = %#v, want %#v", got, want)
+	}
+	if got.UpdatedAt.UTC() != created {
+		t.Fatalf("Invocation().UpdatedAt = %s, want %s", got.UpdatedAt.UTC(), created)
+	}
+}
+
+// TestStoreRejectsAnInvocationForTheWrongRun verifies that invocation lookup
+// cannot accidentally attach stale state to another active run.
+func TestStoreRejectsAnInvocationForTheWrongRun(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	if err := opened.SaveInvocation(context.Background(), store.Invocation{
+		ID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation,
+		Status: store.InvocationStatusActive,
+	}); err != nil {
+		t.Fatalf("SaveInvocation() error = %v", err)
+	}
+	got, err := opened.Invocation(context.Background(), "run-2", "inv-1")
+	if err != nil {
+		t.Fatalf("Invocation() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("Invocation() = %#v, want no cross-run result", got)
+	}
+}

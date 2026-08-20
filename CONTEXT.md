@@ -21,12 +21,40 @@ A repository-declared deterministic command whose result is tied to an exact che
 _Avoid_: Agent check, review
 
 **Worker**:
-The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, and explicitly declared repository caches.
+The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, explicitly declared repository caches, and factory-managed credential copies.
 _Avoid_: Container in workflow decisions
 
 **WorkerRuntime**:
 The portable seam that starts, resumes, commands, stops, and inspects a worker while hiding runtime identifiers, container paths, role homes, invocation packets, result files, and process tracking.
 _Avoid_: Docker API
+
+**Invocation**:
+One immutable harness attempt within a run, with its own invocation packet, result directory, visible surface handles, prompt version, and native session identifier when known.
+_Avoid_: Terminal transcript
+
+**Surface**:
+An operator-visible terminal pane owned by a `TerminalRuntime`; its handle is opaque to workflow code and its screen is never a correctness protocol.
+_Avoid_: Screen scrape
+
+**Harness**:
+A configured interactive coding tool, such as Codex, launched through the harness seam with a role-specific prompt and native resume behavior.
+_Avoid_: Lead agent
+
+**Role**:
+The coordinator-owned responsibility assigned to an invocation, such as implementation, test, or review; repository guidance cannot change role ownership.
+_Avoid_: Persona
+
+**Invocation packet**:
+The read-only, versioned file containing the frozen specification and role identity that the coordinator mounts into one worker invocation.
+_Avoid_: Live issue
+
+**Structured report**:
+The schema-versioned, content-limited proposal written by `factory-report`; the coordinator validates it before making any workflow decision.
+_Avoid_: Terminal output
+
+**Credential store**:
+A factory-managed, harness-specific credential copy kept separate from role session state and never populated by mounting the host harness directory.
+_Avoid_: Host auth mount
 
 **Review blocker**:
 A concrete correctness, security, specification, or documented-standards violation that prevents readiness.
