@@ -104,8 +104,13 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 	}
 	if info, err := os.Stat(started.GitMetadataPath); err != nil {
 		t.Fatalf("stat worker Git projection: %v", err)
-	} else if got := info.Mode().Perm(); got != 0o755 {
-		t.Fatalf("worker Git projection permissions = %#o, want 0755", got)
+	} else if got := info.Mode().Perm(); got&0o050 != 0o050 || got&0o007 != 0 {
+		t.Fatalf("worker Git projection permissions = %#o, want group read/execute without other access", got)
+	}
+	if info, err := os.Stat(filepath.Join(started.GitMetadataPath, "HEAD")); err != nil {
+		t.Fatalf("stat worker Git projection HEAD: %v", err)
+	} else if got := info.Mode().Perm(); got&0o040 != 0o040 || got&0o007 != 0 {
+		t.Fatalf("worker Git projection HEAD permissions = %#o, want group read without other access", got)
 	}
 	if len(runtime.commands) != 2 || runtime.commands[0].Command != policy.Setup || runtime.commands[1].Command != policy.Gates[0].Command {
 		t.Fatalf("worker commands = %#v, want frozen setup then gate", runtime.commands)

@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -28,6 +29,9 @@ const (
 	CachePath = "/cache"
 	// WorkerUser is the fixed non-root identity used for worker processes.
 	WorkerUser = "10001:10001"
+	// workerPrimaryGroupID is already present in WorkerUser and does not need
+	// to be repeated as a supplemental Docker group.
+	workerPrimaryGroupID = 10001
 	// workerImageDigestPrefix is the only image digest algorithm accepted by
 	// version one.
 	workerImageDigestPrefix = "sha256:"
@@ -168,7 +172,7 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		if inspection.Running {
 			return nil
 		}
-		if err := prepareWorkerMounts(request); err != nil {
+		if _, err := prepareWorkerMounts(request); err != nil {
 			return fmt.Errorf("prepare worker mounts: %w", err)
 		}
 		return r.startContainer(ctx, name)
@@ -176,7 +180,8 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 	if !isContainerNotFound(err) {
 		return fmt.Errorf("inspect worker %q before start: %w", request.RunID, err)
 	}
-	if err := prepareWorkerMounts(request); err != nil {
+	groupIDs, err := prepareWorkerMounts(request)
+	if err != nil {
 		return fmt.Errorf("prepare worker mounts: %w", err)
 	}
 
@@ -191,6 +196,9 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		"--workdir", WorktreePath,
 		"--mount", bindMount(request.WorktreePath, WorktreePath, false),
 		"--mount", bindMount(request.GitMetadataPath, GitMetadataPath, true),
+	}
+	for _, groupID := range groupIDs {
+		args = append(args, "--group-add", strconv.Itoa(groupID))
 	}
 	for _, cache := range request.Caches {
 		cachePath := filepath.Join(CachePath, cache.Name)
@@ -527,10 +535,10 @@ func validateImageName(image string) error {
 }
 
 // prepareWorkerMounts makes every explicit bind mount accessible to the fixed
-// non-root WorkerUser without relying on the coordinator's host UID. Writable
-// mounts receive owner-independent read/write/execute permissions; read-only
-// mounts receive owner-independent read/execute permissions.
-func prepareWorkerMounts(request StartRequest) error {
+// non-root WorkerUser without changing ownership or granting world access. It
+// returns the non-root host group IDs that Docker must add to the worker.
+func prepareWorkerMounts(request StartRequest) ([]int, error) {
+	groupIDs := make(map[int]struct{})
 	mounts := []struct {
 		name     string
 		path     string
@@ -540,22 +548,31 @@ func prepareWorkerMounts(request StartRequest) error {
 		{name: "Git metadata", path: request.GitMetadataPath, readOnly: true},
 	}
 	for _, mount := range mounts {
-		if err := prepareWorkerMount(mount.path, mount.readOnly); err != nil {
-			return fmt.Errorf("prepare %s mount: %w", mount.name, err)
+		if err := prepareWorkerMount(mount.path, mount.readOnly, groupIDs); err != nil {
+			return nil, fmt.Errorf("prepare %s mount: %w", mount.name, err)
 		}
 	}
 	for _, cache := range request.Caches {
-		if err := prepareWorkerMount(cache.HostPath, cache.ReadOnly); err != nil {
-			return fmt.Errorf("prepare cache %q mount: %w", cache.Name, err)
+		if err := prepareWorkerMount(cache.HostPath, cache.ReadOnly, groupIDs); err != nil {
+			return nil, fmt.Errorf("prepare cache %q mount: %w", cache.Name, err)
 		}
 	}
-	return nil
+	result := make([]int, 0, len(groupIDs))
+	for groupID := range groupIDs {
+		if groupID == workerPrimaryGroupID {
+			continue
+		}
+		result = append(result, groupID)
+	}
+	sort.Ints(result)
+	return result, nil
 }
 
 // prepareWorkerMount recursively applies the permission strategy used by all
-// worker bind mounts. Symlinks are left untouched so permission preparation
+// worker bind mounts. It records each entry's host group for Docker's
+// supplemental groups. Symlinks are left untouched so permission preparation
 // never follows a link outside the declared mount.
-func prepareWorkerMount(path string, readOnly bool) error {
+func prepareWorkerMount(path string, readOnly bool, groupIDs map[int]struct{}) error {
 	return filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -570,6 +587,11 @@ func prepareWorkerMount(path string, readOnly bool) error {
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported mount entry %q", currentPath)
 		}
+		groupID, err := hostGroupID(info, currentPath)
+		if err != nil {
+			return err
+		}
+		groupIDs[groupID] = struct{}{}
 		wanted := workerMountPermissions(info.Mode(), readOnly)
 		if info.Mode().Perm() == wanted {
 			return nil
@@ -578,25 +600,42 @@ func prepareWorkerMount(path string, readOnly bool) error {
 	})
 }
 
-// workerMountPermissions returns owner-independent permissions for one worker
-// mount entry while preserving executable intent on regular files.
+// hostGroupID returns the non-root group ID that owns a host mount entry. The
+// worker receives this group as a supplemental Docker group so its access is
+// limited to the mount's existing host group rather than to every host user.
+func hostGroupID(info os.FileInfo, path string) (int, error) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return 0, fmt.Errorf("cannot determine host group for mount entry %q", path)
+	}
+	groupID := int(stat.Gid)
+	if groupID <= 0 {
+		return 0, fmt.Errorf("mount entry %q has unsupported host group id %d", path, groupID)
+	}
+	return groupID, nil
+}
+
+// workerMountPermissions returns owner-plus-group permissions for one worker
+// mount entry while preserving executable intent on regular files. Other-user
+// permissions are removed so worker access always uses an explicit group.
 func workerMountPermissions(mode os.FileMode, readOnly bool) os.FileMode {
+	permissions := mode.Perm() & 0o700
 	if mode.IsDir() {
 		if readOnly {
-			return 0o755
+			return permissions | 0o050
 		}
-		return 0o777
+		return permissions | 0o070
 	}
 	if readOnly {
-		permissions := os.FileMode(0o644)
+		permissions |= 0o040
 		if mode.Perm()&0o111 != 0 {
-			permissions |= 0o111
+			permissions |= 0o010
 		}
 		return permissions
 	}
-	permissions := os.FileMode(0o666)
+	permissions |= 0o060
 	if mode.Perm()&0o111 != 0 {
-		permissions |= 0o111
+		permissions |= 0o010
 	}
 	return permissions
 }

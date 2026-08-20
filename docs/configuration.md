@@ -106,9 +106,10 @@ escalation, and no Docker socket. The coordinator prepares `/git` as a
 credential-free projection of Git history, refs, and run worktree state while
 omitting Git configuration, remotes, and hooks. Setup and gates receive a clean
 explicit environment; they do not inherit the coordinator's host environment
-or credentials. Explicit worker mounts receive owner-independent permissions
-for the fixed non-root worker. See [Worker runtime](worker-runtime.md) for the
-runtime seam and its isolation contract.
+or credentials. Explicit worker mounts receive owner-plus-group permissions,
+and the runtime passes their existing non-root host groups to Docker as
+supplemental groups; other-user access is removed. See [Worker runtime](worker-runtime.md)
+for the runtime seam and its isolation contract.
 
 ## Claiming an issue
 

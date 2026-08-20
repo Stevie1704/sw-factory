@@ -176,7 +176,7 @@ func copyGitMetadata(source, destination string) error {
 		}
 		target := filepath.Join(destination, relative)
 		if entry.IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, 0o750); err != nil {
 				return err
 			}
 			return nil
@@ -188,15 +188,16 @@ func copyGitMetadata(source, destination string) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported git metadata entry %q", relative)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			return err
 		}
-		return copyGitMetadataFile(path, target, 0o644)
+		return copyGitMetadataFile(path, target, 0o640)
 	})
 }
 
 // makeGitProjectionReadable gives the fixed worker identity read and execute
-// access to an existing projection without granting it write access.
+// access through the projection's host group without granting world access or
+// write access.
 func makeGitProjectionReadable(projection string) error {
 	return filepath.WalkDir(projection, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -212,14 +213,25 @@ func makeGitProjectionReadable(projection string) error {
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported git metadata entry %q", path)
 		}
-		mode := fs.FileMode(0o644)
-		if info.IsDir() {
-			mode = 0o755
-		} else if info.Mode().Perm()&0o111 != 0 {
-			mode |= 0o111
-		}
+		mode := gitProjectionPermissions(info.Mode())
 		return os.Chmod(path, mode)
 	})
+}
+
+// gitProjectionPermissions returns owner-plus-group permissions for one
+// projected Git metadata entry. The worker receives the projection's host
+// group at Docker start, so no world-readable or world-executable bits are
+// needed.
+func gitProjectionPermissions(mode fs.FileMode) fs.FileMode {
+	permissions := mode.Perm() & 0o700
+	if mode.IsDir() {
+		return permissions | 0o050
+	}
+	permissions |= 0o040
+	if mode.Perm()&0o111 != 0 {
+		permissions |= 0o010
+	}
+	return permissions
 }
 
 // skipGitMetadata reports whether a relative Git metadata path should be
@@ -295,7 +307,7 @@ func overlayWorktreeGitState(worktreePath, projection string) error {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("worktree git state %q is not a regular file", name)
 		}
-		if err := copyGitMetadataFile(source, filepath.Join(projection, name), 0o644); err != nil {
+		if err := copyGitMetadataFile(source, filepath.Join(projection, name), 0o640); err != nil {
 			return err
 		}
 	}

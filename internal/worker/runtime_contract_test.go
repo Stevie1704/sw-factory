@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -51,12 +52,12 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	if err := runtime.Start(context.Background(), request); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	assertMode(t, worktreePath, 0o777)
-	assertMode(t, filepath.Join(worktreePath, "existing.txt"), 0o666)
-	assertMode(t, gitMetadataPath, 0o755)
-	assertMode(t, filepath.Join(gitMetadataPath, "HEAD"), 0o644)
-	assertMode(t, cachePath, 0o777)
-	assertMode(t, filepath.Join(cachePath, "existing.cache"), 0o666)
+	assertGroupAccess(t, worktreePath, 0o070)
+	assertGroupAccess(t, filepath.Join(worktreePath, "existing.txt"), 0o060)
+	assertGroupAccess(t, gitMetadataPath, 0o050)
+	assertGroupAccess(t, filepath.Join(gitMetadataPath, "HEAD"), 0o040)
+	assertGroupAccess(t, cachePath, 0o070)
+	assertGroupAccess(t, filepath.Join(cachePath, "existing.cache"), 0o060)
 
 	result, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
 		RunID:             request.RunID,
@@ -112,6 +113,9 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 		"GIT_CONFIG_VALUE_0=disabled://factory",
 		"ghcr.io/example/factory-worker@"+testWorkerDigest,
 	)
+	if groupID := os.Getgid(); groupID != 10001 && !strings.Contains(runLine, "--group-add "+strconv.Itoa(groupID)) {
+		t.Fatalf("worker start omitted host group %d from supplemental groups: %q", groupID, runLine)
+	}
 	if strings.Contains(runLine, "docker.sock") {
 		t.Fatalf("worker start mounted the Docker socket: %q", runLine)
 	}
@@ -414,16 +418,20 @@ func assertContainsAll(t *testing.T, value string, fragments ...string) {
 	}
 }
 
-// assertMode verifies the owner-independent permissions applied to one worker
-// mount entry before Docker starts the fixed non-root worker.
-func assertMode(t *testing.T, path string, want os.FileMode) {
+// assertGroupAccess verifies that the worker group can access one prepared
+// mount entry without relying on permissions for unrelated host users.
+func assertGroupAccess(t *testing.T, path string, required os.FileMode) {
 	t.Helper()
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat %q: %v", path, err)
 	}
-	if got := info.Mode().Perm(); got != want {
-		t.Fatalf("permissions for %q = %#o, want %#o", path, got, want)
+	got := info.Mode().Perm()
+	if got&required != required {
+		t.Fatalf("permissions for %q = %#o, missing worker group bits %#o", path, got, required)
+	}
+	if got&0o007 != 0 {
+		t.Fatalf("permissions for %q = %#o, unexpectedly grant other-user access", path, got)
 	}
 }
 
