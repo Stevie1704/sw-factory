@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "invocation_id": "inv-codex-1",
+  "run_id": "spike-issue-2",
+  "harness": "codex",
+  "role": "test",
+  "stage": "test",
+  "outcome": "completed",
+  "summary": "codex spike stage",
+  "reported_at": "2026-08-20T07:59:23.629Z"
+}

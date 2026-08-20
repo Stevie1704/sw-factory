@@ -96,12 +96,15 @@ def main():
     time.sleep(1.5)
     started = time.time()
     os.write(fd, b"\x03")
-    interrupted = read_until(fd, b"^C", timeout=10.0).decode(errors="replace")
+    # The terminal echoes "^C" whether or not the child died, so it proves
+    # nothing on its own. The surviving evidence is that the 30 second sleep is
+    # gone long before it could have finished.
+    read_until(fd, b"^C", timeout=10.0)
     elapsed = time.time() - started
     checks.append((
-        "Ctrl+C reaches the foreground process group",
-        "^C" in interrupted and elapsed < 5,
-        f"elapsed={elapsed:.2f}s tail={interrupted[-160:]!r}",
+        "Ctrl+C ends the foreground process early",
+        elapsed < 5,
+        f"elapsed={elapsed:.2f}s",
     ))
 
     time.sleep(0.5)

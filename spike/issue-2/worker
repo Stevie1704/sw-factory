@@ -17,12 +17,15 @@ RUN_DIR="$HERE/.run"
 WORK_DIR="$RUN_DIR/work"
 RESULT_DIR="$RUN_DIR/results"
 
+# Acceptance criterion 8 needs the container rebuilt from the *same* image, so
+# an absent pin is a hard error rather than a fallback to whatever the tag
+# currently points at.
 pinned_image() {
-  if [[ -s "$PIN_FILE" ]]; then
-    tr -d '[:space:]' <"$PIN_FILE"
-  else
-    docker image inspect "$IMAGE_TAG" --format '{{.Id}}'
+  if [[ ! -s "$PIN_FILE" ]]; then
+    echo "no pinned image: run ./worker build first" >&2
+    exit 1
   fi
+  tr -d '[:space:]' <"$PIN_FILE"
 }
 
 cmd_build() {

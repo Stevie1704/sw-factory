@@ -1,0 +1,23 @@
+verified surface id: 9A454F15-E65B-432E-8F92-8DCAFFD93D4F
+surface 9A454F15-E65B-432E-8F92-8DCAFFD93D4F: 92 columns, 54 rows, screen=alternate
+styles: 10 total, 7 with explicit colour
+foreground colours in use: #888888, #999999, #D77757
+box-drawing characters rendered: 408
+------------------------------------------------------------
+╭─── Claude Code v2.1.232 ─────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started            │
+│                Welcome back Stevie!                │ Run /init to create a CLAUDE.md fi… │
+│                                                    │ ─────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                          │
+│                      ▝▜█████▛▘                     │ Fixed prompt caching for sessions … │
+│                        ▘▘ ▝▝                       │ Added a built-in "Concise" output … │
+│   Haiku 4.5 · Claude Pro · <operator-email>'s   │ Added `ANTHROPIC_DEFAULT_MODEL` en… │
+│   Organization                                     │ /release-notes for more             │
+│                        /work                       │                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+   Tackle your toughest work with Opus 5. Switch anytime with /model.
+   +1 more · /status
+────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "write a test for <filepath>"
+────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents

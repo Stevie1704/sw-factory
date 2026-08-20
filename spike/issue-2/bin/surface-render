@@ -11,11 +11,24 @@ import sys
 
 
 def replay(surface):
+    """Read a surface, refusing to return one we did not ask for.
+
+    `terminal.replay` returns the *active* surface whatever it is asked for, and
+    an unknown id yields the caller's own surface instead of an error. The only
+    defence is to compare the surface id in the reply against the request.
+    """
     out = subprocess.run(
         ["cmux", "rpc", "terminal.replay", json.dumps({"surface": surface})],
         capture_output=True, text=True, check=True,
     )
-    return json.loads(out.stdout)
+    payload = json.loads(out.stdout)
+    returned = payload.get("surface_id")
+    if surface and surface.lower() != returned.lower():
+        raise SystemExit(
+            f"cmux returned surface {returned}, not the requested {surface}. "
+            f"Focus the pane first: cmux focus-pane <pane> --workspace <id>"
+        )
+    return payload
 
 
 def render(grid):
@@ -42,8 +55,11 @@ def colour_summary(grid):
 
 
 def main():
-    surface = sys.argv[1] if len(sys.argv) > 1 else "surface:1"
+    # Pass the surface UUID. Short refs are positional and shift as workspaces
+    # come and go; an empty argument reads whichever surface is active.
+    surface = sys.argv[1] if len(sys.argv) > 1 else ""
     grid = replay(surface)["render_grid"]
+    print(f"verified surface id: {grid['surface_id']}")
     lines = render(grid)
     total, explicit, palette = colour_summary(grid)
 

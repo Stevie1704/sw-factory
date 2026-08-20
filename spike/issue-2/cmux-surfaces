@@ -8,6 +8,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER="$HERE/worker"
+CONTAINER=swf-spike
 
 if ! cmux ping >/dev/null 2>&1; then
   echo "cmux control socket is not reachable from here." >&2
@@ -15,7 +16,9 @@ if ! cmux ping >/dev/null 2>&1; then
   exit 1
 fi
 
-"$WORKER" up >/dev/null 2>&1 || true
+if ! docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
+  "$WORKER" up
+fi
 
 layout=$(cat <<JSON
 {
