@@ -70,6 +70,7 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 		Image:           packet.RepositoryConfig.WorkerBuild.Image,
 		ImageDigest:     run.ImageDigest,
 		Caches:          workerCaches(packet.RepositoryConfig.Caches),
+		Role:            "gate",
 	}); err != nil {
 		return gate.Result{}, err
 	}

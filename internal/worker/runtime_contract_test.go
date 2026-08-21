@@ -119,6 +119,9 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	if strings.Contains(runLine, "docker.sock") {
 		t.Fatalf("worker start mounted the Docker socket: %q", runLine)
 	}
+	if strings.Contains(runLine, "dst="+worker.CredentialPath) {
+		t.Fatalf("worker without credentials mounted the credential volume: %q", runLine)
+	}
 	execLines := findLogLines(lines, " exec ")
 	if len(execLines) != 2 {
 		t.Fatalf("Docker exec calls = %d, want clean and role calls; calls = %#v", len(execLines), lines)
@@ -214,6 +217,31 @@ func TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment(t *testing.T)
 	}
 }
 
+// TestDockerRuntimeRejectsAHostHarnessDirectoryAsACache verifies that a
+// repository cache cannot smuggle the full host Codex or Claude state home
+// into a worker.
+func TestDockerRuntimeRejectsAHostHarnessDirectoryAsACache(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	harnessDirectory := filepath.Join(t.TempDir(), ".codex")
+	if err := os.MkdirAll(harnessDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if err := runtime.Start(context.Background(), worker.StartRequest{
+		RunID:           "run-host-harness-cache",
+		WorktreePath:    makeDirectory(t, "worktree"),
+		GitMetadataPath: makeDirectory(t, "git-metadata"),
+		Caches:          []worker.CacheMount{{Name: "codex", HostPath: harnessDirectory}},
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+	}); err == nil || !strings.Contains(err.Error(), "host harness") {
+		t.Fatalf("Start() error = %v, want host harness cache rejection", err)
+	}
+	if lines := readStubLog(t, logPath); len(lines) != 0 {
+		t.Fatalf("Docker was invoked after rejecting host harness cache: %#v", lines)
+	}
+}
+
 // TestDockerRuntimeReturnsACommandExitResult verifies a deterministic command
 // failure remains a command result and is not confused with runtime failure.
 func TestDockerRuntimeReturnsACommandExitResult(t *testing.T) {
@@ -292,6 +320,10 @@ case "$command_name" in
       exit 1
     fi
     state=$(cat "$WORKER_DOCKER_STATE")
+    if [ -n "${WORKER_DOCKER_INSPECT_JSON_FILE:-}" ]; then
+      cat "$WORKER_DOCKER_INSPECT_JSON_FILE"
+      exit 0
+    fi
     if [ "$state" = "running" ]; then
       printf 'true\t%s\t' "$WORKER_DOCKER_IMAGE"
     else
@@ -330,6 +362,10 @@ case "$command_name" in
     ;;
   stop)
     printf 'stopped\n' > "$WORKER_DOCKER_STATE"
+    printf 'stub-container\n'
+    ;;
+  rm)
+    rm -f "$WORKER_DOCKER_STATE"
     printf 'stub-container\n'
     ;;
   exec)
@@ -488,9 +524,11 @@ func TestDockerRuntimeReusesStoppedWorkerWhenMountContractMatches(t *testing.T) 
 		t.Fatalf("Stop() error = %v", err)
 	}
 
-	// Start again with identical mount contract - should reuse the container
+	// Start again with legacy two-field inspection output - should reuse the
+	// stopped container without structured mount-contract validation.
+	t.Setenv("WORKER_DOCKER_MOUNTS", "")
 	if err := runtime.Start(context.Background(), request); err != nil {
-		t.Fatalf("Start() with matching mounts error = %v", err)
+		t.Fatalf("Start() through legacy inspection error = %v", err)
 	}
 
 	lines := readStubLog(t, logPath)
@@ -499,6 +537,47 @@ func TestDockerRuntimeReusesStoppedWorkerWhenMountContractMatches(t *testing.T) 
 	}
 	if countLogLines(lines, " start ") != 1 {
 		t.Fatalf("Docker start calls = %d, want 1 (reused stopped container); calls = %#v", countLogLines(lines, " start "), lines)
+	}
+}
+
+// TestDockerRuntimeRejectsMalformedLegacyMountRecords verifies compatibility
+// parsing fails closed instead of silently discarding incomplete mount data.
+func TestDockerRuntimeRejectsMalformedLegacyMountRecords(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	worktreePath := makeDirectory(t, "worktree")
+	gitMetadataPath := makeDirectory(t, "git-metadata")
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.StartRequest{
+		RunID:           "run-contract-malformed-mount",
+		WorktreePath:    worktreePath,
+		GitMetadataPath: gitMetadataPath,
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+	}
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("initial Start() error = %v", err)
+	}
+	if err := runtime.Stop(context.Background(), request.RunID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	mountsPath := os.Getenv("WORKER_DOCKER_MOUNTS")
+	for _, test := range []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "field count", data: "source\tdestination\n", want: "malformed mount record"},
+		{name: "read-write flag", data: "source\tdestination\tunknown\n", want: "invalid mount read-write flag"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(mountsPath, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Start() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

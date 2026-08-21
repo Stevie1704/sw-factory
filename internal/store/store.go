@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -16,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 6
 
 // runTimestampLayout keeps serialized run timestamps fixed-width so SQLite
 // text ordering matches chronological ordering for sub-second timestamps.
@@ -44,6 +46,20 @@ const (
 	StatusFailed            Status = "failed"
 	StatusCancelled         Status = "cancelled"
 	StatusComplete          Status = "complete"
+)
+
+// InvocationStatus describes the lifecycle of one visible harness invocation.
+type InvocationStatus string
+
+const (
+	// InvocationStatusActive means the harness may still produce a report.
+	InvocationStatusActive InvocationStatus = "active"
+	// InvocationStatusCompleted means the coordinator accepted a completed report.
+	InvocationStatusCompleted InvocationStatus = "completed"
+	// InvocationStatusWaitingForHuman means the report requested clarification.
+	InvocationStatusWaitingForHuman InvocationStatus = "waiting_for_human"
+	// InvocationStatusCannotProceed means the report contained blocking evidence.
+	InvocationStatusCannotProceed InvocationStatus = "cannot_proceed"
 )
 
 type UnknownSchemaVersionError struct {
@@ -82,6 +98,49 @@ type Run struct {
 	SpecificationPacket string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+}
+
+// Invocation is the persisted recoverable identity of one harness session.
+type Invocation struct {
+	// ID is the immutable invocation identifier used by the report protocol.
+	ID string
+	// RunID binds the invocation to one factory run.
+	RunID string
+	// Harness identifies the selected role harness.
+	Harness string
+	// Role identifies the workflow role owning the invocation.
+	Role string
+	// Stage identifies the workflow stage owning the invocation.
+	Stage Stage
+	// Model is the validated model policy selection.
+	Model string
+	// ReasoningEffort is the validated reasoning policy selection.
+	ReasoningEffort string
+	// NativeSessionID is the harness-native continuation identity when known.
+	NativeSessionID string
+	// WorkspaceID is the opaque terminal workspace handle.
+	WorkspaceID string
+	// StatusSurfaceID is the opaque supervision status surface handle.
+	StatusSurfaceID string
+	// ImplementationSurfaceID is the opaque implementation surface handle.
+	ImplementationSurfaceID string
+	// ChecksSurfaceID is the opaque deterministic-check surface handle.
+	ChecksSurfaceID string
+	// InvocationDirectory is the host directory containing the frozen packet.
+	InvocationDirectory string
+	// ResultDirectory is the host directory containing report.json.
+	ResultDirectory string
+	// PermittedPaths contains repository-relative prefixes authorized for the
+	// completed handoff and is persisted for coordinator restart validation.
+	PermittedPaths []string
+	// PromptVersion identifies the versioned core role prompt.
+	PromptVersion string
+	// Status is the invocation lifecycle state.
+	Status InvocationStatus
+	// CreatedAt is the immutable invocation creation time.
+	CreatedAt time.Time
+	// UpdatedAt is the latest coordinator update time.
+	UpdatedAt time.Time
 }
 
 type Store struct {
@@ -293,6 +352,168 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	return nil
 }
 
+// SaveInvocation validates and upserts one recoverable harness invocation.
+func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error {
+	if invocation.ID == "" {
+		return errors.New("invocation id is required")
+	}
+	if invocation.RunID == "" {
+		return errors.New("invocation run id is required")
+	}
+	if invocation.Harness == "" {
+		return errors.New("invocation harness is required")
+	}
+	if invocation.Role == "" {
+		return errors.New("invocation role is required")
+	}
+	if invocation.Stage == "" {
+		return errors.New("invocation stage is required")
+	}
+	if invocation.Status == "" {
+		return errors.New("invocation status is required")
+	}
+	if invocation.CreatedAt.IsZero() {
+		invocation.CreatedAt = time.Now().UTC()
+	}
+	if invocation.UpdatedAt.IsZero() {
+		invocation.UpdatedAt = invocation.CreatedAt
+	}
+	permittedPathJSON, err := json.Marshal(invocation.PermittedPaths)
+	if err != nil {
+		return fmt.Errorf("encode invocation permitted paths: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO invocations (
+			id, run_id, harness, role, stage, model, reasoning_effort,
+			native_session_id, workspace_id, status_surface_id,
+			implementation_surface_id, checks_surface_id, invocation_directory,
+			result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			run_id = excluded.run_id,
+			harness = excluded.harness,
+			role = excluded.role,
+			stage = excluded.stage,
+			model = excluded.model,
+			reasoning_effort = excluded.reasoning_effort,
+			native_session_id = excluded.native_session_id,
+			workspace_id = excluded.workspace_id,
+			status_surface_id = excluded.status_surface_id,
+			implementation_surface_id = excluded.implementation_surface_id,
+			checks_surface_id = excluded.checks_surface_id,
+			invocation_directory = excluded.invocation_directory,
+			result_directory = excluded.result_directory,
+			permitted_paths = excluded.permitted_paths,
+			prompt_version = excluded.prompt_version,
+			status = excluded.status,
+			updated_at = excluded.updated_at`,
+		invocation.ID,
+		invocation.RunID,
+		invocation.Harness,
+		invocation.Role,
+		invocation.Stage,
+		invocation.Model,
+		invocation.ReasoningEffort,
+		invocation.NativeSessionID,
+		invocation.WorkspaceID,
+		invocation.StatusSurfaceID,
+		invocation.ImplementationSurfaceID,
+		invocation.ChecksSurfaceID,
+		invocation.InvocationDirectory,
+		invocation.ResultDirectory,
+		string(permittedPathJSON),
+		invocation.PromptVersion,
+		invocation.Status,
+		invocation.CreatedAt.UTC().Format(runTimestampLayout),
+		invocation.UpdatedAt.UTC().Format(runTimestampLayout),
+	)
+	if err != nil {
+		if isActiveInvocationConflict(err) {
+			return fmt.Errorf("save invocation: active invocation already exists for run %q: %w", invocation.RunID, err)
+		}
+		return fmt.Errorf("save invocation: %w", err)
+	}
+	return nil
+}
+
+// Invocation loads one persisted invocation only when both identifiers match.
+func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*Invocation, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort,
+		       native_session_id, workspace_id, status_surface_id,
+		       implementation_surface_id, checks_surface_id, invocation_directory,
+		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		FROM invocations
+		WHERE run_id = ? AND id = ?`, runID, invocationID)
+	return scanInvocation(row)
+}
+
+// ActiveInvocation returns the newest active visible invocation for one run.
+// The coordinator uses it to avoid launching duplicate harness sessions after
+// a process restart or a repeated operator command.
+func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation, error) {
+	if runID == "" {
+		return nil, errors.New("invocation run id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort,
+		       native_session_id, workspace_id, status_surface_id,
+		       implementation_surface_id, checks_surface_id, invocation_directory,
+		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		FROM invocations
+		WHERE run_id = ? AND status = ?
+		ORDER BY updated_at DESC
+		LIMIT 1`, runID, InvocationStatusActive)
+	return scanInvocation(row)
+}
+
+// scanInvocation decodes one invocation row and its RFC3339 timestamps.
+func scanInvocation(row *sql.Row) (*Invocation, error) {
+	var invocation Invocation
+	var permittedPathJSON, createdAt, updatedAt string
+	if err := row.Scan(
+		&invocation.ID,
+		&invocation.RunID,
+		&invocation.Harness,
+		&invocation.Role,
+		&invocation.Stage,
+		&invocation.Model,
+		&invocation.ReasoningEffort,
+		&invocation.NativeSessionID,
+		&invocation.WorkspaceID,
+		&invocation.StatusSurfaceID,
+		&invocation.ImplementationSurfaceID,
+		&invocation.ChecksSurfaceID,
+		&invocation.InvocationDirectory,
+		&invocation.ResultDirectory,
+		&permittedPathJSON,
+		&invocation.PromptVersion,
+		&invocation.Status,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read invocation row: %w", err)
+	}
+	if permittedPathJSON != "" {
+		if err := json.Unmarshal([]byte(permittedPathJSON), &invocation.PermittedPaths); err != nil {
+			return nil, fmt.Errorf("decode invocation permitted paths: %w", err)
+		}
+	}
+	var err error
+	invocation.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse invocation created_at: %w", err)
+	}
+	invocation.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse invocation updated_at: %w", err)
+	}
+	return &invocation, nil
+}
+
 // databaseState reports whether the path identifies an existing database file and whether that file is empty.
 func databaseState(path string) (bool, bool, error) {
 	info, err := os.Stat(path)
@@ -416,6 +637,46 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				WHERE status NOT IN ('complete', 'cancelled', 'failed')`); err != nil {
 				return fmt.Errorf("apply store migration 3: %w", err)
 			}
+		case 4:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE invocations (
+					id TEXT PRIMARY KEY,
+					run_id TEXT NOT NULL,
+					harness TEXT NOT NULL,
+					role TEXT NOT NULL,
+					stage TEXT NOT NULL,
+					model TEXT NOT NULL DEFAULT '',
+					reasoning_effort TEXT NOT NULL DEFAULT '',
+					native_session_id TEXT NOT NULL DEFAULT '',
+					workspace_id TEXT NOT NULL DEFAULT '',
+					status_surface_id TEXT NOT NULL DEFAULT '',
+					implementation_surface_id TEXT NOT NULL DEFAULT '',
+					checks_surface_id TEXT NOT NULL DEFAULT '',
+					invocation_directory TEXT NOT NULL DEFAULT '',
+					result_directory TEXT NOT NULL DEFAULT '',
+					prompt_version TEXT NOT NULL DEFAULT '',
+					status TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
+				)`); err != nil {
+				return fmt.Errorf("apply store migration 4: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE INDEX invocations_by_run
+					ON invocations (run_id, updated_at)`); err != nil {
+				return fmt.Errorf("apply store migration 4 index: %w", err)
+			}
+		case 5:
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE invocations ADD COLUMN permitted_paths TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("apply store migration 5: %w", err)
+			}
+		case 6:
+			if err := reconcileDuplicateInvocations(ctx, tx); err != nil {
+				return fmt.Errorf("reconcile invocations before store migration 6: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_invocation_per_run
+				ON invocations (run_id)
+				WHERE status = 'active'`); err != nil {
+				return fmt.Errorf("apply store migration 6: %w", err)
+			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
 		}
@@ -536,6 +797,66 @@ func reconcileDuplicateRuns(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// reconcileDuplicateInvocations keeps the newest active invocation per run
+// before the partial unique index is created for migrated stores.
+func reconcileDuplicateInvocations(ctx context.Context, tx *sql.Tx) error {
+	type invocationCandidate struct {
+		id        string
+		updatedAt time.Time
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, run_id, updated_at
+		FROM invocations
+		WHERE status = ?`, InvocationStatusActive)
+	if err != nil {
+		return fmt.Errorf("list active invocations: %w", err)
+	}
+	newestByRun := make(map[string]invocationCandidate)
+	duplicates := make([]string, 0)
+	for rows.Next() {
+		var id, runID, updatedAt string
+		if err := rows.Scan(&id, &runID, &updatedAt); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan invocation for reconciliation: %w", err)
+		}
+		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("parse invocation updated_at for reconciliation: %w", err)
+		}
+		candidate := invocationCandidate{id: id, updatedAt: parsedUpdatedAt}
+		current, exists := newestByRun[runID]
+		if !exists || parsedUpdatedAt.After(current.updatedAt) || (parsedUpdatedAt.Equal(current.updatedAt) && id > current.id) {
+			if exists {
+				duplicates = append(duplicates, current.id)
+			}
+			newestByRun[runID] = candidate
+		} else {
+			duplicates = append(duplicates, candidate.id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read invocations for reconciliation: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close invocations for reconciliation: %w", err)
+	}
+	for _, id := range duplicates {
+		if _, err := tx.ExecContext(ctx, "UPDATE invocations SET status = ? WHERE id = ?", InvocationStatusCannotProceed, id); err != nil {
+			return fmt.Errorf("mark duplicate invocation %q unavailable: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// isActiveInvocationConflict recognizes the migration-created unique index
+// without depending on a driver-specific SQLite error type.
+func isActiveInvocationConflict(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "one_active_invocation_per_run") || strings.Contains(message, "unique constraint failed: invocations.run_id")
 }
 
 // backupDatabase creates a private 0600 backup of the database and returns its path.

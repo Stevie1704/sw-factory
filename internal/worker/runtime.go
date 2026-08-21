@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -27,6 +28,13 @@ const (
 	GitMetadataPath = "/git"
 	// CachePath is the stable in-worker parent path for repository caches.
 	CachePath = "/cache"
+	// InvocationPath is the stable read-only path for a frozen invocation packet.
+	InvocationPath = "/invocation"
+	// ResultPath is the stable writable path for structured invocation reports.
+	ResultPath = "/results"
+	// CredentialPath is the stable worker path for the factory-managed Codex
+	// credential volume. It is separate from the role session home.
+	CredentialPath = "/run/factory-auth"
 	// WorkerUser is the fixed non-root identity used for worker processes.
 	WorkerUser = "10001:10001"
 	// workerPrimaryGroupID is already present in WorkerUser and does not need
@@ -78,6 +86,18 @@ type StartRequest struct {
 	ImageDigest string
 	// Caches are the only additional host paths made visible to the worker.
 	Caches []CacheMount
+	// InvocationPath is an optional host directory mounted read-only at
+	// InvocationPath for one frozen invocation packet.
+	InvocationPath string
+	// ResultPath is an optional host directory mounted read-write at ResultPath
+	// for one invocation's structured report.
+	ResultPath string
+	// CredentialStoreID identifies the factory-managed credential store. The
+	// adapter derives a private persistent volume name from this value and
+	// never exposes the value as a Docker identifier.
+	CredentialStoreID string
+	// Role selects the isolated role session volume used by the adapter.
+	Role string
 }
 
 // ResumeRequest contains the immutable image identity needed to resume an
@@ -116,6 +136,77 @@ type CommandResult struct {
 	Stderr string
 }
 
+// InteractiveRequest describes one visible harness command. The adapter
+// translates it into a host helper command without exposing a Docker name.
+type InteractiveRequest struct {
+	// RunID selects the worker receiving the interactive command.
+	RunID string
+	// Command is the harness executable and its arguments inside the worker.
+	Command []string
+	// EnvironmentPolicy selects clean or role execution.
+	EnvironmentPolicy EnvironmentPolicy
+	// Role names the coordinator-defined workflow role.
+	Role string
+	// Environment contains explicit non-secret invocation values.
+	Environment map[string]string
+}
+
+// InteractiveCommand is a terminal-launch command whose executable runs on the
+// host and attaches to the worker without revealing its runtime identifier.
+type InteractiveCommand struct {
+	// Executable is the host attach helper.
+	Executable string
+	// Args are helper arguments; the worker adapter owns runtime translation.
+	Args []string
+}
+
+// CredentialSeedRequest selects one host-side Codex auth file to stream into a
+// worker-owned role home. The host directory is never mounted.
+type CredentialSeedRequest struct {
+	// RunID selects the worker receiving the credential copy.
+	RunID string
+	// AuthPath is the explicit host path to one Codex auth.json file.
+	AuthPath string
+}
+
+// NativeSessionRequest selects a harness-native session identifier lookup.
+type NativeSessionRequest struct {
+	// RunID selects the worker whose role home is inspected.
+	RunID string
+	// Harness identifies the session format being inspected.
+	Harness string
+}
+
+// InteractiveRuntime is the optional extension implemented by runtimes that
+// can provide a visible terminal attach command.
+type InteractiveRuntime interface {
+	WorkerRuntime
+	// InteractiveCommand returns a command for a terminal adapter to launch.
+	InteractiveCommand(context.Context, InteractiveRequest) (InteractiveCommand, error)
+}
+
+// CredentialSeeder is the optional extension for narrowly scoped auth seeding.
+type CredentialSeeder interface {
+	// SeedCodexCredentials streams one explicit Codex auth file into the worker.
+	SeedCodexCredentials(context.Context, CredentialSeedRequest) error
+}
+
+// NativeSessionProvider is the optional extension for non-screen session
+// identifier discovery.
+type NativeSessionProvider interface {
+	// NativeSessionID returns the newest known native session identifier.
+	NativeSessionID(context.Context, NativeSessionRequest) (string, error)
+}
+
+// NativeSessionSnapshotProvider is the stronger session-discovery seam used
+// for fresh launches. It lets a harness distinguish a session created by the
+// current launch from an older persisted session.
+type NativeSessionSnapshotProvider interface {
+	// NativeSessionIDs returns all currently persisted native session
+	// identifiers in stable adapter order.
+	NativeSessionIDs(context.Context, NativeSessionRequest) ([]string, error)
+}
+
 // Inspection reports worker lifecycle state without exposing a runtime ID.
 type Inspection struct {
 	// Exists reports whether the run's worker container exists.
@@ -126,6 +217,12 @@ type Inspection struct {
 	Image string
 	// Mounts are the container's configured bind mounts.
 	Mounts []ContainerMount
+	// mountIdentities maps stable in-worker destinations to adapter-private
+	// mount identities used to detect stale bind or volume configuration.
+	mountIdentities map[string]string
+	// mountDestinations is the compatibility fallback for runtimes that expose
+	// only destination names rather than Docker's structured inspect payload.
+	mountDestinations map[string]struct{}
 }
 
 // ContainerMount describes one configured container bind mount.
@@ -161,6 +258,9 @@ type DockerRuntime struct {
 	// DockerBinary overrides the executable name for controlled contract tests.
 	// An empty value uses docker from PATH.
 	DockerBinary string
+	// AttachBinary is the host helper used to attach a cmux surface. An empty
+	// value uses factory-worker-attach from PATH.
+	AttachBinary string
 }
 
 // NewDockerRuntime creates a Docker-backed WorkerRuntime adapter.
@@ -181,18 +281,24 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		if inspection.Image != imageReference(request.Image, request.ImageDigest) {
 			return fmt.Errorf("worker %q uses image %q, want frozen image %q", request.RunID, inspection.Image, imageReference(request.Image, request.ImageDigest))
 		}
-		if inspection.Running {
+		if !workerMountsPresent(request, inspection) {
+			if err := r.recreateWorker(ctx, name, inspection.Running); err != nil {
+				return fmt.Errorf("recreate worker %q for required mounts: %w", request.RunID, err)
+			}
+		} else if inspection.Running {
 			return nil
+		} else {
+			if len(inspection.Mounts) > 0 {
+				if err := validateMountContract(inspection.Mounts, request); err != nil {
+					return fmt.Errorf("worker %q mount contract mismatch: %w", request.RunID, err)
+				}
+			}
+			if _, err := prepareWorkerMounts(request); err != nil {
+				return fmt.Errorf("prepare worker mounts: %w", err)
+			}
+			return r.startContainer(ctx, name)
 		}
-		if err := validateMountContract(inspection.Mounts, request); err != nil {
-			return fmt.Errorf("worker %q mount contract mismatch: %w", request.RunID, err)
-		}
-		if _, err := prepareWorkerMounts(request); err != nil {
-			return fmt.Errorf("prepare worker mounts: %w", err)
-		}
-		return r.startContainer(ctx, name)
-	}
-	if !isContainerNotFound(err) {
+	} else if !isContainerNotFound(err) {
 		return fmt.Errorf("inspect worker %q before start: %w", request.RunID, err)
 	}
 	groupIDs, err := prepareWorkerMounts(request)
@@ -212,6 +318,20 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		"--mount", bindMount(request.WorktreePath, WorktreePath, false),
 		"--mount", bindMount(request.GitMetadataPath, GitMetadataPath, true),
 	}
+	if request.InvocationPath != "" {
+		args = append(args, "--mount", bindMount(request.InvocationPath, InvocationPath, true))
+	}
+	if request.ResultPath != "" {
+		args = append(args, "--mount", bindMount(request.ResultPath, ResultPath, false))
+	}
+	if request.CredentialStoreID != "" {
+		args = append(args, "--mount", "type=volume,src="+credentialVolumeName(request.RunID, request.CredentialStoreID)+",dst="+CredentialPath)
+	}
+	role := request.Role
+	if strings.TrimSpace(role) == "" {
+		role = "implementation"
+	}
+	args = append(args, "--mount", "type=volume,src="+roleVolumeName(request.RunID, role)+",dst=/home/factory")
 	for _, groupID := range groupIDs {
 		args = append(args, "--group-add", strconv.Itoa(groupID))
 	}
@@ -290,6 +410,151 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, err)
 }
 
+// InteractiveCommand returns a host helper invocation for a visible terminal
+// surface. Only the run/role identity and explicit non-secret protocol values
+// cross the seam; the private Docker name is derived later inside the worker
+// adapter/helper.
+func (r *DockerRuntime) InteractiveCommand(_ context.Context, request InteractiveRequest) (InteractiveCommand, error) {
+	if err := validateInteractiveRequest(request); err != nil {
+		return InteractiveCommand{}, err
+	}
+	binary := r.AttachBinary
+	if strings.TrimSpace(binary) == "" {
+		binary = "factory-worker-attach"
+	}
+	args := []string{"--run-id", request.RunID, "--role", request.Role}
+	entries := explicitEnvironment(request.Environment)
+	for _, entry := range entries {
+		args = append(args, "--env", entry)
+	}
+	args = append(args, "--")
+	args = append(args, request.Command...)
+	return InteractiveCommand{Executable: binary, Args: args}, nil
+}
+
+// SeedCodexCredentials streams one explicit auth.json file into the separate
+// factory-managed credential volume and links only that file into Codex's role
+// home. It never mounts the host file or returns credential contents.
+func (r *DockerRuntime) SeedCodexCredentials(ctx context.Context, request CredentialSeedRequest) error {
+	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(request.AuthPath) || strings.ContainsAny(request.AuthPath, "\x00\r\n") {
+		return errors.New("codex auth path must be an absolute safe path")
+	}
+	info, err := os.Lstat(request.AuthPath)
+	if err != nil {
+		return fmt.Errorf("inspect codex auth file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("codex auth path must not be a symbolic link")
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("codex auth path must be a regular file")
+	}
+	data, err := os.ReadFile(request.AuthPath)
+	if err != nil {
+		return fmt.Errorf("read codex auth file: %w", err)
+	}
+	if len(data) == 0 {
+		return errors.New("codex auth file is empty")
+	}
+	_, err = r.runDockerWithInput(ctx, []string{
+		"exec", "-i", "--user", "0:0", "--workdir", WorktreePath,
+		containerName(request.RunID), "/bin/sh", "-c",
+		"umask 077; rm -f \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"; cat > \"" + CredentialPath + "/auth.json\"; chmod 0444 \"" + CredentialPath + "/auth.json\"; mkdir -p \"$HOME/.codex\"; chown " + WorkerUser + " \"$HOME/.codex\"; ln -s \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"; chown -h " + WorkerUser + " \"$HOME/.codex/auth.json\"",
+	}, data)
+	if err != nil {
+		return fmt.Errorf("seed Codex credentials: %w", err)
+	}
+	return nil
+}
+
+// NativeSessionIDs discovers Codex sessions from persisted role-home files,
+// never by scraping terminal output. An empty result means the harness has not
+// persisted a session file yet.
+func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSessionRequest) ([]string, error) {
+	if err := validateRunID(request.RunID); err != nil {
+		return nil, err
+	}
+	if request.Harness != "codex" {
+		return nil, fmt.Errorf("native session lookup does not support harness %q", request.Harness)
+	}
+	result, err := r.RunCommand(ctx, CommandRequest{
+		RunID:             request.RunID,
+		Command:           `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`,
+		EnvironmentPolicy: EnvironmentPolicyClean,
+		Role:              "coordinator",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result.ExitCode != 0 {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(result.Stdout)
+	if trimmed == "" {
+		return nil, nil
+	}
+	identifiers := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, identifier := range strings.Split(trimmed, "\n") {
+		identifier = strings.TrimSpace(identifier)
+		if identifier == "" {
+			continue
+		}
+		if !validName(identifier) {
+			return nil, errors.New("discovered native session identifier is unsafe")
+		}
+		if _, exists := seen[identifier]; exists {
+			continue
+		}
+		seen[identifier] = struct{}{}
+		identifiers = append(identifiers, identifier)
+	}
+	return identifiers, nil
+}
+
+// NativeSessionID returns the newest currently persisted Codex session for
+// compatibility with runtimes that only need one identifier.
+func (r *DockerRuntime) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
+	identifiers, err := r.NativeSessionIDs(ctx, request)
+	if err != nil || len(identifiers) == 0 {
+		return "", err
+	}
+	return identifiers[len(identifiers)-1], nil
+}
+
+// Attach connects the current process's standard streams to one interactive
+// worker harness. It is used by the small host attach helper launched by cmux.
+func (r *DockerRuntime) Attach(ctx context.Context, request InteractiveRequest) error {
+	if err := validateInteractiveRequest(request); err != nil {
+		return err
+	}
+	inspection, err := r.inspectContainer(ctx, containerName(request.RunID))
+	if err != nil {
+		return fmt.Errorf("inspect worker before interactive attach: %w", err)
+	}
+	if !inspection.Running {
+		return fmt.Errorf("worker %q is not running", request.RunID)
+	}
+	args := []string{"exec", "-it", "--workdir", WorktreePath}
+	for _, value := range commandEnvironment(CommandRequest{RunID: request.RunID, EnvironmentPolicy: request.EnvironmentPolicy, Role: request.Role, Environment: request.Environment}) {
+		args = append(args, "--env", value)
+	}
+	args = append(args, containerName(request.RunID))
+	args = append(args, request.Command...)
+	binary := r.DockerBinary
+	if strings.TrimSpace(binary) == "" {
+		binary = "docker"
+	}
+	command := exec.CommandContext(ctx, binary, args...)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	return command.Run()
+}
+
 // Stop stops an existing worker while retaining its writable state and role
 // storage for a future Resume call. Stopping an absent or already stopped
 // worker is idempotent.
@@ -338,18 +603,37 @@ func (r *DockerRuntime) startContainer(ctx context.Context, name string) error {
 	return nil
 }
 
-// inspectContainer reads lifecycle, image, and mount fields from Docker.
+// recreateWorker removes a worker whose immutable container configuration
+// predates a newly required invocation mount. Its named role and credential
+// volumes and bind-mounted worktree remain intact for the replacement.
+func (r *DockerRuntime) recreateWorker(ctx context.Context, name string, running bool) error {
+	if running {
+		if _, err := r.runDocker(ctx, []string{"stop", name}); err != nil {
+			return fmt.Errorf("stop worker before recreation: %w", err)
+		}
+	}
+	if _, err := r.runDocker(ctx, []string{"rm", name}); err != nil {
+		return fmt.Errorf("remove worker before recreation: %w", err)
+	}
+	return nil
+}
+
+// inspectContainer reads lifecycle, image, and stable mount fields from Docker.
 func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Inspection, error) {
 	result, err := r.runDocker(ctx, []string{
 		"container", "inspect",
-		"--format", "{{.State.Running}}\t{{.Config.Image}}\t{{range .Mounts}}{{.Source}}\t{{.Destination}}\t{{.RW}}\n{{end}}",
+		"--format", "{{json .}}",
 		name,
 	})
 	if err != nil {
 		return Inspection{}, err
 	}
-	fields := strings.SplitN(strings.TrimSpace(result.Stdout), "\t", 3)
-	if len(fields) < 2 {
+	trimmed := strings.TrimSpace(result.Stdout)
+	if strings.HasPrefix(trimmed, "{") {
+		return parseDockerInspectionJSON([]byte(trimmed))
+	}
+	fields := strings.SplitN(trimmed, "\t", 3)
+	if len(fields) < 2 || len(fields) > 3 {
 		return Inspection{}, fmt.Errorf("docker inspect returned malformed worker state %q", result.Stdout)
 	}
 	running, err := strconv.ParseBool(fields[0])
@@ -358,35 +642,107 @@ func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Insp
 	}
 	image := fields[1]
 	var mounts []ContainerMount
+	mountDestinations := make(map[string]struct{})
 	if len(fields) == 3 && strings.TrimSpace(fields[2]) != "" {
-		mountLines := strings.Split(strings.TrimSpace(fields[2]), "\n")
-		for _, line := range mountLines {
+		for _, line := range strings.Split(strings.TrimSpace(fields[2]), "\n") {
 			mountFields := strings.Split(line, "\t")
 			if len(mountFields) != 3 {
-				continue
+				return Inspection{}, fmt.Errorf("docker inspect returned malformed mount record %q", line)
 			}
-			rw, err := strconv.ParseBool(mountFields[2])
+			readWrite, err := strconv.ParseBool(mountFields[2])
 			if err != nil {
-				continue
+				return Inspection{}, fmt.Errorf("docker inspect returned invalid mount read-write flag %q in record %q: %w", mountFields[2], line, err)
 			}
+			destination := mountFields[1]
 			mounts = append(mounts, ContainerMount{
 				Source:      mountFields[0],
-				Destination: mountFields[1],
-				ReadOnly:    !rw,
+				Destination: destination,
+				ReadOnly:    !readWrite,
 			})
+			mountDestinations[destination] = struct{}{}
 		}
 	}
-	return Inspection{Exists: true, Running: running, Image: image, Mounts: mounts}, nil
+	return Inspection{Exists: true, Running: running, Image: image, Mounts: mounts, mountDestinations: mountDestinations}, nil
+}
+
+// dockerInspection is the private subset of Docker's inspect document needed
+// to detect stale worker configuration without exposing host paths through the
+// WorkerRuntime seam.
+type dockerInspection struct {
+	State struct {
+		Running bool `json:"Running"`
+	} `json:"State"`
+	Config struct {
+		Image string `json:"Image"`
+	} `json:"Config"`
+	Mounts []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Name        string `json:"Name"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	} `json:"Mounts"`
+}
+
+// parseDockerInspectionJSON converts Docker's structured inspection response
+// into the adapter-private lifecycle and mount representation.
+func parseDockerInspectionJSON(data []byte) (Inspection, error) {
+	var document dockerInspection
+	if err := json.Unmarshal(data, &document); err != nil {
+		return Inspection{}, fmt.Errorf("docker inspect returned malformed JSON: %w", err)
+	}
+	mountIdentities := make(map[string]string, len(document.Mounts))
+	mounts := make([]ContainerMount, 0, len(document.Mounts))
+	for _, mount := range document.Mounts {
+		if strings.TrimSpace(mount.Destination) == "" {
+			continue
+		}
+		identity := dockerMountIdentity(mount.Type, mount.Source, mount.Name)
+		if identity != "" {
+			mountIdentities[mount.Destination] = identity
+		}
+		mounts = append(mounts, ContainerMount{
+			Source:      mount.Source,
+			Destination: mount.Destination,
+			ReadOnly:    !mount.RW,
+		})
+	}
+	return Inspection{
+		Exists:          true,
+		Running:         document.State.Running,
+		Image:           document.Config.Image,
+		Mounts:          mounts,
+		mountIdentities: mountIdentities,
+	}, nil
+}
+
+// dockerMountIdentity reduces a Docker mount to the stable source identity
+// needed for reuse checks while keeping the source private to this adapter.
+func dockerMountIdentity(_ string, source, name string) string {
+	if strings.TrimSpace(name) != "" {
+		return "volume:" + strings.TrimSpace(name)
+	}
+	if strings.TrimSpace(source) != "" {
+		return "bind:" + filepath.Clean(source)
+	}
+	return ""
 }
 
 // runDocker executes one host-side Docker CLI invocation and captures both
 // output streams without ever returning the private container name to callers.
 func (r *DockerRuntime) runDocker(ctx context.Context, args []string) (dockerCommandResult, error) {
+	return r.runDockerWithInput(ctx, args, nil)
+}
+
+// runDockerWithInput executes one Docker CLI invocation with optional standard
+// input while retaining the adapter's redacted error behavior.
+func (r *DockerRuntime) runDockerWithInput(ctx context.Context, args []string, input []byte) (dockerCommandResult, error) {
 	binary := r.DockerBinary
 	if strings.TrimSpace(binary) == "" {
 		binary = "docker"
 	}
 	command := exec.CommandContext(ctx, binary, args...)
+	command.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -470,6 +826,22 @@ func validateStartRequest(request StartRequest) error {
 	if !validDigest(request.ImageDigest) {
 		return errors.New("worker image digest must be a sha256 digest with 64 lowercase hexadecimal characters")
 	}
+	if request.InvocationPath != "" {
+		if err := validateDirectory(request.InvocationPath, "invocation path"); err != nil {
+			return err
+		}
+	}
+	if request.ResultPath != "" {
+		if err := validateDirectory(request.ResultPath, "result path"); err != nil {
+			return err
+		}
+	}
+	if strings.ContainsAny(request.CredentialStoreID, "\x00\r\n") {
+		return errors.New("credential store id contains control characters")
+	}
+	if request.Role != "" && !validName(request.Role) {
+		return fmt.Errorf("worker role %q contains unsafe characters", request.Role)
+	}
 	seen := make(map[string]struct{}, len(request.Caches))
 	for _, cache := range request.Caches {
 		if err := validateCacheMount(cache, seen); err != nil {
@@ -477,6 +849,68 @@ func validateStartRequest(request StartRequest) error {
 		}
 	}
 	return nil
+}
+
+// workerMountsPresent reports whether an existing container already has the
+// complete immutable mount set requested by the coordinator. A legacy runtime
+// inspection that contains only destinations is accepted as a compatibility
+// fallback, but Docker's structured inspection must match each source too.
+func workerMountsPresent(request StartRequest, inspection Inspection) bool {
+	wanted := expectedWorkerMounts(request)
+	if inspection.mountIdentities != nil {
+		for destination, identity := range wanted {
+			if inspection.mountIdentities[destination] != identity {
+				return false
+			}
+		}
+		return true
+	}
+	for _, destination := range requiredInvocationMounts(request) {
+		if _, found := inspection.mountDestinations[destination]; !found {
+			return false
+		}
+	}
+	return true
+}
+
+// requiredInvocationMounts returns the mounts introduced by the visible
+// invocation seam; older adapters cannot safely compare the base mount sources.
+func requiredInvocationMounts(request StartRequest) []string {
+	required := make([]string, 0, 2)
+	if request.InvocationPath != "" {
+		required = append(required, InvocationPath)
+	}
+	if request.ResultPath != "" {
+		required = append(required, ResultPath)
+	}
+	return required
+}
+
+// expectedWorkerMounts returns the source identity for every immutable mount
+// that must be present before a worker can be reused.
+func expectedWorkerMounts(request StartRequest) map[string]string {
+	role := request.Role
+	if strings.TrimSpace(role) == "" {
+		role = "implementation"
+	}
+	wanted := map[string]string{
+		WorktreePath:    "bind:" + filepath.Clean(request.WorktreePath),
+		GitMetadataPath: "bind:" + filepath.Clean(request.GitMetadataPath),
+		"/home/factory": "volume:" + roleVolumeName(request.RunID, role),
+	}
+	if request.CredentialStoreID != "" {
+		wanted[CredentialPath] = "volume:" + credentialVolumeName(request.RunID, request.CredentialStoreID)
+	}
+	if request.InvocationPath != "" {
+		wanted[InvocationPath] = "bind:" + filepath.Clean(request.InvocationPath)
+	}
+	if request.ResultPath != "" {
+		wanted[ResultPath] = "bind:" + filepath.Clean(request.ResultPath)
+	}
+	for _, cache := range request.Caches {
+		wanted[filepath.Join(CachePath, cache.Name)] = "bind:" + filepath.Clean(cache.HostPath)
+	}
+	return wanted
 }
 
 // validateResumeRequest validates the worker run ID, image name, and immutable
@@ -526,6 +960,9 @@ func validateCacheMount(cache CacheMount, seen map[string]struct{}) error {
 	if !validName(cache.Name) {
 		return fmt.Errorf("cache name %q is invalid", cache.Name)
 	}
+	if hostHarnessDirectory(cache.HostPath) {
+		return fmt.Errorf("cache path %q targets a host harness directory", cache.HostPath)
+	}
 	if _, exists := seen[cache.Name]; exists {
 		return fmt.Errorf("cache name %q is duplicated", cache.Name)
 	}
@@ -533,10 +970,34 @@ func validateCacheMount(cache CacheMount, seen map[string]struct{}) error {
 	return ensureCacheDirectory(cache.HostPath)
 }
 
+// hostHarnessDirectory identifies the full Codex or Claude state directories
+// that may never cross the worker boundary as repository caches.
+func hostHarnessDirectory(path string) bool {
+	for _, component := range strings.Split(filepath.ToSlash(filepath.Clean(path)), "/") {
+		if component == ".codex" || component == ".claude" {
+			return true
+		}
+	}
+	return false
+}
+
 // validateEnvironmentEntry validates an environment variable name and value
 // for worker execution. It returns an error for invalid names, forbidden
 // characters, disallowed variables, or worker-reserved variables.
 func validateEnvironmentEntry(name, value string) error {
+	return validateEnvironmentEntryWithProtocol(name, value, false)
+}
+
+// validateInteractiveEnvironmentEntry allows only the coordinator's
+// invocation identity fields in addition to the ordinary non-secret values.
+func validateInteractiveEnvironmentEntry(name, value string) error {
+	return validateEnvironmentEntryWithProtocol(name, value, true)
+}
+
+// validateEnvironmentEntryWithProtocol validates one environment entry while
+// optionally allowing the small set of harness identity values that the
+// coordinator must pass to an interactive session.
+func validateEnvironmentEntryWithProtocol(name, value string, allowProtocol bool) error {
 	if !validEnvironmentName(name) {
 		return fmt.Errorf("environment name %q is invalid", name)
 	}
@@ -546,7 +1007,7 @@ func validateEnvironmentEntry(name, value string) error {
 	if forbiddenEnvironmentName(name) {
 		return fmt.Errorf("environment variable %q is not allowed in a worker", name)
 	}
-	if reservedEnvironmentName(name) {
+	if reservedEnvironmentName(name) && (!allowProtocol || !interactiveProtocolEnvironmentName(name)) {
 		return fmt.Errorf("environment variable %q is reserved by the worker", name)
 	}
 	return nil
@@ -597,16 +1058,15 @@ func validateMountContract(existingMounts []ContainerMount, request StartRequest
 		existingMountMap[mount.Destination] = mount
 	}
 
-	if len(existingMountMap) != len(requiredMounts) {
-		return fmt.Errorf("container has %d mounts, want %d mounts", len(existingMountMap), len(requiredMounts))
-	}
-
+	// The container may also carry mounts this contract does not track (for
+	// example the factory-managed credential and role volumes), so only the
+	// worktree, Git metadata, and cache mounts declared above are checked.
 	for destination, required := range requiredMounts {
 		existing, found := existingMountMap[destination]
 		if !found {
 			return fmt.Errorf("container missing mount at %q", destination)
 		}
-		if existing.Source != required.Source {
+		if filepath.Clean(existing.Source) != filepath.Clean(required.Source) {
 			return fmt.Errorf("mount at %q uses host path %q, want %q", destination, existing.Source, required.Source)
 		}
 		if existing.ReadOnly != required.ReadOnly {
@@ -637,6 +1097,20 @@ func prepareWorkerMounts(request StartRequest) ([]int, error) {
 	}{
 		{name: "worktree", path: request.WorktreePath},
 		{name: "Git metadata", path: request.GitMetadataPath, readOnly: true},
+	}
+	if request.InvocationPath != "" {
+		mounts = append(mounts, struct {
+			name     string
+			path     string
+			readOnly bool
+		}{name: "invocation", path: request.InvocationPath, readOnly: true})
+	}
+	if request.ResultPath != "" {
+		mounts = append(mounts, struct {
+			name     string
+			path     string
+			readOnly bool
+		}{name: "result", path: request.ResultPath})
 	}
 	for _, mount := range mounts {
 		if err := prepareWorkerMount(mount.path, mount.readOnly, groupIDs); err != nil {
@@ -834,7 +1308,18 @@ func forbiddenEnvironmentName(name string) bool {
 // stable paths, Git configuration, or clean-environment controls.
 func reservedEnvironmentName(name string) bool {
 	switch strings.ToUpper(name) {
-	case "HOME", "PATH", "TERM", "LANG", "LC_ALL", "FACTORY_RUN_ID", "FACTORY_ROLE", "GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2", "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS":
+	case "HOME", "PATH", "TERM", "LANG", "LC_ALL", "FACTORY_RUN_ID", "FACTORY_ROLE", "FACTORY_INVOCATION_ID", "FACTORY_HARNESS", "FACTORY_STAGE", "FACTORY_MODEL", "FACTORY_REASONING_EFFORT", "FACTORY_INVOCATION_DIR", "FACTORY_RESULT_DIR", "FACTORY_REPORT_COMMAND", "GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2", "GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS":
+		return true
+	default:
+		return false
+	}
+}
+
+// interactiveProtocolEnvironmentName identifies values supplied by the
+// coordinator to a visible harness rather than arbitrary worker commands.
+func interactiveProtocolEnvironmentName(name string) bool {
+	switch strings.ToUpper(name) {
+	case "FACTORY_INVOCATION_ID", "FACTORY_HARNESS", "FACTORY_STAGE", "FACTORY_MODEL", "FACTORY_REASONING_EFFORT":
 		return true
 	default:
 		return false
@@ -895,6 +1380,9 @@ func baselineEnvironment(runID string) []string {
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_ASKPASS=/bin/false",
 		"SSH_ASKPASS=/bin/false",
+		"FACTORY_INVOCATION_DIR=" + InvocationPath,
+		"FACTORY_RESULT_DIR=" + ResultPath,
+		"FACTORY_REPORT_COMMAND=/usr/local/bin/factory-report",
 	}
 }
 
@@ -906,13 +1394,21 @@ func commandEnvironment(request CommandRequest) []string {
 	if request.EnvironmentPolicy == EnvironmentPolicyRole {
 		entries = append(entries, "FACTORY_ROLE="+request.Role)
 	}
-	keys := make([]string, 0, len(request.Environment))
-	for key := range request.Environment {
+	entries = append(entries, explicitEnvironment(request.Environment)...)
+	return entries
+}
+
+// explicitEnvironment returns sorted caller-supplied entries without adding
+// worker baseline or role identity values that the adapter owns itself.
+func explicitEnvironment(environment map[string]string) []string {
+	keys := make([]string, 0, len(environment))
+	for key := range environment {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	entries := make([]string, 0, len(keys))
 	for _, key := range keys {
-		entries = append(entries, key+"="+request.Environment[key])
+		entries = append(entries, key+"="+environment[key])
 	}
 	return entries
 }
@@ -922,6 +1418,51 @@ func commandEnvironment(request CommandRequest) []string {
 func containerName(runID string) string {
 	digest := sha256.Sum256([]byte(runID))
 	return "factory-worker-" + hex.EncodeToString(digest[:])[:24]
+}
+
+// roleVolumeName derives a private Docker volume name from a run and role
+// without making the volume identity part of any portable workflow seam.
+func roleVolumeName(runID, role string) string {
+	digest := sha256.Sum256([]byte(runID + "\x00" + role))
+	return "factory-role-" + strings.ToLower(role) + "-" + hex.EncodeToString(digest[:])[:16]
+}
+
+// credentialVolumeName derives a persistent factory-managed credential volume
+// without exposing its coordinator-side key or the host auth path to Docker.
+func credentialVolumeName(runID, storeID string) string {
+	if strings.TrimSpace(storeID) == "" {
+		storeID = runID
+	}
+	digest := sha256.Sum256([]byte(storeID))
+	return "factory-auth-codex-" + hex.EncodeToString(digest[:])[:24]
+}
+
+// validateInteractiveRequest validates a harness command and its explicit
+// environment before it is handed to a terminal or Docker adapter.
+func validateInteractiveRequest(request InteractiveRequest) error {
+	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if len(request.Command) == 0 || strings.TrimSpace(request.Command[0]) == "" {
+		return errors.New("interactive harness command is required")
+	}
+	if request.EnvironmentPolicy != EnvironmentPolicyClean && request.EnvironmentPolicy != EnvironmentPolicyRole {
+		return errors.New("interactive environment policy must be clean or role")
+	}
+	if strings.TrimSpace(request.Role) == "" || !validName(request.Role) {
+		return errors.New("interactive harness role is required and must be safe")
+	}
+	for _, argument := range request.Command {
+		if strings.ContainsAny(argument, "\x00\r\n") {
+			return errors.New("interactive harness command contains control characters")
+		}
+	}
+	for name, value := range request.Environment {
+		if err := validateInteractiveEnvironmentEntry(name, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // isContainerNotFound reports whether err indicates that Docker could not find a

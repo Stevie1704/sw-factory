@@ -149,6 +149,92 @@ func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
 	}
 }
 
+// TestStoreMigratesSchemaThreeAndReadsLegacyEmptyPermittedPaths verifies the
+// invocation column migration remains compatible with rows whose old default
+// was an empty string rather than JSON.
+func TestStoreMigratesSchemaThreeAndReadsLegacyEmptyPermittedPaths(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySchema := `
+		CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
+		INSERT INTO schema_metadata(singleton, version) VALUES (1, 3);
+		CREATE TABLE operational_runs (
+			id TEXT PRIMARY KEY,
+			repository_path TEXT NOT NULL,
+			issue_number INTEGER NOT NULL,
+			stage TEXT NOT NULL,
+			status TEXT NOT NULL,
+			branch TEXT NOT NULL DEFAULT '',
+			worktree TEXT NOT NULL DEFAULT '',
+			checkpoint_sha TEXT NOT NULL DEFAULT '',
+			image_digest TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			coordinator TEXT NOT NULL DEFAULT '',
+			status_comment_id TEXT NOT NULL DEFAULT '',
+			specification_packet TEXT NOT NULL DEFAULT ''
+		);
+		CREATE UNIQUE INDEX one_active_run_per_repository
+			ON operational_runs (repository_path)
+			WHERE status NOT IN ('complete', 'cancelled', 'failed');`
+	if _, err := database.ExecContext(t.Context(), legacySchema); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() migration error = %v", err)
+	}
+	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
+	}
+	if err := opened.SaveInvocation(context.Background(), store.Invocation{
+		ID: "inv-migrated", RunID: "run-migrated", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusCompleted,
+	}); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveInvocation() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), "UPDATE invocations SET permitted_paths = '' WHERE id = 'inv-migrated'"); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	invocation, err := reopened.Invocation(context.Background(), "run-migrated", "inv-migrated")
+	if err != nil {
+		t.Fatalf("Invocation() error = %v", err)
+	}
+	if invocation == nil || len(invocation.PermittedPaths) != 0 {
+		t.Fatalf("Invocation() = %#v, want an invocation with empty permitted paths", invocation)
+	}
+}
+
 func TestOpenReopensAnExistingCurrentVersionStoreWithoutCreatingABackup(t *testing.T) {
 	t.Parallel()
 

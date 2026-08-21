@@ -24,13 +24,15 @@ type HostConfig struct {
 }
 
 type RepositoryRegistration struct {
-	Path                 string        `yaml:"path"`
-	GitHub               GitHubConfig  `yaml:"github"`
-	AuthorizedUsers      []string      `yaml:"authorized_users"`
-	Polling              PollingConfig `yaml:"polling"`
-	Cmux                 CmuxConfig    `yaml:"cmux"`
-	OperationalDataPath  string        `yaml:"operational_data_path"`
-	RepositoryConfigPath string        `yaml:"repository_config_path"`
+	Path            string        `yaml:"path"`
+	GitHub          GitHubConfig  `yaml:"github"`
+	AuthorizedUsers []string      `yaml:"authorized_users"`
+	Polling         PollingConfig `yaml:"polling"`
+	Cmux            CmuxConfig    `yaml:"cmux"`
+	// Authentication contains optional narrowly scoped host credential sources.
+	Authentication       AuthenticationConfig `yaml:"authentication"`
+	OperationalDataPath  string               `yaml:"operational_data_path"`
+	RepositoryConfigPath string               `yaml:"repository_config_path"`
 }
 
 type GitHubConfig struct {
@@ -46,6 +48,13 @@ type PollingConfig struct {
 type CmuxConfig struct {
 	SocketPath       string `yaml:"socket_path"`
 	ControlWorkspace string `yaml:"control_workspace"`
+}
+
+// AuthenticationConfig identifies narrowly scoped host credential sources.
+// The factory stores the path, never the credential contents.
+type AuthenticationConfig struct {
+	// CodexAuthPath is an optional host path to one Codex auth.json file.
+	CodexAuthPath string `yaml:"codex_auth_path"`
 }
 
 type RepositoryConfig struct {
@@ -477,6 +486,14 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	}
 	if repository.Cmux.SocketPath != "" && !filepath.IsAbs(repository.Cmux.SocketPath) {
 		return validation(prefix+".cmux.socket_path", "must be absolute when set")
+	}
+	if repository.Authentication.CodexAuthPath != "" {
+		if strings.ContainsAny(repository.Authentication.CodexAuthPath, "\x00\r\n") {
+			return validation(prefix+".authentication.codex_auth_path", "must not contain control characters")
+		}
+		if !filepath.IsAbs(repository.Authentication.CodexAuthPath) {
+			return validation(prefix+".authentication.codex_auth_path", "must be absolute when set")
+		}
 	}
 	if strings.TrimSpace(repository.RepositoryConfigPath) == "" {
 		return validation(prefix+".repository_config_path", "is required")

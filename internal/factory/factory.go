@@ -7,13 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/google/uuid"
 )
@@ -25,6 +28,12 @@ type Factory interface {
 	BootstrapLabels(context.Context) (BootstrapLabelsResult, error)
 	RunCoordinator
 	RunGate(context.Context, RunGateRequest) (gate.Result, error)
+	// StartAgent launches the visible Codex implementation role for an active run.
+	StartAgent(context.Context, AgentRequest) (AgentLaunchResult, error)
+	// AcceptAgentReport validates and accepts one structured visible-agent handoff.
+	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
+	// RunAgent launches a visible agent and accepts its already-written report.
+	RunAgent(context.Context, AgentRequest) (AgentResult, error)
 	Status(context.Context) (StatusResult, error)
 }
 
@@ -85,14 +94,21 @@ type Dependencies struct {
 	CommitStatuses  github.CommitStatusPublisher
 	Worktree        gitadapter.WorktreeManager
 	Worker          worker.WorkerRuntime
-	Now             Clock
-	NewRunID        RunIDGenerator
-	Coordinator     string
+	// Terminal owns visible control and run workspaces.
+	Terminal terminal.TerminalRuntime
+	// Harness owns interactive role lifecycle and native session recovery.
+	Harness     harness.Runtime
+	Now         Clock
+	NewRunID    RunIDGenerator
+	Coordinator string
 }
 
 type Service struct {
-	configPath string
-	deps       Dependencies
+	configPath        string
+	deps              Dependencies
+	runtimeMu         sync.Mutex
+	runtimeSocketPath string
+	runtimePathSet    bool
 }
 
 type InitResult struct {
@@ -109,6 +125,8 @@ type RegisterRequest struct {
 	PollingBackoff       string
 	CmuxSocketPath       string
 	CmuxControlWorkspace string
+	// CodexAuthPath is an optional host-side Codex auth.json path.
+	CodexAuthPath        string
 	RepositoryConfigPath string
 }
 
@@ -190,6 +208,30 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	return &Service{configPath: configPath, deps: dependencies}
 }
 
+// ensureAgentRuntime lazily constructs the default terminal and harness only
+// after registration has supplied the cmux socket path. The mutex keeps the
+// first construction atomic without mutating a live runtime during a launch.
+// A service owns one registered cmux endpoint, so a later conflicting path is
+// rejected rather than silently reusing the wrong terminal adapter.
+func (s *Service) ensureAgentRuntime(socketPath string) (terminal.TerminalRuntime, harness.Runtime, error) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	if s.runtimePathSet && s.runtimeSocketPath != socketPath {
+		return nil, nil, fmt.Errorf("cmux socket path %q conflicts with cached path %q", socketPath, s.runtimeSocketPath)
+	}
+	if !s.runtimePathSet {
+		s.runtimeSocketPath = socketPath
+		s.runtimePathSet = true
+	}
+	if s.deps.Terminal == nil {
+		s.deps.Terminal = terminal.NewCmuxRuntime(nil, socketPath)
+	}
+	if s.deps.Harness == nil {
+		s.deps.Harness = harness.NewCodex(s.deps.Worker, s.deps.Terminal)
+	}
+	return s.deps.Terminal, s.deps.Harness, nil
+}
+
 func (s *Service) Init(_ context.Context) (InitResult, error) {
 	if s.configPath == "" {
 		return InitResult{}, errors.New("host configuration path is required")
@@ -249,6 +291,7 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		AuthorizedUsers:      request.AuthorizedUsers,
 		Polling:              config.PollingConfig{Interval: defaultString(request.PollingInterval, "30s"), Backoff: defaultString(request.PollingBackoff, "5m")},
 		Cmux:                 config.CmuxConfig{SocketPath: request.CmuxSocketPath, ControlWorkspace: request.CmuxControlWorkspace},
+		Authentication:       config.AuthenticationConfig{CodexAuthPath: request.CodexAuthPath},
 		OperationalDataPath:  operationalPath,
 		RepositoryConfigPath: repositoryConfigPath,
 	}

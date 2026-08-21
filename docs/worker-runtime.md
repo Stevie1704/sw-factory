@@ -22,6 +22,9 @@ The Docker adapter uses these stable paths regardless of the host checkout:
 | `/work` | read-write | The run worktree |
 | `/git` | read-only | A credential-free projection of Git metadata needed for history and diffs |
 | `/cache/<name>` | declared per cache | A repository cache |
+| `/invocation` | read-only | The frozen invocation packet for the active role |
+| `/results` | read-write | The invocation-scoped `report.json` result directory |
+| `/run/factory-auth` | managed; written only by the adapter, read-only for the role | A factory-managed Codex credential volume, separate from role session state |
 
 Workers run as uid/gid `10001:10001`, drop all capabilities, disable privilege
 escalation, and use the ordinary bridge network for public research access.
@@ -40,6 +43,14 @@ read-only Git projections and read-only caches use group `rx`/`r`; Docker's
 read-only mount flag prevents container writes. The fixed worker UID can access
 the declared paths without changing ownership or relying on world permissions.
 
+The worker's role home is a private Docker volume derived from the run and role.
+It is not a host-home mount. When a Codex auth source is configured, the adapter
+reads only the explicit `auth.json` file and streams it into a separate,
+factory-managed credential volume. Codex sees a link to that copy from the role
+home, while session files remain in the role volume. The host harness directory
+is never mounted and the host source is never written back; fresh roles can
+reuse credentials without inheriting another role's session context.
+
 The coordinator prepares `/git` from the repository's objects, refs, and
 worktree state. Git configuration, remote definitions, hooks, submodules, and
 host-specific worktree indirection are omitted, so repository history and diff
@@ -55,3 +66,18 @@ to decide success.
 The contract tests use a controlled Docker executable. Live Docker, harness,
 and terminal checks remain environment checks and are not ordinary unit-test
 dependencies.
+
+## Visible harness attach
+
+`InteractiveRuntime` extends the worker seam with an opaque attach command. The
+Docker adapter returns the host helper `factory-worker-attach` plus a run
+identifier, role environment, and harness command. The helper derives the
+private container name inside the worker adapter and attaches `docker exec -it`
+to the current process streams. A terminal adapter can therefore launch Codex
+in a real pseudo-terminal without learning Docker identifiers.
+
+The terminal surface is for observation and human input only. The coordinator
+does not scrape its output. A harness publishes completion with
+`factory-report`, which atomically writes a schema-versioned JSON report below
+`/results`; the coordinator validates that report against the persisted
+invocation, current worktree, permitted paths, and stage invariants.
