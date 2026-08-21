@@ -104,9 +104,11 @@ type Dependencies struct {
 }
 
 type Service struct {
-	configPath string
-	deps       Dependencies
-	runtimeMu  sync.Mutex
+	configPath        string
+	deps              Dependencies
+	runtimeMu         sync.Mutex
+	runtimeSocketPath string
+	runtimePathSet    bool
 }
 
 type InitResult struct {
@@ -209,16 +211,25 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 // ensureAgentRuntime lazily constructs the default terminal and harness only
 // after registration has supplied the cmux socket path. The mutex keeps the
 // first construction atomic without mutating a live runtime during a launch.
-func (s *Service) ensureAgentRuntime(socketPath string) (terminal.TerminalRuntime, harness.Runtime) {
+// A service owns one registered cmux endpoint, so a later conflicting path is
+// rejected rather than silently reusing the wrong terminal adapter.
+func (s *Service) ensureAgentRuntime(socketPath string) (terminal.TerminalRuntime, harness.Runtime, error) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
+	if s.runtimePathSet && s.runtimeSocketPath != socketPath {
+		return nil, nil, fmt.Errorf("cmux socket path %q conflicts with cached path %q", socketPath, s.runtimeSocketPath)
+	}
+	if !s.runtimePathSet {
+		s.runtimeSocketPath = socketPath
+		s.runtimePathSet = true
+	}
 	if s.deps.Terminal == nil {
 		s.deps.Terminal = terminal.NewCmuxRuntime(nil, socketPath)
 	}
 	if s.deps.Harness == nil {
 		s.deps.Harness = harness.NewCodex(s.deps.Worker, s.deps.Terminal)
 	}
-	return s.deps.Terminal, s.deps.Harness
+	return s.deps.Terminal, s.deps.Harness, nil
 }
 
 func (s *Service) Init(_ context.Context) (InitResult, error) {

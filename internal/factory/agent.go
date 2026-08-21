@@ -173,7 +173,10 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 			return AgentLaunchResult{}, errors.New("worker runtime does not support Codex credential seeding")
 		}
 	}
-	terminalRuntime, harnessRuntime := s.ensureAgentRuntime(registration.Cmux.SocketPath)
+	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath)
+	if err != nil {
+		return AgentLaunchResult{}, fmt.Errorf("ensure agent runtime: %w", err)
+	}
 	runID, err := s.deps.NewRunID()
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("generate invocation identifier: %w", err)
@@ -415,7 +418,10 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if err := report.Validate(value, validationContext); err != nil {
 		return AgentResult{}, err
 	}
-	_, harnessRuntime := s.ensureAgentRuntime(registration.Cmux.SocketPath)
+	_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath)
+	if err != nil {
+		return AgentResult{}, fmt.Errorf("ensure agent runtime: %w", err)
+	}
 	nativeSessionID := invocation.NativeSessionID
 	if invocation.NativeSessionID != "" {
 		if value.NativeSessionID != "" && value.NativeSessionID != invocation.NativeSessionID {
