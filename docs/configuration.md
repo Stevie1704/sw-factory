@@ -181,6 +181,57 @@ regenerates only that marked section, and preserves human-authored text around
 it. The issue's single factory state label and editable status comment move to
 the `draft_pr` stage at the same transition.
 
+## End-to-end demonstration
+
+The tracer-bullet acceptance path is an operator-run check against a disposable
+repository and issue. Do not use a production repository: the path creates a
+factory branch, changes the issue's factory label and status comment, pushes
+the branch, and opens a draft pull request.
+
+Before starting, prepare a dedicated GitHub repository with a checked-in
+`factory.yaml`, a fresh open issue carrying `agent-ready`, valid `gh` login,
+Docker with the configured worker image available, a running cmux session, and
+the host Codex `auth.json` path registered in the host configuration. Build the
+three local commands from this checkout (`factory`, `factory-report`, and
+`factory-worker-attach`) so the worker image can invoke the pinned report
+command.
+
+Run the path in this order:
+
+```sh
+factory bootstrap-labels --config /Users/me/.config/factory/config.yaml
+factory issue --config /Users/me/.config/factory/config.yaml <issue-number>
+factory agent --config /Users/me/.config/factory/config.yaml --run-id <run-id>
+
+# In the visible implementation surface, make the requested small change and
+# submit its structured report with factory-report.
+factory agent-report \
+  --config /Users/me/.config/factory/config.yaml \
+  --run-id <run-id> \
+  --invocation-id <invocation-id>
+factory draft-pr \
+  --config /Users/me/.config/factory/config.yaml \
+  --run-id <run-id>
+```
+
+Record the command output and verify the demonstration at each boundary:
+
+- the issue has exactly one factory state label and one editable status comment;
+- the worker reaches the visible Codex session, while its container has no Git
+  remote or GitHub credential access;
+- the run worktree contains one `factory: implementation checkpoint <run-id>`
+  commit, and `git ls-remote` shows the pushed `factory/<run-id>` branch only
+  after every configured gate passes;
+- the GitHub pull request is draft, targets the configured base branch, and
+  contains the generated factory markers and gate summary;
+- repeating `factory draft-pr` updates that same pull request and retains text
+  outside the generated markers; and
+- `factory status` and the issue's status comment report `draft_pr`.
+
+Keep the resulting pull-request URL and the status-comment URL as the
+demonstration evidence. Close the disposable pull request and issue, then
+remove the run's local worktree and operational database after inspection.
+
 ## Operational SQLite store
 
 The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
