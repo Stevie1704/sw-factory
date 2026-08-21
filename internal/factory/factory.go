@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -105,6 +106,7 @@ type Dependencies struct {
 type Service struct {
 	configPath string
 	deps       Dependencies
+	runtimeMu  sync.Mutex
 }
 
 type InitResult struct {
@@ -192,12 +194,6 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.Worker == nil {
 		dependencies.Worker = worker.NewDockerRuntime()
 	}
-	if dependencies.Terminal == nil {
-		dependencies.Terminal = terminal.NewCmuxRuntime(nil)
-	}
-	if dependencies.Harness == nil {
-		dependencies.Harness = harness.NewCodex(dependencies.Worker, dependencies.Terminal)
-	}
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
@@ -208,6 +204,21 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		dependencies.Coordinator = defaultCoordinator()
 	}
 	return &Service{configPath: configPath, deps: dependencies}
+}
+
+// ensureAgentRuntime lazily constructs the default terminal and harness only
+// after registration has supplied the cmux socket path. The mutex keeps the
+// first construction atomic without mutating a live runtime during a launch.
+func (s *Service) ensureAgentRuntime(socketPath string) (terminal.TerminalRuntime, harness.Runtime) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	if s.deps.Terminal == nil {
+		s.deps.Terminal = terminal.NewCmuxRuntime(nil, socketPath)
+	}
+	if s.deps.Harness == nil {
+		s.deps.Harness = harness.NewCodex(s.deps.Worker, s.deps.Terminal)
+	}
+	return s.deps.Terminal, s.deps.Harness
 }
 
 func (s *Service) Init(_ context.Context) (InitResult, error) {

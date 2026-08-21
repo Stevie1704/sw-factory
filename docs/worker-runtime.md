@@ -22,7 +22,7 @@ The Docker adapter uses these stable paths regardless of the host checkout:
 | `/cache/<name>` | declared per cache | A repository cache |
 | `/invocation` | read-only | The frozen invocation packet for the active role |
 | `/results` | read-write | The invocation-scoped `report.json` result directory |
-| `/run/factory-auth` | managed/read-only | A factory-managed Codex credential volume, separate from role session state |
+| `/run/factory-auth` | managed; written only by the adapter, read-only for the role | A factory-managed Codex credential volume, separate from role session state |
 
 Workers run as uid/gid `10001:10001`, drop all capabilities, disable privilege
 escalation, and use the ordinary bridge network for public research access.

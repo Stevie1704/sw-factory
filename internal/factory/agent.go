@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -172,6 +173,7 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 			return AgentLaunchResult{}, errors.New("worker runtime does not support Codex credential seeding")
 		}
 	}
+	terminalRuntime, harnessRuntime := s.ensureAgentRuntime(registration.Cmux.SocketPath)
 	runID, err := s.deps.NewRunID()
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("generate invocation identifier: %w", err)
@@ -235,14 +237,16 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 		if returnErr == nil || !invocationPersisted {
 			return
 		}
+		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 		invocation.Status = store.InvocationStatusCannotProceed
 		invocation.UpdatedAt = s.deps.Now().UTC()
-		_ = invocationStore.SaveInvocation(ctx, invocation)
+		_ = invocationStore.SaveInvocation(rollbackContext, invocation)
 		if workerStarted {
-			_ = s.deps.Worker.Stop(ctx, run.ID)
+			_ = s.deps.Worker.Stop(rollbackContext, run.ID)
 		}
 		if cleanupSurface.ID != "" {
-			_ = s.deps.Terminal.CloseSurface(ctx, cleanupSurface.ID)
+			_ = terminalRuntime.CloseSurface(rollbackContext, cleanupSurface.ID)
 		}
 	}()
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
@@ -277,10 +281,7 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 			return AgentLaunchResult{}, err
 		}
 	}
-	if cmux, ok := s.deps.Terminal.(*terminal.CmuxRuntime); ok {
-		cmux.SocketPath = registration.Cmux.SocketPath
-	}
-	control, err := s.deps.Terminal.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
+	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
 		Name:             defaultString(registration.Cmux.ControlWorkspace, "factory-control"),
 		Description:      "software factory coordinator",
 		WorkingDirectory: registration.Path,
@@ -288,7 +289,7 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
-	runWorkspace, err := s.deps.Terminal.EnsureRunWorkspace(ctx, terminal.RunWorkspaceRequest{
+	runWorkspace, err := terminalRuntime.EnsureRunWorkspace(ctx, terminal.RunWorkspaceRequest{
 		RunID:            run.ID,
 		Name:             "factory-" + run.ID,
 		Description:      fmt.Sprintf("factory run for issue #%d", run.IssueNumber),
@@ -305,10 +306,10 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist visible terminal handles: %w", err)
 	}
-	if err := s.deps.Terminal.Notify(ctx, terminal.Notification{WorkspaceID: control.ID, Title: "factory run started", Body: run.ID + " implementation agent active"}); err != nil {
+	if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: control.ID, Title: "factory run started", Body: run.ID + " implementation agent active"}); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	session, err := s.deps.Harness.Start(ctx, harness.StartRequest{
+	session, err := harnessRuntime.Start(ctx, harness.StartRequest{
 		InvocationID:    invocationID,
 		RunID:           run.ID,
 		Role:            role,
@@ -414,6 +415,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if err := report.Validate(value, validationContext); err != nil {
 		return AgentResult{}, err
 	}
+	_, harnessRuntime := s.ensureAgentRuntime(registration.Cmux.SocketPath)
 	nativeSessionID := invocation.NativeSessionID
 	if value.NativeSessionID != "" {
 		nativeSessionID = value.NativeSessionID
@@ -421,7 +423,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if nativeSessionID == "" {
 		return AgentResult{}, errors.New("accepted agent report must retain a native session identifier")
 	}
-	if err := s.deps.Harness.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: nativeSessionID, Surface: terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID), Name: invocation.Role}}); err != nil {
+	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: nativeSessionID, Surface: terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID), Name: invocation.Role}}); err != nil {
 		return AgentResult{}, fmt.Errorf("finish accepted harness session: %w", err)
 	}
 	invocation.NativeSessionID = nativeSessionID

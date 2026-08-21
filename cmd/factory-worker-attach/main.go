@@ -16,12 +16,16 @@ import (
 // main parses only the opaque run identity and explicit environment, then
 // delegates private Docker naming and PTY attachment to the worker adapter.
 func main() {
-	flags := flag.NewFlagSet("factory-worker-attach", flag.ExitOnError)
+	flags := flag.NewFlagSet("factory-worker-attach", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
 	runID := flags.String("run-id", "", "factory run identifier")
 	role := flags.String("role", "implementation", "factory workflow role")
 	environment := stringList{}
 	flags.Var(&environment, "env", "explicit worker environment; may be repeated")
 	if err := flags.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		os.Exit(2)
 	}
 	if flags.NArg() == 0 || strings.TrimSpace(*runID) == "" {

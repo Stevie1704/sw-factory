@@ -2,6 +2,9 @@ package worker_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,14 +53,15 @@ func TestDockerRuntimeMountsInvocationAndResultDirectories(t *testing.T) {
 	results := makeDirectory(t, "results")
 	runtime := &worker.DockerRuntime{DockerBinary: stub}
 	if err := runtime.Start(context.Background(), worker.StartRequest{
-		RunID:           "run-report-mounts",
-		WorktreePath:    worktree,
-		GitMetadataPath: gitMetadata,
-		InvocationPath:  invocation,
-		ResultPath:      results,
-		Role:            "implementation",
-		Image:           "ghcr.io/example/factory-worker",
-		ImageDigest:     interactiveWorkerDigest,
+		RunID:             "run-report-mounts",
+		WorktreePath:      worktree,
+		GitMetadataPath:   gitMetadata,
+		InvocationPath:    invocation,
+		ResultPath:        results,
+		CredentialStoreID: "registration",
+		Role:              "implementation",
+		Image:             "ghcr.io/example/factory-worker",
+		ImageDigest:       interactiveWorkerDigest,
 	}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -82,20 +86,37 @@ func TestDockerRuntimeRecreatesAnExistingWorkerForInvocationMounts(t *testing.T)
 		RunID:           "run-reconfigure",
 		WorktreePath:    worktree,
 		GitMetadataPath: gitMetadata,
-		Role:            "implementation",
+		Role:            "gate",
 		Image:           "ghcr.io/example/factory-worker",
 		ImageDigest:     interactiveWorkerDigest,
 	}
 	if err := runtime.Start(context.Background(), base); err != nil {
 		t.Fatalf("base Start() error = %v", err)
 	}
+	inspectionPath := filepath.Join(t.TempDir(), "inspection.json")
+	inspection, marshalErr := json.Marshal(map[string]any{
+		"State":  map[string]bool{"Running": true},
+		"Config": map[string]string{"Image": "ghcr.io/example/factory-worker@" + interactiveWorkerDigest},
+		"Mounts": []map[string]string{
+			{"Type": "bind", "Source": worktree, "Destination": worker.WorktreePath},
+			{"Type": "bind", "Source": gitMetadata, "Destination": worker.GitMetadataPath},
+			{"Type": "volume", "Name": testRoleVolumeName(base.RunID, base.Role), "Destination": "/home/factory"},
+		},
+	})
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if err := os.WriteFile(inspectionPath, inspection, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKER_DOCKER_INSPECT_JSON_FILE", inspectionPath)
 	if err := runtime.Start(context.Background(), worker.StartRequest{
 		RunID:           base.RunID,
 		WorktreePath:    worktree,
 		GitMetadataPath: gitMetadata,
 		InvocationPath:  makeDirectory(t, "invocation"),
 		ResultPath:      makeDirectory(t, "results"),
-		Role:            base.Role,
+		Role:            "implementation",
 		Image:           base.Image,
 		ImageDigest:     base.ImageDigest,
 	}); err != nil {
@@ -105,6 +126,13 @@ func TestDockerRuntimeRecreatesAnExistingWorkerForInvocationMounts(t *testing.T)
 	if countLogLines(lines, " run ") != 2 || countLogLines(lines, " rm ") != 1 {
 		t.Fatalf("Docker reconfiguration calls = %#v, want stop/rm and replacement run", lines)
 	}
+}
+
+// testRoleVolumeName mirrors only the stable test fixture identity needed to
+// build a structured Docker inspect response without exposing adapter code.
+func testRoleVolumeName(runID, role string) string {
+	digest := sha256.Sum256([]byte(runID + "\x00" + role))
+	return "factory-role-" + role + "-" + hex.EncodeToString(digest[:])[:16]
 }
 
 // TestDockerRuntimeSeedsOnlyTheCodexCredentialFile verifies that seeding reads

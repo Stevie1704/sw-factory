@@ -119,6 +119,9 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	if strings.Contains(runLine, "docker.sock") {
 		t.Fatalf("worker start mounted the Docker socket: %q", runLine)
 	}
+	if strings.Contains(runLine, "dst="+worker.CredentialPath) {
+		t.Fatalf("worker without credentials mounted the credential volume: %q", runLine)
+	}
 	execLines := findLogLines(lines, " exec ")
 	if len(execLines) != 2 {
 		t.Fatalf("Docker exec calls = %d, want clean and role calls; calls = %#v", len(execLines), lines)
@@ -316,6 +319,10 @@ case "$command_name" in
       exit 1
     fi
     state=$(cat "$WORKER_DOCKER_STATE")
+    if [ -n "${WORKER_DOCKER_INSPECT_JSON_FILE:-}" ]; then
+      cat "$WORKER_DOCKER_INSPECT_JSON_FILE"
+      exit 0
+    fi
     if [ "$state" = "running" ]; then
       printf 'true\t%s\n' "$WORKER_DOCKER_IMAGE"
     else

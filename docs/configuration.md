@@ -148,7 +148,7 @@ prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 5 and persists invocation
+result. The operational store schema is version 6 and persists invocation
 identity, opaque surface handles, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state.
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -17,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 // runTimestampLayout keeps serialized run timestamps fixed-width so SQLite
 // text ordering matches chronological ordering for sub-second timestamps.
@@ -427,6 +428,9 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.UpdatedAt.UTC().Format(runTimestampLayout),
 	)
 	if err != nil {
+		if isActiveInvocationConflict(err) {
+			return fmt.Errorf("save invocation: active invocation already exists for run %q: %w", invocation.RunID, err)
+		}
 		return fmt.Errorf("save invocation: %w", err)
 	}
 	return nil
@@ -664,6 +668,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			if _, err := tx.ExecContext(ctx, `ALTER TABLE invocations ADD COLUMN permitted_paths TEXT NOT NULL DEFAULT ''`); err != nil {
 				return fmt.Errorf("apply store migration 5: %w", err)
 			}
+		case 6:
+			if err := reconcileDuplicateInvocations(ctx, tx); err != nil {
+				return fmt.Errorf("reconcile invocations before store migration 6: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_invocation_per_run
+				ON invocations (run_id)
+				WHERE status = 'active'`); err != nil {
+				return fmt.Errorf("apply store migration 6: %w", err)
+			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
 		}
@@ -731,6 +744,66 @@ func reconcileDuplicateRuns(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// reconcileDuplicateInvocations keeps the newest active invocation per run
+// before the partial unique index is created for migrated stores.
+func reconcileDuplicateInvocations(ctx context.Context, tx *sql.Tx) error {
+	type invocationCandidate struct {
+		id        string
+		updatedAt time.Time
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, run_id, updated_at
+		FROM invocations
+		WHERE status = ?`, InvocationStatusActive)
+	if err != nil {
+		return fmt.Errorf("list active invocations: %w", err)
+	}
+	newestByRun := make(map[string]invocationCandidate)
+	duplicates := make([]string, 0)
+	for rows.Next() {
+		var id, runID, updatedAt string
+		if err := rows.Scan(&id, &runID, &updatedAt); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan invocation for reconciliation: %w", err)
+		}
+		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("parse invocation updated_at for reconciliation: %w", err)
+		}
+		candidate := invocationCandidate{id: id, updatedAt: parsedUpdatedAt}
+		current, exists := newestByRun[runID]
+		if !exists || parsedUpdatedAt.After(current.updatedAt) || (parsedUpdatedAt.Equal(current.updatedAt) && id > current.id) {
+			if exists {
+				duplicates = append(duplicates, current.id)
+			}
+			newestByRun[runID] = candidate
+		} else {
+			duplicates = append(duplicates, candidate.id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read invocations for reconciliation: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close invocations for reconciliation: %w", err)
+	}
+	for _, id := range duplicates {
+		if _, err := tx.ExecContext(ctx, "UPDATE invocations SET status = ? WHERE id = ?", InvocationStatusCannotProceed, id); err != nil {
+			return fmt.Errorf("mark duplicate invocation %q unavailable: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// isActiveInvocationConflict recognizes the migration-created unique index
+// without depending on a driver-specific SQLite error type.
+func isActiveInvocationConflict(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "one_active_invocation_per_run") || strings.Contains(message, "unique constraint failed: invocations.run_id")
 }
 
 // backupDatabase creates a private 0600 backup of the database and returns its path.

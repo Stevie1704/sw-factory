@@ -13,10 +13,30 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // SchemaVersion is the version of the agent report envelope.
 const SchemaVersion = 1
+
+// MaxReportBytes is the maximum serialized report size accepted by the
+// coordinator and report writer.
+const MaxReportBytes = 256 << 10
+
+const (
+	maxSummaryRunes       = 2000
+	maxChangeSummaryRunes = 4000
+	maxTextRunes          = 4000
+	maxPathRunes          = 1024
+	maxIdentifierRunes    = 256
+	maxAcceptanceMappings = 64
+	maxProductionFiles    = 256
+	maxFocusedCommands    = 128
+	maxKnownLimitations   = 64
+	maxPermittedPaths     = 128
+	maxQuestions          = 32
+	maxEvidenceEntries    = 32
+)
 
 // ReportFileName is the only accepted report filename in an invocation result
 // directory.
@@ -130,13 +150,7 @@ type ValidationContext struct {
 // invocation-specific result directory. A temporary file is synced and
 // renamed so readers never observe a partial JSON document.
 func WriteAtomic(resultDirectory string, value Report) (string, error) {
-	if err := Validate(value, ValidationContext{
-		InvocationID: value.InvocationID,
-		RunID:        value.RunID,
-		Harness:      value.Harness,
-		Role:         value.Role,
-		Stage:        value.Stage,
-	}); err != nil {
+	if err := Validate(value, identityFrom(value, value.InvocationID)); err != nil {
 		return "", err
 	}
 	if err := validateInvocationDirectory(resultDirectory, value.InvocationID); err != nil {
@@ -150,13 +164,7 @@ func WriteAtomic(resultDirectory string, value Report) (string, error) {
 // identity parameter keeps the protocol safe even though the in-worker mount
 // itself is named /results rather than after the host invocation id.
 func WriteAtomicForInvocation(resultDirectory, invocationID string, value Report) (string, error) {
-	if err := Validate(value, ValidationContext{
-		InvocationID: invocationID,
-		RunID:        value.RunID,
-		Harness:      value.Harness,
-		Role:         value.Role,
-		Stage:        value.Stage,
-	}); err != nil {
+	if err := Validate(value, identityFrom(value, invocationID)); err != nil {
 		return "", err
 	}
 	if !filepath.IsAbs(resultDirectory) {
@@ -185,6 +193,9 @@ func writeAtomicReport(resultDirectory string, value Report) (string, error) {
 		return "", fmt.Errorf("encode agent report: %w", err)
 	}
 	data = append(data, '\n')
+	if len(data) > MaxReportBytes {
+		return "", fmt.Errorf("agent report exceeds the %d-byte limit", MaxReportBytes)
+	}
 	temporary, err := os.CreateTemp(resultDirectory, ".report-*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("create temporary agent report: %w", err)
@@ -234,9 +245,17 @@ func Read(path string) (Report, error) {
 	} else if !info.Mode().IsRegular() {
 		return Report{}, errors.New("agent report path must be a regular file")
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return Report{}, fmt.Errorf("read agent report: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, int64(MaxReportBytes)+1))
+	if err != nil {
+		return Report{}, fmt.Errorf("read agent report: %w", err)
+	}
+	if len(data) > MaxReportBytes {
+		return Report{}, fmt.Errorf("agent report exceeds the %d-byte limit", MaxReportBytes)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -250,13 +269,7 @@ func Read(path string) (Report, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return Report{}, fmt.Errorf("read trailing agent report data: %w", err)
 	}
-	if err := Validate(value, ValidationContext{
-		InvocationID: value.InvocationID,
-		RunID:        value.RunID,
-		Harness:      value.Harness,
-		Role:         value.Role,
-		Stage:        value.Stage,
-	}); err != nil {
+	if err := Validate(value, identityFrom(value, value.InvocationID)); err != nil {
 		return Report{}, err
 	}
 	return value, nil
@@ -287,10 +300,10 @@ func Validate(value Report, context ValidationContext) error {
 	if !safeIdentifier(value.InvocationID) || !safeIdentifier(value.RunID) {
 		return errors.New("report identifiers contain unsafe characters")
 	}
-	if strings.TrimSpace(value.Summary) == "" || strings.ContainsAny(value.Summary, "\x00\r\n") {
-		return errors.New("report summary must be a nonempty single line")
+	if err := validateText("report summary", value.Summary, maxSummaryRunes, true); err != nil {
+		return err
 	}
-	if value.ReportedAt.IsZero() || value.ReportedAt.Location() == nil {
+	if value.ReportedAt.IsZero() {
 		return errors.New("report reported_at is required")
 	}
 	switch value.Outcome {
@@ -336,15 +349,21 @@ func Validate(value Report, context ValidationContext) error {
 // validateHandoff checks handoff text, path safety, permitted prefixes, and
 // agreement with the coordinator's observed worktree changes.
 func validateHandoff(value Handoff, context ValidationContext) error {
-	if strings.TrimSpace(value.ChangeSummary) == "" || strings.ContainsAny(value.ChangeSummary, "\x00\r\n") {
-		return errors.New("completed handoff change_summary is required")
+	if err := validateText("completed handoff change_summary", value.ChangeSummary, maxChangeSummaryRunes, true); err != nil {
+		return err
 	}
 	if len(value.AcceptanceMapping) == 0 {
 		return errors.New("completed handoff acceptance_mapping is required")
 	}
+	if len(value.AcceptanceMapping) > maxAcceptanceMappings {
+		return fmt.Errorf("completed handoff acceptance_mapping exceeds %d entries", maxAcceptanceMappings)
+	}
 	for index, mapping := range value.AcceptanceMapping {
-		if strings.TrimSpace(mapping.Criterion) == "" || strings.TrimSpace(mapping.Evidence) == "" || strings.ContainsAny(mapping.Criterion+mapping.Evidence, "\x00\r\n") {
-			return fmt.Errorf("acceptance_mapping[%d] requires criterion and evidence", index)
+		if err := validateText(fmt.Sprintf("acceptance_mapping[%d].criterion", index), mapping.Criterion, maxTextRunes, true); err != nil {
+			return err
+		}
+		if err := validateText(fmt.Sprintf("acceptance_mapping[%d].evidence", index), mapping.Evidence, maxTextRunes, true); err != nil {
+			return err
 		}
 	}
 	observed := make(map[string]struct{}, len(context.ObservedChanges))
@@ -358,7 +377,13 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 			return fmt.Errorf("observed worktree path %q is outside permitted paths", path)
 		}
 	}
+	if len(value.ProductionFilesChanged) > maxProductionFiles {
+		return fmt.Errorf("production_files_changed exceeds %d entries", maxProductionFiles)
+	}
 	for index, path := range value.ProductionFilesChanged {
+		if err := validateText(fmt.Sprintf("production_files_changed[%d]", index), path, maxPathRunes, true); err != nil {
+			return err
+		}
 		clean, err := cleanRelativePath(path)
 		if err != nil {
 			return fmt.Errorf("production_files_changed[%d]: %w", index, err)
@@ -382,14 +407,20 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 	if len(value.FocusedCommands) == 0 {
 		return errors.New("completed handoff focused_commands is required")
 	}
+	if len(value.FocusedCommands) > maxFocusedCommands {
+		return fmt.Errorf("focused_commands exceeds %d entries", maxFocusedCommands)
+	}
 	for index, command := range value.FocusedCommands {
-		if strings.TrimSpace(command) == "" || strings.ContainsAny(command, "\x00\r\n") {
-			return fmt.Errorf("focused_commands[%d] must be a nonempty single line", index)
+		if err := validateText(fmt.Sprintf("focused_commands[%d]", index), command, maxTextRunes, true); err != nil {
+			return err
 		}
 	}
+	if len(value.KnownLimitations) > maxKnownLimitations {
+		return fmt.Errorf("known_limitations exceeds %d entries", maxKnownLimitations)
+	}
 	for index, limitation := range value.KnownLimitations {
-		if strings.TrimSpace(limitation) == "" || strings.ContainsAny(limitation, "\x00\r\n") {
-			return fmt.Errorf("known_limitations[%d] must be a nonempty single line", index)
+		if err := validateText(fmt.Sprintf("known_limitations[%d]", index), limitation, maxTextRunes, true); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -398,9 +429,15 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 // ValidatePermittedPaths validates the repository-relative prefixes stored
 // with an invocation and reused when its report is accepted.
 func ValidatePermittedPaths(values []string) error {
+	if len(values) > maxPermittedPaths {
+		return fmt.Errorf("permitted_paths exceeds %d entries", maxPermittedPaths)
+	}
 	for index, value := range values {
 		if strings.TrimSpace(value) == "." {
 			continue
+		}
+		if err := validateText(fmt.Sprintf("permitted_paths[%d]", index), value, maxPathRunes, true); err != nil {
+			return err
 		}
 		if _, err := cleanRelativePath(value); err != nil {
 			return fmt.Errorf("permitted_paths[%d]: %w", index, err)
@@ -411,6 +448,9 @@ func ValidatePermittedPaths(values []string) error {
 
 // validateQuestions ensures clarification identifiers are unique and safe.
 func validateQuestions(values []Question) error {
+	if len(values) > maxQuestions {
+		return fmt.Errorf("questions exceeds %d entries", maxQuestions)
+	}
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
 		if !safeIdentifier(value.ID) || strings.TrimSpace(value.ID) == "" {
@@ -420,8 +460,8 @@ func validateQuestions(values []Question) error {
 			return fmt.Errorf("questions[%d].id %q is duplicated", index, value.ID)
 		}
 		seen[value.ID] = struct{}{}
-		if strings.TrimSpace(value.Prompt) == "" || strings.ContainsAny(value.Prompt, "\x00\r\n") {
-			return fmt.Errorf("questions[%d].prompt must be a nonempty single line", index)
+		if err := validateText(fmt.Sprintf("questions[%d].prompt", index), value.Prompt, maxTextRunes, true); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -430,12 +470,15 @@ func validateQuestions(values []Question) error {
 // validateEvidence ensures cannot-proceed evidence remains concise and
 // observable rather than becoming a transcript transport.
 func validateEvidence(values []Evidence) error {
+	if len(values) > maxEvidenceEntries {
+		return fmt.Errorf("evidence exceeds %d entries", maxEvidenceEntries)
+	}
 	for index, value := range values {
-		if strings.TrimSpace(value.Kind) == "" || strings.TrimSpace(value.Detail) == "" {
-			return fmt.Errorf("evidence[%d] requires kind and detail", index)
+		if err := validateText(fmt.Sprintf("evidence[%d].kind", index), value.Kind, maxSummaryRunes, true); err != nil {
+			return err
 		}
-		if strings.ContainsAny(value.Kind+value.Detail, "\x00\r\n") {
-			return fmt.Errorf("evidence[%d] must not contain control characters", index)
+		if err := validateText(fmt.Sprintf("evidence[%d].detail", index), value.Detail, maxTextRunes, true); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -489,7 +532,7 @@ func withinAnyPrefix(path string, prefixes []string) bool {
 // safeIdentifier reports whether a value can be used as a protocol identity or
 // a single path component.
 func safeIdentifier(value string) bool {
-	if value == "" || value == "." || value == ".." {
+	if value == "" || value == "." || value == ".." || utf8.RuneCountInString(value) > maxIdentifierRunes {
 		return false
 	}
 	for _, character := range value {
@@ -499,4 +542,30 @@ func safeIdentifier(value string) bool {
 		return false
 	}
 	return true
+}
+
+// identityFrom derives validation expectations from a report envelope so all
+// public read and write paths apply the same identity binding rules.
+func identityFrom(value Report, invocationID string) ValidationContext {
+	return ValidationContext{
+		InvocationID: invocationID,
+		RunID:        value.RunID,
+		Harness:      value.Harness,
+		Role:         value.Role,
+		Stage:        value.Stage,
+	}
+}
+
+// validateText enforces a bounded, single-line protocol field.
+func validateText(field, value string, maxRunes int, required bool) error {
+	if required && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s must be a nonempty single line", field)
+	}
+	if strings.ContainsAny(value, "\x00\r\n") {
+		return fmt.Errorf("%s must be a nonempty single line", field)
+	}
+	if utf8.RuneCountInString(value) > maxRunes {
+		return fmt.Errorf("%s exceeds %d characters", field, maxRunes)
+	}
+	return nil
 }

@@ -1,6 +1,8 @@
 package report_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +56,26 @@ func TestWriteAtomicWritesOneInvocationReport(t *testing.T) {
 		t.Fatalf("ReadDir() error = %v", err)
 	} else if len(entries) != 1 || entries[0].Name() != "report.json" {
 		t.Fatalf("invocation result directory contains %#v, want only report.json", entries)
+	}
+}
+
+// TestWriteAtomicForInvocationWritesAReadableReport verifies the worker-mounted
+// result-directory entry point binds the explicit invocation identity.
+func TestWriteAtomicForInvocationWritesAReadableReport(t *testing.T) {
+	resultDirectory := filepath.Join(t.TempDir(), "results")
+	path, err := report.WriteAtomicForInvocation(resultDirectory, "inv-1", completedReport())
+	if err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	if path != filepath.Join(resultDirectory, report.ReportFileName) {
+		t.Fatalf("WriteAtomicForInvocation() path = %q, want report path", path)
+	}
+	value, err := report.Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if value.InvocationID != "inv-1" || value.RunID != "run-1" {
+		t.Fatalf("Read() = %#v, want invocation-bound report", value)
 	}
 }
 
@@ -159,6 +181,72 @@ func TestValidateRejectsAProductionFileFromAnInspectedCleanWorktree(t *testing.T
 	})
 	if err == nil || !strings.Contains(err.Error(), "was not observed") {
 		t.Fatalf("Validate() error = %v, want clean-worktree mismatch", err)
+	}
+}
+
+// TestReadRejectsUnknownFieldsAndTrailingJSON verifies the report reader is a
+// strict single-envelope parser rather than a permissive JSON prefix reader.
+func TestReadRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
+	root := t.TempDir()
+	encoded, err := json.Marshal(completedReport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatal(err)
+	}
+	object["unexpected"] = true
+	unknown, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownPath := filepath.Join(root, "unknown.json")
+	if err := os.WriteFile(unknownPath, unknown, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := report.Read(unknownPath); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("Read(unknown) error = %v, want unknown-field rejection", err)
+	}
+	trailingPath := filepath.Join(root, "trailing.json")
+	if err := os.WriteFile(trailingPath, append(encoded, []byte("\n{}")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := report.Read(trailingPath); err == nil || !strings.Contains(err.Error(), "more than one JSON value") {
+		t.Fatalf("Read(trailing) error = %v, want trailing-value rejection", err)
+	}
+}
+
+// TestReportContentLimitsRejectOversizedFieldsAndFiles verifies bounded text,
+// collection, and serialized-file inputs are rejected before acceptance.
+func TestReportContentLimitsRejectOversizedFieldsAndFiles(t *testing.T) {
+	longText := strings.Repeat("x", 5000)
+	for _, test := range []struct {
+		name   string
+		mutate func(*report.Report)
+	}{
+		{name: "summary", mutate: func(value *report.Report) { value.Summary = longText }},
+		{name: "change summary", mutate: func(value *report.Report) { value.Handoff.ChangeSummary = longText }},
+		{name: "mapping evidence", mutate: func(value *report.Report) { value.Handoff.AcceptanceMapping[0].Evidence = longText }},
+		{name: "focused command", mutate: func(value *report.Report) { value.Handoff.FocusedCommands[0] = longText }},
+		{name: "limitation", mutate: func(value *report.Report) { value.Handoff.KnownLimitations = []string{longText} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := report.Validate(func() report.Report {
+				value := completedReport()
+				test.mutate(&value)
+				return value
+			}(), report.ValidationContext{InvocationID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: "implementation"}); err == nil {
+				t.Fatal("Validate() accepted oversized content")
+			}
+		})
+	}
+	path := filepath.Join(t.TempDir(), "oversized.json")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), report.MaxReportBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := report.Read(path); err == nil || !strings.Contains(err.Error(), "byte limit") {
+		t.Fatalf("Read(oversized) error = %v, want byte-limit rejection", err)
 	}
 }
 

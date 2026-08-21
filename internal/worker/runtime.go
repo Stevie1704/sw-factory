@@ -198,6 +198,15 @@ type NativeSessionProvider interface {
 	NativeSessionID(context.Context, NativeSessionRequest) (string, error)
 }
 
+// NativeSessionSnapshotProvider is the stronger session-discovery seam used
+// for fresh launches. It lets a harness distinguish a session created by the
+// current launch from an older persisted session.
+type NativeSessionSnapshotProvider interface {
+	// NativeSessionIDs returns all currently persisted native session
+	// identifiers in stable adapter order.
+	NativeSessionIDs(context.Context, NativeSessionRequest) ([]string, error)
+}
+
 // Inspection reports worker lifecycle state without exposing a runtime ID.
 type Inspection struct {
 	// Exists reports whether the run's worker container exists.
@@ -298,7 +307,9 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 	if request.ResultPath != "" {
 		args = append(args, "--mount", bindMount(request.ResultPath, ResultPath, false))
 	}
-	args = append(args, "--mount", "type=volume,src="+credentialVolumeName(request.RunID, request.CredentialStoreID)+",dst="+CredentialPath)
+	if request.CredentialStoreID != "" {
+		args = append(args, "--mount", "type=volume,src="+credentialVolumeName(request.RunID, request.CredentialStoreID)+",dst="+CredentialPath)
+	}
 	role := request.Role
 	if strings.TrimSpace(role) == "" {
 		role = "implementation"
@@ -412,29 +423,29 @@ func (r *DockerRuntime) SeedCodexCredentials(ctx context.Context, request Creden
 		return err
 	}
 	if !filepath.IsAbs(request.AuthPath) || strings.ContainsAny(request.AuthPath, "\x00\r\n") {
-		return errors.New("Codex auth path must be an absolute safe path")
+		return errors.New("codex auth path must be an absolute safe path")
 	}
 	info, err := os.Lstat(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("inspect Codex auth file: %w", err)
+		return fmt.Errorf("inspect codex auth file: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("Codex auth path must not be a symbolic link")
+		return errors.New("codex auth path must not be a symbolic link")
 	}
 	if !info.Mode().IsRegular() {
-		return errors.New("Codex auth path must be a regular file")
+		return errors.New("codex auth path must be a regular file")
 	}
 	data, err := os.ReadFile(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("read Codex auth file: %w", err)
+		return fmt.Errorf("read codex auth file: %w", err)
 	}
 	if len(data) == 0 {
-		return errors.New("Codex auth file is empty")
+		return errors.New("codex auth file is empty")
 	}
 	_, err = r.runDockerWithInput(ctx, []string{
 		"exec", "-i", "--user", "0:0", "--workdir", WorktreePath,
 		containerName(request.RunID), "/bin/sh", "-c",
-		"umask 077; rm -f \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"; cat > \"" + CredentialPath + "/auth.json\"; chmod 0444 \"" + CredentialPath + "/auth.json\"; mkdir -p \"$HOME/.codex\"; ln -s \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"",
+		"umask 077; rm -f \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"; cat > \"" + CredentialPath + "/auth.json\"; chmod 0444 \"" + CredentialPath + "/auth.json\"; mkdir -p \"$HOME/.codex\"; chown " + WorkerUser + " \"$HOME/.codex\"; ln -s \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"; chown -h " + WorkerUser + " \"$HOME/.codex/auth.json\"",
 	}, data)
 	if err != nil {
 		return fmt.Errorf("seed Codex credentials: %w", err)
@@ -442,36 +453,59 @@ func (r *DockerRuntime) SeedCodexCredentials(ctx context.Context, request Creden
 	return nil
 }
 
-// NativeSessionID discovers a Codex session from its persisted role-home files,
+// NativeSessionIDs discovers Codex sessions from persisted role-home files,
 // never by scraping terminal output. An empty result means the harness has not
-// persisted its session file yet.
-func (r *DockerRuntime) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
+// persisted a session file yet.
+func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSessionRequest) ([]string, error) {
 	if err := validateRunID(request.RunID); err != nil {
-		return "", err
+		return nil, err
 	}
 	if request.Harness != "codex" {
-		return "", fmt.Errorf("native session lookup does not support harness %q", request.Harness)
+		return nil, fmt.Errorf("native session lookup does not support harness %q", request.Harness)
 	}
 	result, err := r.RunCommand(ctx, CommandRequest{
 		RunID:             request.RunID,
-		Command:           `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | tail -n 1 | sed -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#'`,
+		Command:           `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`,
 		EnvironmentPolicy: EnvironmentPolicyClean,
 		Role:              "coordinator",
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if result.ExitCode != 0 {
-		return "", nil
+		return nil, nil
 	}
-	identifier := strings.TrimSpace(result.Stdout)
-	if identifier == "" {
-		return "", nil
+	trimmed := strings.TrimSpace(result.Stdout)
+	if trimmed == "" {
+		return nil, nil
 	}
-	if !validName(identifier) {
-		return "", errors.New("discovered native session identifier is unsafe")
+	identifiers := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, identifier := range strings.Split(trimmed, "\n") {
+		identifier = strings.TrimSpace(identifier)
+		if identifier == "" {
+			continue
+		}
+		if !validName(identifier) {
+			return nil, errors.New("discovered native session identifier is unsafe")
+		}
+		if _, exists := seen[identifier]; exists {
+			continue
+		}
+		seen[identifier] = struct{}{}
+		identifiers = append(identifiers, identifier)
 	}
-	return identifier, nil
+	return identifiers, nil
+}
+
+// NativeSessionID returns the newest currently persisted Codex session for
+// compatibility with runtimes that only need one identifier.
+func (r *DockerRuntime) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
+	identifiers, err := r.NativeSessionIDs(ctx, request)
+	if err != nil || len(identifiers) == 0 {
+		return "", err
+	}
+	return identifiers[len(identifiers)-1], nil
 }
 
 // Attach connects the current process's standard streams to one interactive
@@ -582,7 +616,7 @@ func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Insp
 		return parseDockerInspectionJSON([]byte(trimmed))
 	}
 	fields := strings.SplitN(trimmed, "\t", 3)
-	if len(fields) != 2 {
+	if len(fields) < 2 || len(fields) > 3 {
 		return Inspection{}, fmt.Errorf("docker inspect returned malformed worker state %q", result.Stdout)
 	}
 	running, err := strconv.ParseBool(fields[0])
@@ -823,8 +857,10 @@ func expectedWorkerMounts(request StartRequest) map[string]string {
 	wanted := map[string]string{
 		WorktreePath:    "bind:" + filepath.Clean(request.WorktreePath),
 		GitMetadataPath: "bind:" + filepath.Clean(request.GitMetadataPath),
-		CredentialPath:  "volume:" + credentialVolumeName(request.RunID, request.CredentialStoreID),
 		"/home/factory": "volume:" + roleVolumeName(request.RunID, role),
+	}
+	if request.CredentialStoreID != "" {
+		wanted[CredentialPath] = "volume:" + credentialVolumeName(request.RunID, request.CredentialStoreID)
 	}
 	if request.InvocationPath != "" {
 		wanted[InvocationPath] = "bind:" + filepath.Clean(request.InvocationPath)

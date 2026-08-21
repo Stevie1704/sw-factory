@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,105 @@ func TestAcceptAgentReportUsesOnlyTheStructuredReportAndFinishesTheSession(t *te
 	if runtime.starts[0].WorktreePath == "" {
 		t.Fatal("worker start did not receive the run worktree")
 	}
+}
+
+// TestAcceptAgentReportRejectsAWorktreeCheckpointMismatch verifies report
+// acceptance refuses a worktree whose HEAD no longer matches the run claim.
+func TestAcceptAgentReportRejectsAWorktreeCheckpointMismatch(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	runStore.current.CheckpointSHA = "different-checkpoint"
+	if _, err := writeAgentTestReport(t, launch, "internal/factory/agent.go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "does not match checkpoint") {
+		t.Fatalf("AcceptAgentReport() error = %v, want checkpoint rejection", err)
+	}
+	if runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusActive {
+		t.Fatalf("invocation after checkpoint rejection = %#v, want active", runStore.invocations[launch.Invocation.ID])
+	}
+}
+
+// TestAcceptAgentReportRejectsAProductionPathOutsidePolicy verifies the
+// coordinator's persisted permitted-path policy is applied to the handoff.
+func TestAcceptAgentReportRejectsAProductionPathOutsidePolicy(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{PermittedPaths: []string{"internal/factory"}})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	if _, err := writeAgentTestReport(t, launch, "docs/outside.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "outside permitted paths") {
+		t.Fatalf("AcceptAgentReport() error = %v, want permitted-path rejection", err)
+	}
+	if runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusActive {
+		t.Fatalf("invocation after path rejection = %#v, want active", runStore.invocations[launch.Invocation.ID])
+	}
+}
+
+// TestAcceptAgentReportRejectsAPermittedPathRequestMismatch verifies an
+// operator cannot replace the invocation's persisted path policy at accept.
+func TestAcceptAgentReportRejectsAPermittedPathRequestMismatch(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{PermittedPaths: []string{"internal/factory"}})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	if _, err := writeAgentTestReport(t, launch, "internal/factory/agent.go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID, PermittedPaths: []string{"internal/other"}}); err == nil || !strings.Contains(err.Error(), "permitted paths do not match") {
+		t.Fatalf("AcceptAgentReport() error = %v, want request-policy rejection", err)
+	}
+	if runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusActive {
+		t.Fatalf("invocation after request-policy rejection = %#v, want active", runStore.invocations[launch.Invocation.ID])
+	}
+}
+
+// TestAcceptAgentReportRejectsATerminalInvocation verifies a completed
+// invocation cannot be accepted again or finish its harness twice.
+func TestAcceptAgentReportRejectsATerminalInvocation(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	terminal := runStore.invocations[launch.Invocation.ID]
+	terminal.Status = store.InvocationStatusCompleted
+	runStore.invocations[launch.Invocation.ID] = terminal
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "already completed") {
+		t.Fatalf("AcceptAgentReport() error = %v, want terminal-invocation rejection", err)
+	}
+}
+
+// writeAgentTestReport writes a valid completed report with one selected
+// production path for the acceptance rejection tests.
+func writeAgentTestReport(t *testing.T, launch factory.AgentLaunchResult, productionPath string) (string, error) {
+	t.Helper()
+	value := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  launch.Invocation.ID,
+		RunID:         launch.Invocation.RunID,
+		Harness:       launch.Invocation.Harness,
+		Role:          launch.Invocation.Role,
+		Stage:         string(launch.Invocation.Stage),
+		Outcome:       report.OutcomeCompleted,
+		Summary:       "implementation complete",
+		Handoff: &report.Handoff{
+			ChangeSummary:          "implemented behavior",
+			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "criterion", Evidence: "focused test"}},
+			ProductionFilesChanged: []string{productionPath},
+			FocusedCommands:        []string{"go test ./internal/factory"},
+		},
+		NativeSessionID: "session-1",
+		ReportedAt:      time.Now().UTC(),
+	}
+	return report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value)
 }
 
 // newAgentService creates one isolated high-level service with fake external

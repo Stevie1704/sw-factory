@@ -87,7 +87,7 @@ func (m *LocalWorktreeManager) Inspect(ctx context.Context, worktreePath string)
 	if err != nil {
 		return WorktreeState{}, fmt.Errorf("inspect worktree HEAD: %w", err)
 	}
-	statusOutput, err := m.runner().Run(ctx, worktreePath, []string{"status", "--porcelain=v1", "--untracked-files=all"})
+	statusOutput, err := m.runner().Run(ctx, worktreePath, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"})
 	if err != nil {
 		return WorktreeState{}, fmt.Errorf("inspect worktree changes: %w", err)
 	}
@@ -184,19 +184,24 @@ func (m *LocalWorktreeManager) worktreePath(repositoryPath, runID string) string
 	return filepath.Join(filepath.Dir(repositoryPath), ".factory-worktrees", filepath.Base(repositoryPath), runID)
 }
 
-// porcelainPaths extracts the path column from Git porcelain-v1 output.
+// porcelainPaths extracts repository paths from NUL-delimited Git
+// porcelain-v1 output. Rename and copy records contain destination first and
+// source second; only the destination is relevant to observed changes.
 func porcelainPaths(output string) []string {
 	paths := []string{}
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		if len(line) < 4 {
+	fields := strings.Split(output, "\x00")
+	for index := 0; index < len(fields); index++ {
+		record := fields[index]
+		if len(record) < 4 {
 			continue
 		}
-		path := strings.TrimSpace(line[3:])
-		if arrow := strings.Index(path, " -> "); arrow >= 0 {
-			path = path[arrow+4:]
-		}
+		status := record[:2]
+		path := record[3:]
 		if path != "" {
 			paths = append(paths, filepath.ToSlash(path))
+		}
+		if strings.ContainsAny(status, "RC") && index+1 < len(fields) {
+			index++
 		}
 	}
 	return paths

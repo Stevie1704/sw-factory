@@ -45,10 +45,6 @@ type Command struct {
 	Executable string
 	// Args are arguments passed without shell interpolation.
 	Args []string
-	// Environment contains explicit non-secret values for the surface.
-	Environment map[string]string
-	// WorkingDirectory is an optional host-side working directory.
-	WorkingDirectory string
 }
 
 // WorkspaceRequest asks the terminal adapter to ensure one named workspace.
@@ -142,17 +138,22 @@ type CmuxRuntime struct {
 	Runner CommandRunner
 	// Binary overrides the cmux executable name.
 	Binary string
-	// SocketPath is passed to cmux as CMUX_SOCKET_PATH when configured by the
-	// host registration.
-	SocketPath string
+	// socketPath is passed to cmux as CMUX_SOCKET_PATH when configured by the
+	// host registration. It is immutable after construction.
+	socketPath string
 	mu         sync.Mutex
 	control    Workspace
 	runs       map[string]RunWorkspace
 }
 
-// NewCmuxRuntime creates a cmux-backed terminal runtime.
-func NewCmuxRuntime(runner CommandRunner) *CmuxRuntime {
-	return &CmuxRuntime{Runner: runner, runs: make(map[string]RunWorkspace)}
+// NewCmuxRuntime creates a cmux-backed terminal runtime. An optional socket
+// path selects the cmux instance used by the runtime.
+func NewCmuxRuntime(runner CommandRunner, socketPaths ...string) *CmuxRuntime {
+	socketPath := ""
+	if len(socketPaths) > 0 {
+		socketPath = socketPaths[0]
+	}
+	return &CmuxRuntime{Runner: runner, socketPath: socketPath, runs: make(map[string]RunWorkspace)}
 }
 
 // EnsureControlWorkspace creates the coordinator workspace and returns its
@@ -334,8 +335,8 @@ func (r *CmuxRuntime) run(ctx context.Context, args []string, input []byte) ([]b
 		binary = "cmux"
 	}
 	command := exec.CommandContext(ctx, binary, args...)
-	if strings.TrimSpace(r.SocketPath) != "" {
-		command.Env = append(os.Environ(), "CMUX_SOCKET_PATH="+r.SocketPath)
+	if strings.TrimSpace(r.socketPath) != "" {
+		command.Env = append(os.Environ(), "CMUX_SOCKET_PATH="+r.socketPath)
 	}
 	command.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
@@ -377,11 +378,6 @@ func validateCommand(command Command) error {
 	for _, argument := range command.Args {
 		if strings.ContainsAny(argument, "\x00\r\n") {
 			return errors.New("surface command argument contains control characters")
-		}
-	}
-	for key, value := range command.Environment {
-		if strings.TrimSpace(key) == "" || strings.ContainsAny(key+value, "\x00\r\n") {
-			return errors.New("surface command environment is invalid")
 		}
 	}
 	return nil

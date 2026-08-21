@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,8 +86,8 @@ func TestStoreRejectsAnInvocationForTheWrongRun(t *testing.T) {
 	}
 }
 
-// TestStoreFindsOnlyTheNewestActiveInvocation verifies the restart guard's
-// store query ignores completed sessions and orders active sessions reliably.
+// TestStoreFindsTheActiveInvocation verifies the restart guard's store query
+// ignores completed sessions.
 func TestStoreFindsOnlyTheNewestActiveInvocation(t *testing.T) {
 	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
 	if err != nil {
@@ -96,7 +97,6 @@ func TestStoreFindsOnlyTheNewestActiveInvocation(t *testing.T) {
 	created := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	for _, invocation := range []store.Invocation{
 		{ID: "inv-complete", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusCompleted, CreatedAt: created, UpdatedAt: created},
-		{ID: "inv-active-old", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusActive, CreatedAt: created, UpdatedAt: created.Add(time.Minute)},
 		{ID: "inv-active-new", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusActive, CreatedAt: created, UpdatedAt: created.Add(2 * time.Minute)},
 	} {
 		if err := opened.SaveInvocation(context.Background(), invocation); err != nil {
@@ -109,5 +109,24 @@ func TestStoreFindsOnlyTheNewestActiveInvocation(t *testing.T) {
 	}
 	if active == nil || active.ID != "inv-active-new" {
 		t.Fatalf("ActiveInvocation() = %#v, want newest active invocation", active)
+	}
+}
+
+// TestStoreRejectsTwoActiveInvocationsForOneRun verifies the database index,
+// rather than only the coordinator lookup, owns active-invocation uniqueness.
+func TestStoreRejectsTwoActiveInvocationsForOneRun(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	base := store.Invocation{RunID: "run-unique", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusActive}
+	base.ID = "inv-first"
+	if err := opened.SaveInvocation(context.Background(), base); err != nil {
+		t.Fatalf("SaveInvocation(first) error = %v", err)
+	}
+	base.ID = "inv-second"
+	if err := opened.SaveInvocation(context.Background(), base); err == nil || !strings.Contains(err.Error(), "active invocation already exists") {
+		t.Fatalf("SaveInvocation(second) error = %v, want authoritative active-uniqueness error", err)
 	}
 }

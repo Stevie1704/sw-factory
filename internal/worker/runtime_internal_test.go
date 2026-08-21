@@ -20,11 +20,15 @@ func TestDockerInspectionRejectsAStaleInvocationSource(t *testing.T) {
 		Role:            "implementation",
 	}
 	wanted := expectedWorkerMounts(request)
+	identities := make(map[string]string, len(wanted))
+	for destination, identity := range wanted {
+		identities[destination] = identity
+	}
 	inspection := Inspection{
 		Exists:          true,
 		Running:         true,
 		Image:           imageReference(request.Image, request.ImageDigest),
-		mountIdentities: wanted,
+		mountIdentities: identities,
 	}
 	matchingInvocation := wanted[InvocationPath]
 	inspection.mountIdentities[InvocationPath] = "bind:/host/old-packet"

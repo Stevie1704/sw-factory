@@ -96,6 +96,9 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 	if started.Image != policy.WorkerBuild.Image || started.ImageDigest != policy.WorkerBuild.Digest || started.WorktreePath != worktreePath || started.GitMetadataPath == gitMetadataPath {
 		t.Fatalf("worker start = %#v, want frozen worker identity and stable paths", started)
 	}
+	if started.Role != "gate" || started.CredentialStoreID != "" {
+		t.Fatalf("gate worker start = %#v, want gate role without credentials", started)
+	}
 	if _, err := os.Stat(filepath.Join(started.GitMetadataPath, "config")); !os.IsNotExist(err) {
 		t.Fatalf("worker Git projection contains a configuration file: %v", err)
 	}

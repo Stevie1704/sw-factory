@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -121,6 +122,9 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	if request.Model != "" {
 		command = append(command, "-m", request.Model)
 	}
+	if request.ReasoningEffort != "" {
+		command = append(command, "-c", "model_reasoning_effort="+request.ReasoningEffort)
+	}
 	if request.ResumeSessionID != "" {
 		command = append(command, "resume", request.ResumeSessionID)
 	}
@@ -164,13 +168,31 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	}); err != nil {
 		return Session{}, fmt.Errorf("launch Codex surface: %w", err)
 	}
+	var snapshotProvider worker.NativeSessionSnapshotProvider
+	var baseline []string
+	if request.ResumeSessionID == "" {
+		if provider, ok := c.Worker.(worker.NativeSessionSnapshotProvider); ok {
+			snapshotProvider = provider
+			baseline, err = provider.NativeSessionIDs(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
+			if err != nil {
+				_ = c.Terminal.CloseSurface(ctx, surface.ID)
+				return Session{}, fmt.Errorf("snapshot Codex native sessions: %w", err)
+			}
+		}
+	}
 	if err := c.Terminal.SendInput(ctx, surface.ID, []byte(strings.TrimSpace(request.Prompt)+"\n")); err != nil {
 		_ = c.Terminal.CloseSurface(ctx, surface.ID)
 		return Session{}, fmt.Errorf("send Codex prompt: %w", err)
 	}
 	nativeSessionID := request.ResumeSessionID
 	if nativeSessionID == "" {
-		if provider, ok := c.Worker.(worker.NativeSessionProvider); ok {
+		if snapshotProvider != nil {
+			discovered, discoverErr := discoverNativeSession(ctx, snapshotProvider, baseline, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
+			if discoverErr != nil {
+				return Session{}, fmt.Errorf("discover Codex native session: %w", discoverErr)
+			}
+			nativeSessionID = discovered
+		} else if provider, ok := c.Worker.(worker.NativeSessionProvider); ok {
 			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
 			if discoverErr != nil {
 				return Session{}, fmt.Errorf("discover Codex native session: %w", discoverErr)
@@ -179,6 +201,56 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 		}
 	}
 	return Session{InvocationID: request.InvocationID, NativeSessionID: nativeSessionID, Surface: surface}, nil
+}
+
+const (
+	// nativeSessionDiscoveryTimeout bounds how long a fresh launch waits for
+	// Codex to persist its native session file.
+	nativeSessionDiscoveryTimeout = 5 * time.Second
+	// nativeSessionDiscoveryInterval avoids a tight polling loop while Codex
+	// initializes its role home.
+	nativeSessionDiscoveryInterval = 50 * time.Millisecond
+)
+
+// discoverNativeSession returns a session identifier that was not present
+// before the prompt was sent. It returns an empty identifier when Codex does
+// not persist a new session before the bounded discovery window expires.
+func discoverNativeSession(ctx context.Context, provider worker.NativeSessionSnapshotProvider, baseline []string, request worker.NativeSessionRequest) (string, error) {
+	discoveryContext, cancel := context.WithTimeout(ctx, nativeSessionDiscoveryTimeout)
+	defer cancel()
+	known := make(map[string]struct{}, len(baseline))
+	for _, identifier := range baseline {
+		known[identifier] = struct{}{}
+	}
+	for {
+		if discoveryContext.Err() != nil {
+			return "", nil
+		}
+		identifiers, err := provider.NativeSessionIDs(discoveryContext, request)
+		if err != nil {
+			if discoveryContext.Err() != nil {
+				return "", nil
+			}
+			return "", err
+		}
+		for index := len(identifiers) - 1; index >= 0; index-- {
+			if _, exists := known[identifiers[index]]; !exists {
+				return identifiers[index], nil
+			}
+		}
+		timer := time.NewTimer(nativeSessionDiscoveryInterval)
+		select {
+		case <-discoveryContext.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return "", nil
+		case <-timer.C:
+		}
+	}
 }
 
 // validateStartRequest rejects incomplete identities before any terminal or
