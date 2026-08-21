@@ -349,8 +349,9 @@ func (c *GhClient) CreatePullRequest(ctx context.Context, repository Repository,
 	return response.pullRequest(), nil
 }
 
-// UpdatePullRequest replaces the complete body and keeps the pull request a
-// draft. The caller supplies a body with its human-authored portion preserved.
+// UpdatePullRequest replaces the complete body and title.
+// It preserves the current state of closed pull requests and does not include
+// the Draft field in PATCH payloads to avoid state conflicts.
 func (c *GhClient) UpdatePullRequest(ctx context.Context, repository Repository, number int, request PullRequestRequest) (PullRequest, error) {
 	if number <= 0 {
 		return PullRequest{}, errors.New("pull request number must be positive")
@@ -358,8 +359,17 @@ func (c *GhClient) UpdatePullRequest(ctx context.Context, repository Repository,
 	if err := validatePullRequestRequest(request); err != nil {
 		return PullRequest{}, err
 	}
+	// Fetch current PR state to detect closed pull requests
+	var currentResponse pullRequestResponse
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number)}, nil, &currentResponse); err != nil {
+		return PullRequest{}, fmt.Errorf("fetch pull request #%d state: %w", number, err)
+	}
 	var response pullRequestResponse
-	payload := pullRequestUpdatePayload{Title: request.Title, Body: request.Body, Draft: request.Draft, State: "open"}
+	payload := pullRequestUpdatePayload{Title: request.Title, Body: request.Body}
+	// Preserve closed state; only PATCH open PRs to open state
+	if currentResponse.State != "closed" {
+		payload.State = "open"
+	}
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number), "--method", "PATCH"}, payload, &response); err != nil {
 		return PullRequest{}, fmt.Errorf("update draft pull request #%d: %w", number, err)
 	}
@@ -492,8 +502,8 @@ type pullRequestCreatePayload struct {
 type pullRequestUpdatePayload struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
-	Draft bool   `json:"draft"`
-	State string `json:"state"`
+	Draft bool   `json:"draft,omitempty"`
+	State string `json:"state,omitempty"`
 }
 
 // pullRequest converts an API response into the adapter-neutral model.

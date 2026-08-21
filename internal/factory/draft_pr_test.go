@@ -151,10 +151,9 @@ func TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation(t *testin
 
 // draftGitWorkspace records the host Git effects for coordinator seam tests.
 type draftGitWorkspace struct {
-	state         gitadapter.WorktreeState
-	checkpoints   []gitadapter.CheckpointRequest
-	pushes        []gitadapter.PushRequest
-	checkpointSHA string
+	state       gitadapter.WorktreeState
+	checkpoints []gitadapter.CheckpointRequest
+	pushes      []gitadapter.PushRequest
 }
 
 // activeInvocationRunStore adds the real-store invocation guard to the small

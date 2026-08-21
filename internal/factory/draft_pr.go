@@ -285,6 +285,8 @@ func (s *Service) pullRequestClient() github.PullRequestClient {
 }
 
 // generatedPullRequestBody renders the complete coordinator-owned PR section.
+// It builds the Gates section from the observed gate results rather than
+// configured gates, rendering each result's actual status.
 func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) string {
 	if strings.TrimSpace(intervention) == "" {
 		intervention = "none"
@@ -293,11 +295,28 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 	if issueBody == "" {
 		issueBody = "(no issue body supplied)"
 	}
-	gateLines := make([]string, 0, len(packet.RepositoryConfig.Gates))
-	for _, declared := range packet.RepositoryConfig.Gates {
-		gateLines = append(gateLines, fmt.Sprintf("- `%s`: passed", declared.Name))
+	gateLines := make([]string, 0, len(gates))
+	for _, result := range gates {
+		var status string
+		switch result.Status.State {
+		case github.CommitStatusSuccess:
+			status = "passed"
+		case github.CommitStatusFailure:
+			status = "failed"
+		case github.CommitStatusError:
+			status = "error"
+		case github.CommitStatusPending:
+			status = "pending"
+		default:
+			status = "unknown"
+		}
+		gateName := result.GateName
+		if gateName == "" {
+			gateName = "(unnamed)"
+		}
+		gateLines = append(gateLines, fmt.Sprintf("- `%s`: %s", gateName, status))
 	}
-	if len(gates) == 0 && len(gateLines) == 0 {
+	if len(gateLines) == 0 {
 		gateLines = append(gateLines, "- (none)")
 	}
 	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)

@@ -149,6 +149,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	runner := &fakeCommandRunner{outputs: [][]byte{
 		[]byte(`[{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}]`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Created","body":"generated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
+		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Updated","body":"human text\n\ngenerated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 	}}
 	client := &github.GhClient{Runner: runner}
@@ -178,20 +179,23 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	if updated.Number != 12 || updated.Body != "human text\n\ngenerated" {
 		t.Fatalf("updated pull request = %#v, want decoded update", updated)
 	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("GitHub calls = %d, want find/create/update", len(runner.calls))
+	if len(runner.calls) != 4 {
+		t.Fatalf("GitHub calls = %d, want find/create/update(get+patch)", len(runner.calls))
 	}
 	if !containsArgs(runner.calls[0].args, "repos/example/project/pulls", "--paginate", "--slurp") {
 		t.Fatalf("find args = %#v, want paginated pulls endpoint", runner.calls[0].args)
 	}
-	for _, index := range []int{1, 2} {
-		method := "POST"
-		if index == 2 {
-			method = "PATCH"
-		}
-		if !containsArgs(runner.calls[index].args, "--method", method, "--input", "-") {
-			t.Fatalf("mutation args = %#v, want JSON mutation", runner.calls[index].args)
-		}
+	// Call 1: CreatePullRequest (POST)
+	if !containsArgs(runner.calls[1].args, "--method", "POST", "--input", "-") {
+		t.Fatalf("create args = %#v, want POST mutation", runner.calls[1].args)
+	}
+	// Call 2: UpdatePullRequest GET to fetch current state
+	if !containsArgs(runner.calls[2].args, "repos/example/project/pulls/12") {
+		t.Fatalf("update fetch args = %#v, want GET pulls endpoint", runner.calls[2].args)
+	}
+	// Call 3: UpdatePullRequest PATCH to update
+	if !containsArgs(runner.calls[3].args, "--method", "PATCH", "--input", "-") {
+		t.Fatalf("update patch args = %#v, want PATCH mutation", runner.calls[3].args)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(runner.calls[1].input, &payload); err != nil {
