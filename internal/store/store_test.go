@@ -715,6 +715,16 @@ func TestSchemaTwoMigrationReconcilesDuplicateActiveRuns(t *testing.T) {
 		_ = opened.Close()
 		t.Fatalf("CurrentRun() = %#v, want newest .12Z run to remain active", current)
 	}
+	// Verify LatestRun also returns the correct run after timestamp normalization
+	latest, err := opened.LatestRun(t.Context())
+	if err != nil {
+		_ = opened.Close()
+		t.Fatalf("LatestRun() error = %v", err)
+	}
+	if latest == nil || latest.ID != "run-new" || !latest.UpdatedAt.Equal(wantUpdatedAt) {
+		_ = opened.Close()
+		t.Fatalf("LatestRun() = %#v, want run-new with normalized timestamp after migration", latest)
+	}
 	current.Status = store.StatusComplete
 	if err := opened.SaveRun(t.Context(), *current); err != nil {
 		_ = opened.Close()
