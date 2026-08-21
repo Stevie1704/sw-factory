@@ -56,6 +56,11 @@ worktree state. Git configuration, remote definitions, hooks, submodules, and
 host-specific worktree indirection are omitted, so repository history and diff
 operations remain available without exposing remote credentials.
 
+The worker never commits, changes branches, pushes, or calls GitHub. The
+host-side `GitWorkspace` validates the accepted worktree, creates the immutable
+checkpoint, synchronizes a base branch when policy requires it, pushes the run
+branch, and removes the worktree during cleanup.
+
 Setup and the selected repository-declared gate run with `env -i` plus an
 explicit worker baseline. Role-policy commands additionally receive the
 coordinator-defined role identity; clean-policy commands do not. The gate

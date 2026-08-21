@@ -34,6 +34,9 @@ type Factory interface {
 	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
 	// RunAgent launches a visible agent and accepts its already-written report.
 	RunAgent(context.Context, AgentRequest) (AgentResult, error)
+	// CreateDraftPullRequest checkpoints the accepted implementation, runs every
+	// configured gate, pushes the branch, and creates or updates one draft PR.
+	CreateDraftPullRequest(context.Context, DraftPullRequestRequest) (DraftPullRequestResult, error)
 	Status(context.Context) (StatusResult, error)
 }
 
@@ -93,7 +96,11 @@ type Dependencies struct {
 	GitHub          github.Client
 	CommitStatuses  github.CommitStatusPublisher
 	Worktree        gitadapter.WorktreeManager
-	Worker          worker.WorkerRuntime
+	// GitWorkspace owns checkpoint, base-sync, push, and cleanup effects on the host.
+	GitWorkspace gitadapter.GitWorkspace
+	// PullRequests owns idempotent draft pull-request discovery and mutation.
+	PullRequests github.PullRequestClient
+	Worker       worker.WorkerRuntime
 	// Terminal owns visible control and run workspaces.
 	Terminal terminal.TerminalRuntime
 	// Harness owns interactive role lifecycle and native session recovery.
@@ -191,7 +198,17 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		}
 	}
 	if dependencies.Worktree == nil {
-		dependencies.Worktree = gitadapter.NewWorktreeManager()
+		dependencies.Worktree = gitadapter.NewGitWorkspace()
+	}
+	if dependencies.GitWorkspace == nil {
+		if workspace, ok := dependencies.Worktree.(gitadapter.GitWorkspace); ok {
+			dependencies.GitWorkspace = workspace
+		}
+	}
+	if dependencies.PullRequests == nil {
+		if client, ok := dependencies.GitHub.(github.PullRequestClient); ok {
+			dependencies.PullRequests = client
+		}
 	}
 	if dependencies.Worker == nil {
 		dependencies.Worker = worker.NewDockerRuntime()

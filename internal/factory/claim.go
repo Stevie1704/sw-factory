@@ -172,12 +172,16 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err != nil {
 		return IssueResult{}, fmt.Errorf("freeze specification packet: %w", err)
 	}
-	workspace, err := s.deps.Worktree.Create(ctx, registration.Path, repositoryConfig.TargetBranch, runID)
+	worktreeManager := s.worktreeManager()
+	if worktreeManager == nil {
+		return IssueResult{}, errors.New("GitWorkspace is required to create a run worktree")
+	}
+	workspace, err := worktreeManager.Create(ctx, registration.Path, repositoryConfig.TargetBranch, runID)
 	if err != nil {
 		return IssueResult{}, err
 	}
 	cleanupWorkspace := func(cause error) error {
-		if cleanupErr := s.deps.Worktree.Remove(ctx, registration.Path, workspace); cleanupErr != nil {
+		if cleanupErr := worktreeManager.Remove(ctx, registration.Path, workspace); cleanupErr != nil {
 			return errors.Join(cause, fmt.Errorf("remove claim workspace: %w", cleanupErr))
 		}
 		return cause
@@ -407,7 +411,11 @@ func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Ru
 // statusCommentBody renders the single editable supervision comment.
 func statusCommentBody(run store.Run) string {
 	started := run.CreatedAt.UTC().Format(time.RFC3339)
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status)
+	pullRequest := ""
+	if run.PullRequestNumber > 0 {
+		pullRequest = fmt.Sprintf("- pull request: #%d %s\n", run.PullRequestNumber, run.PullRequestURL)
+	}
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, pullRequest)
 }
 
 // statusCommentMarker identifies the one editable status comment for a run.

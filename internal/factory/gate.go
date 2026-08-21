@@ -14,6 +14,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -49,12 +50,19 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 	if err != nil {
 		return gate.Result{}, err
 	}
-	if run.ImageDigest != packet.RepositoryConfig.WorkerBuild.Digest {
-		return gate.Result{}, fmt.Errorf("run %q image digest %q differs from frozen packet digest %q", run.ID, run.ImageDigest, packet.RepositoryConfig.WorkerBuild.Digest)
-	}
 	declaredGate, ok := declaredGate(packet, request.GateName)
 	if !ok {
 		return gate.Result{}, fmt.Errorf("gate %q is not declared in the frozen specification packet", request.GateName)
+	}
+	return s.runGate(ctx, registration, *run, packet, declaredGate)
+}
+
+// runGate executes one frozen gate for an already selected run. Keeping the
+// run selection outside this helper lets the draft-PR boundary run every
+// configured gate without re-reading mutable state between gates.
+func (s *Service) runGate(ctx context.Context, registration config.RepositoryRegistration, run store.Run, packet SpecificationPacket, declared config.GateConfig) (gate.Result, error) {
+	if run.ImageDigest != packet.RepositoryConfig.WorkerBuild.Digest {
+		return gate.Result{}, fmt.Errorf("run %q image digest %q differs from frozen packet digest %q", run.ID, run.ImageDigest, packet.RepositoryConfig.WorkerBuild.Digest)
 	}
 	if s.deps.CommitStatuses == nil {
 		return gate.Result{}, errors.New("GitHub client does not support Commit Statuses")
@@ -83,7 +91,7 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 		CheckpointSHA: run.CheckpointSHA,
 		Setup:         packet.RepositoryConfig.Setup,
 		SetupTimeout:  packet.RepositoryConfig.Timeouts.Setup,
-		Gate:          declaredGate,
+		Gate:          declared,
 	})
 }
 
@@ -122,6 +130,9 @@ func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (s
 			return "", fmt.Errorf("git metadata projection %q contains forbidden configuration", projection)
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return "", fmt.Errorf("inspect git metadata projection configuration: %w", statErr)
+		}
+		if err := overlayWorktreeGitState(worktreePath, projection); err != nil {
+			return "", fmt.Errorf("refresh git metadata projection: %w", err)
 		}
 		if err := makeGitProjectionReadable(projection); err != nil {
 			return "", fmt.Errorf("prepare git metadata projection permissions: %w", err)

@@ -153,6 +153,22 @@ func TestRunStatusRejectsPositionalArguments(t *testing.T) {
 	}
 }
 
+// TestRunDraftPullRequestRejectsPositionalArguments verifies the draft-PR
+// command keeps run selection explicit and unambiguous.
+func TestRunDraftPullRequestRejectsPositionalArguments(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{"draft-pr", "extra", "--config", configPath}, &output, &output)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "draft-pr does not accept positional arguments") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestRunInitRejectsAnUnknownFlag(t *testing.T) {
 	t.Parallel()
 

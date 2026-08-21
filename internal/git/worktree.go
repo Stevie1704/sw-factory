@@ -20,6 +20,44 @@ type Workspace struct {
 	Worktree string
 }
 
+// CheckpointRequest selects one host-side implementation checkpoint.
+type CheckpointRequest struct {
+	// RunID identifies the factory run owning the checkpoint.
+	RunID string
+	// WorktreePath is the absolute run worktree to commit.
+	WorktreePath string
+	// ParentSHA is the last checkpoint known by the coordinator.
+	ParentSHA string
+	// Message is the human-readable portion of the checkpoint commit message.
+	Message string
+}
+
+// CheckpointResult identifies the immutable commit created or recovered by a
+// checkpoint operation.
+type CheckpointResult struct {
+	// SHA is the full commit identity.
+	SHA string
+	// Created reports whether this call created a new commit.
+	Created bool
+}
+
+// PushRequest selects one run branch for a host-side push.
+type PushRequest struct {
+	// WorktreePath is the run worktree whose current HEAD is pushed.
+	WorktreePath string
+	// Branch is the exact remote branch name to update.
+	Branch string
+}
+
+// BaseSyncRequest selects a fast-forward-only synchronization with a remote
+// target branch.
+type BaseSyncRequest struct {
+	// WorktreePath is the run worktree to update.
+	WorktreePath string
+	// TargetBranch is the remote branch to fetch and merge.
+	TargetBranch string
+}
+
 // WorktreeState is the coordinator-observed state used to validate a harness
 // handoff against the actual checkout.
 type WorktreeState struct {
@@ -39,6 +77,17 @@ type WorktreeManager interface {
 type WorktreeInspector interface {
 	// Inspect reads the current commit and changed paths without mutating Git.
 	Inspect(context.Context, string) (WorktreeState, error)
+}
+
+// GitWorkspace is the task-oriented host Git seam used by the coordinator.
+// It keeps branch/worktree creation, validation, checkpoints, base
+// synchronization, pushes, and cleanup out of workflow code and workers.
+type GitWorkspace interface {
+	WorktreeManager
+	WorktreeInspector
+	CreateCheckpoint(context.Context, CheckpointRequest) (CheckpointResult, error)
+	Push(context.Context, PushRequest) error
+	SynchronizeBase(context.Context, BaseSyncRequest) error
 }
 
 // CommandRunner is the executable seam for host-side Git commands.
@@ -77,6 +126,14 @@ type LocalWorktreeManager struct {
 
 // NewWorktreeManager returns a Git-backed worktree manager.
 func NewWorktreeManager() *LocalWorktreeManager { return &LocalWorktreeManager{} }
+
+// NewGitWorkspace returns the host-side Git workspace adapter.
+func NewGitWorkspace() *LocalWorktreeManager { return NewWorktreeManager() }
+
+// LocalGitWorkspace is the host-side Git workspace implementation. The alias
+// preserves the existing LocalWorktreeManager name for callers of earlier
+// foundation stages.
+type LocalGitWorkspace = LocalWorktreeManager
 
 // Inspect reads the current HEAD and porcelain status of one run worktree.
 func (m *LocalWorktreeManager) Inspect(ctx context.Context, worktreePath string) (WorktreeState, error) {
@@ -147,6 +204,129 @@ func (m *LocalWorktreeManager) Create(ctx context.Context, repositoryPath, targe
 	return Workspace{BaseSHA: baseSHA, Branch: branch, Worktree: worktree}, nil
 }
 
+// CreateCheckpoint validates the run worktree and creates one host-side
+// implementation commit. A checkpoint marker makes retries recover the
+// original commit rather than creating a duplicate.
+func (m *LocalWorktreeManager) CreateCheckpoint(ctx context.Context, request CheckpointRequest) (CheckpointResult, error) {
+	if strings.TrimSpace(request.RunID) == "" {
+		return CheckpointResult{}, errors.New("checkpoint run id is required")
+	}
+	if err := validateRefPart(request.RunID); err != nil {
+		return CheckpointResult{}, fmt.Errorf("checkpoint run id: %w", err)
+	}
+	if strings.TrimSpace(request.WorktreePath) == "" {
+		return CheckpointResult{}, errors.New("checkpoint worktree path is required")
+	}
+	if !filepath.IsAbs(request.WorktreePath) {
+		return CheckpointResult{}, errors.New("checkpoint worktree path must be absolute")
+	}
+	if !validCommitSHA(request.ParentSHA) {
+		return CheckpointResult{}, errors.New("checkpoint parent SHA must be a full commit identity")
+	}
+	message := strings.TrimSpace(request.Message)
+	if strings.ContainsRune(message, '\x00') {
+		return CheckpointResult{}, errors.New("checkpoint message contains a NUL byte")
+	}
+	marker := "factory: implementation checkpoint " + request.RunID
+	state, err := m.Inspect(ctx, request.WorktreePath)
+	if err != nil {
+		return CheckpointResult{}, fmt.Errorf("inspect worktree before checkpoint: %w", err)
+	}
+	if state.HeadSHA != request.ParentSHA {
+		if m.hasCheckpointMarker(ctx, request.WorktreePath, marker) {
+			if len(state.ChangedPaths) != 0 {
+				return CheckpointResult{}, errors.New("worktree has changes after the existing implementation checkpoint")
+			}
+			return CheckpointResult{SHA: state.HeadSHA}, nil
+		}
+		return CheckpointResult{}, fmt.Errorf("worktree HEAD %q does not match checkpoint parent %q", state.HeadSHA, request.ParentSHA)
+	}
+	if len(state.ChangedPaths) == 0 {
+		if m.hasCheckpointMarker(ctx, request.WorktreePath, marker) {
+			return CheckpointResult{SHA: state.HeadSHA}, nil
+		}
+		return CheckpointResult{}, errors.New("worktree has no implementation changes to checkpoint")
+	}
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"diff", "--check"}); err != nil {
+		return CheckpointResult{}, fmt.Errorf("validate worktree before checkpoint: %w", err)
+	}
+	commitMessage := marker
+	if message != "" {
+		commitMessage += "\n\n" + message
+	}
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"add", "--all", "--"}); err != nil {
+		return CheckpointResult{}, fmt.Errorf("stage implementation checkpoint: %w", err)
+	}
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"commit", "--message", commitMessage}); err != nil {
+		return CheckpointResult{}, fmt.Errorf("create implementation checkpoint: %w", err)
+	}
+	headOutput, err := m.runner().Run(ctx, request.WorktreePath, []string{"rev-parse", "HEAD"})
+	if err != nil {
+		return CheckpointResult{}, fmt.Errorf("resolve implementation checkpoint: %w", err)
+	}
+	head := strings.TrimSpace(string(headOutput))
+	if !validCommitSHA(head) {
+		return CheckpointResult{}, errors.New("implementation checkpoint did not produce a full commit identity")
+	}
+	return CheckpointResult{SHA: head, Created: true}, nil
+}
+
+// Push publishes the current run worktree HEAD to its named remote branch
+// without force-pushing or changing the ordinary checkout.
+func (m *LocalWorktreeManager) Push(ctx context.Context, request PushRequest) error {
+	if strings.TrimSpace(request.WorktreePath) == "" {
+		return errors.New("push worktree path is required")
+	}
+	if !filepath.IsAbs(request.WorktreePath) {
+		return errors.New("push worktree path must be absolute")
+	}
+	if strings.TrimSpace(request.Branch) == "" {
+		return errors.New("push branch is required")
+	}
+	if err := validateRefPart(request.Branch); err != nil {
+		return fmt.Errorf("push branch: %w", err)
+	}
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"push", "--set-upstream", "origin", "HEAD:refs/heads/" + request.Branch}); err != nil {
+		return fmt.Errorf("push run branch %q: %w", request.Branch, err)
+	}
+	return nil
+}
+
+// SynchronizeBase fetches the named target branch and fast-forwards the run
+// worktree to it. It never rebases or force-updates a run branch.
+func (m *LocalWorktreeManager) SynchronizeBase(ctx context.Context, request BaseSyncRequest) error {
+	if strings.TrimSpace(request.WorktreePath) == "" {
+		return errors.New("base synchronization worktree path is required")
+	}
+	if !filepath.IsAbs(request.WorktreePath) {
+		return errors.New("base synchronization worktree path must be absolute")
+	}
+	if strings.TrimSpace(request.TargetBranch) == "" {
+		return errors.New("base synchronization target branch is required")
+	}
+	if err := validateRefPart(request.TargetBranch); err != nil {
+		return fmt.Errorf("base synchronization target branch: %w", err)
+	}
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"fetch", "--no-tags", "origin", "refs/heads/" + request.TargetBranch}); err != nil {
+		return fmt.Errorf("fetch base branch %q: %w", request.TargetBranch, err)
+	}
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"merge", "--ff-only", "FETCH_HEAD"}); err != nil {
+		return fmt.Errorf("fast-forward base branch %q: %w", request.TargetBranch, err)
+	}
+	return nil
+}
+
+// hasCheckpointMarker reports whether the current commit carries the marker
+// used to make a repeated checkpoint request idempotent.
+func (m *LocalWorktreeManager) hasCheckpointMarker(ctx context.Context, worktreePath, marker string) bool {
+	output, err := m.runner().Run(ctx, worktreePath, []string{"log", "-1", "--format=%B"})
+	if err != nil {
+		return false
+	}
+	firstLine := strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)[0]
+	return firstLine == marker
+}
+
 // Remove deletes a run worktree and its factory branch after a claim failure.
 // It attempts both operations so a partial cleanup still reports every error.
 func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string, workspace Workspace) error {
@@ -214,4 +394,18 @@ func validateRefPart(value string) error {
 		return fmt.Errorf("contains characters that cannot be used safely: %q", value)
 	}
 	return nil
+}
+
+// validCommitSHA reports whether value is a full SHA-1 or SHA-256 identity.
+func validCommitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }

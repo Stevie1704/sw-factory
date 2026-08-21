@@ -32,6 +32,7 @@ var commandTable = []commandDefinition{
 	{name: "issue", handler: runIssue},
 	{name: "agent", handler: runAgent},
 	{name: "agent-report", handler: runAgentReport},
+	{name: "draft-pr", handler: runDraftPullRequest},
 	{name: "status", handler: runStatus},
 }
 
@@ -208,6 +209,37 @@ func runAgentReport(ctx context.Context, args []string, defaultConfigPath string
 	}
 	if !writeOutput(output, errorsOutput, "agent report accepted\nrun: %s\ninvocation: %s\noutcome: %s\nstatus: %s\n", result.Invocation.RunID, result.Invocation.ID, result.Report.Outcome, result.Invocation.Status) {
 		return 1
+	}
+	return 0
+}
+
+// runDraftPullRequest advances the accepted implementation to one draft pull
+// request through host-side checkpoint, gate, Git, and GitHub effects.
+func runDraftPullRequest(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("draft-pr", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "active factory run identifier")
+	intervention := flags.String("intervention", "", "operator-visible intervention marker")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("draft-pr does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).CreateDraftPullRequest(ctx, factory.DraftPullRequestRequest{RunID: *runID, Intervention: *intervention})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "draft pull request ready\nrun: %s\ncheckpoint: %s\npull request: #%d %s\nstage: %s\n", result.Run.ID, result.Run.CheckpointSHA, result.PullRequest.Number, result.PullRequest.URL, result.Run.Stage) {
+		return 1
+	}
+	for _, gateResult := range result.Gates {
+		if !writeOutput(output, errorsOutput, "gate: %s (%s)\n", gateResult.GateName, gateResult.Status.State) {
+			return 1
+		}
 	}
 	return 0
 }
