@@ -6,7 +6,9 @@ container paths, and invocation/result storage remain inside the adapter.
 
 The interface has five operations:
 
-- `start` creates a per-run worker from `image@digest`.
+- `start` creates a per-run worker from `image@digest`. An existing stopped
+  worker is reused only when its frozen image and mount contract (worktree,
+  Git metadata, and cache paths) match the request.
 - `resume` restarts the existing worker without changing its frozen image.
 - `run-command` runs one shell command and returns its exit result.
 - `stop` stops the worker while retaining it for resume.

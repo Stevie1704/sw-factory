@@ -687,6 +687,59 @@ func reconcileDuplicateRuns(ctx context.Context, tx *sql.Tx) error {
 		id        string
 		updatedAt time.Time
 	}
+	// First, normalize all legacy timestamps to the canonical fixed-width format
+	// so that subsequent SQL ORDER BY operations on created_at/updated_at produce
+	// correct chronological results via lexical string comparison.
+	allRows, err := tx.QueryContext(ctx, `SELECT id, created_at, updated_at FROM operational_runs`)
+	if err != nil {
+		return fmt.Errorf("list runs for timestamp normalization: %w", err)
+	}
+	type timestampUpdate struct {
+		id        string
+		createdAt string
+		updatedAt string
+	}
+	updates := make([]timestampUpdate, 0)
+	for allRows.Next() {
+		var id, createdAt, updatedAt string
+		if err := allRows.Scan(&id, &createdAt, &updatedAt); err != nil {
+			_ = allRows.Close()
+			return fmt.Errorf("scan run for timestamp normalization: %w", err)
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			_ = allRows.Close()
+			return fmt.Errorf("parse run created_at for normalization: %w", err)
+		}
+		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			_ = allRows.Close()
+			return fmt.Errorf("parse run updated_at for normalization: %w", err)
+		}
+		normalizedCreatedAt := parsedCreatedAt.Format(runTimestampLayout)
+		normalizedUpdatedAt := parsedUpdatedAt.Format(runTimestampLayout)
+		if createdAt != normalizedCreatedAt || updatedAt != normalizedUpdatedAt {
+			updates = append(updates, timestampUpdate{
+				id:        id,
+				createdAt: normalizedCreatedAt,
+				updatedAt: normalizedUpdatedAt,
+			})
+		}
+	}
+	if err := allRows.Err(); err != nil {
+		_ = allRows.Close()
+		return fmt.Errorf("read runs for timestamp normalization: %w", err)
+	}
+	if err := allRows.Close(); err != nil {
+		return fmt.Errorf("close runs for timestamp normalization: %w", err)
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE operational_runs SET created_at = ?, updated_at = ? WHERE id = ?`,
+			update.createdAt, update.updatedAt, update.id); err != nil {
+			return fmt.Errorf("normalize timestamps for run %q: %w", update.id, err)
+		}
+	}
+	// Now reconcile duplicates using the normalized timestamps
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, repository_path, updated_at
 		FROM operational_runs

@@ -298,6 +298,7 @@ func writeDockerStub(t *testing.T) (string, string, string) {
 	stub := filepath.Join(root, "docker-stub")
 	logPath := filepath.Join(root, "docker.log")
 	statePath := filepath.Join(root, "docker.state")
+	mountsPath := filepath.Join(root, "docker.mounts")
 	script := `#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$WORKER_DOCKER_LOG"
@@ -317,13 +318,35 @@ case "$command_name" in
     fi
     state=$(cat "$WORKER_DOCKER_STATE")
     if [ "$state" = "running" ]; then
-      printf 'true\t%s\n' "$WORKER_DOCKER_IMAGE"
+      printf 'true\t%s\t' "$WORKER_DOCKER_IMAGE"
     else
-      printf 'false\t%s\n' "$WORKER_DOCKER_IMAGE"
+      printf 'false\t%s\t' "$WORKER_DOCKER_IMAGE"
     fi
+    if [ -f "$WORKER_DOCKER_MOUNTS" ]; then
+      cat "$WORKER_DOCKER_MOUNTS"
+    fi
+    printf '\n'
     ;;
   run)
     printf 'running\n' > "$WORKER_DOCKER_STATE"
+    # Extract and record mount information from run command
+    printf '' > "$WORKER_DOCKER_MOUNTS"
+    shift
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--mount" ]; then
+        shift
+        mount_spec="$1"
+        src=$(echo "$mount_spec" | sed -n 's/.*src=\([^,]*\).*/\1/p')
+        dst=$(echo "$mount_spec" | sed -n 's/.*dst=\([^,]*\).*/\1/p')
+        if echo "$mount_spec" | grep -q "readonly"; then
+          rw="false"
+        else
+          rw="true"
+        fi
+        printf '%s\t%s\t%s\n' "$src" "$dst" "$rw" >> "$WORKER_DOCKER_MOUNTS"
+      fi
+      shift
+    done
     printf 'stub-container\n'
     ;;
   start)
@@ -375,6 +398,7 @@ esac
 	}
 	t.Setenv("WORKER_DOCKER_LOG", logPath)
 	t.Setenv("WORKER_DOCKER_STATE", statePath)
+	t.Setenv("WORKER_DOCKER_MOUNTS", mountsPath)
 	t.Setenv("WORKER_DOCKER_IMAGE", "ghcr.io/example/factory-worker@"+testWorkerDigest)
 	return stub, logPath, statePath
 }
@@ -461,6 +485,206 @@ func assertGroupAccess(t *testing.T, path string, required os.FileMode) {
 	}
 	if got&0o007 != 0 {
 		t.Fatalf("permissions for %q = %#o, unexpectedly grant other-user access", path, got)
+	}
+}
+
+// TestDockerRuntimeReusesStoppedWorkerWhenMountContractMatches verifies that a
+// stopped worker is reused when its configured mounts match the new request.
+func TestDockerRuntimeReusesStoppedWorkerWhenMountContractMatches(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	worktreePath := makeDirectory(t, "worktree")
+	gitMetadataPath := makeDirectory(t, "git-metadata")
+	cachePath := makeDirectory(t, "go-cache")
+
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.StartRequest{
+		RunID:           "run-contract-mount-match",
+		WorktreePath:    worktreePath,
+		GitMetadataPath: gitMetadataPath,
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+		Caches: []worker.CacheMount{{
+			Name:     "go-build",
+			HostPath: cachePath,
+			ReadOnly: false,
+		}},
+	}
+
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := runtime.Stop(context.Background(), request.RunID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	// Start again with identical mount contract - should reuse the container
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() with matching mounts error = %v", err)
+	}
+
+	lines := readStubLog(t, logPath)
+	if countLogLines(lines, " run ") != 1 {
+		t.Fatalf("Docker run calls = %d, want 1 (mount contract matched, container reused); calls = %#v", countLogLines(lines, " run "), lines)
+	}
+	if countLogLines(lines, " start ") != 1 {
+		t.Fatalf("Docker start calls = %d, want 1 (reused stopped container); calls = %#v", countLogLines(lines, " start "), lines)
+	}
+}
+
+// TestDockerRuntimeRefusesMountContractMismatch verifies that Start returns a
+// clear error when a stopped worker's configured mounts don't match the new
+// request, mirroring the existing image-mismatch error pattern.
+func TestDockerRuntimeRefusesMountContractMismatch(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	worktreePath := makeDirectory(t, "worktree")
+	gitMetadataPath := makeDirectory(t, "git-metadata")
+	cachePath := makeDirectory(t, "go-cache")
+	otherCachePath := makeDirectory(t, "other-cache")
+
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.StartRequest{
+		RunID:           "run-contract-mount-mismatch",
+		WorktreePath:    worktreePath,
+		GitMetadataPath: gitMetadataPath,
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+		Caches: []worker.CacheMount{{
+			Name:     "go-build",
+			HostPath: cachePath,
+			ReadOnly: false,
+		}},
+	}
+
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := runtime.Stop(context.Background(), request.RunID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		request worker.StartRequest
+		pattern string
+	}{
+		{
+			name: "different worktree path",
+			request: worker.StartRequest{
+				RunID:           request.RunID,
+				WorktreePath:    makeDirectory(t, "other-worktree"),
+				GitMetadataPath: gitMetadataPath,
+				Image:           request.Image,
+				ImageDigest:     request.ImageDigest,
+				Caches:          request.Caches,
+			},
+			pattern: "mount contract mismatch",
+		},
+		{
+			name: "different git metadata path",
+			request: worker.StartRequest{
+				RunID:           request.RunID,
+				WorktreePath:    worktreePath,
+				GitMetadataPath: makeDirectory(t, "other-git-metadata"),
+				Image:           request.Image,
+				ImageDigest:     request.ImageDigest,
+				Caches:          request.Caches,
+			},
+			pattern: "mount contract mismatch",
+		},
+		{
+			name: "different cache host path",
+			request: worker.StartRequest{
+				RunID:           request.RunID,
+				WorktreePath:    worktreePath,
+				GitMetadataPath: gitMetadataPath,
+				Image:           request.Image,
+				ImageDigest:     request.ImageDigest,
+				Caches: []worker.CacheMount{{
+					Name:     "go-build",
+					HostPath: otherCachePath,
+					ReadOnly: false,
+				}},
+			},
+			pattern: "mount contract mismatch",
+		},
+		{
+			name: "different cache name",
+			request: worker.StartRequest{
+				RunID:           request.RunID,
+				WorktreePath:    worktreePath,
+				GitMetadataPath: gitMetadataPath,
+				Image:           request.Image,
+				ImageDigest:     request.ImageDigest,
+				Caches: []worker.CacheMount{{
+					Name:     "npm-cache",
+					HostPath: cachePath,
+					ReadOnly: false,
+				}},
+			},
+			pattern: "mount contract mismatch",
+		},
+		{
+			name: "different cache read-only flag",
+			request: worker.StartRequest{
+				RunID:           request.RunID,
+				WorktreePath:    worktreePath,
+				GitMetadataPath: gitMetadataPath,
+				Image:           request.Image,
+				ImageDigest:     request.ImageDigest,
+				Caches: []worker.CacheMount{{
+					Name:     "go-build",
+					HostPath: cachePath,
+					ReadOnly: true,
+				}},
+			},
+			pattern: "mount contract mismatch",
+		},
+		{
+			name: "extra cache mount",
+			request: worker.StartRequest{
+				RunID:           request.RunID,
+				WorktreePath:    worktreePath,
+				GitMetadataPath: gitMetadataPath,
+				Image:           request.Image,
+				ImageDigest:     request.ImageDigest,
+				Caches: []worker.CacheMount{
+					{
+						Name:     "go-build",
+						HostPath: cachePath,
+						ReadOnly: false,
+					},
+					{
+						Name:     "npm-cache",
+						HostPath: otherCachePath,
+						ReadOnly: false,
+					},
+				},
+			},
+			pattern: "mount contract mismatch",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runtime.Start(context.Background(), tc.request)
+			if err == nil {
+				t.Fatalf("Start() succeeded with mismatched mounts, want error containing %q", tc.pattern)
+			}
+			if !strings.Contains(err.Error(), tc.pattern) {
+				t.Fatalf("Start() error = %q, want error containing %q", err.Error(), tc.pattern)
+			}
+			if !strings.Contains(err.Error(), request.RunID) {
+				t.Fatalf("Start() error = %q, want error mentioning run ID %q", err.Error(), request.RunID)
+			}
+		})
+	}
+
+	lines := readStubLog(t, logPath)
+	if countLogLines(lines, " run ") != 1 {
+		t.Fatalf("Docker run calls = %d, want 1 (mount mismatches should not create new containers); calls = %#v", countLogLines(lines, " run "), lines)
+	}
+	if countLogLines(lines, " start ") != 0 {
+		t.Fatalf("Docker start calls = %d, want 0 (mount mismatches should not restart container); calls = %#v", countLogLines(lines, " start "), lines)
 	}
 }
 
