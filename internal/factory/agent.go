@@ -417,7 +417,11 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	_, harnessRuntime := s.ensureAgentRuntime(registration.Cmux.SocketPath)
 	nativeSessionID := invocation.NativeSessionID
-	if value.NativeSessionID != "" {
+	if invocation.NativeSessionID != "" {
+		if value.NativeSessionID != "" && value.NativeSessionID != invocation.NativeSessionID {
+			return AgentResult{}, errors.New("agent report native session identifier does not match persisted invocation")
+		}
+	} else {
 		nativeSessionID = value.NativeSessionID
 	}
 	if nativeSessionID == "" {

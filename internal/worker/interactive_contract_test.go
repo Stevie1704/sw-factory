@@ -131,6 +131,7 @@ func TestDockerRuntimeRecreatesAnExistingWorkerForInvocationMounts(t *testing.T)
 // testRoleVolumeName mirrors only the stable test fixture identity needed to
 // build a structured Docker inspect response without exposing adapter code.
 func testRoleVolumeName(runID, role string) string {
+	role = strings.ToLower(role)
 	digest := sha256.Sum256([]byte(runID + "\x00" + role))
 	return "factory-role-" + role + "-" + hex.EncodeToString(digest[:])[:16]
 }

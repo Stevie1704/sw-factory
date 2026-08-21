@@ -524,9 +524,11 @@ func TestDockerRuntimeReusesStoppedWorkerWhenMountContractMatches(t *testing.T) 
 		t.Fatalf("Stop() error = %v", err)
 	}
 
-	// Start again with identical mount contract - should reuse the container
+	// Start again with legacy two-field inspection output - should reuse the
+	// stopped container without structured mount-contract validation.
+	t.Setenv("WORKER_DOCKER_MOUNTS", "")
 	if err := runtime.Start(context.Background(), request); err != nil {
-		t.Fatalf("Start() with matching mounts error = %v", err)
+		t.Fatalf("Start() through legacy inspection error = %v", err)
 	}
 
 	lines := readStubLog(t, logPath)
@@ -535,6 +537,47 @@ func TestDockerRuntimeReusesStoppedWorkerWhenMountContractMatches(t *testing.T) 
 	}
 	if countLogLines(lines, " start ") != 1 {
 		t.Fatalf("Docker start calls = %d, want 1 (reused stopped container); calls = %#v", countLogLines(lines, " start "), lines)
+	}
+}
+
+// TestDockerRuntimeRejectsMalformedLegacyMountRecords verifies compatibility
+// parsing fails closed instead of silently discarding incomplete mount data.
+func TestDockerRuntimeRejectsMalformedLegacyMountRecords(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	worktreePath := makeDirectory(t, "worktree")
+	gitMetadataPath := makeDirectory(t, "git-metadata")
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.StartRequest{
+		RunID:           "run-contract-malformed-mount",
+		WorktreePath:    worktreePath,
+		GitMetadataPath: gitMetadataPath,
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+	}
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("initial Start() error = %v", err)
+	}
+	if err := runtime.Stop(context.Background(), request.RunID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	mountsPath := os.Getenv("WORKER_DOCKER_MOUNTS")
+	for _, test := range []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "field count", data: "source\tdestination\n", want: "malformed mount record"},
+		{name: "read-write flag", data: "source\tdestination\tunknown\n", want: "invalid mount read-write flag"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(mountsPath, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Start(context.Background(), request); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Start() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

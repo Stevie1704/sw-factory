@@ -156,6 +156,11 @@ func NewCmuxRuntime(runner CommandRunner, socketPaths ...string) *CmuxRuntime {
 	return &CmuxRuntime{Runner: runner, socketPath: socketPath, runs: make(map[string]RunWorkspace)}
 }
 
+// ConfiguredSocketPath returns the cmux socket path selected at construction.
+func (r *CmuxRuntime) ConfiguredSocketPath() string {
+	return r.socketPath
+}
+
 // EnsureControlWorkspace creates the coordinator workspace and returns its
 // opaque handle.
 func (r *CmuxRuntime) EnsureControlWorkspace(ctx context.Context, request WorkspaceRequest) (Workspace, error) {

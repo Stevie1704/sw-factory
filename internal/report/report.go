@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 // SchemaVersion is the version of the agent report envelope.
@@ -238,18 +240,35 @@ func writeAtomicReport(resultDirectory string, value Report) (string, error) {
 // Read loads and validates the JSON envelope at path without accepting unknown
 // fields or trailing data.
 func Read(path string) (Report, error) {
-	if info, err := os.Lstat(path); err != nil {
+	cleanPath := filepath.Clean(path)
+	directoryFD, err := unix.Open(filepath.Dir(cleanPath), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return Report{}, errors.New("agent report path must not be a symbolic link")
+		}
 		return Report{}, fmt.Errorf("inspect agent report: %w", err)
-	} else if info.Mode()&os.ModeSymlink != 0 {
-		return Report{}, errors.New("agent report path must not be a symbolic link")
-	} else if !info.Mode().IsRegular() {
-		return Report{}, errors.New("agent report path must be a regular file")
 	}
-	file, err := os.Open(path)
+	defer func() { _ = unix.Close(directoryFD) }()
+	fileDescriptor, err := unix.Openat(directoryFD, filepath.Base(cleanPath), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return Report{}, errors.New("agent report path must not be a symbolic link")
+		}
+		return Report{}, fmt.Errorf("read agent report: %w", err)
+	}
+	file := os.NewFile(uintptr(fileDescriptor), cleanPath)
+	if file == nil {
+		_ = unix.Close(fileDescriptor)
+		return Report{}, errors.New("read agent report: open returned an invalid file descriptor")
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
 	if err != nil {
 		return Report{}, fmt.Errorf("read agent report: %w", err)
 	}
-	defer func() { _ = file.Close() }()
+	if !info.Mode().IsRegular() {
+		return Report{}, errors.New("agent report path must be a regular file")
+	}
 	data, err := io.ReadAll(io.LimitReader(file, int64(MaxReportBytes)+1))
 	if err != nil {
 		return Report{}, fmt.Errorf("read agent report: %w", err)

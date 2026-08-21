@@ -130,6 +130,61 @@ func TestAcceptAgentReportUsesOnlyTheStructuredReportAndFinishesTheSession(t *te
 	}
 }
 
+// TestAcceptAgentReportTrustsThePersistedNativeSession verifies a report
+// cannot replace the native session identity already bound to the invocation.
+func TestAcceptAgentReportTrustsThePersistedNativeSession(t *testing.T) {
+	service, runStore, _, _, harnessRuntime := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.NativeSessionID = "session-persisted"
+	runStore.invocations[launch.Invocation.ID] = persisted
+	path, err := writeAgentTestReport(t, launch, "internal/factory/agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := report.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.NativeSessionID = ""
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+
+	accepted, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID})
+	if err != nil {
+		t.Fatalf("AcceptAgentReport() error = %v", err)
+	}
+	if accepted.Invocation.NativeSessionID != "session-persisted" || len(harnessRuntime.finished) != 1 || harnessRuntime.finished[0].NativeSessionID != "session-persisted" {
+		t.Fatalf("accepted native session = %#v, finished = %#v, want persisted identity", accepted.Invocation.NativeSessionID, harnessRuntime.finished)
+	}
+}
+
+// TestAcceptAgentReportRejectsANativeSessionMismatch verifies a supplied
+// report identity must agree with the persisted invocation identity.
+func TestAcceptAgentReportRejectsANativeSessionMismatch(t *testing.T) {
+	service, runStore, _, _, harnessRuntime := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.NativeSessionID = "session-persisted"
+	runStore.invocations[launch.Invocation.ID] = persisted
+	if _, err := writeAgentTestReport(t, launch, "internal/factory/agent.go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "does not match persisted invocation") {
+		t.Fatalf("AcceptAgentReport() error = %v, want persisted-session mismatch", err)
+	}
+	if len(harnessRuntime.finished) != 0 {
+		t.Fatalf("finished sessions = %#v, want none after mismatch", harnessRuntime.finished)
+	}
+}
+
 // TestAcceptAgentReportRejectsAWorktreeCheckpointMismatch verifies report
 // acceptance refuses a worktree whose HEAD no longer matches the run claim.
 func TestAcceptAgentReportRejectsAWorktreeCheckpointMismatch(t *testing.T) {
@@ -196,9 +251,9 @@ func TestAcceptAgentReportRejectsATerminalInvocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartAgent() error = %v", err)
 	}
-	terminal := runStore.invocations[launch.Invocation.ID]
-	terminal.Status = store.InvocationStatusCompleted
-	runStore.invocations[launch.Invocation.ID] = terminal
+	completed := runStore.invocations[launch.Invocation.ID]
+	completed.Status = store.InvocationStatusCompleted
+	runStore.invocations[launch.Invocation.ID] = completed
 	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "already completed") {
 		t.Fatalf("AcceptAgentReport() error = %v, want terminal-invocation rejection", err)
 	}

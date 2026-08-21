@@ -149,6 +149,17 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	if err != nil {
 		return Session{}, fmt.Errorf("build Codex interactive command: %w", err)
 	}
+	var snapshotProvider worker.NativeSessionSnapshotProvider
+	var baseline []string
+	if request.ResumeSessionID == "" {
+		if provider, ok := c.Worker.(worker.NativeSessionSnapshotProvider); ok {
+			snapshotProvider = provider
+			baseline, err = provider.NativeSessionIDs(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
+			if err != nil {
+				return Session{}, fmt.Errorf("snapshot Codex native sessions: %w", err)
+			}
+		}
+	}
 	surface := request.Surface
 	if surface.ID == "" {
 		surface, err = c.Terminal.CreateSurface(ctx, terminal.SurfaceRequest{
@@ -168,18 +179,6 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	}); err != nil {
 		return Session{}, fmt.Errorf("launch Codex surface: %w", err)
 	}
-	var snapshotProvider worker.NativeSessionSnapshotProvider
-	var baseline []string
-	if request.ResumeSessionID == "" {
-		if provider, ok := c.Worker.(worker.NativeSessionSnapshotProvider); ok {
-			snapshotProvider = provider
-			baseline, err = provider.NativeSessionIDs(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
-			if err != nil {
-				_ = c.Terminal.CloseSurface(ctx, surface.ID)
-				return Session{}, fmt.Errorf("snapshot Codex native sessions: %w", err)
-			}
-		}
-	}
 	if err := c.Terminal.SendInput(ctx, surface.ID, []byte(strings.TrimSpace(request.Prompt)+"\n")); err != nil {
 		_ = c.Terminal.CloseSurface(ctx, surface.ID)
 		return Session{}, fmt.Errorf("send Codex prompt: %w", err)
@@ -189,12 +188,14 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 		if snapshotProvider != nil {
 			discovered, discoverErr := discoverNativeSession(ctx, snapshotProvider, baseline, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
 			if discoverErr != nil {
+				_ = c.Terminal.CloseSurface(ctx, surface.ID)
 				return Session{}, fmt.Errorf("discover Codex native session: %w", discoverErr)
 			}
 			nativeSessionID = discovered
 		} else if provider, ok := c.Worker.(worker.NativeSessionProvider); ok {
 			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: "codex"})
 			if discoverErr != nil {
+				_ = c.Terminal.CloseSurface(ctx, surface.ID)
 				return Session{}, fmt.Errorf("discover Codex native session: %w", discoverErr)
 			}
 			nativeSessionID = discovered
@@ -207,14 +208,22 @@ const (
 	// nativeSessionDiscoveryTimeout bounds how long a fresh launch waits for
 	// Codex to persist its native session file.
 	nativeSessionDiscoveryTimeout = 5 * time.Second
-	// nativeSessionDiscoveryInterval avoids a tight polling loop while Codex
-	// initializes its role home.
-	nativeSessionDiscoveryInterval = 50 * time.Millisecond
+	// nativeSessionDiscoveryInitialInterval avoids a tight polling loop while
+	// Codex initializes its role home.
+	nativeSessionDiscoveryInitialInterval = 100 * time.Millisecond
+	// nativeSessionDiscoveryMaxInterval keeps discovery responsive without
+	// repeatedly invoking the worker while Codex is still starting.
+	nativeSessionDiscoveryMaxInterval = 500 * time.Millisecond
 )
 
+// ErrNativeSessionUnavailable reports that a fresh Codex launch did not expose
+// a newly persisted native session before discovery timed out or was canceled.
+var ErrNativeSessionUnavailable = errors.New("native Codex session was not discovered before the deadline")
+
 // discoverNativeSession returns a session identifier that was not present
-// before the prompt was sent. It returns an empty identifier when Codex does
-// not persist a new session before the bounded discovery window expires.
+// before the prompt was sent. It returns ErrNativeSessionUnavailable when
+// Codex does not persist a new session before the bounded discovery window
+// expires or the caller cancels discovery.
 func discoverNativeSession(ctx context.Context, provider worker.NativeSessionSnapshotProvider, baseline []string, request worker.NativeSessionRequest) (string, error) {
 	discoveryContext, cancel := context.WithTimeout(ctx, nativeSessionDiscoveryTimeout)
 	defer cancel()
@@ -222,23 +231,27 @@ func discoverNativeSession(ctx context.Context, provider worker.NativeSessionSna
 	for _, identifier := range baseline {
 		known[identifier] = struct{}{}
 	}
+	interval := nativeSessionDiscoveryInitialInterval
 	for {
-		if discoveryContext.Err() != nil {
-			return "", nil
+		if err := discoveryContext.Err(); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrNativeSessionUnavailable, err)
 		}
 		identifiers, err := provider.NativeSessionIDs(discoveryContext, request)
 		if err != nil {
 			if discoveryContext.Err() != nil {
-				return "", nil
+				return "", fmt.Errorf("%w: %v", ErrNativeSessionUnavailable, discoveryContext.Err())
 			}
 			return "", err
 		}
 		for index := len(identifiers) - 1; index >= 0; index-- {
+			if strings.TrimSpace(identifiers[index]) == "" {
+				continue
+			}
 			if _, exists := known[identifiers[index]]; !exists {
 				return identifiers[index], nil
 			}
 		}
-		timer := time.NewTimer(nativeSessionDiscoveryInterval)
+		timer := time.NewTimer(interval)
 		select {
 		case <-discoveryContext.Done():
 			if !timer.Stop() {
@@ -247,8 +260,14 @@ func discoverNativeSession(ctx context.Context, provider worker.NativeSessionSna
 				default:
 				}
 			}
-			return "", nil
+			return "", fmt.Errorf("%w: %v", ErrNativeSessionUnavailable, discoveryContext.Err())
 		case <-timer.C:
+			if interval < nativeSessionDiscoveryMaxInterval {
+				interval *= 2
+				if interval > nativeSessionDiscoveryMaxInterval {
+					interval = nativeSessionDiscoveryMaxInterval
+				}
+			}
 		}
 	}
 }

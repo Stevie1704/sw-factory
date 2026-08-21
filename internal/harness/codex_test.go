@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -79,9 +80,12 @@ func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
 func TestCodexFreshStartIgnoresStaleSessions(t *testing.T) {
 	workerRuntime := &snapshotWorker{
 		fakeWorker: &fakeWorker{},
-		snapshots:  [][]string{{"session-old"}, {"session-old"}, {"session-old", "session-new"}},
+		snapshots:  [][]string{{"session-old"}, {"session-old", "session-new"}},
 	}
-	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
+	terminalRuntime := &fakeTerminal{
+		surface:    terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"},
+		launchHook: workerRuntime.markSurfaceStarted,
+	}
 	session, err := harness.NewCodex(workerRuntime, terminalRuntime).Start(context.Background(), harness.StartRequest{
 		InvocationID: "inv-3",
 		RunID:        "run-1",
@@ -96,6 +100,55 @@ func TestCodexFreshStartIgnoresStaleSessions(t *testing.T) {
 	}
 	if session.NativeSessionID != "session-new" {
 		t.Fatalf("NativeSessionID = %q, want newly persisted session", session.NativeSessionID)
+	}
+}
+
+// TestCodexDiscoveryFailureClosesTheSurface verifies a failed fresh-session
+// lookup does not leave the launched surface or Codex process running.
+func TestCodexDiscoveryFailureClosesTheSurface(t *testing.T) {
+	workerRuntime := &snapshotWorker{fakeWorker: &fakeWorker{}, snapshots: [][]string{{"session-old"}}}
+	terminalRuntime := &fakeTerminal{
+		surface:    terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"},
+		launchHook: workerRuntime.markSurfaceStarted,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := harness.NewCodex(workerRuntime, terminalRuntime).Start(ctx, harness.StartRequest{
+		InvocationID: "inv-4",
+		RunID:        "run-1",
+		Role:         "implementation",
+		Stage:        "implementation",
+		WorkspaceID:  "workspace-run",
+		Surface:      terminalRuntime.surface,
+		Prompt:       "Start the implementation.",
+	})
+	if !errors.Is(err, harness.ErrNativeSessionUnavailable) {
+		t.Fatalf("Start() error = %v, want native-session-unavailable sentinel", err)
+	}
+	if terminalRuntime.closed != string(terminalRuntime.surface.ID) {
+		t.Fatalf("closed surface = %q, want %q", terminalRuntime.closed, terminalRuntime.surface.ID)
+	}
+}
+
+// TestCodexLegacyDiscoveryFailureClosesTheSurface verifies cleanup also
+// covers runtimes that expose only the single-session lookup seam.
+func TestCodexLegacyDiscoveryFailureClosesTheSurface(t *testing.T) {
+	workerRuntime := &failingNativeSessionWorker{fakeWorker: &fakeWorker{}}
+	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
+	_, err := harness.NewCodex(workerRuntime, terminalRuntime).Start(context.Background(), harness.StartRequest{
+		InvocationID: "inv-5",
+		RunID:        "run-1",
+		Role:         "implementation",
+		Stage:        "implementation",
+		WorkspaceID:  "workspace-run",
+		Surface:      terminalRuntime.surface,
+		Prompt:       "Start the implementation.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "discover Codex native session: native session lookup failed") {
+		t.Fatalf("Start() error = %v, want wrapped legacy discovery error", err)
+	}
+	if terminalRuntime.closed != string(terminalRuntime.surface.ID) {
+		t.Fatalf("closed surface = %q, want %q", terminalRuntime.closed, terminalRuntime.surface.ID)
 	}
 }
 
@@ -121,17 +174,38 @@ type fakeWorker struct {
 // worker fixture without making every harness test wait for discovery.
 type snapshotWorker struct {
 	*fakeWorker
-	snapshots [][]string
-	index     int
+	snapshots      [][]string
+	surfaceStarted bool
 }
 
-// NativeSessionIDs returns the next persisted-session snapshot.
+// failingNativeSessionWorker exposes the legacy single-session lookup with a
+// deterministic failure for cleanup tests.
+type failingNativeSessionWorker struct {
+	*fakeWorker
+}
+
+// NativeSessionID returns the configured legacy lookup failure.
+func (*failingNativeSessionWorker) NativeSessionID(context.Context, worker.NativeSessionRequest) (string, error) {
+	return "", errors.New("native session lookup failed")
+}
+
+// markSurfaceStarted models Codex persisting its new session during surface
+// launch, after the baseline snapshot has been captured.
+func (w *snapshotWorker) markSurfaceStarted() {
+	w.surfaceStarted = true
+}
+
+// NativeSessionIDs returns the persisted-session snapshot for the current
+// surface-start phase.
 func (w *snapshotWorker) NativeSessionIDs(context.Context, worker.NativeSessionRequest) ([]string, error) {
-	if w.index >= len(w.snapshots) {
+	index := 0
+	if w.surfaceStarted {
+		index = 1
+	}
+	if index >= len(w.snapshots) {
 		return nil, nil
 	}
-	value := append([]string(nil), w.snapshots[w.index]...)
-	w.index++
+	value := append([]string(nil), w.snapshots[index]...)
 	return value, nil
 }
 
@@ -162,10 +236,11 @@ func (w *fakeWorker) InteractiveCommand(_ context.Context, request worker.Intera
 
 // fakeTerminal records visible surface operations without reading a screen.
 type fakeTerminal struct {
-	surface  terminal.Surface
-	inputs   [][]byte
-	closed   string
-	launched terminal.Command
+	surface    terminal.Surface
+	inputs     [][]byte
+	closed     string
+	launched   terminal.Command
+	launchHook func()
 }
 
 // EnsureControlWorkspace implements TerminalRuntime for the harness test.
@@ -183,12 +258,18 @@ func (t *fakeTerminal) CreateSurface(_ context.Context, request terminal.Surface
 	if request.WorkspaceID != t.surface.WorkspaceID {
 		return terminal.Surface{}, nil
 	}
+	if t.launchHook != nil {
+		t.launchHook()
+	}
 	return t.surface, nil
 }
 
 // LaunchSurface records the command launched in a layout-created surface.
 func (t *fakeTerminal) LaunchSurface(_ context.Context, _ terminal.SurfaceID, command terminal.Command) error {
 	t.launched = command
+	if t.launchHook != nil {
+		t.launchHook()
+	}
 	return nil
 }
 
@@ -213,4 +294,5 @@ func (*fakeTerminal) CloseWorkspace(context.Context, terminal.WorkspaceID) error
 var _ worker.WorkerRuntime = (*fakeWorker)(nil)
 var _ worker.InteractiveRuntime = (*fakeWorker)(nil)
 var _ worker.NativeSessionSnapshotProvider = (*snapshotWorker)(nil)
+var _ worker.NativeSessionProvider = (*failingNativeSessionWorker)(nil)
 var _ terminal.TerminalRuntime = (*fakeTerminal)(nil)

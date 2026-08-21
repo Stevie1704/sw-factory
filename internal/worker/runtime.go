@@ -288,8 +288,10 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		} else if inspection.Running {
 			return nil
 		} else {
-			if err := validateMountContract(inspection.Mounts, request); err != nil {
-				return fmt.Errorf("worker %q mount contract mismatch: %w", request.RunID, err)
+			if len(inspection.Mounts) > 0 {
+				if err := validateMountContract(inspection.Mounts, request); err != nil {
+					return fmt.Errorf("worker %q mount contract mismatch: %w", request.RunID, err)
+				}
 			}
 			if _, err := prepareWorkerMounts(request); err != nil {
 				return fmt.Errorf("prepare worker mounts: %w", err)
@@ -645,11 +647,11 @@ func (r *DockerRuntime) inspectContainer(ctx context.Context, name string) (Insp
 		for _, line := range strings.Split(strings.TrimSpace(fields[2]), "\n") {
 			mountFields := strings.Split(line, "\t")
 			if len(mountFields) != 3 {
-				continue
+				return Inspection{}, fmt.Errorf("docker inspect returned malformed mount record %q", line)
 			}
 			readWrite, err := strconv.ParseBool(mountFields[2])
 			if err != nil {
-				continue
+				return Inspection{}, fmt.Errorf("docker inspect returned invalid mount read-write flag %q in record %q: %w", mountFields[2], line, err)
 			}
 			destination := mountFields[1]
 			mounts = append(mounts, ContainerMount{
@@ -1064,7 +1066,7 @@ func validateMountContract(existingMounts []ContainerMount, request StartRequest
 		if !found {
 			return fmt.Errorf("container missing mount at %q", destination)
 		}
-		if existing.Source != required.Source {
+		if filepath.Clean(existing.Source) != filepath.Clean(required.Source) {
 			return fmt.Errorf("mount at %q uses host path %q, want %q", destination, existing.Source, required.Source)
 		}
 		if existing.ReadOnly != required.ReadOnly {

@@ -7,7 +7,9 @@ import (
 )
 
 // TestInspectParsesNulDelimitedStatus verifies paths with spaces and arrow
-// text remain intact while rename/copy source fields are ignored.
+// text remain intact while rename/copy source fields are ignored. The rename
+// and copy records mirror verified `git status --porcelain=v1 -z` output:
+// destination path first, followed by the source path.
 func TestInspectParsesNulDelimitedStatus(t *testing.T) {
 	runner := &inspectRunner{status: " M internal/foo -> bar.go\x00?? internal/ümlaut.go\x00R  new name.go\x00old name.go\x00C  copy.go\x00source.go\x00"}
 	state, err := (&LocalWorktreeManager{Runner: runner}).Inspect(context.Background(), "/worktree")
