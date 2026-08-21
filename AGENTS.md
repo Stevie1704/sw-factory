@@ -11,3 +11,7 @@ Uses the five canonical labels unchanged. See `docs/agents/triage-labels.md`.
 ### Domain docs
 
 Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
+### Documentation
+
+During coding create docstrings for functions and definitions.
