@@ -487,8 +487,13 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	if repository.Cmux.SocketPath != "" && !filepath.IsAbs(repository.Cmux.SocketPath) {
 		return validation(prefix+".cmux.socket_path", "must be absolute when set")
 	}
-	if repository.Authentication.CodexAuthPath != "" && !filepath.IsAbs(repository.Authentication.CodexAuthPath) {
-		return validation(prefix+".authentication.codex_auth_path", "must be absolute when set")
+	if repository.Authentication.CodexAuthPath != "" {
+		if strings.ContainsAny(repository.Authentication.CodexAuthPath, "\x00\r\n") {
+			return validation(prefix+".authentication.codex_auth_path", "must not contain control characters")
+		}
+		if !filepath.IsAbs(repository.Authentication.CodexAuthPath) {
+			return validation(prefix+".authentication.codex_auth_path", "must be absolute when set")
+		}
 	}
 	if strings.TrimSpace(repository.RepositoryConfigPath) == "" {
 		return validation(prefix+".repository_config_path", "is required")
