@@ -1,0 +1,319 @@
+package factory
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/gate"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/store"
+)
+
+const (
+	// generatedPullRequestStart marks the coordinator-owned PR body section.
+	generatedPullRequestStart = "<!-- factory-generated:start -->"
+	// generatedPullRequestEnd marks the end of the coordinator-owned PR body section.
+	generatedPullRequestEnd = "<!-- factory-generated:end -->"
+)
+
+// DraftPullRequestRequest selects the active run whose accepted implementation
+// should become a draft pull request.
+type DraftPullRequestRequest struct {
+	// RunID identifies the active run. Empty selects the repository's only run.
+	RunID string
+	// Intervention is the operator-visible marker regenerated in the PR body.
+	Intervention string
+}
+
+// DraftPullRequestResult contains the final run, gate results, and draft PR
+// identity produced by the coordinator.
+type DraftPullRequestResult struct {
+	// Run is the persisted run after the draft PR transition.
+	Run store.Run
+	// Gates contains one result for every configured gate.
+	Gates []gate.Result
+	// PullRequest is the created or recovered draft PR.
+	PullRequest github.PullRequest
+}
+
+// CreateDraftPullRequest advances an accepted implementation through its host
+// checkpoint, all frozen deterministic gates, first branch push, and one
+// idempotent draft pull request. Repeating it regenerates only the marked
+// factory section and preserves human-authored PR text.
+func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullRequestRequest) (DraftPullRequestResult, error) {
+	if strings.ContainsAny(request.Intervention, "\x00\r\n") {
+		return DraftPullRequestResult{}, errors.New("draft pull request intervention must be a single line")
+	}
+	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	if err != nil {
+		return DraftPullRequestResult{}, err
+	}
+	defer func() { _ = runStore.Close() }()
+	if run == nil {
+		return DraftPullRequestResult{}, errors.New("no active run")
+	}
+	if request.RunID != "" && request.RunID != run.ID {
+		return DraftPullRequestResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return DraftPullRequestResult{}, err
+	}
+	if run.Stage == store.StageDraftPR {
+		pullRequest, err := s.regenerateDraftPullRequest(ctx, registration, *run, packet, request.Intervention)
+		if err != nil {
+			return DraftPullRequestResult{Run: *run}, err
+		}
+		return DraftPullRequestResult{Run: *run, PullRequest: pullRequest}, nil
+	}
+	if run.Stage != store.StageImplementation && run.Stage != store.StageCheck {
+		return DraftPullRequestResult{}, fmt.Errorf("run %q must be in implementation or check stage, not %q", run.ID, run.Stage)
+	}
+	if run.Status != store.StatusActive {
+		return DraftPullRequestResult{}, fmt.Errorf("run %q is %s; implementation must be active", run.ID, run.Status)
+	}
+	if activeStore, ok := runStore.(ActiveInvocationStore); ok {
+		active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
+		if lookupErr != nil {
+			return DraftPullRequestResult{}, fmt.Errorf("look up active implementation invocation: %w", lookupErr)
+		}
+		if active != nil {
+			return DraftPullRequestResult{}, fmt.Errorf("run %q still has active implementation invocation %q", run.ID, active.ID)
+		}
+	}
+	workspace := s.gitWorkspace()
+	if workspace == nil {
+		return DraftPullRequestResult{}, errors.New("GitWorkspace is required to create a draft pull request")
+	}
+	checkpoint, err := workspace.CreateCheckpoint(ctx, gitadapter.CheckpointRequest{
+		RunID:        run.ID,
+		WorktreePath: run.Worktree,
+		ParentSHA:    run.CheckpointSHA,
+		Message:      "accepted implementation",
+	})
+	if err != nil {
+		return DraftPullRequestResult{}, err
+	}
+	if !github.ValidCommitSHA(checkpoint.SHA) {
+		return DraftPullRequestResult{}, errors.New("GitWorkspace returned an invalid implementation checkpoint SHA")
+	}
+	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	if err != nil {
+		return DraftPullRequestResult{}, err
+	}
+	if issue.Number == 0 {
+		issue = packet.Issue
+		issue.Number = run.IssueNumber
+	}
+	next := *run
+	next.CheckpointSHA = checkpoint.SHA
+	next.Stage = store.StageCheck
+	next.Status = store.StatusActive
+	next.UpdatedAt = s.deps.Now().UTC()
+	next, err = s.applyStateTransition(ctx, runStore, stateTransition{
+		Repository: repository, Issue: issue, Previous: *run, Next: next,
+	})
+	if err != nil {
+		return DraftPullRequestResult{}, err
+	}
+
+	gates, gateErr := s.runConfiguredGates(ctx, registration, next, packet)
+	result := DraftPullRequestResult{Run: next, Gates: gates}
+	if gateErr != nil {
+		return result, gateErr
+	}
+	state, err := workspace.Inspect(ctx, next.Worktree)
+	if err != nil {
+		return result, fmt.Errorf("validate checkpoint after gates: %w", err)
+	}
+	if state.HeadSHA != next.CheckpointSHA {
+		return result, fmt.Errorf("worktree HEAD %q changed after checkpoint %q", state.HeadSHA, next.CheckpointSHA)
+	}
+	if len(state.ChangedPaths) != 0 {
+		return result, errors.New("worktree has uncommitted changes after deterministic gates")
+	}
+	if err := workspace.Push(ctx, gitadapter.PushRequest{WorktreePath: next.Worktree, Branch: next.Branch}); err != nil {
+		return result, err
+	}
+
+	pullRequests := s.pullRequestClient()
+	if pullRequests == nil {
+		return result, errors.New("GitHub client does not support pull-request operations")
+	}
+	pullRequest, err := s.upsertDraftPullRequest(ctx, pullRequests, repository, next, packet, gates, request.Intervention)
+	if err != nil {
+		return result, err
+	}
+	next.PullRequestNumber = pullRequest.Number
+	next.PullRequestURL = pullRequest.URL
+	next.Stage = store.StageDraftPR
+	next.Status = store.StatusActive
+	next.UpdatedAt = s.deps.Now().UTC()
+	next, err = s.applyStateTransition(ctx, runStore, stateTransition{
+		Repository: repository, Issue: issue, Previous: result.Run, Next: next,
+	})
+	if err != nil {
+		return DraftPullRequestResult{Run: next, Gates: gates, PullRequest: pullRequest}, err
+	}
+	return DraftPullRequestResult{Run: next, Gates: gates, PullRequest: pullRequest}, nil
+}
+
+// runConfiguredGates executes every gate from the frozen specification in
+// declaration order and joins failures so the operator sees the complete
+// deterministic result set from one checkpoint.
+func (s *Service) runConfiguredGates(ctx context.Context, registration config.RepositoryRegistration, run store.Run, packet SpecificationPacket) ([]gate.Result, error) {
+	results := make([]gate.Result, 0, len(packet.RepositoryConfig.Gates))
+	var failures []error
+	for _, declared := range packet.RepositoryConfig.Gates {
+		result, err := s.runGate(ctx, registration, run, packet, declared)
+		results = append(results, result)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("gate %q: %w", declared.Name, err))
+		}
+	}
+	return results, errors.Join(failures...)
+}
+
+// upsertDraftPullRequest finds a prior branch pull request before creating one
+// and merges the generated section into its existing body when present.
+func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequest, error) {
+	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
+	if err != nil {
+		return github.PullRequest{}, err
+	}
+	body := generatedPullRequestBody(run, packet, gates, intervention)
+	request := github.PullRequestRequest{
+		Title:      defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number)),
+		Body:       body,
+		HeadBranch: run.Branch,
+		BaseBranch: packet.RepositoryConfig.TargetBranch,
+		Draft:      true,
+	}
+	if existing.Number > 0 {
+		request.Body = mergeGeneratedPullRequestBody(existing.Body, body)
+		updated, err := client.UpdatePullRequest(ctx, repository, existing.Number, request)
+		if err != nil {
+			return github.PullRequest{}, err
+		}
+		if updated.Number <= 0 {
+			return github.PullRequest{}, errors.New("pull-request update returned no pull-request identity")
+		}
+		return updated, nil
+	}
+	created, err := client.CreatePullRequest(ctx, repository, request)
+	if err != nil {
+		return github.PullRequest{}, err
+	}
+	if created.Number <= 0 {
+		return github.PullRequest{}, errors.New("pull-request creation returned no pull-request identity")
+	}
+	return created, nil
+}
+
+// regenerateDraftPullRequest refreshes a previously created PR without
+// rerunning gates or pushing again. The branch lookup supplies the current
+// human-authored body for preservation.
+func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration config.RepositoryRegistration, run store.Run, packet SpecificationPacket, intervention string) (github.PullRequest, error) {
+	client := s.pullRequestClient()
+	if client == nil {
+		return github.PullRequest{}, errors.New("GitHub client does not support pull-request operations")
+	}
+	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
+	if err != nil {
+		return github.PullRequest{}, err
+	}
+	if existing.Number == 0 {
+		return github.PullRequest{}, fmt.Errorf("draft pull request for branch %q was not found", run.Branch)
+	}
+	body := mergeGeneratedPullRequestBody(existing.Body, generatedPullRequestBody(run, packet, nil, intervention))
+	updated, err := client.UpdatePullRequest(ctx, repository, existing.Number, github.PullRequestRequest{
+		Title: defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number)), Body: body,
+		HeadBranch: run.Branch, BaseBranch: packet.RepositoryConfig.TargetBranch, Draft: true,
+	})
+	if err != nil {
+		return github.PullRequest{}, err
+	}
+	if updated.Number <= 0 {
+		return github.PullRequest{}, errors.New("pull-request regeneration returned no pull-request identity")
+	}
+	return updated, nil
+}
+
+// gitWorkspace resolves the new task-oriented seam while retaining the
+// foundation Worktree adapter as a compatibility fallback.
+func (s *Service) gitWorkspace() gitadapter.GitWorkspace {
+	if s.deps.GitWorkspace != nil {
+		return s.deps.GitWorkspace
+	}
+	workspace, _ := s.deps.Worktree.(gitadapter.GitWorkspace)
+	return workspace
+}
+
+// worktreeManager resolves the task-oriented Git workspace for the existing
+// claim/cleanup operations while keeping foundation adapters compatible.
+func (s *Service) worktreeManager() gitadapter.WorktreeManager {
+	if s.deps.GitWorkspace != nil {
+		return s.deps.GitWorkspace
+	}
+	return s.deps.Worktree
+}
+
+// worktreeInspector resolves the read-only validation seam used by report
+// acceptance.
+func (s *Service) worktreeInspector() gitadapter.WorktreeInspector {
+	if s.deps.GitWorkspace != nil {
+		return s.deps.GitWorkspace
+	}
+	inspector, _ := s.deps.Worktree.(gitadapter.WorktreeInspector)
+	return inspector
+}
+
+// pullRequestClient resolves the dedicated pull-request adapter or a GitHub
+// client that implements it directly.
+func (s *Service) pullRequestClient() github.PullRequestClient {
+	if s.deps.PullRequests != nil {
+		return s.deps.PullRequests
+	}
+	client, _ := s.deps.GitHub.(github.PullRequestClient)
+	return client
+}
+
+// generatedPullRequestBody renders the complete coordinator-owned PR section.
+func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) string {
+	if strings.TrimSpace(intervention) == "" {
+		intervention = "none"
+	}
+	issueBody := strings.TrimSpace(packet.Issue.Body)
+	if issueBody == "" {
+		issueBody = "(no issue body supplied)"
+	}
+	gateLines := make([]string, 0, len(packet.RepositoryConfig.Gates))
+	for _, declared := range packet.RepositoryConfig.Gates {
+		gateLines = append(gateLines, fmt.Sprintf("- `%s`: passed", declared.Name))
+	}
+	if len(gates) == 0 && len(gateLines) == 0 {
+		gateLines = append(gateLines, "- (none)")
+	}
+	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
+}
+
+// mergeGeneratedPullRequestBody replaces only the marked factory section and
+// appends it after existing human-authored text when no marker exists.
+func mergeGeneratedPullRequestBody(existing, generated string) string {
+	start := strings.Index(existing, generatedPullRequestStart)
+	end := strings.Index(existing, generatedPullRequestEnd)
+	if start >= 0 && end >= start {
+		end += len(generatedPullRequestEnd)
+		return existing[:start] + generated + existing[end:]
+	}
+	if strings.TrimSpace(existing) == "" {
+		return generated
+	}
+	return strings.TrimRight(existing, "\n") + "\n\n" + generated
+}

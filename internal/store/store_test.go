@@ -422,6 +422,8 @@ func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
 	updated := initial
 	updated.Stage = store.StageReview
 	updated.Status = store.StatusWaitingForHuman
+	updated.PullRequestNumber = 17
+	updated.PullRequestURL = "https://github.com/example/project/pull/17"
 	updated.CreatedAt = time.Time{}
 	updated.UpdatedAt = time.Unix(200, 0).UTC()
 	if err := opened.SaveRun(context.Background(), updated); err != nil {
@@ -443,6 +445,9 @@ func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
 	}
 	if !got.CreatedAt.Equal(initial.CreatedAt) {
 		t.Fatalf("CreatedAt = %v, want original %v", got.CreatedAt, initial.CreatedAt)
+	}
+	if got.PullRequestNumber != updated.PullRequestNumber || got.PullRequestURL != updated.PullRequestURL {
+		t.Fatalf("pull request identity = #%d %q, want #%d %q", got.PullRequestNumber, got.PullRequestURL, updated.PullRequestNumber, updated.PullRequestURL)
 	}
 }
 

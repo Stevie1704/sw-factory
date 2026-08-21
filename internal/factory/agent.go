@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
@@ -402,8 +401,8 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		WorktreePath:   run.Worktree,
 		PermittedPaths: invocation.PermittedPaths,
 	}
-	inspector, ok := s.deps.Worktree.(gitadapter.WorktreeInspector)
-	if !ok {
+	inspector := s.worktreeInspector()
+	if inspector == nil {
 		return AgentResult{}, errors.New("worktree runtime does not support report inspection")
 	}
 	state, inspectErr := inspector.Inspect(ctx, run.Worktree)

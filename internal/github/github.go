@@ -72,6 +72,42 @@ type Comment struct {
 	Body string
 }
 
+// PullRequest is the pull-request identity and body returned to the
+// coordinator after a host-side GitHub operation.
+type PullRequest struct {
+	// Number is the repository-local pull-request number.
+	Number int
+	// URL is the browser URL for operator supervision.
+	URL string
+	// Title is the pull-request title.
+	Title string
+	// Body is the current complete pull-request body.
+	Body string
+	// State is the GitHub lifecycle state.
+	State string
+	// Draft reports whether GitHub marks the pull request as a draft.
+	Draft bool
+	// HeadBranch is the source branch name.
+	HeadBranch string
+	// BaseBranch is the target branch name.
+	BaseBranch string
+}
+
+// PullRequestRequest contains the stable fields used to create or update a
+// draft pull request.
+type PullRequestRequest struct {
+	// Title is the pull-request title.
+	Title string
+	// Body is the complete body, including any preserved human-authored text.
+	Body string
+	// HeadBranch is the source branch to publish.
+	HeadBranch string
+	// BaseBranch is the target branch to merge into.
+	BaseBranch string
+	// Draft requests a draft pull request on creation and update.
+	Draft bool
+}
+
 // CommitStatusState is the GitHub state vocabulary used for deterministic
 // checkpoint results.
 type CommitStatusState string
@@ -117,6 +153,15 @@ type Client interface {
 	CreateIssueComment(context.Context, Repository, int, string) (Comment, error)
 	FindStatusComment(context.Context, Repository, int, string) (Comment, error)
 	EditIssueComment(context.Context, Repository, string, string) error
+}
+
+// PullRequestClient is the host-side seam for idempotent draft pull-request
+// discovery and mutation. It is separate from Client so existing issue/state
+// adapters do not gain GitHub pull-request authority accidentally.
+type PullRequestClient interface {
+	FindPullRequest(context.Context, Repository, string, string) (PullRequest, error)
+	CreatePullRequest(context.Context, Repository, PullRequestRequest) (PullRequest, error)
+	UpdatePullRequest(context.Context, Repository, int, PullRequestRequest) (PullRequest, error)
 }
 
 // CommandRunner is the executable seam for the local GitHub CLI adapter.
@@ -258,6 +303,69 @@ func (c *GhClient) EditIssueComment(ctx context.Context, repository Repository, 
 	return nil
 }
 
+// FindPullRequest finds the pull request for one exact source/target branch
+// pair, including closed pull requests so a retry cannot create a duplicate.
+func (c *GhClient) FindPullRequest(ctx context.Context, repository Repository, headBranch, baseBranch string) (PullRequest, error) {
+	if err := validatePullRequestBranches(headBranch, baseBranch); err != nil {
+		return PullRequest{}, err
+	}
+	args := []string{
+		"api", fmt.Sprintf("repos/%s/pulls", repository.String()),
+		"--paginate", "--slurp",
+		"-f", "state=all",
+		"-f", "head=" + repository.Owner + ":" + headBranch,
+		"-f", "base=" + baseBranch,
+	}
+	output, err := c.callBytes(ctx, args, nil)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("find pull request for %q: %w", headBranch, err)
+	}
+	responses, err := decodePullRequestList(output)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("decode pull requests for %q: %w", headBranch, err)
+	}
+	for _, response := range responses {
+		pullRequest := response.pullRequest()
+		if pullRequest.HeadBranch == headBranch && pullRequest.BaseBranch == baseBranch {
+			return pullRequest, nil
+		}
+	}
+	return PullRequest{}, nil
+}
+
+// CreatePullRequest creates one draft pull request from a pushed run branch.
+func (c *GhClient) CreatePullRequest(ctx context.Context, repository Repository, request PullRequestRequest) (PullRequest, error) {
+	if err := validatePullRequestRequest(request); err != nil {
+		return PullRequest{}, err
+	}
+	var response pullRequestResponse
+	payload := pullRequestCreatePayload{
+		Title: request.Title, Body: request.Body, Head: request.HeadBranch,
+		Base: request.BaseBranch, Draft: request.Draft,
+	}
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls", repository.String()), "--method", "POST"}, payload, &response); err != nil {
+		return PullRequest{}, fmt.Errorf("create draft pull request: %w", err)
+	}
+	return response.pullRequest(), nil
+}
+
+// UpdatePullRequest replaces the complete body and keeps the pull request a
+// draft. The caller supplies a body with its human-authored portion preserved.
+func (c *GhClient) UpdatePullRequest(ctx context.Context, repository Repository, number int, request PullRequestRequest) (PullRequest, error) {
+	if number <= 0 {
+		return PullRequest{}, errors.New("pull request number must be positive")
+	}
+	if err := validatePullRequestRequest(request); err != nil {
+		return PullRequest{}, err
+	}
+	var response pullRequestResponse
+	payload := pullRequestUpdatePayload{Title: request.Title, Body: request.Body, Draft: request.Draft, State: "open"}
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number), "--method", "PATCH"}, payload, &response); err != nil {
+		return PullRequest{}, fmt.Errorf("update draft pull request #%d: %w", number, err)
+	}
+	return response.pullRequest(), nil
+}
+
 // CreateCommitStatus publishes one deterministic result for an exact commit.
 // The status context is caller-defined but must be stable and single-line.
 func (c *GhClient) CreateCommitStatus(ctx context.Context, repository Repository, status CommitStatus) error {
@@ -353,4 +461,89 @@ type issueResponse struct {
 type commentResponse struct {
 	ID   int64  `json:"id"`
 	Body string `json:"body"`
+}
+
+// pullRequestResponse is the GitHub API subset used by the factory.
+type pullRequestResponse struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	State   string `json:"state"`
+	Draft   bool   `json:"draft"`
+	Head    struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+}
+
+// pullRequestCreatePayload is the GitHub API create request shape.
+type pullRequestCreatePayload struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	Head  string `json:"head"`
+	Base  string `json:"base"`
+	Draft bool   `json:"draft"`
+}
+
+// pullRequestUpdatePayload is the GitHub API update request shape.
+type pullRequestUpdatePayload struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	Draft bool   `json:"draft"`
+	State string `json:"state"`
+}
+
+// pullRequest converts an API response into the adapter-neutral model.
+func (r pullRequestResponse) pullRequest() PullRequest {
+	return PullRequest{
+		Number: r.Number, URL: r.HTMLURL, Title: r.Title, Body: r.Body,
+		State: r.State, Draft: r.Draft, HeadBranch: r.Head.Ref, BaseBranch: r.Base.Ref,
+	}
+}
+
+// decodePullRequestList accepts both gh --slurp pagination output and a plain
+// single-page array, which keeps the adapter tolerant of test and CLI modes.
+func decodePullRequestList(output []byte) ([]pullRequestResponse, error) {
+	var pages [][]pullRequestResponse
+	if err := json.Unmarshal(output, &pages); err == nil {
+		result := make([]pullRequestResponse, 0)
+		for _, page := range pages {
+			result = append(result, page...)
+		}
+		return result, nil
+	}
+	var singlePage []pullRequestResponse
+	if err := json.Unmarshal(output, &singlePage); err != nil {
+		return nil, err
+	}
+	return singlePage, nil
+}
+
+// validatePullRequestBranches rejects values that could alter an API request
+// while permitting normal Git branch slashes.
+func validatePullRequestBranches(headBranch, baseBranch string) error {
+	for field, value := range map[string]string{"head branch": headBranch, "base branch": baseBranch} {
+		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("pull request %s is required and must be a single line", field)
+		}
+	}
+	return nil
+}
+
+// validatePullRequestRequest validates the fields used by a create or update
+// mutation before invoking the authenticated GitHub CLI.
+func validatePullRequestRequest(request PullRequestRequest) error {
+	if strings.TrimSpace(request.Title) == "" || strings.ContainsAny(request.Title, "\x00\r\n") {
+		return errors.New("pull request title is required and must be a single line")
+	}
+	if err := validatePullRequestBranches(request.HeadBranch, request.BaseBranch); err != nil {
+		return err
+	}
+	if strings.ContainsRune(request.Body, '\x00') {
+		return errors.New("pull request body contains a NUL byte")
+	}
+	return nil
 }

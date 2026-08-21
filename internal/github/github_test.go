@@ -140,6 +140,68 @@ func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
 	}
 }
 
+// TestGhClientOwnsDraftPullRequestFindCreateAndUpdate verifies that pull
+// request mutations stay inside the host GitHub adapter and use the exact
+// branch/base identity supplied by the coordinator.
+func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`[{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}]`),
+		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Created","body":"generated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
+		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Updated","body":"human text\n\ngenerated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
+	}}
+	client := &github.GhClient{Runner: runner}
+	repository := github.Repository{Owner: "example", Name: "project"}
+
+	found, err := client.FindPullRequest(context.Background(), repository, "factory/run-1", "main")
+	if err != nil {
+		t.Fatalf("FindPullRequest() error = %v", err)
+	}
+	if found.Number != 12 || found.HeadBranch != "factory/run-1" || found.BaseBranch != "main" || found.Body != "human text" {
+		t.Fatalf("found pull request = %#v, want decoded identity", found)
+	}
+
+	request := github.PullRequestRequest{Title: "Created", Body: "generated", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true}
+	created, err := client.CreatePullRequest(context.Background(), repository, request)
+	if err != nil {
+		t.Fatalf("CreatePullRequest() error = %v", err)
+	}
+	if created.Number != 12 || !created.Draft {
+		t.Fatalf("created pull request = %#v, want draft #12", created)
+	}
+
+	updated, err := client.UpdatePullRequest(context.Background(), repository, 12, request)
+	if err != nil {
+		t.Fatalf("UpdatePullRequest() error = %v", err)
+	}
+	if updated.Number != 12 || updated.Body != "human text\n\ngenerated" {
+		t.Fatalf("updated pull request = %#v, want decoded update", updated)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("GitHub calls = %d, want find/create/update", len(runner.calls))
+	}
+	if !containsArgs(runner.calls[0].args, "repos/example/project/pulls", "--paginate", "--slurp") {
+		t.Fatalf("find args = %#v, want paginated pulls endpoint", runner.calls[0].args)
+	}
+	for _, index := range []int{1, 2} {
+		method := "POST"
+		if index == 2 {
+			method = "PATCH"
+		}
+		if !containsArgs(runner.calls[index].args, "--method", method, "--input", "-") {
+			t.Fatalf("mutation args = %#v, want JSON mutation", runner.calls[index].args)
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(runner.calls[1].input, &payload); err != nil {
+		t.Fatalf("decode create payload: %v", err)
+	}
+	if payload["head"] != "factory/run-1" || payload["base"] != "main" || payload["draft"] != true {
+		t.Fatalf("create payload = %#v, want branch/base/draft", payload)
+	}
+}
+
 // TestValidCommitSHARejectsAbbreviatedObjectIDs verifies checkpoint validation
 // does not accept intermediate-length values as exact commit identities.
 func TestValidCommitSHARejectsAbbreviatedObjectIDs(t *testing.T) {

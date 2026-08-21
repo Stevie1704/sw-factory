@@ -108,7 +108,7 @@ base_synchronization:
 
 The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
-Issue #3 establishes and validates this repository-declared gate contract. Issue #5 adds the worker runtime and the coordinator path that runs setup plus one selected gate in the pinned worker and publishes its result to the exact checkpoint SHA. Full baseline health, dependency skipping, independent-gate execution, manifest-triggered setup, and retained checkpoint-keyed gate results remain the expanded gate model in issue #9. The commands declared by this repository's `factory.yaml` are also run as part of the repository verification suite.
+Issue #3 establishes and validates this repository-declared gate contract. Issue #5 adds the worker runtime and the coordinator path that runs setup plus one selected gate in the pinned worker and publishes its result to the exact checkpoint SHA. Issue #7 uses that same frozen gate contract to run every declared gate before the first branch push. Full baseline health, dependency skipping, independent-gate execution, manifest-triggered setup, and retained checkpoint-keyed gate results remain the expanded gate model in issue #9. The commands declared by this repository's `factory.yaml` are also run as part of the repository verification suite.
 
 Worker execution uses stable in-container paths (`/work`, `/git`, and
 `/cache/<name>`), a non-root uid, dropped capabilities, disabled privilege
@@ -148,14 +148,43 @@ prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 6 and persists invocation
+result. The operational store schema is version 7 and persists invocation
 identity, opaque surface handles, prompt version, result directory, native
-session identifier, and permitted handoff paths in addition to run state.
+session identifier, and permitted handoff paths in addition to run state. It
+also persists the draft pull-request number and URL so a restarted command can
+update the existing pull request instead of creating another one.
+
+## Creating the draft pull request
+
+After the implementation report has been accepted, advance the run through
+the host-owned checkpoint, deterministic gates, branch push, and draft PR:
+
+```sh
+factory draft-pr \
+  --config /Users/me/.config/factory/config.yaml \
+  --run-id run-123
+```
+
+The coordinator validates the worktree against the stored checkpoint, creates
+one commit marked `factory: implementation checkpoint <run-id>`, and records
+its full SHA before running every gate from the frozen specification packet.
+Only when all gates pass does the host push `factory/<run-id>` and call
+GitHub's draft pull-request API. Workers never receive Git remotes, GitHub
+credentials, commit authority, or push authority.
+
+The PR body contains one coordinator-owned section between
+`<!-- factory-generated:start -->` and `<!-- factory-generated:end -->`.
+That section includes the issue and specification summary, checkpoint, stage,
+gate results, intervention marker, and control commands. Repeating
+`factory draft-pr` finds the existing PR by its exact source and target branch,
+regenerates only that marked section, and preserves human-authored text around
+it. The issue's single factory state label and editable status comment move to
+the `draft_pr` stage at the same transition.
 
 ## Operational SQLite store
 
-The operational store contains current workflow state, the active run's frozen specification packet, and the status-comment identity needed by later transitions. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
+The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
 
 Issue #25 will add separate content-free local evaluation summaries. Those summaries remain local and are not outbound telemetry.
 
-The high-level `Factory` seam injects configuration, repository checking, GitHub, Git/worktree, worker, terminal, harness, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; issue #6 adds the portable `TerminalRuntime`, Codex harness, invocation packet, and structured report boundary.
+The high-level `Factory` seam injects configuration, repository checking, GitHub, pull requests, `GitWorkspace`, worker, terminal, harness, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; issue #6 adds the portable `TerminalRuntime`, Codex harness, invocation packet, and structured report boundary; issue #7 adds host checkpoint, push, and draft-PR orchestration.

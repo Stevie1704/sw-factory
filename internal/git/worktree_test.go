@@ -81,6 +81,129 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	}
 }
 
+// TestLocalGitWorkspaceCreatesOneImplementationCheckpoint verifies the host
+// Git seam commits the worktree's changes and returns the resulting full SHA.
+func TestLocalGitWorkspaceCreatesOneImplementationCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repository := filepath.Join(root, "project")
+	remote := filepath.Join(root, "project-origin.git")
+	initializeGitRepository(t, repository, remote)
+	manager := &gitadapter.LocalWorktreeManager{WorktreeDir: filepath.Join(root, "worktrees")}
+	workspace, err := manager.Create(context.Background(), repository, "main", "run-checkpoint")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Worktree, "implementation.txt"), []byte("implemented\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	checkpoint, err := manager.CreateCheckpoint(context.Background(), gitadapter.CheckpointRequest{
+		RunID:        "run-checkpoint",
+		WorktreePath: workspace.Worktree,
+		ParentSHA:    workspace.BaseSHA,
+		Message:      "implementation checkpoint",
+	})
+	if err != nil {
+		t.Fatalf("CreateCheckpoint() error = %v", err)
+	}
+	if !validCommitSHA(checkpoint.SHA) || !checkpoint.Created {
+		t.Fatalf("checkpoint = %#v, want a new full-SHA checkpoint", checkpoint)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Worktree, "log", "-1", "--format=%B")); got != "factory: implementation checkpoint run-checkpoint\n\nimplementation checkpoint" {
+		t.Fatalf("checkpoint message = %q, want factory marker and supplied message", got)
+	}
+
+	repeated, err := manager.CreateCheckpoint(context.Background(), gitadapter.CheckpointRequest{
+		RunID:        "run-checkpoint",
+		WorktreePath: workspace.Worktree,
+		ParentSHA:    workspace.BaseSHA,
+		Message:      "implementation checkpoint",
+	})
+	if err != nil {
+		t.Fatalf("repeated CreateCheckpoint() error = %v", err)
+	}
+	if repeated.SHA != checkpoint.SHA || repeated.Created {
+		t.Fatalf("repeated checkpoint = %#v, want the original SHA without a second commit", repeated)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Worktree, "rev-list", "--count", "HEAD")); got != "2" {
+		t.Fatalf("commit count = %q, want one implementation commit", got)
+	}
+
+	if err := manager.Remove(context.Background(), repository, workspace); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+}
+
+// TestLocalGitWorkspacePushesOnlyTheNamedRunBranch verifies the push command
+// is host-side, non-forcing, and targets the run branch explicitly.
+func TestLocalGitWorkspacePushesOnlyTheNamedRunBranch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repository := filepath.Join(root, "project")
+	remote := filepath.Join(root, "project-origin.git")
+	initializeGitRepository(t, repository, remote)
+	manager := &gitadapter.LocalWorktreeManager{WorktreeDir: filepath.Join(root, "worktrees")}
+	workspace, err := manager.Create(context.Background(), repository, "main", "run-push")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Worktree, "implementation.txt"), []byte("implemented\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.CreateCheckpoint(context.Background(), gitadapter.CheckpointRequest{
+		RunID: "run-push", WorktreePath: workspace.Worktree, ParentSHA: workspace.BaseSHA,
+	}); err != nil {
+		t.Fatalf("CreateCheckpoint() error = %v", err)
+	}
+	if err := manager.Push(context.Background(), gitadapter.PushRequest{WorktreePath: workspace.Worktree, Branch: workspace.Branch}); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+	if got := strings.TrimSpace(runGit(t, root, "--git-dir", remote, "rev-parse", "refs/heads/"+workspace.Branch)); got != strings.TrimSpace(runGit(t, workspace.Worktree, "rev-parse", "HEAD")) {
+		t.Fatalf("remote run branch = %q, want worktree HEAD", got)
+	}
+
+	if err := manager.Remove(context.Background(), repository, workspace); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+}
+
+// initializeGitRepository creates a disposable repository with an origin and
+// a configured commit identity for adapter integration tests.
+func initializeGitRepository(t *testing.T, repository, remote string) {
+	t.Helper()
+	runGit(t, filepath.Dir(repository), "init", "--bare", remote)
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "init", "-b", "main")
+	runGit(t, repository, "config", "user.email", "factory@example.test")
+	runGit(t, repository, "config", "user.name", "Factory Test")
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", "README.md")
+	runGit(t, repository, "commit", "-m", "initial")
+	runGit(t, repository, "remote", "add", "origin", remote)
+	runGit(t, repository, "push", "origin", "main")
+}
+
+// validCommitSHA reports whether a test value is a full Git object identity.
+func validCommitSHA(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // runGit executes one Git command in a temporary test repository.
 func runGit(t *testing.T, directory string, args ...string) string {
 	t.Helper()
