@@ -60,7 +60,7 @@ The default checked-in file is `factory.yaml` at the repository root. It is pars
 ```yaml
 schema_version: 1
 target_branch: main
-setup: go mod download
+setup: scripts/worker-go.sh mod download
 gates:
   - name: format
     command: gofmt -l .
@@ -68,7 +68,7 @@ gates:
     blocking: true
     environment_policy: clean
   - name: test
-    command: go test ./...
+    command: scripts/worker-go.sh test ./...
     timeout: 2m
     blocking: true
     depends_on: [format]
@@ -98,8 +98,8 @@ caches:
     path: /tmp/factory-cache
     read_only: false
 worker_build:
-  image: ghcr.io/example/factory-worker
-  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  image: ghcr.io/stevie1704/sw-factory-worker
+  digest: sha256:1437c7e2675768b8f081ea2a4fc20a95548e55c778b421a2c3880c5463bc2fd2
   definition: worker/Dockerfile
 base_synchronization:
   mode: before_ready
@@ -107,6 +107,55 @@ base_synchronization:
 ```
 
 The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+
+## Worker image build and digest pinning
+
+This repository owns a two-layer worker image definition:
+
+- `worker/base.Dockerfile` defines the versioned factory base image. It pins
+  the Codex and Claude Code npm packages through `CODEX_VERSION` and
+  `CLAUDE_VERSION` build arguments, installs Git and the basic worker
+  utilities, and builds the repository's `factory-report` binary into
+  `/usr/local/bin/factory-report`.
+- `worker/Dockerfile` extends that base with the Go toolchain required by this
+  repository's setup and gates. Go and `gofmt` are exposed through
+  `/usr/local/bin`, because the worker adapter deliberately supplies the fixed
+  non-login `PATH` `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`.
+
+Build and verify both images with Docker from the repository root:
+
+```sh
+make worker-build
+```
+
+The command builds the versioned base image locally, builds the repository
+worker without pulling that base again, verifies the worker as uid `10001`
+with `HOME=/home/factory`, checks the stable worker paths and required tools,
+and verifies that the digest-qualified reference resolves locally with
+`--pull=never`. The digest is Docker's local content-addressable image ID, so
+the configured image must be built locally under the same image name; this is
+deliberate because the worker runtime never pulls. A registry publish workflow
+should replace it with the registry's manifest digest. The command prints the
+exact `worker_build` block to copy into `factory.yaml`. The defaults pin Codex
+`0.148.0`, Claude Code `2.1.232`, and
+Go `1.25.0`; override those build arguments explicitly when producing a new
+versioned image. Set `WORKER_PLATFORM=linux/amd64` (or another target) when
+building for a platform different from the Docker daemon.
+
+After the image smoke checks, the same command mounts this checkout and runs
+the configured setup, format, vet, test, and build gates under the worker's
+clean baseline environment.
+
+The checked-in `worker_build.image` is intentionally an image name without a
+mutable tag. The reported SHA-256 digest is appended by the worker adapter as
+`image@digest`, so a run never starts from a mutable tag and never pulls an
+image implicitly.
+
+The Go setup and gates in this repository invoke `scripts/worker-go.sh`. The
+wrapper removes only the coordinator's Git routing and disabled-origin
+configuration variables, keeps Git prompts disabled, and turns off Go VCS
+stamping; this lets local Git fixtures in `go test` run without touching the
+worker's read-only `/git` projection.
 
 Issue #3 establishes and validates this repository-declared gate contract. Issue #5 adds the worker runtime and the coordinator path that runs setup plus one selected gate in the pinned worker and publishes its result to the exact checkpoint SHA. Issue #7 uses that same frozen gate contract to run every declared gate before the first branch push. Full baseline health, dependency skipping, independent-gate execution, manifest-triggered setup, and retained checkpoint-keyed gate results remain the expanded gate model in issue #9. The commands declared by this repository's `factory.yaml` are also run as part of the repository verification suite.
 

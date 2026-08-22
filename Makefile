@@ -10,7 +10,7 @@ BINARIES := \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all build test test-race vet fmt fmt-check check deps tidy install run report attach clean
+.PHONY: help all build test test-race vet fmt fmt-check check deps tidy install run report attach worker-build clean
 
 help: ## Show the available development commands.
 	@awk 'BEGIN { FS = ":.*##"; print "Usage: make <target>\n"; print "Targets:" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -61,6 +61,9 @@ report: ## Run the structured-report CLI; pass arguments with ARGS='--help'.
 
 attach: ## Run the worker-attach CLI; pass arguments with ARGS='--help'.
 	$(GO) run ./cmd/factory-worker-attach $(ARGS)
+
+worker-build: ## Build and verify the pinned worker images, then print the config digest.
+	./scripts/build-worker.sh
 
 clean: ## Remove binaries built by the build target.
 	rm -f $(BINARIES)

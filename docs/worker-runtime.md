@@ -15,6 +15,12 @@ The interface has five operations:
 - `inspect` reports existence and running state without returning a Docker
   identifier.
 
+The checked-in worker build workflow is local-only: Docker's content-addressable
+local image ID is emitted as the `sha256` digest and verified as
+`image@digest` with `--pull=never`. A published copy must use its registry
+manifest digest instead; the worker runtime itself never turns a digest into a
+pull.
+
 The Docker adapter uses these stable paths regardless of the host checkout:
 
 | Worker path | Access | Contents |
