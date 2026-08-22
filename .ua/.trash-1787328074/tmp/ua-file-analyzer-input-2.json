@@ -1,0 +1,30 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {"path": "cmd/factory-report/main.go", "language": "go", "sizeLines": 14, "fileCategory": "code"},
+    {"path": "internal/factory/agent.go", "language": "go", "sizeLines": 648, "fileCategory": "code"},
+    {"path": "internal/prompt/prompt.go", "language": "go", "sizeLines": 88, "fileCategory": "code"},
+    {"path": "internal/report/report.go", "language": "go", "sizeLines": 590, "fileCategory": "code"},
+    {"path": "internal/reportcli/reportcli.go", "language": "go", "sizeLines": 192, "fileCategory": "code"}
+  ],
+  "batchImportData": {
+    "cmd/factory-report/main.go": [
+      "internal/reportcli/reportcli.go"
+    ],
+    "internal/factory/agent.go": [
+      "internal/config/config.go",
+      "internal/github/github.go",
+      "internal/harness/codex.go",
+      "internal/prompt/prompt.go",
+      "internal/report/report.go",
+      "internal/store/store.go",
+      "internal/terminal/runtime.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/prompt/prompt.go": [],
+    "internal/report/report.go": [],
+    "internal/reportcli/reportcli.go": [
+      "internal/report/report.go"
+    ]
+  }
+}

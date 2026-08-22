@@ -1,0 +1,5533 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 6,
+  "filesSkipped": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 6,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 6,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "results": [
+    {
+      "path": "cmd/factory/main.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 12,
+      "nonEmptyLines": 9,
+      "functions": [
+        {
+          "name": "main",
+          "startLine": 10,
+          "endLine": 12,
+          "params": []
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "main",
+          "callee": "os.Exit",
+          "lineNumber": 11
+        },
+        {
+          "caller": "main",
+          "callee": "cli.Run",
+          "lineNumber": 11
+        },
+        {
+          "caller": "main",
+          "callee": "context.Background",
+          "lineNumber": 11
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 0,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "internal/cli/cli.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 397,
+      "nonEmptyLines": 376,
+      "functions": [
+        {
+          "name": "Run",
+          "startLine": 42,
+          "endLine": 59,
+          "params": [
+            "ctx",
+            "args",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "commandFor",
+          "startLine": 62,
+          "endLine": 69,
+          "params": [
+            "name"
+          ]
+        },
+        {
+          "name": "commandNames",
+          "startLine": 72,
+          "endLine": 78,
+          "params": []
+        },
+        {
+          "name": "runBootstrapLabels",
+          "startLine": 81,
+          "endLine": 101,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "runIssue",
+          "startLine": 104,
+          "endLine": 142,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "runAgent",
+          "startLine": 145,
+          "endLine": 183,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "runAgentReport",
+          "startLine": 186,
+          "endLine": 214,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "runDraftPullRequest",
+          "startLine": 218,
+          "endLine": 245,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "runInit",
+          "startLine": 248,
+          "endLine": 269,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "runRegister",
+          "startLine": 272,
+          "endLine": 321,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "runStatus",
+          "startLine": 325,
+          "endLine": 368,
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ]
+        },
+        {
+          "name": "writeOutput",
+          "startLine": 372,
+          "endLine": 378,
+          "params": [
+            "output",
+            "errorsOutput",
+            "format"
+          ]
+        },
+        {
+          "name": "writeError",
+          "startLine": 381,
+          "endLine": 385,
+          "params": [
+            "output",
+            "err"
+          ]
+        },
+        {
+          "name": "String",
+          "startLine": 389,
+          "endLine": 389,
+          "params": []
+        },
+        {
+          "name": "Set",
+          "startLine": 391,
+          "endLine": 397,
+          "params": [
+            "value"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "commandDefinition",
+          "startLine": 21,
+          "endLine": 24,
+          "methods": [],
+          "properties": [
+            "name",
+            "handler"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Run",
+          "line": 42,
+          "isDefault": false
+        },
+        {
+          "name": "String",
+          "line": 389,
+          "isDefault": false
+        },
+        {
+          "name": "Set",
+          "line": 391,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Run",
+          "callee": "commandNames",
+          "lineNumber": 43
+        },
+        {
+          "caller": "Run",
+          "callee": "len",
+          "lineNumber": 44
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 45
+        },
+        {
+          "caller": "Run",
+          "callee": "fmt.Errorf",
+          "lineNumber": 45
+        },
+        {
+          "caller": "Run",
+          "callee": "commandFor",
+          "lineNumber": 48
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 50
+        },
+        {
+          "caller": "Run",
+          "callee": "fmt.Errorf",
+          "lineNumber": 50
+        },
+        {
+          "caller": "Run",
+          "callee": "config.DefaultHostConfigPath",
+          "lineNumber": 53
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 55
+        },
+        {
+          "caller": "Run",
+          "callee": "handler",
+          "lineNumber": 58
+        },
+        {
+          "caller": "commandNames",
+          "callee": "make",
+          "lineNumber": 73
+        },
+        {
+          "caller": "commandNames",
+          "callee": "len",
+          "lineNumber": 73
+        },
+        {
+          "caller": "commandNames",
+          "callee": "append",
+          "lineNumber": 75
+        },
+        {
+          "caller": "commandNames",
+          "callee": "strings.Join",
+          "lineNumber": 77
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 82
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "flags.SetOutput",
+          "lineNumber": 83
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "flags.String",
+          "lineNumber": 84
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "flags.Parse",
+          "lineNumber": 85
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "flags.NArg",
+          "lineNumber": 88
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "writeError",
+          "lineNumber": 89
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "errors.New",
+          "lineNumber": 89
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "factory.New(*configPath).BootstrapLabels",
+          "lineNumber": 92
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "factory.New",
+          "lineNumber": 92
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "writeError",
+          "lineNumber": 94
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "writeOutput",
+          "lineNumber": 97
+        },
+        {
+          "caller": "runBootstrapLabels",
+          "callee": "strings.Join",
+          "lineNumber": 97
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 105
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.SetOutput",
+          "lineNumber": 106
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.String",
+          "lineNumber": 107
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.Int",
+          "lineNumber": 108
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.Parse",
+          "lineNumber": 109
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.NArg",
+          "lineNumber": 112
+        },
+        {
+          "caller": "runIssue",
+          "callee": "writeError",
+          "lineNumber": 113
+        },
+        {
+          "caller": "runIssue",
+          "callee": "errors.New",
+          "lineNumber": 113
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.NArg",
+          "lineNumber": 117
+        },
+        {
+          "caller": "runIssue",
+          "callee": "writeError",
+          "lineNumber": 119
+        },
+        {
+          "caller": "runIssue",
+          "callee": "errors.New",
+          "lineNumber": 119
+        },
+        {
+          "caller": "runIssue",
+          "callee": "strconv.Atoi",
+          "lineNumber": 122
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.Arg",
+          "lineNumber": 122
+        },
+        {
+          "caller": "runIssue",
+          "callee": "writeError",
+          "lineNumber": 124
+        },
+        {
+          "caller": "runIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 124
+        },
+        {
+          "caller": "runIssue",
+          "callee": "flags.Arg",
+          "lineNumber": 124
+        },
+        {
+          "caller": "runIssue",
+          "callee": "writeError",
+          "lineNumber": 130
+        },
+        {
+          "caller": "runIssue",
+          "callee": "errors.New",
+          "lineNumber": 130
+        },
+        {
+          "caller": "runIssue",
+          "callee": "factory.New(*configPath).ClaimIssue",
+          "lineNumber": 133
+        },
+        {
+          "caller": "runIssue",
+          "callee": "factory.New",
+          "lineNumber": 133
+        },
+        {
+          "caller": "runIssue",
+          "callee": "writeError",
+          "lineNumber": 135
+        },
+        {
+          "caller": "runIssue",
+          "callee": "writeOutput",
+          "lineNumber": 138
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 146
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.SetOutput",
+          "lineNumber": 147
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 148
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 149
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 150
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 151
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 152
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 153
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 154
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.String",
+          "lineNumber": 155
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.Var",
+          "lineNumber": 157
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.Parse",
+          "lineNumber": 158
+        },
+        {
+          "caller": "runAgent",
+          "callee": "flags.NArg",
+          "lineNumber": 161
+        },
+        {
+          "caller": "runAgent",
+          "callee": "writeError",
+          "lineNumber": 162
+        },
+        {
+          "caller": "runAgent",
+          "callee": "errors.New",
+          "lineNumber": 162
+        },
+        {
+          "caller": "runAgent",
+          "callee": "factory.New(*configPath).StartAgent",
+          "lineNumber": 165
+        },
+        {
+          "caller": "runAgent",
+          "callee": "factory.New",
+          "lineNumber": 165
+        },
+        {
+          "caller": "runAgent",
+          "callee": "store.Stage",
+          "lineNumber": 168
+        },
+        {
+          "caller": "runAgent",
+          "callee": "config.Harness",
+          "lineNumber": 169
+        },
+        {
+          "caller": "runAgent",
+          "callee": "append",
+          "lineNumber": 173
+        },
+        {
+          "caller": "runAgent",
+          "callee": "writeError",
+          "lineNumber": 176
+        },
+        {
+          "caller": "runAgent",
+          "callee": "writeOutput",
+          "lineNumber": 179
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 187
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flags.SetOutput",
+          "lineNumber": 188
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flags.String",
+          "lineNumber": 189
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flags.String",
+          "lineNumber": 190
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flags.String",
+          "lineNumber": 191
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flags.Var",
+          "lineNumber": 193
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flags.Parse",
+          "lineNumber": 194
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "flags.NArg",
+          "lineNumber": 197
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "writeError",
+          "lineNumber": 198
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 198
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 201
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "writeError",
+          "lineNumber": 202
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 202
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "factory.New(*configPath).AcceptAgentReport",
+          "lineNumber": 205
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "factory.New",
+          "lineNumber": 205
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "append",
+          "lineNumber": 205
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "writeError",
+          "lineNumber": 207
+        },
+        {
+          "caller": "runAgentReport",
+          "callee": "writeOutput",
+          "lineNumber": 210
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 219
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "flags.SetOutput",
+          "lineNumber": 220
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "flags.String",
+          "lineNumber": 221
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "flags.String",
+          "lineNumber": 222
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "flags.String",
+          "lineNumber": 223
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "flags.Parse",
+          "lineNumber": 224
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "flags.NArg",
+          "lineNumber": 227
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "writeError",
+          "lineNumber": 228
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 228
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "factory.New(*configPath).CreateDraftPullRequest",
+          "lineNumber": 231
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "factory.New",
+          "lineNumber": 231
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "writeError",
+          "lineNumber": 233
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "writeOutput",
+          "lineNumber": 236
+        },
+        {
+          "caller": "runDraftPullRequest",
+          "callee": "writeOutput",
+          "lineNumber": 240
+        },
+        {
+          "caller": "runInit",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 249
+        },
+        {
+          "caller": "runInit",
+          "callee": "flags.SetOutput",
+          "lineNumber": 250
+        },
+        {
+          "caller": "runInit",
+          "callee": "flags.String",
+          "lineNumber": 251
+        },
+        {
+          "caller": "runInit",
+          "callee": "flags.Parse",
+          "lineNumber": 252
+        },
+        {
+          "caller": "runInit",
+          "callee": "flags.NArg",
+          "lineNumber": 255
+        },
+        {
+          "caller": "runInit",
+          "callee": "writeError",
+          "lineNumber": 256
+        },
+        {
+          "caller": "runInit",
+          "callee": "errors.New",
+          "lineNumber": 256
+        },
+        {
+          "caller": "runInit",
+          "callee": "factory.New",
+          "lineNumber": 259
+        },
+        {
+          "caller": "runInit",
+          "callee": "service.Init",
+          "lineNumber": 260
+        },
+        {
+          "caller": "runInit",
+          "callee": "writeError",
+          "lineNumber": 262
+        },
+        {
+          "caller": "runInit",
+          "callee": "writeOutput",
+          "lineNumber": 265
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 273
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.SetOutput",
+          "lineNumber": 274
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 275
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 276
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 277
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 278
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 279
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 280
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 281
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 282
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 283
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 284
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.String",
+          "lineNumber": 285
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.Var",
+          "lineNumber": 287
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.Parse",
+          "lineNumber": 288
+        },
+        {
+          "caller": "runRegister",
+          "callee": "flags.NArg",
+          "lineNumber": 291
+        },
+        {
+          "caller": "runRegister",
+          "callee": "writeError",
+          "lineNumber": 292
+        },
+        {
+          "caller": "runRegister",
+          "callee": "errors.New",
+          "lineNumber": 292
+        },
+        {
+          "caller": "runRegister",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 295
+        },
+        {
+          "caller": "runRegister",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 295
+        },
+        {
+          "caller": "runRegister",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 295
+        },
+        {
+          "caller": "runRegister",
+          "callee": "len",
+          "lineNumber": 295
+        },
+        {
+          "caller": "runRegister",
+          "callee": "writeError",
+          "lineNumber": 296
+        },
+        {
+          "caller": "runRegister",
+          "callee": "errors.New",
+          "lineNumber": 296
+        },
+        {
+          "caller": "runRegister",
+          "callee": "factory.New",
+          "lineNumber": 299
+        },
+        {
+          "caller": "runRegister",
+          "callee": "service.Register",
+          "lineNumber": 300
+        },
+        {
+          "caller": "runRegister",
+          "callee": "writeError",
+          "lineNumber": 314
+        },
+        {
+          "caller": "runRegister",
+          "callee": "writeOutput",
+          "lineNumber": 317
+        },
+        {
+          "caller": "runStatus",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 326
+        },
+        {
+          "caller": "runStatus",
+          "callee": "flags.SetOutput",
+          "lineNumber": 327
+        },
+        {
+          "caller": "runStatus",
+          "callee": "flags.String",
+          "lineNumber": 328
+        },
+        {
+          "caller": "runStatus",
+          "callee": "flags.Parse",
+          "lineNumber": 329
+        },
+        {
+          "caller": "runStatus",
+          "callee": "flags.NArg",
+          "lineNumber": 332
+        },
+        {
+          "caller": "runStatus",
+          "callee": "writeError",
+          "lineNumber": 333
+        },
+        {
+          "caller": "runStatus",
+          "callee": "errors.New",
+          "lineNumber": 333
+        },
+        {
+          "caller": "runStatus",
+          "callee": "factory.New",
+          "lineNumber": 336
+        },
+        {
+          "caller": "runStatus",
+          "callee": "service.Status",
+          "lineNumber": 337
+        },
+        {
+          "caller": "runStatus",
+          "callee": "writeError",
+          "lineNumber": 339
+        },
+        {
+          "caller": "runStatus",
+          "callee": "writeOutput",
+          "lineNumber": 342
+        },
+        {
+          "caller": "runStatus",
+          "callee": "writeOutput",
+          "lineNumber": 346
+        },
+        {
+          "caller": "runStatus",
+          "callee": "writeOutput",
+          "lineNumber": 350
+        },
+        {
+          "caller": "runStatus",
+          "callee": "writeOutput",
+          "lineNumber": 355
+        },
+        {
+          "caller": "runStatus",
+          "callee": "writeOutput",
+          "lineNumber": 363
+        },
+        {
+          "caller": "writeOutput",
+          "callee": "fmt.Fprintf",
+          "lineNumber": 373
+        },
+        {
+          "caller": "writeOutput",
+          "callee": "writeError",
+          "lineNumber": 374
+        },
+        {
+          "caller": "writeError",
+          "callee": "fmt.Fprintf",
+          "lineNumber": 383
+        },
+        {
+          "caller": "String",
+          "callee": "strings.Join",
+          "lineNumber": 389
+        },
+        {
+          "caller": "Set",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 392
+        },
+        {
+          "caller": "Set",
+          "callee": "errors.New",
+          "lineNumber": 393
+        },
+        {
+          "caller": "Set",
+          "callee": "append",
+          "lineNumber": 395
+        }
+      ],
+      "metrics": {
+        "importCount": 7,
+        "exportCount": 3,
+        "functionCount": 15,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "internal/config/config.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 612,
+      "nonEmptyLines": 559,
+      "functions": [
+        {
+          "name": "Error",
+          "startLine": 163,
+          "endLine": 165,
+          "params": []
+        },
+        {
+          "name": "Error",
+          "startLine": 174,
+          "endLine": 180,
+          "params": []
+        },
+        {
+          "name": "Error",
+          "startLine": 187,
+          "endLine": 189,
+          "params": []
+        },
+        {
+          "name": "Unwrap",
+          "startLine": 191,
+          "endLine": 191,
+          "params": []
+        },
+        {
+          "name": "NewHostConfig",
+          "startLine": 194,
+          "endLine": 196,
+          "params": []
+        },
+        {
+          "name": "DefaultHostConfigPath",
+          "startLine": 201,
+          "endLine": 210,
+          "params": []
+        },
+        {
+          "name": "DefaultOperationalDataPath",
+          "startLine": 213,
+          "endLine": 215,
+          "params": [
+            "hostConfigPath"
+          ]
+        },
+        {
+          "name": "DefaultRepositoryConfigPath",
+          "startLine": 218,
+          "endLine": 220,
+          "params": [
+            "repositoryPath"
+          ]
+        },
+        {
+          "name": "LoadHost",
+          "startLine": 224,
+          "endLine": 233,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "LoadRepository",
+          "startLine": 236,
+          "endLine": 245,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "SaveHost",
+          "startLine": 248,
+          "endLine": 284,
+          "params": [
+            "path",
+            "config"
+          ]
+        },
+        {
+          "name": "CreateHost",
+          "startLine": 288,
+          "endLine": 299,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "ValidateHost",
+          "startLine": 302,
+          "endLine": 316,
+          "params": [
+            "config"
+          ]
+        },
+        {
+          "name": "ValidateRepository",
+          "startLine": 320,
+          "endLine": 456,
+          "params": [
+            "config"
+          ]
+        },
+        {
+          "name": "validateRegistration",
+          "startLine": 459,
+          "endLine": 505,
+          "params": [
+            "prefix",
+            "repository"
+          ]
+        },
+        {
+          "name": "validateSchema",
+          "startLine": 509,
+          "endLine": 520,
+          "params": [
+            "kind",
+            "version"
+          ]
+        },
+        {
+          "name": "validateDuration",
+          "startLine": 523,
+          "endLine": 535,
+          "params": [
+            "field",
+            "value",
+            "allowEmpty"
+          ]
+        },
+        {
+          "name": "validateUniqueStrings",
+          "startLine": 538,
+          "endLine": 543,
+          "params": [
+            "field",
+            "values"
+          ]
+        },
+        {
+          "name": "validateOptionalUniqueStrings",
+          "startLine": 546,
+          "endLine": 558,
+          "params": [
+            "field",
+            "values"
+          ]
+        },
+        {
+          "name": "validateOptionalOverrides",
+          "startLine": 561,
+          "endLine": 573,
+          "params": [
+            "values"
+          ]
+        },
+        {
+          "name": "validation",
+          "startLine": 576,
+          "endLine": 578,
+          "params": [
+            "field",
+            "message"
+          ]
+        },
+        {
+          "name": "loadYAML",
+          "startLine": 581,
+          "endLine": 599,
+          "params": [
+            "path",
+            "destination"
+          ]
+        },
+        {
+          "name": "validSHA256Digest",
+          "startLine": 602,
+          "endLine": 612,
+          "params": [
+            "value"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "HostConfig",
+          "startLine": 21,
+          "endLine": 24,
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "Repositories"
+          ]
+        },
+        {
+          "name": "RepositoryRegistration",
+          "startLine": 26,
+          "endLine": 36,
+          "methods": [],
+          "properties": [
+            "Path",
+            "GitHub",
+            "AuthorizedUsers",
+            "Polling",
+            "Cmux",
+            "Authentication",
+            "OperationalDataPath",
+            "RepositoryConfigPath"
+          ]
+        },
+        {
+          "name": "GitHubConfig",
+          "startLine": 38,
+          "endLine": 41,
+          "methods": [],
+          "properties": [
+            "Owner",
+            "Repository"
+          ]
+        },
+        {
+          "name": "PollingConfig",
+          "startLine": 43,
+          "endLine": 46,
+          "methods": [],
+          "properties": [
+            "Interval",
+            "Backoff"
+          ]
+        },
+        {
+          "name": "CmuxConfig",
+          "startLine": 48,
+          "endLine": 51,
+          "methods": [],
+          "properties": [
+            "SocketPath",
+            "ControlWorkspace"
+          ]
+        },
+        {
+          "name": "AuthenticationConfig",
+          "startLine": 55,
+          "endLine": 58,
+          "methods": [],
+          "properties": [
+            "CodexAuthPath"
+          ]
+        },
+        {
+          "name": "RepositoryConfig",
+          "startLine": 60,
+          "endLine": 74,
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "TargetBranch",
+            "Setup",
+            "Gates",
+            "RoleHarnessDefaults",
+            "ModelOptions",
+            "Timeouts",
+            "RetryLimits",
+            "TestPolicy",
+            "AllowedOverrides",
+            "Caches",
+            "WorkerBuild",
+            "BaseSynchronization"
+          ]
+        },
+        {
+          "name": "GateConfig",
+          "startLine": 83,
+          "endLine": 90,
+          "methods": [],
+          "properties": [
+            "Name",
+            "Command",
+            "Timeout",
+            "Blocking",
+            "DependsOn",
+            "EnvironmentPolicy"
+          ]
+        },
+        {
+          "name": "TimeoutConfig",
+          "startLine": 92,
+          "endLine": 97,
+          "methods": [],
+          "properties": [
+            "Setup",
+            "Agent",
+            "Gate",
+            "Review"
+          ]
+        },
+        {
+          "name": "RetryLimits",
+          "startLine": 99,
+          "endLine": 103,
+          "methods": [],
+          "properties": [
+            "CheckRepair",
+            "ReviewRepair",
+            "TestRevision"
+          ]
+        },
+        {
+          "name": "TestPolicy",
+          "startLine": 113,
+          "endLine": 117,
+          "methods": [],
+          "properties": [
+            "Mode",
+            "AllowHumanExemption",
+            "AllowTechnicalExemption"
+          ]
+        },
+        {
+          "name": "CacheConfig",
+          "startLine": 119,
+          "endLine": 123,
+          "methods": [],
+          "properties": [
+            "Name",
+            "Path",
+            "ReadOnly"
+          ]
+        },
+        {
+          "name": "WorkerBuildConfig",
+          "startLine": 125,
+          "endLine": 129,
+          "methods": [],
+          "properties": [
+            "Image",
+            "Digest",
+            "Definition"
+          ]
+        },
+        {
+          "name": "BaseSynchronization",
+          "startLine": 138,
+          "endLine": 141,
+          "methods": [],
+          "properties": [
+            "Mode",
+            "Branch"
+          ]
+        },
+        {
+          "name": "ValidationError",
+          "startLine": 158,
+          "endLine": 161,
+          "methods": [
+            "Error"
+          ],
+          "properties": [
+            "Field",
+            "Message"
+          ]
+        },
+        {
+          "name": "UnknownSchemaVersionError",
+          "startLine": 167,
+          "endLine": 172,
+          "methods": [
+            "Error"
+          ],
+          "properties": [
+            "Kind",
+            "Field",
+            "Version",
+            "Supported"
+          ]
+        },
+        {
+          "name": "ConfigFileError",
+          "startLine": 182,
+          "endLine": 185,
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Path",
+            "Err"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "HostConfig",
+          "line": 21,
+          "isDefault": false
+        },
+        {
+          "name": "RepositoryRegistration",
+          "line": 26,
+          "isDefault": false
+        },
+        {
+          "name": "GitHubConfig",
+          "line": 38,
+          "isDefault": false
+        },
+        {
+          "name": "PollingConfig",
+          "line": 43,
+          "isDefault": false
+        },
+        {
+          "name": "CmuxConfig",
+          "line": 48,
+          "isDefault": false
+        },
+        {
+          "name": "AuthenticationConfig",
+          "line": 55,
+          "isDefault": false
+        },
+        {
+          "name": "RepositoryConfig",
+          "line": 60,
+          "isDefault": false
+        },
+        {
+          "name": "GateConfig",
+          "line": 83,
+          "isDefault": false
+        },
+        {
+          "name": "TimeoutConfig",
+          "line": 92,
+          "isDefault": false
+        },
+        {
+          "name": "RetryLimits",
+          "line": 99,
+          "isDefault": false
+        },
+        {
+          "name": "TestPolicy",
+          "line": 113,
+          "isDefault": false
+        },
+        {
+          "name": "CacheConfig",
+          "line": 119,
+          "isDefault": false
+        },
+        {
+          "name": "WorkerBuildConfig",
+          "line": 125,
+          "isDefault": false
+        },
+        {
+          "name": "BaseSynchronization",
+          "line": 138,
+          "isDefault": false
+        },
+        {
+          "name": "ValidationError",
+          "line": 158,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 163,
+          "isDefault": false
+        },
+        {
+          "name": "UnknownSchemaVersionError",
+          "line": 167,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 174,
+          "isDefault": false
+        },
+        {
+          "name": "ConfigFileError",
+          "line": 182,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 187,
+          "isDefault": false
+        },
+        {
+          "name": "Unwrap",
+          "line": 191,
+          "isDefault": false
+        },
+        {
+          "name": "NewHostConfig",
+          "line": 194,
+          "isDefault": false
+        },
+        {
+          "name": "DefaultHostConfigPath",
+          "line": 201,
+          "isDefault": false
+        },
+        {
+          "name": "DefaultOperationalDataPath",
+          "line": 213,
+          "isDefault": false
+        },
+        {
+          "name": "DefaultRepositoryConfigPath",
+          "line": 218,
+          "isDefault": false
+        },
+        {
+          "name": "LoadHost",
+          "line": 224,
+          "isDefault": false
+        },
+        {
+          "name": "LoadRepository",
+          "line": 236,
+          "isDefault": false
+        },
+        {
+          "name": "SaveHost",
+          "line": 248,
+          "isDefault": false
+        },
+        {
+          "name": "CreateHost",
+          "line": 288,
+          "isDefault": false
+        },
+        {
+          "name": "ValidateHost",
+          "line": 302,
+          "isDefault": false
+        },
+        {
+          "name": "ValidateRepository",
+          "line": 320,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 164
+        },
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 179
+        },
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 188
+        },
+        {
+          "caller": "DefaultHostConfigPath",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 202
+        },
+        {
+          "caller": "DefaultHostConfigPath",
+          "callee": "os.Getenv",
+          "lineNumber": 202
+        },
+        {
+          "caller": "DefaultHostConfigPath",
+          "callee": "filepath.Abs",
+          "lineNumber": 203
+        },
+        {
+          "caller": "DefaultHostConfigPath",
+          "callee": "os.UserConfigDir",
+          "lineNumber": 205
+        },
+        {
+          "caller": "DefaultHostConfigPath",
+          "callee": "fmt.Errorf",
+          "lineNumber": 207
+        },
+        {
+          "caller": "DefaultHostConfigPath",
+          "callee": "filepath.Join",
+          "lineNumber": 209
+        },
+        {
+          "caller": "DefaultOperationalDataPath",
+          "callee": "filepath.Join",
+          "lineNumber": 214
+        },
+        {
+          "caller": "DefaultOperationalDataPath",
+          "callee": "filepath.Dir",
+          "lineNumber": 214
+        },
+        {
+          "caller": "DefaultRepositoryConfigPath",
+          "callee": "filepath.Join",
+          "lineNumber": 219
+        },
+        {
+          "caller": "LoadHost",
+          "callee": "loadYAML",
+          "lineNumber": 226
+        },
+        {
+          "caller": "LoadHost",
+          "callee": "ValidateHost",
+          "lineNumber": 229
+        },
+        {
+          "caller": "LoadRepository",
+          "callee": "loadYAML",
+          "lineNumber": 238
+        },
+        {
+          "caller": "LoadRepository",
+          "callee": "ValidateRepository",
+          "lineNumber": 241
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "ValidateHost",
+          "lineNumber": 249
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "yaml.Marshal",
+          "lineNumber": 252
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 254
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "os.MkdirAll",
+          "lineNumber": 256
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "filepath.Dir",
+          "lineNumber": 256
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 257
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "os.CreateTemp",
+          "lineNumber": 259
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "filepath.Dir",
+          "lineNumber": 259
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 261
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Name",
+          "lineNumber": 263
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "func() { _ = os.Remove(temporaryPath) }",
+          "lineNumber": 264
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "os.Remove",
+          "lineNumber": 264
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Chmod",
+          "lineNumber": 265
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Close",
+          "lineNumber": 266
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 267
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Write",
+          "lineNumber": 269
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Close",
+          "lineNumber": 270
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 271
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Sync",
+          "lineNumber": 273
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Close",
+          "lineNumber": 274
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 275
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "temporary.Close",
+          "lineNumber": 277
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 278
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "os.Rename",
+          "lineNumber": 280
+        },
+        {
+          "caller": "SaveHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 281
+        },
+        {
+          "caller": "CreateHost",
+          "callee": "os.Stat",
+          "lineNumber": 289
+        },
+        {
+          "caller": "CreateHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 290
+        },
+        {
+          "caller": "CreateHost",
+          "callee": "errors.Is",
+          "lineNumber": 291
+        },
+        {
+          "caller": "CreateHost",
+          "callee": "fmt.Errorf",
+          "lineNumber": 292
+        },
+        {
+          "caller": "CreateHost",
+          "callee": "NewHostConfig",
+          "lineNumber": 294
+        },
+        {
+          "caller": "CreateHost",
+          "callee": "SaveHost",
+          "lineNumber": 295
+        },
+        {
+          "caller": "ValidateHost",
+          "callee": "validateSchema",
+          "lineNumber": 303
+        },
+        {
+          "caller": "ValidateHost",
+          "callee": "len",
+          "lineNumber": 306
+        },
+        {
+          "caller": "ValidateHost",
+          "callee": "validation",
+          "lineNumber": 307
+        },
+        {
+          "caller": "ValidateHost",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 310
+        },
+        {
+          "caller": "ValidateHost",
+          "callee": "validateRegistration",
+          "lineNumber": 311
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validateSchema",
+          "lineNumber": 321
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 324
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 325
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 327
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 328
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 330
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 331
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "len",
+          "lineNumber": 333
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 334
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "make",
+          "lineNumber": 336
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "len",
+          "lineNumber": 336
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 338
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 339
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 340
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 343
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 346
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 347
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validateDuration",
+          "lineNumber": 349
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 353
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 357
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 357
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 360
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 360
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "len",
+          "lineNumber": 364
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 365
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 368
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 369
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 372
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "len",
+          "lineNumber": 375
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 376
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "len",
+          "lineNumber": 379
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 380
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 383
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 384
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 384
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 390
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 395
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validateDuration",
+          "lineNumber": 404
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 414
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 418
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validateOptionalOverrides",
+          "lineNumber": 420
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "make",
+          "lineNumber": 423
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "len",
+          "lineNumber": 423
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 425
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 426
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 427
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 430
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 433
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 434
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 437
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 438
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 440
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 441
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validSHA256Digest",
+          "lineNumber": 443
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 444
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 446
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 447
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 450
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 452
+        },
+        {
+          "caller": "ValidateRepository",
+          "callee": "validation",
+          "lineNumber": 453
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 460
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 461
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 463
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 464
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 466
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 467
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 469
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 470
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validateUniqueStrings",
+          "lineNumber": 472
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validateDuration",
+          "lineNumber": 475
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validateDuration",
+          "lineNumber": 478
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 481
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 482
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 484
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 485
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 487
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 488
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 491
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 492
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 494
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 495
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 498
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 499
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 501
+        },
+        {
+          "caller": "validateRegistration",
+          "callee": "validation",
+          "lineNumber": 502
+        },
+        {
+          "caller": "validateSchema",
+          "callee": "validation",
+          "lineNumber": 511
+        },
+        {
+          "caller": "validateSchema",
+          "callee": "validation",
+          "lineNumber": 517
+        },
+        {
+          "caller": "validateDuration",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 524
+        },
+        {
+          "caller": "validateDuration",
+          "callee": "validation",
+          "lineNumber": 528
+        },
+        {
+          "caller": "validateDuration",
+          "callee": "time.ParseDuration",
+          "lineNumber": 530
+        },
+        {
+          "caller": "validateDuration",
+          "callee": "validation",
+          "lineNumber": 532
+        },
+        {
+          "caller": "validateUniqueStrings",
+          "callee": "len",
+          "lineNumber": 539
+        },
+        {
+          "caller": "validateUniqueStrings",
+          "callee": "validation",
+          "lineNumber": 540
+        },
+        {
+          "caller": "validateUniqueStrings",
+          "callee": "validateOptionalUniqueStrings",
+          "lineNumber": 542
+        },
+        {
+          "caller": "validateOptionalUniqueStrings",
+          "callee": "make",
+          "lineNumber": 547
+        },
+        {
+          "caller": "validateOptionalUniqueStrings",
+          "callee": "len",
+          "lineNumber": 547
+        },
+        {
+          "caller": "validateOptionalUniqueStrings",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 549
+        },
+        {
+          "caller": "validateOptionalUniqueStrings",
+          "callee": "validation",
+          "lineNumber": 550
+        },
+        {
+          "caller": "validateOptionalUniqueStrings",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 550
+        },
+        {
+          "caller": "validateOptionalUniqueStrings",
+          "callee": "validation",
+          "lineNumber": 553
+        },
+        {
+          "caller": "validateOptionalUniqueStrings",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 553
+        },
+        {
+          "caller": "validateOptionalOverrides",
+          "callee": "make",
+          "lineNumber": 562
+        },
+        {
+          "caller": "validateOptionalOverrides",
+          "callee": "len",
+          "lineNumber": 562
+        },
+        {
+          "caller": "validateOptionalOverrides",
+          "callee": "validation",
+          "lineNumber": 565
+        },
+        {
+          "caller": "validateOptionalOverrides",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 565
+        },
+        {
+          "caller": "validateOptionalOverrides",
+          "callee": "validation",
+          "lineNumber": 568
+        },
+        {
+          "caller": "validateOptionalOverrides",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 568
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "os.ReadFile",
+          "lineNumber": 582
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "yaml.NewDecoder",
+          "lineNumber": 586
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "bytes.NewReader",
+          "lineNumber": 586
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "decoder.KnownFields",
+          "lineNumber": 587
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "decoder.Decode",
+          "lineNumber": 588
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "decoder.Decode",
+          "lineNumber": 592
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "errors.Is",
+          "lineNumber": 592
+        },
+        {
+          "caller": "loadYAML",
+          "callee": "errors.New",
+          "lineNumber": 594
+        },
+        {
+          "caller": "validSHA256Digest",
+          "callee": "len",
+          "lineNumber": 603
+        },
+        {
+          "caller": "validSHA256Digest",
+          "callee": "len",
+          "lineNumber": 603
+        },
+        {
+          "caller": "validSHA256Digest",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 603
+        },
+        {
+          "caller": "validSHA256Digest",
+          "callee": "len",
+          "lineNumber": 606
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 31,
+        "functionCount": 23,
+        "classCount": 17
+      }
+    },
+    {
+      "path": "internal/factory/claim.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 503,
+      "nonEmptyLines": 468,
+      "functions": [
+        {
+          "name": "BootstrapLabels",
+          "startLine": 96,
+          "endLine": 112,
+          "params": [
+            "ctx"
+          ]
+        },
+        {
+          "name": "ClaimIssue",
+          "startLine": 117,
+          "endLine": 219,
+          "params": [
+            "ctx",
+            "issueNumber"
+          ]
+        },
+        {
+          "name": "Transition",
+          "startLine": 224,
+          "endLine": 272,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "applyStateTransition",
+          "startLine": 278,
+          "endLine": 312,
+          "params": [
+            "ctx",
+            "runStore",
+            "transition"
+          ]
+        },
+        {
+          "name": "saveRunWithRetry",
+          "startLine": 317,
+          "endLine": 339,
+          "params": [
+            "ctx",
+            "runStore",
+            "run"
+          ]
+        },
+        {
+          "name": "registration",
+          "startLine": 342,
+          "endLine": 354,
+          "params": []
+        },
+        {
+          "name": "openRunStore",
+          "startLine": 357,
+          "endLine": 372,
+          "params": [
+            "ctx"
+          ]
+        },
+        {
+          "name": "openActiveRunStore",
+          "startLine": 376,
+          "endLine": 387,
+          "params": [
+            "ctx"
+          ]
+        },
+        {
+          "name": "failClaim",
+          "startLine": 391,
+          "endLine": 409,
+          "params": [
+            "ctx",
+            "runStore",
+            "run",
+            "repository",
+            "issue",
+            "cause"
+          ]
+        },
+        {
+          "name": "statusCommentBody",
+          "startLine": 412,
+          "endLine": 419,
+          "params": [
+            "run"
+          ]
+        },
+        {
+          "name": "statusCommentMarker",
+          "startLine": 422,
+          "endLine": 424,
+          "params": [
+            "runID"
+          ]
+        },
+        {
+          "name": "factoryLabelForStatus",
+          "startLine": 427,
+          "endLine": 432,
+          "params": [
+            "status"
+          ]
+        },
+        {
+          "name": "validateStage",
+          "startLine": 435,
+          "endLine": 440,
+          "params": [
+            "stage"
+          ]
+        },
+        {
+          "name": "validateStatus",
+          "startLine": 443,
+          "endLine": 448,
+          "params": [
+            "status"
+          ]
+        },
+        {
+          "name": "hasLabel",
+          "startLine": 451,
+          "endLine": 458,
+          "params": [
+            "labels",
+            "wanted"
+          ]
+        },
+        {
+          "name": "conflictingFactoryLabel",
+          "startLine": 461,
+          "endLine": 468,
+          "params": [
+            "labels"
+          ]
+        },
+        {
+          "name": "replaceFactoryState",
+          "startLine": 472,
+          "endLine": 489,
+          "params": [
+            "labels",
+            "state"
+          ]
+        },
+        {
+          "name": "cloneIssue",
+          "startLine": 492,
+          "endLine": 495,
+          "params": [
+            "issue"
+          ]
+        },
+        {
+          "name": "defaultCoordinator",
+          "startLine": 498,
+          "endLine": 503,
+          "params": []
+        }
+      ],
+      "classes": [
+        {
+          "name": "SpecificationPacket",
+          "startLine": 25,
+          "endLine": 29,
+          "methods": [],
+          "properties": [
+            "Version",
+            "Issue",
+            "RepositoryConfig"
+          ]
+        },
+        {
+          "name": "BootstrapLabelsResult",
+          "startLine": 32,
+          "endLine": 35,
+          "methods": [],
+          "properties": [
+            "Repository",
+            "Labels"
+          ]
+        },
+        {
+          "name": "IssueResult",
+          "startLine": 38,
+          "endLine": 41,
+          "methods": [],
+          "properties": [
+            "Run",
+            "Packet"
+          ]
+        },
+        {
+          "name": "TransitionRequest",
+          "startLine": 45,
+          "endLine": 49,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Stage",
+            "Status"
+          ]
+        },
+        {
+          "name": "stateTransition",
+          "startLine": 86,
+          "endLine": 92,
+          "methods": [],
+          "properties": [
+            "Repository",
+            "Issue",
+            "Previous",
+            "Next",
+            "CreateComment"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "SpecificationPacket",
+          "line": 25,
+          "isDefault": false
+        },
+        {
+          "name": "BootstrapLabelsResult",
+          "line": 32,
+          "isDefault": false
+        },
+        {
+          "name": "IssueResult",
+          "line": 38,
+          "isDefault": false
+        },
+        {
+          "name": "TransitionRequest",
+          "line": 45,
+          "isDefault": false
+        },
+        {
+          "name": "BootstrapLabels",
+          "line": 96,
+          "isDefault": false
+        },
+        {
+          "name": "ClaimIssue",
+          "line": 117,
+          "isDefault": false
+        },
+        {
+          "name": "Transition",
+          "line": 224,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "BootstrapLabels",
+          "callee": "s.registration",
+          "lineNumber": 97
+        },
+        {
+          "caller": "BootstrapLabels",
+          "callee": "s.deps.GitHub.CreateLabel",
+          "lineNumber": 103
+        },
+        {
+          "caller": "BootstrapLabels",
+          "callee": "make",
+          "lineNumber": 107
+        },
+        {
+          "caller": "BootstrapLabels",
+          "callee": "len",
+          "lineNumber": 107
+        },
+        {
+          "caller": "BootstrapLabels",
+          "callee": "append",
+          "lineNumber": 109
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "errors.New",
+          "lineNumber": 119
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.openActiveRunStore",
+          "lineNumber": 121
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "func() { _ = runStore.Close() }",
+          "lineNumber": 125
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "runStore.Close",
+          "lineNumber": 125
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.deps.LoadRepository",
+          "lineNumber": 126
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 128
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 132
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.deps.GitHub.Issue",
+          "lineNumber": 135
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 143
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 146
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "strings.EqualFold",
+          "lineNumber": 148
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 148
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 149
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "defaultString",
+          "lineNumber": 149
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "hasLabel",
+          "lineNumber": 151
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 152
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "conflictingFactoryLabel",
+          "lineNumber": 154
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 155
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.deps.NewRunID",
+          "lineNumber": 158
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 160
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 162
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "errors.New",
+          "lineNumber": 163
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 165
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.deps.Now",
+          "lineNumber": 165
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "cloneIssue",
+          "lineNumber": 168
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "json.Marshal",
+          "lineNumber": 171
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 173
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.worktreeManager",
+          "lineNumber": 175
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "errors.New",
+          "lineNumber": 177
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "worktreeManager.Create",
+          "lineNumber": 179
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "worktreeManager.Remove",
+          "lineNumber": 184
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "errors.Join",
+          "lineNumber": 185
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 185
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "string",
+          "lineNumber": 200
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "runStore.SaveRun",
+          "lineNumber": 204
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "cleanupWorkspace",
+          "lineNumber": 205
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 205
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.applyStateTransition",
+          "lineNumber": 208
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "s.failClaim",
+          "lineNumber": 215
+        },
+        {
+          "caller": "ClaimIssue",
+          "callee": "cleanupWorkspace",
+          "lineNumber": 216
+        },
+        {
+          "caller": "Transition",
+          "callee": "validateStage",
+          "lineNumber": 225
+        },
+        {
+          "caller": "Transition",
+          "callee": "validateStatus",
+          "lineNumber": 228
+        },
+        {
+          "caller": "Transition",
+          "callee": "s.openActiveRunStore",
+          "lineNumber": 231
+        },
+        {
+          "caller": "Transition",
+          "callee": "func() { _ = runStore.Close() }",
+          "lineNumber": 235
+        },
+        {
+          "caller": "Transition",
+          "callee": "runStore.Close",
+          "lineNumber": 235
+        },
+        {
+          "caller": "Transition",
+          "callee": "errors.New",
+          "lineNumber": 237
+        },
+        {
+          "caller": "Transition",
+          "callee": "fmt.Errorf",
+          "lineNumber": 240
+        },
+        {
+          "caller": "Transition",
+          "callee": "s.deps.GitHub.Issue",
+          "lineNumber": 243
+        },
+        {
+          "caller": "Transition",
+          "callee": "s.deps.GitHub.FindStatusComment",
+          "lineNumber": 248
+        },
+        {
+          "caller": "Transition",
+          "callee": "statusCommentMarker",
+          "lineNumber": 248
+        },
+        {
+          "caller": "Transition",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 252
+        },
+        {
+          "caller": "Transition",
+          "callee": "errors.New",
+          "lineNumber": 253
+        },
+        {
+          "caller": "Transition",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 261
+        },
+        {
+          "caller": "Transition",
+          "callee": "s.deps.Now",
+          "lineNumber": 261
+        },
+        {
+          "caller": "Transition",
+          "callee": "s.applyStateTransition",
+          "lineNumber": 262
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "append",
+          "lineNumber": 280
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "replaceFactoryState",
+          "lineNumber": 281
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "factoryLabelForStatus",
+          "lineNumber": 281
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.GitHub.ReplaceIssueLabels",
+          "lineNumber": 282
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "fmt.Errorf",
+          "lineNumber": 283
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.GitHub.CreateIssueComment",
+          "lineNumber": 286
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "statusCommentBody",
+          "lineNumber": 286
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "fmt.Errorf",
+          "lineNumber": 288
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 290
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "errors.New",
+          "lineNumber": 291
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.GitHub.EditIssueComment",
+          "lineNumber": 295
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "statusCommentBody",
+          "lineNumber": 295
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.GitHub.ReplaceIssueLabels",
+          "lineNumber": 296
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "fmt.Errorf",
+          "lineNumber": 297
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 300
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.Now",
+          "lineNumber": 300
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "saveRunWithRetry",
+          "lineNumber": 301
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.GitHub.EditIssueComment",
+          "lineNumber": 304
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "statusCommentBody",
+          "lineNumber": 304
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "s.deps.GitHub.ReplaceIssueLabels",
+          "lineNumber": 305
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "errors.Join",
+          "lineNumber": 307
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "append",
+          "lineNumber": 307
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "fmt.Errorf",
+          "lineNumber": 307
+        },
+        {
+          "caller": "applyStateTransition",
+          "callee": "fmt.Errorf",
+          "lineNumber": 309
+        },
+        {
+          "caller": "saveRunWithRetry",
+          "callee": "runStore.SaveRun",
+          "lineNumber": 318
+        },
+        {
+          "caller": "saveRunWithRetry",
+          "callee": "ctx.Err",
+          "lineNumber": 322
+        },
+        {
+          "caller": "saveRunWithRetry",
+          "callee": "time.NewTimer",
+          "lineNumber": 325
+        },
+        {
+          "caller": "saveRunWithRetry",
+          "callee": "timer.Stop",
+          "lineNumber": 326
+        },
+        {
+          "caller": "saveRunWithRetry",
+          "callee": "ctx.Done",
+          "lineNumber": 328
+        },
+        {
+          "caller": "saveRunWithRetry",
+          "callee": "ctx.Err",
+          "lineNumber": 332
+        },
+        {
+          "caller": "saveRunWithRetry",
+          "callee": "runStore.SaveRun",
+          "lineNumber": 335
+        },
+        {
+          "caller": "registration",
+          "callee": "errors.New",
+          "lineNumber": 344
+        },
+        {
+          "caller": "registration",
+          "callee": "s.deps.Config.Load",
+          "lineNumber": 346
+        },
+        {
+          "caller": "registration",
+          "callee": "len",
+          "lineNumber": 350
+        },
+        {
+          "caller": "registration",
+          "callee": "errors.New",
+          "lineNumber": 351
+        },
+        {
+          "caller": "openRunStore",
+          "callee": "s.registration",
+          "lineNumber": 358
+        },
+        {
+          "caller": "openRunStore",
+          "callee": "s.deps.OpenStore",
+          "lineNumber": 362
+        },
+        {
+          "caller": "openRunStore",
+          "callee": "opened.Close",
+          "lineNumber": 368
+        },
+        {
+          "caller": "openRunStore",
+          "callee": "errors.New",
+          "lineNumber": 369
+        },
+        {
+          "caller": "openActiveRunStore",
+          "callee": "s.openRunStore",
+          "lineNumber": 377
+        },
+        {
+          "caller": "openActiveRunStore",
+          "callee": "runStore.CurrentRun",
+          "lineNumber": 381
+        },
+        {
+          "caller": "openActiveRunStore",
+          "callee": "runStore.Close",
+          "lineNumber": 383
+        },
+        {
+          "caller": "failClaim",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 393
+        },
+        {
+          "caller": "failClaim",
+          "callee": "s.deps.Now",
+          "lineNumber": 393
+        },
+        {
+          "caller": "failClaim",
+          "callee": "s.deps.GitHub.ReplaceIssueLabels",
+          "lineNumber": 395
+        },
+        {
+          "caller": "failClaim",
+          "callee": "replaceFactoryState",
+          "lineNumber": 395
+        },
+        {
+          "caller": "failClaim",
+          "callee": "append",
+          "lineNumber": 398
+        },
+        {
+          "caller": "failClaim",
+          "callee": "s.deps.GitHub.EditIssueComment",
+          "lineNumber": 398
+        },
+        {
+          "caller": "failClaim",
+          "callee": "statusCommentBody",
+          "lineNumber": 398
+        },
+        {
+          "caller": "failClaim",
+          "callee": "runStore.SaveRun",
+          "lineNumber": 400
+        },
+        {
+          "caller": "failClaim",
+          "callee": "append",
+          "lineNumber": 401
+        },
+        {
+          "caller": "failClaim",
+          "callee": "fmt.Errorf",
+          "lineNumber": 401
+        },
+        {
+          "caller": "failClaim",
+          "callee": "errors.Join",
+          "lineNumber": 405
+        },
+        {
+          "caller": "statusCommentBody",
+          "callee": "run.CreatedAt.UTC().Format",
+          "lineNumber": 413
+        },
+        {
+          "caller": "statusCommentBody",
+          "callee": "run.CreatedAt.UTC",
+          "lineNumber": 413
+        },
+        {
+          "caller": "statusCommentBody",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 416
+        },
+        {
+          "caller": "statusCommentBody",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 418
+        },
+        {
+          "caller": "statusCommentBody",
+          "callee": "statusCommentMarker",
+          "lineNumber": 418
+        },
+        {
+          "caller": "statusCommentMarker",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 423
+        },
+        {
+          "caller": "validateStage",
+          "callee": "fmt.Errorf",
+          "lineNumber": 439
+        },
+        {
+          "caller": "validateStatus",
+          "callee": "fmt.Errorf",
+          "lineNumber": 447
+        },
+        {
+          "caller": "conflictingFactoryLabel",
+          "callee": "hasLabel",
+          "lineNumber": 463
+        },
+        {
+          "caller": "replaceFactoryState",
+          "callee": "make",
+          "lineNumber": 473
+        },
+        {
+          "caller": "replaceFactoryState",
+          "callee": "len",
+          "lineNumber": 473
+        },
+        {
+          "caller": "replaceFactoryState",
+          "callee": "make",
+          "lineNumber": 474
+        },
+        {
+          "caller": "replaceFactoryState",
+          "callee": "len",
+          "lineNumber": 474
+        },
+        {
+          "caller": "replaceFactoryState",
+          "callee": "hasLabel",
+          "lineNumber": 476
+        },
+        {
+          "caller": "replaceFactoryState",
+          "callee": "append",
+          "lineNumber": 483
+        },
+        {
+          "caller": "replaceFactoryState",
+          "callee": "append",
+          "lineNumber": 486
+        },
+        {
+          "caller": "cloneIssue",
+          "callee": "append",
+          "lineNumber": 493
+        },
+        {
+          "caller": "defaultCoordinator",
+          "callee": "os.Hostname",
+          "lineNumber": 499
+        },
+        {
+          "caller": "defaultCoordinator",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 499
+        }
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 7,
+        "functionCount": 19,
+        "classCount": 5
+      }
+    },
+    {
+      "path": "internal/factory/draft_pr.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 338,
+      "nonEmptyLines": 321,
+      "functions": [
+        {
+          "name": "CreateDraftPullRequest",
+          "startLine": 47,
+          "endLine": 164,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "runConfiguredGates",
+          "startLine": 169,
+          "endLine": 180,
+          "params": [
+            "ctx",
+            "registration",
+            "run",
+            "packet"
+          ]
+        },
+        {
+          "name": "upsertDraftPullRequest",
+          "startLine": 184,
+          "endLine": 216,
+          "params": [
+            "ctx",
+            "client",
+            "repository",
+            "run",
+            "packet",
+            "gates",
+            "intervention"
+          ]
+        },
+        {
+          "name": "regenerateDraftPullRequest",
+          "startLine": 221,
+          "endLine": 246,
+          "params": [
+            "ctx",
+            "registration",
+            "run",
+            "packet",
+            "intervention"
+          ]
+        },
+        {
+          "name": "gitWorkspace",
+          "startLine": 250,
+          "endLine": 256,
+          "params": []
+        },
+        {
+          "name": "worktreeManager",
+          "startLine": 260,
+          "endLine": 265,
+          "params": []
+        },
+        {
+          "name": "worktreeInspector",
+          "startLine": 269,
+          "endLine": 275,
+          "params": []
+        },
+        {
+          "name": "pullRequestClient",
+          "startLine": 279,
+          "endLine": 285,
+          "params": []
+        },
+        {
+          "name": "generatedPullRequestBody",
+          "startLine": 290,
+          "endLine": 323,
+          "params": [
+            "run",
+            "packet",
+            "gates",
+            "intervention"
+          ]
+        },
+        {
+          "name": "mergeGeneratedPullRequestBody",
+          "startLine": 327,
+          "endLine": 338,
+          "params": [
+            "existing",
+            "generated"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "DraftPullRequestRequest",
+          "startLine": 25,
+          "endLine": 30,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Intervention"
+          ]
+        },
+        {
+          "name": "DraftPullRequestResult",
+          "startLine": 34,
+          "endLine": 41,
+          "methods": [],
+          "properties": [
+            "Run",
+            "Gates",
+            "PullRequest"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "DraftPullRequestRequest",
+          "line": 25,
+          "isDefault": false
+        },
+        {
+          "name": "DraftPullRequestResult",
+          "line": 34,
+          "isDefault": false
+        },
+        {
+          "name": "CreateDraftPullRequest",
+          "line": 47,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 48
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 49
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.openActiveRunStore",
+          "lineNumber": 51
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "func() { _ = runStore.Close() }",
+          "lineNumber": 55
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "runStore.Close",
+          "lineNumber": 55
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 57
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 60
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "decodeSpecificationPacket",
+          "lineNumber": 62
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.regenerateDraftPullRequest",
+          "lineNumber": 67
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 74
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 77
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "activeStore.ActiveInvocation",
+          "lineNumber": 80
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 82
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 85
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.gitWorkspace",
+          "lineNumber": 88
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 90
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "workspace.CreateCheckpoint",
+          "lineNumber": 92
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "github.ValidCommitSHA",
+          "lineNumber": 101
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 102
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.deps.GitHub.Issue",
+          "lineNumber": 105
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 117
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.deps.Now",
+          "lineNumber": 117
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.applyStateTransition",
+          "lineNumber": 118
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.runConfiguredGates",
+          "lineNumber": 125
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "workspace.Inspect",
+          "lineNumber": 130
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 132
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 135
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "len",
+          "lineNumber": 137
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 138
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "workspace.Push",
+          "lineNumber": 140
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.pullRequestClient",
+          "lineNumber": 144
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 146
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.upsertDraftPullRequest",
+          "lineNumber": 148
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 156
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.deps.Now",
+          "lineNumber": 156
+        },
+        {
+          "caller": "CreateDraftPullRequest",
+          "callee": "s.applyStateTransition",
+          "lineNumber": 157
+        },
+        {
+          "caller": "runConfiguredGates",
+          "callee": "make",
+          "lineNumber": 170
+        },
+        {
+          "caller": "runConfiguredGates",
+          "callee": "len",
+          "lineNumber": 170
+        },
+        {
+          "caller": "runConfiguredGates",
+          "callee": "s.runGate",
+          "lineNumber": 173
+        },
+        {
+          "caller": "runConfiguredGates",
+          "callee": "append",
+          "lineNumber": 174
+        },
+        {
+          "caller": "runConfiguredGates",
+          "callee": "append",
+          "lineNumber": 176
+        },
+        {
+          "caller": "runConfiguredGates",
+          "callee": "fmt.Errorf",
+          "lineNumber": 176
+        },
+        {
+          "caller": "runConfiguredGates",
+          "callee": "errors.Join",
+          "lineNumber": 179
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "client.FindPullRequest",
+          "lineNumber": 185
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "generatedPullRequestBody",
+          "lineNumber": 189
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "defaultString",
+          "lineNumber": 191
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 191
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "mergeGeneratedPullRequestBody",
+          "lineNumber": 198
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "client.UpdatePullRequest",
+          "lineNumber": 199
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 204
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "client.CreatePullRequest",
+          "lineNumber": 208
+        },
+        {
+          "caller": "upsertDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 213
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "s.pullRequestClient",
+          "lineNumber": 222
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 224
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "client.FindPullRequest",
+          "lineNumber": 227
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 232
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "mergeGeneratedPullRequestBody",
+          "lineNumber": 234
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "generatedPullRequestBody",
+          "lineNumber": 234
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "client.UpdatePullRequest",
+          "lineNumber": 235
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "defaultString",
+          "lineNumber": 236
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 236
+        },
+        {
+          "caller": "regenerateDraftPullRequest",
+          "callee": "errors.New",
+          "lineNumber": 243
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 291
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 294
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "make",
+          "lineNumber": 298
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "len",
+          "lineNumber": 298
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "append",
+          "lineNumber": 317
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 317
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "len",
+          "lineNumber": 319
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "append",
+          "lineNumber": 320
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 322
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "defaultString",
+          "lineNumber": 322
+        },
+        {
+          "caller": "generatedPullRequestBody",
+          "callee": "strings.Join",
+          "lineNumber": 322
+        },
+        {
+          "caller": "mergeGeneratedPullRequestBody",
+          "callee": "strings.Index",
+          "lineNumber": 328
+        },
+        {
+          "caller": "mergeGeneratedPullRequestBody",
+          "callee": "strings.Index",
+          "lineNumber": 329
+        },
+        {
+          "caller": "mergeGeneratedPullRequestBody",
+          "callee": "len",
+          "lineNumber": 331
+        },
+        {
+          "caller": "mergeGeneratedPullRequestBody",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 334
+        },
+        {
+          "caller": "mergeGeneratedPullRequestBody",
+          "callee": "strings.TrimRight",
+          "lineNumber": 337
+        }
+      ],
+      "metrics": {
+        "importCount": 5,
+        "exportCount": 3,
+        "functionCount": 10,
+        "classCount": 2
+      }
+    },
+    {
+      "path": "internal/store/store.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 925,
+      "nonEmptyLines": 885,
+      "functions": [
+        {
+          "name": "Error",
+          "startLine": 70,
+          "endLine": 72,
+          "params": []
+        },
+        {
+          "name": "Error",
+          "startLine": 79,
+          "endLine": 81,
+          "params": []
+        },
+        {
+          "name": "Unwrap",
+          "startLine": 83,
+          "endLine": 83,
+          "params": []
+        },
+        {
+          "name": "Open",
+          "startLine": 160,
+          "endLine": 226,
+          "params": [
+            "ctx",
+            "path"
+          ]
+        },
+        {
+          "name": "Close",
+          "startLine": 228,
+          "endLine": 233,
+          "params": []
+        },
+        {
+          "name": "Path",
+          "startLine": 235,
+          "endLine": 235,
+          "params": []
+        },
+        {
+          "name": "SchemaVersion",
+          "startLine": 237,
+          "endLine": 237,
+          "params": []
+        },
+        {
+          "name": "CurrentRun",
+          "startLine": 240,
+          "endLine": 251,
+          "params": [
+            "ctx"
+          ]
+        },
+        {
+          "name": "LatestRun",
+          "startLine": 255,
+          "endLine": 265,
+          "params": [
+            "ctx"
+          ]
+        },
+        {
+          "name": "scanRun",
+          "startLine": 268,
+          "endLine": 304,
+          "params": [
+            "row"
+          ]
+        },
+        {
+          "name": "SaveRun",
+          "startLine": 307,
+          "endLine": 365,
+          "params": [
+            "ctx",
+            "run"
+          ]
+        },
+        {
+          "name": "SaveInvocation",
+          "startLine": 368,
+          "endLine": 449,
+          "params": [
+            "ctx",
+            "invocation"
+          ]
+        },
+        {
+          "name": "Invocation",
+          "startLine": 452,
+          "endLine": 461,
+          "params": [
+            "ctx",
+            "runID",
+            "invocationID"
+          ]
+        },
+        {
+          "name": "ActiveInvocation",
+          "startLine": 466,
+          "endLine": 480,
+          "params": [
+            "ctx",
+            "runID"
+          ]
+        },
+        {
+          "name": "scanInvocation",
+          "startLine": 483,
+          "endLine": 527,
+          "params": [
+            "row"
+          ]
+        },
+        {
+          "name": "databaseState",
+          "startLine": 530,
+          "endLine": 542,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "openConfiguredDatabase",
+          "startLine": 547,
+          "endLine": 567,
+          "params": [
+            "ctx",
+            "path"
+          ]
+        },
+        {
+          "name": "configure",
+          "startLine": 570,
+          "endLine": 581,
+          "params": [
+            "ctx",
+            "database"
+          ]
+        },
+        {
+          "name": "initializeMetadata",
+          "startLine": 584,
+          "endLine": 595,
+          "params": [
+            "ctx",
+            "database"
+          ]
+        },
+        {
+          "name": "readSchemaVersion",
+          "startLine": 599,
+          "endLine": 605,
+          "params": [
+            "ctx",
+            "database",
+            "path"
+          ]
+        },
+        {
+          "name": "migrate",
+          "startLine": 608,
+          "endLine": 713,
+          "params": [
+            "ctx",
+            "database",
+            "from"
+          ]
+        },
+        {
+          "name": "reconcileDuplicateRuns",
+          "startLine": 719,
+          "endLine": 821,
+          "params": [
+            "ctx",
+            "tx"
+          ]
+        },
+        {
+          "name": "reconcileDuplicateInvocations",
+          "startLine": 825,
+          "endLine": 874,
+          "params": [
+            "ctx",
+            "tx"
+          ]
+        },
+        {
+          "name": "isActiveInvocationConflict",
+          "startLine": 878,
+          "endLine": 881,
+          "params": [
+            "err"
+          ]
+        },
+        {
+          "name": "backupDatabase",
+          "startLine": 885,
+          "endLine": 925,
+          "params": [
+            "path"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "UnknownSchemaVersionError",
+          "startLine": 65,
+          "endLine": 68,
+          "methods": [
+            "Error"
+          ],
+          "properties": [
+            "Version",
+            "Supported"
+          ]
+        },
+        {
+          "name": "UnversionedDatabaseError",
+          "startLine": 74,
+          "endLine": 77,
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Path",
+            "Err"
+          ]
+        },
+        {
+          "name": "Run",
+          "startLine": 86,
+          "endLine": 105,
+          "methods": [],
+          "properties": [
+            "ID",
+            "RepositoryPath",
+            "IssueNumber",
+            "Stage",
+            "Status",
+            "Branch",
+            "Worktree",
+            "CheckpointSHA",
+            "ImageDigest",
+            "Coordinator",
+            "StatusCommentID",
+            "PullRequestNumber",
+            "PullRequestURL",
+            "SpecificationPacket",
+            "CreatedAt",
+            "UpdatedAt"
+          ]
+        },
+        {
+          "name": "Invocation",
+          "startLine": 108,
+          "endLine": 148,
+          "methods": [],
+          "properties": [
+            "ID",
+            "RunID",
+            "Harness",
+            "Role",
+            "Stage",
+            "Model",
+            "ReasoningEffort",
+            "NativeSessionID",
+            "WorkspaceID",
+            "StatusSurfaceID",
+            "ImplementationSurfaceID",
+            "ChecksSurfaceID",
+            "InvocationDirectory",
+            "ResultDirectory",
+            "PermittedPaths",
+            "PromptVersion",
+            "Status",
+            "CreatedAt",
+            "UpdatedAt"
+          ]
+        },
+        {
+          "name": "Store",
+          "startLine": 150,
+          "endLine": 154,
+          "methods": [
+            "Close",
+            "Path",
+            "SchemaVersion",
+            "CurrentRun",
+            "LatestRun",
+            "SaveRun",
+            "SaveInvocation",
+            "Invocation",
+            "ActiveInvocation"
+          ],
+          "properties": [
+            "db",
+            "path",
+            "schemaVersion"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "UnknownSchemaVersionError",
+          "line": 65,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 70,
+          "isDefault": false
+        },
+        {
+          "name": "UnversionedDatabaseError",
+          "line": 74,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 79,
+          "isDefault": false
+        },
+        {
+          "name": "Unwrap",
+          "line": 83,
+          "isDefault": false
+        },
+        {
+          "name": "Run",
+          "line": 86,
+          "isDefault": false
+        },
+        {
+          "name": "Invocation",
+          "line": 108,
+          "isDefault": false
+        },
+        {
+          "name": "Store",
+          "line": 150,
+          "isDefault": false
+        },
+        {
+          "name": "Open",
+          "line": 160,
+          "isDefault": false
+        },
+        {
+          "name": "Close",
+          "line": 228,
+          "isDefault": false
+        },
+        {
+          "name": "Path",
+          "line": 235,
+          "isDefault": false
+        },
+        {
+          "name": "SchemaVersion",
+          "line": 237,
+          "isDefault": false
+        },
+        {
+          "name": "CurrentRun",
+          "line": 240,
+          "isDefault": false
+        },
+        {
+          "name": "LatestRun",
+          "line": 255,
+          "isDefault": false
+        },
+        {
+          "name": "SaveRun",
+          "line": 307,
+          "isDefault": false
+        },
+        {
+          "name": "SaveInvocation",
+          "line": 368,
+          "isDefault": false
+        },
+        {
+          "name": "Invocation",
+          "line": 452,
+          "isDefault": false
+        },
+        {
+          "name": "ActiveInvocation",
+          "line": 466,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 71
+        },
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 80
+        },
+        {
+          "caller": "Open",
+          "callee": "errors.New",
+          "lineNumber": 162
+        },
+        {
+          "caller": "Open",
+          "callee": "filepath.Abs",
+          "lineNumber": 164
+        },
+        {
+          "caller": "Open",
+          "callee": "fmt.Errorf",
+          "lineNumber": 166
+        },
+        {
+          "caller": "Open",
+          "callee": "filepath.Dir",
+          "lineNumber": 168
+        },
+        {
+          "caller": "Open",
+          "callee": "os.MkdirAll",
+          "lineNumber": 169
+        },
+        {
+          "caller": "Open",
+          "callee": "fmt.Errorf",
+          "lineNumber": 170
+        },
+        {
+          "caller": "Open",
+          "callee": "os.Stat",
+          "lineNumber": 172
+        },
+        {
+          "caller": "Open",
+          "callee": "fmt.Errorf",
+          "lineNumber": 173
+        },
+        {
+          "caller": "Open",
+          "callee": "info.Mode().Perm",
+          "lineNumber": 174
+        },
+        {
+          "caller": "Open",
+          "callee": "info.Mode",
+          "lineNumber": 174
+        },
+        {
+          "caller": "Open",
+          "callee": "fmt.Errorf",
+          "lineNumber": 175
+        },
+        {
+          "caller": "Open",
+          "callee": "databaseState",
+          "lineNumber": 177
+        },
+        {
+          "caller": "Open",
+          "callee": "errors.New",
+          "lineNumber": 182
+        },
+        {
+          "caller": "Open",
+          "callee": "openConfiguredDatabase",
+          "lineNumber": 184
+        },
+        {
+          "caller": "Open",
+          "callee": "func() {\n\t\tif closeOnError && database != nil {\n\t\t\t_ = database.Close()\n\t\t}\n\t}",
+          "lineNumber": 189
+        },
+        {
+          "caller": "Open",
+          "callee": "database.Close",
+          "lineNumber": 191
+        },
+        {
+          "caller": "Open",
+          "callee": "initializeMetadata",
+          "lineNumber": 195
+        },
+        {
+          "caller": "Open",
+          "callee": "readSchemaVersion",
+          "lineNumber": 199
+        },
+        {
+          "caller": "Open",
+          "callee": "database.Close",
+          "lineNumber": 208
+        },
+        {
+          "caller": "Open",
+          "callee": "fmt.Errorf",
+          "lineNumber": 209
+        },
+        {
+          "caller": "Open",
+          "callee": "backupDatabase",
+          "lineNumber": 211
+        },
+        {
+          "caller": "Open",
+          "callee": "openConfiguredDatabase",
+          "lineNumber": 214
+        },
+        {
+          "caller": "Open",
+          "callee": "fmt.Errorf",
+          "lineNumber": 216
+        },
+        {
+          "caller": "Open",
+          "callee": "migrate",
+          "lineNumber": 219
+        },
+        {
+          "caller": "Close",
+          "callee": "s.db.Close",
+          "lineNumber": 232
+        },
+        {
+          "caller": "CurrentRun",
+          "callee": "s.db.QueryRowContext",
+          "lineNumber": 241
+        },
+        {
+          "caller": "CurrentRun",
+          "callee": "scanRun",
+          "lineNumber": 250
+        },
+        {
+          "caller": "LatestRun",
+          "callee": "s.db.QueryRowContext",
+          "lineNumber": 256
+        },
+        {
+          "caller": "LatestRun",
+          "callee": "scanRun",
+          "lineNumber": 264
+        },
+        {
+          "caller": "scanRun",
+          "callee": "row.Scan",
+          "lineNumber": 271
+        },
+        {
+          "caller": "scanRun",
+          "callee": "errors.Is",
+          "lineNumber": 289
+        },
+        {
+          "caller": "scanRun",
+          "callee": "fmt.Errorf",
+          "lineNumber": 292
+        },
+        {
+          "caller": "scanRun",
+          "callee": "time.Parse",
+          "lineNumber": 295
+        },
+        {
+          "caller": "scanRun",
+          "callee": "fmt.Errorf",
+          "lineNumber": 297
+        },
+        {
+          "caller": "scanRun",
+          "callee": "time.Parse",
+          "lineNumber": 299
+        },
+        {
+          "caller": "scanRun",
+          "callee": "fmt.Errorf",
+          "lineNumber": 301
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "errors.New",
+          "lineNumber": 309
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "errors.New",
+          "lineNumber": 312
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "errors.New",
+          "lineNumber": 315
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "run.CreatedAt.IsZero",
+          "lineNumber": 317
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "time.Now().UTC",
+          "lineNumber": 318
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "time.Now",
+          "lineNumber": 318
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "run.UpdatedAt.IsZero",
+          "lineNumber": 320
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "s.db.ExecContext",
+          "lineNumber": 323
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "run.CreatedAt.UTC().Format",
+          "lineNumber": 358
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "run.CreatedAt.UTC",
+          "lineNumber": 358
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "run.UpdatedAt.UTC().Format",
+          "lineNumber": 359
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "run.UpdatedAt.UTC",
+          "lineNumber": 359
+        },
+        {
+          "caller": "SaveRun",
+          "callee": "fmt.Errorf",
+          "lineNumber": 362
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "errors.New",
+          "lineNumber": 370
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "errors.New",
+          "lineNumber": 373
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "errors.New",
+          "lineNumber": 376
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "errors.New",
+          "lineNumber": 379
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "errors.New",
+          "lineNumber": 382
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "errors.New",
+          "lineNumber": 385
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "invocation.CreatedAt.IsZero",
+          "lineNumber": 387
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "time.Now().UTC",
+          "lineNumber": 388
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "time.Now",
+          "lineNumber": 388
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "invocation.UpdatedAt.IsZero",
+          "lineNumber": 390
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "json.Marshal",
+          "lineNumber": 393
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "fmt.Errorf",
+          "lineNumber": 395
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "s.db.ExecContext",
+          "lineNumber": 397
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "string",
+          "lineNumber": 436
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "invocation.CreatedAt.UTC().Format",
+          "lineNumber": 439
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "invocation.CreatedAt.UTC",
+          "lineNumber": 439
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "invocation.UpdatedAt.UTC().Format",
+          "lineNumber": 440
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "invocation.UpdatedAt.UTC",
+          "lineNumber": 440
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "isActiveInvocationConflict",
+          "lineNumber": 443
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "fmt.Errorf",
+          "lineNumber": 444
+        },
+        {
+          "caller": "SaveInvocation",
+          "callee": "fmt.Errorf",
+          "lineNumber": 446
+        },
+        {
+          "caller": "Invocation",
+          "callee": "s.db.QueryRowContext",
+          "lineNumber": 453
+        },
+        {
+          "caller": "Invocation",
+          "callee": "scanInvocation",
+          "lineNumber": 460
+        },
+        {
+          "caller": "ActiveInvocation",
+          "callee": "errors.New",
+          "lineNumber": 468
+        },
+        {
+          "caller": "ActiveInvocation",
+          "callee": "s.db.QueryRowContext",
+          "lineNumber": 470
+        },
+        {
+          "caller": "ActiveInvocation",
+          "callee": "scanInvocation",
+          "lineNumber": 479
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "row.Scan",
+          "lineNumber": 486
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "errors.Is",
+          "lineNumber": 507
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "fmt.Errorf",
+          "lineNumber": 510
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "json.Unmarshal",
+          "lineNumber": 513
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "fmt.Errorf",
+          "lineNumber": 514
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "time.Parse",
+          "lineNumber": 518
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "fmt.Errorf",
+          "lineNumber": 520
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "time.Parse",
+          "lineNumber": 522
+        },
+        {
+          "caller": "scanInvocation",
+          "callee": "fmt.Errorf",
+          "lineNumber": 524
+        },
+        {
+          "caller": "databaseState",
+          "callee": "os.Stat",
+          "lineNumber": 531
+        },
+        {
+          "caller": "databaseState",
+          "callee": "errors.Is",
+          "lineNumber": 532
+        },
+        {
+          "caller": "databaseState",
+          "callee": "fmt.Errorf",
+          "lineNumber": 536
+        },
+        {
+          "caller": "databaseState",
+          "callee": "info.IsDir",
+          "lineNumber": 538
+        },
+        {
+          "caller": "databaseState",
+          "callee": "fmt.Errorf",
+          "lineNumber": 539
+        },
+        {
+          "caller": "databaseState",
+          "callee": "info.Size",
+          "lineNumber": 541
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "sql.Open",
+          "lineNumber": 548
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 550
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "database.PingContext",
+          "lineNumber": 552
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "database.Close",
+          "lineNumber": 553
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 554
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "os.Chmod",
+          "lineNumber": 556
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "database.Close",
+          "lineNumber": 557
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 558
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "database.SetMaxOpenConns",
+          "lineNumber": 560
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "database.SetMaxIdleConns",
+          "lineNumber": 561
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "configure",
+          "lineNumber": 562
+        },
+        {
+          "caller": "openConfiguredDatabase",
+          "callee": "database.Close",
+          "lineNumber": 563
+        },
+        {
+          "caller": "configure",
+          "callee": "database.ExecContext",
+          "lineNumber": 576
+        },
+        {
+          "caller": "configure",
+          "callee": "fmt.Errorf",
+          "lineNumber": 577
+        },
+        {
+          "caller": "initializeMetadata",
+          "callee": "database.ExecContext",
+          "lineNumber": 585
+        },
+        {
+          "caller": "initializeMetadata",
+          "callee": "fmt.Errorf",
+          "lineNumber": 589
+        },
+        {
+          "caller": "initializeMetadata",
+          "callee": "database.ExecContext",
+          "lineNumber": 591
+        },
+        {
+          "caller": "initializeMetadata",
+          "callee": "fmt.Errorf",
+          "lineNumber": 592
+        },
+        {
+          "caller": "readSchemaVersion",
+          "callee": "database.QueryRowContext(ctx, \"SELECT version FROM schema_metadata WHERE singleton = 1\").Scan",
+          "lineNumber": 601
+        },
+        {
+          "caller": "readSchemaVersion",
+          "callee": "database.QueryRowContext",
+          "lineNumber": 601
+        },
+        {
+          "caller": "migrate",
+          "callee": "database.BeginTx",
+          "lineNumber": 609
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 611
+        },
+        {
+          "caller": "migrate",
+          "callee": "func() { _ = tx.Rollback() }",
+          "lineNumber": 613
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.Rollback",
+          "lineNumber": 613
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 618
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 631
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 639
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 640
+        },
+        {
+          "caller": "migrate",
+          "callee": "reconcileDuplicateRuns",
+          "lineNumber": 644
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 645
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 647
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 650
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 653
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 673
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 675
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 677
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 680
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 681
+        },
+        {
+          "caller": "migrate",
+          "callee": "reconcileDuplicateInvocations",
+          "lineNumber": 684
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 685
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 687
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 690
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 697
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 698
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 702
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.ExecContext",
+          "lineNumber": 705
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 706
+        },
+        {
+          "caller": "migrate",
+          "callee": "tx.Commit",
+          "lineNumber": 709
+        },
+        {
+          "caller": "migrate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 710
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "tx.QueryContext",
+          "lineNumber": 727
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 729
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "make",
+          "lineNumber": 736
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Next",
+          "lineNumber": 737
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Scan",
+          "lineNumber": 739
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Close",
+          "lineNumber": 740
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 741
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "time.Parse",
+          "lineNumber": 743
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Close",
+          "lineNumber": 745
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 746
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "time.Parse",
+          "lineNumber": 748
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Close",
+          "lineNumber": 750
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 751
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "parsedCreatedAt.Format",
+          "lineNumber": 753
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "parsedUpdatedAt.Format",
+          "lineNumber": 754
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "append",
+          "lineNumber": 756
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Err",
+          "lineNumber": 763
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Close",
+          "lineNumber": 764
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 765
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "allRows.Close",
+          "lineNumber": 767
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 768
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "tx.ExecContext",
+          "lineNumber": 771
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 773
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "tx.QueryContext",
+          "lineNumber": 777
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 782
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "make",
+          "lineNumber": 784
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "make",
+          "lineNumber": 785
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "rows.Next",
+          "lineNumber": 786
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "rows.Scan",
+          "lineNumber": 788
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "rows.Close",
+          "lineNumber": 789
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 790
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "time.Parse",
+          "lineNumber": 792
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "rows.Close",
+          "lineNumber": 794
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 795
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "parsedUpdatedAt.After",
+          "lineNumber": 799
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "parsedUpdatedAt.Equal",
+          "lineNumber": 799
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "append",
+          "lineNumber": 801
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "append",
+          "lineNumber": 805
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "rows.Err",
+          "lineNumber": 808
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "rows.Close",
+          "lineNumber": 809
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 810
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "rows.Close",
+          "lineNumber": 812
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 813
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "tx.ExecContext",
+          "lineNumber": 816
+        },
+        {
+          "caller": "reconcileDuplicateRuns",
+          "callee": "fmt.Errorf",
+          "lineNumber": 817
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "tx.QueryContext",
+          "lineNumber": 830
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "fmt.Errorf",
+          "lineNumber": 835
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "make",
+          "lineNumber": 837
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "make",
+          "lineNumber": 838
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "rows.Next",
+          "lineNumber": 839
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "rows.Scan",
+          "lineNumber": 841
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "rows.Close",
+          "lineNumber": 842
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "fmt.Errorf",
+          "lineNumber": 843
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "time.Parse",
+          "lineNumber": 845
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "rows.Close",
+          "lineNumber": 847
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "fmt.Errorf",
+          "lineNumber": 848
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "parsedUpdatedAt.After",
+          "lineNumber": 852
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "parsedUpdatedAt.Equal",
+          "lineNumber": 852
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "append",
+          "lineNumber": 854
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "append",
+          "lineNumber": 858
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "rows.Err",
+          "lineNumber": 861
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "rows.Close",
+          "lineNumber": 862
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "fmt.Errorf",
+          "lineNumber": 863
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "rows.Close",
+          "lineNumber": 865
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "fmt.Errorf",
+          "lineNumber": 866
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "tx.ExecContext",
+          "lineNumber": 869
+        },
+        {
+          "caller": "reconcileDuplicateInvocations",
+          "callee": "fmt.Errorf",
+          "lineNumber": 870
+        },
+        {
+          "caller": "isActiveInvocationConflict",
+          "callee": "strings.ToLower",
+          "lineNumber": 879
+        },
+        {
+          "caller": "isActiveInvocationConflict",
+          "callee": "err.Error",
+          "lineNumber": 879
+        },
+        {
+          "caller": "isActiveInvocationConflict",
+          "callee": "strings.Contains",
+          "lineNumber": 880
+        },
+        {
+          "caller": "isActiveInvocationConflict",
+          "callee": "strings.Contains",
+          "lineNumber": 880
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "time.Now().UTC().Format",
+          "lineNumber": 887
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "time.Now().UTC",
+          "lineNumber": 887
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "time.Now",
+          "lineNumber": 887
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "strconv.Itoa",
+          "lineNumber": 889
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "os.Stat",
+          "lineNumber": 892
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "errors.Is",
+          "lineNumber": 894
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 895
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "os.Open",
+          "lineNumber": 897
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 899
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "os.OpenFile",
+          "lineNumber": 901
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "input.Close",
+          "lineNumber": 903
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 904
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "io.Copy",
+          "lineNumber": 906
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "output.Sync",
+          "lineNumber": 908
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "output.Close",
+          "lineNumber": 910
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "input.Close",
+          "lineNumber": 911
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "os.Remove",
+          "lineNumber": 913
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 914
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 917
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 920
+        },
+        {
+          "caller": "backupDatabase",
+          "callee": "errors.New",
+          "lineNumber": 924
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 18,
+        "functionCount": 25,
+        "classCount": 5
+      }
+    }
+  ]
+}

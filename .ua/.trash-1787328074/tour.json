@@ -1,0 +1,115 @@
+[
+  {
+    "order": 1,
+    "title": "Factory Command Surface",
+    "description": "Start with the three command binaries to see how this project is entered: the main factory command delegates to the CLI, the report command serves worker-side reporting, and the attach command reconnects to a Docker worker. Together they reveal that the Software Factory is a supervised workflow with both coordinator-facing and worker-facing processes.",
+    "nodeIds": [
+      "file:cmd/factory/main.go",
+      "file:cmd/factory-report/main.go",
+      "file:cmd/factory-worker-attach/main.go"
+    ],
+    "languageLesson": "Go command binaries commonly keep main.go thin: create process-level dependencies such as context, call a package-level service, and convert its returned error or status into the process exit result."
+  },
+  {
+    "order": 2,
+    "title": "CLI Dispatch Boundary",
+    "description": "The CLI translates arguments and flags into factory operations, including configuration, issue claiming, agent execution, gates, and draft pull requests. This is the first useful map of the orchestration layer because it connects the process entry point to the workflow capabilities without owning each capability’s implementation.",
+    "nodeIds": [
+      "file:internal/cli/cli.go"
+    ]
+  },
+  {
+    "order": 3,
+    "title": "Domain Model and Configuration",
+    "description": "Read the domain context alongside the checked-in repository configuration and configuration package to establish the vocabulary of runs, checkpoints, gates, workers, harnesses, reports, and credentials. The YAML file supplies the ordered gates, policies, timeouts, and worker image, while config.go turns those settings into validated host and repository models used by the rest of the system.",
+    "nodeIds": [
+      "document:CONTEXT.md",
+      "config:factory.yaml",
+      "file:internal/config/config.go"
+    ],
+    "languageLesson": "Go configuration code often separates decoding from validation: unmarshalling creates a data shape, while explicit validation enforces cross-field and operational invariants before work begins."
+  },
+  {
+    "order": 4,
+    "title": "Factory Dependency Assembly",
+    "description": "The Factory service is the composition root for the workflow described in the earlier steps. It wires configuration, GitHub, SQLite storage, Git worktrees, Docker workers, terminal sessions, and the Codex harness behind injected adapters so higher-level orchestration can coordinate them without embedding infrastructure details.",
+    "nodeIds": [
+      "file:internal/factory/factory.go"
+    ]
+  },
+  {
+    "order": 5,
+    "title": "Claiming and Run State",
+    "description": "Issue claiming turns a repository issue into a durable supervised run: labels are bootstrapped, ownership is claimed, and stage and status transitions are persisted while GitHub statuses are synchronized. The store.go package is the recovery-oriented record of that lifecycle, providing SQLite migrations, validation, backups, duplicate reconciliation, and queries that let orchestration resume safely.",
+    "nodeIds": [
+      "file:internal/factory/claim.go",
+      "file:internal/store/store.go",
+      "document:docs/configuration.md"
+    ]
+  },
+  {
+    "order": 6,
+    "title": "Visible Agent Execution",
+    "description": "Building on the run state, agent.go coordinates a visible implementation-agent invocation: it resolves policy, prepares a worker and terminal surface, freezes invocation context, builds a prompt packet, and accepts the resulting structured report. prompt.go is the boundary that converts trusted context plus untrusted repository guidance into a versioned implementation-role prompt.",
+    "nodeIds": [
+      "file:internal/factory/agent.go",
+      "file:internal/prompt/prompt.go",
+      "document:docs/agent-runtime.md"
+    ],
+    "languageLesson": "Go interfaces make orchestration testable by allowing worker, terminal, and harness implementations to be replaced with fakes. The coordinator can then test policy and lifecycle decisions without starting Docker or a real terminal."
+  },
+  {
+    "order": 7,
+    "title": "Structured Report Protocol",
+    "description": "The worker-side report binary and report package close the agent loop opened in Step 6. reportcli.go translates flags and environment identity into one report, while report.go validates identity, outcome, paths, sizes, and worktree safety before the coordinator trusts the result or advances the run.",
+    "nodeIds": [
+      "file:cmd/factory-report/main.go",
+      "file:internal/reportcli/reportcli.go",
+      "file:internal/report/report.go"
+    ],
+    "languageLesson": "A Go protocol package can make invalid states difficult to accept by centralizing parsing and validation at the boundary. Returning wrapped errors preserves the underlying cause while adding the operation that failed."
+  },
+  {
+    "order": 8,
+    "title": "Gates and Draft Pull Requests",
+    "description": "After an implementation report is accepted, gate.go and runner.go execute the configured setup and checkpoint commands inside an isolated worker and publish exact statuses. draft_pr.go then combines checkpointing, deterministic gates, worktree branch pushes, and idempotent pull-request creation or regeneration, turning a successful run into a reviewable artifact.",
+    "nodeIds": [
+      "file:internal/factory/gate.go",
+      "file:internal/gate/runner.go",
+      "file:internal/factory/draft_pr.go"
+    ]
+  },
+  {
+    "order": 9,
+    "title": "Isolation and Git Adapters",
+    "description": "The workflow’s safety boundary is implemented by the worker and Git adapters: runtime.go controls hardened Docker lifecycle, mounts, commands, environments, and sessions, while worktree.go manages isolated branches, checkpoints, pushes, synchronization, inspection, and cleanup. These seams keep host-side coordination separate from the mutable workspace where agent and gate commands run.",
+    "nodeIds": [
+      "file:internal/worker/runtime.go",
+      "file:internal/git/worktree.go",
+      "document:docs/worker-runtime.md"
+    ]
+  },
+  {
+    "order": 10,
+    "title": "GitHub and Terminal Integration",
+    "description": "The external adapters complete the operational picture: github.go translates issue, pull-request, and exact commit-status operations through the host-side GitHub CLI, while terminal/runtime.go provides portable workspace and surface contracts over cmux. harness/codex.go composes those terminal and worker seams into a recoverable interactive Codex session, including constrained commands, prompts, notifications, and native session discovery.",
+    "nodeIds": [
+      "file:internal/github/github.go",
+      "file:internal/terminal/runtime.go",
+      "file:internal/harness/codex.go",
+      "document:docs/spikes/0002-nested-harness-ttys.md"
+    ]
+  },
+  {
+    "order": 11,
+    "title": "Architecture and Operating Rules",
+    "description": "Finish with the project’s written constraints: agent guidance defines repository conventions, the issue-tracker and triage documents explain how work is selected and labeled, and the ADR records the no-outbound-telemetry evaluation boundary. These documents turn the code tour into an operational understanding of how the factory should be used, changed, and audited.",
+    "nodeIds": [
+      "document:AGENTS.md",
+      "document:docs/agents/issue-tracker.md",
+      "document:docs/agents/triage-labels.md",
+      "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "config:go.mod"
+    ]
+  }
+]

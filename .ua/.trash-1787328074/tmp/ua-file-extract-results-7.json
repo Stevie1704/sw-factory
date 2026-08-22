@@ -1,0 +1,126 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 3,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 0,
+      "failed": 0,
+      "skipped": 3
+    }
+  },
+  "results": [
+    {
+      "path": "docs/agents/domain.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 51,
+      "nonEmptyLines": 36,
+      "sections": [
+        {
+          "heading": "Domain Docs",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Before exploring, read these",
+          "level": 2,
+          "line": 5
+        },
+        {
+          "heading": "File structure",
+          "level": 2,
+          "line": 13
+        },
+        {
+          "heading": "Use the glossary's vocabulary",
+          "level": 2,
+          "line": 41
+        },
+        {
+          "heading": "Flag ADR conflicts",
+          "level": 2,
+          "line": 47
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 5
+      }
+    },
+    {
+      "path": "docs/agents/issue-tracker.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 45,
+      "nonEmptyLines": 29,
+      "sections": [
+        {
+          "heading": "Issue tracker: GitHub",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Conventions",
+          "level": 2,
+          "line": 5
+        },
+        {
+          "heading": "Pull requests as a triage surface",
+          "level": 2,
+          "line": 16
+        },
+        {
+          "heading": "When a skill says \"publish to the issue tracker\"",
+          "level": 2,
+          "line": 28
+        },
+        {
+          "heading": "When a skill says \"fetch the relevant ticket\"",
+          "level": 2,
+          "line": 32
+        },
+        {
+          "heading": "Wayfinding operations",
+          "level": 2,
+          "line": 36
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 6
+      }
+    },
+    {
+      "path": "docs/agents/triage-labels.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 15,
+      "nonEmptyLines": 11,
+      "sections": [
+        {
+          "heading": "Triage Labels",
+          "level": 1,
+          "line": 1
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 1
+      }
+    }
+  ]
+}

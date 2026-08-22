@@ -1,0 +1,42 @@
+{
+  "nodes": [
+    {
+      "id": "file:.ua/.understandignore",
+      "type": "file",
+      "name": ".understandignore",
+      "filePath": ".ua/.understandignore",
+      "summary": "Analysis ignore configuration documenting supported exclusion patterns and currently excluding the serena directory, spike directory, and Go test files.",
+      "tags": ["configuration", "analysis", "ignore-rules"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.ua/config.json",
+      "type": "config",
+      "name": "config.json",
+      "filePath": ".ua/config.json",
+      "summary": "Understand-Anything configuration selecting English as the language for generated analysis output.",
+      "tags": ["configuration", "analysis", "localization"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "type": "document",
+      "name": "0001-local-evaluation-without-outbound-telemetry.md",
+      "filePath": "docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "summary": "Accepted architecture decision establishing content-free local evaluation summaries while preserving the project's no-outbound-telemetry privacy boundary.",
+      "tags": ["documentation", "architecture-decision", "privacy", "evaluation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:docs/spikes/0002-nested-harness-ttys.md",
+      "type": "document",
+      "name": "0002-nested-harness-ttys.md",
+      "filePath": "docs/spikes/0002-nested-harness-ttys.md",
+      "summary": "Detailed spike report validating Codex and Claude Code recovery through Docker pseudo-terminals nested in cmux, including acceptance-criterion evidence, failure modes, workarounds, and downstream recommendations.",
+      "tags": ["documentation", "spike", "terminal-runtime", "docker", "cmux"],
+      "complexity": "complex",
+      "languageNotes": "Markdown uses structured headings, tables, code blocks, and numbered failure-mode analysis to record experimental evidence and architectural consequences."
+    }
+  ],
+  "edges": []
+}

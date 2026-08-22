@@ -1,0 +1,28 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {
+      "path": "docs/agents/domain.md",
+      "language": "markdown",
+      "sizeLines": 51,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/agents/issue-tracker.md",
+      "language": "markdown",
+      "sizeLines": 45,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/agents/triage-labels.md",
+      "language": "markdown",
+      "sizeLines": 15,
+      "fileCategory": "docs"
+    }
+  ],
+  "batchImportData": {
+    "docs/agents/domain.md": [],
+    "docs/agents/issue-tracker.md": [],
+    "docs/agents/triage-labels.md": []
+  }
+}

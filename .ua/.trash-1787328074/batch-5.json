@@ -1,0 +1,82 @@
+{
+  "nodes": [
+    {
+      "id": "document:AGENTS.md",
+      "type": "document",
+      "name": "AGENTS.md",
+      "filePath": "AGENTS.md",
+      "summary": "Repository guidance for agents covering GitHub issue tracking, canonical triage labels, domain documentation, and the requirement to write docstrings during coding.",
+      "tags": ["documentation", "agent-guidance", "issue-tracking", "development"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:CONTEXT.md",
+      "type": "document",
+      "name": "CONTEXT.md",
+      "filePath": "CONTEXT.md",
+      "summary": "Domain context for the Software Factory, defining the supervised run model and its key concepts, including checkpoints, gates, workers, harnesses, reports, credentials, and operational storage.",
+      "tags": ["documentation", "domain-model", "architecture", "workflow", "terminology"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:factory.yaml",
+      "type": "config",
+      "name": "factory.yaml",
+      "filePath": "factory.yaml",
+      "summary": "Checked-in repository configuration defining the main branch, Go setup command, ordered format/vet/test/build gates, harness and model defaults, timeouts, retry limits, test policy, worker image, and base synchronization mode.",
+      "tags": ["configuration", "build-system", "testing", "workflow", "deployment"],
+      "complexity": "moderate",
+      "languageNotes": "YAML expresses a dependency-ordered deterministic gate pipeline and separate policy sections for harnesses, models, retries, and worker builds."
+    },
+    {
+      "id": "config:go.mod",
+      "type": "config",
+      "name": "go.mod",
+      "filePath": "go.mod",
+      "summary": "Go module manifest declaring the github.com/Stevie1704/sw-factory module, Go 1.25.0, and its direct and indirect dependencies for UUIDs, system calls, YAML, and SQLite support.",
+      "tags": ["configuration", "go", "dependency-management", "module-system"],
+      "complexity": "simple",
+      "languageNotes": "The manifest separates direct requirements from indirect dependencies in two require blocks."
+    },
+    {
+      "id": "config:go.sum",
+      "type": "config",
+      "name": "go.sum",
+      "filePath": "go.sum",
+      "summary": "Go module checksum database recording cryptographic hashes for the project’s direct and transitive module versions and their go.mod files.",
+      "tags": ["configuration", "go", "dependency-management", "integrity"],
+      "complexity": "moderate",
+      "languageNotes": "Entries include both module-content and module-go.mod hashes, supporting reproducible and verified dependency downloads."
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:AGENTS.md",
+      "target": "document:CONTEXT.md",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:CONTEXT.md",
+      "target": "config:factory.yaml",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:factory.yaml",
+      "target": "config:go.mod",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:go.sum",
+      "target": "config:go.mod",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    }
+  ]
+}

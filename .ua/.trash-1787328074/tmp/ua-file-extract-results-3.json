@@ -1,0 +1,5314 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 5,
+  "filesSkipped": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 5,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 5,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "results": [
+    {
+      "path": "cmd/factory-worker-attach/main.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 75,
+      "nonEmptyLines": 69,
+      "functions": [
+        {
+          "name": "main",
+          "startLine": 18,
+          "endLine": 60,
+          "params": []
+        },
+        {
+          "name": "String",
+          "startLine": 66,
+          "endLine": 66,
+          "params": []
+        },
+        {
+          "name": "Set",
+          "startLine": 69,
+          "endLine": 75,
+          "params": [
+            "input"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "String",
+          "line": 66,
+          "isDefault": false
+        },
+        {
+          "name": "Set",
+          "line": 69,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "main",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 19
+        },
+        {
+          "caller": "main",
+          "callee": "flags.SetOutput",
+          "lineNumber": 20
+        },
+        {
+          "caller": "main",
+          "callee": "flags.String",
+          "lineNumber": 21
+        },
+        {
+          "caller": "main",
+          "callee": "flags.String",
+          "lineNumber": 22
+        },
+        {
+          "caller": "main",
+          "callee": "flags.Var",
+          "lineNumber": 24
+        },
+        {
+          "caller": "main",
+          "callee": "flags.Parse",
+          "lineNumber": 25
+        },
+        {
+          "caller": "main",
+          "callee": "errors.Is",
+          "lineNumber": 26
+        },
+        {
+          "caller": "main",
+          "callee": "os.Exit",
+          "lineNumber": 29
+        },
+        {
+          "caller": "main",
+          "callee": "flags.NArg",
+          "lineNumber": 31
+        },
+        {
+          "caller": "main",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 31
+        },
+        {
+          "caller": "main",
+          "callee": "fmt.Fprintln",
+          "lineNumber": 32
+        },
+        {
+          "caller": "main",
+          "callee": "os.Exit",
+          "lineNumber": 33
+        },
+        {
+          "caller": "main",
+          "callee": "append",
+          "lineNumber": 35
+        },
+        {
+          "caller": "main",
+          "callee": "flags.Args",
+          "lineNumber": 35
+        },
+        {
+          "caller": "main",
+          "callee": "make",
+          "lineNumber": 36
+        },
+        {
+          "caller": "main",
+          "callee": "len",
+          "lineNumber": 36
+        },
+        {
+          "caller": "main",
+          "callee": "strings.Cut",
+          "lineNumber": 38
+        },
+        {
+          "caller": "main",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 39
+        },
+        {
+          "caller": "main",
+          "callee": "fmt.Fprintf",
+          "lineNumber": 40
+        },
+        {
+          "caller": "main",
+          "callee": "os.Exit",
+          "lineNumber": 41
+        },
+        {
+          "caller": "main",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 45
+        },
+        {
+          "caller": "main",
+          "callee": "fmt.Fprintln",
+          "lineNumber": 46
+        },
+        {
+          "caller": "main",
+          "callee": "os.Exit",
+          "lineNumber": 47
+        },
+        {
+          "caller": "main",
+          "callee": "(&worker.DockerRuntime{}).Attach",
+          "lineNumber": 49
+        },
+        {
+          "caller": "main",
+          "callee": "context.Background",
+          "lineNumber": 49
+        },
+        {
+          "caller": "main",
+          "callee": "fmt.Fprintf",
+          "lineNumber": 57
+        },
+        {
+          "caller": "main",
+          "callee": "os.Exit",
+          "lineNumber": 58
+        },
+        {
+          "caller": "String",
+          "callee": "strings.Join",
+          "lineNumber": 66
+        },
+        {
+          "caller": "Set",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 70
+        },
+        {
+          "caller": "Set",
+          "callee": "strings.Contains",
+          "lineNumber": 70
+        },
+        {
+          "caller": "Set",
+          "callee": "errors.New",
+          "lineNumber": 71
+        },
+        {
+          "caller": "Set",
+          "callee": "append",
+          "lineNumber": 73
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 2,
+        "functionCount": 3,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "internal/factory/gate.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 364,
+      "nonEmptyLines": 348,
+      "functions": [
+        {
+          "name": "RunGate",
+          "startLine": 34,
+          "endLine": 58,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "runGate",
+          "startLine": 63,
+          "endLine": 96,
+          "params": [
+            "ctx",
+            "registration",
+            "run",
+            "packet",
+            "declared"
+          ]
+        },
+        {
+          "name": "prepareGitMetadataProjection",
+          "startLine": 104,
+          "endLine": 165,
+          "params": [
+            "runID",
+            "repositoryPath",
+            "worktreePath"
+          ]
+        },
+        {
+          "name": "copyGitMetadata",
+          "startLine": 171,
+          "endLine": 208,
+          "params": [
+            "source",
+            "destination"
+          ]
+        },
+        {
+          "name": "makeGitProjectionReadable",
+          "startLine": 213,
+          "endLine": 231,
+          "params": [
+            "projection"
+          ]
+        },
+        {
+          "name": "gitProjectionPermissions",
+          "startLine": 237,
+          "endLine": 247,
+          "params": [
+            "mode"
+          ]
+        },
+        {
+          "name": "skipGitMetadata",
+          "startLine": 252,
+          "endLine": 265,
+          "params": [
+            "relative",
+            "directory"
+          ]
+        },
+        {
+          "name": "copyGitMetadataFile",
+          "startLine": 269,
+          "endLine": 286,
+          "params": [
+            "source",
+            "destination",
+            "mode"
+          ]
+        },
+        {
+          "name": "overlayWorktreeGitState",
+          "startLine": 291,
+          "endLine": 327,
+          "params": [
+            "worktreePath",
+            "projection"
+          ]
+        },
+        {
+          "name": "decodeSpecificationPacket",
+          "startLine": 331,
+          "endLine": 343,
+          "params": [
+            "serialized"
+          ]
+        },
+        {
+          "name": "declaredGate",
+          "startLine": 348,
+          "endLine": 355,
+          "params": [
+            "packet",
+            "name"
+          ]
+        },
+        {
+          "name": "workerCaches",
+          "startLine": 358,
+          "endLine": 364,
+          "params": [
+            "caches"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "RunGateRequest",
+          "startLine": 24,
+          "endLine": 29,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "GateName"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "RunGateRequest",
+          "line": 24,
+          "isDefault": false
+        },
+        {
+          "name": "RunGate",
+          "line": 34,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "RunGate",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 35
+        },
+        {
+          "caller": "RunGate",
+          "callee": "errors.New",
+          "lineNumber": 36
+        },
+        {
+          "caller": "RunGate",
+          "callee": "s.openActiveRunStore",
+          "lineNumber": 38
+        },
+        {
+          "caller": "RunGate",
+          "callee": "func() { _ = runStore.Close() }",
+          "lineNumber": 42
+        },
+        {
+          "caller": "RunGate",
+          "callee": "runStore.Close",
+          "lineNumber": 42
+        },
+        {
+          "caller": "RunGate",
+          "callee": "errors.New",
+          "lineNumber": 44
+        },
+        {
+          "caller": "RunGate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 47
+        },
+        {
+          "caller": "RunGate",
+          "callee": "decodeSpecificationPacket",
+          "lineNumber": 49
+        },
+        {
+          "caller": "RunGate",
+          "callee": "declaredGate",
+          "lineNumber": 53
+        },
+        {
+          "caller": "RunGate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 55
+        },
+        {
+          "caller": "RunGate",
+          "callee": "s.runGate",
+          "lineNumber": 57
+        },
+        {
+          "caller": "runGate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 65
+        },
+        {
+          "caller": "runGate",
+          "callee": "errors.New",
+          "lineNumber": 68
+        },
+        {
+          "caller": "runGate",
+          "callee": "prepareGitMetadataProjection",
+          "lineNumber": 70
+        },
+        {
+          "caller": "runGate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 72
+        },
+        {
+          "caller": "runGate",
+          "callee": "s.deps.Worker.Start",
+          "lineNumber": 74
+        },
+        {
+          "caller": "runGate",
+          "callee": "workerCaches",
+          "lineNumber": 80
+        },
+        {
+          "caller": "runGate",
+          "callee": "(gate.Runner{\n\t\tRuntime:    s.deps.Worker,\n\t\tRepository: github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},\n\t\tStatuses:   s.deps.CommitStatuses,\n\t}).Run",
+          "lineNumber": 85
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 105
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.Base",
+          "lineNumber": 105
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 105
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 106
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 108
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "errors.New",
+          "lineNumber": 109
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.Join",
+          "lineNumber": 111
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.Stat",
+          "lineNumber": 112
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 114
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "sourceInfo.IsDir",
+          "lineNumber": 116
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "errors.New",
+          "lineNumber": 117
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.Join",
+          "lineNumber": 120
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.Dir",
+          "lineNumber": 120
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.Join",
+          "lineNumber": 121
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.Stat",
+          "lineNumber": 122
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "projectionInfo.IsDir",
+          "lineNumber": 123
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 124
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.Stat",
+          "lineNumber": 126
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.Join",
+          "lineNumber": 126
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 127
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.Stat",
+          "lineNumber": 129
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "filepath.Join",
+          "lineNumber": 129
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 130
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "errors.Is",
+          "lineNumber": 131
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 132
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "overlayWorktreeGitState",
+          "lineNumber": 134
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 135
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "makeGitProjectionReadable",
+          "lineNumber": 137
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 138
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "errors.Is",
+          "lineNumber": 141
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 142
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.MkdirAll",
+          "lineNumber": 144
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 145
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.MkdirTemp",
+          "lineNumber": 147
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 149
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "func() { _ = os.RemoveAll(temporary) }",
+          "lineNumber": 151
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.RemoveAll",
+          "lineNumber": 151
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "copyGitMetadata",
+          "lineNumber": 152
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 153
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "overlayWorktreeGitState",
+          "lineNumber": 155
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 156
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "makeGitProjectionReadable",
+          "lineNumber": 158
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 159
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "os.Rename",
+          "lineNumber": 161
+        },
+        {
+          "caller": "prepareGitMetadataProjection",
+          "callee": "fmt.Errorf",
+          "lineNumber": 162
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "filepath.WalkDir",
+          "lineNumber": 172
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "filepath.Rel",
+          "lineNumber": 176
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "skipGitMetadata",
+          "lineNumber": 183
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "entry.IsDir",
+          "lineNumber": 183
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "entry.IsDir",
+          "lineNumber": 184
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "filepath.Join",
+          "lineNumber": 189
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "entry.IsDir",
+          "lineNumber": 190
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "os.MkdirAll",
+          "lineNumber": 191
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "entry.Info",
+          "lineNumber": 196
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "info.Mode",
+          "lineNumber": 200
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "info.Mode().IsRegular",
+          "lineNumber": 200
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "info.Mode",
+          "lineNumber": 200
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "fmt.Errorf",
+          "lineNumber": 201
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "os.MkdirAll",
+          "lineNumber": 203
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "filepath.Dir",
+          "lineNumber": 203
+        },
+        {
+          "caller": "copyGitMetadata",
+          "callee": "copyGitMetadataFile",
+          "lineNumber": 206
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "filepath.WalkDir",
+          "lineNumber": 214
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "entry.Type",
+          "lineNumber": 218
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "entry.Info",
+          "lineNumber": 221
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "info.IsDir",
+          "lineNumber": 225
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "info.Mode().IsRegular",
+          "lineNumber": 225
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "info.Mode",
+          "lineNumber": 225
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "fmt.Errorf",
+          "lineNumber": 226
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "gitProjectionPermissions",
+          "lineNumber": 228
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "info.Mode",
+          "lineNumber": 228
+        },
+        {
+          "caller": "makeGitProjectionReadable",
+          "callee": "os.Chmod",
+          "lineNumber": 229
+        },
+        {
+          "caller": "gitProjectionPermissions",
+          "callee": "mode.Perm",
+          "lineNumber": 238
+        },
+        {
+          "caller": "gitProjectionPermissions",
+          "callee": "mode.IsDir",
+          "lineNumber": 239
+        },
+        {
+          "caller": "gitProjectionPermissions",
+          "callee": "mode.Perm",
+          "lineNumber": 243
+        },
+        {
+          "caller": "skipGitMetadata",
+          "callee": "strings.Split",
+          "lineNumber": 253
+        },
+        {
+          "caller": "skipGitMetadata",
+          "callee": "filepath.ToSlash",
+          "lineNumber": 253
+        },
+        {
+          "caller": "skipGitMetadata",
+          "callee": "filepath.Base",
+          "lineNumber": 263
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "os.Open",
+          "lineNumber": 270
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "func() { _ = input.Close() }",
+          "lineNumber": 274
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "input.Close",
+          "lineNumber": 274
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "os.Chmod",
+          "lineNumber": 275
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "errors.Is",
+          "lineNumber": 275
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "os.OpenFile",
+          "lineNumber": 278
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "io.Copy",
+          "lineNumber": 282
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "output.Chmod",
+          "lineNumber": 283
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "output.Close",
+          "lineNumber": 284
+        },
+        {
+          "caller": "copyGitMetadataFile",
+          "callee": "errors.Join",
+          "lineNumber": 285
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "os.ReadFile",
+          "lineNumber": 292
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "filepath.Join",
+          "lineNumber": 292
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "errors.Is",
+          "lineNumber": 293
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 299
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "strings.SplitN",
+          "lineNumber": 299
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "string",
+          "lineNumber": 299
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 300
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 303
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "strings.TrimPrefix",
+          "lineNumber": 303
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "errors.New",
+          "lineNumber": 305
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 307
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "filepath.Join",
+          "lineNumber": 308
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "filepath.Join",
+          "lineNumber": 311
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "os.Stat",
+          "lineNumber": 312
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "errors.Is",
+          "lineNumber": 313
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "info.Mode().IsRegular",
+          "lineNumber": 319
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "info.Mode",
+          "lineNumber": 319
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "fmt.Errorf",
+          "lineNumber": 320
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "copyGitMetadataFile",
+          "lineNumber": 322
+        },
+        {
+          "caller": "overlayWorktreeGitState",
+          "callee": "filepath.Join",
+          "lineNumber": 322
+        },
+        {
+          "caller": "decodeSpecificationPacket",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 332
+        },
+        {
+          "caller": "decodeSpecificationPacket",
+          "callee": "errors.New",
+          "lineNumber": 333
+        },
+        {
+          "caller": "decodeSpecificationPacket",
+          "callee": "json.Unmarshal",
+          "lineNumber": 336
+        },
+        {
+          "caller": "decodeSpecificationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 337
+        },
+        {
+          "caller": "decodeSpecificationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 340
+        },
+        {
+          "caller": "workerCaches",
+          "callee": "make",
+          "lineNumber": 359
+        },
+        {
+          "caller": "workerCaches",
+          "callee": "len",
+          "lineNumber": 359
+        },
+        {
+          "caller": "workerCaches",
+          "callee": "append",
+          "lineNumber": 361
+        }
+      ],
+      "metrics": {
+        "importCount": 5,
+        "exportCount": 2,
+        "functionCount": 12,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "internal/gate/runner.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 220,
+      "nonEmptyLines": 201,
+      "functions": [
+        {
+          "name": "Error",
+          "startLine": 58,
+          "endLine": 63,
+          "params": []
+        },
+        {
+          "name": "Unwrap",
+          "startLine": 66,
+          "endLine": 66,
+          "params": []
+        },
+        {
+          "name": "Error",
+          "startLine": 79,
+          "endLine": 84,
+          "params": []
+        },
+        {
+          "name": "Unwrap",
+          "startLine": 87,
+          "endLine": 87,
+          "params": []
+        },
+        {
+          "name": "Run",
+          "startLine": 103,
+          "endLine": 186,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "publish",
+          "startLine": 189,
+          "endLine": 194,
+          "params": [
+            "ctx",
+            "status"
+          ]
+        },
+        {
+          "name": "positiveDuration",
+          "startLine": 198,
+          "endLine": 204,
+          "params": [
+            "field",
+            "value"
+          ]
+        },
+        {
+          "name": "workerEnvironmentPolicy",
+          "startLine": 208,
+          "endLine": 217,
+          "params": [
+            "policy"
+          ]
+        },
+        {
+          "name": "statusContext",
+          "startLine": 220,
+          "endLine": 220,
+          "params": [
+            "name"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Request",
+          "startLine": 20,
+          "endLine": 31,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "CheckpointSHA",
+            "Setup",
+            "SetupTimeout",
+            "Gate"
+          ]
+        },
+        {
+          "name": "Result",
+          "startLine": 35,
+          "endLine": 46,
+          "methods": [],
+          "properties": [
+            "CheckpointSHA",
+            "GateName",
+            "Setup",
+            "Gate",
+            "Status"
+          ]
+        },
+        {
+          "name": "SetupFailure",
+          "startLine": 50,
+          "endLine": 55,
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Result",
+            "Cause"
+          ]
+        },
+        {
+          "name": "GateFailure",
+          "startLine": 69,
+          "endLine": 76,
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Name",
+            "Result",
+            "Cause"
+          ]
+        },
+        {
+          "name": "Runner",
+          "startLine": 91,
+          "endLine": 98,
+          "methods": [
+            "Run",
+            "publish"
+          ],
+          "properties": [
+            "Runtime",
+            "Repository",
+            "Statuses"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Request",
+          "line": 20,
+          "isDefault": false
+        },
+        {
+          "name": "Result",
+          "line": 35,
+          "isDefault": false
+        },
+        {
+          "name": "SetupFailure",
+          "line": 50,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 58,
+          "isDefault": false
+        },
+        {
+          "name": "Unwrap",
+          "line": 66,
+          "isDefault": false
+        },
+        {
+          "name": "GateFailure",
+          "line": 69,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 79,
+          "isDefault": false
+        },
+        {
+          "name": "Unwrap",
+          "line": 87,
+          "isDefault": false
+        },
+        {
+          "name": "Runner",
+          "line": 91,
+          "isDefault": false
+        },
+        {
+          "name": "Run",
+          "line": 103,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 60
+        },
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 62
+        },
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 81
+        },
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 83
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 105
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 108
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 110
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 111
+        },
+        {
+          "caller": "Run",
+          "callee": "github.ValidCommitSHA",
+          "lineNumber": 113
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 114
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 116
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 117
+        },
+        {
+          "caller": "Run",
+          "callee": "positiveDuration",
+          "lineNumber": 119
+        },
+        {
+          "caller": "Run",
+          "callee": "positiveDuration",
+          "lineNumber": 123
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 127
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 128
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 130
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 131
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 133
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 134
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 137
+        },
+        {
+          "caller": "Run",
+          "callee": "statusContext",
+          "lineNumber": 145
+        },
+        {
+          "caller": "Run",
+          "callee": "context.WithTimeout",
+          "lineNumber": 148
+        },
+        {
+          "caller": "Run",
+          "callee": "r.Runtime.RunCommand",
+          "lineNumber": 149
+        },
+        {
+          "caller": "Run",
+          "callee": "cancelSetup",
+          "lineNumber": 155
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.Join",
+          "lineNumber": 160
+        },
+        {
+          "caller": "Run",
+          "callee": "r.publish",
+          "lineNumber": 160
+        },
+        {
+          "caller": "Run",
+          "callee": "context.WithTimeout",
+          "lineNumber": 163
+        },
+        {
+          "caller": "Run",
+          "callee": "r.Runtime.RunCommand",
+          "lineNumber": 164
+        },
+        {
+          "caller": "Run",
+          "callee": "workerEnvironmentPolicy",
+          "lineNumber": 167
+        },
+        {
+          "caller": "Run",
+          "callee": "cancelGate",
+          "lineNumber": 170
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.Join",
+          "lineNumber": 180
+        },
+        {
+          "caller": "Run",
+          "callee": "r.publish",
+          "lineNumber": 180
+        },
+        {
+          "caller": "Run",
+          "callee": "r.publish",
+          "lineNumber": 185
+        },
+        {
+          "caller": "publish",
+          "callee": "r.Statuses.CreateCommitStatus",
+          "lineNumber": 190
+        },
+        {
+          "caller": "publish",
+          "callee": "fmt.Errorf",
+          "lineNumber": 191
+        },
+        {
+          "caller": "positiveDuration",
+          "callee": "time.ParseDuration",
+          "lineNumber": 199
+        },
+        {
+          "caller": "positiveDuration",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 199
+        },
+        {
+          "caller": "positiveDuration",
+          "callee": "fmt.Errorf",
+          "lineNumber": 201
+        },
+        {
+          "caller": "statusContext",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 220
+        }
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 10,
+        "functionCount": 9,
+        "classCount": 5
+      }
+    },
+    {
+      "path": "internal/github/github.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 559,
+      "nonEmptyLines": 514,
+      "functions": [
+        {
+          "name": "String",
+          "startLine": 49,
+          "endLine": 49,
+          "params": []
+        },
+        {
+          "name": "Run",
+          "startLine": 176,
+          "endLine": 190,
+          "params": [
+            "ctx",
+            "args",
+            "input"
+          ]
+        },
+        {
+          "name": "NewClient",
+          "startLine": 200,
+          "endLine": 200,
+          "params": []
+        },
+        {
+          "name": "runner",
+          "startLine": 203,
+          "endLine": 208,
+          "params": []
+        },
+        {
+          "name": "Issue",
+          "startLine": 211,
+          "endLine": 232,
+          "params": [
+            "ctx",
+            "repository",
+            "number"
+          ]
+        },
+        {
+          "name": "CreateLabel",
+          "startLine": 235,
+          "endLine": 250,
+          "params": [
+            "ctx",
+            "repository",
+            "label"
+          ]
+        },
+        {
+          "name": "ReplaceIssueLabels",
+          "startLine": 253,
+          "endLine": 261,
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "labels"
+          ]
+        },
+        {
+          "name": "CreateIssueComment",
+          "startLine": 264,
+          "endLine": 270,
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "body"
+          ]
+        },
+        {
+          "name": "FindStatusComment",
+          "startLine": 274,
+          "endLine": 293,
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "marker"
+          ]
+        },
+        {
+          "name": "EditIssueComment",
+          "startLine": 296,
+          "endLine": 304,
+          "params": [
+            "ctx",
+            "repository",
+            "commentID",
+            "body"
+          ]
+        },
+        {
+          "name": "FindPullRequest",
+          "startLine": 308,
+          "endLine": 334,
+          "params": [
+            "ctx",
+            "repository",
+            "headBranch",
+            "baseBranch"
+          ]
+        },
+        {
+          "name": "CreatePullRequest",
+          "startLine": 337,
+          "endLine": 350,
+          "params": [
+            "ctx",
+            "repository",
+            "request"
+          ]
+        },
+        {
+          "name": "UpdatePullRequest",
+          "startLine": 355,
+          "endLine": 377,
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "request"
+          ]
+        },
+        {
+          "name": "CreateCommitStatus",
+          "startLine": 381,
+          "endLine": 406,
+          "params": [
+            "ctx",
+            "repository",
+            "status"
+          ]
+        },
+        {
+          "name": "callJSON",
+          "startLine": 409,
+          "endLine": 418,
+          "params": [
+            "ctx",
+            "args",
+            "payload",
+            "destination"
+          ]
+        },
+        {
+          "name": "call",
+          "startLine": 421,
+          "endLine": 424,
+          "params": [
+            "ctx",
+            "args",
+            "payload"
+          ]
+        },
+        {
+          "name": "callBytes",
+          "startLine": 427,
+          "endLine": 438,
+          "params": [
+            "ctx",
+            "args",
+            "payload"
+          ]
+        },
+        {
+          "name": "ValidCommitSHA",
+          "startLine": 442,
+          "endLine": 453,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "pullRequest",
+          "startLine": 510,
+          "endLine": 515,
+          "params": []
+        },
+        {
+          "name": "decodePullRequestList",
+          "startLine": 519,
+          "endLine": 533,
+          "params": [
+            "output"
+          ]
+        },
+        {
+          "name": "validatePullRequestBranches",
+          "startLine": 537,
+          "endLine": 544,
+          "params": [
+            "headBranch",
+            "baseBranch"
+          ]
+        },
+        {
+          "name": "validatePullRequestRequest",
+          "startLine": 548,
+          "endLine": 559,
+          "params": [
+            "request"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Repository",
+          "startLine": 43,
+          "endLine": 46,
+          "methods": [
+            "String"
+          ],
+          "properties": [
+            "Owner",
+            "Name"
+          ]
+        },
+        {
+          "name": "Issue",
+          "startLine": 52,
+          "endLine": 60,
+          "methods": [],
+          "properties": [
+            "Number",
+            "Title",
+            "Body",
+            "State",
+            "Labels",
+            "IsPullRequest",
+            "UpdatedAt"
+          ]
+        },
+        {
+          "name": "Label",
+          "startLine": 63,
+          "endLine": 67,
+          "methods": [],
+          "properties": [
+            "Name",
+            "Description",
+            "Color"
+          ]
+        },
+        {
+          "name": "Comment",
+          "startLine": 70,
+          "endLine": 73,
+          "methods": [],
+          "properties": [
+            "ID",
+            "Body"
+          ]
+        },
+        {
+          "name": "PullRequest",
+          "startLine": 77,
+          "endLine": 94,
+          "methods": [],
+          "properties": [
+            "Number",
+            "URL",
+            "Title",
+            "Body",
+            "State",
+            "Draft",
+            "HeadBranch",
+            "BaseBranch"
+          ]
+        },
+        {
+          "name": "PullRequestRequest",
+          "startLine": 98,
+          "endLine": 109,
+          "methods": [],
+          "properties": [
+            "Title",
+            "Body",
+            "HeadBranch",
+            "BaseBranch",
+            "Draft"
+          ]
+        },
+        {
+          "name": "CommitStatus",
+          "startLine": 127,
+          "endLine": 138,
+          "methods": [],
+          "properties": [
+            "SHA",
+            "State",
+            "Context",
+            "Description",
+            "TargetURL"
+          ]
+        },
+        {
+          "name": "CommitStatusPublisher",
+          "startLine": 142,
+          "endLine": 144,
+          "methods": [
+            "CreateCommitStatus"
+          ],
+          "properties": []
+        },
+        {
+          "name": "Client",
+          "startLine": 149,
+          "endLine": 156,
+          "methods": [
+            "Issue",
+            "CreateLabel",
+            "ReplaceIssueLabels",
+            "CreateIssueComment",
+            "FindStatusComment",
+            "EditIssueComment"
+          ],
+          "properties": []
+        },
+        {
+          "name": "PullRequestClient",
+          "startLine": 161,
+          "endLine": 165,
+          "methods": [
+            "FindPullRequest",
+            "CreatePullRequest",
+            "UpdatePullRequest"
+          ],
+          "properties": []
+        },
+        {
+          "name": "CommandRunner",
+          "startLine": 168,
+          "endLine": 170,
+          "methods": [
+            "Run"
+          ],
+          "properties": []
+        },
+        {
+          "name": "commandRunner",
+          "startLine": 173,
+          "endLine": 173,
+          "methods": [
+            "Run"
+          ],
+          "properties": []
+        },
+        {
+          "name": "GhClient",
+          "startLine": 195,
+          "endLine": 197,
+          "methods": [
+            "runner",
+            "Issue",
+            "CreateLabel",
+            "ReplaceIssueLabels",
+            "CreateIssueComment",
+            "FindStatusComment",
+            "EditIssueComment",
+            "FindPullRequest",
+            "CreatePullRequest",
+            "UpdatePullRequest",
+            "CreateCommitStatus",
+            "callJSON",
+            "call",
+            "callBytes"
+          ],
+          "properties": [
+            "Runner"
+          ]
+        },
+        {
+          "name": "issueResponse",
+          "startLine": 457,
+          "endLine": 467,
+          "methods": [],
+          "properties": [
+            "Number",
+            "Title",
+            "Body",
+            "State",
+            "PullRequest",
+            "Labels",
+            "UpdatedAt"
+          ]
+        },
+        {
+          "name": "commentResponse",
+          "startLine": 471,
+          "endLine": 474,
+          "methods": [],
+          "properties": [
+            "ID",
+            "Body"
+          ]
+        },
+        {
+          "name": "pullRequestResponse",
+          "startLine": 477,
+          "endLine": 490,
+          "methods": [
+            "pullRequest"
+          ],
+          "properties": [
+            "Number",
+            "HTMLURL",
+            "Title",
+            "Body",
+            "State",
+            "Draft",
+            "Head",
+            "Base"
+          ]
+        },
+        {
+          "name": "pullRequestCreatePayload",
+          "startLine": 493,
+          "endLine": 499,
+          "methods": [],
+          "properties": [
+            "Title",
+            "Body",
+            "Head",
+            "Base",
+            "Draft"
+          ]
+        },
+        {
+          "name": "pullRequestUpdatePayload",
+          "startLine": 502,
+          "endLine": 507,
+          "methods": [],
+          "properties": [
+            "Title",
+            "Body",
+            "Draft",
+            "State"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Repository",
+          "line": 43,
+          "isDefault": false
+        },
+        {
+          "name": "String",
+          "line": 49,
+          "isDefault": false
+        },
+        {
+          "name": "Issue",
+          "line": 52,
+          "isDefault": false
+        },
+        {
+          "name": "Label",
+          "line": 63,
+          "isDefault": false
+        },
+        {
+          "name": "Comment",
+          "line": 70,
+          "isDefault": false
+        },
+        {
+          "name": "PullRequest",
+          "line": 77,
+          "isDefault": false
+        },
+        {
+          "name": "PullRequestRequest",
+          "line": 98,
+          "isDefault": false
+        },
+        {
+          "name": "CommitStatus",
+          "line": 127,
+          "isDefault": false
+        },
+        {
+          "name": "CommitStatusPublisher",
+          "line": 142,
+          "isDefault": false
+        },
+        {
+          "name": "Client",
+          "line": 149,
+          "isDefault": false
+        },
+        {
+          "name": "PullRequestClient",
+          "line": 161,
+          "isDefault": false
+        },
+        {
+          "name": "CommandRunner",
+          "line": 168,
+          "isDefault": false
+        },
+        {
+          "name": "Run",
+          "line": 176,
+          "isDefault": false
+        },
+        {
+          "name": "GhClient",
+          "line": 195,
+          "isDefault": false
+        },
+        {
+          "name": "NewClient",
+          "line": 200,
+          "isDefault": false
+        },
+        {
+          "name": "Issue",
+          "line": 211,
+          "isDefault": false
+        },
+        {
+          "name": "CreateLabel",
+          "line": 235,
+          "isDefault": false
+        },
+        {
+          "name": "ReplaceIssueLabels",
+          "line": 253,
+          "isDefault": false
+        },
+        {
+          "name": "CreateIssueComment",
+          "line": 264,
+          "isDefault": false
+        },
+        {
+          "name": "FindStatusComment",
+          "line": 274,
+          "isDefault": false
+        },
+        {
+          "name": "EditIssueComment",
+          "line": 296,
+          "isDefault": false
+        },
+        {
+          "name": "FindPullRequest",
+          "line": 308,
+          "isDefault": false
+        },
+        {
+          "name": "CreatePullRequest",
+          "line": 337,
+          "isDefault": false
+        },
+        {
+          "name": "UpdatePullRequest",
+          "line": 355,
+          "isDefault": false
+        },
+        {
+          "name": "CreateCommitStatus",
+          "line": 381,
+          "isDefault": false
+        },
+        {
+          "name": "ValidCommitSHA",
+          "line": 442,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Run",
+          "callee": "exec.CommandContext",
+          "lineNumber": 177
+        },
+        {
+          "caller": "Run",
+          "callee": "bytes.NewReader",
+          "lineNumber": 178
+        },
+        {
+          "caller": "Run",
+          "callee": "command.Run",
+          "lineNumber": 182
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 183
+        },
+        {
+          "caller": "Run",
+          "callee": "stderr.String",
+          "lineNumber": 183
+        },
+        {
+          "caller": "Run",
+          "callee": "fmt.Errorf",
+          "lineNumber": 187
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.Join",
+          "lineNumber": 187
+        },
+        {
+          "caller": "Run",
+          "callee": "stdout.Bytes",
+          "lineNumber": 189
+        },
+        {
+          "caller": "Issue",
+          "callee": "errors.New",
+          "lineNumber": 213
+        },
+        {
+          "caller": "Issue",
+          "callee": "c.callJSON",
+          "lineNumber": 216
+        },
+        {
+          "caller": "Issue",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 216
+        },
+        {
+          "caller": "Issue",
+          "callee": "repository.String",
+          "lineNumber": 216
+        },
+        {
+          "caller": "Issue",
+          "callee": "fmt.Errorf",
+          "lineNumber": 217
+        },
+        {
+          "caller": "Issue",
+          "callee": "make",
+          "lineNumber": 219
+        },
+        {
+          "caller": "Issue",
+          "callee": "len",
+          "lineNumber": 219
+        },
+        {
+          "caller": "Issue",
+          "callee": "append",
+          "lineNumber": 221
+        },
+        {
+          "caller": "CreateLabel",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 236
+        },
+        {
+          "caller": "CreateLabel",
+          "callee": "errors.New",
+          "lineNumber": 237
+        },
+        {
+          "caller": "CreateLabel",
+          "callee": "repository.String",
+          "lineNumber": 241
+        },
+        {
+          "caller": "CreateLabel",
+          "callee": "strings.TrimPrefix",
+          "lineNumber": 242
+        },
+        {
+          "caller": "CreateLabel",
+          "callee": "c.runner().Run",
+          "lineNumber": 246
+        },
+        {
+          "caller": "CreateLabel",
+          "callee": "c.runner",
+          "lineNumber": 246
+        },
+        {
+          "caller": "CreateLabel",
+          "callee": "fmt.Errorf",
+          "lineNumber": 247
+        },
+        {
+          "caller": "ReplaceIssueLabels",
+          "callee": "errors.New",
+          "lineNumber": 255
+        },
+        {
+          "caller": "ReplaceIssueLabels",
+          "callee": "c.call",
+          "lineNumber": 257
+        },
+        {
+          "caller": "ReplaceIssueLabels",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 257
+        },
+        {
+          "caller": "ReplaceIssueLabels",
+          "callee": "repository.String",
+          "lineNumber": 257
+        },
+        {
+          "caller": "ReplaceIssueLabels",
+          "callee": "fmt.Errorf",
+          "lineNumber": 258
+        },
+        {
+          "caller": "CreateIssueComment",
+          "callee": "c.callJSON",
+          "lineNumber": 266
+        },
+        {
+          "caller": "CreateIssueComment",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 266
+        },
+        {
+          "caller": "CreateIssueComment",
+          "callee": "repository.String",
+          "lineNumber": 266
+        },
+        {
+          "caller": "CreateIssueComment",
+          "callee": "fmt.Errorf",
+          "lineNumber": 267
+        },
+        {
+          "caller": "CreateIssueComment",
+          "callee": "fmt.Sprint",
+          "lineNumber": 269
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "errors.New",
+          "lineNumber": 276
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 278
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "errors.New",
+          "lineNumber": 279
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "c.callJSON",
+          "lineNumber": 282
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 282
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "repository.String",
+          "lineNumber": 282
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "fmt.Errorf",
+          "lineNumber": 283
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "strings.Contains",
+          "lineNumber": 287
+        },
+        {
+          "caller": "FindStatusComment",
+          "callee": "fmt.Sprint",
+          "lineNumber": 288
+        },
+        {
+          "caller": "EditIssueComment",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 297
+        },
+        {
+          "caller": "EditIssueComment",
+          "callee": "errors.New",
+          "lineNumber": 298
+        },
+        {
+          "caller": "EditIssueComment",
+          "callee": "c.call",
+          "lineNumber": 300
+        },
+        {
+          "caller": "EditIssueComment",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 300
+        },
+        {
+          "caller": "EditIssueComment",
+          "callee": "repository.String",
+          "lineNumber": 300
+        },
+        {
+          "caller": "EditIssueComment",
+          "callee": "fmt.Errorf",
+          "lineNumber": 301
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "validatePullRequestBranches",
+          "lineNumber": 309
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 313
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "repository.String",
+          "lineNumber": 313
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "c.callBytes",
+          "lineNumber": 319
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 321
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "decodePullRequestList",
+          "lineNumber": 323
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 325
+        },
+        {
+          "caller": "FindPullRequest",
+          "callee": "response.pullRequest",
+          "lineNumber": 328
+        },
+        {
+          "caller": "CreatePullRequest",
+          "callee": "validatePullRequestRequest",
+          "lineNumber": 338
+        },
+        {
+          "caller": "CreatePullRequest",
+          "callee": "c.callJSON",
+          "lineNumber": 346
+        },
+        {
+          "caller": "CreatePullRequest",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 346
+        },
+        {
+          "caller": "CreatePullRequest",
+          "callee": "repository.String",
+          "lineNumber": 346
+        },
+        {
+          "caller": "CreatePullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 347
+        },
+        {
+          "caller": "CreatePullRequest",
+          "callee": "response.pullRequest",
+          "lineNumber": 349
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "errors.New",
+          "lineNumber": 357
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "validatePullRequestRequest",
+          "lineNumber": 359
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "c.callJSON",
+          "lineNumber": 364
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 364
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "repository.String",
+          "lineNumber": 364
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 365
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "c.callJSON",
+          "lineNumber": 373
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 373
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "repository.String",
+          "lineNumber": 373
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 374
+        },
+        {
+          "caller": "UpdatePullRequest",
+          "callee": "response.pullRequest",
+          "lineNumber": 376
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "ValidCommitSHA",
+          "lineNumber": 382
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "errors.New",
+          "lineNumber": 383
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "fmt.Errorf",
+          "lineNumber": 386
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 388
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 388
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "errors.New",
+          "lineNumber": 389
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "len",
+          "lineNumber": 391
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "errors.New",
+          "lineNumber": 392
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "string",
+          "lineNumber": 395
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "c.call",
+          "lineNumber": 402
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 402
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "repository.String",
+          "lineNumber": 402
+        },
+        {
+          "caller": "CreateCommitStatus",
+          "callee": "fmt.Errorf",
+          "lineNumber": 403
+        },
+        {
+          "caller": "callJSON",
+          "callee": "c.callBytes",
+          "lineNumber": 410
+        },
+        {
+          "caller": "callJSON",
+          "callee": "json.Unmarshal",
+          "lineNumber": 414
+        },
+        {
+          "caller": "callJSON",
+          "callee": "fmt.Errorf",
+          "lineNumber": 415
+        },
+        {
+          "caller": "call",
+          "callee": "c.callBytes",
+          "lineNumber": 422
+        },
+        {
+          "caller": "callBytes",
+          "callee": "json.Marshal",
+          "lineNumber": 430
+        },
+        {
+          "caller": "callBytes",
+          "callee": "fmt.Errorf",
+          "lineNumber": 432
+        },
+        {
+          "caller": "callBytes",
+          "callee": "append",
+          "lineNumber": 435
+        },
+        {
+          "caller": "callBytes",
+          "callee": "c.runner().Run",
+          "lineNumber": 437
+        },
+        {
+          "caller": "callBytes",
+          "callee": "c.runner",
+          "lineNumber": 437
+        },
+        {
+          "caller": "ValidCommitSHA",
+          "callee": "len",
+          "lineNumber": 443
+        },
+        {
+          "caller": "ValidCommitSHA",
+          "callee": "len",
+          "lineNumber": 443
+        },
+        {
+          "caller": "decodePullRequestList",
+          "callee": "json.Unmarshal",
+          "lineNumber": 521
+        },
+        {
+          "caller": "decodePullRequestList",
+          "callee": "make",
+          "lineNumber": 522
+        },
+        {
+          "caller": "decodePullRequestList",
+          "callee": "append",
+          "lineNumber": 524
+        },
+        {
+          "caller": "decodePullRequestList",
+          "callee": "json.Unmarshal",
+          "lineNumber": 529
+        },
+        {
+          "caller": "validatePullRequestBranches",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 539
+        },
+        {
+          "caller": "validatePullRequestBranches",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 539
+        },
+        {
+          "caller": "validatePullRequestBranches",
+          "callee": "fmt.Errorf",
+          "lineNumber": 540
+        },
+        {
+          "caller": "validatePullRequestRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 549
+        },
+        {
+          "caller": "validatePullRequestRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 549
+        },
+        {
+          "caller": "validatePullRequestRequest",
+          "callee": "errors.New",
+          "lineNumber": 550
+        },
+        {
+          "caller": "validatePullRequestRequest",
+          "callee": "validatePullRequestBranches",
+          "lineNumber": 552
+        },
+        {
+          "caller": "validatePullRequestRequest",
+          "callee": "strings.ContainsRune",
+          "lineNumber": 555
+        },
+        {
+          "caller": "validatePullRequestRequest",
+          "callee": "errors.New",
+          "lineNumber": 556
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 26,
+        "functionCount": 22,
+        "classCount": 18
+      }
+    },
+    {
+      "path": "internal/worker/runtime.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 1499,
+      "nonEmptyLines": 1412,
+      "functions": [
+        {
+          "name": "NewDockerRuntime",
+          "startLine": 267,
+          "endLine": 269,
+          "params": []
+        },
+        {
+          "name": "Start",
+          "startLine": 274,
+          "endLine": 350,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "Resume",
+          "startLine": 354,
+          "endLine": 374,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "RunCommand",
+          "startLine": 379,
+          "endLine": 411,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "InteractiveCommand",
+          "startLine": 417,
+          "endLine": 433,
+          "params": [
+            "_",
+            "request"
+          ]
+        },
+        {
+          "name": "SeedCodexCredentials",
+          "startLine": 438,
+          "endLine": 471,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "NativeSessionIDs",
+          "startLine": 476,
+          "endLine": 516,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "NativeSessionID",
+          "startLine": 520,
+          "endLine": 526,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "Attach",
+          "startLine": 530,
+          "endLine": 556,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "Stop",
+          "startLine": 561,
+          "endLine": 580,
+          "params": [
+            "ctx",
+            "runID"
+          ]
+        },
+        {
+          "name": "Inspect",
+          "startLine": 584,
+          "endLine": 596,
+          "params": [
+            "ctx",
+            "runID"
+          ]
+        },
+        {
+          "name": "startContainer",
+          "startLine": 599,
+          "endLine": 604,
+          "params": [
+            "ctx",
+            "name"
+          ]
+        },
+        {
+          "name": "recreateWorker",
+          "startLine": 609,
+          "endLine": 619,
+          "params": [
+            "ctx",
+            "name",
+            "running"
+          ]
+        },
+        {
+          "name": "inspectContainer",
+          "startLine": 622,
+          "endLine": 666,
+          "params": [
+            "ctx",
+            "name"
+          ]
+        },
+        {
+          "name": "parseDockerInspectionJSON",
+          "startLine": 689,
+          "endLine": 717,
+          "params": [
+            "data"
+          ]
+        },
+        {
+          "name": "dockerMountIdentity",
+          "startLine": 721,
+          "endLine": 729,
+          "params": [
+            "_",
+            "source",
+            "name"
+          ]
+        },
+        {
+          "name": "runDocker",
+          "startLine": 733,
+          "endLine": 735,
+          "params": [
+            "ctx",
+            "args"
+          ]
+        },
+        {
+          "name": "runDockerWithInput",
+          "startLine": 739,
+          "endLine": 773,
+          "params": [
+            "ctx",
+            "args",
+            "input"
+          ]
+        },
+        {
+          "name": "Error",
+          "startLine": 804,
+          "endLine": 806,
+          "params": []
+        },
+        {
+          "name": "Unwrap",
+          "startLine": 809,
+          "endLine": 809,
+          "params": []
+        },
+        {
+          "name": "validateStartRequest",
+          "startLine": 813,
+          "endLine": 852,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "workerMountsPresent",
+          "startLine": 858,
+          "endLine": 874,
+          "params": [
+            "request",
+            "inspection"
+          ]
+        },
+        {
+          "name": "requiredInvocationMounts",
+          "startLine": 878,
+          "endLine": 887,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "expectedWorkerMounts",
+          "startLine": 891,
+          "endLine": 914,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "validateResumeRequest",
+          "startLine": 918,
+          "endLine": 929,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "validateCommandRequest",
+          "startLine": 933,
+          "endLine": 955,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "validateCacheMount",
+          "startLine": 959,
+          "endLine": 971,
+          "params": [
+            "cache",
+            "seen"
+          ]
+        },
+        {
+          "name": "hostHarnessDirectory",
+          "startLine": 975,
+          "endLine": 982,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "validateEnvironmentEntry",
+          "startLine": 987,
+          "endLine": 989,
+          "params": [
+            "name",
+            "value"
+          ]
+        },
+        {
+          "name": "validateInteractiveEnvironmentEntry",
+          "startLine": 993,
+          "endLine": 995,
+          "params": [
+            "name",
+            "value"
+          ]
+        },
+        {
+          "name": "validateEnvironmentEntryWithProtocol",
+          "startLine": 1000,
+          "endLine": 1014,
+          "params": [
+            "name",
+            "value",
+            "allowProtocol"
+          ]
+        },
+        {
+          "name": "validateImageName",
+          "startLine": 1018,
+          "endLine": 1031,
+          "params": [
+            "image"
+          ]
+        },
+        {
+          "name": "validateMountContract",
+          "startLine": 1035,
+          "endLine": 1086,
+          "params": [
+            "existingMounts",
+            "request"
+          ]
+        },
+        {
+          "name": "prepareWorkerMounts",
+          "startLine": 1091,
+          "endLine": 1134,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "prepareWorkerMount",
+          "startLine": 1140,
+          "endLine": 1166,
+          "params": [
+            "path",
+            "readOnly",
+            "groupIDs"
+          ]
+        },
+        {
+          "name": "hostGroupID",
+          "startLine": 1171,
+          "endLine": 1181,
+          "params": [
+            "info",
+            "path"
+          ]
+        },
+        {
+          "name": "workerMountPermissions",
+          "startLine": 1186,
+          "endLine": 1206,
+          "params": [
+            "mode",
+            "readOnly"
+          ]
+        },
+        {
+          "name": "validateDirectory",
+          "startLine": 1210,
+          "endLine": 1225,
+          "params": [
+            "path",
+            "field"
+          ]
+        },
+        {
+          "name": "ensureCacheDirectory",
+          "startLine": 1229,
+          "endLine": 1250,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "validateRunID",
+          "startLine": 1254,
+          "endLine": 1262,
+          "params": [
+            "runID"
+          ]
+        },
+        {
+          "name": "validName",
+          "startLine": 1266,
+          "endLine": 1277,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "validEnvironmentName",
+          "startLine": 1280,
+          "endLine": 1293,
+          "params": [
+            "name"
+          ]
+        },
+        {
+          "name": "forbiddenEnvironmentName",
+          "startLine": 1298,
+          "endLine": 1305,
+          "params": [
+            "name"
+          ]
+        },
+        {
+          "name": "reservedEnvironmentName",
+          "startLine": 1309,
+          "endLine": 1316,
+          "params": [
+            "name"
+          ]
+        },
+        {
+          "name": "interactiveProtocolEnvironmentName",
+          "startLine": 1320,
+          "endLine": 1327,
+          "params": [
+            "name"
+          ]
+        },
+        {
+          "name": "validDigest",
+          "startLine": 1330,
+          "endLine": 1341,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "imageReference",
+          "startLine": 1344,
+          "endLine": 1346,
+          "params": [
+            "image",
+            "digest"
+          ]
+        },
+        {
+          "name": "bindMount",
+          "startLine": 1349,
+          "endLine": 1355,
+          "params": [
+            "hostPath",
+            "destination",
+            "readOnly"
+          ]
+        },
+        {
+          "name": "baselineEnvironment",
+          "startLine": 1360,
+          "endLine": 1387,
+          "params": [
+            "runID"
+          ]
+        },
+        {
+          "name": "commandEnvironment",
+          "startLine": 1392,
+          "endLine": 1399,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "explicitEnvironment",
+          "startLine": 1403,
+          "endLine": 1414,
+          "params": [
+            "environment"
+          ]
+        },
+        {
+          "name": "containerName",
+          "startLine": 1418,
+          "endLine": 1421,
+          "params": [
+            "runID"
+          ]
+        },
+        {
+          "name": "roleVolumeName",
+          "startLine": 1425,
+          "endLine": 1428,
+          "params": [
+            "runID",
+            "role"
+          ]
+        },
+        {
+          "name": "credentialVolumeName",
+          "startLine": 1432,
+          "endLine": 1438,
+          "params": [
+            "runID",
+            "storeID"
+          ]
+        },
+        {
+          "name": "validateInteractiveRequest",
+          "startLine": 1442,
+          "endLine": 1466,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "isContainerNotFound",
+          "startLine": 1470,
+          "endLine": 1477,
+          "params": [
+            "err"
+          ]
+        },
+        {
+          "name": "isDockerRuntimeFailure",
+          "startLine": 1481,
+          "endLine": 1497,
+          "params": [
+            "commandErr"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "CacheMount",
+          "startLine": 63,
+          "endLine": 71,
+          "methods": [],
+          "properties": [
+            "Name",
+            "HostPath",
+            "ReadOnly"
+          ]
+        },
+        {
+          "name": "StartRequest",
+          "startLine": 75,
+          "endLine": 101,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "WorktreePath",
+            "GitMetadataPath",
+            "Image",
+            "ImageDigest",
+            "Caches",
+            "InvocationPath",
+            "ResultPath",
+            "CredentialStoreID",
+            "Role"
+          ]
+        },
+        {
+          "name": "ResumeRequest",
+          "startLine": 105,
+          "endLine": 112,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Image",
+            "ImageDigest"
+          ]
+        },
+        {
+          "name": "CommandRequest",
+          "startLine": 115,
+          "endLine": 126,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Command",
+            "EnvironmentPolicy",
+            "Role",
+            "Environment"
+          ]
+        },
+        {
+          "name": "CommandResult",
+          "startLine": 130,
+          "endLine": 137,
+          "methods": [],
+          "properties": [
+            "ExitCode",
+            "Stdout",
+            "Stderr"
+          ]
+        },
+        {
+          "name": "InteractiveRequest",
+          "startLine": 141,
+          "endLine": 152,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Command",
+            "EnvironmentPolicy",
+            "Role",
+            "Environment"
+          ]
+        },
+        {
+          "name": "InteractiveCommand",
+          "startLine": 156,
+          "endLine": 161,
+          "methods": [],
+          "properties": [
+            "Executable",
+            "Args"
+          ]
+        },
+        {
+          "name": "CredentialSeedRequest",
+          "startLine": 165,
+          "endLine": 170,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "AuthPath"
+          ]
+        },
+        {
+          "name": "NativeSessionRequest",
+          "startLine": 173,
+          "endLine": 178,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Harness"
+          ]
+        },
+        {
+          "name": "InteractiveRuntime",
+          "startLine": 182,
+          "endLine": 186,
+          "methods": [
+            "InteractiveCommand"
+          ],
+          "properties": []
+        },
+        {
+          "name": "CredentialSeeder",
+          "startLine": 189,
+          "endLine": 192,
+          "methods": [
+            "SeedCodexCredentials"
+          ],
+          "properties": []
+        },
+        {
+          "name": "NativeSessionProvider",
+          "startLine": 196,
+          "endLine": 199,
+          "methods": [
+            "NativeSessionID"
+          ],
+          "properties": []
+        },
+        {
+          "name": "NativeSessionSnapshotProvider",
+          "startLine": 204,
+          "endLine": 208,
+          "methods": [
+            "NativeSessionIDs"
+          ],
+          "properties": []
+        },
+        {
+          "name": "Inspection",
+          "startLine": 211,
+          "endLine": 226,
+          "methods": [],
+          "properties": [
+            "Exists",
+            "Running",
+            "Image",
+            "Mounts",
+            "mountIdentities",
+            "mountDestinations"
+          ]
+        },
+        {
+          "name": "ContainerMount",
+          "startLine": 229,
+          "endLine": 236,
+          "methods": [],
+          "properties": [
+            "Source",
+            "Destination",
+            "ReadOnly"
+          ]
+        },
+        {
+          "name": "WorkerRuntime",
+          "startLine": 241,
+          "endLine": 252,
+          "methods": [
+            "Start",
+            "Resume",
+            "RunCommand",
+            "Stop",
+            "Inspect"
+          ],
+          "properties": []
+        },
+        {
+          "name": "DockerRuntime",
+          "startLine": 257,
+          "endLine": 264,
+          "methods": [
+            "Start",
+            "Resume",
+            "RunCommand",
+            "InteractiveCommand",
+            "SeedCodexCredentials",
+            "NativeSessionIDs",
+            "NativeSessionID",
+            "Attach",
+            "Stop",
+            "Inspect",
+            "startContainer",
+            "recreateWorker",
+            "inspectContainer",
+            "runDocker",
+            "runDockerWithInput"
+          ],
+          "properties": [
+            "DockerBinary",
+            "AttachBinary"
+          ]
+        },
+        {
+          "name": "dockerInspection",
+          "startLine": 671,
+          "endLine": 685,
+          "methods": [],
+          "properties": [
+            "State",
+            "Config",
+            "Mounts"
+          ]
+        },
+        {
+          "name": "dockerCommandResult",
+          "startLine": 776,
+          "endLine": 783,
+          "methods": [],
+          "properties": [
+            "Stdout",
+            "Stderr",
+            "ExitCode"
+          ]
+        },
+        {
+          "name": "dockerCommandError",
+          "startLine": 786,
+          "endLine": 800,
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Args",
+            "ExitCode",
+            "ProcessStarted",
+            "Stdout",
+            "Stderr",
+            "Cause"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "CacheMount",
+          "line": 63,
+          "isDefault": false
+        },
+        {
+          "name": "StartRequest",
+          "line": 75,
+          "isDefault": false
+        },
+        {
+          "name": "ResumeRequest",
+          "line": 105,
+          "isDefault": false
+        },
+        {
+          "name": "CommandRequest",
+          "line": 115,
+          "isDefault": false
+        },
+        {
+          "name": "CommandResult",
+          "line": 130,
+          "isDefault": false
+        },
+        {
+          "name": "InteractiveRequest",
+          "line": 141,
+          "isDefault": false
+        },
+        {
+          "name": "InteractiveCommand",
+          "line": 156,
+          "isDefault": false
+        },
+        {
+          "name": "CredentialSeedRequest",
+          "line": 165,
+          "isDefault": false
+        },
+        {
+          "name": "NativeSessionRequest",
+          "line": 173,
+          "isDefault": false
+        },
+        {
+          "name": "InteractiveRuntime",
+          "line": 182,
+          "isDefault": false
+        },
+        {
+          "name": "CredentialSeeder",
+          "line": 189,
+          "isDefault": false
+        },
+        {
+          "name": "NativeSessionProvider",
+          "line": 196,
+          "isDefault": false
+        },
+        {
+          "name": "NativeSessionSnapshotProvider",
+          "line": 204,
+          "isDefault": false
+        },
+        {
+          "name": "Inspection",
+          "line": 211,
+          "isDefault": false
+        },
+        {
+          "name": "ContainerMount",
+          "line": 229,
+          "isDefault": false
+        },
+        {
+          "name": "WorkerRuntime",
+          "line": 241,
+          "isDefault": false
+        },
+        {
+          "name": "DockerRuntime",
+          "line": 257,
+          "isDefault": false
+        },
+        {
+          "name": "NewDockerRuntime",
+          "line": 267,
+          "isDefault": false
+        },
+        {
+          "name": "Start",
+          "line": 274,
+          "isDefault": false
+        },
+        {
+          "name": "Resume",
+          "line": 354,
+          "isDefault": false
+        },
+        {
+          "name": "RunCommand",
+          "line": 379,
+          "isDefault": false
+        },
+        {
+          "name": "InteractiveCommand",
+          "line": 417,
+          "isDefault": false
+        },
+        {
+          "name": "SeedCodexCredentials",
+          "line": 438,
+          "isDefault": false
+        },
+        {
+          "name": "NativeSessionIDs",
+          "line": 476,
+          "isDefault": false
+        },
+        {
+          "name": "NativeSessionID",
+          "line": 520,
+          "isDefault": false
+        },
+        {
+          "name": "Attach",
+          "line": 530,
+          "isDefault": false
+        },
+        {
+          "name": "Stop",
+          "line": 561,
+          "isDefault": false
+        },
+        {
+          "name": "Inspect",
+          "line": 584,
+          "isDefault": false
+        },
+        {
+          "name": "Error",
+          "line": 804,
+          "isDefault": false
+        },
+        {
+          "name": "Unwrap",
+          "line": 809,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Start",
+          "callee": "validateStartRequest",
+          "lineNumber": 275
+        },
+        {
+          "caller": "Start",
+          "callee": "containerName",
+          "lineNumber": 278
+        },
+        {
+          "caller": "Start",
+          "callee": "r.inspectContainer",
+          "lineNumber": 279
+        },
+        {
+          "caller": "Start",
+          "callee": "imageReference",
+          "lineNumber": 281
+        },
+        {
+          "caller": "Start",
+          "callee": "fmt.Errorf",
+          "lineNumber": 282
+        },
+        {
+          "caller": "Start",
+          "callee": "imageReference",
+          "lineNumber": 282
+        },
+        {
+          "caller": "Start",
+          "callee": "workerMountsPresent",
+          "lineNumber": 284
+        },
+        {
+          "caller": "Start",
+          "callee": "r.recreateWorker",
+          "lineNumber": 285
+        },
+        {
+          "caller": "Start",
+          "callee": "fmt.Errorf",
+          "lineNumber": 286
+        },
+        {
+          "caller": "Start",
+          "callee": "len",
+          "lineNumber": 291
+        },
+        {
+          "caller": "Start",
+          "callee": "validateMountContract",
+          "lineNumber": 292
+        },
+        {
+          "caller": "Start",
+          "callee": "fmt.Errorf",
+          "lineNumber": 293
+        },
+        {
+          "caller": "Start",
+          "callee": "prepareWorkerMounts",
+          "lineNumber": 296
+        },
+        {
+          "caller": "Start",
+          "callee": "fmt.Errorf",
+          "lineNumber": 297
+        },
+        {
+          "caller": "Start",
+          "callee": "r.startContainer",
+          "lineNumber": 299
+        },
+        {
+          "caller": "Start",
+          "callee": "isContainerNotFound",
+          "lineNumber": 301
+        },
+        {
+          "caller": "Start",
+          "callee": "fmt.Errorf",
+          "lineNumber": 302
+        },
+        {
+          "caller": "Start",
+          "callee": "prepareWorkerMounts",
+          "lineNumber": 304
+        },
+        {
+          "caller": "Start",
+          "callee": "fmt.Errorf",
+          "lineNumber": 306
+        },
+        {
+          "caller": "Start",
+          "callee": "bindMount",
+          "lineNumber": 318
+        },
+        {
+          "caller": "Start",
+          "callee": "bindMount",
+          "lineNumber": 319
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 322
+        },
+        {
+          "caller": "Start",
+          "callee": "bindMount",
+          "lineNumber": 322
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 325
+        },
+        {
+          "caller": "Start",
+          "callee": "bindMount",
+          "lineNumber": 325
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 328
+        },
+        {
+          "caller": "Start",
+          "callee": "credentialVolumeName",
+          "lineNumber": 328
+        },
+        {
+          "caller": "Start",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 331
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 334
+        },
+        {
+          "caller": "Start",
+          "callee": "roleVolumeName",
+          "lineNumber": 334
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 336
+        },
+        {
+          "caller": "Start",
+          "callee": "strconv.Itoa",
+          "lineNumber": 336
+        },
+        {
+          "caller": "Start",
+          "callee": "filepath.Join",
+          "lineNumber": 339
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 340
+        },
+        {
+          "caller": "Start",
+          "callee": "bindMount",
+          "lineNumber": 340
+        },
+        {
+          "caller": "Start",
+          "callee": "baselineEnvironment",
+          "lineNumber": 342
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 343
+        },
+        {
+          "caller": "Start",
+          "callee": "append",
+          "lineNumber": 345
+        },
+        {
+          "caller": "Start",
+          "callee": "imageReference",
+          "lineNumber": 345
+        },
+        {
+          "caller": "Start",
+          "callee": "r.runDocker",
+          "lineNumber": 346
+        },
+        {
+          "caller": "Start",
+          "callee": "fmt.Errorf",
+          "lineNumber": 347
+        },
+        {
+          "caller": "Resume",
+          "callee": "validateResumeRequest",
+          "lineNumber": 355
+        },
+        {
+          "caller": "Resume",
+          "callee": "containerName",
+          "lineNumber": 358
+        },
+        {
+          "caller": "Resume",
+          "callee": "r.inspectContainer",
+          "lineNumber": 359
+        },
+        {
+          "caller": "Resume",
+          "callee": "isContainerNotFound",
+          "lineNumber": 361
+        },
+        {
+          "caller": "Resume",
+          "callee": "fmt.Errorf",
+          "lineNumber": 362
+        },
+        {
+          "caller": "Resume",
+          "callee": "fmt.Errorf",
+          "lineNumber": 364
+        },
+        {
+          "caller": "Resume",
+          "callee": "imageReference",
+          "lineNumber": 366
+        },
+        {
+          "caller": "Resume",
+          "callee": "fmt.Errorf",
+          "lineNumber": 368
+        },
+        {
+          "caller": "Resume",
+          "callee": "r.startContainer",
+          "lineNumber": 373
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "validateCommandRequest",
+          "lineNumber": 380
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "r.inspectContainer",
+          "lineNumber": 383
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "containerName",
+          "lineNumber": 383
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "fmt.Errorf",
+          "lineNumber": 385
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "fmt.Errorf",
+          "lineNumber": 388
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "commandEnvironment",
+          "lineNumber": 391
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "append",
+          "lineNumber": 394
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "append",
+          "lineNumber": 396
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "containerName",
+          "lineNumber": 396
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "append",
+          "lineNumber": 397
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "append",
+          "lineNumber": 398
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "r.runDocker",
+          "lineNumber": 399
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "ctx.Err",
+          "lineNumber": 403
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "fmt.Errorf",
+          "lineNumber": 404
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "ctx.Err",
+          "lineNumber": 404
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "errors.As",
+          "lineNumber": 407
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "isDockerRuntimeFailure",
+          "lineNumber": 407
+        },
+        {
+          "caller": "RunCommand",
+          "callee": "fmt.Errorf",
+          "lineNumber": 410
+        },
+        {
+          "caller": "InteractiveCommand",
+          "callee": "validateInteractiveRequest",
+          "lineNumber": 418
+        },
+        {
+          "caller": "InteractiveCommand",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 422
+        },
+        {
+          "caller": "InteractiveCommand",
+          "callee": "explicitEnvironment",
+          "lineNumber": 426
+        },
+        {
+          "caller": "InteractiveCommand",
+          "callee": "append",
+          "lineNumber": 428
+        },
+        {
+          "caller": "InteractiveCommand",
+          "callee": "append",
+          "lineNumber": 430
+        },
+        {
+          "caller": "InteractiveCommand",
+          "callee": "append",
+          "lineNumber": 431
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "validateRunID",
+          "lineNumber": 439
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 442
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 442
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "errors.New",
+          "lineNumber": 443
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "os.Lstat",
+          "lineNumber": 445
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "fmt.Errorf",
+          "lineNumber": 447
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "info.Mode",
+          "lineNumber": 449
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "errors.New",
+          "lineNumber": 450
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "info.Mode().IsRegular",
+          "lineNumber": 452
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "info.Mode",
+          "lineNumber": 452
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "errors.New",
+          "lineNumber": 453
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "os.ReadFile",
+          "lineNumber": 455
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "fmt.Errorf",
+          "lineNumber": 457
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "len",
+          "lineNumber": 459
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "errors.New",
+          "lineNumber": 460
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "r.runDockerWithInput",
+          "lineNumber": 462
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "containerName",
+          "lineNumber": 464
+        },
+        {
+          "caller": "SeedCodexCredentials",
+          "callee": "fmt.Errorf",
+          "lineNumber": 468
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "validateRunID",
+          "lineNumber": 477
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "fmt.Errorf",
+          "lineNumber": 481
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "r.RunCommand",
+          "lineNumber": 483
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 495
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "make",
+          "lineNumber": 499
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "make",
+          "lineNumber": 500
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "strings.Split",
+          "lineNumber": 501
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 502
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "validName",
+          "lineNumber": 506
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "errors.New",
+          "lineNumber": 507
+        },
+        {
+          "caller": "NativeSessionIDs",
+          "callee": "append",
+          "lineNumber": 513
+        },
+        {
+          "caller": "NativeSessionID",
+          "callee": "r.NativeSessionIDs",
+          "lineNumber": 521
+        },
+        {
+          "caller": "NativeSessionID",
+          "callee": "len",
+          "lineNumber": 522
+        },
+        {
+          "caller": "NativeSessionID",
+          "callee": "len",
+          "lineNumber": 525
+        },
+        {
+          "caller": "Attach",
+          "callee": "validateInteractiveRequest",
+          "lineNumber": 531
+        },
+        {
+          "caller": "Attach",
+          "callee": "r.inspectContainer",
+          "lineNumber": 534
+        },
+        {
+          "caller": "Attach",
+          "callee": "containerName",
+          "lineNumber": 534
+        },
+        {
+          "caller": "Attach",
+          "callee": "fmt.Errorf",
+          "lineNumber": 536
+        },
+        {
+          "caller": "Attach",
+          "callee": "fmt.Errorf",
+          "lineNumber": 539
+        },
+        {
+          "caller": "Attach",
+          "callee": "commandEnvironment",
+          "lineNumber": 542
+        },
+        {
+          "caller": "Attach",
+          "callee": "append",
+          "lineNumber": 543
+        },
+        {
+          "caller": "Attach",
+          "callee": "append",
+          "lineNumber": 545
+        },
+        {
+          "caller": "Attach",
+          "callee": "containerName",
+          "lineNumber": 545
+        },
+        {
+          "caller": "Attach",
+          "callee": "append",
+          "lineNumber": 546
+        },
+        {
+          "caller": "Attach",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 548
+        },
+        {
+          "caller": "Attach",
+          "callee": "exec.CommandContext",
+          "lineNumber": 551
+        },
+        {
+          "caller": "Attach",
+          "callee": "command.Run",
+          "lineNumber": 555
+        },
+        {
+          "caller": "Stop",
+          "callee": "validateRunID",
+          "lineNumber": 562
+        },
+        {
+          "caller": "Stop",
+          "callee": "containerName",
+          "lineNumber": 565
+        },
+        {
+          "caller": "Stop",
+          "callee": "r.inspectContainer",
+          "lineNumber": 566
+        },
+        {
+          "caller": "Stop",
+          "callee": "isContainerNotFound",
+          "lineNumber": 568
+        },
+        {
+          "caller": "Stop",
+          "callee": "fmt.Errorf",
+          "lineNumber": 571
+        },
+        {
+          "caller": "Stop",
+          "callee": "r.runDocker",
+          "lineNumber": 576
+        },
+        {
+          "caller": "Stop",
+          "callee": "fmt.Errorf",
+          "lineNumber": 577
+        },
+        {
+          "caller": "Inspect",
+          "callee": "validateRunID",
+          "lineNumber": 585
+        },
+        {
+          "caller": "Inspect",
+          "callee": "r.inspectContainer",
+          "lineNumber": 588
+        },
+        {
+          "caller": "Inspect",
+          "callee": "containerName",
+          "lineNumber": 588
+        },
+        {
+          "caller": "Inspect",
+          "callee": "isContainerNotFound",
+          "lineNumber": 590
+        },
+        {
+          "caller": "Inspect",
+          "callee": "fmt.Errorf",
+          "lineNumber": 593
+        },
+        {
+          "caller": "startContainer",
+          "callee": "r.runDocker",
+          "lineNumber": 600
+        },
+        {
+          "caller": "startContainer",
+          "callee": "fmt.Errorf",
+          "lineNumber": 601
+        },
+        {
+          "caller": "recreateWorker",
+          "callee": "r.runDocker",
+          "lineNumber": 611
+        },
+        {
+          "caller": "recreateWorker",
+          "callee": "fmt.Errorf",
+          "lineNumber": 612
+        },
+        {
+          "caller": "recreateWorker",
+          "callee": "r.runDocker",
+          "lineNumber": 615
+        },
+        {
+          "caller": "recreateWorker",
+          "callee": "fmt.Errorf",
+          "lineNumber": 616
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "r.runDocker",
+          "lineNumber": 623
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 631
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 632
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "parseDockerInspectionJSON",
+          "lineNumber": 633
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strings.SplitN",
+          "lineNumber": 635
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "len",
+          "lineNumber": 636
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "len",
+          "lineNumber": 636
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "fmt.Errorf",
+          "lineNumber": 637
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strconv.ParseBool",
+          "lineNumber": 639
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "fmt.Errorf",
+          "lineNumber": 641
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "make",
+          "lineNumber": 645
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "len",
+          "lineNumber": 646
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 646
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strings.Split",
+          "lineNumber": 647
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 647
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strings.Split",
+          "lineNumber": 648
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "len",
+          "lineNumber": 649
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "fmt.Errorf",
+          "lineNumber": 650
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "strconv.ParseBool",
+          "lineNumber": 652
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "fmt.Errorf",
+          "lineNumber": 654
+        },
+        {
+          "caller": "inspectContainer",
+          "callee": "append",
+          "lineNumber": 657
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "json.Unmarshal",
+          "lineNumber": 691
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "fmt.Errorf",
+          "lineNumber": 692
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "make",
+          "lineNumber": 694
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "len",
+          "lineNumber": 694
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "make",
+          "lineNumber": 695
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "len",
+          "lineNumber": 695
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 697
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "dockerMountIdentity",
+          "lineNumber": 700
+        },
+        {
+          "caller": "parseDockerInspectionJSON",
+          "callee": "append",
+          "lineNumber": 704
+        },
+        {
+          "caller": "dockerMountIdentity",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 722
+        },
+        {
+          "caller": "dockerMountIdentity",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 723
+        },
+        {
+          "caller": "dockerMountIdentity",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 725
+        },
+        {
+          "caller": "dockerMountIdentity",
+          "callee": "filepath.Clean",
+          "lineNumber": 726
+        },
+        {
+          "caller": "runDocker",
+          "callee": "r.runDockerWithInput",
+          "lineNumber": 734
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 741
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "exec.CommandContext",
+          "lineNumber": 744
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "bytes.NewReader",
+          "lineNumber": 745
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "command.Run",
+          "lineNumber": 749
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "stdout.String",
+          "lineNumber": 751
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "stderr.String",
+          "lineNumber": 752
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "errors.As",
+          "lineNumber": 761
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "exitErr.ExitCode",
+          "lineNumber": 762
+        },
+        {
+          "caller": "runDockerWithInput",
+          "callee": "append",
+          "lineNumber": 766
+        },
+        {
+          "caller": "Error",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 805
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validateRunID",
+          "lineNumber": 814
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validateDirectory",
+          "lineNumber": 817
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validateDirectory",
+          "lineNumber": 820
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validateImageName",
+          "lineNumber": 823
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validDigest",
+          "lineNumber": 826
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "errors.New",
+          "lineNumber": 827
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validateDirectory",
+          "lineNumber": 830
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validateDirectory",
+          "lineNumber": 835
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 839
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "errors.New",
+          "lineNumber": 840
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validName",
+          "lineNumber": 842
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 843
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "make",
+          "lineNumber": 845
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "len",
+          "lineNumber": 845
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "validateCacheMount",
+          "lineNumber": 847
+        },
+        {
+          "caller": "workerMountsPresent",
+          "callee": "expectedWorkerMounts",
+          "lineNumber": 859
+        },
+        {
+          "caller": "workerMountsPresent",
+          "callee": "requiredInvocationMounts",
+          "lineNumber": 868
+        },
+        {
+          "caller": "requiredInvocationMounts",
+          "callee": "make",
+          "lineNumber": 879
+        },
+        {
+          "caller": "requiredInvocationMounts",
+          "callee": "append",
+          "lineNumber": 881
+        },
+        {
+          "caller": "requiredInvocationMounts",
+          "callee": "append",
+          "lineNumber": 884
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 893
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "filepath.Clean",
+          "lineNumber": 897
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "filepath.Clean",
+          "lineNumber": 898
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "roleVolumeName",
+          "lineNumber": 899
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "credentialVolumeName",
+          "lineNumber": 902
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "filepath.Clean",
+          "lineNumber": 905
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "filepath.Clean",
+          "lineNumber": 908
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "filepath.Join",
+          "lineNumber": 911
+        },
+        {
+          "caller": "expectedWorkerMounts",
+          "callee": "filepath.Clean",
+          "lineNumber": 911
+        },
+        {
+          "caller": "validateResumeRequest",
+          "callee": "validateRunID",
+          "lineNumber": 919
+        },
+        {
+          "caller": "validateResumeRequest",
+          "callee": "validateImageName",
+          "lineNumber": 922
+        },
+        {
+          "caller": "validateResumeRequest",
+          "callee": "validDigest",
+          "lineNumber": 925
+        },
+        {
+          "caller": "validateResumeRequest",
+          "callee": "errors.New",
+          "lineNumber": 926
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "validateRunID",
+          "lineNumber": 934
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 937
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "errors.New",
+          "lineNumber": 938
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "errors.New",
+          "lineNumber": 941
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 943
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "errors.New",
+          "lineNumber": 944
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "validName",
+          "lineNumber": 946
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 947
+        },
+        {
+          "caller": "validateCommandRequest",
+          "callee": "validateEnvironmentEntry",
+          "lineNumber": 950
+        },
+        {
+          "caller": "validateCacheMount",
+          "callee": "validName",
+          "lineNumber": 960
+        },
+        {
+          "caller": "validateCacheMount",
+          "callee": "fmt.Errorf",
+          "lineNumber": 961
+        },
+        {
+          "caller": "validateCacheMount",
+          "callee": "hostHarnessDirectory",
+          "lineNumber": 963
+        },
+        {
+          "caller": "validateCacheMount",
+          "callee": "fmt.Errorf",
+          "lineNumber": 964
+        },
+        {
+          "caller": "validateCacheMount",
+          "callee": "fmt.Errorf",
+          "lineNumber": 967
+        },
+        {
+          "caller": "validateCacheMount",
+          "callee": "ensureCacheDirectory",
+          "lineNumber": 970
+        },
+        {
+          "caller": "hostHarnessDirectory",
+          "callee": "strings.Split",
+          "lineNumber": 976
+        },
+        {
+          "caller": "hostHarnessDirectory",
+          "callee": "filepath.ToSlash",
+          "lineNumber": 976
+        },
+        {
+          "caller": "hostHarnessDirectory",
+          "callee": "filepath.Clean",
+          "lineNumber": 976
+        },
+        {
+          "caller": "validateEnvironmentEntry",
+          "callee": "validateEnvironmentEntryWithProtocol",
+          "lineNumber": 988
+        },
+        {
+          "caller": "validateInteractiveEnvironmentEntry",
+          "callee": "validateEnvironmentEntryWithProtocol",
+          "lineNumber": 994
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "validEnvironmentName",
+          "lineNumber": 1001
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1002
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 1004
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1005
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "forbiddenEnvironmentName",
+          "lineNumber": 1007
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1008
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "reservedEnvironmentName",
+          "lineNumber": 1010
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "interactiveProtocolEnvironmentName",
+          "lineNumber": 1010
+        },
+        {
+          "caller": "validateEnvironmentEntryWithProtocol",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1011
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 1019
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "errors.New",
+          "lineNumber": 1021
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 1023
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 1023
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1024
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "strings.LastIndex",
+          "lineNumber": 1026
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "strings.Contains",
+          "lineNumber": 1027
+        },
+        {
+          "caller": "validateImageName",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1028
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "make",
+          "lineNumber": 1036
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "filepath.Join",
+          "lineNumber": 1048
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "make",
+          "lineNumber": 1056
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1067
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "filepath.Clean",
+          "lineNumber": 1069
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "filepath.Clean",
+          "lineNumber": 1069
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1070
+        },
+        {
+          "caller": "validateMountContract",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1081
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "make",
+          "lineNumber": 1092
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "append",
+          "lineNumber": 1102
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "append",
+          "lineNumber": 1109
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "prepareWorkerMount",
+          "lineNumber": 1116
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1117
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "prepareWorkerMount",
+          "lineNumber": 1121
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1122
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "make",
+          "lineNumber": 1125
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "len",
+          "lineNumber": 1125
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "append",
+          "lineNumber": 1130
+        },
+        {
+          "caller": "prepareWorkerMounts",
+          "callee": "sort.Ints",
+          "lineNumber": 1132
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "filepath.WalkDir",
+          "lineNumber": 1141
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "entry.Type",
+          "lineNumber": 1145
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "entry.Info",
+          "lineNumber": 1148
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "info.IsDir",
+          "lineNumber": 1152
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "info.Mode().IsRegular",
+          "lineNumber": 1152
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "info.Mode",
+          "lineNumber": 1152
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1153
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "hostGroupID",
+          "lineNumber": 1155
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "workerMountPermissions",
+          "lineNumber": 1160
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "info.Mode",
+          "lineNumber": 1160
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "info.Mode().Perm",
+          "lineNumber": 1161
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "info.Mode",
+          "lineNumber": 1161
+        },
+        {
+          "caller": "prepareWorkerMount",
+          "callee": "os.Chmod",
+          "lineNumber": 1164
+        },
+        {
+          "caller": "hostGroupID",
+          "callee": "info.Sys",
+          "lineNumber": 1172
+        },
+        {
+          "caller": "hostGroupID",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1174
+        },
+        {
+          "caller": "hostGroupID",
+          "callee": "int",
+          "lineNumber": 1176
+        },
+        {
+          "caller": "hostGroupID",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1178
+        },
+        {
+          "caller": "workerMountPermissions",
+          "callee": "mode.Perm",
+          "lineNumber": 1187
+        },
+        {
+          "caller": "workerMountPermissions",
+          "callee": "mode.IsDir",
+          "lineNumber": 1188
+        },
+        {
+          "caller": "workerMountPermissions",
+          "callee": "mode.Perm",
+          "lineNumber": 1196
+        },
+        {
+          "caller": "workerMountPermissions",
+          "callee": "mode.Perm",
+          "lineNumber": 1202
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 1211
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1212
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 1214
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1215
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "os.Stat",
+          "lineNumber": 1217
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1219
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "info.IsDir",
+          "lineNumber": 1221
+        },
+        {
+          "caller": "validateDirectory",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1222
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 1230
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "errors.New",
+          "lineNumber": 1231
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 1233
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "errors.New",
+          "lineNumber": 1234
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "os.Stat",
+          "lineNumber": 1236
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "errors.Is",
+          "lineNumber": 1237
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "os.MkdirAll",
+          "lineNumber": 1238
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1239
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "os.Stat",
+          "lineNumber": 1241
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1244
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "info.IsDir",
+          "lineNumber": 1246
+        },
+        {
+          "caller": "ensureCacheDirectory",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1247
+        },
+        {
+          "caller": "validateRunID",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 1255
+        },
+        {
+          "caller": "validateRunID",
+          "callee": "errors.New",
+          "lineNumber": 1256
+        },
+        {
+          "caller": "validateRunID",
+          "callee": "validName",
+          "lineNumber": 1258
+        },
+        {
+          "caller": "validateRunID",
+          "callee": "fmt.Errorf",
+          "lineNumber": 1259
+        },
+        {
+          "caller": "forbiddenEnvironmentName",
+          "callee": "strings.ToUpper",
+          "lineNumber": 1299
+        },
+        {
+          "caller": "forbiddenEnvironmentName",
+          "callee": "strings.HasSuffix",
+          "lineNumber": 1303
+        },
+        {
+          "caller": "forbiddenEnvironmentName",
+          "callee": "strings.ToUpper",
+          "lineNumber": 1303
+        },
+        {
+          "caller": "forbiddenEnvironmentName",
+          "callee": "strings.HasSuffix",
+          "lineNumber": 1303
+        },
+        {
+          "caller": "forbiddenEnvironmentName",
+          "callee": "strings.ToUpper",
+          "lineNumber": 1303
+        },
+        {
+          "caller": "reservedEnvironmentName",
+          "callee": "strings.ToUpper",
+          "lineNumber": 1310
+        },
+        {
+          "caller": "interactiveProtocolEnvironmentName",
+          "callee": "strings.ToUpper",
+          "lineNumber": 1321
+        },
+        {
+          "caller": "validDigest",
+          "callee": "len",
+          "lineNumber": 1331
+        },
+        {
+          "caller": "validDigest",
+          "callee": "len",
+          "lineNumber": 1331
+        },
+        {
+          "caller": "validDigest",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 1331
+        },
+        {
+          "caller": "validDigest",
+          "callee": "strings.TrimPrefix",
+          "lineNumber": 1334
+        },
+        {
+          "caller": "imageReference",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 1345
+        },
+        {
+          "caller": "imageReference",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 1345
+        },
+        {
+          "caller": "commandEnvironment",
+          "callee": "baselineEnvironment",
+          "lineNumber": 1393
+        },
+        {
+          "caller": "commandEnvironment",
+          "callee": "append",
+          "lineNumber": 1395
+        },
+        {
+          "caller": "commandEnvironment",
+          "callee": "append",
+          "lineNumber": 1397
+        },
+        {
+          "caller": "commandEnvironment",
+          "callee": "explicitEnvironment",
+          "lineNumber": 1397
+        },
+        {
+          "caller": "explicitEnvironment",
+          "callee": "make",
+          "lineNumber": 1404
+        },
+        {
+          "caller": "explicitEnvironment",
+          "callee": "len",
+          "lineNumber": 1404
+        },
+        {
+          "caller": "explicitEnvironment",
+          "callee": "append",
+          "lineNumber": 1406
+        },
+        {
+          "caller": "explicitEnvironment",
+          "callee": "sort.Strings",
+          "lineNumber": 1408
+        },
+        {
+          "caller": "explicitEnvironment",
+          "callee": "make",
+          "lineNumber": 1409
+        },
+        {
+          "caller": "explicitEnvironment",
+          "callee": "len",
+          "lineNumber": 1409
+        },
+        {
+          "caller": "explicitEnvironment",
+          "callee": "append",
+          "lineNumber": 1411
+        },
+        {
+          "caller": "containerName",
+          "callee": "sha256.Sum256",
+          "lineNumber": 1419
+        },
+        {
+          "caller": "containerName",
+          "callee": "hex.EncodeToString",
+          "lineNumber": 1420
+        },
+        {
+          "caller": "roleVolumeName",
+          "callee": "sha256.Sum256",
+          "lineNumber": 1426
+        },
+        {
+          "caller": "roleVolumeName",
+          "callee": "strings.ToLower",
+          "lineNumber": 1427
+        },
+        {
+          "caller": "roleVolumeName",
+          "callee": "hex.EncodeToString",
+          "lineNumber": 1427
+        },
+        {
+          "caller": "credentialVolumeName",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 1433
+        },
+        {
+          "caller": "credentialVolumeName",
+          "callee": "sha256.Sum256",
+          "lineNumber": 1436
+        },
+        {
+          "caller": "credentialVolumeName",
+          "callee": "hex.EncodeToString",
+          "lineNumber": 1437
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "validateRunID",
+          "lineNumber": 1443
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "len",
+          "lineNumber": 1446
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 1446
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "errors.New",
+          "lineNumber": 1447
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "errors.New",
+          "lineNumber": 1450
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 1452
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "validName",
+          "lineNumber": 1452
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "errors.New",
+          "lineNumber": 1453
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 1456
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "errors.New",
+          "lineNumber": 1457
+        },
+        {
+          "caller": "validateInteractiveRequest",
+          "callee": "validateInteractiveEnvironmentEntry",
+          "lineNumber": 1461
+        },
+        {
+          "caller": "isContainerNotFound",
+          "callee": "errors.As",
+          "lineNumber": 1472
+        },
+        {
+          "caller": "isContainerNotFound",
+          "callee": "strings.ToLower",
+          "lineNumber": 1475
+        },
+        {
+          "caller": "isContainerNotFound",
+          "callee": "strings.Contains",
+          "lineNumber": 1476
+        },
+        {
+          "caller": "isContainerNotFound",
+          "callee": "strings.Contains",
+          "lineNumber": 1476
+        },
+        {
+          "caller": "isDockerRuntimeFailure",
+          "callee": "strings.ToLower",
+          "lineNumber": 1482
+        },
+        {
+          "caller": "isDockerRuntimeFailure",
+          "callee": "strings.Contains",
+          "lineNumber": 1492
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 30,
+        "functionCount": 57,
+        "classCount": 20
+      }
+    }
+  ]
+}

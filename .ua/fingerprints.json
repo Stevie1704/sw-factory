@@ -1,0 +1,6198 @@
+{
+  "version": "1.0.0",
+  "gitCommitHash": "582b7e9f3e4ffb259e418dab04a3b51a29c966f6",
+  "generatedAt": "2026-08-21T16:01:03.044Z",
+  "files": {
+    ".ua/.understandignore": {
+      "filePath": ".ua/.understandignore",
+      "contentHash": "9409bc7b1385e2b42a7b32da19ac25e3901ad7341e16e0d959352d0736d24a15",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 70,
+      "hasStructuralAnalysis": false
+    },
+    ".ua/config.json": {
+      "filePath": ".ua/config.json",
+      "contentHash": "08d37f20ea0af2233ae24f094723759f952381ecb6dd7f2aaa05ef96e95eae6b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 4,
+      "hasStructuralAnalysis": true
+    },
+    "AGENTS.md": {
+      "filePath": "AGENTS.md",
+      "contentHash": "ba9abffff0d64c2f82b08d587bdef8516032fc73193433024fdb8291d5f2c946",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 17,
+      "hasStructuralAnalysis": true
+    },
+    "CONTEXT.md": {
+      "filePath": "CONTEXT.md",
+      "contentHash": "890ee062a2816bbb333a528ca2fab8530008182d39325f9aed1bfc6b3367c83b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 86,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/factory-report/main.go": {
+      "filePath": "cmd/factory-report/main.go",
+      "contentHash": "9cca8da6d0314f608f253580cdd30a85da5671213027d362afdfb43642ef44f2",
+      "functions": [
+        {
+          "name": "main",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/reportcli",
+          "specifiers": [
+            "reportcli"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/factory-worker-attach/main.go": {
+      "filePath": "cmd/factory-worker-attach/main.go",
+      "contentHash": "0fb8721e057d7dfe26979a40c65ec19a1d0d0d041669ec3be5ca8aaffb8b43cc",
+      "functions": [
+        {
+          "name": "main",
+          "params": [],
+          "exported": false,
+          "lineCount": 43
+        },
+        {
+          "name": "String",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Set",
+          "params": [
+            "input"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "flag",
+          "specifiers": [
+            "flag"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/worker",
+          "specifiers": [
+            "worker"
+          ]
+        }
+      ],
+      "exports": [
+        "String",
+        "Set"
+      ],
+      "totalLines": 76,
+      "hasStructuralAnalysis": true
+    },
+    "cmd/factory/main.go": {
+      "filePath": "cmd/factory/main.go",
+      "contentHash": "325d8b8720795c05d8efdced01c78044aaf960dc7eef301fa97f01be219a1ee7",
+      "functions": [
+        {
+          "name": "main",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/cli",
+          "specifiers": [
+            "cli"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 13,
+      "hasStructuralAnalysis": true
+    },
+    "docs/adr/0001-local-evaluation-without-outbound-telemetry.md": {
+      "filePath": "docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "contentHash": "15042d8da3d986152be52cc70b817cfb0106f89f86d6dd82c99ce31e52879727",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 12,
+      "hasStructuralAnalysis": true
+    },
+    "docs/agent-runtime.md": {
+      "filePath": "docs/agent-runtime.md",
+      "contentHash": "81301bf37d050fb2d2a413be5ea11a509c54ffb6d10e9def85e2f2eddaf80567",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 101,
+      "hasStructuralAnalysis": true
+    },
+    "docs/agents/domain.md": {
+      "filePath": "docs/agents/domain.md",
+      "contentHash": "edc6d6131fdffc4b7135704f5262124fc43355c95f61b7399dc5a4db643e28ca",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 52,
+      "hasStructuralAnalysis": true
+    },
+    "docs/agents/issue-tracker.md": {
+      "filePath": "docs/agents/issue-tracker.md",
+      "contentHash": "afd6852a80185217bd28aa5cbe456bef1e85be25be7bd1fba382d5b8ee428325",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 46,
+      "hasStructuralAnalysis": true
+    },
+    "docs/agents/triage-labels.md": {
+      "filePath": "docs/agents/triage-labels.md",
+      "contentHash": "4f53c9b40ce2651e3611aa090eaedbd6dbc9b71ef8c5f7e65eac0d8263190d0d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 16,
+      "hasStructuralAnalysis": true
+    },
+    "docs/configuration.md": {
+      "filePath": "docs/configuration.md",
+      "contentHash": "5d6c0c75b87ddf571d4d5e06bfb2645084e6355890378ad2bd9ce2849a658100",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 242,
+      "hasStructuralAnalysis": true
+    },
+    "docs/spikes/0002-nested-harness-ttys.md": {
+      "filePath": "docs/spikes/0002-nested-harness-ttys.md",
+      "contentHash": "440095171728a4e11575a6f24c9a367c7c61f29fa9cf219052b33e07bb9b1fbf",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 386,
+      "hasStructuralAnalysis": true
+    },
+    "docs/worker-runtime.md": {
+      "filePath": "docs/worker-runtime.md",
+      "contentHash": "2168c2c01d0cfbe23539116f064f92d6e80a958ebc3e47fe4de033aac2a0c6bd",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 89,
+      "hasStructuralAnalysis": true
+    },
+    "factory.yaml": {
+      "filePath": "factory.yaml",
+      "contentHash": "00fa38c7c44fd61e4afdf6ecb179c3f9a9e251b4d482ba61e77d258b49678cc8",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 62,
+      "hasStructuralAnalysis": true
+    },
+    "go.mod": {
+      "filePath": "go.mod",
+      "contentHash": "8cfb5a5255f586b29febaff08d5728b6685ae5285371a55dbde6fa9f97c3a785",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 21,
+      "hasStructuralAnalysis": false
+    },
+    "go.sum": {
+      "filePath": "go.sum",
+      "contentHash": "b169d454eb9814db4585f7ca1e895720ce4949a913b02e60c16ad3b63f763bae",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 55,
+      "hasStructuralAnalysis": false
+    },
+    "internal/cli/cli.go": {
+      "filePath": "internal/cli/cli.go",
+      "contentHash": "289e2941a8abe9ea6e183f630f9f117ac232061c542a184595e274512439a44e",
+      "functions": [
+        {
+          "name": "Run",
+          "params": [
+            "ctx",
+            "args",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "commandFor",
+          "params": [
+            "name"
+          ],
+          "returnType": "(commandHandler, bool)",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "commandNames",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "runBootstrapLabels",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 21
+        },
+        {
+          "name": "runIssue",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 39
+        },
+        {
+          "name": "runAgent",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 39
+        },
+        {
+          "name": "runAgentReport",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 29
+        },
+        {
+          "name": "runDraftPullRequest",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 28
+        },
+        {
+          "name": "runInit",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 22
+        },
+        {
+          "name": "runRegister",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 50
+        },
+        {
+          "name": "runStatus",
+          "params": [
+            "ctx",
+            "args",
+            "defaultConfigPath",
+            "output",
+            "errorsOutput"
+          ],
+          "returnType": "int",
+          "exported": false,
+          "lineCount": 44
+        },
+        {
+          "name": "writeOutput",
+          "params": [
+            "output",
+            "errorsOutput",
+            "format"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "writeError",
+          "params": [
+            "output",
+            "err"
+          ],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "String",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Set",
+          "params": [
+            "value"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [
+        {
+          "name": "commandDefinition",
+          "methods": [],
+          "properties": [
+            "name",
+            "handler"
+          ],
+          "exported": false,
+          "lineCount": 4
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "flag",
+          "specifiers": [
+            "flag"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "strconv",
+          "specifiers": [
+            "strconv"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/factory",
+          "specifiers": [
+            "factory"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/store",
+          "specifiers": [
+            "store"
+          ]
+        }
+      ],
+      "exports": [
+        "Run",
+        "String",
+        "Set"
+      ],
+      "totalLines": 398,
+      "hasStructuralAnalysis": true
+    },
+    "internal/config/config.go": {
+      "filePath": "internal/config/config.go",
+      "contentHash": "a2267b6c5620fa0c21947f04de531e614640aae4e554c285ae31d8d74199cbac",
+      "functions": [
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Unwrap",
+          "params": [],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "NewHostConfig",
+          "params": [],
+          "returnType": "HostConfig",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "DefaultHostConfigPath",
+          "params": [],
+          "returnType": "(string, error)",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "DefaultOperationalDataPath",
+          "params": [
+            "hostConfigPath"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "DefaultRepositoryConfigPath",
+          "params": [
+            "repositoryPath"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "LoadHost",
+          "params": [
+            "path"
+          ],
+          "returnType": "(HostConfig, error)",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "LoadRepository",
+          "params": [
+            "path"
+          ],
+          "returnType": "(RepositoryConfig, error)",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "SaveHost",
+          "params": [
+            "path",
+            "config"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 37
+        },
+        {
+          "name": "CreateHost",
+          "params": [
+            "path"
+          ],
+          "returnType": "(HostConfig, error)",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "ValidateHost",
+          "params": [
+            "config"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "ValidateRepository",
+          "params": [
+            "config"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 137
+        },
+        {
+          "name": "validateRegistration",
+          "params": [
+            "prefix",
+            "repository"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 47
+        },
+        {
+          "name": "validateSchema",
+          "params": [
+            "kind",
+            "version"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "validateDuration",
+          "params": [
+            "field",
+            "value",
+            "allowEmpty"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "validateUniqueStrings",
+          "params": [
+            "field",
+            "values"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "validateOptionalUniqueStrings",
+          "params": [
+            "field",
+            "values"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "validateOptionalOverrides",
+          "params": [
+            "values"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "validation",
+          "params": [
+            "field",
+            "message"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "loadYAML",
+          "params": [
+            "path",
+            "destination"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "validSHA256Digest",
+          "params": [
+            "value"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 11
+        }
+      ],
+      "classes": [
+        {
+          "name": "HostConfig",
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "Repositories"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "RepositoryRegistration",
+          "methods": [],
+          "properties": [
+            "Path",
+            "GitHub",
+            "AuthorizedUsers",
+            "Polling",
+            "Cmux",
+            "Authentication",
+            "OperationalDataPath",
+            "RepositoryConfigPath"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "GitHubConfig",
+          "methods": [],
+          "properties": [
+            "Owner",
+            "Repository"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "PollingConfig",
+          "methods": [],
+          "properties": [
+            "Interval",
+            "Backoff"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "CmuxConfig",
+          "methods": [],
+          "properties": [
+            "SocketPath",
+            "ControlWorkspace"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "AuthenticationConfig",
+          "methods": [],
+          "properties": [
+            "CodexAuthPath"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "RepositoryConfig",
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "TargetBranch",
+            "Setup",
+            "Gates",
+            "RoleHarnessDefaults",
+            "ModelOptions",
+            "Timeouts",
+            "RetryLimits",
+            "TestPolicy",
+            "AllowedOverrides",
+            "Caches",
+            "WorkerBuild",
+            "BaseSynchronization"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "GateConfig",
+          "methods": [],
+          "properties": [
+            "Name",
+            "Command",
+            "Timeout",
+            "Blocking",
+            "DependsOn",
+            "EnvironmentPolicy"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TimeoutConfig",
+          "methods": [],
+          "properties": [
+            "Setup",
+            "Agent",
+            "Gate",
+            "Review"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "RetryLimits",
+          "methods": [],
+          "properties": [
+            "CheckRepair",
+            "ReviewRepair",
+            "TestRevision"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "TestPolicy",
+          "methods": [],
+          "properties": [
+            "Mode",
+            "AllowHumanExemption",
+            "AllowTechnicalExemption"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "CacheConfig",
+          "methods": [],
+          "properties": [
+            "Name",
+            "Path",
+            "ReadOnly"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "WorkerBuildConfig",
+          "methods": [],
+          "properties": [
+            "Image",
+            "Digest",
+            "Definition"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "BaseSynchronization",
+          "methods": [],
+          "properties": [
+            "Mode",
+            "Branch"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "ValidationError",
+          "methods": [
+            "Error"
+          ],
+          "properties": [
+            "Field",
+            "Message"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "UnknownSchemaVersionError",
+          "methods": [
+            "Error"
+          ],
+          "properties": [
+            "Kind",
+            "Field",
+            "Version",
+            "Supported"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "ConfigFileError",
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Path",
+            "Err"
+          ],
+          "exported": true,
+          "lineCount": 4
+        }
+      ],
+      "imports": [
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "gopkg.in/yaml.v3",
+          "specifiers": [
+            "yaml.v3"
+          ]
+        }
+      ],
+      "exports": [
+        "HostConfig",
+        "RepositoryRegistration",
+        "GitHubConfig",
+        "PollingConfig",
+        "CmuxConfig",
+        "AuthenticationConfig",
+        "RepositoryConfig",
+        "GateConfig",
+        "TimeoutConfig",
+        "RetryLimits",
+        "TestPolicy",
+        "CacheConfig",
+        "WorkerBuildConfig",
+        "BaseSynchronization",
+        "ValidationError",
+        "Error",
+        "UnknownSchemaVersionError",
+        "Error",
+        "ConfigFileError",
+        "Error",
+        "Unwrap",
+        "NewHostConfig",
+        "DefaultHostConfigPath",
+        "DefaultOperationalDataPath",
+        "DefaultRepositoryConfigPath",
+        "LoadHost",
+        "LoadRepository",
+        "SaveHost",
+        "CreateHost",
+        "ValidateHost",
+        "ValidateRepository"
+      ],
+      "totalLines": 613,
+      "hasStructuralAnalysis": true
+    },
+    "internal/factory/agent.go": {
+      "filePath": "internal/factory/agent.go",
+      "contentHash": "828867b2ba00781c0e2c65bf02bb34b37bfc1ddef02a34419e3ee6087fcce30b",
+      "functions": [
+        {
+          "name": "StartAgent",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(result AgentLaunchResult, returnErr error)",
+          "exported": true,
+          "lineCount": 229
+        },
+        {
+          "name": "AcceptAgentReport",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(AgentResult, error)",
+          "exported": true,
+          "lineCount": 120
+        },
+        {
+          "name": "RunAgent",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(AgentResult, error)",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "normalizeAgentRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "AgentRequest",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "validateAgentRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 20
+        },
+        {
+          "name": "resolveAgentPolicy",
+          "params": [
+            "repository",
+            "request"
+          ],
+          "returnType": "(config.Harness, string, error)",
+          "exported": false,
+          "lineCount": 27
+        },
+        {
+          "name": "hasOverride",
+          "params": [
+            "values",
+            "wanted"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "contains",
+          "params": [
+            "values",
+            "wanted"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "sameStrings",
+          "params": [
+            "left",
+            "right"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "validateAgentRunState",
+          "params": [
+            "run"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "persistAgentRunState",
+          "params": [
+            "ctx",
+            "registration",
+            "runStore",
+            "previous",
+            "next"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "writeInvocationPacket",
+          "params": [
+            "directory",
+            "packet"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 32
+        }
+      ],
+      "classes": [
+        {
+          "name": "InvocationStore",
+          "methods": [
+            "SaveInvocation",
+            "Invocation"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "ActiveInvocationStore",
+          "methods": [
+            "ActiveInvocation"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "AgentRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Role",
+            "Stage",
+            "Harness",
+            "Model",
+            "ReasoningEffort",
+            "CodexAuthPath",
+            "PermittedPaths"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "AgentLaunchResult",
+          "methods": [],
+          "properties": [
+            "Invocation",
+            "Prompt"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "AgentReportRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "InvocationID",
+            "PermittedPaths"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "AgentResult",
+          "methods": [],
+          "properties": [
+            "Invocation",
+            "Report"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "InvocationPacket",
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "InvocationID",
+            "RunID",
+            "Role",
+            "Stage",
+            "SpecificationPacket",
+            "PromptVersion",
+            "PermittedPaths"
+          ],
+          "exported": true,
+          "lineCount": 19
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/github",
+          "specifiers": [
+            "github"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/harness",
+          "specifiers": [
+            "harness"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/prompt",
+          "specifiers": [
+            "prompt"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/report",
+          "specifiers": [
+            "report"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/store",
+          "specifiers": [
+            "store"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/terminal",
+          "specifiers": [
+            "terminal"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/worker",
+          "specifiers": [
+            "worker"
+          ]
+        }
+      ],
+      "exports": [
+        "InvocationStore",
+        "ActiveInvocationStore",
+        "AgentRequest",
+        "AgentLaunchResult",
+        "AgentReportRequest",
+        "AgentResult",
+        "InvocationPacket",
+        "StartAgent",
+        "AcceptAgentReport",
+        "RunAgent"
+      ],
+      "totalLines": 649,
+      "hasStructuralAnalysis": true
+    },
+    "internal/factory/claim.go": {
+      "filePath": "internal/factory/claim.go",
+      "contentHash": "d5bc0152687962c166748717ba4adf5a4e25b8e72febfb3dec87e7aa686391e5",
+      "functions": [
+        {
+          "name": "BootstrapLabels",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(BootstrapLabelsResult, error)",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "ClaimIssue",
+          "params": [
+            "ctx",
+            "issueNumber"
+          ],
+          "returnType": "(IssueResult, error)",
+          "exported": true,
+          "lineCount": 103
+        },
+        {
+          "name": "Transition",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(store.Run, error)",
+          "exported": true,
+          "lineCount": 49
+        },
+        {
+          "name": "applyStateTransition",
+          "params": [
+            "ctx",
+            "runStore",
+            "transition"
+          ],
+          "returnType": "(store.Run, error)",
+          "exported": false,
+          "lineCount": 35
+        },
+        {
+          "name": "saveRunWithRetry",
+          "params": [
+            "ctx",
+            "runStore",
+            "run"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "registration",
+          "params": [],
+          "returnType": "(config.RepositoryRegistration, error)",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "openRunStore",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(config.RepositoryRegistration, RunStore, error)",
+          "exported": false,
+          "lineCount": 16
+        },
+        {
+          "name": "openActiveRunStore",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(config.RepositoryRegistration, RunStore, *store.Run, error)",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "failClaim",
+          "params": [
+            "ctx",
+            "runStore",
+            "run",
+            "repository",
+            "issue",
+            "cause"
+          ],
+          "returnType": "(IssueResult, error)",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "statusCommentBody",
+          "params": [
+            "run"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "statusCommentMarker",
+          "params": [
+            "runID"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "factoryLabelForStatus",
+          "params": [
+            "status"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "validateStage",
+          "params": [
+            "stage"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "validateStatus",
+          "params": [
+            "status"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "hasLabel",
+          "params": [
+            "labels",
+            "wanted"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "conflictingFactoryLabel",
+          "params": [
+            "labels"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "replaceFactoryState",
+          "params": [
+            "labels",
+            "state"
+          ],
+          "returnType": "[]string",
+          "exported": false,
+          "lineCount": 18
+        },
+        {
+          "name": "cloneIssue",
+          "params": [
+            "issue"
+          ],
+          "returnType": "github.Issue",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "defaultCoordinator",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        }
+      ],
+      "classes": [
+        {
+          "name": "SpecificationPacket",
+          "methods": [],
+          "properties": [
+            "Version",
+            "Issue",
+            "RepositoryConfig"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "BootstrapLabelsResult",
+          "methods": [],
+          "properties": [
+            "Repository",
+            "Labels"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "IssueResult",
+          "methods": [],
+          "properties": [
+            "Run",
+            "Packet"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "TransitionRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Stage",
+            "Status"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "stateTransition",
+          "methods": [],
+          "properties": [
+            "Repository",
+            "Issue",
+            "Previous",
+            "Next",
+            "CreateComment"
+          ],
+          "exported": false,
+          "lineCount": 7
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/github",
+          "specifiers": [
+            "github"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/store",
+          "specifiers": [
+            "store"
+          ]
+        }
+      ],
+      "exports": [
+        "SpecificationPacket",
+        "BootstrapLabelsResult",
+        "IssueResult",
+        "TransitionRequest",
+        "BootstrapLabels",
+        "ClaimIssue",
+        "Transition"
+      ],
+      "totalLines": 504,
+      "hasStructuralAnalysis": true
+    },
+    "internal/factory/draft_pr.go": {
+      "filePath": "internal/factory/draft_pr.go",
+      "contentHash": "0d61825b96014bed3300e67a81118ed3f6172f2f1de00c6ef658ea81a8cda9f2",
+      "functions": [
+        {
+          "name": "CreateDraftPullRequest",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(DraftPullRequestResult, error)",
+          "exported": true,
+          "lineCount": 118
+        },
+        {
+          "name": "runConfiguredGates",
+          "params": [
+            "ctx",
+            "registration",
+            "run",
+            "packet"
+          ],
+          "returnType": "([]gate.Result, error)",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "upsertDraftPullRequest",
+          "params": [
+            "ctx",
+            "client",
+            "repository",
+            "run",
+            "packet",
+            "gates",
+            "intervention"
+          ],
+          "returnType": "(github.PullRequest, error)",
+          "exported": false,
+          "lineCount": 33
+        },
+        {
+          "name": "regenerateDraftPullRequest",
+          "params": [
+            "ctx",
+            "registration",
+            "run",
+            "packet",
+            "intervention"
+          ],
+          "returnType": "(github.PullRequest, error)",
+          "exported": false,
+          "lineCount": 26
+        },
+        {
+          "name": "gitWorkspace",
+          "params": [],
+          "returnType": "gitadapter.GitWorkspace",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "worktreeManager",
+          "params": [],
+          "returnType": "gitadapter.WorktreeManager",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "worktreeInspector",
+          "params": [],
+          "returnType": "gitadapter.WorktreeInspector",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "pullRequestClient",
+          "params": [],
+          "returnType": "github.PullRequestClient",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "generatedPullRequestBody",
+          "params": [
+            "run",
+            "packet",
+            "gates",
+            "intervention"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 34
+        },
+        {
+          "name": "mergeGeneratedPullRequestBody",
+          "params": [
+            "existing",
+            "generated"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 12
+        }
+      ],
+      "classes": [
+        {
+          "name": "DraftPullRequestRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Intervention"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "DraftPullRequestResult",
+          "methods": [],
+          "properties": [
+            "Run",
+            "Gates",
+            "PullRequest"
+          ],
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/gate",
+          "specifiers": [
+            "gate"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/git",
+          "specifiers": [
+            "gitadapter"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/github",
+          "specifiers": [
+            "github"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/store",
+          "specifiers": [
+            "store"
+          ]
+        }
+      ],
+      "exports": [
+        "DraftPullRequestRequest",
+        "DraftPullRequestResult",
+        "CreateDraftPullRequest"
+      ],
+      "totalLines": 339,
+      "hasStructuralAnalysis": true
+    },
+    "internal/factory/factory.go": {
+      "filePath": "internal/factory/factory.go",
+      "contentHash": "196b049269be3a3340bea32369658a8913149b35b951f570dbaadf575c8f7ce3",
+      "functions": [
+        {
+          "name": "Load",
+          "params": [
+            "path"
+          ],
+          "returnType": "(config.HostConfig, error)",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Save",
+          "params": [
+            "path",
+            "value"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Create",
+          "params": [
+            "path"
+          ],
+          "returnType": "(config.HostConfig, error)",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "New",
+          "params": [
+            "configPath"
+          ],
+          "returnType": "*Service",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "NewWithDependencies",
+          "params": [
+            "configPath",
+            "dependencies"
+          ],
+          "returnType": "*Service",
+          "exported": true,
+          "lineCount": 50
+        },
+        {
+          "name": "ensureAgentRuntime",
+          "params": [
+            "socketPath"
+          ],
+          "returnType": "(terminal.TerminalRuntime, harness.Runtime, error)",
+          "exported": false,
+          "lineCount": 18
+        },
+        {
+          "name": "Init",
+          "params": [
+            "_"
+          ],
+          "returnType": "(InitResult, error)",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "Register",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(RegisterResult, error)",
+          "exported": true,
+          "lineCount": 69
+        },
+        {
+          "name": "Status",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(StatusResult, error)",
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "checkRepository",
+          "params": [
+            "path"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 16
+        },
+        {
+          "name": "defaultString",
+          "params": [
+            "value",
+            "fallback"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "pathWithin",
+          "params": [
+            "root",
+            "target"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "validateOperationalPath",
+          "params": [
+            "repositoryPath",
+            "operationalPath"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "resolvePath",
+          "params": [
+            "path"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 23
+        }
+      ],
+      "classes": [
+        {
+          "name": "Factory",
+          "methods": [
+            "Init",
+            "Register",
+            "BootstrapLabels",
+            "RunGate",
+            "StartAgent",
+            "AcceptAgentReport",
+            "RunAgent",
+            "CreateDraftPullRequest",
+            "Status"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "RunCoordinator",
+          "methods": [
+            "ClaimIssue",
+            "Transition"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "ConfigRepository",
+          "methods": [
+            "Load",
+            "Save",
+            "Create"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "OperationalStore",
+          "methods": [
+            "CurrentRun",
+            "Close"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "RunStore",
+          "methods": [
+            "SaveRun"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "LatestRunStore",
+          "methods": [
+            "LatestRun"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Dependencies",
+          "methods": [],
+          "properties": [
+            "Config",
+            "OpenStore",
+            "CheckRepository",
+            "LoadRepository",
+            "GitHub",
+            "CommitStatuses",
+            "Worktree",
+            "GitWorkspace",
+            "PullRequests",
+            "Worker",
+            "Terminal",
+            "Harness",
+            "Now",
+            "NewRunID",
+            "Coordinator"
+          ],
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "Service",
+          "methods": [
+            "ensureAgentRuntime",
+            "Init",
+            "Register",
+            "Status"
+          ],
+          "properties": [
+            "configPath",
+            "deps",
+            "runtimeMu",
+            "runtimeSocketPath",
+            "runtimePathSet"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "InitResult",
+          "methods": [],
+          "properties": [
+            "ConfigPath"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "RegisterRequest",
+          "methods": [],
+          "properties": [
+            "RepositoryPath",
+            "GitHubOwner",
+            "GitHubRepository",
+            "AuthorizedUsers",
+            "OperationalDataPath",
+            "PollingInterval",
+            "PollingBackoff",
+            "CmuxSocketPath",
+            "CmuxControlWorkspace",
+            "CodexAuthPath",
+            "RepositoryConfigPath"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "RegisterResult",
+          "methods": [],
+          "properties": [
+            "RepositoryPath",
+            "OperationalDataPath"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "StatusResult",
+          "methods": [],
+          "properties": [
+            "ConfigPath",
+            "RepositoryPath",
+            "LatestRun",
+            "ActiveRun"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "fileConfigRepository",
+          "methods": [
+            "Load",
+            "Save",
+            "Create"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 1
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/gate",
+          "specifiers": [
+            "gate"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/git",
+          "specifiers": [
+            "gitadapter"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/github",
+          "specifiers": [
+            "github"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/harness",
+          "specifiers": [
+            "harness"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/store",
+          "specifiers": [
+            "store"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/terminal",
+          "specifiers": [
+            "terminal"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/worker",
+          "specifiers": [
+            "worker"
+          ]
+        },
+        {
+          "source": "github.com/google/uuid",
+          "specifiers": [
+            "uuid"
+          ]
+        }
+      ],
+      "exports": [
+        "Factory",
+        "RunCoordinator",
+        "ConfigRepository",
+        "OperationalStore",
+        "RunStore",
+        "LatestRunStore",
+        "Dependencies",
+        "Service",
+        "InitResult",
+        "RegisterRequest",
+        "RegisterResult",
+        "StatusResult",
+        "Load",
+        "Save",
+        "Create",
+        "New",
+        "NewWithDependencies",
+        "Init",
+        "Register",
+        "Status"
+      ],
+      "totalLines": 435,
+      "hasStructuralAnalysis": true
+    },
+    "internal/factory/gate.go": {
+      "filePath": "internal/factory/gate.go",
+      "contentHash": "23e47fc066c3294a5b9b79352b74742f677d81861e95eaea5ec2bb3ff2bb9b5a",
+      "functions": [
+        {
+          "name": "RunGate",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(gate.Result, error)",
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "runGate",
+          "params": [
+            "ctx",
+            "registration",
+            "run",
+            "packet",
+            "declared"
+          ],
+          "returnType": "(gate.Result, error)",
+          "exported": false,
+          "lineCount": 34
+        },
+        {
+          "name": "prepareGitMetadataProjection",
+          "params": [
+            "runID",
+            "repositoryPath",
+            "worktreePath"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 62
+        },
+        {
+          "name": "copyGitMetadata",
+          "params": [
+            "source",
+            "destination"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "makeGitProjectionReadable",
+          "params": [
+            "projection"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "gitProjectionPermissions",
+          "params": [
+            "mode"
+          ],
+          "returnType": "fs.FileMode",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "skipGitMetadata",
+          "params": [
+            "relative",
+            "directory"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "copyGitMetadataFile",
+          "params": [
+            "source",
+            "destination",
+            "mode"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 18
+        },
+        {
+          "name": "overlayWorktreeGitState",
+          "params": [
+            "worktreePath",
+            "projection"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 37
+        },
+        {
+          "name": "decodeSpecificationPacket",
+          "params": [
+            "serialized"
+          ],
+          "returnType": "(SpecificationPacket, error)",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "declaredGate",
+          "params": [
+            "packet",
+            "name"
+          ],
+          "returnType": "(config.GateConfig, bool)",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "workerCaches",
+          "params": [
+            "caches"
+          ],
+          "returnType": "[]worker.CacheMount",
+          "exported": false,
+          "lineCount": 7
+        }
+      ],
+      "classes": [
+        {
+          "name": "RunGateRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "GateName"
+          ],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "io/fs",
+          "specifiers": [
+            "fs"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/gate",
+          "specifiers": [
+            "gate"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/github",
+          "specifiers": [
+            "github"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/store",
+          "specifiers": [
+            "store"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/worker",
+          "specifiers": [
+            "worker"
+          ]
+        }
+      ],
+      "exports": [
+        "RunGateRequest",
+        "RunGate"
+      ],
+      "totalLines": 365,
+      "hasStructuralAnalysis": true
+    },
+    "internal/gate/runner.go": {
+      "filePath": "internal/gate/runner.go",
+      "contentHash": "2a811be40a3adcb90510672e05c4b7173f3b2becdb3d5d3d8421ecbe12b60977",
+      "functions": [
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Unwrap",
+          "params": [],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Unwrap",
+          "params": [],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Run",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(Result, error)",
+          "exported": true,
+          "lineCount": 84
+        },
+        {
+          "name": "publish",
+          "params": [
+            "ctx",
+            "status"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "positiveDuration",
+          "params": [
+            "field",
+            "value"
+          ],
+          "returnType": "(time.Duration, error)",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "workerEnvironmentPolicy",
+          "params": [
+            "policy"
+          ],
+          "returnType": "worker.EnvironmentPolicy",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "statusContext",
+          "params": [
+            "name"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 1
+        }
+      ],
+      "classes": [
+        {
+          "name": "Request",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "CheckpointSHA",
+            "Setup",
+            "SetupTimeout",
+            "Gate"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "Result",
+          "methods": [],
+          "properties": [
+            "CheckpointSHA",
+            "GateName",
+            "Setup",
+            "Gate",
+            "Status"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "SetupFailure",
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Result",
+            "Cause"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "GateFailure",
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Name",
+            "Result",
+            "Cause"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "Runner",
+          "methods": [
+            "Run",
+            "publish"
+          ],
+          "properties": [
+            "Runtime",
+            "Repository",
+            "Statuses"
+          ],
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/github",
+          "specifiers": [
+            "github"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/worker",
+          "specifiers": [
+            "worker"
+          ]
+        }
+      ],
+      "exports": [
+        "Request",
+        "Result",
+        "SetupFailure",
+        "Error",
+        "Unwrap",
+        "GateFailure",
+        "Error",
+        "Unwrap",
+        "Runner",
+        "Run"
+      ],
+      "totalLines": 221,
+      "hasStructuralAnalysis": true
+    },
+    "internal/git/worktree.go": {
+      "filePath": "internal/git/worktree.go",
+      "contentHash": "5d34a0e33419ed885a9e7eb656039002cc81a9f9d41d0b7ef2d02a528b4fd8bb",
+      "functions": [
+        {
+          "name": "Run",
+          "params": [
+            "ctx",
+            "directory",
+            "args"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "NewWorktreeManager",
+          "params": [],
+          "returnType": "*LocalWorktreeManager",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "NewGitWorkspace",
+          "params": [],
+          "returnType": "*LocalWorktreeManager",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Inspect",
+          "params": [
+            "ctx",
+            "worktreePath"
+          ],
+          "returnType": "(WorktreeState, error)",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "runner",
+          "params": [],
+          "returnType": "CommandRunner",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "Create",
+          "params": [
+            "ctx",
+            "repositoryPath",
+            "targetBranch",
+            "runID"
+          ],
+          "returnType": "(Workspace, error)",
+          "exported": true,
+          "lineCount": 42
+        },
+        {
+          "name": "CreateCheckpoint",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(CheckpointResult, error)",
+          "exported": true,
+          "lineCount": 63
+        },
+        {
+          "name": "Push",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "SynchronizeBase",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "hasCheckpointMarker",
+          "params": [
+            "ctx",
+            "worktreePath",
+            "marker"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "Remove",
+          "params": [
+            "ctx",
+            "repositoryPath",
+            "workspace"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "worktreePath",
+          "params": [
+            "repositoryPath",
+            "runID"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "porcelainPaths",
+          "params": [
+            "output"
+          ],
+          "returnType": "[]string",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "validateRefPart",
+          "params": [
+            "value"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "validCommitSHA",
+          "params": [
+            "value"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 12
+        }
+      ],
+      "classes": [
+        {
+          "name": "Workspace",
+          "methods": [],
+          "properties": [
+            "BaseSHA",
+            "Branch",
+            "Worktree"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "CheckpointRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "WorktreePath",
+            "ParentSHA",
+            "Message"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "CheckpointResult",
+          "methods": [],
+          "properties": [
+            "SHA",
+            "Created"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "PushRequest",
+          "methods": [],
+          "properties": [
+            "WorktreePath",
+            "Branch"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "BaseSyncRequest",
+          "methods": [],
+          "properties": [
+            "WorktreePath",
+            "TargetBranch"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "WorktreeState",
+          "methods": [],
+          "properties": [
+            "HeadSHA",
+            "ChangedPaths"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "WorktreeManager",
+          "methods": [
+            "Create",
+            "Remove"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "WorktreeInspector",
+          "methods": [
+            "Inspect"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "GitWorkspace",
+          "methods": [
+            "CreateCheckpoint",
+            "Push",
+            "SynchronizeBase"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "CommandRunner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "commandRunner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "LocalWorktreeManager",
+          "methods": [
+            "Inspect",
+            "runner",
+            "Create",
+            "CreateCheckpoint",
+            "Push",
+            "SynchronizeBase",
+            "hasCheckpointMarker",
+            "Remove",
+            "worktreePath"
+          ],
+          "properties": [
+            "Runner",
+            "WorktreeDir"
+          ],
+          "exported": true,
+          "lineCount": 4
+        }
+      ],
+      "imports": [
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "os/exec",
+          "specifiers": [
+            "exec"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        }
+      ],
+      "exports": [
+        "Workspace",
+        "CheckpointRequest",
+        "CheckpointResult",
+        "PushRequest",
+        "BaseSyncRequest",
+        "WorktreeState",
+        "WorktreeManager",
+        "WorktreeInspector",
+        "GitWorkspace",
+        "CommandRunner",
+        "Run",
+        "LocalWorktreeManager",
+        "NewWorktreeManager",
+        "NewGitWorkspace",
+        "Inspect",
+        "Create",
+        "CreateCheckpoint",
+        "Push",
+        "SynchronizeBase",
+        "Remove"
+      ],
+      "totalLines": 412,
+      "hasStructuralAnalysis": true
+    },
+    "internal/github/github.go": {
+      "filePath": "internal/github/github.go",
+      "contentHash": "0fe1114e5bc945bc9fadc4eb2381102b1291c8f41e5d5c28e3ef885b804ce4e0",
+      "functions": [
+        {
+          "name": "String",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Run",
+          "params": [
+            "ctx",
+            "args",
+            "input"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "NewClient",
+          "params": [],
+          "returnType": "*GhClient",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "runner",
+          "params": [],
+          "returnType": "CommandRunner",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "Issue",
+          "params": [
+            "ctx",
+            "repository",
+            "number"
+          ],
+          "returnType": "(Issue, error)",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "CreateLabel",
+          "params": [
+            "ctx",
+            "repository",
+            "label"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "ReplaceIssueLabels",
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "labels"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "CreateIssueComment",
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "body"
+          ],
+          "returnType": "(Comment, error)",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "FindStatusComment",
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "marker"
+          ],
+          "returnType": "(Comment, error)",
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "EditIssueComment",
+          "params": [
+            "ctx",
+            "repository",
+            "commentID",
+            "body"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "FindPullRequest",
+          "params": [
+            "ctx",
+            "repository",
+            "headBranch",
+            "baseBranch"
+          ],
+          "returnType": "(PullRequest, error)",
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "CreatePullRequest",
+          "params": [
+            "ctx",
+            "repository",
+            "request"
+          ],
+          "returnType": "(PullRequest, error)",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "UpdatePullRequest",
+          "params": [
+            "ctx",
+            "repository",
+            "number",
+            "request"
+          ],
+          "returnType": "(PullRequest, error)",
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "CreateCommitStatus",
+          "params": [
+            "ctx",
+            "repository",
+            "status"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "callJSON",
+          "params": [
+            "ctx",
+            "args",
+            "payload",
+            "destination"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "call",
+          "params": [
+            "ctx",
+            "args",
+            "payload"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "callBytes",
+          "params": [
+            "ctx",
+            "args",
+            "payload"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "ValidCommitSHA",
+          "params": [
+            "value"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "pullRequest",
+          "params": [],
+          "returnType": "PullRequest",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "decodePullRequestList",
+          "params": [
+            "output"
+          ],
+          "returnType": "([]pullRequestResponse, error)",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "validatePullRequestBranches",
+          "params": [
+            "headBranch",
+            "baseBranch"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "validatePullRequestRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        }
+      ],
+      "classes": [
+        {
+          "name": "Repository",
+          "methods": [
+            "String"
+          ],
+          "properties": [
+            "Owner",
+            "Name"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Issue",
+          "methods": [],
+          "properties": [
+            "Number",
+            "Title",
+            "Body",
+            "State",
+            "Labels",
+            "IsPullRequest",
+            "UpdatedAt"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "Label",
+          "methods": [],
+          "properties": [
+            "Name",
+            "Description",
+            "Color"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "Comment",
+          "methods": [],
+          "properties": [
+            "ID",
+            "Body"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "PullRequest",
+          "methods": [],
+          "properties": [
+            "Number",
+            "URL",
+            "Title",
+            "Body",
+            "State",
+            "Draft",
+            "HeadBranch",
+            "BaseBranch"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "PullRequestRequest",
+          "methods": [],
+          "properties": [
+            "Title",
+            "Body",
+            "HeadBranch",
+            "BaseBranch",
+            "Draft"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "CommitStatus",
+          "methods": [],
+          "properties": [
+            "SHA",
+            "State",
+            "Context",
+            "Description",
+            "TargetURL"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "CommitStatusPublisher",
+          "methods": [
+            "CreateCommitStatus"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Client",
+          "methods": [
+            "Issue",
+            "CreateLabel",
+            "ReplaceIssueLabels",
+            "CreateIssueComment",
+            "FindStatusComment",
+            "EditIssueComment"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "PullRequestClient",
+          "methods": [
+            "FindPullRequest",
+            "CreatePullRequest",
+            "UpdatePullRequest"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "CommandRunner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "commandRunner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "GhClient",
+          "methods": [
+            "runner",
+            "Issue",
+            "CreateLabel",
+            "ReplaceIssueLabels",
+            "CreateIssueComment",
+            "FindStatusComment",
+            "EditIssueComment",
+            "FindPullRequest",
+            "CreatePullRequest",
+            "UpdatePullRequest",
+            "CreateCommitStatus",
+            "callJSON",
+            "call",
+            "callBytes"
+          ],
+          "properties": [
+            "Runner"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "issueResponse",
+          "methods": [],
+          "properties": [
+            "Number",
+            "Title",
+            "Body",
+            "State",
+            "PullRequest",
+            "Labels",
+            "UpdatedAt"
+          ],
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "commentResponse",
+          "methods": [],
+          "properties": [
+            "ID",
+            "Body"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "pullRequestResponse",
+          "methods": [
+            "pullRequest"
+          ],
+          "properties": [
+            "Number",
+            "HTMLURL",
+            "Title",
+            "Body",
+            "State",
+            "Draft",
+            "Head",
+            "Base"
+          ],
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "pullRequestCreatePayload",
+          "methods": [],
+          "properties": [
+            "Title",
+            "Body",
+            "Head",
+            "Base",
+            "Draft"
+          ],
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "pullRequestUpdatePayload",
+          "methods": [],
+          "properties": [
+            "Title",
+            "Body",
+            "Draft",
+            "State"
+          ],
+          "exported": false,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os/exec",
+          "specifiers": [
+            "exec"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "Repository",
+        "String",
+        "Issue",
+        "Label",
+        "Comment",
+        "PullRequest",
+        "PullRequestRequest",
+        "CommitStatus",
+        "CommitStatusPublisher",
+        "Client",
+        "PullRequestClient",
+        "CommandRunner",
+        "Run",
+        "GhClient",
+        "NewClient",
+        "Issue",
+        "CreateLabel",
+        "ReplaceIssueLabels",
+        "CreateIssueComment",
+        "FindStatusComment",
+        "EditIssueComment",
+        "FindPullRequest",
+        "CreatePullRequest",
+        "UpdatePullRequest",
+        "CreateCommitStatus",
+        "ValidCommitSHA"
+      ],
+      "totalLines": 560,
+      "hasStructuralAnalysis": true
+    },
+    "internal/harness/codex.go": {
+      "filePath": "internal/harness/codex.go",
+      "contentHash": "ff8b911241846c4060ec990f5c48aa223bf07f79eb15b341034d05666f7e71d9",
+      "functions": [
+        {
+          "name": "NewCodex",
+          "params": [
+            "runtime",
+            "terminalRuntime"
+          ],
+          "returnType": "*Codex",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Start",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(Session, error)",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Resume",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(Session, error)",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Finish",
+          "params": [
+            "ctx",
+            "session"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "launch",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(Session, error)",
+          "exported": false,
+          "lineCount": 96
+        },
+        {
+          "name": "discoverNativeSession",
+          "params": [
+            "ctx",
+            "provider",
+            "baseline",
+            "request"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 47
+        },
+        {
+          "name": "validateStartRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 26
+        }
+      ],
+      "classes": [
+        {
+          "name": "StartRequest",
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "RunID",
+            "Role",
+            "Stage",
+            "WorkspaceID",
+            "Surface",
+            "Prompt",
+            "Model",
+            "ReasoningEffort",
+            "ResumeSessionID"
+          ],
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "Session",
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "NativeSessionID",
+            "Surface"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "Runtime",
+          "methods": [
+            "Start",
+            "Resume",
+            "Finish"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "Codex",
+          "methods": [
+            "Start",
+            "Resume",
+            "Finish",
+            "launch"
+          ],
+          "properties": [
+            "Worker",
+            "Terminal"
+          ],
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/terminal",
+          "specifiers": [
+            "terminal"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/worker",
+          "specifiers": [
+            "worker"
+          ]
+        }
+      ],
+      "exports": [
+        "StartRequest",
+        "Session",
+        "Runtime",
+        "Codex",
+        "NewCodex",
+        "Start",
+        "Resume",
+        "Finish"
+      ],
+      "totalLines": 305,
+      "hasStructuralAnalysis": true
+    },
+    "internal/prompt/prompt.go": {
+      "filePath": "internal/prompt/prompt.go",
+      "contentHash": "f92160e6c456b7ef8dd07e03c1ed71035ce5cb0b09a8868a16d559ad5c2cf626",
+      "functions": [
+        {
+          "name": "Build",
+          "params": [
+            "request"
+          ],
+          "returnType": "(string, error)",
+          "exported": true,
+          "lineCount": 42
+        },
+        {
+          "name": "sanitizeFenced",
+          "params": [
+            "value"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 6
+        }
+      ],
+      "classes": [
+        {
+          "name": "Request",
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "RunID",
+            "Role",
+            "Stage",
+            "SpecificationPacket",
+            "RepositoryGuidance"
+          ],
+          "exported": true,
+          "lineCount": 14
+        }
+      ],
+      "imports": [
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        }
+      ],
+      "exports": [
+        "Request",
+        "Build"
+      ],
+      "totalLines": 89,
+      "hasStructuralAnalysis": true
+    },
+    "internal/report/report.go": {
+      "filePath": "internal/report/report.go",
+      "contentHash": "562d84d569184a0c00fe85c37759731451a75f89dea5f94811c0b8810b5b3528",
+      "functions": [
+        {
+          "name": "WriteAtomic",
+          "params": [
+            "resultDirectory",
+            "value"
+          ],
+          "returnType": "(string, error)",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "WriteAtomicForInvocation",
+          "params": [
+            "resultDirectory",
+            "invocationID",
+            "value"
+          ],
+          "returnType": "(string, error)",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "writeAtomicReport",
+          "params": [
+            "resultDirectory",
+            "value"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 56
+        },
+        {
+          "name": "Read",
+          "params": [
+            "path"
+          ],
+          "returnType": "(Report, error)",
+          "exported": true,
+          "lineCount": 54
+        },
+        {
+          "name": "Validate",
+          "params": [
+            "value",
+            "context"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 68
+        },
+        {
+          "name": "validateHandoff",
+          "params": [
+            "value",
+            "context"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 77
+        },
+        {
+          "name": "ValidatePermittedPaths",
+          "params": [
+            "values"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "validateQuestions",
+          "params": [
+            "values"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "validateEvidence",
+          "params": [
+            "values"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "validateInvocationDirectory",
+          "params": [
+            "path",
+            "invocationID"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "cleanRelativePath",
+          "params": [
+            "path"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "withinAnyPrefix",
+          "params": [
+            "path",
+            "prefixes"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "safeIdentifier",
+          "params": [
+            "value"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "identityFrom",
+          "params": [
+            "value",
+            "invocationID"
+          ],
+          "returnType": "ValidationContext",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "validateText",
+          "params": [
+            "field",
+            "value",
+            "maxRunes",
+            "required"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        }
+      ],
+      "classes": [
+        {
+          "name": "AcceptanceMapping",
+          "methods": [],
+          "properties": [
+            "Criterion",
+            "Evidence"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Handoff",
+          "methods": [],
+          "properties": [
+            "ChangeSummary",
+            "AcceptanceMapping",
+            "ProductionFilesChanged",
+            "FocusedCommands",
+            "KnownLimitations"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "Question",
+          "methods": [],
+          "properties": [
+            "ID",
+            "Prompt"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Evidence",
+          "methods": [],
+          "properties": [
+            "Kind",
+            "Detail"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Report",
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "InvocationID",
+            "RunID",
+            "Harness",
+            "Role",
+            "Stage",
+            "Outcome",
+            "Summary",
+            "Handoff",
+            "Questions",
+            "Evidence",
+            "NativeSessionID",
+            "ReportedAt"
+          ],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "ValidationContext",
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "RunID",
+            "Harness",
+            "Role",
+            "Stage",
+            "WorktreePath",
+            "PermittedPaths",
+            "ObservedChanges",
+            "WorktreeObserved"
+          ],
+          "exported": true,
+          "lineCount": 21
+        }
+      ],
+      "imports": [
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "unicode/utf8",
+          "specifiers": [
+            "utf8"
+          ]
+        },
+        {
+          "source": "golang.org/x/sys/unix",
+          "specifiers": [
+            "unix"
+          ]
+        }
+      ],
+      "exports": [
+        "AcceptanceMapping",
+        "Handoff",
+        "Question",
+        "Evidence",
+        "Report",
+        "ValidationContext",
+        "WriteAtomic",
+        "WriteAtomicForInvocation",
+        "Read",
+        "Validate",
+        "ValidatePermittedPaths"
+      ],
+      "totalLines": 591,
+      "hasStructuralAnalysis": true
+    },
+    "internal/reportcli/reportcli.go": {
+      "filePath": "internal/reportcli/reportcli.go",
+      "contentHash": "9c5e5f7b8f861a00e80a4ee8673f5f6a01c02b5034a0f49fd90738ee4dfc0de9",
+      "functions": [
+        {
+          "name": "Run",
+          "params": [
+            "request"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 100
+        },
+        {
+          "name": "ensureHandoff",
+          "params": [
+            "value"
+          ],
+          "returnType": "*report.Handoff",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "writeError",
+          "params": [
+            "output",
+            "err"
+          ],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "String",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Set",
+          "params": [
+            "input"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "String",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "Set",
+          "params": [
+            "input"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "classes": [
+        {
+          "name": "Request",
+          "methods": [],
+          "properties": [
+            "Args",
+            "Environment",
+            "Now",
+            "Output",
+            "ErrorsOutput"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "pair",
+          "methods": [],
+          "properties": [
+            "Key",
+            "Value"
+          ],
+          "exported": false,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "flag",
+          "specifiers": [
+            "flag"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/Stevie1704/sw-factory/internal/report",
+          "specifiers": [
+            "report"
+          ]
+        }
+      ],
+      "exports": [
+        "Request",
+        "Run",
+        "String",
+        "Set",
+        "String",
+        "Set"
+      ],
+      "totalLines": 193,
+      "hasStructuralAnalysis": true
+    },
+    "internal/store/store.go": {
+      "filePath": "internal/store/store.go",
+      "contentHash": "099579a970c715b22070850319cea71922acea6d29d5aff54ee7b4bfda47e702",
+      "functions": [
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Unwrap",
+          "params": [],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Open",
+          "params": [
+            "ctx",
+            "path"
+          ],
+          "returnType": "(*Store, error)",
+          "exported": true,
+          "lineCount": 67
+        },
+        {
+          "name": "Close",
+          "params": [],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Path",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "SchemaVersion",
+          "params": [],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "CurrentRun",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(*Run, error)",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "LatestRun",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(*Run, error)",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "scanRun",
+          "params": [
+            "row"
+          ],
+          "returnType": "(*Run, error)",
+          "exported": false,
+          "lineCount": 37
+        },
+        {
+          "name": "SaveRun",
+          "params": [
+            "ctx",
+            "run"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 59
+        },
+        {
+          "name": "SaveInvocation",
+          "params": [
+            "ctx",
+            "invocation"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 82
+        },
+        {
+          "name": "Invocation",
+          "params": [
+            "ctx",
+            "runID",
+            "invocationID"
+          ],
+          "returnType": "(*Invocation, error)",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "ActiveInvocation",
+          "params": [
+            "ctx",
+            "runID"
+          ],
+          "returnType": "(*Invocation, error)",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "scanInvocation",
+          "params": [
+            "row"
+          ],
+          "returnType": "(*Invocation, error)",
+          "exported": false,
+          "lineCount": 45
+        },
+        {
+          "name": "databaseState",
+          "params": [
+            "path"
+          ],
+          "returnType": "(bool, bool, error)",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "openConfiguredDatabase",
+          "params": [
+            "ctx",
+            "path"
+          ],
+          "returnType": "(*sql.DB, error)",
+          "exported": false,
+          "lineCount": 21
+        },
+        {
+          "name": "configure",
+          "params": [
+            "ctx",
+            "database"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "initializeMetadata",
+          "params": [
+            "ctx",
+            "database"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "readSchemaVersion",
+          "params": [
+            "ctx",
+            "database",
+            "path"
+          ],
+          "returnType": "(int, error)",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "migrate",
+          "params": [
+            "ctx",
+            "database",
+            "from"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 106
+        },
+        {
+          "name": "reconcileDuplicateRuns",
+          "params": [
+            "ctx",
+            "tx"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 103
+        },
+        {
+          "name": "reconcileDuplicateInvocations",
+          "params": [
+            "ctx",
+            "tx"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 50
+        },
+        {
+          "name": "isActiveInvocationConflict",
+          "params": [
+            "err"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "backupDatabase",
+          "params": [
+            "path"
+          ],
+          "returnType": "(string, error)",
+          "exported": false,
+          "lineCount": 41
+        }
+      ],
+      "classes": [
+        {
+          "name": "UnknownSchemaVersionError",
+          "methods": [
+            "Error"
+          ],
+          "properties": [
+            "Version",
+            "Supported"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "UnversionedDatabaseError",
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Path",
+            "Err"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Run",
+          "methods": [],
+          "properties": [
+            "ID",
+            "RepositoryPath",
+            "IssueNumber",
+            "Stage",
+            "Status",
+            "Branch",
+            "Worktree",
+            "CheckpointSHA",
+            "ImageDigest",
+            "Coordinator",
+            "StatusCommentID",
+            "PullRequestNumber",
+            "PullRequestURL",
+            "SpecificationPacket",
+            "CreatedAt",
+            "UpdatedAt"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "Invocation",
+          "methods": [],
+          "properties": [
+            "ID",
+            "RunID",
+            "Harness",
+            "Role",
+            "Stage",
+            "Model",
+            "ReasoningEffort",
+            "NativeSessionID",
+            "WorkspaceID",
+            "StatusSurfaceID",
+            "ImplementationSurfaceID",
+            "ChecksSurfaceID",
+            "InvocationDirectory",
+            "ResultDirectory",
+            "PermittedPaths",
+            "PromptVersion",
+            "Status",
+            "CreatedAt",
+            "UpdatedAt"
+          ],
+          "exported": true,
+          "lineCount": 41
+        },
+        {
+          "name": "Store",
+          "methods": [
+            "Close",
+            "Path",
+            "SchemaVersion",
+            "CurrentRun",
+            "LatestRun",
+            "SaveRun",
+            "SaveInvocation",
+            "Invocation",
+            "ActiveInvocation"
+          ],
+          "properties": [
+            "db",
+            "path",
+            "schemaVersion"
+          ],
+          "exported": true,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "database/sql",
+          "specifiers": [
+            "sql"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io",
+          "specifiers": [
+            "io"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "strconv",
+          "specifiers": [
+            "strconv"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "modernc.org/sqlite",
+          "specifiers": [
+            "_"
+          ]
+        }
+      ],
+      "exports": [
+        "UnknownSchemaVersionError",
+        "Error",
+        "UnversionedDatabaseError",
+        "Error",
+        "Unwrap",
+        "Run",
+        "Invocation",
+        "Store",
+        "Open",
+        "Close",
+        "Path",
+        "SchemaVersion",
+        "CurrentRun",
+        "LatestRun",
+        "SaveRun",
+        "SaveInvocation",
+        "Invocation",
+        "ActiveInvocation"
+      ],
+      "totalLines": 926,
+      "hasStructuralAnalysis": true
+    },
+    "internal/terminal/runtime.go": {
+      "filePath": "internal/terminal/runtime.go",
+      "contentHash": "23e377d6673ea3c735071bf7d17d11370f1b0cbc0e8d8dfa01d0b59b1fd48804",
+      "functions": [
+        {
+          "name": "NewCmuxRuntime",
+          "params": [
+            "runner"
+          ],
+          "returnType": "*CmuxRuntime",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "ConfiguredSocketPath",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "EnsureControlWorkspace",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(Workspace, error)",
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "EnsureRunWorkspace",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(RunWorkspace, error)",
+          "exported": true,
+          "lineCount": 36
+        },
+        {
+          "name": "CreateSurface",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(Surface, error)",
+          "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "LaunchSurface",
+          "params": [
+            "ctx",
+            "surfaceID",
+            "command"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "SendInput",
+          "params": [
+            "ctx",
+            "surfaceID",
+            "input"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "Notify",
+          "params": [
+            "ctx",
+            "notification"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "CloseSurface",
+          "params": [
+            "ctx",
+            "surfaceID"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "CloseWorkspace",
+          "params": [
+            "ctx",
+            "workspaceID"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "run",
+          "params": [
+            "ctx",
+            "args",
+            "input"
+          ],
+          "returnType": "([]byte, error)",
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "validateWorkspaceRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "validateCommand",
+          "params": [
+            "command"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "workspaceLayout",
+          "params": [
+            "request",
+            "command"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "runWorkspaceLayout",
+          "params": [
+            "request"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "commandLine",
+          "params": [
+            "command"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "shellQuote",
+          "params": [
+            "value"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "surface",
+          "params": [
+            "defaultName",
+            "workspaceID"
+          ],
+          "returnType": "Surface",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "decodeWorkspace",
+          "params": [
+            "data",
+            "defaultName"
+          ],
+          "returnType": "(Workspace, error)",
+          "exported": false,
+          "lineCount": 18
+        },
+        {
+          "name": "decodeRunWorkspace",
+          "params": [
+            "data",
+            "defaultName"
+          ],
+          "returnType": "(RunWorkspace, error)",
+          "exported": false,
+          "lineCount": 32
+        }
+      ],
+      "classes": [
+        {
+          "name": "Workspace",
+          "methods": [],
+          "properties": [
+            "ID",
+            "Name"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "Surface",
+          "methods": [],
+          "properties": [
+            "ID",
+            "WorkspaceID",
+            "Name"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "Command",
+          "methods": [],
+          "properties": [
+            "Executable",
+            "Args"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "WorkspaceRequest",
+          "methods": [],
+          "properties": [
+            "Name",
+            "Description",
+            "WorkingDirectory"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "RunWorkspaceRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Name",
+            "Description",
+            "WorkingDirectory"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "RunWorkspace",
+          "methods": [],
+          "properties": [
+            "Status",
+            "Implementation",
+            "Checks"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "SurfaceRequest",
+          "methods": [],
+          "properties": [
+            "WorkspaceID",
+            "Name",
+            "Command"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "Notification",
+          "methods": [],
+          "properties": [
+            "WorkspaceID",
+            "Title",
+            "Body"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "TerminalRuntime",
+          "methods": [
+            "EnsureControlWorkspace",
+            "EnsureRunWorkspace",
+            "CreateSurface",
+            "LaunchSurface",
+            "SendInput",
+            "Notify",
+            "CloseSurface",
+            "CloseWorkspace"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "CommandRunner",
+          "methods": [
+            "Run"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "CmuxRuntime",
+          "methods": [
+            "ConfiguredSocketPath",
+            "EnsureControlWorkspace",
+            "EnsureRunWorkspace",
+            "CreateSurface",
+            "LaunchSurface",
+            "SendInput",
+            "Notify",
+            "CloseSurface",
+            "CloseWorkspace",
+            "run"
+          ],
+          "properties": [
+            "Runner",
+            "Binary",
+            "socketPath",
+            "mu",
+            "control",
+            "runs"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "workspaceResponse",
+          "methods": [],
+          "properties": [
+            "ID",
+            "WorkspaceID",
+            "Name",
+            "Surfaces"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "surfaceResponse",
+          "methods": [
+            "surface"
+          ],
+          "properties": [
+            "ID",
+            "SurfaceID",
+            "WorkspaceID",
+            "Name"
+          ],
+          "exported": false,
+          "lineCount": 6
+        }
+      ],
+      "imports": [
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "os/exec",
+          "specifiers": [
+            "exec"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        }
+      ],
+      "exports": [
+        "Workspace",
+        "Surface",
+        "Command",
+        "WorkspaceRequest",
+        "RunWorkspaceRequest",
+        "RunWorkspace",
+        "SurfaceRequest",
+        "Notification",
+        "TerminalRuntime",
+        "CommandRunner",
+        "CmuxRuntime",
+        "NewCmuxRuntime",
+        "ConfiguredSocketPath",
+        "EnsureControlWorkspace",
+        "EnsureRunWorkspace",
+        "CreateSurface",
+        "LaunchSurface",
+        "SendInput",
+        "Notify",
+        "CloseSurface",
+        "CloseWorkspace"
+      ],
+      "totalLines": 520,
+      "hasStructuralAnalysis": true
+    },
+    "internal/worker/runtime.go": {
+      "filePath": "internal/worker/runtime.go",
+      "contentHash": "50d3bb851abc500b52e7ca4814700706e8341f53aa2966636d99485014f268b6",
+      "functions": [
+        {
+          "name": "NewDockerRuntime",
+          "params": [],
+          "returnType": "*DockerRuntime",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Start",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 77
+        },
+        {
+          "name": "Resume",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "RunCommand",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(CommandResult, error)",
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "InteractiveCommand",
+          "params": [
+            "_",
+            "request"
+          ],
+          "returnType": "(InteractiveCommand, error)",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "SeedCodexCredentials",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "NativeSessionIDs",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "([]string, error)",
+          "exported": true,
+          "lineCount": 41
+        },
+        {
+          "name": "NativeSessionID",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "(string, error)",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "Attach",
+          "params": [
+            "ctx",
+            "request"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "Stop",
+          "params": [
+            "ctx",
+            "runID"
+          ],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "Inspect",
+          "params": [
+            "ctx",
+            "runID"
+          ],
+          "returnType": "(Inspection, error)",
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "startContainer",
+          "params": [
+            "ctx",
+            "name"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "recreateWorker",
+          "params": [
+            "ctx",
+            "name",
+            "running"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "inspectContainer",
+          "params": [
+            "ctx",
+            "name"
+          ],
+          "returnType": "(Inspection, error)",
+          "exported": false,
+          "lineCount": 45
+        },
+        {
+          "name": "parseDockerInspectionJSON",
+          "params": [
+            "data"
+          ],
+          "returnType": "(Inspection, error)",
+          "exported": false,
+          "lineCount": 29
+        },
+        {
+          "name": "dockerMountIdentity",
+          "params": [
+            "_",
+            "source",
+            "name"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "runDocker",
+          "params": [
+            "ctx",
+            "args"
+          ],
+          "returnType": "(dockerCommandResult, error)",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "runDockerWithInput",
+          "params": [
+            "ctx",
+            "args",
+            "input"
+          ],
+          "returnType": "(dockerCommandResult, error)",
+          "exported": false,
+          "lineCount": 35
+        },
+        {
+          "name": "Error",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "Unwrap",
+          "params": [],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "validateStartRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 40
+        },
+        {
+          "name": "workerMountsPresent",
+          "params": [
+            "request",
+            "inspection"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "requiredInvocationMounts",
+          "params": [
+            "request"
+          ],
+          "returnType": "[]string",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "expectedWorkerMounts",
+          "params": [
+            "request"
+          ],
+          "returnType": "map[string]string",
+          "exported": false,
+          "lineCount": 24
+        },
+        {
+          "name": "validateResumeRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "validateCommandRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "validateCacheMount",
+          "params": [
+            "cache",
+            "seen"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "hostHarnessDirectory",
+          "params": [
+            "path"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "validateEnvironmentEntry",
+          "params": [
+            "name",
+            "value"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "validateInteractiveEnvironmentEntry",
+          "params": [
+            "name",
+            "value"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "validateEnvironmentEntryWithProtocol",
+          "params": [
+            "name",
+            "value",
+            "allowProtocol"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "validateImageName",
+          "params": [
+            "image"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "validateMountContract",
+          "params": [
+            "existingMounts",
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 52
+        },
+        {
+          "name": "prepareWorkerMounts",
+          "params": [
+            "request"
+          ],
+          "returnType": "([]int, error)",
+          "exported": false,
+          "lineCount": 44
+        },
+        {
+          "name": "prepareWorkerMount",
+          "params": [
+            "path",
+            "readOnly",
+            "groupIDs"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 27
+        },
+        {
+          "name": "hostGroupID",
+          "params": [
+            "info",
+            "path"
+          ],
+          "returnType": "(int, error)",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "workerMountPermissions",
+          "params": [
+            "mode",
+            "readOnly"
+          ],
+          "returnType": "os.FileMode",
+          "exported": false,
+          "lineCount": 21
+        },
+        {
+          "name": "validateDirectory",
+          "params": [
+            "path",
+            "field"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 16
+        },
+        {
+          "name": "ensureCacheDirectory",
+          "params": [
+            "path"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 22
+        },
+        {
+          "name": "validateRunID",
+          "params": [
+            "runID"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "validName",
+          "params": [
+            "value"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "validEnvironmentName",
+          "params": [
+            "name"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "forbiddenEnvironmentName",
+          "params": [
+            "name"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "reservedEnvironmentName",
+          "params": [
+            "name"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "interactiveProtocolEnvironmentName",
+          "params": [
+            "name"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "validDigest",
+          "params": [
+            "value"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "imageReference",
+          "params": [
+            "image",
+            "digest"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "bindMount",
+          "params": [
+            "hostPath",
+            "destination",
+            "readOnly"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "baselineEnvironment",
+          "params": [
+            "runID"
+          ],
+          "returnType": "[]string",
+          "exported": false,
+          "lineCount": 28
+        },
+        {
+          "name": "commandEnvironment",
+          "params": [
+            "request"
+          ],
+          "returnType": "[]string",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "explicitEnvironment",
+          "params": [
+            "environment"
+          ],
+          "returnType": "[]string",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "containerName",
+          "params": [
+            "runID"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "roleVolumeName",
+          "params": [
+            "runID",
+            "role"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "credentialVolumeName",
+          "params": [
+            "runID",
+            "storeID"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "validateInteractiveRequest",
+          "params": [
+            "request"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "isContainerNotFound",
+          "params": [
+            "err"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "isDockerRuntimeFailure",
+          "params": [
+            "commandErr"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 17
+        }
+      ],
+      "classes": [
+        {
+          "name": "CacheMount",
+          "methods": [],
+          "properties": [
+            "Name",
+            "HostPath",
+            "ReadOnly"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "StartRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "WorktreePath",
+            "GitMetadataPath",
+            "Image",
+            "ImageDigest",
+            "Caches",
+            "InvocationPath",
+            "ResultPath",
+            "CredentialStoreID",
+            "Role"
+          ],
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "ResumeRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Image",
+            "ImageDigest"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "CommandRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Command",
+            "EnvironmentPolicy",
+            "Role",
+            "Environment"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "CommandResult",
+          "methods": [],
+          "properties": [
+            "ExitCode",
+            "Stdout",
+            "Stderr"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "InteractiveRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Command",
+            "EnvironmentPolicy",
+            "Role",
+            "Environment"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "InteractiveCommand",
+          "methods": [],
+          "properties": [
+            "Executable",
+            "Args"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "CredentialSeedRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "AuthPath"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "NativeSessionRequest",
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Harness"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "InteractiveRuntime",
+          "methods": [
+            "InteractiveCommand"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "CredentialSeeder",
+          "methods": [
+            "SeedCodexCredentials"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "NativeSessionProvider",
+          "methods": [
+            "NativeSessionID"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "NativeSessionSnapshotProvider",
+          "methods": [
+            "NativeSessionIDs"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "Inspection",
+          "methods": [],
+          "properties": [
+            "Exists",
+            "Running",
+            "Image",
+            "Mounts",
+            "mountIdentities",
+            "mountDestinations"
+          ],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "ContainerMount",
+          "methods": [],
+          "properties": [
+            "Source",
+            "Destination",
+            "ReadOnly"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "WorkerRuntime",
+          "methods": [
+            "Start",
+            "Resume",
+            "RunCommand",
+            "Stop",
+            "Inspect"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "DockerRuntime",
+          "methods": [
+            "Start",
+            "Resume",
+            "RunCommand",
+            "InteractiveCommand",
+            "SeedCodexCredentials",
+            "NativeSessionIDs",
+            "NativeSessionID",
+            "Attach",
+            "Stop",
+            "Inspect",
+            "startContainer",
+            "recreateWorker",
+            "inspectContainer",
+            "runDocker",
+            "runDockerWithInput"
+          ],
+          "properties": [
+            "DockerBinary",
+            "AttachBinary"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "dockerInspection",
+          "methods": [],
+          "properties": [
+            "State",
+            "Config",
+            "Mounts"
+          ],
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "dockerCommandResult",
+          "methods": [],
+          "properties": [
+            "Stdout",
+            "Stderr",
+            "ExitCode"
+          ],
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "dockerCommandError",
+          "methods": [
+            "Error",
+            "Unwrap"
+          ],
+          "properties": [
+            "Args",
+            "ExitCode",
+            "ProcessStarted",
+            "Stdout",
+            "Stderr",
+            "Cause"
+          ],
+          "exported": false,
+          "lineCount": 15
+        }
+      ],
+      "imports": [
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "crypto/sha256",
+          "specifiers": [
+            "sha256"
+          ]
+        },
+        {
+          "source": "encoding/hex",
+          "specifiers": [
+            "hex"
+          ]
+        },
+        {
+          "source": "encoding/json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "io/fs",
+          "specifiers": [
+            "fs"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "os/exec",
+          "specifiers": [
+            "exec"
+          ]
+        },
+        {
+          "source": "path/filepath",
+          "specifiers": [
+            "filepath"
+          ]
+        },
+        {
+          "source": "sort",
+          "specifiers": [
+            "sort"
+          ]
+        },
+        {
+          "source": "strconv",
+          "specifiers": [
+            "strconv"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "syscall",
+          "specifiers": [
+            "syscall"
+          ]
+        }
+      ],
+      "exports": [
+        "CacheMount",
+        "StartRequest",
+        "ResumeRequest",
+        "CommandRequest",
+        "CommandResult",
+        "InteractiveRequest",
+        "InteractiveCommand",
+        "CredentialSeedRequest",
+        "NativeSessionRequest",
+        "InteractiveRuntime",
+        "CredentialSeeder",
+        "NativeSessionProvider",
+        "NativeSessionSnapshotProvider",
+        "Inspection",
+        "ContainerMount",
+        "WorkerRuntime",
+        "DockerRuntime",
+        "NewDockerRuntime",
+        "Start",
+        "Resume",
+        "RunCommand",
+        "InteractiveCommand",
+        "SeedCodexCredentials",
+        "NativeSessionIDs",
+        "NativeSessionID",
+        "Attach",
+        "Stop",
+        "Inspect",
+        "Error",
+        "Unwrap"
+      ],
+      "totalLines": 1500,
+      "hasStructuralAnalysis": true
+    }
+  }
+}

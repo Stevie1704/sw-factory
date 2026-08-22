@@ -1,0 +1,13 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {"path": "docs/agent-runtime.md", "language": "markdown", "sizeLines": 100, "fileCategory": "docs"},
+    {"path": "docs/configuration.md", "language": "markdown", "sizeLines": 241, "fileCategory": "docs"},
+    {"path": "docs/worker-runtime.md", "language": "markdown", "sizeLines": 88, "fileCategory": "docs"}
+  ],
+  "batchImportData": {
+    "docs/agent-runtime.md": [],
+    "docs/configuration.md": [],
+    "docs/worker-runtime.md": []
+  }
+}

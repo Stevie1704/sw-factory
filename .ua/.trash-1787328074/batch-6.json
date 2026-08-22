@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {
+      "id": "document:docs/agent-runtime.md",
+      "type": "document",
+      "name": "agent-runtime.md",
+      "filePath": "docs/agent-runtime.md",
+      "summary": "Documents the visible implementation-agent runtime boundary, including invocation packets, structured reports, authentication/session handling, and coordinator-owned safety rules.",
+      "tags": ["documentation", "agent-runtime", "workflow", "security"],
+      "complexity": "moderate",
+      "languageNotes": "Markdown documentation organized into five sections with shell command examples and an invocation/report contract."
+    },
+    {
+      "id": "document:docs/configuration.md",
+      "type": "document",
+      "name": "configuration.md",
+      "filePath": "docs/configuration.md",
+      "summary": "Describes host and repository configuration, issue claiming, worker and gate policies, draft pull-request orchestration, end-to-end operation, and the operational SQLite store.",
+      "tags": ["documentation", "configuration", "workflow", "deployment", "database"],
+      "complexity": "moderate",
+      "languageNotes": "Markdown reference with seven sections, YAML configuration examples, CLI workflows, and an explicit link to worker-runtime.md."
+    },
+    {
+      "id": "document:docs/worker-runtime.md",
+      "type": "document",
+      "name": "worker-runtime.md",
+      "filePath": "docs/worker-runtime.md",
+      "summary": "Defines the WorkerRuntime and InteractiveRuntime seams, Docker isolation contract, stable worker mounts, credential handling, gate execution, and visible harness attachment.",
+      "tags": ["documentation", "worker-runtime", "containerization", "security", "orchestration"],
+      "complexity": "moderate",
+      "languageNotes": "Markdown design documentation using an access-control table and detailed runtime boundary constraints."
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:docs/configuration.md",
+      "target": "document:docs/worker-runtime.md",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/agent-runtime.md",
+      "target": "document:docs/worker-runtime.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ]
+}

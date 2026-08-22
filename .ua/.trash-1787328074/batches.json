@@ -1,0 +1,1621 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "louvain",
+  "totalFiles": 35,
+  "totalBatches": 8,
+  "exportsByPath": {
+    ".ua/.understandignore": [],
+    "cmd/factory-report/main.go": [],
+    "cmd/factory-worker-attach/main.go": [
+      "String",
+      "Set"
+    ],
+    "cmd/factory/main.go": [],
+    "internal/cli/cli.go": [
+      "Run",
+      "String",
+      "Set"
+    ],
+    "internal/config/config.go": [
+      "HostConfig",
+      "RepositoryRegistration",
+      "GitHubConfig",
+      "PollingConfig",
+      "CmuxConfig",
+      "AuthenticationConfig",
+      "RepositoryConfig",
+      "GateConfig",
+      "TimeoutConfig",
+      "RetryLimits",
+      "TestPolicy",
+      "CacheConfig",
+      "WorkerBuildConfig",
+      "BaseSynchronization",
+      "ValidationError",
+      "Error",
+      "UnknownSchemaVersionError",
+      "Error",
+      "ConfigFileError",
+      "Error",
+      "Unwrap",
+      "NewHostConfig",
+      "DefaultHostConfigPath",
+      "DefaultOperationalDataPath",
+      "DefaultRepositoryConfigPath",
+      "LoadHost",
+      "LoadRepository",
+      "SaveHost",
+      "CreateHost",
+      "ValidateHost",
+      "ValidateRepository"
+    ],
+    "internal/factory/agent.go": [
+      "InvocationStore",
+      "ActiveInvocationStore",
+      "AgentRequest",
+      "AgentLaunchResult",
+      "AgentReportRequest",
+      "AgentResult",
+      "InvocationPacket",
+      "StartAgent",
+      "AcceptAgentReport",
+      "RunAgent"
+    ],
+    "internal/factory/claim.go": [
+      "SpecificationPacket",
+      "BootstrapLabelsResult",
+      "IssueResult",
+      "TransitionRequest",
+      "BootstrapLabels",
+      "ClaimIssue",
+      "Transition"
+    ],
+    "internal/factory/draft_pr.go": [
+      "DraftPullRequestRequest",
+      "DraftPullRequestResult",
+      "CreateDraftPullRequest"
+    ],
+    "internal/factory/factory.go": [
+      "Factory",
+      "RunCoordinator",
+      "ConfigRepository",
+      "OperationalStore",
+      "RunStore",
+      "LatestRunStore",
+      "Dependencies",
+      "Service",
+      "InitResult",
+      "RegisterRequest",
+      "RegisterResult",
+      "StatusResult",
+      "Load",
+      "Save",
+      "Create",
+      "New",
+      "NewWithDependencies",
+      "Init",
+      "Register",
+      "Status"
+    ],
+    "internal/factory/gate.go": [
+      "RunGateRequest",
+      "RunGate"
+    ],
+    "internal/gate/runner.go": [
+      "Request",
+      "Result",
+      "SetupFailure",
+      "Error",
+      "Unwrap",
+      "GateFailure",
+      "Error",
+      "Unwrap",
+      "Runner",
+      "Run"
+    ],
+    "internal/git/worktree.go": [
+      "Workspace",
+      "CheckpointRequest",
+      "CheckpointResult",
+      "PushRequest",
+      "BaseSyncRequest",
+      "WorktreeState",
+      "WorktreeManager",
+      "WorktreeInspector",
+      "GitWorkspace",
+      "CommandRunner",
+      "Run",
+      "LocalWorktreeManager",
+      "NewWorktreeManager",
+      "NewGitWorkspace",
+      "Inspect",
+      "Create",
+      "CreateCheckpoint",
+      "Push",
+      "SynchronizeBase",
+      "Remove"
+    ],
+    "internal/github/github.go": [
+      "Repository",
+      "String",
+      "Issue",
+      "Label",
+      "Comment",
+      "PullRequest",
+      "PullRequestRequest",
+      "CommitStatus",
+      "CommitStatusPublisher",
+      "Client",
+      "PullRequestClient",
+      "CommandRunner",
+      "Run",
+      "GhClient",
+      "NewClient",
+      "Issue",
+      "CreateLabel",
+      "ReplaceIssueLabels",
+      "CreateIssueComment",
+      "FindStatusComment",
+      "EditIssueComment",
+      "FindPullRequest",
+      "CreatePullRequest",
+      "UpdatePullRequest",
+      "CreateCommitStatus",
+      "ValidCommitSHA"
+    ],
+    "internal/harness/codex.go": [
+      "StartRequest",
+      "Session",
+      "Runtime",
+      "Codex",
+      "NewCodex",
+      "Start",
+      "Resume",
+      "Finish"
+    ],
+    "internal/prompt/prompt.go": [
+      "Request",
+      "Build"
+    ],
+    "internal/report/report.go": [
+      "AcceptanceMapping",
+      "Handoff",
+      "Question",
+      "Evidence",
+      "Report",
+      "ValidationContext",
+      "WriteAtomic",
+      "WriteAtomicForInvocation",
+      "Read",
+      "Validate",
+      "ValidatePermittedPaths"
+    ],
+    "internal/reportcli/reportcli.go": [
+      "Request",
+      "Run",
+      "String",
+      "Set",
+      "String",
+      "Set"
+    ],
+    "internal/store/store.go": [
+      "UnknownSchemaVersionError",
+      "Error",
+      "UnversionedDatabaseError",
+      "Error",
+      "Unwrap",
+      "Run",
+      "Invocation",
+      "Store",
+      "Open",
+      "Close",
+      "Path",
+      "SchemaVersion",
+      "CurrentRun",
+      "LatestRun",
+      "SaveRun",
+      "SaveInvocation",
+      "Invocation",
+      "ActiveInvocation"
+    ],
+    "internal/terminal/runtime.go": [
+      "Workspace",
+      "Surface",
+      "Command",
+      "WorkspaceRequest",
+      "RunWorkspaceRequest",
+      "RunWorkspace",
+      "SurfaceRequest",
+      "Notification",
+      "TerminalRuntime",
+      "CommandRunner",
+      "CmuxRuntime",
+      "NewCmuxRuntime",
+      "ConfiguredSocketPath",
+      "EnsureControlWorkspace",
+      "EnsureRunWorkspace",
+      "CreateSurface",
+      "LaunchSurface",
+      "SendInput",
+      "Notify",
+      "CloseSurface",
+      "CloseWorkspace"
+    ],
+    "internal/worker/runtime.go": [
+      "CacheMount",
+      "StartRequest",
+      "ResumeRequest",
+      "CommandRequest",
+      "CommandResult",
+      "InteractiveRequest",
+      "InteractiveCommand",
+      "CredentialSeedRequest",
+      "NativeSessionRequest",
+      "InteractiveRuntime",
+      "CredentialSeeder",
+      "NativeSessionProvider",
+      "NativeSessionSnapshotProvider",
+      "Inspection",
+      "ContainerMount",
+      "WorkerRuntime",
+      "DockerRuntime",
+      "NewDockerRuntime",
+      "Start",
+      "Resume",
+      "RunCommand",
+      "InteractiveCommand",
+      "SeedCodexCredentials",
+      "NativeSessionIDs",
+      "NativeSessionID",
+      "Attach",
+      "Stop",
+      "Inspect",
+      "Error",
+      "Unwrap"
+    ]
+  },
+  "batches": [
+    {
+      "batchIndex": 1,
+      "files": [
+        {
+          "path": "cmd/factory/main.go",
+          "language": "go",
+          "sizeLines": 12,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/cli/cli.go",
+          "language": "go",
+          "sizeLines": 397,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/config/config.go",
+          "language": "go",
+          "sizeLines": 612,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/factory/claim.go",
+          "language": "go",
+          "sizeLines": 503,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/factory/draft_pr.go",
+          "language": "go",
+          "sizeLines": 338,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/store/store.go",
+          "language": "go",
+          "sizeLines": 925,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "cmd/factory/main.go": [
+          "internal/cli/cli.go"
+        ],
+        "internal/cli/cli.go": [
+          "internal/config/config.go",
+          "internal/factory/agent.go",
+          "internal/factory/claim.go",
+          "internal/factory/draft_pr.go",
+          "internal/factory/factory.go",
+          "internal/factory/gate.go",
+          "internal/store/store.go"
+        ],
+        "internal/config/config.go": [],
+        "internal/factory/claim.go": [
+          "internal/config/config.go",
+          "internal/github/github.go",
+          "internal/store/store.go"
+        ],
+        "internal/factory/draft_pr.go": [
+          "internal/config/config.go",
+          "internal/gate/runner.go",
+          "internal/git/worktree.go",
+          "internal/github/github.go",
+          "internal/store/store.go"
+        ],
+        "internal/store/store.go": []
+      },
+      "neighborMap": {
+        "internal/cli/cli.go": [
+          {
+            "path": "internal/factory/agent.go",
+            "batchIndex": 2,
+            "symbols": [
+              "InvocationStore",
+              "ActiveInvocationStore",
+              "AgentRequest",
+              "AgentLaunchResult",
+              "AgentReportRequest",
+              "AgentResult",
+              "InvocationPacket",
+              "StartAgent",
+              "AcceptAgentReport",
+              "RunAgent"
+            ]
+          },
+          {
+            "path": "internal/factory/factory.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Factory",
+              "RunCoordinator",
+              "ConfigRepository",
+              "OperationalStore",
+              "RunStore",
+              "LatestRunStore",
+              "Dependencies",
+              "Service",
+              "InitResult",
+              "RegisterRequest",
+              "RegisterResult",
+              "StatusResult",
+              "Load",
+              "Save",
+              "Create",
+              "New",
+              "NewWithDependencies",
+              "Init",
+              "Register",
+              "Status"
+            ]
+          },
+          {
+            "path": "internal/factory/gate.go",
+            "batchIndex": 3,
+            "symbols": [
+              "RunGateRequest",
+              "RunGate"
+            ]
+          }
+        ],
+        "internal/config/config.go": [
+          {
+            "path": "internal/factory/agent.go",
+            "batchIndex": 2,
+            "symbols": [
+              "InvocationStore",
+              "ActiveInvocationStore",
+              "AgentRequest",
+              "AgentLaunchResult",
+              "AgentReportRequest",
+              "AgentResult",
+              "InvocationPacket",
+              "StartAgent",
+              "AcceptAgentReport",
+              "RunAgent"
+            ]
+          },
+          {
+            "path": "internal/factory/factory.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Factory",
+              "RunCoordinator",
+              "ConfigRepository",
+              "OperationalStore",
+              "RunStore",
+              "LatestRunStore",
+              "Dependencies",
+              "Service",
+              "InitResult",
+              "RegisterRequest",
+              "RegisterResult",
+              "StatusResult",
+              "Load",
+              "Save",
+              "Create",
+              "New",
+              "NewWithDependencies",
+              "Init",
+              "Register",
+              "Status"
+            ]
+          },
+          {
+            "path": "internal/factory/gate.go",
+            "batchIndex": 3,
+            "symbols": [
+              "RunGateRequest",
+              "RunGate"
+            ]
+          },
+          {
+            "path": "internal/gate/runner.go",
+            "batchIndex": 3,
+            "symbols": [
+              "Request",
+              "Result",
+              "SetupFailure",
+              "Error",
+              "Unwrap",
+              "GateFailure",
+              "Error",
+              "Unwrap",
+              "Runner",
+              "Run"
+            ]
+          }
+        ],
+        "internal/factory/claim.go": [
+          {
+            "path": "internal/github/github.go",
+            "batchIndex": 3,
+            "symbols": [
+              "Repository",
+              "String",
+              "Issue",
+              "Label",
+              "Comment",
+              "PullRequest",
+              "PullRequestRequest",
+              "CommitStatus",
+              "CommitStatusPublisher",
+              "Client",
+              "PullRequestClient",
+              "CommandRunner",
+              "Run",
+              "GhClient",
+              "NewClient",
+              "Issue",
+              "CreateLabel",
+              "ReplaceIssueLabels",
+              "CreateIssueComment",
+              "FindStatusComment",
+              "EditIssueComment",
+              "FindPullRequest",
+              "CreatePullRequest",
+              "UpdatePullRequest",
+              "CreateCommitStatus",
+              "ValidCommitSHA"
+            ]
+          }
+        ],
+        "internal/factory/draft_pr.go": [
+          {
+            "path": "internal/gate/runner.go",
+            "batchIndex": 3,
+            "symbols": [
+              "Request",
+              "Result",
+              "SetupFailure",
+              "Error",
+              "Unwrap",
+              "GateFailure",
+              "Error",
+              "Unwrap",
+              "Runner",
+              "Run"
+            ]
+          },
+          {
+            "path": "internal/git/worktree.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Workspace",
+              "CheckpointRequest",
+              "CheckpointResult",
+              "PushRequest",
+              "BaseSyncRequest",
+              "WorktreeState",
+              "WorktreeManager",
+              "WorktreeInspector",
+              "GitWorkspace",
+              "CommandRunner",
+              "Run",
+              "LocalWorktreeManager",
+              "NewWorktreeManager",
+              "NewGitWorkspace",
+              "Inspect",
+              "Create",
+              "CreateCheckpoint",
+              "Push",
+              "SynchronizeBase",
+              "Remove"
+            ]
+          },
+          {
+            "path": "internal/github/github.go",
+            "batchIndex": 3,
+            "symbols": [
+              "Repository",
+              "String",
+              "Issue",
+              "Label",
+              "Comment",
+              "PullRequest",
+              "PullRequestRequest",
+              "CommitStatus",
+              "CommitStatusPublisher",
+              "Client",
+              "PullRequestClient",
+              "CommandRunner",
+              "Run",
+              "GhClient",
+              "NewClient",
+              "Issue",
+              "CreateLabel",
+              "ReplaceIssueLabels",
+              "CreateIssueComment",
+              "FindStatusComment",
+              "EditIssueComment",
+              "FindPullRequest",
+              "CreatePullRequest",
+              "UpdatePullRequest",
+              "CreateCommitStatus",
+              "ValidCommitSHA"
+            ]
+          }
+        ],
+        "internal/store/store.go": [
+          {
+            "path": "internal/factory/agent.go",
+            "batchIndex": 2,
+            "symbols": [
+              "InvocationStore",
+              "ActiveInvocationStore",
+              "AgentRequest",
+              "AgentLaunchResult",
+              "AgentReportRequest",
+              "AgentResult",
+              "InvocationPacket",
+              "StartAgent",
+              "AcceptAgentReport",
+              "RunAgent"
+            ]
+          },
+          {
+            "path": "internal/factory/factory.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Factory",
+              "RunCoordinator",
+              "ConfigRepository",
+              "OperationalStore",
+              "RunStore",
+              "LatestRunStore",
+              "Dependencies",
+              "Service",
+              "InitResult",
+              "RegisterRequest",
+              "RegisterResult",
+              "StatusResult",
+              "Load",
+              "Save",
+              "Create",
+              "New",
+              "NewWithDependencies",
+              "Init",
+              "Register",
+              "Status"
+            ]
+          },
+          {
+            "path": "internal/factory/gate.go",
+            "batchIndex": 3,
+            "symbols": [
+              "RunGateRequest",
+              "RunGate"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "batchIndex": 2,
+      "files": [
+        {
+          "path": "cmd/factory-report/main.go",
+          "language": "go",
+          "sizeLines": 14,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/factory/agent.go",
+          "language": "go",
+          "sizeLines": 648,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/prompt/prompt.go",
+          "language": "go",
+          "sizeLines": 88,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/report/report.go",
+          "language": "go",
+          "sizeLines": 590,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/reportcli/reportcli.go",
+          "language": "go",
+          "sizeLines": 192,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "cmd/factory-report/main.go": [
+          "internal/reportcli/reportcli.go"
+        ],
+        "internal/factory/agent.go": [
+          "internal/config/config.go",
+          "internal/github/github.go",
+          "internal/harness/codex.go",
+          "internal/prompt/prompt.go",
+          "internal/report/report.go",
+          "internal/store/store.go",
+          "internal/terminal/runtime.go",
+          "internal/worker/runtime.go"
+        ],
+        "internal/prompt/prompt.go": [],
+        "internal/report/report.go": [],
+        "internal/reportcli/reportcli.go": [
+          "internal/report/report.go"
+        ]
+      },
+      "neighborMap": {
+        "internal/factory/agent.go": [
+          {
+            "path": "internal/config/config.go",
+            "batchIndex": 1,
+            "symbols": [
+              "HostConfig",
+              "RepositoryRegistration",
+              "GitHubConfig",
+              "PollingConfig",
+              "CmuxConfig",
+              "AuthenticationConfig",
+              "RepositoryConfig",
+              "GateConfig",
+              "TimeoutConfig",
+              "RetryLimits",
+              "TestPolicy",
+              "CacheConfig",
+              "WorkerBuildConfig",
+              "BaseSynchronization",
+              "ValidationError",
+              "Error",
+              "UnknownSchemaVersionError",
+              "Error",
+              "ConfigFileError",
+              "Error",
+              "Unwrap",
+              "NewHostConfig",
+              "DefaultHostConfigPath",
+              "DefaultOperationalDataPath",
+              "DefaultRepositoryConfigPath",
+              "LoadHost",
+              "LoadRepository",
+              "SaveHost",
+              "CreateHost",
+              "ValidateHost",
+              "ValidateRepository"
+            ]
+          },
+          {
+            "path": "internal/github/github.go",
+            "batchIndex": 3,
+            "symbols": [
+              "Repository",
+              "String",
+              "Issue",
+              "Label",
+              "Comment",
+              "PullRequest",
+              "PullRequestRequest",
+              "CommitStatus",
+              "CommitStatusPublisher",
+              "Client",
+              "PullRequestClient",
+              "CommandRunner",
+              "Run",
+              "GhClient",
+              "NewClient",
+              "Issue",
+              "CreateLabel",
+              "ReplaceIssueLabels",
+              "CreateIssueComment",
+              "FindStatusComment",
+              "EditIssueComment",
+              "FindPullRequest",
+              "CreatePullRequest",
+              "UpdatePullRequest",
+              "CreateCommitStatus",
+              "ValidCommitSHA"
+            ]
+          },
+          {
+            "path": "internal/harness/codex.go",
+            "batchIndex": 4,
+            "symbols": [
+              "StartRequest",
+              "Session",
+              "Runtime",
+              "Codex",
+              "NewCodex",
+              "Start",
+              "Resume",
+              "Finish"
+            ]
+          },
+          {
+            "path": "internal/store/store.go",
+            "batchIndex": 1,
+            "symbols": [
+              "UnknownSchemaVersionError",
+              "Error",
+              "UnversionedDatabaseError",
+              "Error",
+              "Unwrap",
+              "Run",
+              "Invocation",
+              "Store",
+              "Open",
+              "Close",
+              "Path",
+              "SchemaVersion",
+              "CurrentRun",
+              "LatestRun",
+              "SaveRun",
+              "SaveInvocation",
+              "Invocation",
+              "ActiveInvocation"
+            ]
+          },
+          {
+            "path": "internal/terminal/runtime.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Workspace",
+              "Surface",
+              "Command",
+              "WorkspaceRequest",
+              "RunWorkspaceRequest",
+              "RunWorkspace",
+              "SurfaceRequest",
+              "Notification",
+              "TerminalRuntime",
+              "CommandRunner",
+              "CmuxRuntime",
+              "NewCmuxRuntime",
+              "ConfiguredSocketPath",
+              "EnsureControlWorkspace",
+              "EnsureRunWorkspace",
+              "CreateSurface",
+              "LaunchSurface",
+              "SendInput",
+              "Notify",
+              "CloseSurface",
+              "CloseWorkspace"
+            ]
+          },
+          {
+            "path": "internal/worker/runtime.go",
+            "batchIndex": 3,
+            "symbols": [
+              "CacheMount",
+              "StartRequest",
+              "ResumeRequest",
+              "CommandRequest",
+              "CommandResult",
+              "InteractiveRequest",
+              "InteractiveCommand",
+              "CredentialSeedRequest",
+              "NativeSessionRequest",
+              "InteractiveRuntime",
+              "CredentialSeeder",
+              "NativeSessionProvider",
+              "NativeSessionSnapshotProvider",
+              "Inspection",
+              "ContainerMount",
+              "WorkerRuntime",
+              "DockerRuntime",
+              "NewDockerRuntime",
+              "Start",
+              "Resume",
+              "RunCommand",
+              "InteractiveCommand",
+              "SeedCodexCredentials",
+              "NativeSessionIDs",
+              "NativeSessionID",
+              "Attach",
+              "Stop",
+              "Inspect",
+              "Error",
+              "Unwrap"
+            ]
+          },
+          {
+            "path": "internal/cli/cli.go",
+            "batchIndex": 1,
+            "symbols": [
+              "Run",
+              "String",
+              "Set"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "batchIndex": 3,
+      "files": [
+        {
+          "path": "cmd/factory-worker-attach/main.go",
+          "language": "go",
+          "sizeLines": 75,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/factory/gate.go",
+          "language": "go",
+          "sizeLines": 364,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/gate/runner.go",
+          "language": "go",
+          "sizeLines": 220,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/github/github.go",
+          "language": "go",
+          "sizeLines": 559,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/worker/runtime.go",
+          "language": "go",
+          "sizeLines": 1499,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "cmd/factory-worker-attach/main.go": [
+          "internal/worker/runtime.go"
+        ],
+        "internal/factory/gate.go": [
+          "internal/config/config.go",
+          "internal/gate/runner.go",
+          "internal/github/github.go",
+          "internal/store/store.go",
+          "internal/worker/runtime.go"
+        ],
+        "internal/gate/runner.go": [
+          "internal/config/config.go",
+          "internal/github/github.go",
+          "internal/worker/runtime.go"
+        ],
+        "internal/github/github.go": [],
+        "internal/worker/runtime.go": []
+      },
+      "neighborMap": {
+        "internal/factory/gate.go": [
+          {
+            "path": "internal/config/config.go",
+            "batchIndex": 1,
+            "symbols": [
+              "HostConfig",
+              "RepositoryRegistration",
+              "GitHubConfig",
+              "PollingConfig",
+              "CmuxConfig",
+              "AuthenticationConfig",
+              "RepositoryConfig",
+              "GateConfig",
+              "TimeoutConfig",
+              "RetryLimits",
+              "TestPolicy",
+              "CacheConfig",
+              "WorkerBuildConfig",
+              "BaseSynchronization",
+              "ValidationError",
+              "Error",
+              "UnknownSchemaVersionError",
+              "Error",
+              "ConfigFileError",
+              "Error",
+              "Unwrap",
+              "NewHostConfig",
+              "DefaultHostConfigPath",
+              "DefaultOperationalDataPath",
+              "DefaultRepositoryConfigPath",
+              "LoadHost",
+              "LoadRepository",
+              "SaveHost",
+              "CreateHost",
+              "ValidateHost",
+              "ValidateRepository"
+            ]
+          },
+          {
+            "path": "internal/store/store.go",
+            "batchIndex": 1,
+            "symbols": [
+              "UnknownSchemaVersionError",
+              "Error",
+              "UnversionedDatabaseError",
+              "Error",
+              "Unwrap",
+              "Run",
+              "Invocation",
+              "Store",
+              "Open",
+              "Close",
+              "Path",
+              "SchemaVersion",
+              "CurrentRun",
+              "LatestRun",
+              "SaveRun",
+              "SaveInvocation",
+              "Invocation",
+              "ActiveInvocation"
+            ]
+          },
+          {
+            "path": "internal/cli/cli.go",
+            "batchIndex": 1,
+            "symbols": [
+              "Run",
+              "String",
+              "Set"
+            ]
+          }
+        ],
+        "internal/gate/runner.go": [
+          {
+            "path": "internal/config/config.go",
+            "batchIndex": 1,
+            "symbols": [
+              "HostConfig",
+              "RepositoryRegistration",
+              "GitHubConfig",
+              "PollingConfig",
+              "CmuxConfig",
+              "AuthenticationConfig",
+              "RepositoryConfig",
+              "GateConfig",
+              "TimeoutConfig",
+              "RetryLimits",
+              "TestPolicy",
+              "CacheConfig",
+              "WorkerBuildConfig",
+              "BaseSynchronization",
+              "ValidationError",
+              "Error",
+              "UnknownSchemaVersionError",
+              "Error",
+              "ConfigFileError",
+              "Error",
+              "Unwrap",
+              "NewHostConfig",
+              "DefaultHostConfigPath",
+              "DefaultOperationalDataPath",
+              "DefaultRepositoryConfigPath",
+              "LoadHost",
+              "LoadRepository",
+              "SaveHost",
+              "CreateHost",
+              "ValidateHost",
+              "ValidateRepository"
+            ]
+          },
+          {
+            "path": "internal/factory/draft_pr.go",
+            "batchIndex": 1,
+            "symbols": [
+              "DraftPullRequestRequest",
+              "DraftPullRequestResult",
+              "CreateDraftPullRequest"
+            ]
+          },
+          {
+            "path": "internal/factory/factory.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Factory",
+              "RunCoordinator",
+              "ConfigRepository",
+              "OperationalStore",
+              "RunStore",
+              "LatestRunStore",
+              "Dependencies",
+              "Service",
+              "InitResult",
+              "RegisterRequest",
+              "RegisterResult",
+              "StatusResult",
+              "Load",
+              "Save",
+              "Create",
+              "New",
+              "NewWithDependencies",
+              "Init",
+              "Register",
+              "Status"
+            ]
+          }
+        ],
+        "internal/github/github.go": [
+          {
+            "path": "internal/factory/agent.go",
+            "batchIndex": 2,
+            "symbols": [
+              "InvocationStore",
+              "ActiveInvocationStore",
+              "AgentRequest",
+              "AgentLaunchResult",
+              "AgentReportRequest",
+              "AgentResult",
+              "InvocationPacket",
+              "StartAgent",
+              "AcceptAgentReport",
+              "RunAgent"
+            ]
+          },
+          {
+            "path": "internal/factory/claim.go",
+            "batchIndex": 1,
+            "symbols": [
+              "SpecificationPacket",
+              "BootstrapLabelsResult",
+              "IssueResult",
+              "TransitionRequest",
+              "BootstrapLabels",
+              "ClaimIssue",
+              "Transition"
+            ]
+          },
+          {
+            "path": "internal/factory/draft_pr.go",
+            "batchIndex": 1,
+            "symbols": [
+              "DraftPullRequestRequest",
+              "DraftPullRequestResult",
+              "CreateDraftPullRequest"
+            ]
+          },
+          {
+            "path": "internal/factory/factory.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Factory",
+              "RunCoordinator",
+              "ConfigRepository",
+              "OperationalStore",
+              "RunStore",
+              "LatestRunStore",
+              "Dependencies",
+              "Service",
+              "InitResult",
+              "RegisterRequest",
+              "RegisterResult",
+              "StatusResult",
+              "Load",
+              "Save",
+              "Create",
+              "New",
+              "NewWithDependencies",
+              "Init",
+              "Register",
+              "Status"
+            ]
+          }
+        ],
+        "internal/worker/runtime.go": [
+          {
+            "path": "internal/factory/agent.go",
+            "batchIndex": 2,
+            "symbols": [
+              "InvocationStore",
+              "ActiveInvocationStore",
+              "AgentRequest",
+              "AgentLaunchResult",
+              "AgentReportRequest",
+              "AgentResult",
+              "InvocationPacket",
+              "StartAgent",
+              "AcceptAgentReport",
+              "RunAgent"
+            ]
+          },
+          {
+            "path": "internal/factory/factory.go",
+            "batchIndex": 4,
+            "symbols": [
+              "Factory",
+              "RunCoordinator",
+              "ConfigRepository",
+              "OperationalStore",
+              "RunStore",
+              "LatestRunStore",
+              "Dependencies",
+              "Service",
+              "InitResult",
+              "RegisterRequest",
+              "RegisterResult",
+              "StatusResult",
+              "Load",
+              "Save",
+              "Create",
+              "New",
+              "NewWithDependencies",
+              "Init",
+              "Register",
+              "Status"
+            ]
+          },
+          {
+            "path": "internal/harness/codex.go",
+            "batchIndex": 4,
+            "symbols": [
+              "StartRequest",
+              "Session",
+              "Runtime",
+              "Codex",
+              "NewCodex",
+              "Start",
+              "Resume",
+              "Finish"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "batchIndex": 4,
+      "files": [
+        {
+          "path": "internal/factory/factory.go",
+          "language": "go",
+          "sizeLines": 434,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/git/worktree.go",
+          "language": "go",
+          "sizeLines": 411,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/harness/codex.go",
+          "language": "go",
+          "sizeLines": 304,
+          "fileCategory": "code"
+        },
+        {
+          "path": "internal/terminal/runtime.go",
+          "language": "go",
+          "sizeLines": 519,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "internal/factory/factory.go": [
+          "internal/config/config.go",
+          "internal/gate/runner.go",
+          "internal/git/worktree.go",
+          "internal/github/github.go",
+          "internal/harness/codex.go",
+          "internal/store/store.go",
+          "internal/terminal/runtime.go",
+          "internal/worker/runtime.go"
+        ],
+        "internal/git/worktree.go": [],
+        "internal/harness/codex.go": [
+          "internal/terminal/runtime.go",
+          "internal/worker/runtime.go"
+        ],
+        "internal/terminal/runtime.go": []
+      },
+      "neighborMap": {
+        "internal/factory/factory.go": [
+          {
+            "path": "internal/config/config.go",
+            "batchIndex": 1,
+            "symbols": [
+              "HostConfig",
+              "RepositoryRegistration",
+              "GitHubConfig",
+              "PollingConfig",
+              "CmuxConfig",
+              "AuthenticationConfig",
+              "RepositoryConfig",
+              "GateConfig",
+              "TimeoutConfig",
+              "RetryLimits",
+              "TestPolicy",
+              "CacheConfig",
+              "WorkerBuildConfig",
+              "BaseSynchronization",
+              "ValidationError",
+              "Error",
+              "UnknownSchemaVersionError",
+              "Error",
+              "ConfigFileError",
+              "Error",
+              "Unwrap",
+              "NewHostConfig",
+              "DefaultHostConfigPath",
+              "DefaultOperationalDataPath",
+              "DefaultRepositoryConfigPath",
+              "LoadHost",
+              "LoadRepository",
+              "SaveHost",
+              "CreateHost",
+              "ValidateHost",
+              "ValidateRepository"
+            ]
+          },
+          {
+            "path": "internal/gate/runner.go",
+            "batchIndex": 3,
+            "symbols": [
+              "Request",
+              "Result",
+              "SetupFailure",
+              "Error",
+              "Unwrap",
+              "GateFailure",
+              "Error",
+              "Unwrap",
+              "Runner",
+              "Run"
+            ]
+          },
+          {
+            "path": "internal/github/github.go",
+            "batchIndex": 3,
+            "symbols": [
+              "Repository",
+              "String",
+              "Issue",
+              "Label",
+              "Comment",
+              "PullRequest",
+              "PullRequestRequest",
+              "CommitStatus",
+              "CommitStatusPublisher",
+              "Client",
+              "PullRequestClient",
+              "CommandRunner",
+              "Run",
+              "GhClient",
+              "NewClient",
+              "Issue",
+              "CreateLabel",
+              "ReplaceIssueLabels",
+              "CreateIssueComment",
+              "FindStatusComment",
+              "EditIssueComment",
+              "FindPullRequest",
+              "CreatePullRequest",
+              "UpdatePullRequest",
+              "CreateCommitStatus",
+              "ValidCommitSHA"
+            ]
+          },
+          {
+            "path": "internal/store/store.go",
+            "batchIndex": 1,
+            "symbols": [
+              "UnknownSchemaVersionError",
+              "Error",
+              "UnversionedDatabaseError",
+              "Error",
+              "Unwrap",
+              "Run",
+              "Invocation",
+              "Store",
+              "Open",
+              "Close",
+              "Path",
+              "SchemaVersion",
+              "CurrentRun",
+              "LatestRun",
+              "SaveRun",
+              "SaveInvocation",
+              "Invocation",
+              "ActiveInvocation"
+            ]
+          },
+          {
+            "path": "internal/worker/runtime.go",
+            "batchIndex": 3,
+            "symbols": [
+              "CacheMount",
+              "StartRequest",
+              "ResumeRequest",
+              "CommandRequest",
+              "CommandResult",
+              "InteractiveRequest",
+              "InteractiveCommand",
+              "CredentialSeedRequest",
+              "NativeSessionRequest",
+              "InteractiveRuntime",
+              "CredentialSeeder",
+              "NativeSessionProvider",
+              "NativeSessionSnapshotProvider",
+              "Inspection",
+              "ContainerMount",
+              "WorkerRuntime",
+              "DockerRuntime",
+              "NewDockerRuntime",
+              "Start",
+              "Resume",
+              "RunCommand",
+              "InteractiveCommand",
+              "SeedCodexCredentials",
+              "NativeSessionIDs",
+              "NativeSessionID",
+              "Attach",
+              "Stop",
+              "Inspect",
+              "Error",
+              "Unwrap"
+            ]
+          },
+          {
+            "path": "internal/cli/cli.go",
+            "batchIndex": 1,
+            "symbols": [
+              "Run",
+              "String",
+              "Set"
+            ]
+          }
+        ],
+        "internal/git/worktree.go": [
+          {
+            "path": "internal/factory/draft_pr.go",
+            "batchIndex": 1,
+            "symbols": [
+              "DraftPullRequestRequest",
+              "DraftPullRequestResult",
+              "CreateDraftPullRequest"
+            ]
+          }
+        ],
+        "internal/harness/codex.go": [
+          {
+            "path": "internal/worker/runtime.go",
+            "batchIndex": 3,
+            "symbols": [
+              "CacheMount",
+              "StartRequest",
+              "ResumeRequest",
+              "CommandRequest",
+              "CommandResult",
+              "InteractiveRequest",
+              "InteractiveCommand",
+              "CredentialSeedRequest",
+              "NativeSessionRequest",
+              "InteractiveRuntime",
+              "CredentialSeeder",
+              "NativeSessionProvider",
+              "NativeSessionSnapshotProvider",
+              "Inspection",
+              "ContainerMount",
+              "WorkerRuntime",
+              "DockerRuntime",
+              "NewDockerRuntime",
+              "Start",
+              "Resume",
+              "RunCommand",
+              "InteractiveCommand",
+              "SeedCodexCredentials",
+              "NativeSessionIDs",
+              "NativeSessionID",
+              "Attach",
+              "Stop",
+              "Inspect",
+              "Error",
+              "Unwrap"
+            ]
+          },
+          {
+            "path": "internal/factory/agent.go",
+            "batchIndex": 2,
+            "symbols": [
+              "InvocationStore",
+              "ActiveInvocationStore",
+              "AgentRequest",
+              "AgentLaunchResult",
+              "AgentReportRequest",
+              "AgentResult",
+              "InvocationPacket",
+              "StartAgent",
+              "AcceptAgentReport",
+              "RunAgent"
+            ]
+          }
+        ],
+        "internal/terminal/runtime.go": [
+          {
+            "path": "internal/factory/agent.go",
+            "batchIndex": 2,
+            "symbols": [
+              "InvocationStore",
+              "ActiveInvocationStore",
+              "AgentRequest",
+              "AgentLaunchResult",
+              "AgentReportRequest",
+              "AgentResult",
+              "InvocationPacket",
+              "StartAgent",
+              "AcceptAgentReport",
+              "RunAgent"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "batchIndex": 5,
+      "files": [
+        {
+          "path": "AGENTS.md",
+          "language": "markdown",
+          "sizeLines": 16,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "CONTEXT.md",
+          "language": "markdown",
+          "sizeLines": 85,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "factory.yaml",
+          "language": "yaml",
+          "sizeLines": 61,
+          "fileCategory": "config"
+        },
+        {
+          "path": "go.mod",
+          "language": "mod",
+          "sizeLines": 20,
+          "fileCategory": "config"
+        },
+        {
+          "path": "go.sum",
+          "language": "sum",
+          "sizeLines": 54,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "AGENTS.md": [],
+        "CONTEXT.md": [],
+        "factory.yaml": [],
+        "go.mod": [],
+        "go.sum": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 6,
+      "files": [
+        {
+          "path": "docs/agent-runtime.md",
+          "language": "markdown",
+          "sizeLines": 100,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/configuration.md",
+          "language": "markdown",
+          "sizeLines": 241,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/worker-runtime.md",
+          "language": "markdown",
+          "sizeLines": 88,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "docs/agent-runtime.md": [],
+        "docs/configuration.md": [],
+        "docs/worker-runtime.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 7,
+      "files": [
+        {
+          "path": "docs/agents/domain.md",
+          "language": "markdown",
+          "sizeLines": 51,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/agents/issue-tracker.md",
+          "language": "markdown",
+          "sizeLines": 45,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/agents/triage-labels.md",
+          "language": "markdown",
+          "sizeLines": 15,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "docs/agents/domain.md": [],
+        "docs/agents/issue-tracker.md": [],
+        "docs/agents/triage-labels.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 8,
+      "files": [
+        {
+          "path": ".ua/.understandignore",
+          "language": "unknown",
+          "sizeLines": 69,
+          "fileCategory": "code"
+        },
+        {
+          "path": ".ua/config.json",
+          "language": "json",
+          "sizeLines": 3,
+          "fileCategory": "config"
+        },
+        {
+          "path": "docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+          "language": "markdown",
+          "sizeLines": 11,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/spikes/0002-nested-harness-ttys.md",
+          "language": "markdown",
+          "sizeLines": 385,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        ".ua/.understandignore": [],
+        ".ua/config.json": [],
+        "docs/adr/0001-local-evaluation-without-outbound-telemetry.md": [],
+        "docs/spikes/0002-nested-harness-ttys.md": []
+      },
+      "neighborMap": {}
+    }
+  ]
+}

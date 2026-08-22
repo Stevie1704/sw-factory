@@ -1,0 +1,47 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {
+      "path": "internal/factory/factory.go",
+      "language": "go",
+      "sizeLines": 434,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/git/worktree.go",
+      "language": "go",
+      "sizeLines": 411,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/harness/codex.go",
+      "language": "go",
+      "sizeLines": 304,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/terminal/runtime.go",
+      "language": "go",
+      "sizeLines": 519,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "internal/factory/factory.go": [
+      "internal/config/config.go",
+      "internal/gate/runner.go",
+      "internal/git/worktree.go",
+      "internal/github/github.go",
+      "internal/harness/codex.go",
+      "internal/store/store.go",
+      "internal/terminal/runtime.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/git/worktree.go": [],
+    "internal/harness/codex.go": [
+      "internal/terminal/runtime.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/terminal/runtime.go": []
+  }
+}

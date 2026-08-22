@@ -1,0 +1,15 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {"path": ".ua/.understandignore", "language": "unknown", "sizeLines": 69, "fileCategory": "code"},
+    {"path": ".ua/config.json", "language": "json", "sizeLines": 3, "fileCategory": "config"},
+    {"path": "docs/adr/0001-local-evaluation-without-outbound-telemetry.md", "language": "markdown", "sizeLines": 11, "fileCategory": "docs"},
+    {"path": "docs/spikes/0002-nested-harness-ttys.md", "language": "markdown", "sizeLines": 385, "fileCategory": "docs"}
+  ],
+  "batchImportData": {
+    ".ua/.understandignore": [],
+    ".ua/config.json": [],
+    "docs/adr/0001-local-evaluation-without-outbound-telemetry.md": [],
+    "docs/spikes/0002-nested-harness-ttys.md": []
+  }
+}

@@ -1,0 +1,79 @@
+[
+  {
+    "id": "layer:entry-points",
+    "name": "Entry Points and CLI",
+    "description": "Command binaries and CLI adapters that translate process arguments, flags, and worker/report interactions into factory operations.",
+    "nodeIds": [
+      "file:cmd/factory/main.go",
+      "file:cmd/factory-report/main.go",
+      "file:cmd/factory-worker-attach/main.go",
+      "file:internal/cli/cli.go",
+      "file:internal/reportcli/reportcli.go"
+    ]
+  },
+  {
+    "id": "layer:orchestration",
+    "name": "Factory Orchestration",
+    "description": "Supervised run coordination for issue claiming, agent execution, gate progression, draft pull requests, harness prompts, and dependency assembly.",
+    "nodeIds": [
+      "file:internal/factory/claim.go",
+      "file:internal/factory/draft_pr.go",
+      "file:internal/factory/agent.go",
+      "file:internal/factory/gate.go",
+      "file:internal/gate/runner.go",
+      "file:internal/factory/factory.go",
+      "file:internal/harness/codex.go",
+      "file:internal/prompt/prompt.go"
+    ]
+  },
+  {
+    "id": "layer:runtime-adapters",
+    "name": "Runtime and External Adapters",
+    "description": "Injected seams and host/container integrations for GitHub, Git worktrees, Docker workers, and cmux terminal sessions.",
+    "nodeIds": [
+      "file:internal/github/github.go",
+      "file:internal/worker/runtime.go",
+      "file:internal/git/worktree.go",
+      "file:internal/terminal/runtime.go"
+    ]
+  },
+  {
+    "id": "layer:data-protocol",
+    "name": "Operational Data and Protocols",
+    "description": "Durable SQLite run storage and validated structured harness-report contracts exchanged between workers and coordinators.",
+    "nodeIds": [
+      "file:internal/store/store.go",
+      "file:internal/report/report.go"
+    ]
+  },
+  {
+    "id": "layer:configuration",
+    "name": "Configuration",
+    "description": "Host and repository settings, Go module dependency metadata, and Understand-Anything analysis controls used to configure the factory and tooling.",
+    "nodeIds": [
+      "file:internal/config/config.go",
+      "config:factory.yaml",
+      "config:go.mod",
+      "config:go.sum",
+      "file:.ua/.understandignore",
+      "config:.ua/config.json"
+    ]
+  },
+  {
+    "id": "layer:documentation",
+    "name": "Documentation and Architecture Records",
+    "description": "Domain context, runtime and configuration guides, agent workflow conventions, ADRs, and terminal-runtime spike evidence.",
+    "nodeIds": [
+      "document:AGENTS.md",
+      "document:CONTEXT.md",
+      "document:docs/agent-runtime.md",
+      "document:docs/configuration.md",
+      "document:docs/worker-runtime.md",
+      "document:docs/agents/domain.md",
+      "document:docs/agents/issue-tracker.md",
+      "document:docs/agents/triage-labels.md",
+      "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "document:docs/spikes/0002-nested-harness-ttys.md"
+    ]
+  }
+]

@@ -1,0 +1,213 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [
+    ".ua/.understandignore"
+  ],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 3,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 0,
+      "failed": 0,
+      "skipped": 3
+    }
+  },
+  "results": [
+    {
+      "path": ".ua/config.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 3,
+      "nonEmptyLines": 3,
+      "sections": [
+        {
+          "heading": "outputLanguage",
+          "level": 1,
+          "line": 2
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 1
+      }
+    },
+    {
+      "path": "docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 11,
+      "nonEmptyLines": 7,
+      "sections": [
+        {
+          "heading": "Keep local evaluation summaries without outbound telemetry",
+          "level": 1,
+          "line": 5
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 1
+      }
+    },
+    {
+      "path": "docs/spikes/0002-nested-harness-ttys.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 385,
+      "nonEmptyLines": 288,
+      "sections": [
+        {
+          "heading": "Spike 0002 — Nested harness TTYs through cmux and Docker",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Question",
+          "level": 2,
+          "line": 8
+        },
+        {
+          "heading": "Answer so far",
+          "level": 2,
+          "line": 14
+        },
+        {
+          "heading": "Environment",
+          "level": 2,
+          "line": 30
+        },
+        {
+          "heading": "Worker shape that made this work",
+          "level": 2,
+          "line": 45
+        },
+        {
+          "heading": "Verdict per acceptance criterion",
+          "level": 2,
+          "line": 58
+        },
+        {
+          "heading": "Native session identifiers",
+          "level": 2,
+          "line": 82
+        },
+        {
+          "heading": "Codex",
+          "level": 3,
+          "line": 84
+        },
+        {
+          "heading": "Claude Code",
+          "level": 3,
+          "line": 94
+        },
+        {
+          "heading": "Failure modes and workarounds",
+          "level": 2,
+          "line": 110
+        },
+        {
+          "heading": "1. Codex's sandbox cannot start inside a hardened container",
+          "level": 3,
+          "line": 112
+        },
+        {
+          "heading": "2. The two harnesses answer Ctrl+C differently",
+          "level": 3,
+          "line": 133
+        },
+        {
+          "heading": "3. Claude Code cannot be credential seeded from a macOS host",
+          "level": 3,
+          "line": 150
+        },
+        {
+          "heading": "4. Claude Code keeps state outside `~/.claude`",
+          "level": 3,
+          "line": 169
+        },
+        {
+          "heading": "5. Headless authentication and interactive readiness are not the same state",
+          "level": 3,
+          "line": 200
+        },
+        {
+          "heading": "6. `docker cp` breaks non-root workers",
+          "level": 3,
+          "line": 226
+        },
+        {
+          "heading": "7. Bind mounts carry host ownership",
+          "level": 3,
+          "line": 242
+        },
+        {
+          "heading": "8. Codex global flags must precede the `resume` subcommand",
+          "level": 3,
+          "line": 249
+        },
+        {
+          "heading": "9. The cmux control socket rejects outside callers",
+          "level": 3,
+          "line": 256
+        },
+        {
+          "heading": "10. cmux workspace layout is the right surfacing primitive",
+          "level": 3,
+          "line": 270
+        },
+        {
+          "heading": "11. `terminal.replay` ignores the surface it is asked for",
+          "level": 3,
+          "line": 286
+        },
+        {
+          "heading": "12. A pinned worker must disable harness auto-update",
+          "level": 3,
+          "line": 302
+        },
+        {
+          "heading": "13. A cmux restart returns the surface but not the harness",
+          "level": 3,
+          "line": 311
+        },
+        {
+          "heading": "14. Terminal echo defeats naive output matching",
+          "level": 3,
+          "line": 336
+        },
+        {
+          "heading": "Recommendations for downstream tickets",
+          "level": 2,
+          "line": 345
+        },
+        {
+          "heading": "Outstanding work before the spike can close",
+          "level": 2,
+          "line": 368
+        },
+        {
+          "heading": "Notes on scope",
+          "level": 2,
+          "line": 378
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 27
+      }
+    }
+  ]
+}

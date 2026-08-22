@@ -1,0 +1,42 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {
+      "path": "AGENTS.md",
+      "language": "markdown",
+      "sizeLines": 16,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "CONTEXT.md",
+      "language": "markdown",
+      "sizeLines": 85,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "factory.yaml",
+      "language": "yaml",
+      "sizeLines": 61,
+      "fileCategory": "config"
+    },
+    {
+      "path": "go.mod",
+      "language": "mod",
+      "sizeLines": 20,
+      "fileCategory": "config"
+    },
+    {
+      "path": "go.sum",
+      "language": "sum",
+      "sizeLines": 54,
+      "fileCategory": "config"
+    }
+  ],
+  "batchImportData": {
+    "AGENTS.md": [],
+    "CONTEXT.md": [],
+    "factory.yaml": [],
+    "go.mod": [],
+    "go.sum": []
+  }
+}

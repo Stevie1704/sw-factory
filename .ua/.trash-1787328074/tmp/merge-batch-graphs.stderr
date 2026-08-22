@@ -1,0 +1,21 @@
+Found 11 batch files (8 logical batches, 3 multi-part):
+  batch-1-part-1.json: 50 nodes, 118 edges
+  batch-1-part-2.json: 52 nodes, 114 edges
+  batch-2.json: 50 nodes, 120 edges
+  batch-3-part-1.json: 26 nodes, 50 edges
+  batch-3-part-2.json: 89 nodes, 149 edges
+  batch-4-part-1.json: 47 nodes, 112 edges
+  batch-4-part-2.json: 42 nodes, 96 edges
+  batch-5.json: 5 nodes, 4 edges
+  batch-6.json: 3 nodes, 2 edges
+  batch-7.json: 3 nodes, 1 edges
+  batch-8.json: 4 nodes, 0 edges
+
+Input: 371 nodes, 766 edges
+
+Output: 371 nodes, 766 edges
+
+Imports edge recovery:
+  Recovered 0 `imports` edges from importMap (35 entries scanned)
+
+Written to /Users/steffenkrakau/Documents/sw-factory/.ua/intermediate/assembled-graph.json (330 KB)

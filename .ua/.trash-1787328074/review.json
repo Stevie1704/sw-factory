@@ -1,0 +1,33 @@
+{
+  "issues": [],
+  "warnings": [
+    "Node 'document:docs/agents/domain.md' has no edges (orphan)",
+    "Node 'file:.ua/.understandignore' has no edges (orphan)",
+    "Node 'config:.ua/config.json' has no edges (orphan)",
+    "Node 'document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md' has no edges (orphan)",
+    "Node 'document:docs/spikes/0002-nested-harness-ttys.md' has no edges (orphan)"
+  ],
+  "stats": {
+    "totalNodes": 371,
+    "totalEdges": 766,
+    "totalLayers": 6,
+    "tourSteps": 11,
+    "nodeTypes": {
+      "file": 21,
+      "function": 219,
+      "class": 117,
+      "document": 10,
+      "config": 4
+    },
+    "edgeTypes": {
+      "imports": 45,
+      "contains": 336,
+      "exports": 225,
+      "calls": 148,
+      "implements": 5,
+      "documents": 3,
+      "depends_on": 2,
+      "related": 2
+    }
+  }
+}

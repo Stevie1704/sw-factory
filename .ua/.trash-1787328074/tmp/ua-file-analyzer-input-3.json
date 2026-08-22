@@ -1,0 +1,54 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {
+      "path": "cmd/factory-worker-attach/main.go",
+      "language": "go",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/gate.go",
+      "language": "go",
+      "sizeLines": 364,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/gate/runner.go",
+      "language": "go",
+      "sizeLines": 220,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/github/github.go",
+      "language": "go",
+      "sizeLines": 559,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/worker/runtime.go",
+      "language": "go",
+      "sizeLines": 1499,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "cmd/factory-worker-attach/main.go": [
+      "internal/worker/runtime.go"
+    ],
+    "internal/factory/gate.go": [
+      "internal/config/config.go",
+      "internal/gate/runner.go",
+      "internal/github/github.go",
+      "internal/store/store.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/gate/runner.go": [
+      "internal/config/config.go",
+      "internal/github/github.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/github/github.go": [],
+    "internal/worker/runtime.go": []
+  }
+}

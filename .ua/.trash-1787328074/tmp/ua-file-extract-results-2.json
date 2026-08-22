@@ -1,0 +1,3034 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 5,
+  "filesSkipped": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 5,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 5,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "results": [
+    {
+      "path": "cmd/factory-report/main.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 14,
+      "nonEmptyLines": 11,
+      "functions": [
+        {
+          "name": "main",
+          "startLine": 12,
+          "endLine": 14,
+          "params": []
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "main",
+          "callee": "os.Exit",
+          "lineNumber": 13
+        },
+        {
+          "caller": "main",
+          "callee": "reportcli.Run",
+          "lineNumber": 13
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 0,
+        "functionCount": 1,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "internal/factory/agent.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 648,
+      "nonEmptyLines": 626,
+      "functions": [
+        {
+          "name": "StartAgent",
+          "startLine": 114,
+          "endLine": 342,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "AcceptAgentReport",
+          "startLine": 347,
+          "endLine": 466,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "RunAgent",
+          "startLine": 470,
+          "endLine": 476,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "normalizeAgentRequest",
+          "startLine": 479,
+          "endLine": 490,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "validateAgentRequest",
+          "startLine": 494,
+          "endLine": 513,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "resolveAgentPolicy",
+          "startLine": 517,
+          "endLine": 543,
+          "params": [
+            "repository",
+            "request"
+          ]
+        },
+        {
+          "name": "hasOverride",
+          "startLine": 546,
+          "endLine": 553,
+          "params": [
+            "values",
+            "wanted"
+          ]
+        },
+        {
+          "name": "contains",
+          "startLine": 556,
+          "endLine": 563,
+          "params": [
+            "values",
+            "wanted"
+          ]
+        },
+        {
+          "name": "sameStrings",
+          "startLine": 566,
+          "endLine": 576,
+          "params": [
+            "left",
+            "right"
+          ]
+        },
+        {
+          "name": "validateAgentRunState",
+          "startLine": 580,
+          "endLine": 590,
+          "params": [
+            "run"
+          ]
+        },
+        {
+          "name": "persistAgentRunState",
+          "startLine": 595,
+          "endLine": 613,
+          "params": [
+            "ctx",
+            "registration",
+            "runStore",
+            "previous",
+            "next"
+          ]
+        },
+        {
+          "name": "writeInvocationPacket",
+          "startLine": 617,
+          "endLine": 648,
+          "params": [
+            "directory",
+            "packet"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "InvocationStore",
+          "startLine": 25,
+          "endLine": 29,
+          "methods": [
+            "SaveInvocation",
+            "Invocation"
+          ],
+          "properties": []
+        },
+        {
+          "name": "ActiveInvocationStore",
+          "startLine": 33,
+          "endLine": 35,
+          "methods": [
+            "ActiveInvocation"
+          ],
+          "properties": []
+        },
+        {
+          "name": "AgentRequest",
+          "startLine": 38,
+          "endLine": 55,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Role",
+            "Stage",
+            "Harness",
+            "Model",
+            "ReasoningEffort",
+            "CodexAuthPath",
+            "PermittedPaths"
+          ]
+        },
+        {
+          "name": "AgentLaunchResult",
+          "startLine": 58,
+          "endLine": 63,
+          "methods": [],
+          "properties": [
+            "Invocation",
+            "Prompt"
+          ]
+        },
+        {
+          "name": "AgentReportRequest",
+          "startLine": 66,
+          "endLine": 73,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "InvocationID",
+            "PermittedPaths"
+          ]
+        },
+        {
+          "name": "AgentResult",
+          "startLine": 76,
+          "endLine": 81,
+          "methods": [],
+          "properties": [
+            "Invocation",
+            "Report"
+          ]
+        },
+        {
+          "name": "InvocationPacket",
+          "startLine": 85,
+          "endLine": 103,
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "InvocationID",
+            "RunID",
+            "Role",
+            "Stage",
+            "SpecificationPacket",
+            "PromptVersion",
+            "PermittedPaths"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "InvocationStore",
+          "line": 25,
+          "isDefault": false
+        },
+        {
+          "name": "ActiveInvocationStore",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "AgentRequest",
+          "line": 38,
+          "isDefault": false
+        },
+        {
+          "name": "AgentLaunchResult",
+          "line": 58,
+          "isDefault": false
+        },
+        {
+          "name": "AgentReportRequest",
+          "line": 66,
+          "isDefault": false
+        },
+        {
+          "name": "AgentResult",
+          "line": 76,
+          "isDefault": false
+        },
+        {
+          "name": "InvocationPacket",
+          "line": 85,
+          "isDefault": false
+        },
+        {
+          "name": "StartAgent",
+          "line": 114,
+          "isDefault": false
+        },
+        {
+          "name": "AcceptAgentReport",
+          "line": 347,
+          "isDefault": false
+        },
+        {
+          "name": "RunAgent",
+          "line": 470,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "StartAgent",
+          "callee": "normalizeAgentRequest",
+          "lineNumber": 115
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "validateAgentRequest",
+          "lineNumber": 116
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "report.ValidatePermittedPaths",
+          "lineNumber": 119
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.openActiveRunStore",
+          "lineNumber": 122
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "func() { _ = runStore.Close() }",
+          "lineNumber": 126
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "runStore.Close",
+          "lineNumber": 126
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "errors.New",
+          "lineNumber": 129
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "errors.New",
+          "lineNumber": 132
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 135
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "validateAgentRunState",
+          "lineNumber": 137
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "activeStore.ActiveInvocation",
+          "lineNumber": 141
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 143
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 146
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 149
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "errors.New",
+          "lineNumber": 150
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "decodeSpecificationPacket",
+          "lineNumber": 152
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "resolveAgentPolicy",
+          "lineNumber": 156
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 161
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "errors.New",
+          "lineNumber": 172
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.ensureAgentRuntime",
+          "lineNumber": 175
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 177
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.NewRunID",
+          "lineNumber": 179
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 181
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 184
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Now",
+          "lineNumber": 184
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "filepath.Join",
+          "lineNumber": 185
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "filepath.Dir",
+          "lineNumber": 185
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "filepath.Join",
+          "lineNumber": 186
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "filepath.Join",
+          "lineNumber": 187
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "os.MkdirAll",
+          "lineNumber": 188
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 189
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "os.MkdirAll",
+          "lineNumber": 191
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 192
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "prompt.Build",
+          "lineNumber": 196
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "string",
+          "lineNumber": 200
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "writeInvocationPacket",
+          "lineNumber": 207
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "append",
+          "lineNumber": 215
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "string",
+          "lineNumber": 222
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "append",
+          "lineNumber": 229
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "func() {\n\t\tif returnErr == nil || !invocationPersisted {\n\t\t\treturn\n\t\t}\n\t\trollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)\n\t\tdefer cancel()\n\t\tinvocation.Status = store.InvocationStatusCannotProceed\n\t\tinvocation.UpdatedAt = s.deps.Now().UTC()\n\t\t_ = invocationStore.SaveInvocation(rollbackContext, invocation)\n\t\tif workerStarted {\n\t\t\t_ = s.deps.Worker.Stop(rollbackContext, run.ID)\n\t\t}\n\t\tif cleanupSurface.ID != \"\" {\n\t\t\t_ = terminalRuntime.CloseSurface(rollbackContext, cleanupSurface.ID)\n\t\t}\n\t}",
+          "lineNumber": 238
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "context.WithTimeout",
+          "lineNumber": 242
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "context.WithoutCancel",
+          "lineNumber": 242
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "cancel",
+          "lineNumber": 243
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 245
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Now",
+          "lineNumber": 245
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "invocationStore.SaveInvocation",
+          "lineNumber": 246
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Worker.Stop",
+          "lineNumber": 248
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "terminalRuntime.CloseSurface",
+          "lineNumber": 251
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "invocationStore.SaveInvocation",
+          "lineNumber": 254
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 255
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "prepareGitMetadataProjection",
+          "lineNumber": 262
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 264
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Worker.Start",
+          "lineNumber": 266
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "workerCaches",
+          "lineNumber": 272
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 278
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "seeder.SeedCodexCredentials",
+          "lineNumber": 282
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "terminalRuntime.EnsureControlWorkspace",
+          "lineNumber": 286
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "defaultString",
+          "lineNumber": 287
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "terminalRuntime.EnsureRunWorkspace",
+          "lineNumber": 294
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 297
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "string",
+          "lineNumber": 304
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "string",
+          "lineNumber": 305
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "string",
+          "lineNumber": 306
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "string",
+          "lineNumber": 307
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "invocationStore.SaveInvocation",
+          "lineNumber": 308
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 309
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "terminalRuntime.Notify",
+          "lineNumber": 311
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "harnessRuntime.Start",
+          "lineNumber": 314
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "string",
+          "lineNumber": 318
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 326
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "invocationStore.SaveInvocation",
+          "lineNumber": 331
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 332
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 337
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.deps.Now",
+          "lineNumber": 337
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "s.persistAgentRunState",
+          "lineNumber": 338
+        },
+        {
+          "caller": "StartAgent",
+          "callee": "fmt.Errorf",
+          "lineNumber": 339
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 348
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 349
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.openActiveRunStore",
+          "lineNumber": 351
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "func() { _ = runStore.Close() }",
+          "lineNumber": 355
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "runStore.Close",
+          "lineNumber": 355
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 358
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 361
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 364
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "invocationStore.Invocation",
+          "lineNumber": 366
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 371
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 374
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "validateAgentRunState",
+          "lineNumber": 376
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 380
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "len",
+          "lineNumber": 382
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "report.ValidatePermittedPaths",
+          "lineNumber": 383
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "sameStrings",
+          "lineNumber": 386
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 387
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "filepath.Join",
+          "lineNumber": 390
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "report.Read",
+          "lineNumber": 391
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "string",
+          "lineNumber": 400
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.worktreeInspector",
+          "lineNumber": 404
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 406
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "inspector.Inspect",
+          "lineNumber": 408
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 410
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 415
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "report.Validate",
+          "lineNumber": 417
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.ensureAgentRuntime",
+          "lineNumber": 420
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 422
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 427
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "errors.New",
+          "lineNumber": 433
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "harnessRuntime.Finish",
+          "lineNumber": 435
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "terminal.SurfaceID",
+          "lineNumber": 435
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "terminal.WorkspaceID",
+          "lineNumber": 435
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 436
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 447
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.deps.Now",
+          "lineNumber": 447
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "invocationStore.SaveInvocation",
+          "lineNumber": 448
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 449
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.deps.Now().UTC",
+          "lineNumber": 461
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.deps.Now",
+          "lineNumber": 461
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "s.persistAgentRunState",
+          "lineNumber": 462
+        },
+        {
+          "caller": "AcceptAgentReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 463
+        },
+        {
+          "caller": "RunAgent",
+          "callee": "s.StartAgent",
+          "lineNumber": 471
+        },
+        {
+          "caller": "RunAgent",
+          "callee": "s.AcceptAgentReport",
+          "lineNumber": 475
+        },
+        {
+          "caller": "normalizeAgentRequest",
+          "callee": "len",
+          "lineNumber": 486
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 496
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 499
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 501
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "errors.New",
+          "lineNumber": 502
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 504
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "errors.New",
+          "lineNumber": 505
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 508
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 508
+        },
+        {
+          "caller": "validateAgentRequest",
+          "callee": "errors.New",
+          "lineNumber": 509
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "fmt.Errorf",
+          "lineNumber": 523
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "hasOverride",
+          "lineNumber": 525
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "errors.New",
+          "lineNumber": 526
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "len",
+          "lineNumber": 530
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "fmt.Errorf",
+          "lineNumber": 534
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "contains",
+          "lineNumber": 536
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "hasOverride",
+          "lineNumber": 536
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "fmt.Errorf",
+          "lineNumber": 537
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "hasOverride",
+          "lineNumber": 539
+        },
+        {
+          "caller": "resolveAgentPolicy",
+          "callee": "errors.New",
+          "lineNumber": 540
+        },
+        {
+          "caller": "sameStrings",
+          "callee": "len",
+          "lineNumber": 567
+        },
+        {
+          "caller": "sameStrings",
+          "callee": "len",
+          "lineNumber": 567
+        },
+        {
+          "caller": "validateAgentRunState",
+          "callee": "fmt.Errorf",
+          "lineNumber": 582
+        },
+        {
+          "caller": "validateAgentRunState",
+          "callee": "fmt.Errorf",
+          "lineNumber": 588
+        },
+        {
+          "caller": "persistAgentRunState",
+          "callee": "saveRunWithRetry",
+          "lineNumber": 597
+        },
+        {
+          "caller": "persistAgentRunState",
+          "callee": "s.deps.GitHub.Issue",
+          "lineNumber": 600
+        },
+        {
+          "caller": "persistAgentRunState",
+          "callee": "fmt.Errorf",
+          "lineNumber": 602
+        },
+        {
+          "caller": "persistAgentRunState",
+          "callee": "s.applyStateTransition",
+          "lineNumber": 604
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "json.MarshalIndent",
+          "lineNumber": 618
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 620
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "append",
+          "lineNumber": 622
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "os.CreateTemp",
+          "lineNumber": 623
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 625
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Name",
+          "lineNumber": 627
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "func() { _ = os.Remove(path) }",
+          "lineNumber": 628
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "os.Remove",
+          "lineNumber": 628
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Chmod",
+          "lineNumber": 629
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Close",
+          "lineNumber": 630
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 631
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Write",
+          "lineNumber": 633
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Close",
+          "lineNumber": 634
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 635
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Sync",
+          "lineNumber": 637
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Close",
+          "lineNumber": 638
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 639
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "temporary.Close",
+          "lineNumber": 641
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 642
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "os.Rename",
+          "lineNumber": 644
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "filepath.Join",
+          "lineNumber": 644
+        },
+        {
+          "caller": "writeInvocationPacket",
+          "callee": "fmt.Errorf",
+          "lineNumber": 645
+        }
+      ],
+      "metrics": {
+        "importCount": 8,
+        "exportCount": 10,
+        "functionCount": 12,
+        "classCount": 7
+      }
+    },
+    {
+      "path": "internal/prompt/prompt.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 88,
+      "nonEmptyLines": 78,
+      "functions": [
+        {
+          "name": "Build",
+          "startLine": 38,
+          "endLine": 79,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "sanitizeFenced",
+          "startLine": 83,
+          "endLine": 88,
+          "params": [
+            "value"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Request",
+          "startLine": 21,
+          "endLine": 34,
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "RunID",
+            "Role",
+            "Stage",
+            "SpecificationPacket",
+            "RepositoryGuidance"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Request",
+          "line": 21,
+          "isDefault": false
+        },
+        {
+          "name": "Build",
+          "line": 38,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Build",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 45
+        },
+        {
+          "caller": "Build",
+          "callee": "fmt.Errorf",
+          "lineNumber": 46
+        },
+        {
+          "caller": "Build",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 48
+        },
+        {
+          "caller": "Build",
+          "callee": "fmt.Errorf",
+          "lineNumber": 49
+        },
+        {
+          "caller": "Build",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 52
+        },
+        {
+          "caller": "Build",
+          "callee": "sanitizeFenced",
+          "lineNumber": 78
+        },
+        {
+          "caller": "Build",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 78
+        },
+        {
+          "caller": "Build",
+          "callee": "sanitizeFenced",
+          "lineNumber": 78
+        },
+        {
+          "caller": "Build",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 78
+        },
+        {
+          "caller": "sanitizeFenced",
+          "callee": "strings.ReplaceAll",
+          "lineNumber": 85
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 2,
+        "functionCount": 2,
+        "classCount": 1
+      }
+    },
+    {
+      "path": "internal/report/report.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 590,
+      "nonEmptyLines": 560,
+      "functions": [
+        {
+          "name": "WriteAtomic",
+          "startLine": 154,
+          "endLine": 162,
+          "params": [
+            "resultDirectory",
+            "value"
+          ]
+        },
+        {
+          "name": "WriteAtomicForInvocation",
+          "startLine": 168,
+          "endLine": 179,
+          "params": [
+            "resultDirectory",
+            "invocationID",
+            "value"
+          ]
+        },
+        {
+          "name": "writeAtomicReport",
+          "startLine": 183,
+          "endLine": 238,
+          "params": [
+            "resultDirectory",
+            "value"
+          ]
+        },
+        {
+          "name": "Read",
+          "startLine": 242,
+          "endLine": 295,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "Validate",
+          "startLine": 299,
+          "endLine": 366,
+          "params": [
+            "value",
+            "context"
+          ]
+        },
+        {
+          "name": "validateHandoff",
+          "startLine": 370,
+          "endLine": 446,
+          "params": [
+            "value",
+            "context"
+          ]
+        },
+        {
+          "name": "ValidatePermittedPaths",
+          "startLine": 450,
+          "endLine": 466,
+          "params": [
+            "values"
+          ]
+        },
+        {
+          "name": "validateQuestions",
+          "startLine": 469,
+          "endLine": 487,
+          "params": [
+            "values"
+          ]
+        },
+        {
+          "name": "validateEvidence",
+          "startLine": 491,
+          "endLine": 504,
+          "params": [
+            "values"
+          ]
+        },
+        {
+          "name": "validateInvocationDirectory",
+          "startLine": 508,
+          "endLine": 519,
+          "params": [
+            "path",
+            "invocationID"
+          ]
+        },
+        {
+          "name": "cleanRelativePath",
+          "startLine": 522,
+          "endLine": 531,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "withinAnyPrefix",
+          "startLine": 535,
+          "endLine": 549,
+          "params": [
+            "path",
+            "prefixes"
+          ]
+        },
+        {
+          "name": "safeIdentifier",
+          "startLine": 553,
+          "endLine": 564,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "identityFrom",
+          "startLine": 568,
+          "endLine": 576,
+          "params": [
+            "value",
+            "invocationID"
+          ]
+        },
+        {
+          "name": "validateText",
+          "startLine": 579,
+          "endLine": 590,
+          "params": [
+            "field",
+            "value",
+            "maxRunes",
+            "required"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "AcceptanceMapping",
+          "startLine": 60,
+          "endLine": 65,
+          "methods": [],
+          "properties": [
+            "Criterion",
+            "Evidence"
+          ]
+        },
+        {
+          "name": "Handoff",
+          "startLine": 68,
+          "endLine": 79,
+          "methods": [],
+          "properties": [
+            "ChangeSummary",
+            "AcceptanceMapping",
+            "ProductionFilesChanged",
+            "FocusedCommands",
+            "KnownLimitations"
+          ]
+        },
+        {
+          "name": "Question",
+          "startLine": 82,
+          "endLine": 87,
+          "methods": [],
+          "properties": [
+            "ID",
+            "Prompt"
+          ]
+        },
+        {
+          "name": "Evidence",
+          "startLine": 90,
+          "endLine": 95,
+          "methods": [],
+          "properties": [
+            "Kind",
+            "Detail"
+          ]
+        },
+        {
+          "name": "Report",
+          "startLine": 98,
+          "endLine": 125,
+          "methods": [],
+          "properties": [
+            "SchemaVersion",
+            "InvocationID",
+            "RunID",
+            "Harness",
+            "Role",
+            "Stage",
+            "Outcome",
+            "Summary",
+            "Handoff",
+            "Questions",
+            "Evidence",
+            "NativeSessionID",
+            "ReportedAt"
+          ]
+        },
+        {
+          "name": "ValidationContext",
+          "startLine": 129,
+          "endLine": 149,
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "RunID",
+            "Harness",
+            "Role",
+            "Stage",
+            "WorktreePath",
+            "PermittedPaths",
+            "ObservedChanges",
+            "WorktreeObserved"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "AcceptanceMapping",
+          "line": 60,
+          "isDefault": false
+        },
+        {
+          "name": "Handoff",
+          "line": 68,
+          "isDefault": false
+        },
+        {
+          "name": "Question",
+          "line": 82,
+          "isDefault": false
+        },
+        {
+          "name": "Evidence",
+          "line": 90,
+          "isDefault": false
+        },
+        {
+          "name": "Report",
+          "line": 98,
+          "isDefault": false
+        },
+        {
+          "name": "ValidationContext",
+          "line": 129,
+          "isDefault": false
+        },
+        {
+          "name": "WriteAtomic",
+          "line": 154,
+          "isDefault": false
+        },
+        {
+          "name": "WriteAtomicForInvocation",
+          "line": 168,
+          "isDefault": false
+        },
+        {
+          "name": "Read",
+          "line": 242,
+          "isDefault": false
+        },
+        {
+          "name": "Validate",
+          "line": 299,
+          "isDefault": false
+        },
+        {
+          "name": "ValidatePermittedPaths",
+          "line": 450,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "WriteAtomic",
+          "callee": "Validate",
+          "lineNumber": 155
+        },
+        {
+          "caller": "WriteAtomic",
+          "callee": "identityFrom",
+          "lineNumber": 155
+        },
+        {
+          "caller": "WriteAtomic",
+          "callee": "validateInvocationDirectory",
+          "lineNumber": 158
+        },
+        {
+          "caller": "WriteAtomic",
+          "callee": "writeAtomicReport",
+          "lineNumber": 161
+        },
+        {
+          "caller": "WriteAtomicForInvocation",
+          "callee": "Validate",
+          "lineNumber": 169
+        },
+        {
+          "caller": "WriteAtomicForInvocation",
+          "callee": "identityFrom",
+          "lineNumber": 169
+        },
+        {
+          "caller": "WriteAtomicForInvocation",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 172
+        },
+        {
+          "caller": "WriteAtomicForInvocation",
+          "callee": "errors.New",
+          "lineNumber": 173
+        },
+        {
+          "caller": "WriteAtomicForInvocation",
+          "callee": "safeIdentifier",
+          "lineNumber": 175
+        },
+        {
+          "caller": "WriteAtomicForInvocation",
+          "callee": "errors.New",
+          "lineNumber": 176
+        },
+        {
+          "caller": "WriteAtomicForInvocation",
+          "callee": "writeAtomicReport",
+          "lineNumber": 178
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "os.MkdirAll",
+          "lineNumber": 184
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 185
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "os.Lstat",
+          "lineNumber": 187
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 188
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "info.IsDir",
+          "lineNumber": 189
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "info.Mode",
+          "lineNumber": 189
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "errors.New",
+          "lineNumber": 190
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "json.MarshalIndent",
+          "lineNumber": 193
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 195
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "append",
+          "lineNumber": 197
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "len",
+          "lineNumber": 198
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 199
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "os.CreateTemp",
+          "lineNumber": 201
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 203
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Name",
+          "lineNumber": 205
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "func() {\n\t\tif removeTemporary {\n\t\t\t_ = os.Remove(temporaryPath)\n\t\t}\n\t}",
+          "lineNumber": 207
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "os.Remove",
+          "lineNumber": 209
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Chmod",
+          "lineNumber": 212
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Close",
+          "lineNumber": 213
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 214
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Write",
+          "lineNumber": 216
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Close",
+          "lineNumber": 217
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 218
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Sync",
+          "lineNumber": 220
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Close",
+          "lineNumber": 221
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 222
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "temporary.Close",
+          "lineNumber": 224
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 225
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "filepath.Join",
+          "lineNumber": 227
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "os.Lstat",
+          "lineNumber": 228
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "info.Mode",
+          "lineNumber": 228
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "errors.New",
+          "lineNumber": 229
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "errors.Is",
+          "lineNumber": 230
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 231
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "os.Rename",
+          "lineNumber": 233
+        },
+        {
+          "caller": "writeAtomicReport",
+          "callee": "fmt.Errorf",
+          "lineNumber": 234
+        },
+        {
+          "caller": "Read",
+          "callee": "filepath.Clean",
+          "lineNumber": 243
+        },
+        {
+          "caller": "Read",
+          "callee": "unix.Open",
+          "lineNumber": 244
+        },
+        {
+          "caller": "Read",
+          "callee": "filepath.Dir",
+          "lineNumber": 244
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.Is",
+          "lineNumber": 246
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.New",
+          "lineNumber": 247
+        },
+        {
+          "caller": "Read",
+          "callee": "fmt.Errorf",
+          "lineNumber": 249
+        },
+        {
+          "caller": "Read",
+          "callee": "func() { _ = unix.Close(directoryFD) }",
+          "lineNumber": 251
+        },
+        {
+          "caller": "Read",
+          "callee": "unix.Close",
+          "lineNumber": 251
+        },
+        {
+          "caller": "Read",
+          "callee": "unix.Openat",
+          "lineNumber": 252
+        },
+        {
+          "caller": "Read",
+          "callee": "filepath.Base",
+          "lineNumber": 252
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.Is",
+          "lineNumber": 254
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.New",
+          "lineNumber": 255
+        },
+        {
+          "caller": "Read",
+          "callee": "fmt.Errorf",
+          "lineNumber": 257
+        },
+        {
+          "caller": "Read",
+          "callee": "os.NewFile",
+          "lineNumber": 259
+        },
+        {
+          "caller": "Read",
+          "callee": "uintptr",
+          "lineNumber": 259
+        },
+        {
+          "caller": "Read",
+          "callee": "unix.Close",
+          "lineNumber": 261
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.New",
+          "lineNumber": 262
+        },
+        {
+          "caller": "Read",
+          "callee": "func() { _ = file.Close() }",
+          "lineNumber": 264
+        },
+        {
+          "caller": "Read",
+          "callee": "file.Close",
+          "lineNumber": 264
+        },
+        {
+          "caller": "Read",
+          "callee": "file.Stat",
+          "lineNumber": 265
+        },
+        {
+          "caller": "Read",
+          "callee": "fmt.Errorf",
+          "lineNumber": 267
+        },
+        {
+          "caller": "Read",
+          "callee": "info.Mode().IsRegular",
+          "lineNumber": 269
+        },
+        {
+          "caller": "Read",
+          "callee": "info.Mode",
+          "lineNumber": 269
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.New",
+          "lineNumber": 270
+        },
+        {
+          "caller": "Read",
+          "callee": "io.ReadAll",
+          "lineNumber": 272
+        },
+        {
+          "caller": "Read",
+          "callee": "io.LimitReader",
+          "lineNumber": 272
+        },
+        {
+          "caller": "Read",
+          "callee": "int64",
+          "lineNumber": 272
+        },
+        {
+          "caller": "Read",
+          "callee": "fmt.Errorf",
+          "lineNumber": 274
+        },
+        {
+          "caller": "Read",
+          "callee": "len",
+          "lineNumber": 276
+        },
+        {
+          "caller": "Read",
+          "callee": "fmt.Errorf",
+          "lineNumber": 277
+        },
+        {
+          "caller": "Read",
+          "callee": "json.NewDecoder",
+          "lineNumber": 279
+        },
+        {
+          "caller": "Read",
+          "callee": "bytes.NewReader",
+          "lineNumber": 279
+        },
+        {
+          "caller": "Read",
+          "callee": "decoder.DisallowUnknownFields",
+          "lineNumber": 280
+        },
+        {
+          "caller": "Read",
+          "callee": "decoder.Decode",
+          "lineNumber": 282
+        },
+        {
+          "caller": "Read",
+          "callee": "fmt.Errorf",
+          "lineNumber": 283
+        },
+        {
+          "caller": "Read",
+          "callee": "decoder.Decode",
+          "lineNumber": 286
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.New",
+          "lineNumber": 287
+        },
+        {
+          "caller": "Read",
+          "callee": "errors.Is",
+          "lineNumber": 288
+        },
+        {
+          "caller": "Read",
+          "callee": "fmt.Errorf",
+          "lineNumber": 289
+        },
+        {
+          "caller": "Read",
+          "callee": "Validate",
+          "lineNumber": 291
+        },
+        {
+          "caller": "Read",
+          "callee": "identityFrom",
+          "lineNumber": 291
+        },
+        {
+          "caller": "Validate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 301
+        },
+        {
+          "caller": "Validate",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 315
+        },
+        {
+          "caller": "Validate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 316
+        },
+        {
+          "caller": "Validate",
+          "callee": "safeIdentifier",
+          "lineNumber": 319
+        },
+        {
+          "caller": "Validate",
+          "callee": "safeIdentifier",
+          "lineNumber": 319
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 320
+        },
+        {
+          "caller": "Validate",
+          "callee": "validateText",
+          "lineNumber": 322
+        },
+        {
+          "caller": "Validate",
+          "callee": "value.ReportedAt.IsZero",
+          "lineNumber": 325
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 326
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 331
+        },
+        {
+          "caller": "Validate",
+          "callee": "len",
+          "lineNumber": 333
+        },
+        {
+          "caller": "Validate",
+          "callee": "len",
+          "lineNumber": 333
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 334
+        },
+        {
+          "caller": "Validate",
+          "callee": "validateHandoff",
+          "lineNumber": 336
+        },
+        {
+          "caller": "Validate",
+          "callee": "len",
+          "lineNumber": 340
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 341
+        },
+        {
+          "caller": "Validate",
+          "callee": "len",
+          "lineNumber": 343
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 344
+        },
+        {
+          "caller": "Validate",
+          "callee": "validateQuestions",
+          "lineNumber": 346
+        },
+        {
+          "caller": "Validate",
+          "callee": "len",
+          "lineNumber": 350
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 351
+        },
+        {
+          "caller": "Validate",
+          "callee": "len",
+          "lineNumber": 353
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 354
+        },
+        {
+          "caller": "Validate",
+          "callee": "validateEvidence",
+          "lineNumber": 356
+        },
+        {
+          "caller": "Validate",
+          "callee": "fmt.Errorf",
+          "lineNumber": 360
+        },
+        {
+          "caller": "Validate",
+          "callee": "safeIdentifier",
+          "lineNumber": 362
+        },
+        {
+          "caller": "Validate",
+          "callee": "errors.New",
+          "lineNumber": 363
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "validateText",
+          "lineNumber": 371
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 374
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "errors.New",
+          "lineNumber": 375
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 377
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 378
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "validateText",
+          "lineNumber": 381
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 381
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "validateText",
+          "lineNumber": 384
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 384
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "make",
+          "lineNumber": 388
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 388
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "cleanRelativePath",
+          "lineNumber": 390
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 392
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 395
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "withinAnyPrefix",
+          "lineNumber": 395
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 396
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 399
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 400
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "validateText",
+          "lineNumber": 403
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 403
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "cleanRelativePath",
+          "lineNumber": 406
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 408
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 410
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "withinAnyPrefix",
+          "lineNumber": 410
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 411
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 415
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "filepath.Join",
+          "lineNumber": 419
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "filepath.FromSlash",
+          "lineNumber": 419
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "filepath.Rel",
+          "lineNumber": 420
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 421
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "string",
+          "lineNumber": 421
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 422
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 426
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "errors.New",
+          "lineNumber": 427
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 429
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 430
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "validateText",
+          "lineNumber": 433
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 433
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "len",
+          "lineNumber": 437
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Errorf",
+          "lineNumber": 438
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "validateText",
+          "lineNumber": 441
+        },
+        {
+          "caller": "validateHandoff",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 441
+        },
+        {
+          "caller": "ValidatePermittedPaths",
+          "callee": "len",
+          "lineNumber": 451
+        },
+        {
+          "caller": "ValidatePermittedPaths",
+          "callee": "fmt.Errorf",
+          "lineNumber": 452
+        },
+        {
+          "caller": "ValidatePermittedPaths",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 455
+        },
+        {
+          "caller": "ValidatePermittedPaths",
+          "callee": "validateText",
+          "lineNumber": 458
+        },
+        {
+          "caller": "ValidatePermittedPaths",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 458
+        },
+        {
+          "caller": "ValidatePermittedPaths",
+          "callee": "cleanRelativePath",
+          "lineNumber": 461
+        },
+        {
+          "caller": "ValidatePermittedPaths",
+          "callee": "fmt.Errorf",
+          "lineNumber": 462
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "len",
+          "lineNumber": 470
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "fmt.Errorf",
+          "lineNumber": 471
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "make",
+          "lineNumber": 473
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "len",
+          "lineNumber": 473
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "safeIdentifier",
+          "lineNumber": 475
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 475
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "fmt.Errorf",
+          "lineNumber": 476
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "fmt.Errorf",
+          "lineNumber": 479
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "validateText",
+          "lineNumber": 482
+        },
+        {
+          "caller": "validateQuestions",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 482
+        },
+        {
+          "caller": "validateEvidence",
+          "callee": "len",
+          "lineNumber": 492
+        },
+        {
+          "caller": "validateEvidence",
+          "callee": "fmt.Errorf",
+          "lineNumber": 493
+        },
+        {
+          "caller": "validateEvidence",
+          "callee": "validateText",
+          "lineNumber": 496
+        },
+        {
+          "caller": "validateEvidence",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 496
+        },
+        {
+          "caller": "validateEvidence",
+          "callee": "validateText",
+          "lineNumber": 499
+        },
+        {
+          "caller": "validateEvidence",
+          "callee": "fmt.Sprintf",
+          "lineNumber": 499
+        },
+        {
+          "caller": "validateInvocationDirectory",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 509
+        },
+        {
+          "caller": "validateInvocationDirectory",
+          "callee": "errors.New",
+          "lineNumber": 510
+        },
+        {
+          "caller": "validateInvocationDirectory",
+          "callee": "safeIdentifier",
+          "lineNumber": 512
+        },
+        {
+          "caller": "validateInvocationDirectory",
+          "callee": "errors.New",
+          "lineNumber": 513
+        },
+        {
+          "caller": "validateInvocationDirectory",
+          "callee": "filepath.Base",
+          "lineNumber": 515
+        },
+        {
+          "caller": "validateInvocationDirectory",
+          "callee": "filepath.Clean",
+          "lineNumber": 515
+        },
+        {
+          "caller": "validateInvocationDirectory",
+          "callee": "errors.New",
+          "lineNumber": 516
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 523
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 523
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 523
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "errors.New",
+          "lineNumber": 524
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "filepath.ToSlash",
+          "lineNumber": 526
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "filepath.Clean",
+          "lineNumber": 526
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 527
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 527
+        },
+        {
+          "caller": "cleanRelativePath",
+          "callee": "errors.New",
+          "lineNumber": 528
+        },
+        {
+          "caller": "withinAnyPrefix",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 537
+        },
+        {
+          "caller": "withinAnyPrefix",
+          "callee": "cleanRelativePath",
+          "lineNumber": 540
+        },
+        {
+          "caller": "withinAnyPrefix",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 544
+        },
+        {
+          "caller": "safeIdentifier",
+          "callee": "utf8.RuneCountInString",
+          "lineNumber": 554
+        },
+        {
+          "caller": "validateText",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 580
+        },
+        {
+          "caller": "validateText",
+          "callee": "fmt.Errorf",
+          "lineNumber": 581
+        },
+        {
+          "caller": "validateText",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 583
+        },
+        {
+          "caller": "validateText",
+          "callee": "fmt.Errorf",
+          "lineNumber": 584
+        },
+        {
+          "caller": "validateText",
+          "callee": "utf8.RuneCountInString",
+          "lineNumber": 586
+        },
+        {
+          "caller": "validateText",
+          "callee": "fmt.Errorf",
+          "lineNumber": 587
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 11,
+        "functionCount": 15,
+        "classCount": 6
+      }
+    },
+    {
+      "path": "internal/reportcli/reportcli.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 192,
+      "nonEmptyLines": 179,
+      "functions": [
+        {
+          "name": "Run",
+          "startLine": 33,
+          "endLine": 132,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "ensureHandoff",
+          "startLine": 135,
+          "endLine": 140,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "writeError",
+          "startLine": 143,
+          "endLine": 147,
+          "params": [
+            "output",
+            "err"
+          ]
+        },
+        {
+          "name": "String",
+          "startLine": 153,
+          "endLine": 153,
+          "params": []
+        },
+        {
+          "name": "Set",
+          "startLine": 156,
+          "endLine": 162,
+          "params": [
+            "input"
+          ]
+        },
+        {
+          "name": "String",
+          "startLine": 176,
+          "endLine": 182,
+          "params": []
+        },
+        {
+          "name": "Set",
+          "startLine": 185,
+          "endLine": 192,
+          "params": [
+            "input"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Request",
+          "startLine": 18,
+          "endLine": 29,
+          "methods": [],
+          "properties": [
+            "Args",
+            "Environment",
+            "Now",
+            "Output",
+            "ErrorsOutput"
+          ]
+        },
+        {
+          "name": "pair",
+          "startLine": 165,
+          "endLine": 170,
+          "methods": [],
+          "properties": [
+            "Key",
+            "Value"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Request",
+          "line": 18,
+          "isDefault": false
+        },
+        {
+          "name": "Run",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "String",
+          "line": 153,
+          "isDefault": false
+        },
+        {
+          "name": "Set",
+          "line": 156,
+          "isDefault": false
+        },
+        {
+          "name": "String",
+          "line": 176,
+          "isDefault": false
+        },
+        {
+          "name": "Set",
+          "line": 185,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Run",
+          "callee": "time.Now().UTC",
+          "lineNumber": 41
+        },
+        {
+          "caller": "Run",
+          "callee": "time.Now",
+          "lineNumber": 41
+        },
+        {
+          "caller": "Run",
+          "callee": "os.Getenv",
+          "lineNumber": 48
+        },
+        {
+          "caller": "Run",
+          "callee": "flag.NewFlagSet",
+          "lineNumber": 50
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.SetOutput",
+          "lineNumber": 51
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.String",
+          "lineNumber": 52
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.String",
+          "lineNumber": 53
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.String",
+          "lineNumber": 54
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.Var",
+          "lineNumber": 56
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.Var",
+          "lineNumber": 58
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.Var",
+          "lineNumber": 60
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.Var",
+          "lineNumber": 62
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.Var",
+          "lineNumber": 64
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.Var",
+          "lineNumber": 66
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.String",
+          "lineNumber": 67
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.Parse",
+          "lineNumber": 68
+        },
+        {
+          "caller": "Run",
+          "callee": "flags.NArg",
+          "lineNumber": 71
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 72
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 72
+        },
+        {
+          "caller": "Run",
+          "callee": "lookup",
+          "lineNumber": 76
+        },
+        {
+          "caller": "Run",
+          "callee": "lookup",
+          "lineNumber": 77
+        },
+        {
+          "caller": "Run",
+          "callee": "lookup",
+          "lineNumber": 78
+        },
+        {
+          "caller": "Run",
+          "callee": "lookup",
+          "lineNumber": 79
+        },
+        {
+          "caller": "Run",
+          "callee": "lookup",
+          "lineNumber": 80
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 83
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 84
+        },
+        {
+          "caller": "Run",
+          "callee": "fmt.Errorf",
+          "lineNumber": 84
+        },
+        {
+          "caller": "Run",
+          "callee": "lookup",
+          "lineNumber": 88
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 89
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 90
+        },
+        {
+          "caller": "Run",
+          "callee": "errors.New",
+          "lineNumber": 90
+        },
+        {
+          "caller": "Run",
+          "callee": "report.Outcome",
+          "lineNumber": 100
+        },
+        {
+          "caller": "Run",
+          "callee": "request.Now().UTC",
+          "lineNumber": 103
+        },
+        {
+          "caller": "Run",
+          "callee": "request.Now",
+          "lineNumber": 103
+        },
+        {
+          "caller": "Run",
+          "callee": "ensureHandoff",
+          "lineNumber": 106
+        },
+        {
+          "caller": "Run",
+          "callee": "append",
+          "lineNumber": 107
+        },
+        {
+          "caller": "Run",
+          "callee": "len",
+          "lineNumber": 109
+        },
+        {
+          "caller": "Run",
+          "callee": "len",
+          "lineNumber": 109
+        },
+        {
+          "caller": "Run",
+          "callee": "len",
+          "lineNumber": 109
+        },
+        {
+          "caller": "Run",
+          "callee": "ensureHandoff",
+          "lineNumber": 110
+        },
+        {
+          "caller": "Run",
+          "callee": "append",
+          "lineNumber": 112
+        },
+        {
+          "caller": "Run",
+          "callee": "append",
+          "lineNumber": 113
+        },
+        {
+          "caller": "Run",
+          "callee": "append",
+          "lineNumber": 114
+        },
+        {
+          "caller": "Run",
+          "callee": "append",
+          "lineNumber": 117
+        },
+        {
+          "caller": "Run",
+          "callee": "append",
+          "lineNumber": 120
+        },
+        {
+          "caller": "Run",
+          "callee": "report.WriteAtomicForInvocation",
+          "lineNumber": 122
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 124
+        },
+        {
+          "caller": "Run",
+          "callee": "fmt.Fprintf",
+          "lineNumber": 127
+        },
+        {
+          "caller": "Run",
+          "callee": "writeError",
+          "lineNumber": 128
+        },
+        {
+          "caller": "writeError",
+          "callee": "fmt.Fprintf",
+          "lineNumber": 145
+        },
+        {
+          "caller": "String",
+          "callee": "strings.Join",
+          "lineNumber": 153
+        },
+        {
+          "caller": "Set",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 157
+        },
+        {
+          "caller": "Set",
+          "callee": "errors.New",
+          "lineNumber": 158
+        },
+        {
+          "caller": "Set",
+          "callee": "append",
+          "lineNumber": 160
+        },
+        {
+          "caller": "String",
+          "callee": "make",
+          "lineNumber": 177
+        },
+        {
+          "caller": "String",
+          "callee": "len",
+          "lineNumber": 177
+        },
+        {
+          "caller": "String",
+          "callee": "append",
+          "lineNumber": 179
+        },
+        {
+          "caller": "String",
+          "callee": "strings.Join",
+          "lineNumber": 181
+        },
+        {
+          "caller": "Set",
+          "callee": "strings.Cut",
+          "lineNumber": 186
+        },
+        {
+          "caller": "Set",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 187
+        },
+        {
+          "caller": "Set",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 187
+        },
+        {
+          "caller": "Set",
+          "callee": "errors.New",
+          "lineNumber": 188
+        },
+        {
+          "caller": "Set",
+          "callee": "append",
+          "lineNumber": 190
+        }
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 6,
+        "functionCount": 7,
+        "classCount": 2
+      }
+    }
+  ]
+}

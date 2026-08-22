@@ -1,0 +1,136 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 3,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 0,
+      "failed": 0,
+      "skipped": 3
+    }
+  },
+  "results": [
+    {
+      "path": "docs/agent-runtime.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 100,
+      "nonEmptyLines": 78,
+      "sections": [
+        {
+          "heading": "Visible agent runtime",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Starting an implementation invocation",
+          "level": 2,
+          "line": 8
+        },
+        {
+          "heading": "Invocation packet and report",
+          "level": 2,
+          "line": 31
+        },
+        {
+          "heading": "Authentication and session state",
+          "level": 2,
+          "line": 74
+        },
+        {
+          "heading": "Safety boundary",
+          "level": 2,
+          "line": 94
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 5
+      }
+    },
+    {
+      "path": "docs/configuration.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 241,
+      "nonEmptyLines": 198,
+      "sections": [
+        {
+          "heading": "Configuration and local operation",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Host configuration",
+          "level": 2,
+          "line": 21
+        },
+        {
+          "heading": "Checked-in repository configuration",
+          "level": 2,
+          "line": 56
+        },
+        {
+          "heading": "Claiming an issue",
+          "level": 2,
+          "line": 124
+        },
+        {
+          "heading": "Creating the draft pull request",
+          "level": 2,
+          "line": 157
+        },
+        {
+          "heading": "End-to-end demonstration",
+          "level": 2,
+          "line": 184
+        },
+        {
+          "heading": "Operational SQLite store",
+          "level": 2,
+          "line": 235
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 7
+      }
+    },
+    {
+      "path": "docs/worker-runtime.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 88,
+      "nonEmptyLines": 73,
+      "sections": [
+        {
+          "heading": "Worker runtime",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Visible harness attach",
+          "level": 2,
+          "line": 75
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    }
+  ]
+}

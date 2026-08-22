@@ -1,0 +1,364 @@
+{
+  "scriptCompleted": true,
+  "directoryGroups": {
+    "cmd": [
+      "file:cmd/factory/main.go",
+      "file:cmd/factory-report/main.go",
+      "file:cmd/factory-worker-attach/main.go"
+    ],
+    "internal": [
+      "file:internal/cli/cli.go",
+      "file:internal/config/config.go",
+      "file:internal/factory/claim.go",
+      "file:internal/factory/draft_pr.go",
+      "file:internal/store/store.go",
+      "file:internal/factory/agent.go",
+      "file:internal/prompt/prompt.go",
+      "file:internal/report/report.go",
+      "file:internal/reportcli/reportcli.go",
+      "file:internal/factory/gate.go",
+      "file:internal/gate/runner.go",
+      "file:internal/github/github.go",
+      "file:internal/worker/runtime.go",
+      "file:internal/factory/factory.go",
+      "file:internal/git/worktree.go",
+      "file:internal/harness/codex.go",
+      "file:internal/terminal/runtime.go"
+    ],
+    "root": [
+      "document:AGENTS.md",
+      "document:CONTEXT.md",
+      "config:factory.yaml",
+      "config:go.mod",
+      "config:go.sum"
+    ],
+    "docs": [
+      "document:docs/agent-runtime.md",
+      "document:docs/configuration.md",
+      "document:docs/worker-runtime.md",
+      "document:docs/agents/domain.md",
+      "document:docs/agents/issue-tracker.md",
+      "document:docs/agents/triage-labels.md",
+      "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "document:docs/spikes/0002-nested-harness-ttys.md"
+    ],
+    ".ua": [
+      "file:.ua/.understandignore",
+      "config:.ua/config.json"
+    ]
+  },
+  "nodeTypeGroups": {
+    "file": [
+      "file:cmd/factory/main.go",
+      "file:internal/cli/cli.go",
+      "file:internal/config/config.go",
+      "file:internal/factory/claim.go",
+      "file:internal/factory/draft_pr.go",
+      "file:internal/store/store.go",
+      "file:cmd/factory-report/main.go",
+      "file:internal/factory/agent.go",
+      "file:internal/prompt/prompt.go",
+      "file:internal/report/report.go",
+      "file:internal/reportcli/reportcli.go",
+      "file:cmd/factory-worker-attach/main.go",
+      "file:internal/factory/gate.go",
+      "file:internal/gate/runner.go",
+      "file:internal/github/github.go",
+      "file:internal/worker/runtime.go",
+      "file:internal/factory/factory.go",
+      "file:internal/git/worktree.go",
+      "file:internal/harness/codex.go",
+      "file:internal/terminal/runtime.go",
+      "file:.ua/.understandignore"
+    ],
+    "document": [
+      "document:AGENTS.md",
+      "document:CONTEXT.md",
+      "document:docs/agent-runtime.md",
+      "document:docs/configuration.md",
+      "document:docs/worker-runtime.md",
+      "document:docs/agents/domain.md",
+      "document:docs/agents/issue-tracker.md",
+      "document:docs/agents/triage-labels.md",
+      "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "document:docs/spikes/0002-nested-harness-ttys.md"
+    ],
+    "config": [
+      "config:factory.yaml",
+      "config:go.mod",
+      "config:go.sum",
+      "config:.ua/config.json"
+    ]
+  },
+  "importAdjacency": {
+    "file:cmd/factory/main.go": [
+      "file:internal/cli/cli.go"
+    ],
+    "file:internal/cli/cli.go": [
+      "file:internal/config/config.go",
+      "file:internal/factory/agent.go",
+      "file:internal/factory/claim.go",
+      "file:internal/factory/draft_pr.go",
+      "file:internal/factory/factory.go",
+      "file:internal/factory/gate.go",
+      "file:internal/store/store.go"
+    ],
+    "file:internal/config/config.go": [],
+    "file:internal/factory/claim.go": [
+      "file:internal/config/config.go",
+      "file:internal/github/github.go",
+      "file:internal/store/store.go"
+    ],
+    "file:internal/factory/draft_pr.go": [
+      "file:internal/config/config.go",
+      "file:internal/gate/runner.go",
+      "file:internal/git/worktree.go",
+      "file:internal/github/github.go",
+      "file:internal/store/store.go"
+    ],
+    "file:internal/store/store.go": [],
+    "file:cmd/factory-report/main.go": [
+      "file:internal/reportcli/reportcli.go"
+    ],
+    "file:internal/factory/agent.go": [
+      "file:internal/config/config.go",
+      "file:internal/github/github.go",
+      "file:internal/harness/codex.go",
+      "file:internal/prompt/prompt.go",
+      "file:internal/report/report.go",
+      "file:internal/store/store.go",
+      "file:internal/terminal/runtime.go",
+      "file:internal/worker/runtime.go"
+    ],
+    "file:internal/prompt/prompt.go": [],
+    "file:internal/report/report.go": [],
+    "file:internal/reportcli/reportcli.go": [
+      "file:internal/report/report.go"
+    ],
+    "file:cmd/factory-worker-attach/main.go": [
+      "file:internal/worker/runtime.go"
+    ],
+    "file:internal/factory/gate.go": [
+      "file:internal/config/config.go",
+      "file:internal/gate/runner.go",
+      "file:internal/github/github.go",
+      "file:internal/store/store.go",
+      "file:internal/worker/runtime.go"
+    ],
+    "file:internal/gate/runner.go": [
+      "file:internal/config/config.go",
+      "file:internal/github/github.go",
+      "file:internal/worker/runtime.go"
+    ],
+    "file:internal/github/github.go": [],
+    "file:internal/worker/runtime.go": [],
+    "file:internal/factory/factory.go": [
+      "file:internal/config/config.go",
+      "file:internal/gate/runner.go",
+      "file:internal/git/worktree.go",
+      "file:internal/github/github.go",
+      "file:internal/harness/codex.go",
+      "file:internal/store/store.go",
+      "file:internal/terminal/runtime.go",
+      "file:internal/worker/runtime.go"
+    ],
+    "file:internal/git/worktree.go": [],
+    "file:internal/harness/codex.go": [
+      "file:internal/terminal/runtime.go",
+      "file:internal/worker/runtime.go"
+    ],
+    "file:internal/terminal/runtime.go": [],
+    "document:AGENTS.md": [],
+    "document:CONTEXT.md": [],
+    "config:factory.yaml": [],
+    "config:go.mod": [],
+    "config:go.sum": [],
+    "document:docs/agent-runtime.md": [],
+    "document:docs/configuration.md": [],
+    "document:docs/worker-runtime.md": [],
+    "document:docs/agents/domain.md": [],
+    "document:docs/agents/issue-tracker.md": [],
+    "document:docs/agents/triage-labels.md": [],
+    "file:.ua/.understandignore": [],
+    "config:.ua/config.json": [],
+    "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md": [],
+    "document:docs/spikes/0002-nested-harness-ttys.md": []
+  },
+  "interGroupImports": [
+    {
+      "from": "cmd",
+      "to": "internal",
+      "count": 3
+    }
+  ],
+  "intraGroupDensity": {
+    "cmd": {
+      "internalEdges": 0,
+      "totalEdges": 3,
+      "density": 0
+    },
+    "internal": {
+      "internalEdges": 42,
+      "totalEdges": 87,
+      "density": 0.4827586206896552
+    },
+    "root": {
+      "internalEdges": 0,
+      "totalEdges": 0,
+      "density": 0
+    },
+    "docs": {
+      "internalEdges": 0,
+      "totalEdges": 0,
+      "density": 0
+    },
+    ".ua": {
+      "internalEdges": 0,
+      "totalEdges": 0,
+      "density": 0
+    }
+  },
+  "patternMatches": {
+    "cmd": "entry",
+    "internal": "service",
+    "root": "documentation",
+    "docs": "documentation"
+  },
+  "crossCategoryEdges": [
+    {
+      "fromType": "document",
+      "toType": "config",
+      "edgeType": "documents",
+      "count": 1
+    }
+  ],
+  "deploymentTopology": {
+    "hasDockerfile": false,
+    "hasCompose": false,
+    "hasK8s": false,
+    "hasTerraform": false,
+    "hasCI": false,
+    "infraFiles": []
+  },
+  "dataPipeline": {
+    "schemaFiles": [],
+    "migrationFiles": [],
+    "dataModelFiles": [],
+    "apiHandlerFiles": []
+  },
+  "docCoverage": {
+    "groupsWithDocs": 2,
+    "totalGroups": 5,
+    "coverageRatio": 0.4,
+    "undocumentedGroups": [
+      "cmd",
+      "internal",
+      ".ua"
+    ]
+  },
+  "dependencyDirection": [
+    {
+      "dependent": "cmd",
+      "dependsOn": "internal"
+    }
+  ],
+  "groupImportsFrom": {
+    "cmd": [
+      "internal"
+    ]
+  },
+  "groupImportedBy": {
+    "internal": [
+      "cmd"
+    ]
+  },
+  "fileStats": {
+    "totalFileNodes": 35,
+    "filesPerGroup": {
+      "cmd": 3,
+      "internal": 17,
+      "root": 5,
+      "docs": 8,
+      ".ua": 2
+    },
+    "nodeTypeCounts": {
+      "file": 21,
+      "document": 10,
+      "config": 4
+    }
+  },
+  "fileFanIn": {
+    "file:cmd/factory/main.go": 0,
+    "file:internal/cli/cli.go": 1,
+    "file:internal/config/config.go": 7,
+    "file:internal/factory/claim.go": 1,
+    "file:internal/factory/draft_pr.go": 1,
+    "file:internal/store/store.go": 6,
+    "file:cmd/factory-report/main.go": 0,
+    "file:internal/factory/agent.go": 1,
+    "file:internal/prompt/prompt.go": 1,
+    "file:internal/report/report.go": 2,
+    "file:internal/reportcli/reportcli.go": 1,
+    "file:cmd/factory-worker-attach/main.go": 0,
+    "file:internal/factory/gate.go": 1,
+    "file:internal/gate/runner.go": 3,
+    "file:internal/github/github.go": 6,
+    "file:internal/worker/runtime.go": 6,
+    "file:internal/factory/factory.go": 1,
+    "file:internal/git/worktree.go": 2,
+    "file:internal/harness/codex.go": 2,
+    "file:internal/terminal/runtime.go": 3,
+    "document:AGENTS.md": 0,
+    "document:CONTEXT.md": 0,
+    "config:factory.yaml": 0,
+    "config:go.mod": 0,
+    "config:go.sum": 0,
+    "document:docs/agent-runtime.md": 0,
+    "document:docs/configuration.md": 0,
+    "document:docs/worker-runtime.md": 0,
+    "document:docs/agents/domain.md": 0,
+    "document:docs/agents/issue-tracker.md": 0,
+    "document:docs/agents/triage-labels.md": 0,
+    "file:.ua/.understandignore": 0,
+    "config:.ua/config.json": 0,
+    "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md": 0,
+    "document:docs/spikes/0002-nested-harness-ttys.md": 0
+  },
+  "fileFanOut": {
+    "file:cmd/factory/main.go": 1,
+    "file:internal/cli/cli.go": 7,
+    "file:internal/config/config.go": 0,
+    "file:internal/factory/claim.go": 3,
+    "file:internal/factory/draft_pr.go": 5,
+    "file:internal/store/store.go": 0,
+    "file:cmd/factory-report/main.go": 1,
+    "file:internal/factory/agent.go": 8,
+    "file:internal/prompt/prompt.go": 0,
+    "file:internal/report/report.go": 0,
+    "file:internal/reportcli/reportcli.go": 1,
+    "file:cmd/factory-worker-attach/main.go": 1,
+    "file:internal/factory/gate.go": 5,
+    "file:internal/gate/runner.go": 3,
+    "file:internal/github/github.go": 0,
+    "file:internal/worker/runtime.go": 0,
+    "file:internal/factory/factory.go": 8,
+    "file:internal/git/worktree.go": 0,
+    "file:internal/harness/codex.go": 2,
+    "file:internal/terminal/runtime.go": 0,
+    "document:AGENTS.md": 0,
+    "document:CONTEXT.md": 0,
+    "config:factory.yaml": 0,
+    "config:go.mod": 0,
+    "config:go.sum": 0,
+    "document:docs/agent-runtime.md": 0,
+    "document:docs/configuration.md": 0,
+    "document:docs/worker-runtime.md": 0,
+    "document:docs/agents/domain.md": 0,
+    "document:docs/agents/issue-tracker.md": 0,
+    "document:docs/agents/triage-labels.md": 0,
+    "file:.ua/.understandignore": 0,
+    "config:.ua/config.json": 0,
+    "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md": 0,
+    "document:docs/spikes/0002-nested-harness-ttys.md": 0
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "projectRoot": "/Users/steffenkrakau/Documents/sw-factory",
+  "batchFiles": [
+    {
+      "path": "cmd/factory/main.go",
+      "language": "go",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/cli/cli.go",
+      "language": "go",
+      "sizeLines": 397,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/config/config.go",
+      "language": "go",
+      "sizeLines": 612,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/claim.go",
+      "language": "go",
+      "sizeLines": 503,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/draft_pr.go",
+      "language": "go",
+      "sizeLines": 338,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/store/store.go",
+      "language": "go",
+      "sizeLines": 925,
+      "fileCategory": "code"
+    }
+  ],
+  "batchImportData": {
+    "cmd/factory/main.go": [
+      "internal/cli/cli.go"
+    ],
+    "internal/cli/cli.go": [
+      "internal/config/config.go",
+      "internal/factory/agent.go",
+      "internal/factory/claim.go",
+      "internal/factory/draft_pr.go",
+      "internal/factory/factory.go",
+      "internal/factory/gate.go",
+      "internal/store/store.go"
+    ],
+    "internal/config/config.go": [],
+    "internal/factory/claim.go": [
+      "internal/config/config.go",
+      "internal/github/github.go",
+      "internal/store/store.go"
+    ],
+    "internal/factory/draft_pr.go": [
+      "internal/config/config.go",
+      "internal/gate/runner.go",
+      "internal/git/worktree.go",
+      "internal/github/github.go",
+      "internal/store/store.go"
+    ],
+    "internal/store/store.go": []
+  }
+}

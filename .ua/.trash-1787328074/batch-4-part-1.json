@@ -1,0 +1,1569 @@
+{
+  "nodes": [
+    {
+      "id": "file:internal/factory/factory.go",
+      "type": "file",
+      "name": "factory.go",
+      "filePath": "internal/factory/factory.go",
+      "summary": "Coordinates host configuration, repository registration, run status, and dependency wiring for the factory workflow. It assembles the GitHub, store, worker, terminal, and harness adapters behind the public Factory service.",
+      "tags": [
+        "factory",
+        "service",
+        "orchestration",
+        "configuration",
+        "entry-point"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Go package code uses interfaces and injected adapters to isolate host-side effects."
+    },
+    {
+      "id": "file:internal/git/worktree.go",
+      "type": "file",
+      "name": "worktree.go",
+      "filePath": "internal/git/worktree.go",
+      "summary": "Provides host-side Git and worktree adapters for isolated run branches, checkpoints, pushes, base synchronization, inspection, and cleanup. It centralizes command validation and Git command execution behind injectable interfaces.",
+      "tags": [
+        "git",
+        "worktree",
+        "orchestration",
+        "validation",
+        "adapter"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Go package code uses interfaces and injected adapters to isolate host-side effects."
+    },
+    {
+      "id": "class:internal/factory/factory.go:Factory",
+      "type": "class",
+      "name": "Factory",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        25,
+        41
+      ],
+      "summary": "Public high-level coordinator contract covering initialization, registration, workflow operations, agent lifecycle, pull requests, and status.",
+      "tags": [
+        "api",
+        "factory",
+        "orchestration",
+        "contract"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:internal/factory/factory.go:RunCoordinator",
+      "type": "class",
+      "name": "RunCoordinator",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        45,
+        48
+      ],
+      "summary": "Defines the claim and state-transition seam shared by one-shot commands and future polling.",
+      "tags": [
+        "workflow",
+        "coordinator",
+        "contract",
+        "state-machine"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:ConfigRepository",
+      "type": "class",
+      "name": "ConfigRepository",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        50,
+        54
+      ],
+      "summary": "Abstracts loading, saving, and creating host configuration files.",
+      "tags": [
+        "configuration",
+        "repository",
+        "persistence",
+        "contract"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:OperationalStore",
+      "type": "class",
+      "name": "OperationalStore",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        56,
+        59
+      ],
+      "summary": "Defines the operational-store lifecycle and current-run query used by the service.",
+      "tags": [
+        "store",
+        "persistence",
+        "lifecycle",
+        "contract"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:RunStore",
+      "type": "class",
+      "name": "RunStore",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        63,
+        66
+      ],
+      "summary": "Extends the operational store with run persistence for claim and transition operations.",
+      "tags": [
+        "store",
+        "persistence",
+        "workflow",
+        "contract"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:LatestRunStore",
+      "type": "class",
+      "name": "LatestRunStore",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        70,
+        73
+      ],
+      "summary": "Extends the operational store with retrieval of the most recently claimed run for status reporting.",
+      "tags": [
+        "store",
+        "persistence",
+        "status",
+        "contract"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:Dependencies",
+      "type": "class",
+      "name": "Dependencies",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        91,
+        111
+      ],
+      "summary": "Groups the configurable adapters and factories used to construct and operate the factory service.",
+      "tags": [
+        "dependency-injection",
+        "adapters",
+        "service"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:internal/factory/factory.go:Service",
+      "type": "class",
+      "name": "Service",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        113,
+        119
+      ],
+      "summary": "Holds host configuration state, injected adapters, and synchronized lazy runtime construction for the factory service.",
+      "tags": [
+        "service",
+        "factory",
+        "dependency-injection"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:InitResult",
+      "type": "class",
+      "name": "InitResult",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        121,
+        123
+      ],
+      "summary": "Reports the effective host configuration path after initialization.",
+      "tags": [
+        "result",
+        "type-definition",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:RegisterRequest",
+      "type": "class",
+      "name": "RegisterRequest",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        125,
+        138
+      ],
+      "summary": "Carries repository registration inputs including GitHub identity, operational paths, polling settings, cmux, and Codex authentication.",
+      "tags": [
+        "request",
+        "type-definition",
+        "configuration"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:internal/factory/factory.go:RegisterResult",
+      "type": "class",
+      "name": "RegisterResult",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        140,
+        143
+      ],
+      "summary": "Reports the registered repository and operational data paths.",
+      "tags": [
+        "result",
+        "type-definition",
+        "registration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/factory/factory.go:StatusResult",
+      "type": "class",
+      "name": "StatusResult",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        148,
+        154
+      ],
+      "summary": "Reports the configured repository and latest or active run information.",
+      "tags": [
+        "result",
+        "type-definition",
+        "status"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/factory/factory.go:Load",
+      "type": "function",
+      "name": "Load",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        158,
+        160
+      ],
+      "summary": "Loads host configuration through the config package.",
+      "tags": [
+        "configuration",
+        "persistence",
+        "loader"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/factory/factory.go:Save",
+      "type": "function",
+      "name": "Save",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        162,
+        164
+      ],
+      "summary": "Saves host configuration through the config package.",
+      "tags": [
+        "configuration",
+        "persistence",
+        "writer"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/factory/factory.go:Create",
+      "type": "function",
+      "name": "Create",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        166,
+        168
+      ],
+      "summary": "Creates and persists a new host configuration through the config package.",
+      "tags": [
+        "configuration",
+        "factory",
+        "persistence"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/factory/factory.go:New",
+      "type": "function",
+      "name": "New",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        171,
+        173
+      ],
+      "summary": "Constructs a factory service using the default dependency set.",
+      "tags": [
+        "factory",
+        "constructor",
+        "dependency-injection"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/factory/factory.go:NewWithDependencies",
+      "type": "function",
+      "name": "NewWithDependencies",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        177,
+        226
+      ],
+      "summary": "Constructs the factory service and fills unset adapters with default config, store, GitHub, Git, worker, clock, and run-ID implementations.",
+      "tags": [
+        "factory",
+        "constructor",
+        "dependency-injection",
+        "adapters"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/factory/factory.go:Init",
+      "type": "function",
+      "name": "Init",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        252,
+        260
+      ],
+      "summary": "Initializes the host configuration and returns its effective path.",
+      "tags": [
+        "factory",
+        "initialization",
+        "configuration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/factory/factory.go:Register",
+      "type": "function",
+      "name": "Register",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        262,
+        330
+      ],
+      "summary": "Validates a repository registration request, derives safe operational paths, validates repository configuration, checks the store, and persists the host registration.",
+      "tags": [
+        "registration",
+        "validation",
+        "configuration",
+        "persistence"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:internal/factory/factory.go:Status",
+      "type": "function",
+      "name": "Status",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [
+        332,
+        364
+      ],
+      "summary": "Loads the registered repository, validates its operational path, and reports the latest known run from the operational store.",
+      "tags": [
+        "status",
+        "service",
+        "store"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:internal/git/worktree.go:Workspace",
+      "type": "class",
+      "name": "Workspace",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        17,
+        21
+      ],
+      "summary": "Describes the fetched base commit, factory branch, and isolated worktree for one run.",
+      "tags": [
+        "data-model",
+        "git",
+        "worktree"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:CheckpointRequest",
+      "type": "class",
+      "name": "CheckpointRequest",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        24,
+        33
+      ],
+      "summary": "Selects the run worktree and parent commit for a host-side implementation checkpoint.",
+      "tags": [
+        "request",
+        "type-definition",
+        "git"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:CheckpointResult",
+      "type": "class",
+      "name": "CheckpointResult",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        37,
+        42
+      ],
+      "summary": "Reports the commit SHA and whether a checkpoint was newly created.",
+      "tags": [
+        "result",
+        "type-definition",
+        "git"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:PushRequest",
+      "type": "class",
+      "name": "PushRequest",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        45,
+        50
+      ],
+      "summary": "Selects a worktree and branch for a host-side push.",
+      "tags": [
+        "request",
+        "type-definition",
+        "git"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:BaseSyncRequest",
+      "type": "class",
+      "name": "BaseSyncRequest",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        54,
+        59
+      ],
+      "summary": "Selects a worktree and target branch for fast-forward-only base synchronization.",
+      "tags": [
+        "request",
+        "type-definition",
+        "git"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:WorktreeState",
+      "type": "class",
+      "name": "WorktreeState",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        63,
+        68
+      ],
+      "summary": "Captures the current HEAD and repository-relative changed paths observed in a run worktree.",
+      "tags": [
+        "data-model",
+        "git",
+        "inspection"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:WorktreeManager",
+      "type": "class",
+      "name": "WorktreeManager",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        71,
+        74
+      ],
+      "summary": "Defines creation and removal of isolated worktrees.",
+      "tags": [
+        "git",
+        "worktree",
+        "contract",
+        "lifecycle"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:WorktreeInspector",
+      "type": "class",
+      "name": "WorktreeInspector",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        77,
+        80
+      ],
+      "summary": "Defines read-only inspection of a run worktree.",
+      "tags": [
+        "git",
+        "inspection",
+        "contract",
+        "read-only"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:GitWorkspace",
+      "type": "class",
+      "name": "GitWorkspace",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        85,
+        91
+      ],
+      "summary": "Combines worktree lifecycle, inspection, checkpoint, push, and base synchronization operations.",
+      "tags": [
+        "git",
+        "workspace",
+        "contract",
+        "orchestration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:CommandRunner",
+      "type": "class",
+      "name": "CommandRunner",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        94,
+        96
+      ],
+      "summary": "Abstracts execution of host-side Git commands for testing and production adapters.",
+      "tags": [
+        "command-runner",
+        "git",
+        "contract"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/git/worktree.go:LocalWorktreeManager",
+      "type": "class",
+      "name": "LocalWorktreeManager",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        122,
+        125
+      ],
+      "summary": "Implements the Git workspace contracts using an injectable command runner and a configured worktree directory.",
+      "tags": [
+        "git",
+        "worktree",
+        "adapter",
+        "implementation"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/git/worktree.go:Run",
+      "type": "function",
+      "name": "Run",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        102,
+        116
+      ],
+      "summary": "Executes a Git command in a requested directory and includes trimmed stderr in failures.",
+      "tags": [
+        "git",
+        "command-runner",
+        "error-handling"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/git/worktree.go:NewWorktreeManager",
+      "type": "function",
+      "name": "NewWorktreeManager",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        128,
+        128
+      ],
+      "summary": "Constructs the local Git worktree manager with default fields.",
+      "tags": [
+        "git",
+        "worktree",
+        "constructor",
+        "adapter"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/git/worktree.go:NewGitWorkspace",
+      "type": "function",
+      "name": "NewGitWorkspace",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        131,
+        131
+      ],
+      "summary": "Constructs the host-side Git workspace adapter.",
+      "tags": [
+        "git",
+        "workspace",
+        "constructor",
+        "adapter"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/git/worktree.go:Inspect",
+      "type": "function",
+      "name": "Inspect",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        139,
+        152
+      ],
+      "summary": "Reads a worktree HEAD and porcelain status to produce coordinator-visible state.",
+      "tags": [
+        "git",
+        "inspection",
+        "worktree"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/git/worktree.go:Create",
+      "type": "function",
+      "name": "Create",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        164,
+        205
+      ],
+      "summary": "Validates repository, branch, and run identifiers, fetches the target branch, and creates an isolated factory worktree.",
+      "tags": [
+        "git",
+        "worktree",
+        "lifecycle",
+        "validation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:internal/git/worktree.go:CreateCheckpoint",
+      "type": "function",
+      "name": "CreateCheckpoint",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        210,
+        272
+      ],
+      "summary": "Validates checkpoint inputs, detects an existing marker, stages changes, and creates or recovers an implementation commit.",
+      "tags": [
+        "git",
+        "checkpoint",
+        "idempotency",
+        "validation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:internal/git/worktree.go:Push",
+      "type": "function",
+      "name": "Push",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        276,
+        293
+      ],
+      "summary": "Validates a run worktree and branch, then pushes the run branch to its remote destination.",
+      "tags": [
+        "git",
+        "push",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/git/worktree.go:SynchronizeBase",
+      "type": "function",
+      "name": "SynchronizeBase",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        297,
+        317
+      ],
+      "summary": "Fetches and fast-forward merges a target branch into a run worktree while rejecting unsafe synchronization states.",
+      "tags": [
+        "git",
+        "synchronization",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/git/worktree.go:Remove",
+      "type": "function",
+      "name": "Remove",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [
+        332,
+        357
+      ],
+      "summary": "Validates a workspace and removes its worktree and associated factory branch.",
+      "tags": [
+        "git",
+        "cleanup",
+        "worktree",
+        "lifecycle"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:internal/factory/factory.go:fileConfigRepository",
+      "type": "class",
+      "name": "fileConfigRepository",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [156, 156],
+      "summary": "Provides the concrete file-backed implementation of the host configuration repository seam.",
+      "tags": ["configuration", "repository", "persistence"],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/factory/factory.go:checkRepository",
+      "type": "function",
+      "name": "checkRepository",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [367, 382],
+      "summary": "Validates that a repository path is non-empty, absolute, existent, and a directory.",
+      "tags": ["validation", "repository", "filesystem"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/factory/factory.go:resolvePath",
+      "type": "function",
+      "name": "resolvePath",
+      "filePath": "internal/factory/factory.go",
+      "lineRange": [412, 434],
+      "summary": "Resolves an absolute path and evaluates existing symlinks while preserving a clean path for missing descendants.",
+      "tags": ["filesystem", "path-resolution", "security"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/git/worktree.go:porcelainPaths",
+      "type": "function",
+      "name": "porcelainPaths",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [370, 388],
+      "summary": "Parses NUL-delimited Git porcelain output into repository-relative changed paths.",
+      "tags": ["git", "parsing", "inspection"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/git/worktree.go:validCommitSHA",
+      "type": "function",
+      "name": "validCommitSHA",
+      "filePath": "internal/git/worktree.go",
+      "lineRange": [400, 411],
+      "summary": "Checks that a value is a full hexadecimal Git commit identity.",
+      "tags": ["git", "validation", "security"],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:fileConfigRepository",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:checkRepository",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:resolvePath",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:porcelainPaths",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:validCommitSHA",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:Factory",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RunCoordinator",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:ConfigRepository",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:OperationalStore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RunStore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:LatestRunStore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:Dependencies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:Service",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:InitResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RegisterRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RegisterResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:StatusResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Load",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Save",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Create",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:New",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:NewWithDependencies",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Init",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Register",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Status",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:Workspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:CheckpointRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:CheckpointResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:PushRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:BaseSyncRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:WorktreeState",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:WorktreeManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:WorktreeInspector",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:GitWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:CommandRunner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:LocalWorktreeManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Run",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:NewWorktreeManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:NewGitWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Inspect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Create",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:CreateCheckpoint",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Push",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:SynchronizeBase",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Remove",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:Factory",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RunCoordinator",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:ConfigRepository",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:OperationalStore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RunStore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:LatestRunStore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:Dependencies",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:Service",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:InitResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RegisterRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:RegisterResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "class:internal/factory/factory.go:StatusResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Load",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Save",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Create",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:New",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:NewWithDependencies",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Init",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Register",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "function:internal/factory/factory.go:Status",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:Workspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:CheckpointRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:CheckpointResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:PushRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:BaseSyncRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:WorktreeState",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:WorktreeManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:WorktreeInspector",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:GitWorkspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:CommandRunner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "class:internal/git/worktree.go:LocalWorktreeManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Run",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:NewWorktreeManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:NewGitWorkspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Inspect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Create",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:CreateCheckpoint",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Push",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:SynchronizeBase",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/git/worktree.go",
+      "target": "function:internal/git/worktree.go:Remove",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/config/config.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/gate/runner.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/git/worktree.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/github/github.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/harness/codex.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/store/store.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/terminal/runtime.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/factory/factory.go",
+      "target": "file:internal/worker/runtime.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "function:internal/factory/factory.go:Load",
+      "target": "function:internal/config/config.go:LoadHost",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:Save",
+      "target": "function:internal/config/config.go:SaveHost",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:Create",
+      "target": "function:internal/config/config.go:CreateHost",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:New",
+      "target": "function:internal/factory/factory.go:NewWithDependencies",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:NewWithDependencies",
+      "target": "function:internal/store/store.go:Open",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:NewWithDependencies",
+      "target": "function:internal/github/github.go:NewClient",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:NewWithDependencies",
+      "target": "function:internal/git/worktree.go:NewGitWorkspace",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:NewWithDependencies",
+      "target": "function:internal/worker/runtime.go:NewDockerRuntime",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:NewWithDependencies",
+      "target": "function:internal/terminal/runtime.go:NewCmuxRuntime",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:NewWithDependencies",
+      "target": "function:internal/harness/codex.go:NewCodex",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:Register",
+      "target": "function:internal/config/config.go:LoadRepository",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:Register",
+      "target": "function:internal/config/config.go:ValidateHost",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/factory/factory.go:Status",
+      "target": "function:internal/store/store.go:LatestRun",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/git/worktree.go:NewGitWorkspace",
+      "target": "function:internal/git/worktree.go:NewWorktreeManager",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/git/worktree.go:Inspect",
+      "target": "function:internal/git/worktree.go:porcelainPaths",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/git/worktree.go:CreateCheckpoint",
+      "target": "function:internal/git/worktree.go:validCommitSHA",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:internal/git/worktree.go:LocalWorktreeManager",
+      "target": "class:internal/git/worktree.go:WorktreeManager",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "class:internal/git/worktree.go:LocalWorktreeManager",
+      "target": "class:internal/git/worktree.go:WorktreeInspector",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "class:internal/git/worktree.go:LocalWorktreeManager",
+      "target": "class:internal/git/worktree.go:GitWorkspace",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    }
+  ]
+}

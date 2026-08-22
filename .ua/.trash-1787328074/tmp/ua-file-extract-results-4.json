@@ -1,0 +1,3508 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 4,
+  "filesSkipped": [],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 4,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 4,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "results": [
+    {
+      "path": "internal/factory/factory.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 434,
+      "nonEmptyLines": 400,
+      "functions": [
+        {
+          "name": "Load",
+          "startLine": 158,
+          "endLine": 160,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "Save",
+          "startLine": 162,
+          "endLine": 164,
+          "params": [
+            "path",
+            "value"
+          ]
+        },
+        {
+          "name": "Create",
+          "startLine": 166,
+          "endLine": 168,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "New",
+          "startLine": 171,
+          "endLine": 173,
+          "params": [
+            "configPath"
+          ]
+        },
+        {
+          "name": "NewWithDependencies",
+          "startLine": 177,
+          "endLine": 226,
+          "params": [
+            "configPath",
+            "dependencies"
+          ]
+        },
+        {
+          "name": "ensureAgentRuntime",
+          "startLine": 233,
+          "endLine": 250,
+          "params": [
+            "socketPath"
+          ]
+        },
+        {
+          "name": "Init",
+          "startLine": 252,
+          "endLine": 260,
+          "params": [
+            "_"
+          ]
+        },
+        {
+          "name": "Register",
+          "startLine": 262,
+          "endLine": 330,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "Status",
+          "startLine": 332,
+          "endLine": 364,
+          "params": [
+            "ctx"
+          ]
+        },
+        {
+          "name": "checkRepository",
+          "startLine": 367,
+          "endLine": 382,
+          "params": [
+            "path"
+          ]
+        },
+        {
+          "name": "defaultString",
+          "startLine": 385,
+          "endLine": 390,
+          "params": [
+            "value",
+            "fallback"
+          ]
+        },
+        {
+          "name": "pathWithin",
+          "startLine": 393,
+          "endLine": 399,
+          "params": [
+            "root",
+            "target"
+          ]
+        },
+        {
+          "name": "validateOperationalPath",
+          "startLine": 402,
+          "endLine": 407,
+          "params": [
+            "repositoryPath",
+            "operationalPath"
+          ]
+        },
+        {
+          "name": "resolvePath",
+          "startLine": 412,
+          "endLine": 434,
+          "params": [
+            "path"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Factory",
+          "startLine": 25,
+          "endLine": 41,
+          "methods": [
+            "Init",
+            "Register",
+            "BootstrapLabels",
+            "RunGate",
+            "StartAgent",
+            "AcceptAgentReport",
+            "RunAgent",
+            "CreateDraftPullRequest",
+            "Status"
+          ],
+          "properties": []
+        },
+        {
+          "name": "RunCoordinator",
+          "startLine": 45,
+          "endLine": 48,
+          "methods": [
+            "ClaimIssue",
+            "Transition"
+          ],
+          "properties": []
+        },
+        {
+          "name": "ConfigRepository",
+          "startLine": 50,
+          "endLine": 54,
+          "methods": [
+            "Load",
+            "Save",
+            "Create"
+          ],
+          "properties": []
+        },
+        {
+          "name": "OperationalStore",
+          "startLine": 56,
+          "endLine": 59,
+          "methods": [
+            "CurrentRun",
+            "Close"
+          ],
+          "properties": []
+        },
+        {
+          "name": "RunStore",
+          "startLine": 63,
+          "endLine": 66,
+          "methods": [
+            "SaveRun"
+          ],
+          "properties": []
+        },
+        {
+          "name": "LatestRunStore",
+          "startLine": 70,
+          "endLine": 73,
+          "methods": [
+            "LatestRun"
+          ],
+          "properties": []
+        },
+        {
+          "name": "Dependencies",
+          "startLine": 91,
+          "endLine": 111,
+          "methods": [],
+          "properties": [
+            "Config",
+            "OpenStore",
+            "CheckRepository",
+            "LoadRepository",
+            "GitHub",
+            "CommitStatuses",
+            "Worktree",
+            "GitWorkspace",
+            "PullRequests",
+            "Worker",
+            "Terminal",
+            "Harness",
+            "Now",
+            "NewRunID",
+            "Coordinator"
+          ]
+        },
+        {
+          "name": "Service",
+          "startLine": 113,
+          "endLine": 119,
+          "methods": [
+            "ensureAgentRuntime",
+            "Init",
+            "Register",
+            "Status"
+          ],
+          "properties": [
+            "configPath",
+            "deps",
+            "runtimeMu",
+            "runtimeSocketPath",
+            "runtimePathSet"
+          ]
+        },
+        {
+          "name": "InitResult",
+          "startLine": 121,
+          "endLine": 123,
+          "methods": [],
+          "properties": [
+            "ConfigPath"
+          ]
+        },
+        {
+          "name": "RegisterRequest",
+          "startLine": 125,
+          "endLine": 138,
+          "methods": [],
+          "properties": [
+            "RepositoryPath",
+            "GitHubOwner",
+            "GitHubRepository",
+            "AuthorizedUsers",
+            "OperationalDataPath",
+            "PollingInterval",
+            "PollingBackoff",
+            "CmuxSocketPath",
+            "CmuxControlWorkspace",
+            "CodexAuthPath",
+            "RepositoryConfigPath"
+          ]
+        },
+        {
+          "name": "RegisterResult",
+          "startLine": 140,
+          "endLine": 143,
+          "methods": [],
+          "properties": [
+            "RepositoryPath",
+            "OperationalDataPath"
+          ]
+        },
+        {
+          "name": "StatusResult",
+          "startLine": 148,
+          "endLine": 154,
+          "methods": [],
+          "properties": [
+            "ConfigPath",
+            "RepositoryPath",
+            "LatestRun",
+            "ActiveRun"
+          ]
+        },
+        {
+          "name": "fileConfigRepository",
+          "startLine": 156,
+          "endLine": 156,
+          "methods": [
+            "Load",
+            "Save",
+            "Create"
+          ],
+          "properties": []
+        }
+      ],
+      "exports": [
+        {
+          "name": "Factory",
+          "line": 25,
+          "isDefault": false
+        },
+        {
+          "name": "RunCoordinator",
+          "line": 45,
+          "isDefault": false
+        },
+        {
+          "name": "ConfigRepository",
+          "line": 50,
+          "isDefault": false
+        },
+        {
+          "name": "OperationalStore",
+          "line": 56,
+          "isDefault": false
+        },
+        {
+          "name": "RunStore",
+          "line": 63,
+          "isDefault": false
+        },
+        {
+          "name": "LatestRunStore",
+          "line": 70,
+          "isDefault": false
+        },
+        {
+          "name": "Dependencies",
+          "line": 91,
+          "isDefault": false
+        },
+        {
+          "name": "Service",
+          "line": 113,
+          "isDefault": false
+        },
+        {
+          "name": "InitResult",
+          "line": 121,
+          "isDefault": false
+        },
+        {
+          "name": "RegisterRequest",
+          "line": 125,
+          "isDefault": false
+        },
+        {
+          "name": "RegisterResult",
+          "line": 140,
+          "isDefault": false
+        },
+        {
+          "name": "StatusResult",
+          "line": 148,
+          "isDefault": false
+        },
+        {
+          "name": "Load",
+          "line": 158,
+          "isDefault": false
+        },
+        {
+          "name": "Save",
+          "line": 162,
+          "isDefault": false
+        },
+        {
+          "name": "Create",
+          "line": 166,
+          "isDefault": false
+        },
+        {
+          "name": "New",
+          "line": 171,
+          "isDefault": false
+        },
+        {
+          "name": "NewWithDependencies",
+          "line": 177,
+          "isDefault": false
+        },
+        {
+          "name": "Init",
+          "line": 252,
+          "isDefault": false
+        },
+        {
+          "name": "Register",
+          "line": 262,
+          "isDefault": false
+        },
+        {
+          "name": "Status",
+          "line": 332,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Load",
+          "callee": "config.LoadHost",
+          "lineNumber": 159
+        },
+        {
+          "caller": "Save",
+          "callee": "config.SaveHost",
+          "lineNumber": 163
+        },
+        {
+          "caller": "Create",
+          "callee": "config.CreateHost",
+          "lineNumber": 167
+        },
+        {
+          "caller": "New",
+          "callee": "NewWithDependencies",
+          "lineNumber": 172
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "store.Open",
+          "lineNumber": 183
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "github.NewClient",
+          "lineNumber": 193
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "gitadapter.NewGitWorkspace",
+          "lineNumber": 201
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "worker.NewDockerRuntime",
+          "lineNumber": 214
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "time.Now().UTC",
+          "lineNumber": 217
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "time.Now",
+          "lineNumber": 217
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "uuid.NewString",
+          "lineNumber": 220
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 222
+        },
+        {
+          "caller": "NewWithDependencies",
+          "callee": "defaultCoordinator",
+          "lineNumber": 223
+        },
+        {
+          "caller": "ensureAgentRuntime",
+          "callee": "s.runtimeMu.Lock",
+          "lineNumber": 234
+        },
+        {
+          "caller": "ensureAgentRuntime",
+          "callee": "s.runtimeMu.Unlock",
+          "lineNumber": 235
+        },
+        {
+          "caller": "ensureAgentRuntime",
+          "callee": "fmt.Errorf",
+          "lineNumber": 237
+        },
+        {
+          "caller": "ensureAgentRuntime",
+          "callee": "terminal.NewCmuxRuntime",
+          "lineNumber": 244
+        },
+        {
+          "caller": "ensureAgentRuntime",
+          "callee": "harness.NewCodex",
+          "lineNumber": 247
+        },
+        {
+          "caller": "Init",
+          "callee": "errors.New",
+          "lineNumber": 254
+        },
+        {
+          "caller": "Init",
+          "callee": "s.deps.Config.Create",
+          "lineNumber": 256
+        },
+        {
+          "caller": "Register",
+          "callee": "errors.New",
+          "lineNumber": 264
+        },
+        {
+          "caller": "Register",
+          "callee": "s.deps.Config.Load",
+          "lineNumber": 266
+        },
+        {
+          "caller": "Register",
+          "callee": "len",
+          "lineNumber": 270
+        },
+        {
+          "caller": "Register",
+          "callee": "errors.New",
+          "lineNumber": 271
+        },
+        {
+          "caller": "Register",
+          "callee": "s.deps.CheckRepository",
+          "lineNumber": 273
+        },
+        {
+          "caller": "Register",
+          "callee": "filepath.Abs",
+          "lineNumber": 276
+        },
+        {
+          "caller": "Register",
+          "callee": "fmt.Errorf",
+          "lineNumber": 278
+        },
+        {
+          "caller": "Register",
+          "callee": "config.DefaultOperationalDataPath",
+          "lineNumber": 282
+        },
+        {
+          "caller": "Register",
+          "callee": "filepath.Abs",
+          "lineNumber": 284
+        },
+        {
+          "caller": "Register",
+          "callee": "fmt.Errorf",
+          "lineNumber": 286
+        },
+        {
+          "caller": "Register",
+          "callee": "config.DefaultRepositoryConfigPath",
+          "lineNumber": 290
+        },
+        {
+          "caller": "Register",
+          "callee": "filepath.Abs",
+          "lineNumber": 292
+        },
+        {
+          "caller": "Register",
+          "callee": "fmt.Errorf",
+          "lineNumber": 294
+        },
+        {
+          "caller": "Register",
+          "callee": "validateOperationalPath",
+          "lineNumber": 296
+        },
+        {
+          "caller": "Register",
+          "callee": "pathWithin",
+          "lineNumber": 299
+        },
+        {
+          "caller": "Register",
+          "callee": "config.LoadRepository",
+          "lineNumber": 302
+        },
+        {
+          "caller": "Register",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 307
+        },
+        {
+          "caller": "Register",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 307
+        },
+        {
+          "caller": "Register",
+          "callee": "defaultString",
+          "lineNumber": 309
+        },
+        {
+          "caller": "Register",
+          "callee": "defaultString",
+          "lineNumber": 309
+        },
+        {
+          "caller": "Register",
+          "callee": "config.ValidateHost",
+          "lineNumber": 316
+        },
+        {
+          "caller": "Register",
+          "callee": "s.deps.OpenStore",
+          "lineNumber": 319
+        },
+        {
+          "caller": "Register",
+          "callee": "opened.Close",
+          "lineNumber": 323
+        },
+        {
+          "caller": "Register",
+          "callee": "fmt.Errorf",
+          "lineNumber": 324
+        },
+        {
+          "caller": "Register",
+          "callee": "s.deps.Config.Save",
+          "lineNumber": 326
+        },
+        {
+          "caller": "Register",
+          "callee": "fmt.Errorf",
+          "lineNumber": 327
+        },
+        {
+          "caller": "Status",
+          "callee": "errors.New",
+          "lineNumber": 334
+        },
+        {
+          "caller": "Status",
+          "callee": "s.deps.Config.Load",
+          "lineNumber": 336
+        },
+        {
+          "caller": "Status",
+          "callee": "len",
+          "lineNumber": 341
+        },
+        {
+          "caller": "Status",
+          "callee": "validateOperationalPath",
+          "lineNumber": 346
+        },
+        {
+          "caller": "Status",
+          "callee": "s.deps.OpenStore",
+          "lineNumber": 349
+        },
+        {
+          "caller": "Status",
+          "callee": "func() { _ = opened.Close() }",
+          "lineNumber": 353
+        },
+        {
+          "caller": "Status",
+          "callee": "opened.Close",
+          "lineNumber": 353
+        },
+        {
+          "caller": "Status",
+          "callee": "latestStore.LatestRun",
+          "lineNumber": 355
+        },
+        {
+          "caller": "Status",
+          "callee": "opened.CurrentRun",
+          "lineNumber": 357
+        },
+        {
+          "caller": "checkRepository",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 368
+        },
+        {
+          "caller": "checkRepository",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 371
+        },
+        {
+          "caller": "checkRepository",
+          "callee": "os.Stat",
+          "lineNumber": 374
+        },
+        {
+          "caller": "checkRepository",
+          "callee": "fmt.Errorf",
+          "lineNumber": 376
+        },
+        {
+          "caller": "checkRepository",
+          "callee": "info.IsDir",
+          "lineNumber": 378
+        },
+        {
+          "caller": "checkRepository",
+          "callee": "fmt.Errorf",
+          "lineNumber": 379
+        },
+        {
+          "caller": "defaultString",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 386
+        },
+        {
+          "caller": "pathWithin",
+          "callee": "filepath.Rel",
+          "lineNumber": 394
+        },
+        {
+          "caller": "pathWithin",
+          "callee": "resolvePath",
+          "lineNumber": 394
+        },
+        {
+          "caller": "pathWithin",
+          "callee": "resolvePath",
+          "lineNumber": 394
+        },
+        {
+          "caller": "pathWithin",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 398
+        },
+        {
+          "caller": "pathWithin",
+          "callee": "string",
+          "lineNumber": 398
+        },
+        {
+          "caller": "validateOperationalPath",
+          "callee": "pathWithin",
+          "lineNumber": 403
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "filepath.Abs",
+          "lineNumber": 413
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "filepath.Clean",
+          "lineNumber": 415
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "filepath.EvalSymlinks",
+          "lineNumber": 420
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "len",
+          "lineNumber": 422
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "filepath.Join",
+          "lineNumber": 423
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "filepath.Clean",
+          "lineNumber": 425
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "filepath.Dir",
+          "lineNumber": 427
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "append",
+          "lineNumber": 431
+        },
+        {
+          "caller": "resolvePath",
+          "callee": "filepath.Base",
+          "lineNumber": 431
+        }
+      ],
+      "metrics": {
+        "importCount": 8,
+        "exportCount": 20,
+        "functionCount": 14,
+        "classCount": 13
+      }
+    },
+    {
+      "path": "internal/git/worktree.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 411,
+      "nonEmptyLines": 379,
+      "functions": [
+        {
+          "name": "Run",
+          "startLine": 102,
+          "endLine": 116,
+          "params": [
+            "ctx",
+            "directory",
+            "args"
+          ]
+        },
+        {
+          "name": "NewWorktreeManager",
+          "startLine": 128,
+          "endLine": 128,
+          "params": []
+        },
+        {
+          "name": "NewGitWorkspace",
+          "startLine": 131,
+          "endLine": 131,
+          "params": []
+        },
+        {
+          "name": "Inspect",
+          "startLine": 139,
+          "endLine": 152,
+          "params": [
+            "ctx",
+            "worktreePath"
+          ]
+        },
+        {
+          "name": "runner",
+          "startLine": 155,
+          "endLine": 160,
+          "params": []
+        },
+        {
+          "name": "Create",
+          "startLine": 164,
+          "endLine": 205,
+          "params": [
+            "ctx",
+            "repositoryPath",
+            "targetBranch",
+            "runID"
+          ]
+        },
+        {
+          "name": "CreateCheckpoint",
+          "startLine": 210,
+          "endLine": 272,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "Push",
+          "startLine": 276,
+          "endLine": 293,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "SynchronizeBase",
+          "startLine": 297,
+          "endLine": 317,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "hasCheckpointMarker",
+          "startLine": 321,
+          "endLine": 328,
+          "params": [
+            "ctx",
+            "worktreePath",
+            "marker"
+          ]
+        },
+        {
+          "name": "Remove",
+          "startLine": 332,
+          "endLine": 357,
+          "params": [
+            "ctx",
+            "repositoryPath",
+            "workspace"
+          ]
+        },
+        {
+          "name": "worktreePath",
+          "startLine": 360,
+          "endLine": 365,
+          "params": [
+            "repositoryPath",
+            "runID"
+          ]
+        },
+        {
+          "name": "porcelainPaths",
+          "startLine": 370,
+          "endLine": 388,
+          "params": [
+            "output"
+          ]
+        },
+        {
+          "name": "validateRefPart",
+          "startLine": 392,
+          "endLine": 397,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "validCommitSHA",
+          "startLine": 400,
+          "endLine": 411,
+          "params": [
+            "value"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Workspace",
+          "startLine": 17,
+          "endLine": 21,
+          "methods": [],
+          "properties": [
+            "BaseSHA",
+            "Branch",
+            "Worktree"
+          ]
+        },
+        {
+          "name": "CheckpointRequest",
+          "startLine": 24,
+          "endLine": 33,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "WorktreePath",
+            "ParentSHA",
+            "Message"
+          ]
+        },
+        {
+          "name": "CheckpointResult",
+          "startLine": 37,
+          "endLine": 42,
+          "methods": [],
+          "properties": [
+            "SHA",
+            "Created"
+          ]
+        },
+        {
+          "name": "PushRequest",
+          "startLine": 45,
+          "endLine": 50,
+          "methods": [],
+          "properties": [
+            "WorktreePath",
+            "Branch"
+          ]
+        },
+        {
+          "name": "BaseSyncRequest",
+          "startLine": 54,
+          "endLine": 59,
+          "methods": [],
+          "properties": [
+            "WorktreePath",
+            "TargetBranch"
+          ]
+        },
+        {
+          "name": "WorktreeState",
+          "startLine": 63,
+          "endLine": 68,
+          "methods": [],
+          "properties": [
+            "HeadSHA",
+            "ChangedPaths"
+          ]
+        },
+        {
+          "name": "WorktreeManager",
+          "startLine": 71,
+          "endLine": 74,
+          "methods": [
+            "Create",
+            "Remove"
+          ],
+          "properties": []
+        },
+        {
+          "name": "WorktreeInspector",
+          "startLine": 77,
+          "endLine": 80,
+          "methods": [
+            "Inspect"
+          ],
+          "properties": []
+        },
+        {
+          "name": "GitWorkspace",
+          "startLine": 85,
+          "endLine": 91,
+          "methods": [
+            "CreateCheckpoint",
+            "Push",
+            "SynchronizeBase"
+          ],
+          "properties": []
+        },
+        {
+          "name": "CommandRunner",
+          "startLine": 94,
+          "endLine": 96,
+          "methods": [
+            "Run"
+          ],
+          "properties": []
+        },
+        {
+          "name": "commandRunner",
+          "startLine": 99,
+          "endLine": 99,
+          "methods": [
+            "Run"
+          ],
+          "properties": []
+        },
+        {
+          "name": "LocalWorktreeManager",
+          "startLine": 122,
+          "endLine": 125,
+          "methods": [
+            "Inspect",
+            "runner",
+            "Create",
+            "CreateCheckpoint",
+            "Push",
+            "SynchronizeBase",
+            "hasCheckpointMarker",
+            "Remove",
+            "worktreePath"
+          ],
+          "properties": [
+            "Runner",
+            "WorktreeDir"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Workspace",
+          "line": 17,
+          "isDefault": false
+        },
+        {
+          "name": "CheckpointRequest",
+          "line": 24,
+          "isDefault": false
+        },
+        {
+          "name": "CheckpointResult",
+          "line": 37,
+          "isDefault": false
+        },
+        {
+          "name": "PushRequest",
+          "line": 45,
+          "isDefault": false
+        },
+        {
+          "name": "BaseSyncRequest",
+          "line": 54,
+          "isDefault": false
+        },
+        {
+          "name": "WorktreeState",
+          "line": 63,
+          "isDefault": false
+        },
+        {
+          "name": "WorktreeManager",
+          "line": 71,
+          "isDefault": false
+        },
+        {
+          "name": "WorktreeInspector",
+          "line": 77,
+          "isDefault": false
+        },
+        {
+          "name": "GitWorkspace",
+          "line": 85,
+          "isDefault": false
+        },
+        {
+          "name": "CommandRunner",
+          "line": 94,
+          "isDefault": false
+        },
+        {
+          "name": "Run",
+          "line": 102,
+          "isDefault": false
+        },
+        {
+          "name": "LocalWorktreeManager",
+          "line": 122,
+          "isDefault": false
+        },
+        {
+          "name": "NewWorktreeManager",
+          "line": 128,
+          "isDefault": false
+        },
+        {
+          "name": "NewGitWorkspace",
+          "line": 131,
+          "isDefault": false
+        },
+        {
+          "name": "Inspect",
+          "line": 139,
+          "isDefault": false
+        },
+        {
+          "name": "Create",
+          "line": 164,
+          "isDefault": false
+        },
+        {
+          "name": "CreateCheckpoint",
+          "line": 210,
+          "isDefault": false
+        },
+        {
+          "name": "Push",
+          "line": 276,
+          "isDefault": false
+        },
+        {
+          "name": "SynchronizeBase",
+          "line": 297,
+          "isDefault": false
+        },
+        {
+          "name": "Remove",
+          "line": 332,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Run",
+          "callee": "exec.CommandContext",
+          "lineNumber": 103
+        },
+        {
+          "caller": "Run",
+          "callee": "command.Run",
+          "lineNumber": 108
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 109
+        },
+        {
+          "caller": "Run",
+          "callee": "stderr.String",
+          "lineNumber": 109
+        },
+        {
+          "caller": "Run",
+          "callee": "fmt.Errorf",
+          "lineNumber": 113
+        },
+        {
+          "caller": "Run",
+          "callee": "strings.Join",
+          "lineNumber": 113
+        },
+        {
+          "caller": "Run",
+          "callee": "stdout.Bytes",
+          "lineNumber": 115
+        },
+        {
+          "caller": "NewGitWorkspace",
+          "callee": "NewWorktreeManager",
+          "lineNumber": 131
+        },
+        {
+          "caller": "Inspect",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 140
+        },
+        {
+          "caller": "Inspect",
+          "callee": "errors.New",
+          "lineNumber": 141
+        },
+        {
+          "caller": "Inspect",
+          "callee": "m.runner().Run",
+          "lineNumber": 143
+        },
+        {
+          "caller": "Inspect",
+          "callee": "m.runner",
+          "lineNumber": 143
+        },
+        {
+          "caller": "Inspect",
+          "callee": "fmt.Errorf",
+          "lineNumber": 145
+        },
+        {
+          "caller": "Inspect",
+          "callee": "m.runner().Run",
+          "lineNumber": 147
+        },
+        {
+          "caller": "Inspect",
+          "callee": "m.runner",
+          "lineNumber": 147
+        },
+        {
+          "caller": "Inspect",
+          "callee": "fmt.Errorf",
+          "lineNumber": 149
+        },
+        {
+          "caller": "Inspect",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 151
+        },
+        {
+          "caller": "Inspect",
+          "callee": "string",
+          "lineNumber": 151
+        },
+        {
+          "caller": "Inspect",
+          "callee": "porcelainPaths",
+          "lineNumber": 151
+        },
+        {
+          "caller": "Inspect",
+          "callee": "string",
+          "lineNumber": 151
+        },
+        {
+          "caller": "Create",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 165
+        },
+        {
+          "caller": "Create",
+          "callee": "errors.New",
+          "lineNumber": 166
+        },
+        {
+          "caller": "Create",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 168
+        },
+        {
+          "caller": "Create",
+          "callee": "errors.New",
+          "lineNumber": 169
+        },
+        {
+          "caller": "Create",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 171
+        },
+        {
+          "caller": "Create",
+          "callee": "errors.New",
+          "lineNumber": 172
+        },
+        {
+          "caller": "Create",
+          "callee": "os.Stat",
+          "lineNumber": 174
+        },
+        {
+          "caller": "Create",
+          "callee": "fmt.Errorf",
+          "lineNumber": 175
+        },
+        {
+          "caller": "Create",
+          "callee": "validateRefPart",
+          "lineNumber": 177
+        },
+        {
+          "caller": "Create",
+          "callee": "fmt.Errorf",
+          "lineNumber": 178
+        },
+        {
+          "caller": "Create",
+          "callee": "validateRefPart",
+          "lineNumber": 180
+        },
+        {
+          "caller": "Create",
+          "callee": "fmt.Errorf",
+          "lineNumber": 181
+        },
+        {
+          "caller": "Create",
+          "callee": "m.runner().Run",
+          "lineNumber": 184
+        },
+        {
+          "caller": "Create",
+          "callee": "m.runner",
+          "lineNumber": 184
+        },
+        {
+          "caller": "Create",
+          "callee": "fmt.Errorf",
+          "lineNumber": 185
+        },
+        {
+          "caller": "Create",
+          "callee": "m.runner().Run",
+          "lineNumber": 187
+        },
+        {
+          "caller": "Create",
+          "callee": "m.runner",
+          "lineNumber": 187
+        },
+        {
+          "caller": "Create",
+          "callee": "fmt.Errorf",
+          "lineNumber": 189
+        },
+        {
+          "caller": "Create",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 191
+        },
+        {
+          "caller": "Create",
+          "callee": "string",
+          "lineNumber": 191
+        },
+        {
+          "caller": "Create",
+          "callee": "errors.New",
+          "lineNumber": 193
+        },
+        {
+          "caller": "Create",
+          "callee": "m.worktreePath",
+          "lineNumber": 197
+        },
+        {
+          "caller": "Create",
+          "callee": "os.MkdirAll",
+          "lineNumber": 198
+        },
+        {
+          "caller": "Create",
+          "callee": "filepath.Dir",
+          "lineNumber": 198
+        },
+        {
+          "caller": "Create",
+          "callee": "fmt.Errorf",
+          "lineNumber": 199
+        },
+        {
+          "caller": "Create",
+          "callee": "m.runner().Run",
+          "lineNumber": 201
+        },
+        {
+          "caller": "Create",
+          "callee": "m.runner",
+          "lineNumber": 201
+        },
+        {
+          "caller": "Create",
+          "callee": "fmt.Errorf",
+          "lineNumber": 202
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 211
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 212
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "validateRefPart",
+          "lineNumber": 214
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "fmt.Errorf",
+          "lineNumber": 215
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 217
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 218
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 220
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 221
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "validCommitSHA",
+          "lineNumber": 223
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 224
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 226
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "strings.ContainsRune",
+          "lineNumber": 227
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 228
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.Inspect",
+          "lineNumber": 231
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "fmt.Errorf",
+          "lineNumber": 233
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.hasCheckpointMarker",
+          "lineNumber": 236
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "len",
+          "lineNumber": 237
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 238
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "fmt.Errorf",
+          "lineNumber": 242
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "len",
+          "lineNumber": 244
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.hasCheckpointMarker",
+          "lineNumber": 245
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 248
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner().Run",
+          "lineNumber": 250
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner",
+          "lineNumber": 250
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "fmt.Errorf",
+          "lineNumber": 251
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner().Run",
+          "lineNumber": 257
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner",
+          "lineNumber": 257
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "fmt.Errorf",
+          "lineNumber": 258
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner().Run",
+          "lineNumber": 260
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner",
+          "lineNumber": 260
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "fmt.Errorf",
+          "lineNumber": 261
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner().Run",
+          "lineNumber": 263
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "m.runner",
+          "lineNumber": 263
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "fmt.Errorf",
+          "lineNumber": 265
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 267
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "string",
+          "lineNumber": 267
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "validCommitSHA",
+          "lineNumber": 268
+        },
+        {
+          "caller": "CreateCheckpoint",
+          "callee": "errors.New",
+          "lineNumber": 269
+        },
+        {
+          "caller": "Push",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 277
+        },
+        {
+          "caller": "Push",
+          "callee": "errors.New",
+          "lineNumber": 278
+        },
+        {
+          "caller": "Push",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 280
+        },
+        {
+          "caller": "Push",
+          "callee": "errors.New",
+          "lineNumber": 281
+        },
+        {
+          "caller": "Push",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 283
+        },
+        {
+          "caller": "Push",
+          "callee": "errors.New",
+          "lineNumber": 284
+        },
+        {
+          "caller": "Push",
+          "callee": "validateRefPart",
+          "lineNumber": 286
+        },
+        {
+          "caller": "Push",
+          "callee": "fmt.Errorf",
+          "lineNumber": 287
+        },
+        {
+          "caller": "Push",
+          "callee": "m.runner().Run",
+          "lineNumber": 289
+        },
+        {
+          "caller": "Push",
+          "callee": "m.runner",
+          "lineNumber": 289
+        },
+        {
+          "caller": "Push",
+          "callee": "fmt.Errorf",
+          "lineNumber": 290
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 298
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "errors.New",
+          "lineNumber": 299
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "filepath.IsAbs",
+          "lineNumber": 301
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "errors.New",
+          "lineNumber": 302
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 304
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "errors.New",
+          "lineNumber": 305
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "validateRefPart",
+          "lineNumber": 307
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 308
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "m.runner().Run",
+          "lineNumber": 310
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "m.runner",
+          "lineNumber": 310
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 311
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "m.runner().Run",
+          "lineNumber": 313
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "m.runner",
+          "lineNumber": 313
+        },
+        {
+          "caller": "SynchronizeBase",
+          "callee": "fmt.Errorf",
+          "lineNumber": 314
+        },
+        {
+          "caller": "hasCheckpointMarker",
+          "callee": "m.runner().Run",
+          "lineNumber": 322
+        },
+        {
+          "caller": "hasCheckpointMarker",
+          "callee": "m.runner",
+          "lineNumber": 322
+        },
+        {
+          "caller": "hasCheckpointMarker",
+          "callee": "strings.SplitN",
+          "lineNumber": 326
+        },
+        {
+          "caller": "hasCheckpointMarker",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 326
+        },
+        {
+          "caller": "hasCheckpointMarker",
+          "callee": "string",
+          "lineNumber": 326
+        },
+        {
+          "caller": "Remove",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 333
+        },
+        {
+          "caller": "Remove",
+          "callee": "errors.New",
+          "lineNumber": 334
+        },
+        {
+          "caller": "Remove",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 336
+        },
+        {
+          "caller": "Remove",
+          "callee": "errors.New",
+          "lineNumber": 337
+        },
+        {
+          "caller": "Remove",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 339
+        },
+        {
+          "caller": "Remove",
+          "callee": "errors.New",
+          "lineNumber": 340
+        },
+        {
+          "caller": "Remove",
+          "callee": "os.Stat",
+          "lineNumber": 342
+        },
+        {
+          "caller": "Remove",
+          "callee": "fmt.Errorf",
+          "lineNumber": 343
+        },
+        {
+          "caller": "Remove",
+          "callee": "validateRefPart",
+          "lineNumber": 345
+        },
+        {
+          "caller": "Remove",
+          "callee": "fmt.Errorf",
+          "lineNumber": 346
+        },
+        {
+          "caller": "Remove",
+          "callee": "m.runner().Run",
+          "lineNumber": 350
+        },
+        {
+          "caller": "Remove",
+          "callee": "m.runner",
+          "lineNumber": 350
+        },
+        {
+          "caller": "Remove",
+          "callee": "append",
+          "lineNumber": 351
+        },
+        {
+          "caller": "Remove",
+          "callee": "fmt.Errorf",
+          "lineNumber": 351
+        },
+        {
+          "caller": "Remove",
+          "callee": "m.runner().Run",
+          "lineNumber": 353
+        },
+        {
+          "caller": "Remove",
+          "callee": "m.runner",
+          "lineNumber": 353
+        },
+        {
+          "caller": "Remove",
+          "callee": "append",
+          "lineNumber": 354
+        },
+        {
+          "caller": "Remove",
+          "callee": "fmt.Errorf",
+          "lineNumber": 354
+        },
+        {
+          "caller": "Remove",
+          "callee": "errors.Join",
+          "lineNumber": 356
+        },
+        {
+          "caller": "worktreePath",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 361
+        },
+        {
+          "caller": "worktreePath",
+          "callee": "filepath.Join",
+          "lineNumber": 362
+        },
+        {
+          "caller": "worktreePath",
+          "callee": "filepath.Join",
+          "lineNumber": 364
+        },
+        {
+          "caller": "worktreePath",
+          "callee": "filepath.Dir",
+          "lineNumber": 364
+        },
+        {
+          "caller": "worktreePath",
+          "callee": "filepath.Base",
+          "lineNumber": 364
+        },
+        {
+          "caller": "porcelainPaths",
+          "callee": "strings.Split",
+          "lineNumber": 372
+        },
+        {
+          "caller": "porcelainPaths",
+          "callee": "len",
+          "lineNumber": 373
+        },
+        {
+          "caller": "porcelainPaths",
+          "callee": "len",
+          "lineNumber": 375
+        },
+        {
+          "caller": "porcelainPaths",
+          "callee": "append",
+          "lineNumber": 381
+        },
+        {
+          "caller": "porcelainPaths",
+          "callee": "filepath.ToSlash",
+          "lineNumber": 381
+        },
+        {
+          "caller": "porcelainPaths",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 383
+        },
+        {
+          "caller": "porcelainPaths",
+          "callee": "len",
+          "lineNumber": 383
+        },
+        {
+          "caller": "validateRefPart",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 393
+        },
+        {
+          "caller": "validateRefPart",
+          "callee": "strings.HasPrefix",
+          "lineNumber": 393
+        },
+        {
+          "caller": "validateRefPart",
+          "callee": "strings.Contains",
+          "lineNumber": 393
+        },
+        {
+          "caller": "validateRefPart",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 393
+        },
+        {
+          "caller": "validateRefPart",
+          "callee": "fmt.Errorf",
+          "lineNumber": 394
+        },
+        {
+          "caller": "validCommitSHA",
+          "callee": "len",
+          "lineNumber": 401
+        },
+        {
+          "caller": "validCommitSHA",
+          "callee": "len",
+          "lineNumber": 401
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 20,
+        "functionCount": 15,
+        "classCount": 12
+      }
+    },
+    {
+      "path": "internal/harness/codex.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 304,
+      "nonEmptyLines": 288,
+      "functions": [
+        {
+          "name": "NewCodex",
+          "startLine": 72,
+          "endLine": 74,
+          "params": [
+            "runtime",
+            "terminalRuntime"
+          ]
+        },
+        {
+          "name": "Start",
+          "startLine": 77,
+          "endLine": 82,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "Resume",
+          "startLine": 86,
+          "endLine": 91,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "Finish",
+          "startLine": 95,
+          "endLine": 106,
+          "params": [
+            "ctx",
+            "session"
+          ]
+        },
+        {
+          "name": "launch",
+          "startLine": 110,
+          "endLine": 205,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "discoverNativeSession",
+          "startLine": 227,
+          "endLine": 273,
+          "params": [
+            "ctx",
+            "provider",
+            "baseline",
+            "request"
+          ]
+        },
+        {
+          "name": "validateStartRequest",
+          "startLine": 277,
+          "endLine": 302,
+          "params": [
+            "request"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "StartRequest",
+          "startLine": 17,
+          "endLine": 39,
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "RunID",
+            "Role",
+            "Stage",
+            "WorkspaceID",
+            "Surface",
+            "Prompt",
+            "Model",
+            "ReasoningEffort",
+            "ResumeSessionID"
+          ]
+        },
+        {
+          "name": "Session",
+          "startLine": 42,
+          "endLine": 50,
+          "methods": [],
+          "properties": [
+            "InvocationID",
+            "NativeSessionID",
+            "Surface"
+          ]
+        },
+        {
+          "name": "Runtime",
+          "startLine": 53,
+          "endLine": 60,
+          "methods": [
+            "Start",
+            "Resume",
+            "Finish"
+          ],
+          "properties": []
+        },
+        {
+          "name": "Codex",
+          "startLine": 64,
+          "endLine": 69,
+          "methods": [
+            "Start",
+            "Resume",
+            "Finish",
+            "launch"
+          ],
+          "properties": [
+            "Worker",
+            "Terminal"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "StartRequest",
+          "line": 17,
+          "isDefault": false
+        },
+        {
+          "name": "Session",
+          "line": 42,
+          "isDefault": false
+        },
+        {
+          "name": "Runtime",
+          "line": 53,
+          "isDefault": false
+        },
+        {
+          "name": "Codex",
+          "line": 64,
+          "isDefault": false
+        },
+        {
+          "name": "NewCodex",
+          "line": 72,
+          "isDefault": false
+        },
+        {
+          "name": "Start",
+          "line": 77,
+          "isDefault": false
+        },
+        {
+          "name": "Resume",
+          "line": 86,
+          "isDefault": false
+        },
+        {
+          "name": "Finish",
+          "line": 95,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "Start",
+          "callee": "errors.New",
+          "lineNumber": 79
+        },
+        {
+          "caller": "Start",
+          "callee": "c.launch",
+          "lineNumber": 81
+        },
+        {
+          "caller": "Resume",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 87
+        },
+        {
+          "caller": "Resume",
+          "callee": "errors.New",
+          "lineNumber": 88
+        },
+        {
+          "caller": "Resume",
+          "callee": "c.launch",
+          "lineNumber": 90
+        },
+        {
+          "caller": "Finish",
+          "callee": "errors.New",
+          "lineNumber": 97
+        },
+        {
+          "caller": "Finish",
+          "callee": "errors.New",
+          "lineNumber": 100
+        },
+        {
+          "caller": "Finish",
+          "callee": "c.Terminal.SendInput",
+          "lineNumber": 102
+        },
+        {
+          "caller": "Finish",
+          "callee": "fmt.Errorf",
+          "lineNumber": 103
+        },
+        {
+          "caller": "launch",
+          "callee": "validateStartRequest",
+          "lineNumber": 111
+        },
+        {
+          "caller": "launch",
+          "callee": "errors.New",
+          "lineNumber": 116
+        },
+        {
+          "caller": "launch",
+          "callee": "errors.New",
+          "lineNumber": 119
+        },
+        {
+          "caller": "launch",
+          "callee": "append",
+          "lineNumber": 123
+        },
+        {
+          "caller": "launch",
+          "callee": "append",
+          "lineNumber": 126
+        },
+        {
+          "caller": "launch",
+          "callee": "append",
+          "lineNumber": 129
+        },
+        {
+          "caller": "launch",
+          "callee": "interactive.InteractiveCommand",
+          "lineNumber": 142
+        },
+        {
+          "caller": "launch",
+          "callee": "fmt.Errorf",
+          "lineNumber": 150
+        },
+        {
+          "caller": "launch",
+          "callee": "provider.NativeSessionIDs",
+          "lineNumber": 157
+        },
+        {
+          "caller": "launch",
+          "callee": "fmt.Errorf",
+          "lineNumber": 159
+        },
+        {
+          "caller": "launch",
+          "callee": "c.Terminal.CreateSurface",
+          "lineNumber": 165
+        },
+        {
+          "caller": "launch",
+          "callee": "append",
+          "lineNumber": 170
+        },
+        {
+          "caller": "launch",
+          "callee": "fmt.Errorf",
+          "lineNumber": 174
+        },
+        {
+          "caller": "launch",
+          "callee": "c.Terminal.LaunchSurface",
+          "lineNumber": 176
+        },
+        {
+          "caller": "launch",
+          "callee": "append",
+          "lineNumber": 178
+        },
+        {
+          "caller": "launch",
+          "callee": "fmt.Errorf",
+          "lineNumber": 180
+        },
+        {
+          "caller": "launch",
+          "callee": "c.Terminal.SendInput",
+          "lineNumber": 182
+        },
+        {
+          "caller": "launch",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 182
+        },
+        {
+          "caller": "launch",
+          "callee": "c.Terminal.CloseSurface",
+          "lineNumber": 183
+        },
+        {
+          "caller": "launch",
+          "callee": "fmt.Errorf",
+          "lineNumber": 184
+        },
+        {
+          "caller": "launch",
+          "callee": "discoverNativeSession",
+          "lineNumber": 189
+        },
+        {
+          "caller": "launch",
+          "callee": "c.Terminal.CloseSurface",
+          "lineNumber": 191
+        },
+        {
+          "caller": "launch",
+          "callee": "fmt.Errorf",
+          "lineNumber": 192
+        },
+        {
+          "caller": "launch",
+          "callee": "provider.NativeSessionID",
+          "lineNumber": 196
+        },
+        {
+          "caller": "launch",
+          "callee": "c.Terminal.CloseSurface",
+          "lineNumber": 198
+        },
+        {
+          "caller": "launch",
+          "callee": "fmt.Errorf",
+          "lineNumber": 199
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "context.WithTimeout",
+          "lineNumber": 228
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "cancel",
+          "lineNumber": 229
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "make",
+          "lineNumber": 230
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "len",
+          "lineNumber": 230
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "discoveryContext.Err",
+          "lineNumber": 236
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "fmt.Errorf",
+          "lineNumber": 237
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "provider.NativeSessionIDs",
+          "lineNumber": 239
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "discoveryContext.Err",
+          "lineNumber": 241
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "fmt.Errorf",
+          "lineNumber": 242
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "discoveryContext.Err",
+          "lineNumber": 242
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "len",
+          "lineNumber": 246
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 247
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "time.NewTimer",
+          "lineNumber": 254
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "discoveryContext.Done",
+          "lineNumber": 256
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "timer.Stop",
+          "lineNumber": 257
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "fmt.Errorf",
+          "lineNumber": 263
+        },
+        {
+          "caller": "discoverNativeSession",
+          "callee": "discoveryContext.Err",
+          "lineNumber": 263
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 285
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 286
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 288
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "fmt.Errorf",
+          "lineNumber": 289
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "errors.New",
+          "lineNumber": 293
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 295
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "errors.New",
+          "lineNumber": 296
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 298
+        },
+        {
+          "caller": "validateStartRequest",
+          "callee": "errors.New",
+          "lineNumber": 299
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 8,
+        "functionCount": 7,
+        "classCount": 4
+      }
+    },
+    {
+      "path": "internal/terminal/runtime.go",
+      "language": "go",
+      "fileCategory": "code",
+      "totalLines": 519,
+      "nonEmptyLines": 482,
+      "functions": [
+        {
+          "name": "NewCmuxRuntime",
+          "startLine": 151,
+          "endLine": 157,
+          "params": [
+            "runner"
+          ]
+        },
+        {
+          "name": "ConfiguredSocketPath",
+          "startLine": 160,
+          "endLine": 162,
+          "params": []
+        },
+        {
+          "name": "EnsureControlWorkspace",
+          "startLine": 166,
+          "endLine": 193,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "EnsureRunWorkspace",
+          "startLine": 197,
+          "endLine": 232,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "CreateSurface",
+          "startLine": 235,
+          "endLine": 263,
+          "params": [
+            "ctx",
+            "request"
+          ]
+        },
+        {
+          "name": "LaunchSurface",
+          "startLine": 268,
+          "endLine": 279,
+          "params": [
+            "ctx",
+            "surfaceID",
+            "command"
+          ]
+        },
+        {
+          "name": "SendInput",
+          "startLine": 283,
+          "endLine": 294,
+          "params": [
+            "ctx",
+            "surfaceID",
+            "input"
+          ]
+        },
+        {
+          "name": "Notify",
+          "startLine": 298,
+          "endLine": 309,
+          "params": [
+            "ctx",
+            "notification"
+          ]
+        },
+        {
+          "name": "CloseSurface",
+          "startLine": 312,
+          "endLine": 320,
+          "params": [
+            "ctx",
+            "surfaceID"
+          ]
+        },
+        {
+          "name": "CloseWorkspace",
+          "startLine": 323,
+          "endLine": 331,
+          "params": [
+            "ctx",
+            "workspaceID"
+          ]
+        },
+        {
+          "name": "run",
+          "startLine": 334,
+          "endLine": 358,
+          "params": [
+            "ctx",
+            "args",
+            "input"
+          ]
+        },
+        {
+          "name": "validateWorkspaceRequest",
+          "startLine": 361,
+          "endLine": 372,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "validateCommand",
+          "startLine": 376,
+          "endLine": 389,
+          "params": [
+            "command"
+          ]
+        },
+        {
+          "name": "workspaceLayout",
+          "startLine": 392,
+          "endLine": 402,
+          "params": [
+            "request",
+            "command"
+          ]
+        },
+        {
+          "name": "runWorkspaceLayout",
+          "startLine": 405,
+          "endLine": 415,
+          "params": [
+            "request"
+          ]
+        },
+        {
+          "name": "commandLine",
+          "startLine": 418,
+          "endLine": 424,
+          "params": [
+            "command"
+          ]
+        },
+        {
+          "name": "shellQuote",
+          "startLine": 427,
+          "endLine": 429,
+          "params": [
+            "value"
+          ]
+        },
+        {
+          "name": "surface",
+          "startLine": 448,
+          "endLine": 462,
+          "params": [
+            "defaultName",
+            "workspaceID"
+          ]
+        },
+        {
+          "name": "decodeWorkspace",
+          "startLine": 465,
+          "endLine": 482,
+          "params": [
+            "data",
+            "defaultName"
+          ]
+        },
+        {
+          "name": "decodeRunWorkspace",
+          "startLine": 486,
+          "endLine": 517,
+          "params": [
+            "data",
+            "defaultName"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "Workspace",
+          "startLine": 25,
+          "endLine": 30,
+          "methods": [],
+          "properties": [
+            "ID",
+            "Name"
+          ]
+        },
+        {
+          "name": "Surface",
+          "startLine": 33,
+          "endLine": 40,
+          "methods": [],
+          "properties": [
+            "ID",
+            "WorkspaceID",
+            "Name"
+          ]
+        },
+        {
+          "name": "Command",
+          "startLine": 43,
+          "endLine": 48,
+          "methods": [],
+          "properties": [
+            "Executable",
+            "Args"
+          ]
+        },
+        {
+          "name": "WorkspaceRequest",
+          "startLine": 51,
+          "endLine": 58,
+          "methods": [],
+          "properties": [
+            "Name",
+            "Description",
+            "WorkingDirectory"
+          ]
+        },
+        {
+          "name": "RunWorkspaceRequest",
+          "startLine": 62,
+          "endLine": 71,
+          "methods": [],
+          "properties": [
+            "RunID",
+            "Name",
+            "Description",
+            "WorkingDirectory"
+          ]
+        },
+        {
+          "name": "RunWorkspace",
+          "startLine": 74,
+          "endLine": 83,
+          "methods": [],
+          "properties": [
+            "Status",
+            "Implementation",
+            "Checks"
+          ]
+        },
+        {
+          "name": "SurfaceRequest",
+          "startLine": 86,
+          "endLine": 93,
+          "methods": [],
+          "properties": [
+            "WorkspaceID",
+            "Name",
+            "Command"
+          ]
+        },
+        {
+          "name": "Notification",
+          "startLine": 96,
+          "endLine": 103,
+          "methods": [],
+          "properties": [
+            "WorkspaceID",
+            "Title",
+            "Body"
+          ]
+        },
+        {
+          "name": "TerminalRuntime",
+          "startLine": 108,
+          "endLine": 126,
+          "methods": [
+            "EnsureControlWorkspace",
+            "EnsureRunWorkspace",
+            "CreateSurface",
+            "LaunchSurface",
+            "SendInput",
+            "Notify",
+            "CloseSurface",
+            "CloseWorkspace"
+          ],
+          "properties": []
+        },
+        {
+          "name": "CommandRunner",
+          "startLine": 129,
+          "endLine": 132,
+          "methods": [
+            "Run"
+          ],
+          "properties": []
+        },
+        {
+          "name": "CmuxRuntime",
+          "startLine": 136,
+          "endLine": 147,
+          "methods": [
+            "ConfiguredSocketPath",
+            "EnsureControlWorkspace",
+            "EnsureRunWorkspace",
+            "CreateSurface",
+            "LaunchSurface",
+            "SendInput",
+            "Notify",
+            "CloseSurface",
+            "CloseWorkspace",
+            "run"
+          ],
+          "properties": [
+            "Runner",
+            "Binary",
+            "socketPath",
+            "mu",
+            "control",
+            "runs"
+          ]
+        },
+        {
+          "name": "workspaceResponse",
+          "startLine": 432,
+          "endLine": 437,
+          "methods": [],
+          "properties": [
+            "ID",
+            "WorkspaceID",
+            "Name",
+            "Surfaces"
+          ]
+        },
+        {
+          "name": "surfaceResponse",
+          "startLine": 440,
+          "endLine": 445,
+          "methods": [
+            "surface"
+          ],
+          "properties": [
+            "ID",
+            "SurfaceID",
+            "WorkspaceID",
+            "Name"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "Workspace",
+          "line": 25,
+          "isDefault": false
+        },
+        {
+          "name": "Surface",
+          "line": 33,
+          "isDefault": false
+        },
+        {
+          "name": "Command",
+          "line": 43,
+          "isDefault": false
+        },
+        {
+          "name": "WorkspaceRequest",
+          "line": 51,
+          "isDefault": false
+        },
+        {
+          "name": "RunWorkspaceRequest",
+          "line": 62,
+          "isDefault": false
+        },
+        {
+          "name": "RunWorkspace",
+          "line": 74,
+          "isDefault": false
+        },
+        {
+          "name": "SurfaceRequest",
+          "line": 86,
+          "isDefault": false
+        },
+        {
+          "name": "Notification",
+          "line": 96,
+          "isDefault": false
+        },
+        {
+          "name": "TerminalRuntime",
+          "line": 108,
+          "isDefault": false
+        },
+        {
+          "name": "CommandRunner",
+          "line": 129,
+          "isDefault": false
+        },
+        {
+          "name": "CmuxRuntime",
+          "line": 136,
+          "isDefault": false
+        },
+        {
+          "name": "NewCmuxRuntime",
+          "line": 151,
+          "isDefault": false
+        },
+        {
+          "name": "ConfiguredSocketPath",
+          "line": 160,
+          "isDefault": false
+        },
+        {
+          "name": "EnsureControlWorkspace",
+          "line": 166,
+          "isDefault": false
+        },
+        {
+          "name": "EnsureRunWorkspace",
+          "line": 197,
+          "isDefault": false
+        },
+        {
+          "name": "CreateSurface",
+          "line": 235,
+          "isDefault": false
+        },
+        {
+          "name": "LaunchSurface",
+          "line": 268,
+          "isDefault": false
+        },
+        {
+          "name": "SendInput",
+          "line": 283,
+          "isDefault": false
+        },
+        {
+          "name": "Notify",
+          "line": 298,
+          "isDefault": false
+        },
+        {
+          "name": "CloseSurface",
+          "line": 312,
+          "isDefault": false
+        },
+        {
+          "name": "CloseWorkspace",
+          "line": 323,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "NewCmuxRuntime",
+          "callee": "len",
+          "lineNumber": 153
+        },
+        {
+          "caller": "NewCmuxRuntime",
+          "callee": "make",
+          "lineNumber": 156
+        },
+        {
+          "caller": "EnsureControlWorkspace",
+          "callee": "validateWorkspaceRequest",
+          "lineNumber": 167
+        },
+        {
+          "caller": "EnsureControlWorkspace",
+          "callee": "r.mu.Lock",
+          "lineNumber": 170
+        },
+        {
+          "caller": "EnsureControlWorkspace",
+          "callee": "r.mu.Unlock",
+          "lineNumber": 171
+        },
+        {
+          "caller": "EnsureControlWorkspace",
+          "callee": "r.run",
+          "lineNumber": 176
+        },
+        {
+          "caller": "EnsureControlWorkspace",
+          "callee": "workspaceLayout",
+          "lineNumber": 182
+        },
+        {
+          "caller": "EnsureControlWorkspace",
+          "callee": "fmt.Errorf",
+          "lineNumber": 185
+        },
+        {
+          "caller": "EnsureControlWorkspace",
+          "callee": "decodeWorkspace",
+          "lineNumber": 187
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 198
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "errors.New",
+          "lineNumber": 199
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 201
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "errors.New",
+          "lineNumber": 202
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "validateWorkspaceRequest",
+          "lineNumber": 204
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "r.mu.Lock",
+          "lineNumber": 207
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "r.mu.Unlock",
+          "lineNumber": 208
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "r.run",
+          "lineNumber": 212
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "runWorkspaceLayout",
+          "lineNumber": 218
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "fmt.Errorf",
+          "lineNumber": 221
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "decodeRunWorkspace",
+          "lineNumber": 223
+        },
+        {
+          "caller": "EnsureRunWorkspace",
+          "callee": "make",
+          "lineNumber": 228
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 236
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "string",
+          "lineNumber": 236
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "errors.New",
+          "lineNumber": 237
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 239
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "errors.New",
+          "lineNumber": 240
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "validateCommand",
+          "lineNumber": 242
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "r.run",
+          "lineNumber": 245
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "string",
+          "lineNumber": 247
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "commandLine",
+          "lineNumber": 249
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "fmt.Errorf",
+          "lineNumber": 252
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "json.Unmarshal",
+          "lineNumber": 255
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "fmt.Errorf",
+          "lineNumber": 256
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "response.surface",
+          "lineNumber": 258
+        },
+        {
+          "caller": "CreateSurface",
+          "callee": "errors.New",
+          "lineNumber": 260
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 269
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "string",
+          "lineNumber": 269
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "errors.New",
+          "lineNumber": 270
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "validateCommand",
+          "lineNumber": 272
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "r.run",
+          "lineNumber": 275
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "string",
+          "lineNumber": 275
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "commandLine",
+          "lineNumber": 275
+        },
+        {
+          "caller": "LaunchSurface",
+          "callee": "fmt.Errorf",
+          "lineNumber": 276
+        },
+        {
+          "caller": "SendInput",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 284
+        },
+        {
+          "caller": "SendInput",
+          "callee": "string",
+          "lineNumber": 284
+        },
+        {
+          "caller": "SendInput",
+          "callee": "errors.New",
+          "lineNumber": 285
+        },
+        {
+          "caller": "SendInput",
+          "callee": "len",
+          "lineNumber": 287
+        },
+        {
+          "caller": "SendInput",
+          "callee": "errors.New",
+          "lineNumber": 288
+        },
+        {
+          "caller": "SendInput",
+          "callee": "r.run",
+          "lineNumber": 290
+        },
+        {
+          "caller": "SendInput",
+          "callee": "string",
+          "lineNumber": 290
+        },
+        {
+          "caller": "SendInput",
+          "callee": "fmt.Errorf",
+          "lineNumber": 291
+        },
+        {
+          "caller": "Notify",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 299
+        },
+        {
+          "caller": "Notify",
+          "callee": "string",
+          "lineNumber": 299
+        },
+        {
+          "caller": "Notify",
+          "callee": "errors.New",
+          "lineNumber": 300
+        },
+        {
+          "caller": "Notify",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 302
+        },
+        {
+          "caller": "Notify",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 302
+        },
+        {
+          "caller": "Notify",
+          "callee": "errors.New",
+          "lineNumber": 303
+        },
+        {
+          "caller": "Notify",
+          "callee": "r.run",
+          "lineNumber": 305
+        },
+        {
+          "caller": "Notify",
+          "callee": "string",
+          "lineNumber": 305
+        },
+        {
+          "caller": "Notify",
+          "callee": "fmt.Errorf",
+          "lineNumber": 306
+        },
+        {
+          "caller": "CloseSurface",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 313
+        },
+        {
+          "caller": "CloseSurface",
+          "callee": "string",
+          "lineNumber": 313
+        },
+        {
+          "caller": "CloseSurface",
+          "callee": "errors.New",
+          "lineNumber": 314
+        },
+        {
+          "caller": "CloseSurface",
+          "callee": "r.run",
+          "lineNumber": 316
+        },
+        {
+          "caller": "CloseSurface",
+          "callee": "string",
+          "lineNumber": 316
+        },
+        {
+          "caller": "CloseSurface",
+          "callee": "fmt.Errorf",
+          "lineNumber": 317
+        },
+        {
+          "caller": "CloseWorkspace",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 324
+        },
+        {
+          "caller": "CloseWorkspace",
+          "callee": "string",
+          "lineNumber": 324
+        },
+        {
+          "caller": "CloseWorkspace",
+          "callee": "errors.New",
+          "lineNumber": 325
+        },
+        {
+          "caller": "CloseWorkspace",
+          "callee": "r.run",
+          "lineNumber": 327
+        },
+        {
+          "caller": "CloseWorkspace",
+          "callee": "string",
+          "lineNumber": 327
+        },
+        {
+          "caller": "CloseWorkspace",
+          "callee": "fmt.Errorf",
+          "lineNumber": 328
+        },
+        {
+          "caller": "run",
+          "callee": "r.Runner.Run",
+          "lineNumber": 336
+        },
+        {
+          "caller": "run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 339
+        },
+        {
+          "caller": "run",
+          "callee": "exec.CommandContext",
+          "lineNumber": 342
+        },
+        {
+          "caller": "run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 343
+        },
+        {
+          "caller": "run",
+          "callee": "append",
+          "lineNumber": 344
+        },
+        {
+          "caller": "run",
+          "callee": "os.Environ",
+          "lineNumber": 344
+        },
+        {
+          "caller": "run",
+          "callee": "bytes.NewReader",
+          "lineNumber": 346
+        },
+        {
+          "caller": "run",
+          "callee": "command.Run",
+          "lineNumber": 350
+        },
+        {
+          "caller": "run",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 351
+        },
+        {
+          "caller": "run",
+          "callee": "stderr.String",
+          "lineNumber": 351
+        },
+        {
+          "caller": "run",
+          "callee": "fmt.Errorf",
+          "lineNumber": 355
+        },
+        {
+          "caller": "run",
+          "callee": "stdout.Bytes",
+          "lineNumber": 357
+        },
+        {
+          "caller": "validateWorkspaceRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 362
+        },
+        {
+          "caller": "validateWorkspaceRequest",
+          "callee": "errors.New",
+          "lineNumber": 363
+        },
+        {
+          "caller": "validateWorkspaceRequest",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 365
+        },
+        {
+          "caller": "validateWorkspaceRequest",
+          "callee": "errors.New",
+          "lineNumber": 366
+        },
+        {
+          "caller": "validateWorkspaceRequest",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 368
+        },
+        {
+          "caller": "validateWorkspaceRequest",
+          "callee": "errors.New",
+          "lineNumber": 369
+        },
+        {
+          "caller": "validateCommand",
+          "callee": "strings.TrimSpace",
+          "lineNumber": 377
+        },
+        {
+          "caller": "validateCommand",
+          "callee": "errors.New",
+          "lineNumber": 378
+        },
+        {
+          "caller": "validateCommand",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 380
+        },
+        {
+          "caller": "validateCommand",
+          "callee": "errors.New",
+          "lineNumber": 381
+        },
+        {
+          "caller": "validateCommand",
+          "callee": "strings.ContainsAny",
+          "lineNumber": 384
+        },
+        {
+          "caller": "validateCommand",
+          "callee": "errors.New",
+          "lineNumber": 385
+        },
+        {
+          "caller": "workspaceLayout",
+          "callee": "commandLine",
+          "lineNumber": 395
+        },
+        {
+          "caller": "workspaceLayout",
+          "callee": "json.Marshal",
+          "lineNumber": 397
+        },
+        {
+          "caller": "workspaceLayout",
+          "callee": "string",
+          "lineNumber": 401
+        },
+        {
+          "caller": "runWorkspaceLayout",
+          "callee": "json.Marshal",
+          "lineNumber": 406
+        },
+        {
+          "caller": "runWorkspaceLayout",
+          "callee": "string",
+          "lineNumber": 414
+        },
+        {
+          "caller": "commandLine",
+          "callee": "shellQuote",
+          "lineNumber": 419
+        },
+        {
+          "caller": "commandLine",
+          "callee": "append",
+          "lineNumber": 421
+        },
+        {
+          "caller": "commandLine",
+          "callee": "shellQuote",
+          "lineNumber": 421
+        },
+        {
+          "caller": "commandLine",
+          "callee": "strings.Join",
+          "lineNumber": 423
+        },
+        {
+          "caller": "shellQuote",
+          "callee": "strings.ReplaceAll",
+          "lineNumber": 428
+        },
+        {
+          "caller": "surface",
+          "callee": "string",
+          "lineNumber": 455
+        },
+        {
+          "caller": "surface",
+          "callee": "SurfaceID",
+          "lineNumber": 461
+        },
+        {
+          "caller": "surface",
+          "callee": "WorkspaceID",
+          "lineNumber": 461
+        },
+        {
+          "caller": "decodeWorkspace",
+          "callee": "json.Unmarshal",
+          "lineNumber": 467
+        },
+        {
+          "caller": "decodeWorkspace",
+          "callee": "fmt.Errorf",
+          "lineNumber": 468
+        },
+        {
+          "caller": "decodeWorkspace",
+          "callee": "errors.New",
+          "lineNumber": 475
+        },
+        {
+          "caller": "decodeWorkspace",
+          "callee": "WorkspaceID",
+          "lineNumber": 481
+        },
+        {
+          "caller": "decodeRunWorkspace",
+          "callee": "json.Unmarshal",
+          "lineNumber": 488
+        },
+        {
+          "caller": "decodeRunWorkspace",
+          "callee": "fmt.Errorf",
+          "lineNumber": 489
+        },
+        {
+          "caller": "decodeRunWorkspace",
+          "callee": "decodeWorkspace",
+          "lineNumber": 491
+        },
+        {
+          "caller": "decodeRunWorkspace",
+          "callee": "candidate.surface",
+          "lineNumber": 497
+        },
+        {
+          "caller": "decodeRunWorkspace",
+          "callee": "errors.New",
+          "lineNumber": 508
+        },
+        {
+          "caller": "decodeRunWorkspace",
+          "callee": "errors.New",
+          "lineNumber": 511
+        },
+        {
+          "caller": "decodeRunWorkspace",
+          "callee": "errors.New",
+          "lineNumber": 514
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 21,
+        "functionCount": 20,
+        "classCount": 13
+      }
+    }
+  ]
+}

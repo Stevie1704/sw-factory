@@ -1,0 +1,641 @@
+{
+  "scriptCompleted": true,
+  "entryPointCandidates": [
+    {
+      "id": "file:cmd/factory-report/main.go",
+      "score": 4,
+      "name": "main.go",
+      "summary": "Provides the factory-report binary entry point, forwarding process arguments and standard streams to the report CLI."
+    },
+    {
+      "id": "file:cmd/factory-worker-attach/main.go",
+      "score": 4,
+      "name": "main.go",
+      "summary": "Command-line entry point that parses a worker run and attaches a terminal helper to its Docker worker."
+    },
+    {
+      "id": "file:cmd/factory/main.go",
+      "score": 4,
+      "name": "main.go",
+      "summary": "Entrypoint for the factory command binary. It creates a background context, delegates command processing to the CLI package, and exits with the returned status."
+    },
+    {
+      "id": "document:AGENTS.md",
+      "score": 2,
+      "name": "AGENTS.md",
+      "summary": "Repository guidance for agents covering GitHub issue tracking, canonical triage labels, domain documentation, and the requirement to write docstrings during coding."
+    },
+    {
+      "id": "document:CONTEXT.md",
+      "score": 2,
+      "name": "CONTEXT.md",
+      "summary": "Domain context for the Software Factory, defining the supervised run model and its key concepts, including checkpoints, gates, workers, harnesses, reports, credentials, and operational storage."
+    }
+  ],
+  "fanInRanking": [
+    {
+      "id": "file:internal/config/config.go",
+      "fanIn": 7,
+      "name": "config.go"
+    },
+    {
+      "id": "file:internal/github/github.go",
+      "fanIn": 6,
+      "name": "github.go"
+    },
+    {
+      "id": "file:internal/store/store.go",
+      "fanIn": 6,
+      "name": "store.go"
+    },
+    {
+      "id": "file:internal/worker/runtime.go",
+      "fanIn": 6,
+      "name": "runtime.go"
+    },
+    {
+      "id": "file:internal/gate/runner.go",
+      "fanIn": 3,
+      "name": "runner.go"
+    },
+    {
+      "id": "file:internal/terminal/runtime.go",
+      "fanIn": 3,
+      "name": "runtime.go"
+    },
+    {
+      "id": "config:go.mod",
+      "fanIn": 2,
+      "name": "go.mod"
+    },
+    {
+      "id": "document:docs/worker-runtime.md",
+      "fanIn": 2,
+      "name": "worker-runtime.md"
+    },
+    {
+      "id": "file:internal/git/worktree.go",
+      "fanIn": 2,
+      "name": "worktree.go"
+    },
+    {
+      "id": "file:internal/harness/codex.go",
+      "fanIn": 2,
+      "name": "codex.go"
+    },
+    {
+      "id": "file:internal/report/report.go",
+      "fanIn": 2,
+      "name": "report.go"
+    },
+    {
+      "id": "config:factory.yaml",
+      "fanIn": 1,
+      "name": "factory.yaml"
+    },
+    {
+      "id": "document:CONTEXT.md",
+      "fanIn": 1,
+      "name": "CONTEXT.md"
+    },
+    {
+      "id": "document:docs/agents/issue-tracker.md",
+      "fanIn": 1,
+      "name": "issue-tracker.md"
+    },
+    {
+      "id": "file:internal/cli/cli.go",
+      "fanIn": 1,
+      "name": "cli.go"
+    },
+    {
+      "id": "file:internal/factory/agent.go",
+      "fanIn": 1,
+      "name": "agent.go"
+    },
+    {
+      "id": "file:internal/factory/claim.go",
+      "fanIn": 1,
+      "name": "claim.go"
+    },
+    {
+      "id": "file:internal/factory/draft_pr.go",
+      "fanIn": 1,
+      "name": "draft_pr.go"
+    },
+    {
+      "id": "file:internal/factory/factory.go",
+      "fanIn": 1,
+      "name": "factory.go"
+    },
+    {
+      "id": "file:internal/factory/gate.go",
+      "fanIn": 1,
+      "name": "gate.go"
+    }
+  ],
+  "fanOutRanking": [
+    {
+      "id": "file:internal/factory/agent.go",
+      "fanOut": 8,
+      "name": "agent.go"
+    },
+    {
+      "id": "file:internal/factory/factory.go",
+      "fanOut": 8,
+      "name": "factory.go"
+    },
+    {
+      "id": "file:internal/cli/cli.go",
+      "fanOut": 7,
+      "name": "cli.go"
+    },
+    {
+      "id": "file:internal/factory/draft_pr.go",
+      "fanOut": 5,
+      "name": "draft_pr.go"
+    },
+    {
+      "id": "file:internal/factory/gate.go",
+      "fanOut": 5,
+      "name": "gate.go"
+    },
+    {
+      "id": "file:internal/factory/claim.go",
+      "fanOut": 3,
+      "name": "claim.go"
+    },
+    {
+      "id": "file:internal/gate/runner.go",
+      "fanOut": 3,
+      "name": "runner.go"
+    },
+    {
+      "id": "file:internal/harness/codex.go",
+      "fanOut": 2,
+      "name": "codex.go"
+    },
+    {
+      "id": "config:factory.yaml",
+      "fanOut": 1,
+      "name": "factory.yaml"
+    },
+    {
+      "id": "config:go.sum",
+      "fanOut": 1,
+      "name": "go.sum"
+    },
+    {
+      "id": "document:AGENTS.md",
+      "fanOut": 1,
+      "name": "AGENTS.md"
+    },
+    {
+      "id": "document:CONTEXT.md",
+      "fanOut": 1,
+      "name": "CONTEXT.md"
+    },
+    {
+      "id": "document:docs/agent-runtime.md",
+      "fanOut": 1,
+      "name": "agent-runtime.md"
+    },
+    {
+      "id": "document:docs/agents/triage-labels.md",
+      "fanOut": 1,
+      "name": "triage-labels.md"
+    },
+    {
+      "id": "document:docs/configuration.md",
+      "fanOut": 1,
+      "name": "configuration.md"
+    },
+    {
+      "id": "file:cmd/factory-report/main.go",
+      "fanOut": 1,
+      "name": "main.go"
+    },
+    {
+      "id": "file:cmd/factory-worker-attach/main.go",
+      "fanOut": 1,
+      "name": "main.go"
+    },
+    {
+      "id": "file:cmd/factory/main.go",
+      "fanOut": 1,
+      "name": "main.go"
+    },
+    {
+      "id": "file:internal/reportcli/reportcli.go",
+      "fanOut": 1,
+      "name": "reportcli.go"
+    },
+    {
+      "id": "config:.ua/config.json",
+      "fanOut": 0,
+      "name": "config.json"
+    }
+  ],
+  "bfsTraversal": {
+    "startNode": "file:cmd/factory-report/main.go",
+    "order": [
+      "file:cmd/factory-report/main.go",
+      "file:internal/reportcli/reportcli.go",
+      "file:internal/report/report.go"
+    ],
+    "depthMap": {
+      "file:cmd/factory-report/main.go": 0,
+      "file:internal/reportcli/reportcli.go": 1,
+      "file:internal/report/report.go": 2
+    },
+    "byDepth": {
+      "0": [
+        "file:cmd/factory-report/main.go"
+      ],
+      "1": [
+        "file:internal/reportcli/reportcli.go"
+      ],
+      "2": [
+        "file:internal/report/report.go"
+      ]
+    }
+  },
+  "nonCodeFiles": {
+    "documentation": [
+      {
+        "id": "document:AGENTS.md",
+        "name": "AGENTS.md",
+        "type": "document",
+        "summary": "Repository guidance for agents covering GitHub issue tracking, canonical triage labels, domain documentation, and the requirement to write docstrings during coding."
+      },
+      {
+        "id": "document:CONTEXT.md",
+        "name": "CONTEXT.md",
+        "type": "document",
+        "summary": "Domain context for the Software Factory, defining the supervised run model and its key concepts, including checkpoints, gates, workers, harnesses, reports, credentials, and operational storage."
+      },
+      {
+        "id": "document:docs/agent-runtime.md",
+        "name": "agent-runtime.md",
+        "type": "document",
+        "summary": "Documents the visible implementation-agent runtime boundary, including invocation packets, structured reports, authentication/session handling, and coordinator-owned safety rules."
+      },
+      {
+        "id": "document:docs/configuration.md",
+        "name": "configuration.md",
+        "type": "document",
+        "summary": "Describes host and repository configuration, issue claiming, worker and gate policies, draft pull-request orchestration, end-to-end operation, and the operational SQLite store."
+      },
+      {
+        "id": "document:docs/worker-runtime.md",
+        "name": "worker-runtime.md",
+        "type": "document",
+        "summary": "Defines the WorkerRuntime and InteractiveRuntime seams, Docker isolation contract, stable worker mounts, credential handling, gate execution, and visible harness attachment."
+      },
+      {
+        "id": "document:docs/agents/domain.md",
+        "name": "domain.md",
+        "type": "document",
+        "summary": "Guidance for engineering skills on consuming the repository's domain documentation while exploring or modifying the codebase. It defines how to locate context documents and ADRs, use glossary vocabulary, and surface ADR conflicts."
+      },
+      {
+        "id": "document:docs/agents/issue-tracker.md",
+        "name": "issue-tracker.md",
+        "type": "document",
+        "summary": "Defines GitHub as the repository's issue and specification tracker and documents the gh CLI operations used for issues and pull requests. It also specifies triage, wayfinding, dependency, claiming, and resolution conventions."
+      },
+      {
+        "id": "document:docs/agents/triage-labels.md",
+        "name": "triage-labels.md",
+        "type": "document",
+        "summary": "Maps the five canonical triage roles used by the skills to the label strings used in this repository's issue tracker. It records the meaning of each label, including needs-triage, needs-info, readiness, and wontfix."
+      },
+      {
+        "id": "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+        "name": "0001-local-evaluation-without-outbound-telemetry.md",
+        "type": "document",
+        "summary": "Accepted architecture decision establishing content-free local evaluation summaries while preserving the project's no-outbound-telemetry privacy boundary."
+      },
+      {
+        "id": "document:docs/spikes/0002-nested-harness-ttys.md",
+        "name": "0002-nested-harness-ttys.md",
+        "type": "document",
+        "summary": "Detailed spike report validating Codex and Claude Code recovery through Docker pseudo-terminals nested in cmux, including acceptance-criterion evidence, failure modes, workarounds, and downstream recommendations."
+      }
+    ],
+    "infrastructure": [],
+    "data": [],
+    "config": [
+      {
+        "id": "config:factory.yaml",
+        "name": "factory.yaml",
+        "type": "config",
+        "summary": "Checked-in repository configuration defining the main branch, Go setup command, ordered format/vet/test/build gates, harness and model defaults, timeouts, retry limits, test policy, worker image, and base synchronization mode."
+      },
+      {
+        "id": "config:go.mod",
+        "name": "go.mod",
+        "type": "config",
+        "summary": "Go module manifest declaring the github.com/Stevie1704/sw-factory module, Go 1.25.0, and its direct and indirect dependencies for UUIDs, system calls, YAML, and SQLite support."
+      },
+      {
+        "id": "config:go.sum",
+        "name": "go.sum",
+        "type": "config",
+        "summary": "Go module checksum database recording cryptographic hashes for the project’s direct and transitive module versions and their go.mod files."
+      },
+      {
+        "id": "config:.ua/config.json",
+        "name": "config.json",
+        "type": "config",
+        "summary": "Understand-Anything configuration selecting English as the language for generated analysis output."
+      }
+    ]
+  },
+  "clusters": [
+    {
+      "nodes": [
+        "config:factory.yaml",
+        "config:go.mod"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "config:factory.yaml",
+        "document:CONTEXT.md"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "config:go.mod",
+        "config:go.sum"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "document:AGENTS.md",
+        "document:CONTEXT.md"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "document:docs/agent-runtime.md",
+        "document:docs/worker-runtime.md"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "document:docs/agents/issue-tracker.md",
+        "document:docs/agents/triage-labels.md"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "document:docs/configuration.md",
+        "document:docs/worker-runtime.md"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "file:cmd/factory-report/main.go",
+        "file:internal/reportcli/reportcli.go"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "file:cmd/factory-worker-attach/main.go",
+        "file:internal/worker/runtime.go"
+      ],
+      "edgeCount": 1
+    },
+    {
+      "nodes": [
+        "file:cmd/factory/main.go",
+        "file:internal/cli/cli.go"
+      ],
+      "edgeCount": 1
+    }
+  ],
+  "layers": {
+    "count": 6,
+    "list": [
+      {
+        "id": "layer:entry-points",
+        "name": "Entry Points and CLI",
+        "description": "Command binaries and CLI adapters that translate process arguments, flags, and worker/report interactions into factory operations."
+      },
+      {
+        "id": "layer:orchestration",
+        "name": "Factory Orchestration",
+        "description": "Supervised run coordination for issue claiming, agent execution, gate progression, draft pull requests, harness prompts, and dependency assembly."
+      },
+      {
+        "id": "layer:runtime-adapters",
+        "name": "Runtime and External Adapters",
+        "description": "Injected seams and host/container integrations for GitHub, Git worktrees, Docker workers, and cmux terminal sessions."
+      },
+      {
+        "id": "layer:data-protocol",
+        "name": "Operational Data and Protocols",
+        "description": "Durable SQLite run storage and validated structured harness-report contracts exchanged between workers and coordinators."
+      },
+      {
+        "id": "layer:configuration",
+        "name": "Configuration",
+        "description": "Host and repository settings, Go module dependency metadata, and Understand-Anything analysis controls used to configure the factory and tooling."
+      },
+      {
+        "id": "layer:documentation",
+        "name": "Documentation and Architecture Records",
+        "description": "Domain context, runtime and configuration guides, agent workflow conventions, ADRs, and terminal-runtime spike evidence."
+      }
+    ]
+  },
+  "nodeSummaryIndex": {
+    "file:cmd/factory/main.go": {
+      "name": "main.go",
+      "type": "file",
+      "summary": "Entrypoint for the factory command binary. It creates a background context, delegates command processing to the CLI package, and exits with the returned status."
+    },
+    "file:internal/cli/cli.go": {
+      "name": "cli.go",
+      "type": "file",
+      "summary": "Implements the factory command-line interface, including command dispatch, flag parsing, output formatting, and delegation to coordinator services."
+    },
+    "file:internal/config/config.go": {
+      "name": "config.go",
+      "type": "file",
+      "summary": "Defines host and repository YAML configuration models and provides loading, saving, path defaults, schema checks, and detailed validation for factory operation."
+    },
+    "file:internal/factory/claim.go": {
+      "name": "claim.go",
+      "type": "file",
+      "summary": "Implements repository label bootstrapping, issue claiming, run creation, and orthogonal stage/status transitions with durable persistence and GitHub status synchronization."
+    },
+    "file:internal/factory/draft_pr.go": {
+      "name": "draft_pr.go",
+      "type": "file",
+      "summary": "Advances accepted implementations through checkpointing, deterministic gates, branch pushing, and idempotent draft pull-request creation or regeneration."
+    },
+    "file:internal/store/store.go": {
+      "name": "store.go",
+      "type": "file",
+      "summary": "Provides the SQLite operational store for runs and harness invocations, including validation, schema migration, backups, duplicate reconciliation, and recovery-oriented queries."
+    },
+    "file:cmd/factory-report/main.go": {
+      "name": "main.go",
+      "type": "file",
+      "summary": "Provides the factory-report binary entry point, forwarding process arguments and standard streams to the report CLI."
+    },
+    "file:internal/factory/agent.go": {
+      "name": "agent.go",
+      "type": "file",
+      "summary": "Orchestrates visible implementation-agent invocations, including policy resolution, worker and terminal setup, prompt and packet creation, and structured report acceptance."
+    },
+    "file:internal/prompt/prompt.go": {
+      "name": "prompt.go",
+      "type": "file",
+      "summary": "Builds the versioned implementation-role prompt from frozen invocation context and untrusted repository guidance."
+    },
+    "file:internal/report/report.go": {
+      "name": "report.go",
+      "type": "file",
+      "summary": "Defines the structured harness report protocol and enforces identity, outcome, path, size, and worktree-safety invariants while reading and writing reports."
+    },
+    "file:internal/reportcli/reportcli.go": {
+      "name": "reportcli.go",
+      "type": "file",
+      "summary": "Implements the worker-side factory-report command, translating flags and environment identity into one validated structured report."
+    },
+    "file:cmd/factory-worker-attach/main.go": {
+      "name": "main.go",
+      "type": "file",
+      "summary": "Command-line entry point that parses a worker run and attaches a terminal helper to its Docker worker."
+    },
+    "file:internal/factory/gate.go": {
+      "name": "gate.go",
+      "type": "file",
+      "summary": "Coordinates execution of a declared gate for an active run, including frozen configuration, worker startup, and sanitized Git metadata projection."
+    },
+    "file:internal/gate/runner.go": {
+      "name": "runner.go",
+      "type": "file",
+      "summary": "Runs repository setup and one declared gate in an isolated worker, then publishes the exact checkpoint status to GitHub."
+    },
+    "file:internal/github/github.go": {
+      "name": "github.go",
+      "type": "file",
+      "summary": "Provides the host-side GitHub CLI adapter, workflow data types, issue and pull-request operations, and exact commit-status publishing."
+    },
+    "file:internal/worker/runtime.go": {
+      "name": "runtime.go",
+      "type": "file",
+      "summary": "Defines the isolated worker runtime seams and implements hardened Docker lifecycle, command, mount, environment, and session operations."
+    },
+    "file:internal/factory/factory.go": {
+      "name": "factory.go",
+      "type": "file",
+      "summary": "Coordinates host configuration, repository registration, run status, and dependency wiring for the factory workflow. It assembles the GitHub, store, worker, terminal, and harness adapters behind the public Factory service."
+    },
+    "file:internal/git/worktree.go": {
+      "name": "worktree.go",
+      "type": "file",
+      "summary": "Provides host-side Git and worktree adapters for isolated run branches, checkpoints, pushes, base synchronization, inspection, and cleanup. It centralizes command validation and Git command execution behind injectable interfaces."
+    },
+    "file:internal/harness/codex.go": {
+      "name": "codex.go",
+      "type": "file",
+      "summary": "Implements the interactive Codex harness lifecycle on top of worker and terminal runtimes. It builds constrained commands, manages visible surfaces, sends prompts, and discovers native session identifiers for recovery."
+    },
+    "file:internal/terminal/runtime.go": {
+      "name": "runtime.go",
+      "type": "file",
+      "summary": "Defines the portable terminal runtime contracts and a cmux-backed implementation for workspaces, surfaces, commands, notifications, and lifecycle operations. The adapter keeps cmux command vocabulary and opaque identifiers behind the runtime seam."
+    },
+    "document:AGENTS.md": {
+      "name": "AGENTS.md",
+      "type": "document",
+      "summary": "Repository guidance for agents covering GitHub issue tracking, canonical triage labels, domain documentation, and the requirement to write docstrings during coding."
+    },
+    "document:CONTEXT.md": {
+      "name": "CONTEXT.md",
+      "type": "document",
+      "summary": "Domain context for the Software Factory, defining the supervised run model and its key concepts, including checkpoints, gates, workers, harnesses, reports, credentials, and operational storage."
+    },
+    "config:factory.yaml": {
+      "name": "factory.yaml",
+      "type": "config",
+      "summary": "Checked-in repository configuration defining the main branch, Go setup command, ordered format/vet/test/build gates, harness and model defaults, timeouts, retry limits, test policy, worker image, and base synchronization mode."
+    },
+    "config:go.mod": {
+      "name": "go.mod",
+      "type": "config",
+      "summary": "Go module manifest declaring the github.com/Stevie1704/sw-factory module, Go 1.25.0, and its direct and indirect dependencies for UUIDs, system calls, YAML, and SQLite support."
+    },
+    "config:go.sum": {
+      "name": "go.sum",
+      "type": "config",
+      "summary": "Go module checksum database recording cryptographic hashes for the project’s direct and transitive module versions and their go.mod files."
+    },
+    "document:docs/agent-runtime.md": {
+      "name": "agent-runtime.md",
+      "type": "document",
+      "summary": "Documents the visible implementation-agent runtime boundary, including invocation packets, structured reports, authentication/session handling, and coordinator-owned safety rules."
+    },
+    "document:docs/configuration.md": {
+      "name": "configuration.md",
+      "type": "document",
+      "summary": "Describes host and repository configuration, issue claiming, worker and gate policies, draft pull-request orchestration, end-to-end operation, and the operational SQLite store."
+    },
+    "document:docs/worker-runtime.md": {
+      "name": "worker-runtime.md",
+      "type": "document",
+      "summary": "Defines the WorkerRuntime and InteractiveRuntime seams, Docker isolation contract, stable worker mounts, credential handling, gate execution, and visible harness attachment."
+    },
+    "document:docs/agents/domain.md": {
+      "name": "domain.md",
+      "type": "document",
+      "summary": "Guidance for engineering skills on consuming the repository's domain documentation while exploring or modifying the codebase. It defines how to locate context documents and ADRs, use glossary vocabulary, and surface ADR conflicts."
+    },
+    "document:docs/agents/issue-tracker.md": {
+      "name": "issue-tracker.md",
+      "type": "document",
+      "summary": "Defines GitHub as the repository's issue and specification tracker and documents the gh CLI operations used for issues and pull requests. It also specifies triage, wayfinding, dependency, claiming, and resolution conventions."
+    },
+    "document:docs/agents/triage-labels.md": {
+      "name": "triage-labels.md",
+      "type": "document",
+      "summary": "Maps the five canonical triage roles used by the skills to the label strings used in this repository's issue tracker. It records the meaning of each label, including needs-triage, needs-info, readiness, and wontfix."
+    },
+    "file:.ua/.understandignore": {
+      "name": ".understandignore",
+      "type": "file",
+      "summary": "Analysis ignore configuration documenting supported exclusion patterns and currently excluding the serena directory, spike directory, and Go test files."
+    },
+    "config:.ua/config.json": {
+      "name": "config.json",
+      "type": "config",
+      "summary": "Understand-Anything configuration selecting English as the language for generated analysis output."
+    },
+    "document:docs/adr/0001-local-evaluation-without-outbound-telemetry.md": {
+      "name": "0001-local-evaluation-without-outbound-telemetry.md",
+      "type": "document",
+      "summary": "Accepted architecture decision establishing content-free local evaluation summaries while preserving the project's no-outbound-telemetry privacy boundary."
+    },
+    "document:docs/spikes/0002-nested-harness-ttys.md": {
+      "name": "0002-nested-harness-ttys.md",
+      "type": "document",
+      "summary": "Detailed spike report validating Codex and Claude Code recovery through Docker pseudo-terminals nested in cmux, including acceptance-criterion evidence, failure modes, workarounds, and downstream recommendations."
+    }
+  },
+  "totalNodes": 35,
+  "totalEdges": 52
+}

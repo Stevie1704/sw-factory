@@ -1,0 +1,169 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 3,
+  "filesSkipped": [
+    "go.mod",
+    "go.sum"
+  ],
+  "analysisOutcomes": {
+    "structure": {
+      "succeeded": 3,
+      "failed": 0
+    },
+    "callGraph": {
+      "succeeded": 0,
+      "failed": 0,
+      "skipped": 3
+    }
+  },
+  "results": [
+    {
+      "path": "AGENTS.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 17,
+      "nonEmptyLines": 9,
+      "sections": [
+        {
+          "heading": "Agent skills",
+          "level": 2,
+          "line": 1
+        },
+        {
+          "heading": "Issue tracker",
+          "level": 3,
+          "line": 3
+        },
+        {
+          "heading": "Triage labels",
+          "level": 3,
+          "line": 7
+        },
+        {
+          "heading": "Domain docs",
+          "level": 3,
+          "line": 11
+        },
+        {
+          "heading": "Documentation",
+          "level": 3,
+          "line": 15
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 5
+      }
+    },
+    {
+      "path": "CONTEXT.md",
+      "language": "markdown",
+      "fileCategory": "docs",
+      "totalLines": 85,
+      "nonEmptyLines": 63,
+      "sections": [
+        {
+          "heading": "Software Factory",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "Language",
+          "level": 2,
+          "line": 5
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 2
+      }
+    },
+    {
+      "path": "factory.yaml",
+      "language": "yaml",
+      "fileCategory": "config",
+      "totalLines": 61,
+      "nonEmptyLines": 61,
+      "sections": [
+        {
+          "heading": "schema_version",
+          "level": 1,
+          "line": 1
+        },
+        {
+          "heading": "target_branch",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "setup",
+          "level": 1,
+          "line": 3
+        },
+        {
+          "heading": "gates",
+          "level": 1,
+          "line": 4
+        },
+        {
+          "heading": "role_harness_defaults",
+          "level": 1,
+          "line": 28
+        },
+        {
+          "heading": "model_options",
+          "level": 1,
+          "line": 33
+        },
+        {
+          "heading": "timeouts",
+          "level": 1,
+          "line": 38
+        },
+        {
+          "heading": "retry_limits",
+          "level": 1,
+          "line": 43
+        },
+        {
+          "heading": "test_policy",
+          "level": 1,
+          "line": 47
+        },
+        {
+          "heading": "allowed_overrides",
+          "level": 1,
+          "line": 51
+        },
+        {
+          "heading": "caches",
+          "level": 1,
+          "line": 52
+        },
+        {
+          "heading": "worker_build",
+          "level": 1,
+          "line": 56
+        },
+        {
+          "heading": "base_synchronization",
+          "level": 1,
+          "line": 60
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 13
+      }
+    }
+  ]
+}

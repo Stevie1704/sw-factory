@@ -1,0 +1,323 @@
+{
+  "name": "sw-factory",
+  "description": "No description available",
+  "languages": [
+    "go",
+    "json",
+    "markdown",
+    "mod",
+    "sum",
+    "unknown",
+    "yaml"
+  ],
+  "frameworks": [],
+  "files": [
+    {
+      "path": ".ua/.understandignore",
+      "language": "unknown",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": ".ua/config.json",
+      "language": "json",
+      "sizeLines": 3,
+      "fileCategory": "config"
+    },
+    {
+      "path": "AGENTS.md",
+      "language": "markdown",
+      "sizeLines": 16,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "CONTEXT.md",
+      "language": "markdown",
+      "sizeLines": 85,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "cmd/factory-report/main.go",
+      "language": "go",
+      "sizeLines": 14,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cmd/factory-worker-attach/main.go",
+      "language": "go",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cmd/factory/main.go",
+      "language": "go",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
+      "path": "docs/adr/0001-local-evaluation-without-outbound-telemetry.md",
+      "language": "markdown",
+      "sizeLines": 11,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/agent-runtime.md",
+      "language": "markdown",
+      "sizeLines": 100,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/agents/domain.md",
+      "language": "markdown",
+      "sizeLines": 51,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/agents/issue-tracker.md",
+      "language": "markdown",
+      "sizeLines": 45,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/agents/triage-labels.md",
+      "language": "markdown",
+      "sizeLines": 15,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/configuration.md",
+      "language": "markdown",
+      "sizeLines": 241,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/spikes/0002-nested-harness-ttys.md",
+      "language": "markdown",
+      "sizeLines": 385,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/worker-runtime.md",
+      "language": "markdown",
+      "sizeLines": 88,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "factory.yaml",
+      "language": "yaml",
+      "sizeLines": 61,
+      "fileCategory": "config"
+    },
+    {
+      "path": "go.mod",
+      "language": "mod",
+      "sizeLines": 20,
+      "fileCategory": "config"
+    },
+    {
+      "path": "go.sum",
+      "language": "sum",
+      "sizeLines": 54,
+      "fileCategory": "config"
+    },
+    {
+      "path": "internal/cli/cli.go",
+      "language": "go",
+      "sizeLines": 397,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/config/config.go",
+      "language": "go",
+      "sizeLines": 612,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/agent.go",
+      "language": "go",
+      "sizeLines": 648,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/claim.go",
+      "language": "go",
+      "sizeLines": 503,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/draft_pr.go",
+      "language": "go",
+      "sizeLines": 338,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/factory.go",
+      "language": "go",
+      "sizeLines": 434,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/factory/gate.go",
+      "language": "go",
+      "sizeLines": 364,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/gate/runner.go",
+      "language": "go",
+      "sizeLines": 220,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/git/worktree.go",
+      "language": "go",
+      "sizeLines": 411,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/github/github.go",
+      "language": "go",
+      "sizeLines": 559,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/harness/codex.go",
+      "language": "go",
+      "sizeLines": 304,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/prompt/prompt.go",
+      "language": "go",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/report/report.go",
+      "language": "go",
+      "sizeLines": 590,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/reportcli/reportcli.go",
+      "language": "go",
+      "sizeLines": 192,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/store/store.go",
+      "language": "go",
+      "sizeLines": 925,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/terminal/runtime.go",
+      "language": "go",
+      "sizeLines": 519,
+      "fileCategory": "code"
+    },
+    {
+      "path": "internal/worker/runtime.go",
+      "language": "go",
+      "sizeLines": 1499,
+      "fileCategory": "code"
+    }
+  ],
+  "totalFiles": 35,
+  "filteredByIgnore": 39,
+  "estimatedComplexity": "moderate",
+  "importMap": {
+    ".ua/.understandignore": [],
+    ".ua/config.json": [],
+    "AGENTS.md": [],
+    "CONTEXT.md": [],
+    "cmd/factory-report/main.go": [
+      "internal/reportcli/reportcli.go"
+    ],
+    "cmd/factory-worker-attach/main.go": [
+      "internal/worker/runtime.go"
+    ],
+    "cmd/factory/main.go": [
+      "internal/cli/cli.go"
+    ],
+    "docs/adr/0001-local-evaluation-without-outbound-telemetry.md": [],
+    "docs/agent-runtime.md": [],
+    "docs/agents/domain.md": [],
+    "docs/agents/issue-tracker.md": [],
+    "docs/agents/triage-labels.md": [],
+    "docs/configuration.md": [],
+    "docs/spikes/0002-nested-harness-ttys.md": [],
+    "docs/worker-runtime.md": [],
+    "factory.yaml": [],
+    "go.mod": [],
+    "go.sum": [],
+    "internal/cli/cli.go": [
+      "internal/config/config.go",
+      "internal/factory/agent.go",
+      "internal/factory/claim.go",
+      "internal/factory/draft_pr.go",
+      "internal/factory/factory.go",
+      "internal/factory/gate.go",
+      "internal/store/store.go"
+    ],
+    "internal/config/config.go": [],
+    "internal/factory/agent.go": [
+      "internal/config/config.go",
+      "internal/github/github.go",
+      "internal/harness/codex.go",
+      "internal/prompt/prompt.go",
+      "internal/report/report.go",
+      "internal/store/store.go",
+      "internal/terminal/runtime.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/factory/claim.go": [
+      "internal/config/config.go",
+      "internal/github/github.go",
+      "internal/store/store.go"
+    ],
+    "internal/factory/draft_pr.go": [
+      "internal/config/config.go",
+      "internal/gate/runner.go",
+      "internal/git/worktree.go",
+      "internal/github/github.go",
+      "internal/store/store.go"
+    ],
+    "internal/factory/factory.go": [
+      "internal/config/config.go",
+      "internal/gate/runner.go",
+      "internal/git/worktree.go",
+      "internal/github/github.go",
+      "internal/harness/codex.go",
+      "internal/store/store.go",
+      "internal/terminal/runtime.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/factory/gate.go": [
+      "internal/config/config.go",
+      "internal/gate/runner.go",
+      "internal/github/github.go",
+      "internal/store/store.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/gate/runner.go": [
+      "internal/config/config.go",
+      "internal/github/github.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/git/worktree.go": [],
+    "internal/github/github.go": [],
+    "internal/harness/codex.go": [
+      "internal/terminal/runtime.go",
+      "internal/worker/runtime.go"
+    ],
+    "internal/prompt/prompt.go": [],
+    "internal/report/report.go": [],
+    "internal/reportcli/reportcli.go": [
+      "internal/report/report.go"
+    ],
+    "internal/store/store.go": [],
+    "internal/terminal/runtime.go": [],
+    "internal/worker/runtime.go": []
+  }
+}

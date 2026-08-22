@@ -1,0 +1,57 @@
+{
+  "nodes": [
+    {
+      "id": "document:docs/agents/domain.md",
+      "type": "document",
+      "name": "domain.md",
+      "filePath": "docs/agents/domain.md",
+      "summary": "Guidance for engineering skills on consuming the repository's domain documentation while exploring or modifying the codebase. It defines how to locate context documents and ADRs, use glossary vocabulary, and surface ADR conflicts.",
+      "tags": [
+        "documentation",
+        "domain-modeling",
+        "architecture",
+        "adr"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:docs/agents/issue-tracker.md",
+      "type": "document",
+      "name": "issue-tracker.md",
+      "filePath": "docs/agents/issue-tracker.md",
+      "summary": "Defines GitHub as the repository's issue and specification tracker and documents the gh CLI operations used for issues and pull requests. It also specifies triage, wayfinding, dependency, claiming, and resolution conventions.",
+      "tags": [
+        "documentation",
+        "issue-tracker",
+        "github",
+        "triage",
+        "workflow"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:docs/agents/triage-labels.md",
+      "type": "document",
+      "name": "triage-labels.md",
+      "filePath": "docs/agents/triage-labels.md",
+      "summary": "Maps the five canonical triage roles used by the skills to the label strings used in this repository's issue tracker. It records the meaning of each label, including needs-triage, needs-info, readiness, and wontfix.",
+      "tags": [
+        "documentation",
+        "triage",
+        "github",
+        "issue-tracker",
+        "labels"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:docs/agents/triage-labels.md",
+      "target": "document:docs/agents/issue-tracker.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ]
+}

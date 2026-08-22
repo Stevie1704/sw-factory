@@ -1,0 +1,13 @@
+{
+  "fixedSectionOk": true,
+  "nodesRecovered": 0,
+  "edgesRestored": 0,
+  "crossBatchEdgesAdded": 0,
+  "typesRemapped": 0,
+  "complexityRemapped": 0,
+  "notes": [
+    "No malformed nodes, unknown node types, invalid complexity values, or dangling edges were found in the assembled graph or source batches.",
+    "All 45 import relationships represented by the batch data and import map are present in the assembled graph; no cross-batch edges were missing.",
+    "The assembled graph retains all 371 input nodes and 766 input edges without requiring semantic repair."
+  ]
+}

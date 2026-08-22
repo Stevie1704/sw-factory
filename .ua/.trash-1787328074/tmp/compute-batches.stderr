@@ -1,0 +1,3 @@
+Loaded 35 files (21 code).
+Info: compute-batches: merged 4 small batches (4 files) into 1 misc batches — singletons and orphans consolidated
+Wrote 8 batches (sizes: max=6, min=3) to /Users/steffenkrakau/Documents/sw-factory/.ua/intermediate/batches.json

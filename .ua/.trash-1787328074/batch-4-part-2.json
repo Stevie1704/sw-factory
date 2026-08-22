@@ -1,0 +1,1320 @@
+{
+  "nodes": [
+    {
+      "id": "file:internal/harness/codex.go",
+      "type": "file",
+      "name": "codex.go",
+      "filePath": "internal/harness/codex.go",
+      "summary": "Implements the interactive Codex harness lifecycle on top of worker and terminal runtimes. It builds constrained commands, manages visible surfaces, sends prompts, and discovers native session identifiers for recovery.",
+      "tags": [
+        "harness",
+        "codex",
+        "interactive",
+        "worker",
+        "terminal"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Go package code uses interfaces and injected adapters to isolate host-side effects."
+    },
+    {
+      "id": "file:internal/terminal/runtime.go",
+      "type": "file",
+      "name": "runtime.go",
+      "filePath": "internal/terminal/runtime.go",
+      "summary": "Defines the portable terminal runtime contracts and a cmux-backed implementation for workspaces, surfaces, commands, notifications, and lifecycle operations. The adapter keeps cmux command vocabulary and opaque identifiers behind the runtime seam.",
+      "tags": [
+        "terminal",
+        "cmux",
+        "runtime",
+        "orchestration",
+        "adapter"
+      ],
+      "complexity": "complex",
+      "languageNotes": "Go package code uses interfaces and injected adapters to isolate host-side effects."
+    },
+    {
+      "id": "class:internal/harness/codex.go:StartRequest",
+      "type": "class",
+      "name": "StartRequest",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        17,
+        39
+      ],
+      "summary": "Carries coordinator identity, role policy, prompt, workspace surface, model settings, and optional native resume state for a Codex invocation.",
+      "tags": [
+        "request",
+        "type-definition",
+        "codex"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:internal/harness/codex.go:Session",
+      "type": "class",
+      "name": "Session",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        42,
+        50
+      ],
+      "summary": "Represents recoverable visible Codex state, including invocation identity, native session identity, and terminal surface.",
+      "tags": [
+        "data-model",
+        "codex",
+        "recovery"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/harness/codex.go:Runtime",
+      "type": "class",
+      "name": "Runtime",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        53,
+        60
+      ],
+      "summary": "Defines portable start, resume, and finish operations for interactive harness sessions.",
+      "tags": [
+        "harness",
+        "contract",
+        "lifecycle"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/harness/codex.go:Codex",
+      "type": "class",
+      "name": "Codex",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        64,
+        69
+      ],
+      "summary": "Implements the harness runtime by translating worker interactive commands into visible terminal surfaces and Codex session operations.",
+      "tags": [
+        "codex",
+        "harness",
+        "adapter",
+        "interactive"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/harness/codex.go:NewCodex",
+      "type": "function",
+      "name": "NewCodex",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        72,
+        74
+      ],
+      "summary": "Constructs a Codex harness adapter from worker and terminal runtimes.",
+      "tags": [
+        "codex",
+        "constructor",
+        "harness"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/harness/codex.go:Start",
+      "type": "function",
+      "name": "Start",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        77,
+        82
+      ],
+      "summary": "Starts a fresh Codex session and rejects a request that already contains a resume identifier.",
+      "tags": [
+        "codex",
+        "lifecycle",
+        "validation"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/harness/codex.go:Resume",
+      "type": "function",
+      "name": "Resume",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        86,
+        91
+      ],
+      "summary": "Starts Codex with a required native session identifier for session recovery.",
+      "tags": [
+        "codex",
+        "lifecycle",
+        "recovery"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/harness/codex.go:Finish",
+      "type": "function",
+      "name": "Finish",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [
+        95,
+        106
+      ],
+      "summary": "Sends the Codex exit command through the terminal while preserving the visible surface for recovery.",
+      "tags": [
+        "codex",
+        "lifecycle",
+        "terminal"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:Workspace",
+      "type": "class",
+      "name": "Workspace",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        25,
+        30
+      ],
+      "summary": "Represents an opaque terminal workspace handle and its operator-facing name.",
+      "tags": [
+        "data-model",
+        "terminal",
+        "workspace"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:Surface",
+      "type": "class",
+      "name": "Surface",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        33,
+        40
+      ],
+      "summary": "Represents an opaque interactive terminal surface and its owning workspace.",
+      "tags": [
+        "data-model",
+        "terminal",
+        "surface"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:Command",
+      "type": "class",
+      "name": "Command",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        43,
+        48
+      ],
+      "summary": "Describes an executable and argument vector for a terminal adapter.",
+      "tags": [
+        "data-model",
+        "terminal",
+        "command"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:WorkspaceRequest",
+      "type": "class",
+      "name": "WorkspaceRequest",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        51,
+        58
+      ],
+      "summary": "Requests creation or reuse of a named terminal workspace with description and working directory.",
+      "tags": [
+        "request",
+        "type-definition",
+        "terminal"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:RunWorkspaceRequest",
+      "type": "class",
+      "name": "RunWorkspaceRequest",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        62,
+        71
+      ],
+      "summary": "Requests the visible supervision workspace for one run and its working directory.",
+      "tags": [
+        "request",
+        "type-definition",
+        "terminal",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:RunWorkspace",
+      "type": "class",
+      "name": "RunWorkspace",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        74,
+        83
+      ],
+      "summary": "Captures the run workspace and its status, implementation, and checks surfaces.",
+      "tags": [
+        "data-model",
+        "terminal",
+        "orchestration"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:SurfaceRequest",
+      "type": "class",
+      "name": "SurfaceRequest",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        86,
+        93
+      ],
+      "summary": "Requests a command-backed surface in a selected terminal workspace.",
+      "tags": [
+        "request",
+        "type-definition",
+        "terminal"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:Notification",
+      "type": "class",
+      "name": "Notification",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        96,
+        103
+      ],
+      "summary": "Carries an operator-visible message addressed to a terminal workspace.",
+      "tags": [
+        "data-model",
+        "terminal",
+        "notification"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:TerminalRuntime",
+      "type": "class",
+      "name": "TerminalRuntime",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        108,
+        126
+      ],
+      "summary": "Defines portable workspace, surface, input, notification, and lifecycle behavior independent of cmux identifiers.",
+      "tags": [
+        "terminal",
+        "contract",
+        "runtime",
+        "adapter"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:CommandRunner",
+      "type": "class",
+      "name": "CommandRunner",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        129,
+        132
+      ],
+      "summary": "Abstracts execution of terminal-control commands with optional input.",
+      "tags": [
+        "command-runner",
+        "terminal",
+        "contract"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:internal/terminal/runtime.go:CmuxRuntime",
+      "type": "class",
+      "name": "CmuxRuntime",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        136,
+        147
+      ],
+      "summary": "Implements the terminal runtime with cmux commands, synchronized state, and opaque control and run workspace handles.",
+      "tags": [
+        "cmux",
+        "terminal",
+        "adapter",
+        "runtime"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:NewCmuxRuntime",
+      "type": "function",
+      "name": "NewCmuxRuntime",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        151,
+        157
+      ],
+      "summary": "Constructs a cmux runtime with an optional socket path and initialized run workspace map.",
+      "tags": [
+        "cmux",
+        "constructor",
+        "runtime"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:ConfiguredSocketPath",
+      "type": "function",
+      "name": "ConfiguredSocketPath",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        160,
+        162
+      ],
+      "summary": "Returns the socket path selected for the cmux runtime.",
+      "tags": [
+        "cmux",
+        "configuration",
+        "accessor"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:EnsureControlWorkspace",
+      "type": "function",
+      "name": "EnsureControlWorkspace",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        166,
+        193
+      ],
+      "summary": "Validates and creates or reuses the coordinator control workspace while serializing access to runtime state.",
+      "tags": [
+        "cmux",
+        "workspace",
+        "lifecycle",
+        "synchronization"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:EnsureRunWorkspace",
+      "type": "function",
+      "name": "EnsureRunWorkspace",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        197,
+        232
+      ],
+      "summary": "Validates and creates or reuses a run workspace with status, implementation, and checks surfaces.",
+      "tags": [
+        "cmux",
+        "workspace",
+        "lifecycle",
+        "orchestration"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:CreateSurface",
+      "type": "function",
+      "name": "CreateSurface",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        235,
+        263
+      ],
+      "summary": "Validates a surface request, creates a cmux command-backed surface, decodes its opaque handle, and returns it.",
+      "tags": [
+        "cmux",
+        "surface",
+        "lifecycle",
+        "validation"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:LaunchSurface",
+      "type": "function",
+      "name": "LaunchSurface",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        268,
+        279
+      ],
+      "summary": "Validates a command and launches it in an existing cmux surface.",
+      "tags": [
+        "cmux",
+        "surface",
+        "command"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:SendInput",
+      "type": "function",
+      "name": "SendInput",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        283,
+        294
+      ],
+      "summary": "Validates input and sends bytes to an existing cmux surface.",
+      "tags": [
+        "cmux",
+        "input",
+        "surface"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:Notify",
+      "type": "function",
+      "name": "Notify",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        298,
+        309
+      ],
+      "summary": "Validates notification content and routes an operator message to a cmux workspace.",
+      "tags": [
+        "cmux",
+        "notification",
+        "validation"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:CloseSurface",
+      "type": "function",
+      "name": "CloseSurface",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        312,
+        320
+      ],
+      "summary": "Validates a surface identifier and closes the corresponding cmux surface.",
+      "tags": [
+        "cmux",
+        "surface",
+        "lifecycle"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:CloseWorkspace",
+      "type": "function",
+      "name": "CloseWorkspace",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [
+        323,
+        331
+      ],
+      "summary": "Validates a workspace identifier and closes the corresponding cmux workspace.",
+      "tags": [
+        "cmux",
+        "workspace",
+        "lifecycle"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:internal/harness/codex.go:launch",
+      "type": "function",
+      "name": "launch",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [110, 205],
+      "summary": "Builds a constrained Codex command, creates or launches a visible terminal surface, sends the prompt, and discovers native session state.",
+      "tags": ["codex", "interactive", "terminal", "worker", "security"],
+      "complexity": "complex"
+    },
+    {
+      "id": "function:internal/harness/codex.go:discoverNativeSession",
+      "type": "function",
+      "name": "discoverNativeSession",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [227, 273],
+      "summary": "Polls the worker session provider for a newly persisted native Codex session until discovery succeeds, times out, or is canceled.",
+      "tags": ["codex", "session-recovery", "polling", "worker"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/harness/codex.go:validateStartRequest",
+      "type": "function",
+      "name": "validateStartRequest",
+      "filePath": "internal/harness/codex.go",
+      "lineRange": [277, 302],
+      "summary": "Validates invocation, run, role, stage, workspace, and prompt fields before launching Codex.",
+      "tags": ["codex", "validation", "security"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [334, 358],
+      "summary": "Runs a cmux command through the injected runner or process fallback, applying socket environment and stderr diagnostics.",
+      "tags": ["cmux", "command-runner", "runtime", "error-handling"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:validateWorkspaceRequest",
+      "type": "function",
+      "name": "validateWorkspaceRequest",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [361, 372],
+      "summary": "Rejects missing or unsafe workspace names, descriptions, and working directories.",
+      "tags": ["terminal", "validation", "security"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:validateCommand",
+      "type": "function",
+      "name": "validateCommand",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [376, 389],
+      "summary": "Rejects empty or shell-sensitive executable and argument values before terminal launch.",
+      "tags": ["terminal", "validation", "security"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:workspaceLayout",
+      "type": "function",
+      "name": "workspaceLayout",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [392, 402],
+      "summary": "Builds the JSON layout command for a control workspace and optional initial surface.",
+      "tags": ["cmux", "workspace", "serialization"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:runWorkspaceLayout",
+      "type": "function",
+      "name": "runWorkspaceLayout",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [405, 415],
+      "summary": "Builds the serialized layout for a run workspace with status, implementation, and checks surfaces.",
+      "tags": ["cmux", "workspace", "serialization"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:surface",
+      "type": "function",
+      "name": "surface",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [448, 462],
+      "summary": "Converts a cmux surface response into the portable Surface handle used by callers.",
+      "tags": ["cmux", "surface", "serialization"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:decodeWorkspace",
+      "type": "function",
+      "name": "decodeWorkspace",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [465, 482],
+      "summary": "Decodes and validates a cmux workspace response into an opaque portable workspace.",
+      "tags": ["cmux", "workspace", "serialization", "validation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:internal/terminal/runtime.go:decodeRunWorkspace",
+      "type": "function",
+      "name": "decodeRunWorkspace",
+      "filePath": "internal/terminal/runtime.go",
+      "lineRange": [486, 517],
+      "summary": "Decodes a cmux run workspace response and validates the required status, implementation, and checks surfaces.",
+      "tags": ["cmux", "workspace", "serialization", "validation"],
+      "complexity": "complex"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:launch",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:discoverNativeSession",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:validateStartRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:validateWorkspaceRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:validateCommand",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:workspaceLayout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:runWorkspaceLayout",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:surface",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:decodeWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:decodeRunWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:StartRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:Session",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:Runtime",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:Codex",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:NewCodex",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:Start",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:Resume",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:Finish",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Workspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Surface",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Command",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:WorkspaceRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:RunWorkspaceRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:RunWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:SurfaceRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Notification",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:TerminalRuntime",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:CommandRunner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:CmuxRuntime",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:NewCmuxRuntime",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:ConfiguredSocketPath",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:EnsureControlWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:EnsureRunWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:CreateSurface",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:LaunchSurface",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:SendInput",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:Notify",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:CloseSurface",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:CloseWorkspace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:StartRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:Session",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:Runtime",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "class:internal/harness/codex.go:Codex",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:NewCodex",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:Start",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:Resume",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "function:internal/harness/codex.go:Finish",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Workspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Surface",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Command",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:WorkspaceRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:RunWorkspaceRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:RunWorkspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:SurfaceRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:Notification",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:TerminalRuntime",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:CommandRunner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "class:internal/terminal/runtime.go:CmuxRuntime",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:NewCmuxRuntime",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:ConfiguredSocketPath",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:EnsureControlWorkspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:EnsureRunWorkspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:CreateSurface",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:LaunchSurface",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:SendInput",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:Notify",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:CloseSurface",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/terminal/runtime.go",
+      "target": "function:internal/terminal/runtime.go:CloseWorkspace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "file:internal/terminal/runtime.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:internal/harness/codex.go",
+      "target": "file:internal/worker/runtime.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "function:internal/harness/codex.go:Finish",
+      "target": "function:internal/terminal/runtime.go:SendInput",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/harness/codex.go:Start",
+      "target": "function:internal/harness/codex.go:launch",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/harness/codex.go:Resume",
+      "target": "function:internal/harness/codex.go:launch",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/harness/codex.go:launch",
+      "target": "function:internal/harness/codex.go:validateStartRequest",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/harness/codex.go:launch",
+      "target": "function:internal/harness/codex.go:discoverNativeSession",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureControlWorkspace",
+      "target": "function:internal/terminal/runtime.go:validateWorkspaceRequest",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureControlWorkspace",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureControlWorkspace",
+      "target": "function:internal/terminal/runtime.go:workspaceLayout",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureControlWorkspace",
+      "target": "function:internal/terminal/runtime.go:decodeWorkspace",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureRunWorkspace",
+      "target": "function:internal/terminal/runtime.go:validateWorkspaceRequest",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureRunWorkspace",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureRunWorkspace",
+      "target": "function:internal/terminal/runtime.go:runWorkspaceLayout",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:EnsureRunWorkspace",
+      "target": "function:internal/terminal/runtime.go:decodeRunWorkspace",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:CreateSurface",
+      "target": "function:internal/terminal/runtime.go:validateCommand",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:CreateSurface",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:CreateSurface",
+      "target": "function:internal/terminal/runtime.go:surface",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:LaunchSurface",
+      "target": "function:internal/terminal/runtime.go:validateCommand",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:LaunchSurface",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:SendInput",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:Notify",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:CloseSurface",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:CloseWorkspace",
+      "target": "function:internal/terminal/runtime.go:run",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "function:internal/terminal/runtime.go:decodeRunWorkspace",
+      "target": "function:internal/terminal/runtime.go:decodeWorkspace",
+      "type": "calls",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "class:internal/harness/codex.go:Codex",
+      "target": "class:internal/harness/codex.go:Runtime",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    },
+    {
+      "source": "class:internal/terminal/runtime.go:CmuxRuntime",
+      "target": "class:internal/terminal/runtime.go:TerminalRuntime",
+      "type": "implements",
+      "direction": "forward",
+      "weight": 0.9
+    }
+  ]
+}
