@@ -8,15 +8,39 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 )
 
+// Adapter identities used by the fixtures below. The adapter is asked for
+// UUID identifiers, so the fixtures use the identifier form the terminal
+// actually returns.
+const (
+	controlWorkspaceID    = "03316ABB-2A2C-40F3-880C-857E74E1B3FC"
+	runWorkspaceID        = "B57BB9B3-BD4D-439B-AD68-068AA1126809"
+	implementationSurface = "10BB52EB-A479-4E0B-A198-8412FECE0F52"
+	extraSurfaceID        = "85B1AEA6-DBAF-49EE-A88F-F806B8D172D9"
+)
+
+// treeResponse builds a topology fixture in the terminal's own response shape:
+// windows own workspaces, workspaces own panes, and panes own titled surfaces.
+func treeResponse(workspaceID string, titledSurfaces map[string]string) string {
+	panes := make([]string, 0, len(titledSurfaces))
+	for title, identifier := range titledSurfaces {
+		panes = append(panes, `{"surfaces":[{"id":"`+identifier+`","title":"`+title+`","type":"terminal"}]}`)
+	}
+	return `{"windows":[{"workspaces":[{"id":"` + workspaceID + `","panes":[` + strings.Join(panes, ",") + `]}]}]}`
+}
+
 // TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam verifies that the
 // adapter creates the control/run surfaces and routes input and notifications
 // without exposing adapter-specific command details to callers.
 func TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam(t *testing.T) {
-	runner := &fakeRunner{responses: [][]byte{
-		[]byte(`{"id":"workspace-control"}`),
-		[]byte(`{"id":"workspace-run","surfaces":[{"id":"surface-status","name":"status"},{"id":"surface-implementation","name":"implementation"},{"id":"surface-checks","name":"checks"}]}`),
-		[]byte(`{"id":"surface-extra","workspace_id":"workspace-run"}`),
-	}}
+	runner := &fakeRunner{
+		workspaceIDs: []string{controlWorkspaceID, runWorkspaceID},
+		tree: treeResponse(runWorkspaceID, map[string]string{
+			"implementation": implementationSurface,
+			// Present because CreateSurface adds it to this workspace below.
+			"extra": extraSurfaceID,
+		}),
+		newSurface: `{"pane_id":"C53FF016-4543-4BF4-8BD3-B104BCCA2EF8","surface_id":"` + extraSurfaceID + `","type":"terminal","workspace_id":"` + runWorkspaceID + `"}`,
+	}
 	runtime := terminal.NewCmuxRuntime(runner)
 	control, err := runtime.EnsureControlWorkspace(context.Background(), terminal.WorkspaceRequest{
 		Name:             "factory-control",
@@ -26,7 +50,7 @@ func TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureControlWorkspace() error = %v", err)
 	}
-	if control.ID != "workspace-control" {
+	if control.ID != controlWorkspaceID {
 		t.Fatalf("control workspace = %#v, want opaque workspace handle", control)
 	}
 	run, err := runtime.EnsureRunWorkspace(context.Background(), terminal.RunWorkspaceRequest{
@@ -38,8 +62,8 @@ func TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureRunWorkspace() error = %v", err)
 	}
-	if run.ID != "workspace-run" || run.Status.ID != "surface-status" || run.Implementation.ID != "surface-implementation" || run.Checks.ID != "surface-checks" {
-		t.Fatalf("run workspace = %#v, want status/implementation/checks surfaces", run)
+	if run.ID != runWorkspaceID || run.Implementation.ID != implementationSurface || run.Status.ID != "" || run.Checks.ID != "" {
+		t.Fatalf("run workspace = %#v, want only the implementation surface enabled", run)
 	}
 	extra, err := runtime.CreateSurface(context.Background(), terminal.SurfaceRequest{
 		WorkspaceID: run.ID,
@@ -49,7 +73,7 @@ func TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSurface() error = %v", err)
 	}
-	if extra.ID != "surface-extra" {
+	if extra.ID != extraSurfaceID {
 		t.Fatalf("extra surface = %#v, want opaque surface handle", extra)
 	}
 	if err := runtime.SendInput(context.Background(), extra.ID, []byte("continue\n")); err != nil {
@@ -66,8 +90,22 @@ func TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam(t *testing.T) {
 	}
 
 	joined := strings.Join(runner.calls, "\n")
-	if !strings.Contains(joined, "new-workspace") || !strings.Contains(joined, "send-input") || !strings.Contains(joined, "notify") {
-		t.Fatalf("adapter calls = %q, want workspace/input/notification operations", joined)
+	for _, wanted := range []string{"workspace create", "--id-format uuids", "send --surface", "send-key --surface", "notify", "close-surface"} {
+		if !strings.Contains(joined, wanted) {
+			t.Fatalf("adapter calls = %q, want %q", joined, wanted)
+		}
+	}
+	// The legacy workspace alias ignores the structured output flags, so the
+	// adapter must never fall back to it.
+	if strings.Contains(joined, "new-workspace") || strings.Contains(joined, "send-input") {
+		t.Fatalf("adapter used a command the terminal does not support: %q", joined)
+	}
+	// A trailing newline must be pressed as Enter. Typing it together with the
+	// text reads as a paste and leaves the input uncommitted.
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, "send --surface") && strings.HasSuffix(call, "\n") {
+			t.Fatalf("adapter typed a trailing newline instead of pressing Enter: %q", call)
+		}
 	}
 	if strings.Contains(joined, "docker.sock") {
 		t.Fatalf("terminal adapter referenced the Docker socket: %q", joined)
@@ -77,28 +115,44 @@ func TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam(t *testing.T) {
 // TestCmuxRuntimeRejectsMalformedRunWorkspace verifies that a workspace
 // without the required supervision surfaces cannot be accepted.
 func TestCmuxRuntimeRejectsMalformedRunWorkspace(t *testing.T) {
-	runner := &fakeRunner{responses: [][]byte{[]byte(`{"id":"workspace-run","surfaces":[{"id":"surface-status","name":"status"}]}`)}}
+	runner := &fakeRunner{
+		workspaceIDs: []string{runWorkspaceID},
+		tree:         treeResponse(runWorkspaceID, map[string]string{"unrelated": extraSurfaceID}),
+	}
 	_, err := terminal.NewCmuxRuntime(runner).EnsureRunWorkspace(context.Background(), terminal.RunWorkspaceRequest{RunID: "run-1", Name: "factory-run-1", WorkingDirectory: "/tmp/factory"})
 	if err == nil || !strings.Contains(err.Error(), "implementation") {
 		t.Fatalf("EnsureRunWorkspace() error = %v, want required surface error", err)
 	}
 }
 
-// fakeRunner returns deterministic adapter responses and records commands.
+// fakeRunner answers adapter commands the way the terminal does: structured
+// JSON for creation and topology queries, and a plain acknowledgement line for
+// every lifecycle command.
 type fakeRunner struct {
-	responses [][]byte
-	calls     []string
+	workspaceIDs []string
+	tree         string
+	newSurface   string
+	calls        []string
 }
 
-// Run records one host terminal command and returns its next fixture.
+// Run records one host terminal command and returns its fixture.
 func (r *fakeRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
 	r.calls = append(r.calls, strings.Join(args, " "))
-	if len(r.responses) == 0 {
-		return []byte(`{"id":"ok"}`), nil
+	switch {
+	case len(args) > 1 && args[0] == "workspace" && args[1] == "create":
+		identifier := runWorkspaceID
+		if len(r.workspaceIDs) > 0 {
+			identifier = r.workspaceIDs[0]
+			r.workspaceIDs = r.workspaceIDs[1:]
+		}
+		return []byte(`{"group_id":null,"surface_id":"` + implementationSurface + `","window_id":"BE1B197B-CC74-4061-BD7D-E24C82705E08","workspace_id":"` + identifier + `"}`), nil
+	case args[0] == "tree":
+		return []byte(r.tree), nil
+	case args[0] == "new-surface":
+		return []byte(r.newSurface), nil
+	default:
+		return []byte("OK\n"), nil
 	}
-	response := r.responses[0]
-	r.responses = r.responses[1:]
-	return response, nil
 }
 
 var _ terminal.CommandRunner = (*fakeRunner)(nil)

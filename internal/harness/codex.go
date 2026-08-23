@@ -28,7 +28,7 @@ type StartRequest struct {
 	// Surface is an existing role surface in the run workspace. When empty, the
 	// adapter creates a role-named surface.
 	Surface terminal.Surface
-	// Prompt is the initial role prompt typed into the visible session.
+	// Prompt is the initial role prompt passed to the harness process.
 	Prompt string
 	// Model is a validated repository-policy model selection.
 	Model string
@@ -105,8 +105,8 @@ func (c *Codex) Finish(ctx context.Context, session Session) error {
 	return nil
 }
 
-// launch builds the safe Codex command, creates a visible surface, and types
-// the immutable prompt into it. It never reads terminal output.
+// launch builds the safe Codex command with its immutable prompt and creates a
+// visible surface. It never uses terminal input or output as a launch protocol.
 func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, error) {
 	if err := validateStartRequest(request); err != nil {
 		return Session{}, err
@@ -118,7 +118,10 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	if c.Terminal == nil {
 		return Session{}, errors.New("Codex terminal runtime is required")
 	}
-	command := []string{"codex", "-a", "untrusted", "-s", "danger-full-access"}
+	// The worker is the security boundary. Codex therefore runs without its
+	// redundant inner sandbox or interactive approval gates, which would stall
+	// an unattended invocation despite the worker's outer isolation.
+	command := []string{"codex", "-a", "never", "-s", "danger-full-access"}
 	if request.Model != "" {
 		command = append(command, "-m", request.Model)
 	}
@@ -128,6 +131,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	if request.ResumeSessionID != "" {
 		command = append(command, "resume", request.ResumeSessionID)
 	}
+	command = append(command, strings.TrimSpace(request.Prompt))
 	environment := map[string]string{
 		"FACTORY_HARNESS":       "codex",
 		"FACTORY_INVOCATION_ID": request.InvocationID,
@@ -179,10 +183,6 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	}); err != nil {
 		return Session{}, fmt.Errorf("launch Codex surface: %w", err)
 	}
-	if err := c.Terminal.SendInput(ctx, surface.ID, []byte(strings.TrimSpace(request.Prompt)+"\n")); err != nil {
-		_ = c.Terminal.CloseSurface(ctx, surface.ID)
-		return Session{}, fmt.Errorf("send Codex prompt: %w", err)
-	}
 	nativeSessionID := request.ResumeSessionID
 	if nativeSessionID == "" {
 		if snapshotProvider != nil {
@@ -207,7 +207,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 const (
 	// nativeSessionDiscoveryTimeout bounds how long a fresh launch waits for
 	// Codex to persist its native session file.
-	nativeSessionDiscoveryTimeout = 5 * time.Second
+	nativeSessionDiscoveryTimeout = 60 * time.Second
 	// nativeSessionDiscoveryInitialInterval avoids a tight polling loop while
 	// Codex initializes its role home.
 	nativeSessionDiscoveryInitialInterval = 100 * time.Millisecond
@@ -221,7 +221,8 @@ const (
 var ErrNativeSessionUnavailable = errors.New("native Codex session was not discovered before the deadline")
 
 // discoverNativeSession returns a session identifier that was not present
-// before the prompt was sent. It returns ErrNativeSessionUnavailable when
+// before the prompt-bearing command was launched. It returns
+// ErrNativeSessionUnavailable when
 // Codex does not persist a new session before the bounded discovery window
 // expires or the caller cancels discovery.
 func discoverNativeSession(ctx context.Context, provider worker.NativeSessionSnapshotProvider, baseline []string, request worker.NativeSessionRequest) (string, error) {

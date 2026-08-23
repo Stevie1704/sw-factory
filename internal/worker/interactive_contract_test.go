@@ -19,9 +19,10 @@ const interactiveWorkerDigest = "sha256:0123456789abcdef0123456789abcdef01234567
 // terminal receives a host helper plus a run identity, never a Docker name.
 func TestDockerRuntimeBuildsAnOpaqueInteractiveAttachCommand(t *testing.T) {
 	runtime := &worker.DockerRuntime{AttachBinary: "factory-worker-attach"}
+	prompt := "Implement issue #42.\nPreserve the user's quoted 'example'."
 	command, err := runtime.InteractiveCommand(context.Background(), worker.InteractiveRequest{
 		RunID:             "run-interactive",
-		Command:           []string{"codex", "-s", "danger-full-access"},
+		Command:           []string{"codex", "-s", "danger-full-access", prompt},
 		EnvironmentPolicy: worker.EnvironmentPolicyRole,
 		Role:              "implementation",
 		Environment:       map[string]string{"FACTORY_INVOCATION_ID": "inv-1"},
@@ -31,6 +32,9 @@ func TestDockerRuntimeBuildsAnOpaqueInteractiveAttachCommand(t *testing.T) {
 	}
 	if command.Executable != "factory-worker-attach" {
 		t.Fatalf("interactive executable = %q, want host attach helper", command.Executable)
+	}
+	if got := command.Args[len(command.Args)-1]; got != prompt {
+		t.Fatalf("interactive prompt = %q, want opaque multiline argument %q", got, prompt)
 	}
 	joined := strings.Join(command.Args, " ")
 	if !strings.Contains(joined, "--run-id run-interactive") || !strings.Contains(joined, "--role implementation") || !strings.Contains(joined, "-- codex -s danger-full-access") || !strings.Contains(joined, "FACTORY_INVOCATION_ID=inv-1") {
@@ -164,5 +168,60 @@ func TestDockerRuntimeSeedsOnlyTheCodexCredentialFile(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	if strings.Contains(joined, filepath.Dir(authPath)) || strings.Contains(joined, "docker.sock") || !strings.Contains(joined, worker.CredentialPath+"/auth.json") {
 		t.Fatalf("credential seed leaked host harness path or Docker socket: %q", joined)
+	}
+}
+
+// TestDockerRuntimeSeedsCredentialsWithoutPrivilegedOperations verifies that
+// credential seeding never calls chown and writes each path as the user that
+// owns it. The worker drops every capability, so a seed that relies on uid 0
+// being privileged fails at run time while still passing a naive argument
+// check.
+func TestDockerRuntimeSeedsCredentialsWithoutPrivilegedOperations(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"test-only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if err := runtime.Start(context.Background(), worker.StartRequest{
+		RunID:           "run-auth-privileges",
+		WorktreePath:    makeDirectory(t, "worktree"),
+		GitMetadataPath: makeDirectory(t, "git-metadata"),
+		Role:            "implementation",
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     interactiveWorkerDigest,
+	}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := runtime.SeedCodexCredentials(context.Background(), worker.CredentialSeedRequest{RunID: "run-auth-privileges", AuthPath: authPath}); err != nil {
+		t.Fatalf("SeedCodexCredentials() error = %v", err)
+	}
+	var wroteCredential, linkedRoleHome bool
+	for _, line := range readStubLog(t, logPath) {
+		if !strings.HasPrefix(line, "exec ") {
+			continue
+		}
+		if strings.Contains(line, "chown") {
+			t.Fatalf("credential seed requires a capability the worker drops: %q", line)
+		}
+		switch {
+		case strings.Contains(line, "--user 0:0"):
+			if strings.Contains(line, "$HOME/.codex") {
+				t.Fatalf("uid 0 cannot write the factory-owned role home: %q", line)
+			}
+			if strings.Contains(line, "cat > \""+worker.CredentialPath+"/auth.json\"") {
+				wroteCredential = true
+			}
+		case strings.Contains(line, "--user "+worker.WorkerUser):
+			if strings.Contains(line, "ln -s") && strings.Contains(line, "$HOME/.codex/auth.json") {
+				linkedRoleHome = true
+			}
+		}
+	}
+	if !wroteCredential {
+		t.Fatal("credential file was not written as the owner of the credential volume")
+	}
+	if !linkedRoleHome {
+		t.Fatal("role home symlink was not created as the worker user")
 	}
 }
