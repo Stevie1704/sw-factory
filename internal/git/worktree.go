@@ -61,6 +61,11 @@ type BaseSyncRequest struct {
 // WorktreeState is the coordinator-observed state used to validate a harness
 // handoff against the actual checkout.
 type WorktreeState struct {
+	// RepositoryPath is the main checkout root owning the worktree's Git
+	// metadata, resolved from git-common-dir.
+	RepositoryPath string
+	// Branch is the current local branch name, or empty when HEAD is detached.
+	Branch string
 	// HeadSHA is the current full commit identity.
 	HeadSHA string
 	// ChangedPaths contains repository-relative paths reported by Git.
@@ -140,6 +145,14 @@ func (m *LocalWorktreeManager) Inspect(ctx context.Context, worktreePath string)
 	if strings.TrimSpace(worktreePath) == "" {
 		return WorktreeState{}, errors.New("worktree path is required")
 	}
+	commonDirOutput, err := m.runner().Run(ctx, worktreePath, []string{"rev-parse", "--git-common-dir"})
+	if err != nil {
+		return WorktreeState{}, fmt.Errorf("inspect worktree repository: %w", err)
+	}
+	branchOutput, err := m.runner().Run(ctx, worktreePath, []string{"branch", "--show-current"})
+	if err != nil {
+		return WorktreeState{}, fmt.Errorf("inspect worktree branch: %w", err)
+	}
 	headOutput, err := m.runner().Run(ctx, worktreePath, []string{"rev-parse", "HEAD"})
 	if err != nil {
 		return WorktreeState{}, fmt.Errorf("inspect worktree HEAD: %w", err)
@@ -148,7 +161,25 @@ func (m *LocalWorktreeManager) Inspect(ctx context.Context, worktreePath string)
 	if err != nil {
 		return WorktreeState{}, fmt.Errorf("inspect worktree changes: %w", err)
 	}
-	return WorktreeState{HeadSHA: strings.TrimSpace(string(headOutput)), ChangedPaths: porcelainPaths(string(statusOutput))}, nil
+	return WorktreeState{
+		RepositoryPath: repositoryPathFromCommonDir(worktreePath, strings.TrimSpace(string(commonDirOutput))),
+		Branch:         strings.TrimSpace(string(branchOutput)),
+		HeadSHA:        strings.TrimSpace(string(headOutput)),
+		ChangedPaths:   porcelainPaths(string(statusOutput)),
+	}, nil
+}
+
+// repositoryPathFromCommonDir converts Git's common metadata path into the
+// owning checkout root while preserving an empty observation for malformed
+// command output.
+func repositoryPathFromCommonDir(worktreePath, commonDir string) string {
+	if strings.TrimSpace(commonDir) == "" {
+		return ""
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(worktreePath, commonDir)
+	}
+	return filepath.Dir(filepath.Clean(commonDir))
 }
 
 // runner returns the injected command runner or the production Git runner.

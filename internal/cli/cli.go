@@ -361,11 +361,30 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		}
 	} else {
 		label := "active run"
-		if result.LatestRun.Status == store.StatusComplete || result.LatestRun.Status == store.StatusCancelled || result.LatestRun.Status == store.StatusFailed {
+		if store.IsTerminalStatus(result.LatestRun.Status) {
 			label = "last run"
 		}
 		if !writeOutput(output, errorsOutput, "%s: %s (stage=%s status=%s branch=%s worktree=%s)\n", label, result.LatestRun.ID, result.LatestRun.Stage, result.LatestRun.Status, result.LatestRun.Branch, result.LatestRun.Worktree) {
 			return 1
+		}
+	}
+	if result.Recovery != nil {
+		agreement := "disagree"
+		if result.Recovery.SourcesAgree {
+			agreement = "agree"
+		}
+		if !writeOutput(output, errorsOutput, "recovery: %s (run=%s sources=%s)\n", result.Recovery.Code, result.Recovery.RunID, agreement) {
+			return 1
+		}
+		for _, discrepancy := range result.Recovery.Discrepancies {
+			if !writeOutput(output, errorsOutput, "recovery discrepancy: %s.%s expected=%q observed=%q\n", discrepancy.Source, discrepancy.Field, discrepancy.Expected, discrepancy.Observed) {
+				return 1
+			}
+		}
+		for _, action := range result.Recovery.SafeActions {
+			if !writeOutput(output, errorsOutput, "recovery safe action: %s\n", action) {
+				return 1
+			}
 		}
 	}
 	return 0

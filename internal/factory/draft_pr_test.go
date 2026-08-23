@@ -2,7 +2,6 @@ package factory_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -43,21 +42,12 @@ func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *
 		{Name: "format", Command: "format", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean},
 		{Name: "test", Command: "test", Timeout: "5m", Blocking: true, DependsOn: []string{"format"}, EnvironmentPolicy: config.EnvironmentPolicyClean},
 	}
-	packetData, err := json.Marshal(factory.SpecificationPacket{
-		Version:          1,
-		Issue:            github.Issue{Number: 42, Title: "Add the factory handoff", Body: "Implement the supervised draft PR boundary."},
-		RepositoryConfig: policy,
-	})
-	if err != nil {
-		t.Fatal(err)
+	runStore := &fakeRunStore{}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Add the factory handoff", Body: "Implement the supervised draft PR boundary.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	workspace := &draftGitWorkspace{
+		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-draft", Worktree: worktreePath},
+		state:     gitadapter.WorktreeState{Branch: "factory/run-draft", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory.go"}},
 	}
-	runStore := &fakeRunStore{saved: []store.Run{{
-		ID: "run-draft", RepositoryPath: "/repo", IssueNumber: 42, Stage: store.StageImplementation, Status: store.StatusActive,
-		Branch: "factory/run-draft", Worktree: worktreePath, CheckpointSHA: factoryGateCheckpoint, ImageDigest: policy.WorkerBuild.Digest,
-		StatusCommentID: "comment-1", SpecificationPacket: string(packetData), CreatedAt: time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC),
-	}}}
-	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Add the factory handoff", State: "open", Labels: []string{github.LabelAgentRunning}}}
-	workspace := &draftGitWorkspace{state: gitadapter.WorktreeState{HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory.go"}}}
 	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
 	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}}
@@ -69,6 +59,7 @@ func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
 		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
 		GitHub:         &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
 		PullRequests:   pullRequests,
 		Worktree:       workspace,
@@ -76,9 +67,19 @@ func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *
 		Worker:         workerRuntime,
 		CommitStatuses: statuses,
 		Now:            func() time.Time { return time.Date(2026, 8, 21, 10, 1, 0, 0, time.UTC) },
+		NewRunID:       func() (string, error) { return "run-draft", nil },
 	})
+	claimed, err := service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	claimed.Run.Stage = store.StageImplementation
+	claimed.Run.Status = store.StatusActive
+	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
+		t.Fatalf("SaveRun() fixture setup error = %v", err)
+	}
 
-	result, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: "run-draft"})
+	result, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
 	if err != nil {
 		t.Fatalf("CreateDraftPullRequest() error = %v", err)
 	}
@@ -133,17 +134,26 @@ func TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation(t *testin
 	t.Parallel()
 
 	policy := validRepositoryConfig()
-	packetData, err := json.Marshal(factory.SpecificationPacket{Version: 1, Issue: github.Issue{Number: 42, Title: "Active agent"}, RepositoryConfig: policy})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runStore := &activeInvocationRunStore{fakeRunStore: &fakeRunStore{saved: []store.Run{{ID: "run-active", RepositoryPath: "/repo", IssueNumber: 42, Stage: store.StageImplementation, Status: store.StatusActive, CheckpointSHA: factoryGateCheckpoint, ImageDigest: policy.WorkerBuild.Digest, SpecificationPacket: string(packetData)}}}, active: &store.Invocation{ID: "inv-active", RunID: "run-active", Status: store.InvocationStatusActive}}
+	runStore := &activeInvocationRunStore{fakeRunStore: &fakeRunStore{}, active: &store.Invocation{ID: "inv-active", RunID: "run-active", Status: store.InvocationStatusActive}}
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: "/repo", OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	workspace := &draftGitWorkspace{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-active", Worktree: "/worktree/run-active"}}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config: &fakeConfig{value: host}, OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		GitHub: &fakeGitHub{}, GitWorkspace: &draftGitWorkspace{}, Worktree: &fakeWorktree{},
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:         githubAdapter, GitWorkspace: workspace, Worktree: workspace,
+		NewRunID: func() (string, error) { return "run-active", nil },
 	})
-	_, err = service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: "run-active"})
+	claimed, err := service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	claimed.Run.Stage = store.StageImplementation
+	claimed.Run.Status = store.StatusActive
+	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
+		t.Fatalf("SaveRun() fixture setup error = %v", err)
+	}
+	_, err = service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
 	if err == nil || !strings.Contains(err.Error(), "still has active implementation invocation") {
 		t.Fatalf("CreateDraftPullRequest() error = %v, want validation before Git effects", err)
 	}
@@ -151,6 +161,7 @@ func TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation(t *testin
 
 // draftGitWorkspace records the host Git effects for coordinator seam tests.
 type draftGitWorkspace struct {
+	workspace   gitadapter.Workspace
 	state       gitadapter.WorktreeState
 	checkpoints []gitadapter.CheckpointRequest
 	pushes      []gitadapter.PushRequest
@@ -169,8 +180,11 @@ func (s *activeInvocationRunStore) ActiveInvocation(context.Context, string) (*s
 }
 
 // Create implements GitWorkspace for the coordinator test.
-func (*draftGitWorkspace) Create(context.Context, string, string, string) (gitadapter.Workspace, error) {
-	return gitadapter.Workspace{}, errors.New("unexpected Create()")
+func (w *draftGitWorkspace) Create(context.Context, string, string, string) (gitadapter.Workspace, error) {
+	if w.workspace.Branch == "" {
+		return gitadapter.Workspace{}, errors.New("unexpected Create()")
+	}
+	return w.workspace, nil
 }
 
 // Remove implements GitWorkspace for the coordinator test.
