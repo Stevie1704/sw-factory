@@ -169,6 +169,22 @@ func TestRunDraftPullRequestRejectsPositionalArguments(t *testing.T) {
 	}
 }
 
+// TestRunPollRejectsPositionalArguments keeps one-shot command polling
+// explicit about its configured run selection.
+func TestRunPollRejectsPositionalArguments(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{"poll", "extra", "--config", configPath}, &output, &output)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "poll does not accept positional arguments") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
 func TestRunInitRejectsAnUnknownFlag(t *testing.T) {
 	t.Parallel()
 

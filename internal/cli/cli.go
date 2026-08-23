@@ -33,6 +33,7 @@ var commandTable = []commandDefinition{
 	{name: "agent", handler: runAgent},
 	{name: "agent-report", handler: runAgentReport},
 	{name: "draft-pr", handler: runDraftPullRequest},
+	{name: "poll", handler: runPollCommands},
 	{name: "status", handler: runStatus},
 }
 
@@ -242,6 +243,47 @@ func runDraftPullRequest(ctx context.Context, args []string, defaultConfigPath s
 	}
 	for _, gateResult := range result.Gates {
 		if !writeOutput(output, errorsOutput, "gate: %s (%s)\n", gateResult.GateName, gateResult.Status.State) {
+			return 1
+		}
+	}
+	return 0
+}
+
+// runPollCommands performs one production command poll for the current run.
+// Repeating this command is safe because the coordinator persists the
+// processed-comment watermark and revision.
+func runPollCommands(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("poll", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "active or latest factory run identifier")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("poll does not accept positional arguments"))
+		return 2
+	}
+	results, err := factory.New(*configPath).PollCommands(ctx, factory.CommandPollRequest{RunID: *runID})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if len(results) == 0 {
+		if !writeOutput(output, errorsOutput, "no structured commands found\n") {
+			return 1
+		}
+		return 0
+	}
+	for _, result := range results {
+		name := string(result.Command.Kind)
+		if name == "" {
+			name = "malformed"
+		}
+		if !writeOutput(output, errorsOutput, "command: %s outcome: %s\n", name, result.Outcome) {
+			return 1
+		}
+		if result.Rejection != nil && !writeOutput(output, errorsOutput, "rejection: %s (%s)\n", result.Rejection.Code, result.Rejection.Problem) {
 			return 1
 		}
 	}

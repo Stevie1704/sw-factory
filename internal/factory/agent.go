@@ -134,6 +134,9 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if request.RunID != "" && request.RunID != run.ID {
 		return AgentLaunchResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
+	if request.Harness == "" && run.HarnessOverride != "" {
+		request.Harness = config.Harness(run.HarnessOverride)
+	}
 	if err := validateAgentRunState(*run); err != nil {
 		return AgentLaunchResult{}, err
 	}

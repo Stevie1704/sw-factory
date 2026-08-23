@@ -18,7 +18,11 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 7
+const CurrentSchemaVersion = 8
+
+// ErrRevisionConflict reports that another coordinator revision was persisted
+// after a command read the run and before it attempted its compare-and-set.
+var ErrRevisionConflict = errors.New("run revision conflict")
 
 // runTimestampLayout keeps serialized run timestamps fixed-width so SQLite
 // text ordering matches chronological ordering for sub-second timestamps.
@@ -104,7 +108,25 @@ type Run struct {
 	// PullRequestNumber is the persisted idempotency identity of the draft PR.
 	PullRequestNumber int
 	// PullRequestURL is the operator-facing URL of the draft PR.
-	PullRequestURL      string
+	PullRequestURL string
+	// Revision is the monotonic coordinator revision used by command replay
+	// prevention and persisted supervision updates.
+	Revision int64
+	// ProcessedCommentID is the highest processed GitHub comment watermark for
+	// this run. Editing that comment must never execute it again.
+	ProcessedCommentID string
+	// ProcessedCommentRevision records the run revision at which the watermark
+	// was persisted, making the watermark tuple restart-safe and auditable.
+	ProcessedCommentRevision int64
+	// LastCommandName is the last recognized structured command kind.
+	LastCommandName string
+	// LastCommandOutcome is accepted, rejected, or replayed for the last command.
+	LastCommandOutcome string
+	// LastCommandMessage is the operator-facing result detail rendered in the
+	// single editable status comment.
+	LastCommandMessage string
+	// HarnessOverride is the authorized harness choice for a later invocation.
+	HarnessOverride     string
 	SpecificationPacket string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
@@ -248,6 +270,9 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url,
+		       revision, processed_comment_id, processed_comment_revision,
+		       last_command_name, last_command_outcome, last_command_message,
+		       harness_override,
 		       specification_packet, created_at, updated_at
 		FROM operational_runs
 		WHERE status NOT IN (?, ?, ?)
@@ -263,6 +288,9 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url,
+		       revision, processed_comment_id, processed_comment_revision,
+		       last_command_name, last_command_outcome, last_command_message,
+		       harness_override,
 		       specification_packet, created_at, updated_at
 		FROM operational_runs
 		ORDER BY updated_at DESC
@@ -288,6 +316,13 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.StatusCommentID,
 		&run.PullRequestNumber,
 		&run.PullRequestURL,
+		&run.Revision,
+		&run.ProcessedCommentID,
+		&run.ProcessedCommentRevision,
+		&run.LastCommandName,
+		&run.LastCommandOutcome,
+		&run.LastCommandMessage,
+		&run.HarnessOverride,
 		&run.SpecificationPacket,
 		&createdAt,
 		&updatedAt,
@@ -311,14 +346,48 @@ func scanRun(row *sql.Row) (*Run, error) {
 
 // SaveRun validates and upserts one operational run record.
 func (s *Store) SaveRun(ctx context.Context, run Run) error {
+	run, err := normalizeRun(run)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, saveRunStatement, runValues(run)...); err != nil {
+		return fmt.Errorf("save run: %w", err)
+	}
+	return nil
+}
+
+// SaveRunIfRevision persists one command result only when the run still has
+// expectedRevision. It prevents concurrent coordinators from executing one
+// comment against the same stale run snapshot.
+func (s *Store) SaveRunIfRevision(ctx context.Context, expectedRevision int64, run Run) error {
+	run, err := normalizeRun(run)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, saveRunIfRevisionStatement, append(runValues(run)[1:], run.ID, expectedRevision)...)
+	if err != nil {
+		return fmt.Errorf("save run at revision %d: %w", expectedRevision, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect run revision %d update: %w", expectedRevision, err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("%w: run %q no longer has revision %d", ErrRevisionConflict, run.ID, expectedRevision)
+	}
+	return nil
+}
+
+// normalizeRun validates a run and fills absent timestamps before persistence.
+func normalizeRun(run Run) (Run, error) {
 	if run.ID == "" {
-		return errors.New("run id is required")
+		return Run{}, errors.New("run id is required")
 	}
 	if run.RepositoryPath == "" {
-		return errors.New("run repository path is required")
+		return Run{}, errors.New("run repository path is required")
 	}
 	if run.Status == "" {
-		return errors.New("run status is required")
+		return Run{}, errors.New("run status is required")
 	}
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = time.Now().UTC()
@@ -326,27 +395,13 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	if run.UpdatedAt.IsZero() {
 		run.UpdatedAt = run.CreatedAt
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO operational_runs (
-			id, repository_path, issue_number, stage, status, branch, worktree,
-			checkpoint_sha, image_digest, coordinator, status_comment_id,
-			pull_request_number, pull_request_url, specification_packet, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			repository_path = excluded.repository_path,
-			issue_number = excluded.issue_number,
-			stage = excluded.stage,
-			status = excluded.status,
-			branch = excluded.branch,
-			worktree = excluded.worktree,
-			checkpoint_sha = excluded.checkpoint_sha,
-			image_digest = excluded.image_digest,
-			coordinator = excluded.coordinator,
-			status_comment_id = excluded.status_comment_id,
-			pull_request_number = excluded.pull_request_number,
-			pull_request_url = excluded.pull_request_url,
-			specification_packet = excluded.specification_packet,
-			updated_at = excluded.updated_at`,
+	return run, nil
+}
+
+// runValues returns the ordered SQL values shared by normal and revision-safe
+// run persistence.
+func runValues(run Run) []any {
+	return []any{
 		run.ID,
 		run.RepositoryPath,
 		run.IssueNumber,
@@ -360,15 +415,59 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 		run.StatusCommentID,
 		run.PullRequestNumber,
 		run.PullRequestURL,
+		run.Revision,
+		run.ProcessedCommentID,
+		run.ProcessedCommentRevision,
+		run.LastCommandName,
+		run.LastCommandOutcome,
+		run.LastCommandMessage,
+		run.HarnessOverride,
 		run.SpecificationPacket,
 		run.CreatedAt.UTC().Format(runTimestampLayout),
 		run.UpdatedAt.UTC().Format(runTimestampLayout),
-	)
-	if err != nil {
-		return fmt.Errorf("save run: %w", err)
 	}
-	return nil
 }
+
+const saveRunStatement = `
+		INSERT INTO operational_runs (
+			id, repository_path, issue_number, stage, status, branch, worktree,
+			checkpoint_sha, image_digest, coordinator, status_comment_id,
+			pull_request_number, pull_request_url, revision, processed_comment_id,
+			processed_comment_revision, last_command_name, last_command_outcome,
+			last_command_message, harness_override, specification_packet, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			repository_path = excluded.repository_path,
+			issue_number = excluded.issue_number,
+			stage = excluded.stage,
+			status = excluded.status,
+			branch = excluded.branch,
+			worktree = excluded.worktree,
+			checkpoint_sha = excluded.checkpoint_sha,
+			image_digest = excluded.image_digest,
+			coordinator = excluded.coordinator,
+			status_comment_id = excluded.status_comment_id,
+			pull_request_number = excluded.pull_request_number,
+			pull_request_url = excluded.pull_request_url,
+			revision = excluded.revision,
+			processed_comment_id = excluded.processed_comment_id,
+			processed_comment_revision = excluded.processed_comment_revision,
+			last_command_name = excluded.last_command_name,
+			last_command_outcome = excluded.last_command_outcome,
+			last_command_message = excluded.last_command_message,
+			harness_override = excluded.harness_override,
+			specification_packet = excluded.specification_packet,
+			updated_at = excluded.updated_at`
+
+const saveRunIfRevisionStatement = `
+		UPDATE operational_runs SET
+			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
+			checkpoint_sha = ?, image_digest = ?, coordinator = ?, status_comment_id = ?,
+			pull_request_number = ?, pull_request_url = ?, revision = ?, processed_comment_id = ?,
+			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
+			last_command_message = ?, harness_override = ?, specification_packet = ?,
+			created_at = ?, updated_at = ?
+		WHERE id = ? AND revision = ?`
 
 // SaveInvocation validates and upserts one recoverable harness invocation.
 func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error {
@@ -702,6 +801,20 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			} {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 7: %w", err)
+				}
+			}
+		case 8:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN processed_comment_id TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN processed_comment_revision INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN last_command_name TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN last_command_outcome TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN last_command_message TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN harness_override TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 8: %w", err)
 				}
 			}
 		default:
