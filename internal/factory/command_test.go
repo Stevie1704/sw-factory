@@ -236,6 +236,10 @@ type commandRunStore struct {
 	saved      []store.Run
 	// closeCount records store lifetime in polling tests.
 	closeCount int
+	// saveErrors allows tests to inject save failures.
+	saveErrors []error
+	// lifecycleClaims tracks claimed notification deliveries.
+	lifecycleClaims map[string]map[store.Status]bool
 }
 
 // CurrentRun returns the active run when one exists.
@@ -258,6 +262,13 @@ func (s *commandRunStore) LatestRun(context.Context) (*store.Run, error) {
 
 // SaveRun records the new current state and makes it visible after restart.
 func (s *commandRunStore) SaveRun(_ context.Context, run store.Run) error {
+	if len(s.saveErrors) > 0 {
+		err := s.saveErrors[0]
+		s.saveErrors = s.saveErrors[1:]
+		if err != nil {
+			return err
+		}
+	}
 	s.saved = append(s.saved, run)
 	copy := run
 	s.latest = &copy
@@ -276,6 +287,29 @@ func (s *commandRunStore) SaveRunIfRevision(ctx context.Context, expected int64,
 		return store.ErrRevisionConflict
 	}
 	return s.SaveRun(ctx, run)
+}
+
+// ClaimLifecycleNotification atomically claims notification delivery.
+func (s *commandRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
+	if s.lifecycleClaims == nil {
+		s.lifecycleClaims = make(map[string]map[store.Status]bool)
+	}
+	if s.lifecycleClaims[runID] == nil {
+		s.lifecycleClaims[runID] = make(map[store.Status]bool)
+	}
+	if s.lifecycleClaims[runID][terminalStatus] {
+		return false, nil
+	}
+	s.lifecycleClaims[runID][terminalStatus] = true
+	return true, nil
+}
+
+// ReleaseLifecycleNotification removes a notification claim.
+func (s *commandRunStore) ReleaseLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) error {
+	if s.lifecycleClaims != nil && s.lifecycleClaims[runID] != nil {
+		delete(s.lifecycleClaims[runID], terminalStatus)
+	}
+	return nil
 }
 
 // Close increments the test store's close counter and returns nil, satisfying

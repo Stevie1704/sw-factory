@@ -359,9 +359,10 @@ func githubIssueFixture() github.Issue {
 
 // agentRunStore is an in-memory invocation-capable operational-store fake.
 type agentRunStore struct {
-	runs        map[string]store.Run
-	current     *store.Run
-	invocations map[string]store.Invocation
+	runs            map[string]store.Run
+	current         *store.Run
+	invocations     map[string]store.Invocation
+	lifecycleClaims map[string]map[store.Status]bool
 }
 
 // CurrentRun returns the configured active run.
@@ -371,6 +372,29 @@ func (s *agentRunStore) CurrentRun(context.Context) (*store.Run, error) { return
 func (s *agentRunStore) SaveRun(_ context.Context, run store.Run) error {
 	s.runs[run.ID] = run
 	s.current = &run
+	return nil
+}
+
+// ClaimLifecycleNotification atomically claims notification delivery.
+func (s *agentRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
+	if s.lifecycleClaims == nil {
+		s.lifecycleClaims = make(map[string]map[store.Status]bool)
+	}
+	if s.lifecycleClaims[runID] == nil {
+		s.lifecycleClaims[runID] = make(map[store.Status]bool)
+	}
+	if s.lifecycleClaims[runID][terminalStatus] {
+		return false, nil
+	}
+	s.lifecycleClaims[runID][terminalStatus] = true
+	return true, nil
+}
+
+// ReleaseLifecycleNotification removes a notification claim.
+func (s *agentRunStore) ReleaseLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) error {
+	if s.lifecycleClaims != nil && s.lifecycleClaims[runID] != nil {
+		delete(s.lifecycleClaims[runID], terminalStatus)
+	}
 	return nil
 }
 

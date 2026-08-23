@@ -18,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 10
+const CurrentSchemaVersion = 11
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -659,6 +659,55 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 	return &invocation, nil
 }
 
+// ClaimLifecycleNotification atomically claims the right to send one terminal
+// notification, returning true if the claim succeeded (caller should send),
+// false if the claim already exists (notification already sent or being sent).
+func (s *Store) ClaimLifecycleNotification(ctx context.Context, runID string, terminalStatus Status) (bool, error) {
+	if runID == "" {
+		return false, errors.New("run id is required for lifecycle notification claim")
+	}
+	if !IsTerminalStatus(terminalStatus) {
+		return false, fmt.Errorf("cannot claim lifecycle notification for non-terminal status %q", terminalStatus)
+	}
+	now := time.Now().UTC().Format(runTimestampLayout)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO lifecycle_notifications (run_id, terminal_status, created_at)
+		VALUES (?, ?, ?)`, runID, terminalStatus, now)
+	if err != nil {
+		if isLifecycleNotificationClaimConflict(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("claim lifecycle notification for run %q status %q: %w", runID, terminalStatus, err)
+	}
+	return true, nil
+}
+
+// ReleaseLifecycleNotification removes a notification claim, allowing a future
+// retry to attempt delivery again. This is called when notification delivery
+// fails after the claim was successfully recorded.
+func (s *Store) ReleaseLifecycleNotification(ctx context.Context, runID string, terminalStatus Status) error {
+	if runID == "" {
+		return errors.New("run id is required for lifecycle notification release")
+	}
+	if !IsTerminalStatus(terminalStatus) {
+		return fmt.Errorf("cannot release lifecycle notification for non-terminal status %q", terminalStatus)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM lifecycle_notifications
+		WHERE run_id = ? AND terminal_status = ?`, runID, terminalStatus)
+	if err != nil {
+		return fmt.Errorf("release lifecycle notification claim for run %q status %q: %w", runID, terminalStatus, err)
+	}
+	return nil
+}
+
+// isLifecycleNotificationClaimConflict recognizes the primary key violation
+// without depending on a driver-specific SQLite error type.
+func isLifecycleNotificationClaimConflict(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "primary key") || strings.Contains(message, "unique constraint failed: lifecycle_notifications")
+}
+
 // databaseState reports whether the path identifies an existing database file and whether that file is empty.
 func databaseState(path string) (bool, bool, error) {
 	info, err := os.Stat(path)
@@ -857,6 +906,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 10:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN lifecycle_notification_sent INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return fmt.Errorf("apply store migration 10: %w", err)
+			}
+		case 11:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE lifecycle_notifications (
+				run_id TEXT NOT NULL,
+				terminal_status TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (run_id, terminal_status)
+			)`); err != nil {
+				return fmt.Errorf("apply store migration 11: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

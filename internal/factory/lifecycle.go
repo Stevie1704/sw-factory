@@ -212,17 +212,45 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 
 // ensureTerminalNotification delivers and records the one terminal cmux
 // notification, including after a prior delivery failure or restart.
+// It uses a durable claim table to prevent duplicate notifications when
+// notification succeeds but the subsequent run save fails.
 func (s *Service) ensureTerminalNotification(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if run.LifecycleNotificationSent {
 		return run, nil
 	}
+	// Atomically claim the right to send this notification. If the claim already
+	// exists, the notification was already delivered (even if the run flag wasn't
+	// persisted due to a prior save failure), so skip delivery.
+	claimed, err := runStore.ClaimLifecycleNotification(ctx, run.ID, run.Status)
+	if err != nil {
+		return run, fmt.Errorf("claim lifecycle notification: %w", err)
+	}
+	if !claimed {
+		// Notification already delivered by a prior attempt. Update the in-memory
+		// flag and persist it without re-sending the notification.
+		run.LifecycleNotificationSent = true
+		run.UpdatedAt = s.deps.Now().UTC()
+		if err := saveRunWithRetry(ctx, runStore, run); err != nil {
+			return run, fmt.Errorf("persist lifecycle notification flag after skipped delivery: %w", err)
+		}
+		return run, nil
+	}
+	// Claim succeeded. Attempt notification delivery.
 	if err := s.notifyTerminal(ctx, registration, run); err != nil {
+		// Delivery failed. Release the claim so a future retry can attempt delivery again.
+		if releaseErr := runStore.ReleaseLifecycleNotification(ctx, run.ID, run.Status); releaseErr != nil {
+			return run, fmt.Errorf("notify lifecycle transition: %w (also failed to release claim: %v)", err, releaseErr)
+		}
 		return run, err
 	}
+	// Notification delivered successfully. Keep the claim (it now durably records
+	// that delivery happened) and persist the flag in the run record.
 	run.LifecycleNotificationSent = true
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := saveRunWithRetry(ctx, runStore, run); err != nil {
-		return run, fmt.Errorf("persist lifecycle notification: %w", err)
+		// The claim table already records successful delivery, so a retry won't
+		// re-send the notification even though the run flag wasn't persisted.
+		return run, fmt.Errorf("persist lifecycle notification flag: %w", err)
 	}
 	return run, nil
 }

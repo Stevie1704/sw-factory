@@ -69,6 +69,8 @@ type OperationalStore interface {
 type RunStore interface {
 	OperationalStore
 	SaveRun(context.Context, store.Run) error
+	ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error)
+	ReleaseLifecycleNotification(context.Context, string, store.Status) error
 }
 
 // LatestRunStore extends the operational-store seam with the most recently

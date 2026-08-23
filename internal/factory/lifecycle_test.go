@@ -120,6 +120,54 @@ func TestPollLifecycleRetriesAFailedTerminalNotification(t *testing.T) {
 	}
 }
 
+// TestPollLifecycleDoesNotResendAfterNotifySucceedsPersistFails verifies that
+// when notification delivery succeeds but the subsequent run save fails, a retry
+// does not send the notification again (the durable claim prevents duplicate delivery).
+func TestPollLifecycleDoesNotResendAfterNotifySucceedsPersistFails(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusActive)
+	run.Branch = "factory/run-command"
+	run.PullRequestNumber = 19
+	run.PullRequestURL = "https://github.com/example/project/pull/19"
+	githubAdapter := &lifecycleGitHub{
+		commandGitHub: commandGitHub{issue: github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: run.StatusCommentID}},
+		pullRequest:   github.PullRequest{Number: 19, State: "closed", Merged: true, MergeCommitSHA: strings.Repeat("f", 40), HeadBranch: run.Branch, BaseBranch: "main"},
+	}
+	// Inject a save error that will occur after notification succeeds.
+	runStore := &commandRunStore{current: &run, latest: &run, saveErrors: []error{errors.New("transient database error")}}
+	terminalRuntime := &lifecycleTerminal{}
+	service := newLifecycleService(runStore, githubAdapter, &lifecycleWorker{}, terminalRuntime)
+
+	// First poll: notification succeeds, but save fails.
+	first, err := service.PollLifecycle(context.Background(), factoryLifecycleRequest(run.ID))
+	if err == nil {
+		t.Fatal("first PollLifecycle() error = nil, want save failure after notification")
+	}
+	if !strings.Contains(err.Error(), "persist lifecycle notification flag") {
+		t.Fatalf("first PollLifecycle() error = %v, want persist failure", err)
+	}
+	if first.Run.Status != store.StatusComplete {
+		t.Fatalf("first lifecycle result status = %q, want complete", first.Run.Status)
+	}
+	if len(terminalRuntime.notifications) != 1 {
+		t.Fatalf("first poll notifications = %d, want exactly one", len(terminalRuntime.notifications))
+	}
+
+	// Second poll: the durable claim exists, so notification is skipped and only save is attempted.
+	second, err := service.PollLifecycle(context.Background(), factoryLifecycleRequest(run.ID))
+	if err != nil {
+		t.Fatalf("second PollLifecycle() error = %v", err)
+	}
+	if second.Run.Status != store.StatusComplete || !second.Run.LifecycleNotificationSent {
+		t.Fatalf("second lifecycle result = %#v, want completed run with delivered notification", second)
+	}
+	// Critical assertion: notification was NOT sent again.
+	if len(terminalRuntime.notifications) != 1 {
+		t.Fatalf("total notifications = %d, want exactly one (no duplicate after retry)", len(terminalRuntime.notifications))
+	}
+}
+
 // TestAuthorizedCancelStopsAndRetainsAnActiveRun verifies cancellation is a
 // policy-controlled terminal transition rather than workspace cleanup.
 func TestAuthorizedCancelStopsAndRetainsAnActiveRun(t *testing.T) {
