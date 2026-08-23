@@ -116,6 +116,9 @@ type Service struct {
 	runtimeMu         sync.Mutex
 	runtimeSocketPath string
 	runtimePathSet    bool
+	startupMu         sync.Mutex
+	startupChecked    bool
+	startupErr        error
 }
 
 type InitResult struct {
@@ -149,6 +152,8 @@ type StatusResult struct {
 	ConfigPath     string
 	RepositoryPath string
 	LatestRun      *store.Run
+	// Recovery contains the read-only diagnosis for an interrupted run.
+	Recovery *RecoveryDiagnosis
 	// Deprecated: use LatestRun.
 	ActiveRun *store.Run
 }
@@ -359,6 +364,10 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	result.ActiveRun = result.LatestRun
 	if err != nil {
 		return StatusResult{}, err
+	}
+	if result.LatestRun != nil && !store.IsTerminalStatus(result.LatestRun.Status) {
+		diagnosis := s.diagnoseInterruptedRun(ctx, registration, *result.LatestRun)
+		result.Recovery = &diagnosis
 	}
 	return result, nil
 }

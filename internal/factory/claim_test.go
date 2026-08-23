@@ -259,20 +259,14 @@ func TestClaimPreservesTheOriginalErrorWhenWorkspaceCleanupFails(t *testing.T) {
 func TestTransitionEditsThePersistedStatusCommentAndKeepsStageAndStatusSeparate(t *testing.T) {
 	t.Parallel()
 
-	runStore := &fakeRunStore{saved: []store.Run{{
-		ID:              "run-fixed",
-		RepositoryPath:  "/repo",
-		IssueNumber:     42,
-		Stage:           store.StageClaim,
-		Status:          store.StatusActive,
-		Branch:          "factory/run-fixed",
-		Worktree:        "/worktree/run-fixed",
-		Coordinator:     "coordinator-test",
-		StatusCommentID: "comment-1",
-		CreatedAt:       time.Date(2026, 8, 20, 10, 11, 12, 0, time.UTC),
-	}}}
-	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{"enhancement", github.LabelAgentRunning}}}
-	service := newClaimService(githubAdapter, &fakeWorktree{}, runStore, validRepositoryConfig())
+	runStore := &fakeRunStore{}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{"enhancement", github.LabelAgentReady}}}
+	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
+	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
+	if _, err := service.ClaimIssue(context.Background(), 42); err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	githubAdapter.createdComments = nil
 
 	got, err := service.Transition(context.Background(), factory.TransitionRequest{
 		RunID:  "run-fixed",
@@ -304,22 +298,17 @@ func TestTransitionEditsThePersistedStatusCommentAndKeepsStageAndStatusSeparate(
 func TestTransitionRecoversACommentIdentityAfterAnInterruptedPersistence(t *testing.T) {
 	t.Parallel()
 
-	runStore := &fakeRunStore{saved: []store.Run{{
-		ID:             "run-fixed",
-		RepositoryPath: "/repo",
-		IssueNumber:    42,
-		Stage:          store.StageClaim,
-		Status:         store.StatusActive,
-		Branch:         "factory/run-fixed",
-		Worktree:       "/worktree/run-fixed",
-		Coordinator:    "coordinator-test",
-		CreatedAt:      time.Date(2026, 8, 20, 10, 11, 12, 0, time.UTC),
-	}}}
+	runStore := &fakeRunStore{}
 	githubAdapter := &fakeGitHub{
-		issueValue:    github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}},
+		issueValue:    github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}},
 		statusComment: github.Comment{ID: "comment-recovered", Body: "old status"},
 	}
-	service := newClaimService(githubAdapter, &fakeWorktree{}, runStore, validRepositoryConfig())
+	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
+	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
+	if _, err := service.ClaimIssue(context.Background(), 42); err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	runStore.saved[len(runStore.saved)-1].StatusCommentID = ""
 
 	got, err := service.Transition(context.Background(), factory.TransitionRequest{Stage: store.StageImplementation, Status: store.StatusActive})
 	if err != nil {

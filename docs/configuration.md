@@ -192,6 +192,19 @@ The coordinator then fetches `origin/<target_branch>`, records that fetched comm
 
 The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
 
+Before any later coordinator command can progress a persisted non-terminal run,
+the new process performs a read-only recovery diagnosis. It compares the run
+identifier, registered repository, worktree, branch, checkpoint SHA, issue
+number and factory state label, marked status-comment identity, and persisted
+pull-request identity when present. A missing or mismatched projection is
+reported alongside every other discovered discrepancy. Even when all sources
+agree, the command returns the typed `recovery-required` result and refuses to
+resume: this version performs no Git, GitHub, worker, terminal, harness, or
+workflow-state mutation and consumes no workflow budget. `factory status`
+remains available and prints the run, agreement state, discrepancies, and safe
+operator actions. Issue #21 explicitly supersedes this boundary with complete
+reconciliation and idempotent effect recovery.
+
 After a claim, `factory agent` starts the visible Codex implementation role and
 prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use

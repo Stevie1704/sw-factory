@@ -48,6 +48,12 @@ const (
 	StatusComplete          Status = "complete"
 )
 
+// IsTerminalStatus reports whether a run has no further coordinator
+// progression state to reconcile.
+func IsTerminalStatus(status Status) bool {
+	return status == StatusComplete || status == StatusCancelled || status == StatusFailed
+}
+
 // InvocationStatus describes the lifecycle of one visible harness invocation.
 type InvocationStatus string
 

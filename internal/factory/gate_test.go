@@ -2,15 +2,14 @@ package factory_test
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
-	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -41,13 +40,6 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 	policy := validRepositoryConfig()
 	policy.Setup = "setup-from-frozen-packet"
 	policy.Gates[0].Command = "gate-from-frozen-packet"
-	packetData, err := json.Marshal(factory.SpecificationPacket{
-		Version:          1,
-		RepositoryConfig: policy,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
@@ -56,28 +48,32 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 		OperationalDataPath:  filepath.Join(root, "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
-	run := store.Run{
-		ID:                  "run-gate-coordinator",
-		RepositoryPath:      repositoryPath,
-		IssueNumber:         5,
-		Stage:               store.StageClaim,
-		Status:              store.StatusActive,
-		Worktree:            worktreePath,
-		CheckpointSHA:       factoryGateCheckpoint,
-		ImageDigest:         policy.WorkerBuild.Digest,
-		SpecificationPacket: string(packetData),
-	}
+	runStore := &fakeRunStore{}
 	runtime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 5, State: "open", Labels: []string{github.LabelAgentReady}}}
+	workspace := &draftGitWorkspace{
+		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-gate-coordinator", Worktree: worktreePath},
+		state:     gitadapter.WorktreeState{Branch: "factory/run-gate-coordinator", HeadSHA: factoryGateCheckpoint},
+	}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config: &fakeConfig{value: host},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) {
-			return &fakeRunStore{saved: []store.Run{run}}, nil
+			return runStore, nil
 		},
-		GitHub:         &fakeGitHub{},
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:         githubAdapter,
+		GitWorkspace:   workspace,
+		Worktree:       workspace,
 		Worker:         runtime,
 		CommitStatuses: statuses,
+		NewRunID:       func() (string, error) { return "run-gate-coordinator", nil },
 	})
+	claimed, err := service.ClaimIssue(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	run := claimed.Run
 
 	result, err := service.RunGate(context.Background(), factory.RunGateRequest{
 		RunID:    run.ID,

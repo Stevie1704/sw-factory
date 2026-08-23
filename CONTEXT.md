@@ -16,6 +16,14 @@ _Avoid_: Live issue, prompt
 An immutable commit representing accepted work at a stage boundary and identifying the exact subject of gates or review.
 _Avoid_: Snapshot, latest code
 
+**Recovery diagnosis**:
+A read-only comparison of one persisted non-terminal run with its registered repository, worktree, Git projection, and GitHub projections.
+_Avoid_: Reconciliation, recovery
+
+**Recovery-required result**:
+A typed fail-closed refusal that reports the agreement state and discovered discrepancies without claiming that the run was recovered; issue #21 supersedes it with complete reconciliation.
+_Avoid_: Recovered run, automatic continuation
+
 **Gate**:
 A repository-declared deterministic command whose result is tied to an exact checkpoint and does not depend on model judgment.
 _Avoid_: Agent check, review

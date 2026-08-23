@@ -383,7 +383,30 @@ func (s *Service) openActiveRunStore(ctx context.Context) (config.RepositoryRegi
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
+	if err := s.ensureProgressionStartup(ctx, registration, run); err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
 	return registration, runStore, run, nil
+}
+
+// ensureProgressionStartup performs the one read-only startup guard for a
+// service instance. A service that found no interrupted run may continue a run
+// it claims during that same process; a fresh service refuses every persisted
+// non-terminal run until issue #21 supplies reconciliation.
+func (s *Service) ensureProgressionStartup(ctx context.Context, registration config.RepositoryRegistration, run *store.Run) error {
+	s.startupMu.Lock()
+	defer s.startupMu.Unlock()
+	if s.startupChecked {
+		return s.startupErr
+	}
+	s.startupChecked = true
+	if run == nil || store.IsTerminalStatus(run.Status) {
+		return nil
+	}
+	diagnosis := s.diagnoseInterruptedRun(ctx, registration, *run)
+	s.startupErr = recoveryRequiredError(diagnosis)
+	return s.startupErr
 }
 
 // failClaim records a terminal failure and best-effort moves the issue label

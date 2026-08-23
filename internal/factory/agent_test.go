@@ -301,29 +301,42 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 		t.Fatal(err)
 	}
 	policy := validRepositoryConfig()
-	packetData, err := json.Marshal(factory.SpecificationPacket{Version: 1, Issue: githubIssueFixture(), RepositoryConfig: policy})
-	if err != nil {
-		t.Fatal(err)
-	}
 	created := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
-	run := store.Run{ID: "run-agent", RepositoryPath: repositoryPath, IssueNumber: 6, Stage: store.StageClaim, Status: store.StatusActive, StatusCommentID: "comment-1", Worktree: worktreePath, CheckpointSHA: "base", ImageDigest: policy.WorkerBuild.Digest, SpecificationPacket: string(packetData), CreatedAt: created, UpdatedAt: created}
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml")}}}
-	runStore := &agentRunStore{runs: map[string]store.Run{run.ID: run}, current: &run, invocations: map[string]store.Invocation{}}
+	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}}
 	runtime := &agentWorker{}
 	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
-	githubRuntime := &fakeGitHub{issueValue: githubIssueFixture()}
+	issue := githubIssueFixture()
+	issue.Labels = []string{github.LabelAgentReady}
+	githubRuntime := &fakeGitHub{issueValue: issue}
+	worktree := &inspectingWorktree{
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-agent", Worktree: worktreePath}},
+		state:        gitadapter.WorktreeState{Branch: "factory/run-agent", HeadSHA: "base", ChangedPaths: []string{"internal/factory/agent.go"}},
+	}
+	ids := []string{"run-agent", "generated"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config:    &fakeConfig{value: host},
-		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		Worker:    runtime,
-		Terminal:  terminalRuntime,
-		Harness:   harnessRuntime,
-		GitHub:    githubRuntime,
-		Now:       func() time.Time { return created },
-		NewRunID:  func() (string, error) { return "generated", nil },
-		Worktree:  &inspectingWorktree{state: gitadapter.WorktreeState{HeadSHA: "base", ChangedPaths: []string{"internal/factory/agent.go"}}},
+		Config:         &fakeConfig{value: host},
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
+		Worker:         runtime,
+		Terminal:       terminalRuntime,
+		Harness:        harnessRuntime,
+		GitHub:         githubRuntime,
+		Now:            func() time.Time { return created },
+		NewRunID: func() (string, error) {
+			if len(ids) == 0 {
+				return "", errors.New("run id fixture exhausted")
+			}
+			id := ids[0]
+			ids = ids[1:]
+			return id, nil
+		},
+		Worktree: worktree,
 	})
+	if _, err := service.ClaimIssue(context.Background(), 6); err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
 	return service, runStore, runtime, terminalRuntime, harnessRuntime
 }
 

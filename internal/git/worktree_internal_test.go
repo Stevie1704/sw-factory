@@ -20,7 +20,13 @@ func TestInspectParsesNulDelimitedStatus(t *testing.T) {
 	if !reflect.DeepEqual(state.ChangedPaths, want) {
 		t.Fatalf("ChangedPaths = %#v, want %#v", state.ChangedPaths, want)
 	}
-	if len(runner.calls) != 2 || runner.calls[1][0] != "status" || !containsArgument(runner.calls[1], "-z") {
+	if state.Branch != "factory/run-fixed" {
+		t.Fatalf("Branch = %q, want factory/run-fixed", state.Branch)
+	}
+	if state.RepositoryPath != "/repo" {
+		t.Fatalf("RepositoryPath = %q, want /repo", state.RepositoryPath)
+	}
+	if len(runner.calls) != 4 || runner.calls[3][0] != "status" || !containsArgument(runner.calls[3], "-z") {
 		t.Fatalf("Git calls = %#v, want porcelain status with -z", runner.calls)
 	}
 }
@@ -34,6 +40,12 @@ type inspectRunner struct {
 // Run records one Git command and returns its fixture output.
 func (r *inspectRunner) Run(_ context.Context, _ string, args []string) ([]byte, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
+	if args[0] == "rev-parse" && containsArgument(args, "--git-common-dir") {
+		return []byte("/repo/.git\n"), nil
+	}
+	if args[0] == "branch" {
+		return []byte("factory/run-fixed\n"), nil
+	}
 	if args[0] == "rev-parse" {
 		return []byte("0123456789abcdef\n"), nil
 	}
