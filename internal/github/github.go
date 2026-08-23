@@ -66,10 +66,23 @@ type Label struct {
 	Color       string
 }
 
-// Comment is the identity returned after creating a GitHub issue comment.
+// Comment is the coordinator-neutral identity and revision of a GitHub issue
+// or pull-request comment.
 type Comment struct {
-	ID   string
+	// ID is the immutable GitHub comment identity used as a replay watermark.
+	ID string
+	// Body is the complete user-authored comment text.
 	Body string
+	// Author is the GitHub login that authored the comment.
+	Author string
+	// UpdatedAt is the current edit revision of the comment.
+	UpdatedAt time.Time
+}
+
+// CommentReader lists comments for an issue or pull request through the
+// shared GitHub issue-comments endpoint.
+type CommentReader interface {
+	IssueComments(context.Context, Repository, int) ([]Comment, error)
 }
 
 // PullRequest is the pull-request identity and body returned to the
@@ -196,6 +209,8 @@ type GhClient struct {
 	Runner CommandRunner
 }
 
+var _ CommentReader = (*GhClient)(nil)
+
 // NewClient returns a GitHub CLI-backed client.
 func NewClient() *GhClient { return &GhClient{Runner: commandRunner{}} }
 
@@ -266,11 +281,31 @@ func (c *GhClient) CreateIssueComment(ctx context.Context, repository Repository
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--method", "POST"}, map[string]string{"body": body}, &response); err != nil {
 		return Comment{}, fmt.Errorf("create status comment on issue #%d: %w", number, err)
 	}
-	return Comment{ID: fmt.Sprint(response.ID), Body: response.Body}, nil
+	return response.comment(), nil
+}
+
+// IssueComments lists all comments for an issue or pull request in GitHub's
+// stable API order. The caller uses comment IDs as the exactly-once watermark.
+func (c *GhClient) IssueComments(ctx context.Context, repository Repository, number int) ([]Comment, error) {
+	if number <= 0 {
+		return nil, errors.New("issue number must be positive")
+	}
+	var pages [][]commentResponse
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
+		return nil, fmt.Errorf("list comments on issue #%d: %w", number, err)
+	}
+	comments := make([]Comment, 0)
+	for _, page := range pages {
+		for _, response := range page {
+			comments = append(comments, response.comment())
+		}
+	}
+	return comments, nil
 }
 
 // FindStatusComment recovers a previously created status comment by its
 // immutable run marker when persistence was interrupted after GitHub mutation.
+// It only returns a marker match authored by the authenticated coordinator.
 func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository, number int, marker string) (Comment, error) {
 	if number <= 0 {
 		return Comment{}, errors.New("issue number must be positive")
@@ -278,18 +313,38 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository,
 	if strings.TrimSpace(marker) == "" {
 		return Comment{}, errors.New("status comment marker is required")
 	}
+	coordinator, err := c.authenticatedUser(ctx)
+	if err != nil {
+		return Comment{}, err
+	}
 	var pages [][]commentResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
 		return Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
 	}
 	for _, page := range pages {
 		for _, response := range page {
-			if strings.Contains(response.Body, marker) {
-				return Comment{ID: fmt.Sprint(response.ID), Body: response.Body}, nil
+			comment := response.comment()
+			if strings.Contains(comment.Body, marker) && strings.EqualFold(strings.TrimSpace(comment.Author), coordinator) {
+				return comment, nil
 			}
 		}
 	}
 	return Comment{}, nil
+}
+
+// authenticatedUser returns the GitHub login attached to the local gh
+// credential, which is the only reliable coordinator identity available to the
+// adapter when it recovers a status comment.
+func (c *GhClient) authenticatedUser(ctx context.Context) (string, error) {
+	var response userResponse
+	if err := c.callJSON(ctx, []string{"api", "user"}, nil, &response); err != nil {
+		return "", fmt.Errorf("identify authenticated GitHub user: %w", err)
+	}
+	login := strings.TrimSpace(response.Login)
+	if login == "" {
+		return "", errors.New("authenticated GitHub user has no login")
+	}
+	return login, nil
 }
 
 // EditIssueComment edits an existing issue comment by id.
@@ -470,8 +525,24 @@ type issueResponse struct {
 // commentResponse is the subset of a GitHub comment response needed to retain
 // the editable comment identity.
 type commentResponse struct {
-	ID   int64  `json:"id"`
-	Body string `json:"body"`
+	ID        int64     `json:"id"`
+	Body      string    `json:"body"`
+	UpdatedAt time.Time `json:"updated_at"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+// userResponse is the authenticated GitHub user projection used for ownership
+// checks on coordinator-created comments.
+type userResponse struct {
+	Login string `json:"login"`
+}
+
+// comment converts the GitHub response shape into the coordinator-neutral
+// comment model.
+func (r commentResponse) comment() Comment {
+	return Comment{ID: fmt.Sprint(r.ID), Body: r.Body, Author: r.User.Login, UpdatedAt: r.UpdatedAt}
 }
 
 // pullRequestResponse is the GitHub API subset used by the factory.

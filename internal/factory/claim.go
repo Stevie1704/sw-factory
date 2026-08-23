@@ -89,6 +89,9 @@ type stateTransition struct {
 	Previous      store.Run
 	Next          store.Run
 	CreateComment bool
+	// PersistBeforeEffects is used by replay-sensitive commands so the
+	// processed-comment watermark is durable before GitHub mutation.
+	PersistBeforeEffects bool
 }
 
 // BootstrapLabels explicitly creates or updates the factory-owned labels for
@@ -277,6 +280,18 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 // be persisted.
 func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, transition stateTransition) (store.Run, error) {
 	next := transition.Next
+	if next.Revision <= transition.Previous.Revision {
+		next.Revision = transition.Previous.Revision + 1
+	}
+	if transition.PersistBeforeEffects {
+		next.UpdatedAt = s.deps.Now().UTC()
+		if transition.CreateComment {
+			return next, errors.New("cannot persist a command before creating its status comment")
+		}
+		if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
+			return next, fmt.Errorf("persist state transition before GitHub effects: %w", err)
+		}
+	}
 	oldLabels := append([]string(nil), transition.Issue.Labels...)
 	newLabels := replaceFactoryState(oldLabels, factoryLabelForStatus(next.Status))
 	if err := s.deps.GitHub.ReplaceIssueLabels(ctx, transition.Repository, next.IssueNumber, newLabels); err != nil {
@@ -298,6 +313,9 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 		}
 	}
 	next.UpdatedAt = s.deps.Now().UTC()
+	if transition.PersistBeforeEffects {
+		return next, nil
+	}
 	if err := saveRunWithRetry(ctx, runStore, next); err != nil {
 		if !transition.CreateComment {
 			compensationErrors := []error{
@@ -438,7 +456,23 @@ func statusCommentBody(run store.Run) string {
 	if run.PullRequestNumber > 0 {
 		pullRequest = fmt.Sprintf("- pull request: #%d %s\n", run.PullRequestNumber, run.PullRequestURL)
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, pullRequest)
+	commandFeedback := ""
+	if run.LastCommandName != "" {
+		commandFeedback = fmt.Sprintf("\n### Last command\n\n- comment: `%s`\n- revision: `%d`\n- command: `%s`\n- outcome: `%s`\n- message: %s\n", safeStatusCommentValue(run.ProcessedCommentID), run.ProcessedCommentRevision, safeStatusCommentValue(run.LastCommandName), safeStatusCommentValue(run.LastCommandOutcome), safeStatusCommentValue(run.LastCommandMessage))
+	}
+	harness := ""
+	if run.HarnessOverride != "" {
+		harness = fmt.Sprintf("\n- harness override: `%s`\n", safeStatusCommentValue(run.HarnessOverride))
+	}
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, pullRequest, harness, commandFeedback)
+}
+
+// safeStatusCommentValue keeps command feedback single-line and prevents
+// untrusted GitHub login or parser text from changing the status-comment
+// structure.
+func safeStatusCommentValue(value string) string {
+	value = strings.NewReplacer("\r", " ", "\n", " ", "`", "'", "\x00", " ").Replace(value)
+	return strings.TrimSpace(value)
 }
 
 // statusCommentMarker identifies the one editable status comment for a run.

@@ -38,6 +38,10 @@ type Factory interface {
 	// configured gate, pushes the branch, and creates or updates one draft PR.
 	CreateDraftPullRequest(context.Context, DraftPullRequestRequest) (DraftPullRequestResult, error)
 	Status(context.Context) (StatusResult, error)
+	// HandleCommand processes one structured GitHub comment exactly once.
+	HandleCommand(context.Context, CommandRequest) (CommandResult, error)
+	// PollCommands reads issue and pull-request comments for the current run.
+	PollCommands(context.Context, CommandPollRequest) ([]CommandResult, error)
 }
 
 // RunCoordinator is the single claim/state-transition seam used by the
@@ -100,7 +104,9 @@ type Dependencies struct {
 	GitWorkspace gitadapter.GitWorkspace
 	// PullRequests owns idempotent draft pull-request discovery and mutation.
 	PullRequests github.PullRequestClient
-	Worker       worker.WorkerRuntime
+	// Comments lists issue and pull-request comments for command polling.
+	Comments github.CommentReader
+	Worker   worker.WorkerRuntime
 	// Terminal owns visible control and run workspaces.
 	Terminal terminal.TerminalRuntime
 	// Harness owns interactive role lifecycle and native session recovery.
@@ -113,6 +119,7 @@ type Dependencies struct {
 type Service struct {
 	configPath        string
 	deps              Dependencies
+	commandMu         sync.Mutex
 	runtimeMu         sync.Mutex
 	runtimeSocketPath string
 	runtimePathSet    bool
@@ -213,6 +220,11 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.PullRequests == nil {
 		if client, ok := dependencies.GitHub.(github.PullRequestClient); ok {
 			dependencies.PullRequests = client
+		}
+	}
+	if dependencies.Comments == nil {
+		if reader, ok := dependencies.GitHub.(github.CommentReader); ok {
+			dependencies.Comments = reader
 		}
 	}
 	if dependencies.Worker == nil {

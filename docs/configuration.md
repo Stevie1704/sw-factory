@@ -205,12 +205,52 @@ remains available and prints the run, agreement state, discrepancies, and safe
 operator actions. Issue #21 explicitly supersedes this boundary with complete
 reconciliation and idempotent effect recovery.
 
+## Authorized GitHub commands
+
+The coordinator recognizes a command only when the complete trimmed comment is
+one structured `/factory` command. Ordinary discussion is ignored, so a casual
+mention of “retry” or “refresh” cannot control a run:
+
+```text
+/factory status
+/factory refresh
+/factory retry
+/factory config harness=codex
+```
+
+Run one comment poll with `factory poll --config /Users/me/.config/factory/config.yaml`;
+repeating the command is safe because the persisted watermark filters old
+comments.
+
+The author must be present in the registered `authorized_users` list. A status
+or refresh command re-renders the existing supervision comment; retry reopens a
+failed run at its current stage; and harness configuration records a later
+invocation override only when the frozen repository configuration permits it. A
+recognized command from an unauthorized author or a malformed command is a
+typed policy rejection. The coordinator leaves workflow stage, status, labels,
+and configuration unchanged for that rejection, while recording the rejection
+in the same editable status comment.
+
+The command grammar also names `claude` for forward-compatible parsing, but the
+current implementation role has only the Codex adapter; selecting Claude is a
+typed `harness_unavailable` rejection until its later adapter is delivered.
+
+Each comment is processed at most once. The operational store persists a
+monotonic run revision, the processed comment ID watermark, and the revision at
+which that watermark was written. Polling therefore ignores old comments, and
+editing an already processed comment cannot turn it into a new command after a
+coordinator restart. Command handling serializes one service's work and uses a
+SQLite revision compare-and-set, durably claiming the comment before applying
+GitHub effects. The same parser and handler are used for issue comments and
+pull-request comments; later commands can extend the registered verb set
+without duplicating polling or replay logic.
+
 After a claim, `factory agent` starts the visible Codex implementation role and
 prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 7 and persists invocation
+result. The operational store schema is version 8 and persists invocation
 identity, opaque surface handles, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state. It
 also persists the draft pull-request number and URL so a restarted command can
