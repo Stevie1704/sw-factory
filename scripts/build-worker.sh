@@ -48,15 +48,19 @@ case "$image_id" in
     ;;
 esac
 
-digest="$image_id"
-qualified_reference="$WORKER_IMAGE@$digest"
+# Note: This is Docker's local content-addressable image ID (config digest),
+# not a registry manifest digest. See docs/configuration.md and
+# docs/worker-runtime.md for the documented limitation. A registry publish
+# workflow should replace this with the registry's manifest digest.
+local_image_id="$image_id"
+local_reference="$WORKER_IMAGE@$local_image_id"
 
-echo "Verifying local digest-qualified image $qualified_reference"
-"$DOCKER" image inspect "$qualified_reference" >/dev/null
+echo "Verifying local image reference $local_reference"
+"$DOCKER" image inspect "$local_reference" >/dev/null
 "$DOCKER" run --rm --pull=never \
   --cap-drop ALL \
   --security-opt no-new-privileges \
-  "$qualified_reference" /bin/sh -c '
+  "$local_reference" /bin/sh -c '
   test "$(id -u)" = 10001
   test "$HOME" = /home/factory
   test -d /work && test -d /git && test -d /cache && test -d /invocation && test -d /results
@@ -105,14 +109,14 @@ tar -C "$repository_root" \
 tar -C "$worker_checkout" -xf "$worker_archive"
 rm -f "$worker_archive"
 
-echo "Running repository setup and gates in $qualified_reference"
+echo "Running repository setup and gates in $local_reference"
 "$DOCKER" run --rm --pull=never \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --mount "type=bind,src=$worker_checkout,dst=/work" \
   --mount "type=bind,src=$git_projection,dst=/git,readonly" \
   --workdir /work \
-  "$qualified_reference" /usr/bin/env -i \
+  "$local_reference" /usr/bin/env -i \
     HOME=/home/factory \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     TERM=xterm-256color \
@@ -150,6 +154,6 @@ cat <<EOF
 Worker image built and verified locally.
 worker_build:
   image: $WORKER_IMAGE
-  digest: $digest
+  digest: $local_image_id
   definition: worker/Dockerfile
 EOF
