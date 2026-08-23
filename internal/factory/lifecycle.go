@@ -64,12 +64,6 @@ func (s *Service) PollLifecycle(ctx context.Context, request LifecycleRequest) (
 	return s.observeLifecycle(ctx, registration, runStore, run)
 }
 
-// ObserveLifecycle is an explicit spelling of PollLifecycle for callers that
-// perform one-shot lifecycle checks outside the regular command poller.
-func (s *Service) ObserveLifecycle(ctx context.Context, request LifecycleRequest) (LifecycleResult, error) {
-	return s.PollLifecycle(ctx, request)
-}
-
 // observeLifecycle applies one lifecycle decision against an already-open
 // command store. Terminal runs are returned without repeating external effects.
 func (s *Service) observeLifecycle(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) (LifecycleResult, error) {
@@ -77,7 +71,14 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 		return LifecycleResult{Outcome: LifecycleUnchanged}, nil
 	}
 	if store.IsTerminalStatus(run.Status) {
-		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run, Reason: run.LifecycleReason}, nil
+		if run.Status == store.StatusFailed {
+			return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run, Reason: run.LifecycleReason}, nil
+		}
+		updated, notificationErr := s.ensureTerminalNotification(ctx, registration, runStore, *run)
+		if notificationErr != nil {
+			return LifecycleResult{Outcome: LifecycleUnchanged, Run: updated, Reason: updated.LifecycleReason}, notificationErr
+		}
+		return LifecycleResult{Outcome: LifecycleUnchanged, Run: updated, Reason: updated.LifecycleReason}, nil
 	}
 
 	repository := commandRepository(registration)
@@ -93,12 +94,16 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 	// GitHub reports a merged pull request as closed, so merge detection must
 	// happen before either ordinary closed-state cancellation branch.
 	if hasPullRequest && pullRequest.Merged {
+		if strings.TrimSpace(pullRequest.MergeCommitSHA) == "" {
+			return LifecycleResult{}, fmt.Errorf("merged pull request #%d has no merge commit", pullRequest.Number)
+		}
 		reason := fmt.Sprintf("pull request #%d merged", pullRequest.Number)
 		next := *run
 		next.Stage = store.StageReady
 		next.Status = store.StatusComplete
 		next.MergeCommitSHA = pullRequest.MergeCommitSHA
 		next.LifecycleReason = reason
+		next.LifecycleNotificationSent = false
 		next.UpdatedAt = s.deps.Now().UTC()
 		updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
 		return LifecycleResult{Outcome: LifecycleCompleted, Run: updated, Reason: reason}, transitionErr
@@ -117,6 +122,7 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 	next.Status = store.StatusCancelled
 	next.LifecycleReason = reason
 	next.MergeCommitSHA = ""
+	next.LifecycleNotificationSent = false
 	next.UpdatedAt = s.deps.Now().UTC()
 	updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
 	return LifecycleResult{Outcome: LifecycleCancelled, Run: updated, Reason: reason}, transitionErr
@@ -155,14 +161,19 @@ func (s *Service) trackedPullRequest(ctx context.Context, registration config.Re
 // retryTargetIsOpen confirms that a cancelled run has an explicitly reopened
 // GitHub target before the retry command reactivates its persisted state.
 func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.RepositoryRegistration, run store.Run, issue github.Issue) (bool, error) {
-	if strings.EqualFold(strings.TrimSpace(issue.State), "open") {
-		return true, nil
+	issueOpen := strings.EqualFold(strings.TrimSpace(issue.State), "open")
+	if run.PullRequestNumber == 0 {
+		return issueOpen, nil
 	}
 	pullRequest, found, err := s.trackedPullRequest(ctx, registration, run)
 	if err != nil {
 		return false, err
 	}
-	return found && !pullRequest.Merged && strings.EqualFold(strings.TrimSpace(pullRequest.State), "open"), nil
+	pullRequestOpen := found && !pullRequest.Merged && strings.EqualFold(strings.TrimSpace(pullRequest.State), "open")
+	if strings.HasPrefix(strings.TrimSpace(run.LifecycleReason), "pull request #") {
+		return pullRequestOpen, nil
+	}
+	return issueOpen, nil
 }
 
 // transitionTerminal stops the worker, projects the terminal state to GitHub,
@@ -196,10 +207,24 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 	if err != nil {
 		return updated, err
 	}
-	if err := s.notifyTerminal(ctx, registration, updated); err != nil {
-		return updated, err
+	return s.ensureTerminalNotification(ctx, registration, runStore, updated)
+}
+
+// ensureTerminalNotification delivers and records the one terminal cmux
+// notification, including after a prior delivery failure or restart.
+func (s *Service) ensureTerminalNotification(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
+	if run.LifecycleNotificationSent {
+		return run, nil
 	}
-	return updated, nil
+	if err := s.notifyTerminal(ctx, registration, run); err != nil {
+		return run, err
+	}
+	run.LifecycleNotificationSent = true
+	run.UpdatedAt = s.deps.Now().UTC()
+	if err := saveRunWithRetry(ctx, runStore, run); err != nil {
+		return run, fmt.Errorf("persist lifecycle notification: %w", err)
+	}
+	return run, nil
 }
 
 // stopRunWorker stops an existing worker without removing its persistent

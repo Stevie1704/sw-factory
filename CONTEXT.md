@@ -8,6 +8,11 @@ The software factory turns an explicitly authorized GitHub issue into a supervis
 One supervised execution that owns a frozen issue, specification packet, branch, worktree, and pull request.
 _Avoid_: Job, task, workflow instance
 
+**GitHub lifecycle observation**:
+One coordinator read of the tracked issue and pull request that can identify
+successful merge completion or an unmerged closure requiring cancellation.
+_Avoid_: Screen scrape, automatic resume
+
 **Specification packet**:
 The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot and accepted clarifications or revisions.
 _Avoid_: Live issue, prompt

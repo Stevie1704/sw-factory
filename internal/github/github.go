@@ -551,15 +551,18 @@ func (r commentResponse) comment() Comment {
 
 // pullRequestResponse is the GitHub API subset used by the factory.
 type pullRequestResponse struct {
-	Number         int        `json:"number"`
-	HTMLURL        string     `json:"html_url"`
-	Title          string     `json:"title"`
-	Body           string     `json:"body"`
-	State          string     `json:"state"`
-	Draft          bool       `json:"draft"`
-	Merged         bool       `json:"merged"`
-	MergedAt       *time.Time `json:"merged_at"`
-	MergeCommitSHA string     `json:"merge_commit_sha"`
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	State   string `json:"state"`
+	Draft   bool   `json:"draft"`
+	// Merged is supplied by pull-specific GitHub responses when available.
+	Merged bool `json:"merged"`
+	// MergedAt is the timestamp GitHub supplies for a successful merge.
+	MergedAt *time.Time `json:"merged_at"`
+	// MergeCommitSHA is the immutable commit recorded by GitHub for the merge.
+	MergeCommitSHA string `json:"merge_commit_sha"`
 	Head           struct {
 		Ref string `json:"ref"`
 	} `json:"head"`

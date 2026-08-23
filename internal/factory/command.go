@@ -137,6 +137,13 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	if request.IssueNumber != run.IssueNumber && request.IssueNumber != run.PullRequestNumber {
 		return CommandResult{Outcome: CommandRejected, Run: *run}, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("comment target #%d does not belong to run %q", request.IssueNumber, run.ID)}
 	}
+	if (run.Status == store.StatusComplete || run.Status == store.StatusCancelled) && !run.LifecycleNotificationSent {
+		updated, notificationErr := s.ensureTerminalNotification(ctx, registration, runStore, *run)
+		if notificationErr != nil {
+			return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: updated}, notificationErr
+		}
+		*run = updated
+	}
 	if commentAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
 	}
@@ -186,6 +193,7 @@ func (s *Service) handleCancelCommand(ctx context.Context, registration config.R
 	next.Status = store.StatusCancelled
 	next.LifecycleReason = "authorized cancel command"
 	next.MergeCommitSHA = ""
+	next.LifecycleNotificationSent = false
 	next.UpdatedAt = s.deps.Now().UTC()
 	updated, err := s.transitionTerminal(ctx, registration, runStore, run, next, issue)
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
@@ -312,6 +320,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 	next.Status = store.StatusActive
 	next.MergeCommitSHA = ""
 	next.LifecycleReason = ""
+	next.LifecycleNotificationSent = false
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository:           repository,
 		Issue:                issue,

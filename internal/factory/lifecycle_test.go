@@ -2,6 +2,7 @@ package factory_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -79,6 +80,43 @@ func TestPollLifecycleCompletesAMergedPullRequest(t *testing.T) {
 	}
 	if len(githubAdapter.editedComments) != 1 || workerRuntime.stopCalls != 1 || len(terminalRuntime.notifications) != 1 {
 		t.Fatalf("repeated lifecycle effects = edits %d/stops %d/notifications %d, want no duplicates", len(githubAdapter.editedComments), workerRuntime.stopCalls, len(terminalRuntime.notifications))
+	}
+}
+
+// TestPollLifecycleRetriesAFailedTerminalNotification verifies a delivery
+// failure remains retryable after the terminal state itself is persisted.
+func TestPollLifecycleRetriesAFailedTerminalNotification(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusActive)
+	run.Branch = "factory/run-command"
+	run.PullRequestNumber = 17
+	run.PullRequestURL = "https://github.com/example/project/pull/17"
+	githubAdapter := &lifecycleGitHub{
+		commandGitHub: commandGitHub{issue: github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: run.StatusCommentID}},
+		pullRequest:   github.PullRequest{Number: 17, State: "closed", Merged: true, MergeCommitSHA: strings.Repeat("d", 40), HeadBranch: run.Branch, BaseBranch: "main"},
+	}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	terminalRuntime := &lifecycleTerminal{notifyErrors: []error{errors.New("cmux unavailable")}}
+	service := newLifecycleService(runStore, githubAdapter, &lifecycleWorker{}, terminalRuntime)
+
+	first, err := service.PollLifecycle(context.Background(), factoryLifecycleRequest(run.ID))
+	if err == nil {
+		t.Fatal("first PollLifecycle() error = nil, want notification failure")
+	}
+	if first.Run.Status != store.StatusComplete || first.Run.LifecycleNotificationSent {
+		t.Fatalf("first lifecycle result = %#v, want completed run with pending notification", first)
+	}
+
+	second, err := service.PollLifecycle(context.Background(), factoryLifecycleRequest(run.ID))
+	if err != nil {
+		t.Fatalf("second PollLifecycle() error = %v", err)
+	}
+	if second.Run.Status != store.StatusComplete || !second.Run.LifecycleNotificationSent {
+		t.Fatalf("second lifecycle result = %#v, want completed run with delivered notification", second)
+	}
+	if len(terminalRuntime.notifications) != 2 {
+		t.Fatalf("notification attempts = %d, want one retry", len(terminalRuntime.notifications))
 	}
 }
 
@@ -253,6 +291,40 @@ func TestRetryExplicitlyReopensACancelledRun(t *testing.T) {
 	}
 }
 
+// TestRetryRejectsAClosedPullRequest verifies a PR closure cannot be bypassed
+// by reopening only the parent issue before retrying.
+func TestRetryRejectsAClosedPullRequest(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusCancelled)
+	run.Branch = "factory/run-command"
+	run.PullRequestNumber = 17
+	run.PullRequestURL = "https://github.com/example/project/pull/17"
+	run.LifecycleReason = "pull request #17 closed without merging"
+	run.LifecycleNotificationSent = true
+	githubAdapter := &lifecycleGitHub{
+		commandGitHub: commandGitHub{issue: github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentCancelled}}, statusComment: github.Comment{ID: run.StatusCommentID}},
+		pullRequest:   github.PullRequest{Number: 17, State: "closed", HeadBranch: run.Branch, BaseBranch: "main"},
+	}
+	runStore := &commandRunStore{latest: &run}
+	service := newLifecycleService(runStore, githubAdapter, &lifecycleWorker{}, &lifecycleTerminal{})
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: run.IssueNumber, Comment: github.Comment{ID: "101", Author: "alice", Body: "/factory retry"}})
+	if err == nil {
+		t.Fatal("HandleCommand() error = nil, want retry policy rejection")
+	}
+	var rejection *factory.PolicyRejection
+	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionRetryState {
+		t.Fatalf("HandleCommand() error = %v, want retry_state rejection", err)
+	}
+	if result.Outcome != factory.CommandRejected || result.Run.Status != store.StatusCancelled {
+		t.Fatalf("retry result = %#v, want rejected cancelled run", result)
+	}
+	if len(githubAdapter.replacedLabels) != 0 {
+		t.Fatalf("retry labels = %#v, want no state transition", githubAdapter.replacedLabels)
+	}
+}
+
 // factoryLifecycleRequest keeps lifecycle tests independent of the request's
 // concrete field layout while still exercising explicit run selection.
 func factoryLifecycleRequest(runID string) factory.LifecycleRequest {
@@ -326,6 +398,7 @@ func (*lifecycleWorker) Inspect(context.Context, string) (worker.Inspection, err
 // lifecycleTerminal records operator notifications without talking to cmux.
 type lifecycleTerminal struct {
 	notifications []terminal.Notification
+	notifyErrors  []error
 }
 
 // EnsureControlWorkspace returns a stable control workspace for notification.
@@ -354,6 +427,11 @@ func (*lifecycleTerminal) SendInput(context.Context, terminal.SurfaceID, []byte)
 // Notify records one lifecycle notification.
 func (t *lifecycleTerminal) Notify(_ context.Context, notification terminal.Notification) error {
 	t.notifications = append(t.notifications, notification)
+	if len(t.notifyErrors) > 0 {
+		err := t.notifyErrors[0]
+		t.notifyErrors = t.notifyErrors[1:]
+		return err
+	}
 	return nil
 }
 

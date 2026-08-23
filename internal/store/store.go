@@ -18,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 9
+const CurrentSchemaVersion = 10
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -117,6 +117,8 @@ type Run struct {
 	MergeCommitSHA string
 	// LifecycleReason explains an automatic or authorized terminal transition.
 	LifecycleReason string
+	// LifecycleNotificationSent records successful cmux notification delivery.
+	LifecycleNotificationSent bool
 	// Revision is the monotonic coordinator revision used by command replay
 	// prevention and persisted supervision updates.
 	Revision int64
@@ -278,7 +280,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason,
+		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override,
@@ -297,7 +299,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason,
+		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override,
@@ -328,6 +330,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.PullRequestURL,
 		&run.MergeCommitSHA,
 		&run.LifecycleReason,
+		&run.LifecycleNotificationSent,
 		&run.Revision,
 		&run.ProcessedCommentID,
 		&run.ProcessedCommentRevision,
@@ -432,6 +435,7 @@ func runValues(run Run) []any {
 		run.PullRequestURL,
 		run.MergeCommitSHA,
 		run.LifecycleReason,
+		run.LifecycleNotificationSent,
 		run.Revision,
 		run.ProcessedCommentID,
 		run.ProcessedCommentRevision,
@@ -450,10 +454,11 @@ const saveRunStatement = `
 			id, repository_path, issue_number, stage, status, branch, worktree,
 			checkpoint_sha, image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
+			lifecycle_notification_sent,
 			revision, processed_comment_id,
 			processed_comment_revision, last_command_name, last_command_outcome,
 			last_command_message, harness_override, specification_packet, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
 			issue_number = excluded.issue_number,
@@ -469,6 +474,7 @@ const saveRunStatement = `
 			pull_request_url = excluded.pull_request_url,
 			merge_commit_sha = excluded.merge_commit_sha,
 			lifecycle_reason = excluded.lifecycle_reason,
+			lifecycle_notification_sent = excluded.lifecycle_notification_sent,
 			revision = excluded.revision,
 			processed_comment_id = excluded.processed_comment_id,
 			processed_comment_revision = excluded.processed_comment_revision,
@@ -484,6 +490,7 @@ const saveRunIfRevisionStatement = `
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
 			checkpoint_sha = ?, image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
+			lifecycle_notification_sent = ?,
 			revision = ?, processed_comment_id = ?,
 			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
 			last_command_message = ?, harness_override = ?, specification_packet = ?,
@@ -846,6 +853,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 9: %w", err)
 				}
+			}
+		case 10:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN lifecycle_notification_sent INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("apply store migration 10: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
