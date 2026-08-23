@@ -100,6 +100,10 @@ type PullRequest struct {
 	State string
 	// Draft reports whether GitHub marks the pull request as a draft.
 	Draft bool
+	// Merged reports whether GitHub has completed the pull request merge.
+	Merged bool
+	// MergeCommitSHA is the immutable commit created by a successful merge.
+	MergeCommitSHA string
 	// HeadBranch is the source branch name.
 	HeadBranch string
 	// BaseBranch is the target branch name.
@@ -547,13 +551,16 @@ func (r commentResponse) comment() Comment {
 
 // pullRequestResponse is the GitHub API subset used by the factory.
 type pullRequestResponse struct {
-	Number  int    `json:"number"`
-	HTMLURL string `json:"html_url"`
-	Title   string `json:"title"`
-	Body    string `json:"body"`
-	State   string `json:"state"`
-	Draft   bool   `json:"draft"`
-	Head    struct {
+	Number         int        `json:"number"`
+	HTMLURL        string     `json:"html_url"`
+	Title          string     `json:"title"`
+	Body           string     `json:"body"`
+	State          string     `json:"state"`
+	Draft          bool       `json:"draft"`
+	Merged         bool       `json:"merged"`
+	MergedAt       *time.Time `json:"merged_at"`
+	MergeCommitSHA string     `json:"merge_commit_sha"`
+	Head           struct {
 		Ref string `json:"ref"`
 	} `json:"head"`
 	Base struct {
@@ -582,7 +589,8 @@ type pullRequestUpdatePayload struct {
 func (r pullRequestResponse) pullRequest() PullRequest {
 	return PullRequest{
 		Number: r.Number, URL: r.HTMLURL, Title: r.Title, Body: r.Body,
-		State: r.State, Draft: r.Draft, HeadBranch: r.Head.Ref, BaseBranch: r.Base.Ref,
+		State: r.State, Draft: r.Draft, Merged: r.Merged || r.MergedAt != nil,
+		MergeCommitSHA: r.MergeCommitSHA, HeadBranch: r.Head.Ref, BaseBranch: r.Base.Ref,
 	}
 }
 

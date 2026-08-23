@@ -95,3 +95,17 @@ func TestParseSupportsHarnessConfigurationForms(t *testing.T) {
 		}
 	}
 }
+
+// TestParseRecognizesTheAuthorizedCancelCommand verifies cancellation uses the
+// same explicit, single-comment command grammar as the existing controls.
+func TestParseRecognizesTheAuthorizedCancelCommand(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := command.Parse("/factory cancel")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !parsed.Recognized || parsed.Command.Kind != command.Cancel {
+		t.Fatalf("parsed cancel = %#v, want recognized cancel command", parsed)
+	}
+}

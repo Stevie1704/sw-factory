@@ -18,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 8
+const CurrentSchemaVersion = 9
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -113,6 +113,10 @@ type Run struct {
 	PullRequestNumber int
 	// PullRequestURL is the operator-facing URL of the draft PR.
 	PullRequestURL string
+	// MergeCommitSHA is the immutable commit recorded when the tracked PR merges.
+	MergeCommitSHA string
+	// LifecycleReason explains an automatic or authorized terminal transition.
+	LifecycleReason string
 	// Revision is the monotonic coordinator revision used by command replay
 	// prevention and persisted supervision updates.
 	Revision int64
@@ -273,7 +277,8 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
-		       pull_request_number, pull_request_url,
+		       pull_request_number, pull_request_url, merge_commit_sha,
+		       lifecycle_reason,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override,
@@ -291,7 +296,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
-		       pull_request_number, pull_request_url,
+		       pull_request_number, pull_request_url, merge_commit_sha,
+		       lifecycle_reason,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override,
@@ -320,6 +326,8 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.StatusCommentID,
 		&run.PullRequestNumber,
 		&run.PullRequestURL,
+		&run.MergeCommitSHA,
+		&run.LifecycleReason,
 		&run.Revision,
 		&run.ProcessedCommentID,
 		&run.ProcessedCommentRevision,
@@ -422,6 +430,8 @@ func runValues(run Run) []any {
 		run.StatusCommentID,
 		run.PullRequestNumber,
 		run.PullRequestURL,
+		run.MergeCommitSHA,
+		run.LifecycleReason,
 		run.Revision,
 		run.ProcessedCommentID,
 		run.ProcessedCommentRevision,
@@ -439,10 +449,11 @@ const saveRunStatement = `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
 			checkpoint_sha, image_digest, coordinator, status_comment_id,
-			pull_request_number, pull_request_url, revision, processed_comment_id,
+			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
+			revision, processed_comment_id,
 			processed_comment_revision, last_command_name, last_command_outcome,
 			last_command_message, harness_override, specification_packet, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
 			issue_number = excluded.issue_number,
@@ -456,6 +467,8 @@ const saveRunStatement = `
 			status_comment_id = excluded.status_comment_id,
 			pull_request_number = excluded.pull_request_number,
 			pull_request_url = excluded.pull_request_url,
+			merge_commit_sha = excluded.merge_commit_sha,
+			lifecycle_reason = excluded.lifecycle_reason,
 			revision = excluded.revision,
 			processed_comment_id = excluded.processed_comment_id,
 			processed_comment_revision = excluded.processed_comment_revision,
@@ -470,7 +483,8 @@ const saveRunIfRevisionStatement = `
 		UPDATE operational_runs SET
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
 			checkpoint_sha = ?, image_digest = ?, coordinator = ?, status_comment_id = ?,
-			pull_request_number = ?, pull_request_url = ?, revision = ?, processed_comment_id = ?,
+			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
+			revision = ?, processed_comment_id = ?,
 			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
 			last_command_message = ?, harness_override = ?, specification_packet = ?,
 			created_at = ?, updated_at = ?
@@ -822,6 +836,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			} {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 8: %w", err)
+				}
+			}
+		case 9:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN merge_commit_sha TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN lifecycle_reason TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 9: %w", err)
 				}
 			}
 		default:

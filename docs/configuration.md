@@ -215,6 +215,7 @@ mention of “retry” or “refresh” cannot control a run:
 /factory status
 /factory refresh
 /factory retry
+/factory cancel
 /factory config harness=codex
 ```
 
@@ -224,9 +225,11 @@ comments.
 
 The author must be present in the registered `authorized_users` list. A status
 or refresh command re-renders the existing supervision comment; retry reopens a
-failed run at its current stage; and harness configuration records a later
-invocation override only when the frozen repository configuration permits it. A
-recognized command from an unauthorized author or a malformed command is a
+failed or explicitly cancelled run at its current stage; cancel stops active
+worker activity while retaining the run artifacts; and harness configuration
+records a later invocation override only when the frozen repository
+configuration permits it. A recognized command from an unauthorized author or
+a malformed command is a
 typed policy rejection. The coordinator leaves workflow stage, status, labels,
 and configuration unchanged for that rejection, while recording the rejection
 in the same editable status comment.
@@ -245,16 +248,25 @@ GitHub effects. The same parser and handler are used for issue comments and
 pull-request comments; later commands can extend the registered verb set
 without duplicating polling or replay logic.
 
+The poll command also observes the tracked pull request and issue lifecycle.
+A merged pull request completes the run and records its merge commit; closing
+the issue or an unmerged pull request cancels it. Merge detection takes
+precedence over the pull request's closed state. Terminal transitions replace
+the factory state label, edit the existing status comment, notify cmux, stop
+the worker without deleting retained state, and leave the branch and worktree
+available for cleanup or an explicit retry.
+
 After a claim, `factory agent` starts the visible Codex implementation role and
 prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 8 and persists invocation
+result. The operational store schema is version 9 and persists invocation
 identity, opaque surface handles, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state. It
 also persists the draft pull-request number and URL so a restarted command can
-update the existing pull request instead of creating another one.
+update the existing pull request instead of creating another one. Terminal runs
+retain merge commit and lifecycle reason metadata for status rendering.
 
 ## Creating the draft pull request
 

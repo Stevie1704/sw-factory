@@ -228,6 +228,23 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	}
 }
 
+// TestGhClientDecodesMergedPullRequestLifecycle verifies the adapter preserves
+// both the merged decision and immutable merge commit from GitHub's response.
+func TestGhClientDecodesMergedPullRequestLifecycle(t *testing.T) {
+	t.Parallel()
+
+	client := &github.GhClient{Runner: &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`[{"number":17,"html_url":"https://github.com/example/project/pull/17","state":"closed","merged_at":"2026-08-23T12:00:00Z","merge_commit_sha":"0123456789abcdef0123456789abcdef01234567","head":{"ref":"factory/run-1"},"base":{"ref":"main"}}]`),
+	}}}
+	got, err := client.FindPullRequest(context.Background(), github.Repository{Owner: "example", Name: "project"}, "factory/run-1", "main")
+	if err != nil {
+		t.Fatalf("FindPullRequest() error = %v", err)
+	}
+	if !got.Merged || got.MergeCommitSHA == "" {
+		t.Fatalf("pull request = %#v, want merged lifecycle projection", got)
+	}
+}
+
 // TestValidCommitSHARejectsAbbreviatedObjectIDs verifies checkpoint validation
 // does not accept intermediate-length values as exact commit identities.
 func TestValidCommitSHARejectsAbbreviatedObjectIDs(t *testing.T) {
