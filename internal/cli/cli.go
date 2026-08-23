@@ -176,7 +176,11 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 		writeError(errorsOutput, err)
 		return 1
 	}
-	if !writeOutput(output, errorsOutput, "agent started\nrun: %s\ninvocation: %s\nworkspace: %s\nimplementation surface: %s\nchecks surface: %s\n", launch.Invocation.RunID, launch.Invocation.ID, launch.Invocation.WorkspaceID, launch.Invocation.ImplementationSurfaceID, launch.Invocation.ChecksSurfaceID) {
+	message := fmt.Sprintf("agent started\nrun: %s\ninvocation: %s\nworkspace: %s\nimplementation surface: %s\n", launch.Invocation.RunID, launch.Invocation.ID, launch.Invocation.WorkspaceID, launch.Invocation.ImplementationSurfaceID)
+	if launch.Invocation.ChecksSurfaceID != "" {
+		message += fmt.Sprintf("checks surface: %s\n", launch.Invocation.ChecksSurfaceID)
+	}
+	if !writeOutput(output, errorsOutput, "%s", message) {
 		return 1
 	}
 	return 0

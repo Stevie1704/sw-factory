@@ -185,6 +185,9 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	if !containsArgs(runner.calls[0].args, "repos/example/project/pulls", "--paginate", "--slurp") {
 		t.Fatalf("find args = %#v, want paginated pulls endpoint", runner.calls[0].args)
 	}
+	if !containsArgs(runner.calls[0].args, "--method", "GET") {
+		t.Fatalf("find args = %#v, want explicit GET because query fields otherwise make gh api use POST", runner.calls[0].args)
+	}
 	// Call 1: CreatePullRequest (POST)
 	if !containsArgs(runner.calls[1].args, "--method", "POST", "--input", "-") {
 		t.Fatalf("create args = %#v, want POST mutation", runner.calls[1].args)

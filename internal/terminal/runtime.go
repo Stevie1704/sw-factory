@@ -70,15 +70,15 @@ type RunWorkspaceRequest struct {
 	WorkingDirectory string
 }
 
-// RunWorkspace is the minimum visible run layout required by issue #6.
+// RunWorkspace contains the visible surfaces currently assigned to one run.
 type RunWorkspace struct {
 	// Workspace is the parent workspace.
 	Workspace
-	// Status is the coordinator status surface.
+	// Status is reserved for a future live coordinator-status surface.
 	Status Surface
 	// Implementation is the visible implementation-agent surface.
 	Implementation Surface
-	// Checks is the deterministic-check surface.
+	// Checks is reserved for a future live deterministic-check surface.
 	Checks Surface
 }
 
@@ -108,8 +108,7 @@ type Notification struct {
 type TerminalRuntime interface {
 	// EnsureControlWorkspace creates or returns the coordinator workspace.
 	EnsureControlWorkspace(context.Context, WorkspaceRequest) (Workspace, error)
-	// EnsureRunWorkspace creates the required status, implementation, and
-	// checks surfaces for one active run.
+	// EnsureRunWorkspace creates the visible surfaces enabled for one active run.
 	EnsureRunWorkspace(context.Context, RunWorkspaceRequest) (RunWorkspace, error)
 	// CreateSurface creates one command-backed interactive surface.
 	CreateSurface(context.Context, SurfaceRequest) (Surface, error)
@@ -173,14 +172,7 @@ func (r *CmuxRuntime) EnsureControlWorkspace(ctx context.Context, request Worksp
 		control := r.control
 		return control, nil
 	}
-	output, err := r.run(ctx, []string{
-		"new-workspace",
-		"--name", request.Name,
-		"--description", request.Description,
-		"--cwd", request.WorkingDirectory,
-		"--focus", "false",
-		"--layout", workspaceLayout(request, nil),
-	}, nil)
+	output, err := r.run(ctx, workspaceCreateArgs(request.Name, request.Description, request.WorkingDirectory, "false", workspaceLayout(request, nil)), nil)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("create control workspace: %w", err)
 	}
@@ -192,8 +184,8 @@ func (r *CmuxRuntime) EnsureControlWorkspace(ctx context.Context, request Worksp
 	return control, nil
 }
 
-// EnsureRunWorkspace creates one workspace with status, implementation, and
-// checks surfaces. The returned handles are stable opaque values.
+// EnsureRunWorkspace creates one workspace with the currently enabled run
+// surfaces. The returned handles are stable opaque values.
 func (r *CmuxRuntime) EnsureRunWorkspace(ctx context.Context, request RunWorkspaceRequest) (RunWorkspace, error) {
 	if strings.TrimSpace(request.RunID) == "" {
 		return RunWorkspace{}, errors.New("run workspace run id is required")
@@ -209,18 +201,21 @@ func (r *CmuxRuntime) EnsureRunWorkspace(ctx context.Context, request RunWorkspa
 	if run, ok := r.runs[request.RunID]; ok {
 		return run, nil
 	}
-	output, err := r.run(ctx, []string{
-		"new-workspace",
-		"--name", request.Name,
-		"--description", request.Description,
-		"--cwd", request.WorkingDirectory,
-		"--focus", "true",
-		"--layout", runWorkspaceLayout(request),
-	}, nil)
+	output, err := r.run(ctx, workspaceCreateArgs(request.Name, request.Description, request.WorkingDirectory, "true", runWorkspaceLayout(request)), nil)
 	if err != nil {
 		return RunWorkspace{}, fmt.Errorf("create run workspace: %w", err)
 	}
-	decoded, err := decodeRunWorkspace(output, request.Name)
+	workspace, err := decodeWorkspace(output, request.Name)
+	if err != nil {
+		return RunWorkspace{}, err
+	}
+	// Creation reports only the first surface, so the named supervision
+	// surfaces are read back from the adapter's own topology.
+	surfaces, err := r.workspaceSurfaces(ctx, workspace.ID)
+	if err != nil {
+		return RunWorkspace{}, err
+	}
+	decoded, err := runWorkspaceFrom(workspace, surfaces)
 	if err != nil {
 		return RunWorkspace{}, err
 	}
@@ -242,11 +237,13 @@ func (r *CmuxRuntime) CreateSurface(ctx context.Context, request SurfaceRequest)
 	if err := validateCommand(request.Command); err != nil {
 		return Surface{}, err
 	}
+	// Surface creation carries neither a title nor a command, so the adapter
+	// names the surface and starts its command as separate steps.
 	output, err := r.run(ctx, []string{
 		"new-surface",
 		"--workspace", string(request.WorkspaceID),
-		"--name", request.Name,
-		"--command", commandLine(request.Command),
+		"--type", "terminal",
+		"--json", "--id-format", "uuids",
 	}, nil)
 	if err != nil {
 		return Surface{}, fmt.Errorf("create terminal surface: %w", err)
@@ -258,6 +255,12 @@ func (r *CmuxRuntime) CreateSurface(ctx context.Context, request SurfaceRequest)
 	surface := response.surface(request.Name, request.WorkspaceID)
 	if surface.ID == "" {
 		return Surface{}, errors.New("terminal adapter returned no surface handle")
+	}
+	if _, err := r.run(ctx, []string{"rename-tab", "--surface", string(surface.ID), "--workspace", string(request.WorkspaceID), request.Name}, nil); err != nil {
+		return Surface{}, fmt.Errorf("name terminal surface: %w", err)
+	}
+	if err := r.LaunchSurface(ctx, surface.ID, request.Command); err != nil {
+		return Surface{}, err
 	}
 	return surface, nil
 }
@@ -272,7 +275,7 @@ func (r *CmuxRuntime) LaunchSurface(ctx context.Context, surfaceID SurfaceID, co
 	if err := validateCommand(command); err != nil {
 		return err
 	}
-	if _, err := r.run(ctx, []string{"send-input", "--surface", string(surfaceID), "--input", "-"}, []byte(commandLine(command)+"\n")); err != nil {
+	if err := r.sendToSurface(ctx, surfaceID, commandLine(command)+"\n"); err != nil {
 		return fmt.Errorf("launch terminal surface: %w", err)
 	}
 	return nil
@@ -287,8 +290,28 @@ func (r *CmuxRuntime) SendInput(ctx context.Context, surfaceID SurfaceID, input 
 	if len(input) == 0 {
 		return errors.New("surface input is required")
 	}
-	if _, err := r.run(ctx, []string{"send-input", "--surface", string(surfaceID), "--input", "-"}, input); err != nil {
+	if err := r.sendToSurface(ctx, surfaceID, string(input)); err != nil {
 		return fmt.Errorf("send terminal input: %w", err)
+	}
+	return nil
+}
+
+// sendToSurface routes text to a surface, delivering a trailing newline as a
+// separate Enter keystroke. Interactive programs treat text and its newline
+// arriving together as a paste and leave the text uncommitted, so the newline
+// must be pressed rather than typed.
+func (r *CmuxRuntime) sendToSurface(ctx context.Context, surfaceID SurfaceID, text string) error {
+	body := strings.TrimSuffix(text, "\n")
+	if body != "" {
+		if _, err := r.run(ctx, []string{"send", "--surface", string(surfaceID), body}, nil); err != nil {
+			return err
+		}
+	}
+	if !strings.HasSuffix(text, "\n") {
+		return nil
+	}
+	if _, err := r.run(ctx, []string{"send-key", "--surface", string(surfaceID), "Enter"}, nil); err != nil {
+		return err
 	}
 	return nil
 }
@@ -313,7 +336,13 @@ func (r *CmuxRuntime) CloseSurface(ctx context.Context, surfaceID SurfaceID) err
 	if strings.TrimSpace(string(surfaceID)) == "" {
 		return errors.New("surface id is required")
 	}
-	if _, err := r.run(ctx, []string{"close-surface", "--surface", string(surfaceID)}, nil); err != nil {
+	// Surface lookup is scoped to a workspace, so the owning workspace is
+	// resolved before the surface is closed.
+	workspaceID, err := r.surfaceWorkspace(ctx, surfaceID)
+	if err != nil {
+		return err
+	}
+	if _, err := r.run(ctx, []string{"close-surface", "--surface", string(surfaceID), "--workspace", string(workspaceID)}, nil); err != nil {
 		return fmt.Errorf("close terminal surface: %w", err)
 	}
 	return nil
@@ -340,8 +369,11 @@ func (r *CmuxRuntime) run(ctx context.Context, args []string, input []byte) ([]b
 		binary = "cmux"
 	}
 	command := exec.CommandContext(ctx, binary, args...)
+	// Deprecation hints are written to the same stream this adapter reports as
+	// a failure reason, so silence them and keep stderr to actual errors.
+	command.Env = append(os.Environ(), "CMUX_QUIET=1")
 	if strings.TrimSpace(r.socketPath) != "" {
-		command.Env = append(os.Environ(), "CMUX_SOCKET_PATH="+r.socketPath)
+		command.Env = append(command.Env, "CMUX_SOCKET_PATH="+r.socketPath)
 	}
 	command.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
@@ -372,7 +404,9 @@ func validateWorkspaceRequest(request WorkspaceRequest) error {
 }
 
 // validateCommand validates the command before it crosses into a terminal
-// adapter, preventing accidental shell-control characters in executable data.
+// adapter. Multiline arguments are permitted because the adapter shell-quotes
+// each opaque argv value; executable newlines and record-altering bytes remain
+// forbidden.
 func validateCommand(command Command) error {
 	if strings.TrimSpace(command.Executable) == "" {
 		return errors.New("surface command executable is required")
@@ -381,7 +415,7 @@ func validateCommand(command Command) error {
 		return errors.New("surface command executable contains control characters")
 	}
 	for _, argument := range command.Args {
-		if strings.ContainsAny(argument, "\x00\r\n") {
+		if strings.ContainsAny(argument, "\x00\r") {
 			return errors.New("surface command argument contains control characters")
 		}
 	}
@@ -394,24 +428,51 @@ func workspaceLayout(request WorkspaceRequest, command *Command) string {
 	if command != nil {
 		value = commandLine(*command)
 	}
-	layout, _ := json.Marshal(map[string]any{
-		"direction": "horizontal",
-		"children":  []map[string]any{{"pane": map[string]any{"surfaces": []map[string]string{{"type": "terminal", "command": value}}}}},
-	})
+	layout, _ := json.Marshal(splitLayout("horizontal", []map[string]any{terminalPane("", value)}))
 	return string(layout)
 }
 
-// runWorkspaceLayout returns the required three-surface run layout.
+// passiveRunSurfacesEnabled keeps the dormant status/check layout easy to
+// restore once those surfaces display live coordinator and gate output. They
+// are disabled while both would only run the same one-shot `factory status`.
+const passiveRunSurfacesEnabled = false
+
+// runWorkspaceLayout returns the currently enabled run-surface layout.
 func runWorkspaceLayout(request RunWorkspaceRequest) string {
-	layout, _ := json.Marshal(map[string]any{
-		"direction": "vertical",
-		"children": []map[string]any{
-			{"pane": map[string]any{"surfaces": []map[string]string{{"type": "terminal", "name": "status", "command": "factory status"}}}},
-			{"pane": map[string]any{"surfaces": []map[string]string{{"type": "terminal", "name": "implementation", "command": "sh"}}}},
-			{"pane": map[string]any{"surfaces": []map[string]string{{"type": "terminal", "name": "checks", "command": "factory status"}}}},
-		},
-	})
+	panes := []map[string]any{terminalPane("implementation", "sh")}
+	if passiveRunSurfacesEnabled {
+		panes = []map[string]any{
+			terminalPane("status", "factory status"),
+			panes[0],
+			terminalPane("checks", "factory status"),
+		}
+	}
+	layout, _ := json.Marshal(splitLayout("vertical", panes))
 	return string(layout)
+}
+
+// terminalPane returns one layout pane holding a single terminal surface. An
+// empty name leaves the surface unnamed rather than naming it with an empty
+// string.
+func terminalPane(name, command string) map[string]any {
+	surface := map[string]string{"type": "terminal", "command": command}
+	if name != "" {
+		surface["name"] = name
+	}
+	return map[string]any{"pane": map[string]any{"surfaces": []map[string]string{surface}}}
+}
+
+// splitLayout folds panes into a layout node. A terminal split accepts exactly
+// two children, so a single pane becomes a bare pane node and more than two
+// panes nest to the right.
+func splitLayout(direction string, panes []map[string]any) map[string]any {
+	if len(panes) == 1 {
+		return panes[0]
+	}
+	return map[string]any{
+		"direction": direction,
+		"children":  []map[string]any{panes[0], splitLayout(direction, panes[1:])},
+	}
 }
 
 // commandLine produces a conservative shell command for cmux's layout JSON.
@@ -481,39 +542,126 @@ func decodeWorkspace(data []byte, defaultName string) (Workspace, error) {
 	return Workspace{ID: WorkspaceID(identifier), Name: name}, nil
 }
 
-// decodeRunWorkspace decodes the required named surfaces from one adapter
-// response and fails closed when any surface is missing.
-func decodeRunWorkspace(data []byte, defaultName string) (RunWorkspace, error) {
-	var response workspaceResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		return RunWorkspace{}, fmt.Errorf("decode run workspace: %w", err)
-	}
-	workspace, err := decodeWorkspace(data, defaultName)
-	if err != nil {
-		return RunWorkspace{}, err
-	}
+// runWorkspaceFrom binds the enabled named surfaces to one workspace and fails
+// closed when the adapter omitted a required surface.
+func runWorkspaceFrom(workspace Workspace, surfaces map[string]SurfaceID) (RunWorkspace, error) {
 	run := RunWorkspace{Workspace: workspace}
-	for _, candidate := range response.Surfaces {
-		surface := candidate.surface(candidate.Name, workspace.ID)
-		switch surface.Name {
-		case "status":
-			run.Status = surface
-		case "implementation":
-			run.Implementation = surface
-		case "checks":
-			run.Checks = surface
+	// The required surfaces are checked in a fixed order so that a malformed
+	// workspace always reports the same missing surface.
+	required := []struct {
+		name   string
+		target *Surface
+	}{
+		{name: "implementation", target: &run.Implementation},
+	}
+	if passiveRunSurfacesEnabled {
+		required = []struct {
+			name   string
+			target *Surface
+		}{
+			{name: "status", target: &run.Status},
+			required[0],
+			{name: "checks", target: &run.Checks},
 		}
 	}
-	if run.Status.ID == "" {
-		return RunWorkspace{}, errors.New("run workspace is missing status surface")
-	}
-	if run.Implementation.ID == "" {
-		return RunWorkspace{}, errors.New("run workspace is missing implementation surface")
-	}
-	if run.Checks.ID == "" {
-		return RunWorkspace{}, errors.New("run workspace is missing checks surface")
+	for _, entry := range required {
+		identifier, ok := surfaces[entry.name]
+		if !ok || strings.TrimSpace(string(identifier)) == "" {
+			return RunWorkspace{}, fmt.Errorf("run workspace is missing %s surface", entry.name)
+		}
+		*entry.target = Surface{ID: identifier, WorkspaceID: workspace.ID, Name: entry.name}
 	}
 	return run, nil
+}
+
+// workspaceCreateArgs builds the adapter's workspace creation command. The
+// canonical verb is required because its legacy alias ignores the structured
+// output flags.
+func workspaceCreateArgs(name, description, workingDirectory, focus, layout string) []string {
+	return []string{
+		"workspace", "create",
+		"--name", name,
+		"--description", description,
+		"--cwd", workingDirectory,
+		"--focus", focus,
+		"--layout", layout,
+		"--json", "--id-format", "uuids",
+	}
+}
+
+// topologyResponse decodes the adapter's window, workspace, pane, and surface
+// topology. Only the identity and title of each surface is read.
+type topologyResponse struct {
+	Windows []struct {
+		Workspaces []struct {
+			ID    string `json:"id"`
+			Panes []struct {
+				Surfaces []struct {
+					ID    string `json:"id"`
+					Title string `json:"title"`
+				} `json:"surfaces"`
+			} `json:"panes"`
+		} `json:"workspaces"`
+	} `json:"windows"`
+}
+
+// workspaceSurfaces reads the surfaces of one workspace, keyed by their title.
+func (r *CmuxRuntime) workspaceSurfaces(ctx context.Context, workspaceID WorkspaceID) (map[string]SurfaceID, error) {
+	topology, err := r.topology(ctx, []string{"tree", "--workspace", string(workspaceID), "--json", "--id-format", "uuids"})
+	if err != nil {
+		return nil, err
+	}
+	surfaces := make(map[string]SurfaceID)
+	for _, window := range topology.Windows {
+		for _, workspace := range window.Workspaces {
+			if workspace.ID != string(workspaceID) {
+				continue
+			}
+			for _, pane := range workspace.Panes {
+				for _, surface := range pane.Surfaces {
+					surfaces[surface.Title] = SurfaceID(surface.ID)
+				}
+			}
+		}
+	}
+	if len(surfaces) == 0 {
+		return nil, fmt.Errorf("terminal workspace %q reported no surfaces", workspaceID)
+	}
+	return surfaces, nil
+}
+
+// surfaceWorkspace resolves the workspace owning one surface, because surface
+// lifecycle commands are scoped to a workspace.
+func (r *CmuxRuntime) surfaceWorkspace(ctx context.Context, surfaceID SurfaceID) (WorkspaceID, error) {
+	topology, err := r.topology(ctx, []string{"tree", "--json", "--id-format", "uuids"})
+	if err != nil {
+		return "", err
+	}
+	for _, window := range topology.Windows {
+		for _, workspace := range window.Workspaces {
+			for _, pane := range workspace.Panes {
+				for _, surface := range pane.Surfaces {
+					if surface.ID == string(surfaceID) {
+						return WorkspaceID(workspace.ID), nil
+					}
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("terminal surface %q was not found in any workspace", surfaceID)
+}
+
+// topology runs one adapter topology query and decodes its response.
+func (r *CmuxRuntime) topology(ctx context.Context, args []string) (topologyResponse, error) {
+	output, err := r.run(ctx, args, nil)
+	if err != nil {
+		return topologyResponse{}, fmt.Errorf("read terminal topology: %w", err)
+	}
+	var topology topologyResponse
+	if err := json.Unmarshal(output, &topology); err != nil {
+		return topologyResponse{}, fmt.Errorf("decode terminal topology: %w", err)
+	}
+	return topology, nil
 }
 
 var _ TerminalRuntime = (*CmuxRuntime)(nil)

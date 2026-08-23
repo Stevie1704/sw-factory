@@ -42,6 +42,17 @@ RUN npm install --global \
       "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force
 
+# The npm shim always marks Codex as npm-managed, so its TUI opens an
+# interactive "Update now (runs `npm install -g @openai/codex`)" prompt on
+# startup. A worker must never mutate its own pinned toolchain, and the prompt
+# also consumes the first keystrokes sent to the harness. Expose the vendored
+# native binary instead of the shim.
+RUN set -eu; \
+    native="$(find /usr/local/lib/node_modules/@openai/codex -type f -path '*/vendor/*/bin/codex' | head -n 1)"; \
+    test -n "$native"; \
+    ln -sf "$native" /usr/local/bin/codex; \
+    /usr/local/bin/codex --version
+
 COPY --from=factory-report-builder /factory-report /usr/local/bin/factory-report
 
 # The worker adapter supplies this same PATH with env -i. Keep every command
@@ -53,9 +64,13 @@ ENV HOME=/home/factory \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# The run worktree is always mounted at the same stable path, and the harness
+# otherwise opens an interactive trust prompt that consumes the coordinator's
+# prompt instead of the composer.
 RUN useradd --create-home --uid 10001 --user-group --shell /bin/bash factory \
     && mkdir -p /home/factory/.claude /home/factory/.codex \
        /work /git /cache /invocation /results /run/factory-auth \
+    && printf '[projects."/work"]\ntrust_level = "trusted"\n' > /home/factory/.codex/config.toml \
     && chown -R factory:factory /home/factory /work /git /cache /invocation /results /run/factory-auth \
     && chown root:root /run/factory-auth \
     && chmod 0755 /run/factory-auth \

@@ -12,7 +12,7 @@ import (
 )
 
 // TestCodexStartsAnInteractiveSessionThroughThePortableSeams verifies the
-// Codex command, role environment, visible surface, and initial prompt input.
+// Codex command, role environment, visible surface, and argument-passed prompt.
 func TestCodexStartsAnInteractiveSessionThroughThePortableSeams(t *testing.T) {
 	workerRuntime := &fakeWorker{}
 	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
@@ -38,14 +38,19 @@ func TestCodexStartsAnInteractiveSessionThroughThePortableSeams(t *testing.T) {
 		t.Fatalf("interactive worker requests = %#v, want one", workerRuntime.requests)
 	}
 	request := workerRuntime.requests[0]
-	if strings.Join(request.Command, " ") != "codex -a untrusted -s danger-full-access -m gpt-5 -c model_reasoning_effort=high" {
-		t.Fatalf("Codex command = %#v, want sandbox flags before command", request.Command)
+	wantCommand := []string{
+		"codex", "-a", "never", "-s", "danger-full-access",
+		"-m", "gpt-5", "-c", "model_reasoning_effort=high",
+		"Implement the frozen specification.",
+	}
+	if strings.Join(request.Command, "\x00") != strings.Join(wantCommand, "\x00") {
+		t.Fatalf("Codex command = %#v, want sandbox flags followed by the initial prompt argument", request.Command)
 	}
 	if request.Environment["FACTORY_INVOCATION_ID"] != "inv-1" || request.Environment["FACTORY_STAGE"] != "implementation" {
 		t.Fatalf("Codex environment = %#v, want invocation and stage identity", request.Environment)
 	}
-	if string(terminalRuntime.inputs[0]) != "Implement the frozen specification.\n" {
-		t.Fatalf("surface input = %q, want initial prompt", terminalRuntime.inputs[0])
+	if len(terminalRuntime.inputs) != 0 {
+		t.Fatalf("surface inputs = %q, want startup to avoid racing terminal input", terminalRuntime.inputs)
 	}
 	if terminalRuntime.launched.Executable != "factory-worker-attach" {
 		t.Fatalf("surface launch = %#v, want attach helper in the existing implementation surface", terminalRuntime.launched)
@@ -70,8 +75,12 @@ func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
-	if got := strings.Join(workerRuntime.requests[0].Command, " "); got != "codex -a untrusted -s danger-full-access resume session-1" {
-		t.Fatalf("resume command = %q, want native resume command", got)
+	wantCommand := []string{"codex", "-a", "never", "-s", "danger-full-access", "resume", "session-1", "Continue the implementation."}
+	if strings.Join(workerRuntime.requests[0].Command, "\x00") != strings.Join(wantCommand, "\x00") {
+		t.Fatalf("resume command = %#v, want native resume command", workerRuntime.requests[0].Command)
+	}
+	if len(terminalRuntime.inputs) != 0 {
+		t.Fatalf("surface inputs = %q, want resume prompt passed as an argument", terminalRuntime.inputs)
 	}
 }
 

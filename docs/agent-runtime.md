@@ -17,9 +17,11 @@ factory agent \
 ```
 
 The command creates or reuses the control workspace and creates one run
-workspace with status, implementation, and checks surfaces. The output reports
-only the run and opaque terminal handles. It does not print the role prompt or
-terminal contents.
+workspace with an implementation surface. Dormant status and checks layout
+definitions remain in the terminal adapter so they can return when they display
+live coordinator and gate output rather than duplicate the one-shot
+`factory status` command. The output reports the invocation identifier, run, and opaque terminal
+handles. It does not print the role prompt or terminal contents.
 
 The `TerminalRuntime` seam owns workspace, surface, input, notification, and
 lifecycle behavior. The macOS adapter invokes cmux; workflow code never sees

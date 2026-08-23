@@ -459,15 +459,39 @@ func (r *DockerRuntime) SeedCodexCredentials(ctx context.Context, request Creden
 	if len(data) == 0 {
 		return errors.New("codex auth file is empty")
 	}
-	_, err = r.runDockerWithInput(ctx, []string{
+	// The worker drops every capability, so uid 0 holds neither CAP_CHOWN nor
+	// CAP_DAC_OVERRIDE and is less able to write the factory-owned role home
+	// than the worker user itself. Each step therefore runs as the owner of the
+	// directory it writes, and no step changes ownership.
+	name := containerName(request.RunID)
+	if _, err := r.runDockerWithInput(ctx, []string{
 		"exec", "-i", "--user", "0:0", "--workdir", WorktreePath,
-		containerName(request.RunID), "/bin/sh", "-c",
-		"umask 077; rm -f \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"; cat > \"" + CredentialPath + "/auth.json\"; chmod 0444 \"" + CredentialPath + "/auth.json\"; mkdir -p \"$HOME/.codex\"; chown " + WorkerUser + " \"$HOME/.codex\"; ln -s \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"; chown -h " + WorkerUser + " \"$HOME/.codex/auth.json\"",
-	}, data)
-	if err != nil {
-		return fmt.Errorf("seed Codex credentials: %w", err)
+		name, "/bin/sh", "-c",
+		"umask 077; rm -f \"" + CredentialPath + "/auth.json\"; cat > \"" + CredentialPath + "/auth.json\"; chmod 0444 \"" + CredentialPath + "/auth.json\"",
+	}, data); err != nil {
+		return fmt.Errorf("seed Codex credentials: %w", dockerStderrDetail(err))
+	}
+	if _, err := r.runDocker(ctx, []string{
+		"exec", "--user", WorkerUser, "--workdir", WorktreePath,
+		name, "/bin/sh", "-c",
+		"mkdir -p \"$HOME/.codex\"; rm -f \"$HOME/.codex/auth.json\"; ln -s \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"",
+	}); err != nil {
+		return fmt.Errorf("link Codex credentials into the role home: %w", dockerStderrDetail(err))
 	}
 	return nil
+}
+
+// dockerStderrDetail appends the captured Docker standard error to err when the
+// adapter recorded any, so a failed invocation reports its reason instead of an
+// exit code alone. It never adds command arguments or process input.
+func dockerStderrDetail(err error) error {
+	var commandErr *dockerCommandError
+	if errors.As(err, &commandErr) {
+		if detail := strings.TrimSpace(commandErr.Stderr); detail != "" {
+			return fmt.Errorf("%w: %s", err, detail)
+		}
+	}
+	return err
 }
 
 // NativeSessionIDs discovers Codex sessions from persisted role-home files,
@@ -1438,7 +1462,10 @@ func credentialVolumeName(runID, storeID string) string {
 }
 
 // validateInteractiveRequest validates a harness command and its explicit
-// environment before it is handed to a terminal or Docker adapter.
+// environment before it is handed to a terminal or Docker adapter. Arguments
+// may contain newlines because immutable harness prompts are passed as opaque
+// argv values; the executable itself and every argument still reject bytes
+// that could terminate or rewrite the transport record.
 func validateInteractiveRequest(request InteractiveRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
@@ -1452,8 +1479,8 @@ func validateInteractiveRequest(request InteractiveRequest) error {
 	if strings.TrimSpace(request.Role) == "" || !validName(request.Role) {
 		return errors.New("interactive harness role is required and must be safe")
 	}
-	for _, argument := range request.Command {
-		if strings.ContainsAny(argument, "\x00\r\n") {
+	for index, argument := range request.Command {
+		if strings.ContainsAny(argument, "\x00\r") || index == 0 && strings.ContainsRune(argument, '\n') {
 			return errors.New("interactive harness command contains control characters")
 		}
 	}
