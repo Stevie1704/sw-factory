@@ -75,8 +75,9 @@ func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
-	if got := strings.Join(workerRuntime.requests[0].Command, " "); got != "codex -a never -s danger-full-access resume session-1 Continue the implementation." {
-		t.Fatalf("resume command = %q, want native resume command", got)
+	wantCommand := []string{"codex", "-a", "never", "-s", "danger-full-access", "resume", "session-1", "Continue the implementation."}
+	if strings.Join(workerRuntime.requests[0].Command, "\x00") != strings.Join(wantCommand, "\x00") {
+		t.Fatalf("resume command = %#v, want native resume command", workerRuntime.requests[0].Command)
 	}
 	if len(terminalRuntime.inputs) != 0 {
 		t.Fatalf("surface inputs = %q, want resume prompt passed as an argument", terminalRuntime.inputs)
