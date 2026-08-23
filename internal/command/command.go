@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Kind identifies a command understood by the coordinator.
@@ -140,7 +141,8 @@ func hasMarker(trimmed string) bool {
 	if len(trimmed) == len("/factory") {
 		return true
 	}
-	return unicode.IsSpace(rune(trimmed[len("/factory")]))
+	next, _ := utf8.DecodeRuneInString(trimmed[len("/factory"):])
+	return unicode.IsSpace(next)
 }
 
 // unexpectedArgument builds the stable parser rejection for a fixed-arity verb.

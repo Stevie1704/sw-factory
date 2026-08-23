@@ -87,6 +87,9 @@ func TestSaveRunIfRevisionRejectsAStaleCommand(t *testing.T) {
 	if err := opened.SaveRun(context.Background(), initial); err != nil {
 		t.Fatalf("SaveRun() error = %v", err)
 	}
+	if err := opened.SaveRunIfRevision(context.Background(), initial.Revision, initial); !errors.Is(err, store.ErrRevisionNotAdvanced) {
+		t.Fatalf("SaveRunIfRevision() non-advancing error = %v, want ErrRevisionNotAdvanced", err)
+	}
 	stale := initial
 	stale.Revision = 3
 	stale.ProcessedCommentID = "comment-stale"

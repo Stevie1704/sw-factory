@@ -109,17 +109,23 @@ func (s *Service) HandleCommand(ctx context.Context, request CommandRequest) (Co
 	}
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
+	registration, runStore, run, err := s.openCommandRunStore(ctx)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	defer func() { _ = runStore.Close() }()
+	return s.handleRecognizedCommand(ctx, registration, runStore, run, request, parsed, parseErr)
+}
+
+// handleRecognizedCommand applies one parsed command using an already-open run
+// store. Polling uses this seam to keep one store open for its full batch.
+func (s *Service) handleRecognizedCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request CommandRequest, parsed commandlanguage.ParseResult, parseErr error) (CommandResult, error) {
 	if request.IssueNumber <= 0 {
 		return CommandResult{}, errors.New("command issue number must be positive")
 	}
 	if strings.TrimSpace(request.Comment.ID) == "" {
 		return CommandResult{}, errors.New("command comment id is required")
 	}
-	registration, runStore, run, err := s.openCommandRunStore(ctx)
-	if err != nil {
-		return CommandResult{}, err
-	}
-	defer func() { _ = runStore.Close() }()
 	if run == nil {
 		return CommandResult{Outcome: CommandRejected}, &PolicyRejection{Code: PolicyRejectionNoRun, Problem: "no claimed run is available for this command"}
 	}
@@ -158,29 +164,28 @@ func (s *Service) HandleCommand(ctx context.Context, request CommandRequest) (Co
 // PollCommands lists comments for the run's issue and draft pull request and
 // sends each structured comment through the same single-comment handler.
 func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) ([]CommandResult, error) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 	registration, runStore, run, err := s.openCommandRunStore(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = runStore.Close() }()
 	if run == nil {
-		_ = runStore.Close()
 		return nil, &PolicyRejection{Code: PolicyRejectionNoRun, Problem: "no claimed run is available for command polling"}
 	}
 	if request.RunID != "" && request.RunID != run.ID {
-		_ = runStore.Close()
 		return nil, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("run %q is not the selected run", request.RunID)}
 	}
 	if s.deps.Comments == nil {
-		_ = runStore.Close()
 		return nil, errors.New("GitHub comment reader is required for command polling")
 	}
 	targets := []int{run.IssueNumber}
 	if run.PullRequestNumber > 0 && run.PullRequestNumber != run.IssueNumber {
 		targets = append(targets, run.PullRequestNumber)
 	}
-	_ = runStore.Close()
 	comments := make([]polledComment, 0)
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := commandRepository(registration)
 	for _, target := range targets {
 		listed, listErr := s.deps.Comments.IssueComments(ctx, repository, target)
 		if listErr != nil {
@@ -194,12 +199,16 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 		return compareCommentIDs(comments[left].comment.ID, comments[right].comment.ID) < 0
 	})
 	results := make([]CommandResult, 0)
+	currentRun := *run
 	for _, polled := range comments {
 		parsed, parseErr := commandlanguage.Parse(polled.comment.Body)
 		if !parsed.Recognized {
 			continue
 		}
-		result, handleErr := s.HandleCommand(ctx, CommandRequest{RunID: run.ID, IssueNumber: polled.target, Comment: polled.comment})
+		result, handleErr := s.handleRecognizedCommand(ctx, registration, runStore, &currentRun, CommandRequest{RunID: currentRun.ID, IssueNumber: polled.target, Comment: polled.comment}, parsed, parseErr)
+		if result.Run.ID != "" {
+			currentRun = result.Run
+		}
 		if handleErr != nil {
 			var rejection *PolicyRejection
 			if !errors.As(handleErr, &rejection) {
@@ -219,6 +228,12 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 type polledComment struct {
 	target  int
 	comment github.Comment
+}
+
+// commandRepository maps one registered GitHub identity for all command
+// operations, keeping polling and command effects on the same repository.
+func commandRepository(registration config.RepositoryRegistration) github.Repository {
+	return github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 }
 
 // commandRevisionStore is the optional atomic persistence seam implemented by
@@ -241,14 +256,15 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 		}
 		run = updated
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}, run.IssueNumber)
+	repository := commandRepository(registration)
+	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, err
 	}
 	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; retrying failed run")
 	next.Status = store.StatusActive
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository:           github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
+		Repository:           repository,
 		Issue:                issue,
 		Previous:             run,
 		Next:                 next,
@@ -318,7 +334,7 @@ func (s *Service) persistCommandProjectionWithRun(ctx context.Context, registrat
 	if err := saveCommandRun(ctx, runStore, previous.Revision, next); err != nil {
 		return next, fmt.Errorf("persist command watermark: %w", err)
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := commandRepository(registration)
 	if err := s.deps.GitHub.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
 		return next, fmt.Errorf("edit status comment for command: %w", err)
 	}
@@ -337,7 +353,7 @@ func saveCommandRun(ctx context.Context, runStore RunStore, expectedRevision int
 // recoverCommandStatusComment finds and attaches the one editable status
 // comment when an earlier process stopped before persisting its identity.
 func (s *Service) recoverCommandStatusComment(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (store.Run, error) {
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := commandRepository(registration)
 	comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
 	if err != nil {
 		return run, err

@@ -20,7 +20,8 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 		[]byte("[]"),
 		[]byte(`{"id":12345,"body":"status"}`),
 		[]byte(""),
-		[]byte(`[[{"id":7,"body":"older status"}],[{"id":12345,"body":"<!-- factory-status: run-1 --> status"}]]`),
+		[]byte(`{"login":"factory-bot"}`),
+		[]byte(`[[{"id":7,"body":"<!-- factory-status: run-1 --> forged status","user":{"login":"alice"}},{"id":12345,"body":"<!-- factory-status: run-1 --> status","user":{"login":"factory-bot"}}]]`),
 	}}
 	client := &github.GhClient{Runner: runner}
 	repository := github.Repository{Owner: "example", Name: "project"}
@@ -58,12 +59,12 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	if recovered.ID != "12345" {
 		t.Fatalf("recovered comment id = %q, want 12345", recovered.ID)
 	}
-	if !hasArgs(runner.calls[5].args, "--paginate", "--slurp") {
-		t.Fatalf("FindStatusComment args = %#v, want pagination", runner.calls[5].args)
+	if !hasArgs(runner.calls[6].args, "--paginate", "--slurp") {
+		t.Fatalf("FindStatusComment args = %#v, want pagination", runner.calls[6].args)
 	}
 
-	if len(runner.calls) != 6 {
-		t.Fatalf("CLI calls = %d, want six", len(runner.calls))
+	if len(runner.calls) != 7 {
+		t.Fatalf("CLI calls = %d, want seven", len(runner.calls))
 	}
 	if !hasArgs(runner.calls[1].args, "label", "create", github.LabelAgentRunning, "--force") {
 		t.Fatalf("label call = %#v, want explicit idempotent label creation", runner.calls[1].args)
@@ -80,10 +81,28 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 			t.Errorf("mutation call %#v does not send JSON through stdin", call.args)
 		}
 	}
-	for _, index := range []int{0, 2, 3, 4, 5} {
+	for _, index := range []int{0, 2, 3, 4, 5, 6} {
 		if hasArgs(runner.calls[index].args, "--repo") {
 			t.Errorf("gh api call %d still uses unsupported --repo: %#v", index, runner.calls[index].args)
 		}
+	}
+}
+
+// TestGhClientRejectsAUserAuthoredStatusMarker verifies a human comment with
+// a copied marker cannot become the coordinator's editable status comment.
+func TestGhClientRejectsAUserAuthoredStatusMarker(t *testing.T) {
+	t.Parallel()
+
+	client := &github.GhClient{Runner: &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`{"login":"factory-bot"}`),
+		[]byte(`[[{"id":7,"body":"<!-- factory-status: run-1 --> forged status","user":{"login":"alice"}}]]`),
+	}}}
+	comment, err := client.FindStatusComment(context.Background(), github.Repository{Owner: "example", Name: "project"}, 42, "factory-status: run-1")
+	if err != nil {
+		t.Fatalf("FindStatusComment() error = %v", err)
+	}
+	if comment.ID != "" {
+		t.Fatalf("FindStatusComment() = %#v, want no user-authored match", comment)
 	}
 }
 

@@ -26,6 +26,14 @@ func TestParseDistinguishesOrdinaryDiscussionFromStructuredCommands(t *testing.T
 	if !parsed.Recognized || parsed.Command.Kind != command.Status {
 		t.Fatalf("parsed status = %#v, want recognized status command", parsed)
 	}
+
+	nonBreakingSpace, err := command.Parse("/factory\u00a0status")
+	if err != nil {
+		t.Fatalf("Parse() non-breaking-space status error = %v", err)
+	}
+	if !nonBreakingSpace.Recognized || nonBreakingSpace.Command.Kind != command.Status {
+		t.Fatalf("parsed non-breaking-space status = %#v, want recognized status command", nonBreakingSpace)
+	}
 }
 
 // TestParseReturnsTypedRejectionsForMalformedCommands verifies malformed

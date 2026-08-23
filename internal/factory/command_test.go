@@ -160,6 +160,9 @@ func TestPollCommandsSkipsThePersistedWatermark(t *testing.T) {
 	if err != nil || len(first) != 1 || first[0].Outcome != factory.CommandAccepted {
 		t.Fatalf("first PollCommands() = %#v/%v, want one accepted command", first, err)
 	}
+	if runStore.closeCount != 1 {
+		t.Fatalf("first PollCommands() close count = %d, want one close", runStore.closeCount)
+	}
 	second, err := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:    commandConfig{host: commandHost()},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
@@ -172,6 +175,9 @@ func TestPollCommandsSkipsThePersistedWatermark(t *testing.T) {
 	}
 	if len(second) != 1 || second[0].Outcome != factory.CommandReplayed || len(githubAdapter.editedComments) != 1 {
 		t.Fatalf("second PollCommands() = %#v, edits = %d, want replay without second edit", second, len(githubAdapter.editedComments))
+	}
+	if runStore.closeCount != 2 {
+		t.Fatalf("second PollCommands() close count = %d, want one additional close", runStore.closeCount)
 	}
 }
 
@@ -225,9 +231,11 @@ func (c commandConfig) Create(string) (config.HostConfig, error) { return c.host
 
 // commandRunStore is a restartable in-memory store fixture.
 type commandRunStore struct {
-	current *store.Run
-	latest  *store.Run
-	saved   []store.Run
+	current    *store.Run
+	latest     *store.Run
+	saved      []store.Run
+	// closeCount records store lifetime in polling tests.
+	closeCount int
 }
 
 // CurrentRun returns the active run when one exists.
@@ -271,7 +279,10 @@ func (s *commandRunStore) SaveRunIfRevision(ctx context.Context, expected int64,
 }
 
 // Close satisfies the operational-store seam.
-func (s *commandRunStore) Close() error { return nil }
+func (s *commandRunStore) Close() error {
+	s.closeCount++
+	return nil
+}
 
 // commandGitHub records command-related effects.
 type commandGitHub struct {

@@ -24,6 +24,10 @@ const CurrentSchemaVersion = 8
 // after a command read the run and before it attempted its compare-and-set.
 var ErrRevisionConflict = errors.New("run revision conflict")
 
+// ErrRevisionNotAdvanced reports that a compare-and-set update did not move
+// the run to a strictly newer revision.
+var ErrRevisionNotAdvanced = errors.New("run revision did not advance")
+
 // runTimestampLayout keeps serialized run timestamps fixed-width so SQLite
 // text ordering matches chronological ordering for sub-second timestamps.
 const runTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
@@ -363,6 +367,9 @@ func (s *Store) SaveRunIfRevision(ctx context.Context, expectedRevision int64, r
 	run, err := normalizeRun(run)
 	if err != nil {
 		return err
+	}
+	if run.Revision <= expectedRevision {
+		return fmt.Errorf("%w: got %d, expected greater than %d", ErrRevisionNotAdvanced, run.Revision, expectedRevision)
 	}
 	result, err := s.db.ExecContext(ctx, saveRunIfRevisionStatement, append(runValues(run)[1:], run.ID, expectedRevision)...)
 	if err != nil {

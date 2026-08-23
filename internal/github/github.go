@@ -305,6 +305,7 @@ func (c *GhClient) IssueComments(ctx context.Context, repository Repository, num
 
 // FindStatusComment recovers a previously created status comment by its
 // immutable run marker when persistence was interrupted after GitHub mutation.
+// It only returns a marker match authored by the authenticated coordinator.
 func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository, number int, marker string) (Comment, error) {
 	if number <= 0 {
 		return Comment{}, errors.New("issue number must be positive")
@@ -312,18 +313,38 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository,
 	if strings.TrimSpace(marker) == "" {
 		return Comment{}, errors.New("status comment marker is required")
 	}
+	coordinator, err := c.authenticatedUser(ctx)
+	if err != nil {
+		return Comment{}, err
+	}
 	var pages [][]commentResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
 		return Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
 	}
 	for _, page := range pages {
 		for _, response := range page {
-			if strings.Contains(response.Body, marker) {
-				return response.comment(), nil
+			comment := response.comment()
+			if strings.Contains(comment.Body, marker) && strings.EqualFold(strings.TrimSpace(comment.Author), coordinator) {
+				return comment, nil
 			}
 		}
 	}
 	return Comment{}, nil
+}
+
+// authenticatedUser returns the GitHub login attached to the local gh
+// credential, which is the only reliable coordinator identity available to the
+// adapter when it recovers a status comment.
+func (c *GhClient) authenticatedUser(ctx context.Context) (string, error) {
+	var response userResponse
+	if err := c.callJSON(ctx, []string{"api", "user"}, nil, &response); err != nil {
+		return "", fmt.Errorf("identify authenticated GitHub user: %w", err)
+	}
+	login := strings.TrimSpace(response.Login)
+	if login == "" {
+		return "", errors.New("authenticated GitHub user has no login")
+	}
+	return login, nil
 }
 
 // EditIssueComment edits an existing issue comment by id.
@@ -510,6 +531,12 @@ type commentResponse struct {
 	User      struct {
 		Login string `json:"login"`
 	} `json:"user"`
+}
+
+// userResponse is the authenticated GitHub user projection used for ownership
+// checks on coordinator-created comments.
+type userResponse struct {
+	Login string `json:"login"`
 }
 
 // comment converts the GitHub response shape into the coordinator-neutral
