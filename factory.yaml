@@ -1,6 +1,6 @@
 schema_version: 1
 target_branch: main
-setup: go mod download
+setup: scripts/worker-go.sh mod download
 gates:
   - name: format
     command: test -z "$(gofmt -l .)"
@@ -8,19 +8,19 @@ gates:
     blocking: true
     environment_policy: clean
   - name: vet
-    command: go vet ./...
+    command: scripts/worker-go.sh vet ./...
     timeout: 5m
     blocking: true
     depends_on: [format]
     environment_policy: clean
   - name: test
-    command: go test ./...
+    command: scripts/worker-go.sh test ./...
     timeout: 10m
     blocking: true
     depends_on: [vet]
     environment_policy: clean
   - name: build
-    command: go build ./cmd/factory
+    command: scripts/worker-go.sh build -o /tmp/factory ./cmd/factory
     timeout: 5m
     blocking: true
     depends_on: [test]
@@ -55,7 +55,7 @@ caches:
     read_only: false
 worker_build:
   image: ghcr.io/stevie1704/sw-factory-worker
-  digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  digest: sha256:1437c7e2675768b8f081ea2a4fc20a95548e55c778b421a2c3880c5463bc2fd2
   definition: worker/Dockerfile
 base_synchronization:
   mode: never
