@@ -278,7 +278,8 @@ func (s *commandRunStore) SaveRunIfRevision(ctx context.Context, expected int64,
 	return s.SaveRun(ctx, run)
 }
 
-// Close satisfies the operational-store seam.
+// Close increments the test store's close counter and returns nil, satisfying
+// the operational-store seam.
 func (s *commandRunStore) Close() error {
 	s.closeCount++
 	return nil
