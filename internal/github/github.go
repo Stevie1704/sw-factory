@@ -312,6 +312,7 @@ func (c *GhClient) FindPullRequest(ctx context.Context, repository Repository, h
 	args := []string{
 		"api", fmt.Sprintf("repos/%s/pulls", repository.String()),
 		"--paginate", "--slurp",
+		"--method", "GET",
 		"-f", "state=all",
 		"-f", "head=" + repository.Owner + ":" + headBranch,
 		"-f", "base=" + baseBranch,
