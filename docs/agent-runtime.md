@@ -85,6 +85,12 @@ The three valid proposals are:
 - `needs_clarification`, with one or more uniquely identified questions;
 - `cannot_proceed`, with concise observable evidence.
 
+When the harness has reliable measurements or content-free policy signals, it
+may also pass `--input-tokens`, `--output-tokens`, `--total-tokens`,
+`--cost-micros` with `--cost-currency`, `--budget-exhausted`, and repeated
+fixed-category `--exemption`, `--escalation`, or `--blocker` flags. Omitting
+usage leaves it explicitly unavailable; the coordinator never estimates it.
+
 Terminal rendering, scrollback, and screen text are never parsed for stage
 completion. A report is a proposal; only coordinator validation changes the
 run or invocation state.

@@ -188,6 +188,26 @@ func TestValidateRepositoryRejectsInvalidSetupEnvironmentPolicy(t *testing.T) {
 	}
 }
 
+// TestValidateRepositoryAcceptsExplicitEvaluationRetention verifies local
+// evaluation retention is optional but, when present, must be a positive
+// duration.
+func TestValidateRepositoryAcceptsExplicitEvaluationRetention(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.Evaluation.Retention = "720h"
+	if err := config.ValidateRepository(policy); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want valid evaluation retention", err)
+	}
+
+	policy.Evaluation.Retention = "0s"
+	err := config.ValidateRepository(policy)
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) || validationErr.Field != "evaluation.retention" {
+		t.Fatalf("ValidateRepository() error = %v, want evaluation.retention validation", err)
+	}
+}
+
 func TestLoadHostRejectsTheOffendingField(t *testing.T) {
 	t.Parallel()
 

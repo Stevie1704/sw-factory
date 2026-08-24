@@ -72,3 +72,36 @@ func TestRunRejectsAClarificationWithoutQuestions(t *testing.T) {
 		t.Fatalf("Run() status = %d, stderr = %q, want question validation error", status, errorsOutput.String())
 	}
 }
+
+// TestRunAcceptsExplicitHarnessUsage verifies the worker-facing command keeps
+// usage optional and writes only values supplied through numeric flags.
+func TestRunAcceptsExplicitHarnessUsage(t *testing.T) {
+	resultDirectory := t.TempDir()
+	var errorsOutput bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{"--outcome", "completed", "--summary", "done", "--change-summary", "changed", "--acceptance", "criterion=evidence", "--production-file", "internal/factory/agent.go", "--focused-command", "go test ./...", "--input-tokens", "12", "--output-tokens", "8", "--total-tokens", "20", "--cost-micros", "15", "--cost-currency", "USD", "--budget-exhausted", "--escalation", "review_finding", "--exemption", "technical", "--blocker", "review"},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID": "inv-1",
+			"FACTORY_RUN_ID":        "run-1",
+			"FACTORY_HARNESS":       "codex",
+			"FACTORY_ROLE":          "implementation",
+			"FACTORY_STAGE":         "implementation",
+			"FACTORY_RESULT_DIR":    resultDirectory,
+		},
+		Output:       &bytes.Buffer{},
+		ErrorsOutput: &errorsOutput,
+	})
+	if status != 0 {
+		t.Fatalf("Run() status = %d, stderr = %s", status, errorsOutput.String())
+	}
+	value, err := report.Read(resultDirectory + "/report.json")
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if value.Usage == nil || !value.Usage.Available || value.Usage.TotalTokens != 20 || value.Usage.CostMicros != 15 {
+		t.Fatalf("usage = %#v, want explicit CLI measurements", value.Usage)
+	}
+	if !value.BudgetExhausted || len(value.Escalations) != 1 || len(value.Exemptions) != 1 || len(value.Blockers) != 1 {
+		t.Fatalf("evaluation signals = %#v, want explicit CLI signals", value)
+	}
+}

@@ -46,6 +46,12 @@ type Factory interface {
 	PollCommands(context.Context, CommandPollRequest) ([]CommandResult, error)
 	// PollLifecycle observes merge and closure decisions for the current run.
 	PollLifecycle(context.Context, LifecycleRequest) (LifecycleResult, error)
+	// EvaluationReport reads content-free local evaluation summaries and aggregates.
+	EvaluationReport(context.Context, EvaluationReportRequest) (EvaluationReportResult, error)
+	// DeleteEvaluation deliberately removes selected terminal evaluation summaries.
+	DeleteEvaluation(context.Context, EvaluationDeleteRequest) (EvaluationDeleteResult, error)
+	// AttachEvaluationDisposition records an explicit human escalation disposition.
+	AttachEvaluationDisposition(context.Context, EvaluationDispositionRequest) (EvaluationDispositionResult, error)
 }
 
 // RunCoordinator is the single claim/state-transition seam used by the

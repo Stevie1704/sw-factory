@@ -106,9 +106,11 @@ worker_build:
 base_synchronization:
   mode: before_ready
   branch: main
+evaluation:
+  retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 ## Worker image build and digest pinning
 
@@ -360,6 +362,20 @@ remove the run's local worktree and operational database after inspection.
 
 The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
 
-Issue #25 will add separate content-free local evaluation summaries. Those summaries remain local and are not outbound telemetry.
+Issue #25 adds a logically separate `evaluation_summaries` projection inside
+the same versioned SQLite store, plus isolated usage and disposition tables. It stores
+only bounded metadata, counts, durations, fixed categories, hashed human-event
+identities, and reliable harness-reported numeric usage. It never copies issue
+or specification text, prompts, transcripts, diffs, source contents, command
+output, logs, or credentials. Existing stores migrate with the normal private
+`.bak-*` backup and newer schemas still fail closed.
+
+The checked-in `evaluation.retention` duration is an explicit operator policy
+for choosing a cutoff; the factory never deletes summaries automatically. Use
+`factory evaluation` for a local report, `factory evaluation-disposition` to
+attach a human classification, and the separately confirmed
+`factory evaluation-delete --before <RFC3339> --confirm` command to remove only
+selected terminal summaries. Ordinary run-artifact cleanup does not touch this
+projection.
 
 The high-level `Factory` seam injects configuration, repository checking, GitHub, pull requests, `GitWorkspace`, worker, terminal, harness, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; issue #6 adds the portable `TerminalRuntime`, Codex harness, invocation packet, and structured report boundary; issue #7 adds host checkpoint, push, and draft-PR orchestration.

@@ -61,3 +61,5 @@ worker_build:
   definition: worker/Dockerfile
 base_synchronization:
   mode: never
+evaluation:
+  retention: ""
