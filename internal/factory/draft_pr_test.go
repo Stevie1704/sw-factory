@@ -18,6 +18,7 @@ import (
 )
 
 const implementationCheckpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+const repairedImplementationCheckpoint = "1234561234561234561234561234561234561234561234561234561234561234"
 
 // TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft
 // verifies the complete host-owned implementation boundary at the Factory
@@ -127,6 +128,126 @@ func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *
 	}
 }
 
+// TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair
+// verifies the full failed-check to resumed-session to fresh-checkpoint loop.
+func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repo")
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(filepath.Join(repositoryPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repositoryPath, ".git", "HEAD"), []byte("ref: refs/heads/factory/run-repair\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := validRepositoryConfig()
+	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
+	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Repair the implementation", Body: "Implement and repair the supervised handoff.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	workspace := &draftGitWorkspace{
+		workspace:      gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-repair", Worktree: worktreePath},
+		state:          gitadapter.WorktreeState{Branch: "factory/run-repair", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory/agent.go"}},
+		checkpointSHAs: []string{implementationCheckpoint, repairedImplementationCheckpoint},
+	}
+	runtime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 1}}}
+	terminalRuntime := &agentTerminal{}
+	harnessRuntime := &agentHarness{}
+	statuses := &gateStatuses{}
+	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: "factory/run-repair", BaseBranch: "main"}}
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+	}}}
+	ids := []string{"run-repair", "initial", "repair"}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:         &fakeConfig{value: host},
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:         &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		PullRequests:   pullRequests,
+		Worktree:       workspace,
+		GitWorkspace:   workspace,
+		Worker:         runtime,
+		Terminal:       terminalRuntime,
+		Harness:        harnessRuntime,
+		CommitStatuses: statuses,
+		Now:            func() time.Time { return time.Date(2026, 8, 21, 10, 1, 0, 0, time.UTC) },
+		NewRunID: func() (string, error) {
+			if len(ids) == 0 {
+				return "", errors.New("repair test identifiers exhausted")
+			}
+			id := ids[0]
+			ids = ids[1:]
+			return id, nil
+		},
+	})
+	claimed, err := service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	runStore.gateResults[claimed.Run.ID] = []store.GateResult{{
+		RunID: claimed.Run.ID, CheckpointSHA: claimed.Run.CheckpointSHA, Phase: store.GatePhaseBaseline,
+		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
+		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+	}}
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	initial := runStore.invocations[launch.Invocation.ID]
+	initial.NativeSessionID = "session-initial"
+	initial.Status = store.InvocationStatusCompleted
+	initial.UpdatedAt = initial.CreatedAt.Add(time.Minute)
+	runStore.invocations[launch.Invocation.ID] = initial
+
+	first, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("first CreateDraftPullRequest() error = %v", err)
+	}
+	if first.Repair == nil || first.Repair.Outcome != factory.CheckRepairStarted || first.Repair.Run.Stage != store.StageImplementation || first.Repair.Run.CheckRepairAttempts != 1 || first.Repair.Remaining != 2 {
+		t.Fatalf("first result = %#v, want one active check repair with two attempts remaining", first)
+	}
+	if first.Repair.Packet.CheckpointSHA != implementationCheckpoint || len(first.Repair.Packet.Gates) != 1 || first.Repair.Packet.Gates[0].Outcome != "failed" {
+		t.Fatalf("repair packet = %#v, want all failed gates at the failed checkpoint", first.Repair.Packet)
+	}
+	if len(harnessRuntime.resumes) != 1 || harnessRuntime.resumes[0].ResumeSessionID != "session-initial" || harnessRuntime.resumes[0].Surface.ID != "surface-implementation" {
+		t.Fatalf("resume requests = %#v, want native session and existing surface", harnessRuntime.resumes)
+	}
+	if !strings.Contains(githubAdapter.editedComments[len(githubAdapter.editedComments)-1].body, "check-repair attempts: 1/3") || !strings.Contains(githubAdapter.editedComments[len(githubAdapter.editedComments)-1].body, "check-repair remaining: 2") {
+		t.Fatalf("repair status comment = %q, want visible attempt budget", githubAdapter.editedComments[len(githubAdapter.editedComments)-1].body)
+	}
+
+	// Simulate the resumed agent's accepted handoff. The next draft-pr command
+	// must create a new checkpoint and rerun the complete suite against it.
+	repairedInvocation := first.Repair.Invocation
+	repairedInvocation.Status = store.InvocationStatusCompleted
+	repairedInvocation.UpdatedAt = repairedInvocation.CreatedAt.Add(2 * time.Minute)
+	runStore.invocations[repairedInvocation.ID] = repairedInvocation
+	workspace.state.ChangedPaths = []string{"internal/factory/repair.go"}
+	runtime.results = append(runtime.results, worker.CommandResult{ExitCode: 0}, worker.CommandResult{ExitCode: 0})
+	second, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("second CreateDraftPullRequest() error = %v", err)
+	}
+	if second.Repair != nil || second.Run.Stage != store.StageDraftPR || second.Run.CheckpointSHA != repairedImplementationCheckpoint || second.PullRequest.Number != 18 {
+		t.Fatalf("second result = %#v, want a draft PR at a fresh checkpoint", second)
+	}
+	if len(workspace.checkpoints) != 2 || workspace.checkpoints[1].ParentSHA != implementationCheckpoint || len(workspace.pushes) != 1 {
+		t.Fatalf("checkpoint/push effects = %#v/%#v, want repair checkpoint parent and one push", workspace.checkpoints, workspace.pushes)
+	}
+	if len(statuses.values) != 2 || statuses.values[0].SHA != implementationCheckpoint || statuses.values[1].SHA != repairedImplementationCheckpoint {
+		t.Fatalf("published gate statuses = %#v, want one status per exact checkpoint", statuses.values)
+	}
+	if len(runtime.commands) != 4 {
+		t.Fatalf("gate commands = %#v, want setup and gate for each checkpoint", runtime.commands)
+	}
+}
+
 // TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation verifies
 // the coordinator does not checkpoint while the visible agent still owns the
 // implementation stage.
@@ -161,10 +282,11 @@ func TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation(t *testin
 
 // draftGitWorkspace records the host Git effects for coordinator seam tests.
 type draftGitWorkspace struct {
-	workspace   gitadapter.Workspace
-	state       gitadapter.WorktreeState
-	checkpoints []gitadapter.CheckpointRequest
-	pushes      []gitadapter.PushRequest
+	workspace      gitadapter.Workspace
+	state          gitadapter.WorktreeState
+	checkpoints    []gitadapter.CheckpointRequest
+	checkpointSHAs []string
+	pushes         []gitadapter.PushRequest
 }
 
 // activeInvocationRunStore adds the real-store invocation guard to the small
@@ -198,9 +320,14 @@ func (w *draftGitWorkspace) Inspect(context.Context, string) (gitadapter.Worktre
 // CreateCheckpoint records one idempotent checkpoint effect.
 func (w *draftGitWorkspace) CreateCheckpoint(_ context.Context, request gitadapter.CheckpointRequest) (gitadapter.CheckpointResult, error) {
 	w.checkpoints = append(w.checkpoints, request)
-	w.state.HeadSHA = implementationCheckpoint
+	checkpoint := implementationCheckpoint
+	if len(w.checkpointSHAs) > 0 {
+		checkpoint = w.checkpointSHAs[0]
+		w.checkpointSHAs = w.checkpointSHAs[1:]
+	}
+	w.state.HeadSHA = checkpoint
 	w.state.ChangedPaths = nil
-	return gitadapter.CheckpointResult{SHA: implementationCheckpoint, Created: true}, nil
+	return gitadapter.CheckpointResult{SHA: checkpoint, Created: true}, nil
 }
 
 // Push records the host-side branch push.

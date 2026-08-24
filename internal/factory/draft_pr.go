@@ -36,6 +36,9 @@ type DraftPullRequestResult struct {
 	Run store.Run
 	// Gates contains one result for every configured gate.
 	Gates []gate.Result
+	// Repair contains the bounded check-repair decision when the checkpoint
+	// suite did not yet produce a draft pull request.
+	Repair *CheckRepairResult
 	// PullRequest is the created or recovered draft PR.
 	PullRequest github.PullRequest
 }
@@ -73,8 +76,14 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if run.Stage != store.StageImplementation && run.Stage != store.StageCheck {
 		return DraftPullRequestResult{}, fmt.Errorf("run %q must be in implementation or check stage, not %q", run.ID, run.Stage)
 	}
-	if run.Status != store.StatusActive {
+	if run.Stage == store.StageImplementation && run.Status != store.StatusActive {
 		return DraftPullRequestResult{}, fmt.Errorf("run %q is %s; implementation must be active", run.ID, run.Status)
+	}
+	if run.Stage == store.StageCheck && run.Status != store.StatusActive && run.Status != store.StatusWaitingForHarness {
+		return DraftPullRequestResult{}, fmt.Errorf("run %q is %s; check evaluation must be active or waiting for harness", run.ID, run.Status)
+	}
+	if run.CheckRepairPendingAttempt != 0 {
+		return DraftPullRequestResult{Run: *run}, fmt.Errorf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)
 	}
 	if activeStore, ok := runStore.(ActiveInvocationStore); ok {
 		active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
@@ -89,43 +98,63 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if workspace == nil {
 		return DraftPullRequestResult{}, errors.New("GitWorkspace is required to create a draft pull request")
 	}
-	checkpoint, err := workspace.CreateCheckpoint(ctx, gitadapter.CheckpointRequest{
-		RunID:        run.ID,
-		WorktreePath: run.Worktree,
-		ParentSHA:    run.CheckpointSHA,
-		Message:      "accepted implementation",
-	})
-	if err != nil {
-		return DraftPullRequestResult{}, err
-	}
-	if !github.ValidCommitSHA(checkpoint.SHA) {
-		return DraftPullRequestResult{}, errors.New("GitWorkspace returned an invalid implementation checkpoint SHA")
-	}
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return DraftPullRequestResult{}, err
 	}
 	if issue.Number == 0 {
-		issue = packet.Issue
-		issue.Number = run.IssueNumber
+		issue = ensureIssueIdentity(issue, packet.Issue, run.IssueNumber)
 	}
 	next := *run
-	next.CheckpointSHA = checkpoint.SHA
-	next.Stage = store.StageCheck
-	next.Status = store.StatusActive
-	next.UpdatedAt = s.deps.Now().UTC()
-	next, err = s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository: repository, Issue: issue, Previous: *run, Next: next,
-	})
-	if err != nil {
-		return DraftPullRequestResult{}, err
+	if next.CheckRepairBudget <= 0 {
+		next.CheckRepairBudget = packet.RepositoryConfig.RetryLimits.CheckRepair
+	}
+	if run.Stage == store.StageCheck {
+		if run.Status == store.StatusWaitingForHarness {
+			next.Status = store.StatusActive
+			next.LifecycleReason = "resuming check evaluation after infrastructure wait"
+			next.UpdatedAt = s.deps.Now().UTC()
+			if err := s.persistAgentRunState(ctx, registration, runStore, *run, next); err != nil {
+				return DraftPullRequestResult{Run: next}, err
+			}
+		}
+	} else {
+		checkpoint, checkpointErr := workspace.CreateCheckpoint(ctx, gitadapter.CheckpointRequest{
+			RunID:        run.ID,
+			WorktreePath: run.Worktree,
+			ParentSHA:    run.CheckpointSHA,
+			Message:      checkpointMessage(*run),
+		})
+		if checkpointErr != nil {
+			return DraftPullRequestResult{}, checkpointErr
+		}
+		if !github.ValidCommitSHA(checkpoint.SHA) {
+			return DraftPullRequestResult{}, errors.New("GitWorkspace returned an invalid implementation checkpoint SHA")
+		}
+		if run.CheckRepairAttempts > 0 && checkpoint.SHA == run.CheckpointSHA {
+			return DraftPullRequestResult{}, fmt.Errorf("check-repair attempt %d did not produce a new checkpoint SHA", run.CheckRepairAttempts)
+		}
+		next.CheckpointSHA = checkpoint.SHA
+		next.Stage = store.StageCheck
+		next.Status = store.StatusActive
+		next.LifecycleReason = "evaluating implementation checkpoint"
+		next.UpdatedAt = s.deps.Now().UTC()
+		next, err = s.applyStateTransition(ctx, runStore, stateTransition{
+			Repository: repository, Issue: issue, Previous: *run, Next: next,
+		})
+		if err != nil {
+			return DraftPullRequestResult{}, err
+		}
 	}
 
 	gates, gateErr := s.runConfiguredGates(ctx, registration, runStore, next, packet)
 	result := DraftPullRequestResult{Run: next, Gates: gates}
 	if gateErr != nil {
-		return result, gateErr
+		repair, repairErr := s.routeCheckRepair(ctx, registration, runStore, next, packet, gates, gateErr)
+		result.Run = repair.Run
+		result.Repair = &repair
+		return result, repairErr
 	}
 	state, err := workspace.Inspect(ctx, next.Worktree)
 	if err != nil {
@@ -240,6 +269,25 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 		return github.PullRequest{}, errors.New("pull-request regeneration returned no pull-request identity")
 	}
 	return updated, nil
+}
+
+// checkpointMessage identifies whether the next checkpoint follows an
+// accepted implementation or a completed check-repair session.
+func checkpointMessage(run store.Run) string {
+	if run.CheckRepairAttempts > 0 {
+		return fmt.Sprintf("accepted check-repair attempt %d", run.CheckRepairAttempts)
+	}
+	return "accepted implementation"
+}
+
+// ensureIssueIdentity fills the fallback issue identity used by test doubles
+// and GitHub adapters that return an otherwise valid issue without a number.
+func ensureIssueIdentity(issue, fallback github.Issue, issueNumber int) github.Issue {
+	if issue.Number == 0 {
+		issue = fallback
+		issue.Number = issueNumber
+	}
+	return issue
 }
 
 // gitWorkspace resolves the new task-oriented seam while retaining the

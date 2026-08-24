@@ -18,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 13
+const CurrentSchemaVersion = 16
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -162,10 +162,20 @@ type Run struct {
 	// single editable status comment.
 	LastCommandMessage string
 	// HarnessOverride is the authorized harness choice for a later invocation.
-	HarnessOverride     string
-	SpecificationPacket string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	HarnessOverride string
+	// CheckRepairAttempts is the number of deterministic check-repair sessions
+	// successfully launched for this run.
+	CheckRepairAttempts int
+	// CheckRepairBudget is the frozen maximum number of check-repair sessions
+	// allowed for this run.
+	CheckRepairBudget int
+	// CheckRepairPendingAttempt is a durable reservation between worker setup
+	// and native resume. It lets reconciliation distinguish an interrupted
+	// launch from a successfully consumed attempt.
+	CheckRepairPendingAttempt int
+	SpecificationPacket       string
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 // Invocation is the persisted recoverable identity of one harness session.
@@ -184,6 +194,9 @@ type Invocation struct {
 	Model string
 	// ReasoningEffort is the validated reasoning policy selection.
 	ReasoningEffort string
+	// CredentialStoreID identifies the factory-managed credential volume used
+	// by this invocation, without retaining the host auth path or its contents.
+	CredentialStoreID string
 	// NativeSessionID is the harness-native continuation identity when known.
 	NativeSessionID string
 	// WorkspaceID is the opaque terminal workspace handle.
@@ -339,7 +352,8 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
-		       harness_override,
+		       harness_override, check_repair_attempts, check_repair_budget,
+		       check_repair_pending_attempt,
 		       specification_packet, created_at, updated_at
 		FROM operational_runs
 		WHERE status NOT IN (?, ?, ?)
@@ -358,7 +372,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
-		       harness_override,
+		       harness_override, check_repair_attempts, check_repair_budget,
+		       check_repair_pending_attempt,
 		       specification_packet, created_at, updated_at
 		FROM operational_runs
 		ORDER BY updated_at DESC
@@ -394,6 +409,9 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.LastCommandOutcome,
 		&run.LastCommandMessage,
 		&run.HarnessOverride,
+		&run.CheckRepairAttempts,
+		&run.CheckRepairBudget,
+		&run.CheckRepairPendingAttempt,
 		&run.SpecificationPacket,
 		&createdAt,
 		&updatedAt,
@@ -463,6 +481,24 @@ func normalizeRun(run Run) (Run, error) {
 	if run.Status == "" {
 		return Run{}, errors.New("run status is required")
 	}
+	if run.CheckRepairAttempts < 0 {
+		return Run{}, errors.New("run check-repair attempts must not be negative")
+	}
+	if run.CheckRepairBudget < 0 {
+		return Run{}, errors.New("run check-repair budget must not be negative")
+	}
+	if run.CheckRepairAttempts > run.CheckRepairBudget {
+		return Run{}, errors.New("run check-repair attempts must not exceed budget")
+	}
+	if run.CheckRepairPendingAttempt < 0 {
+		return Run{}, errors.New("run pending check-repair attempt must not be negative")
+	}
+	if run.CheckRepairPendingAttempt > run.CheckRepairBudget {
+		return Run{}, errors.New("run pending check-repair attempt must not exceed budget")
+	}
+	if run.CheckRepairPendingAttempt != 0 && run.CheckRepairPendingAttempt != run.CheckRepairAttempts+1 {
+		return Run{}, errors.New("run pending check-repair attempt must be the next attempt")
+	}
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = time.Now().UTC()
 	}
@@ -499,6 +535,9 @@ func runValues(run Run) []any {
 		run.LastCommandOutcome,
 		run.LastCommandMessage,
 		run.HarnessOverride,
+		run.CheckRepairAttempts,
+		run.CheckRepairBudget,
+		run.CheckRepairPendingAttempt,
 		run.SpecificationPacket,
 		run.CreatedAt.UTC().Format(runTimestampLayout),
 		run.UpdatedAt.UTC().Format(runTimestampLayout),
@@ -513,8 +552,10 @@ const saveRunStatement = `
 			lifecycle_notification_sent,
 			revision, processed_comment_id,
 			processed_comment_revision, last_command_name, last_command_outcome,
-			last_command_message, harness_override, specification_packet, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_command_message, harness_override, check_repair_attempts,
+			check_repair_budget, check_repair_pending_attempt, specification_packet,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
 			issue_number = excluded.issue_number,
@@ -538,6 +579,9 @@ const saveRunStatement = `
 			last_command_outcome = excluded.last_command_outcome,
 			last_command_message = excluded.last_command_message,
 			harness_override = excluded.harness_override,
+			check_repair_attempts = excluded.check_repair_attempts,
+			check_repair_budget = excluded.check_repair_budget,
+			check_repair_pending_attempt = excluded.check_repair_pending_attempt,
 			specification_packet = excluded.specification_packet,
 			updated_at = excluded.updated_at`
 
@@ -549,7 +593,8 @@ const saveRunIfRevisionStatement = `
 			lifecycle_notification_sent = ?,
 			revision = ?, processed_comment_id = ?,
 			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
-			last_command_message = ?, harness_override = ?, specification_packet = ?,
+			last_command_message = ?, harness_override = ?, check_repair_attempts = ?,
+			check_repair_budget = ?, check_repair_pending_attempt = ?, specification_packet = ?,
 			created_at = ?, updated_at = ?
 		WHERE id = ? AND revision = ?`
 
@@ -573,6 +618,9 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	if invocation.Status == "" {
 		return errors.New("invocation status is required")
 	}
+	if strings.ContainsAny(invocation.CredentialStoreID, "\x00\r\n") {
+		return errors.New("invocation credential store id contains control characters")
+	}
 	if invocation.CreatedAt.IsZero() {
 		invocation.CreatedAt = time.Now().UTC()
 	}
@@ -585,11 +633,11 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO invocations (
-			id, run_id, harness, role, stage, model, reasoning_effort,
+			id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 			native_session_id, workspace_id, status_surface_id,
 			implementation_surface_id, checks_surface_id, invocation_directory,
 			result_directory, permitted_paths, prompt_version, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -597,6 +645,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			stage = excluded.stage,
 			model = excluded.model,
 			reasoning_effort = excluded.reasoning_effort,
+			credential_store_id = excluded.credential_store_id,
 			native_session_id = excluded.native_session_id,
 			workspace_id = excluded.workspace_id,
 			status_surface_id = excluded.status_surface_id,
@@ -615,6 +664,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.Stage,
 		invocation.Model,
 		invocation.ReasoningEffort,
+		invocation.CredentialStoreID,
 		invocation.NativeSessionID,
 		invocation.WorkspaceID,
 		invocation.StatusSurfaceID,
@@ -640,12 +690,31 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 // Invocation loads one persisted invocation only when both identifiers match.
 func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*Invocation, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, run_id, harness, role, stage, model, reasoning_effort,
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
 		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND id = ?`, runID, invocationID)
+	return scanInvocation(row)
+}
+
+// LatestInvocation returns the most recently updated invocation for one run,
+// including terminal history needed to resume the implementation session that
+// produced a failed checkpoint.
+func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, errors.New("invocation run id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
+		       native_session_id, workspace_id, status_surface_id,
+		       implementation_surface_id, checks_surface_id, invocation_directory,
+		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		FROM invocations
+		WHERE run_id = ?
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1`, runID)
 	return scanInvocation(row)
 }
 
@@ -671,7 +740,7 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 		return nil, errors.New("invocation run id is required")
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, run_id, harness, role, stage, model, reasoning_effort,
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
 		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
@@ -694,6 +763,7 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 		&invocation.Stage,
 		&invocation.Model,
 		&invocation.ReasoningEffort,
+		&invocation.CredentialStoreID,
 		&invocation.NativeSessionID,
 		&invocation.WorkspaceID,
 		&invocation.StatusSurfaceID,
@@ -1242,6 +1312,23 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			if _, err := tx.ExecContext(ctx, `CREATE INDEX evaluation_dispositions_by_run
 					ON evaluation_dispositions (run_id, decided_at)`); err != nil {
 				return fmt.Errorf("apply store migration 13 evaluation dispositions index: %w", err)
+			}
+		case 14:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN check_repair_attempts INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN check_repair_budget INTEGER NOT NULL DEFAULT 0",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 14: %w", err)
+				}
+			}
+		case 15:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN credential_store_id TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("apply store migration 15: %w", err)
+			}
+		case 16:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN check_repair_pending_attempt INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("apply store migration 16: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

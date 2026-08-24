@@ -106,11 +106,16 @@ type InvocationPacket struct {
 	// PermittedPaths lists repository-relative prefixes the coordinator will
 	// accept in the completed handoff.
 	PermittedPaths []string `json:"permitted_paths"`
+	// CheckRepair contains the complete failed-check context when this
+	// invocation is a native-resumed repair.
+	CheckRepair *CheckRepairPacket `json:"check_repair,omitempty"`
 }
 
 const (
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	invocationPacketVersion = 1
+	// Version two adds the optional check-repair packet while retaining all
+	// version-one fields.
+	invocationPacketVersion = 2
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
@@ -139,6 +144,9 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	}
 	if request.RunID != "" && request.RunID != run.ID {
 		return AgentLaunchResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	}
+	if run.CheckRepairPendingAttempt != 0 {
+		return AgentLaunchResult{}, fmt.Errorf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)
 	}
 	if request.Harness == "" && run.HarnessOverride != "" {
 		request.Harness = config.Harness(run.HarnessOverride)
@@ -176,8 +184,10 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if authPath == "" {
 		authPath = registration.Authentication.CodexAuthPath
 	}
+	credentialStoreID := ""
 	var seeder worker.CredentialSeeder
 	if authPath != "" {
+		credentialStoreID = registration.Path
 		var ok bool
 		seeder, ok = s.deps.Worker.(worker.CredentialSeeder)
 		if !ok {
@@ -236,6 +246,7 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 		Stage:               stage,
 		Model:               model,
 		ReasoningEffort:     request.ReasoningEffort,
+		CredentialStoreID:   credentialStoreID,
 		InvocationDirectory: packetDirectory,
 		ResultDirectory:     resultDirectory,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
@@ -274,10 +285,6 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 		if err := recorder.RecordEvaluationInvocation(ctx, run.ID, invocation, run.ImageDigest, report.SchemaVersion); err != nil {
 			return AgentLaunchResult{}, fmt.Errorf("record local evaluation invocation: %w", err)
 		}
-	}
-	credentialStoreID := ""
-	if authPath != "" {
-		credentialStoreID = registration.Path
 	}
 	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
 	if err != nil {
@@ -382,6 +389,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	if request.RunID != "" && request.RunID != run.ID {
 		return AgentResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	}
+	if run.CheckRepairPendingAttempt != 0 {
+		return AgentResult{}, fmt.Errorf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)
 	}
 	invocation, err := invocationStore.Invocation(ctx, run.ID, request.InvocationID)
 	if err != nil {

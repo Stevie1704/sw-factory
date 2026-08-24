@@ -162,6 +162,7 @@ type evaluationRecorder interface {
 	EnsureEvaluationSummary(context.Context, store.Run) error
 	RecordEvaluationStageTransition(context.Context, string, store.Stage, store.Stage, time.Time) error
 	RecordEvaluationInvocation(context.Context, string, store.Invocation, string, int) error
+	RecordEvaluationGateRun(context.Context, string, int) error
 	RecordEvaluationAttempt(context.Context, string, store.EvaluationAttempt) error
 	RecordEvaluationExemption(context.Context, string, store.EvaluationExemption) error
 	RecordEvaluationEscalation(context.Context, string, store.EvaluationEscalationCategory) error

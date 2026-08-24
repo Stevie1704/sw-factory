@@ -115,6 +115,30 @@ not from the terminal screen. Accepted reports retain the native session id and
 opaque surface handle so a later coordinator recovery operation can resume the
 session.
 
+## Check-repair loop
+
+When `factory draft-pr` evaluates an accepted implementation checkpoint, it
+runs the complete frozen gate suite and retains each result under that exact
+checkpoint SHA. Typed deterministic gate failures are assembled into one
+bounded check-repair packet containing all gate outcomes, skipped dependency
+reasons, and bounded command diagnostics. The next implementation invocation
+uses the existing worker role volume, implementation surface, and native Codex
+session through the harness resume seam.
+
+The repository's `retry_limits.check_repair` value is frozen into the run. A
+repair reservation is durable before native resume, but the consumed attempt
+counter advances only after resume and the final run-state write succeed; an
+interrupted reservation is marked for reconciliation and blocks blind
+relaunch. Setup, worker, GitHub status, harness, and other transport failures
+roll back before resume and move the run to `waiting_for_harness` without
+consuming the budget. Once the ceiling is reached, the run moves to
+`check/waiting_for_human` and receives the `agent-needs-input` label. The
+single status comment always shows consumed, pending, and remaining attempts.
+After a repair report is accepted, the next checkpoint must have a new SHA and
+the full gate suite runs again; no prior checkpoint result authorizes it. Gate
+counts, repair attempts, stage durations, budget exhaustion, and available
+usage metadata remain in the local content-free evaluation summary.
+
 ## Safety boundary
 
 The versioned core prompt is placed after repository guidance and therefore
