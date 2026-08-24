@@ -207,6 +207,12 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err := runStore.SaveRun(ctx, run); err != nil {
 		return IssueResult{}, cleanupWorkspace(fmt.Errorf("persist frozen specification packet: %w", err))
 	}
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.EnsureEvaluationSummary(ctx, run); err != nil {
+			_, failureErr := s.failClaim(ctx, runStore, run, repository, issue, fmt.Errorf("persist local evaluation summary: %w", err))
+			return IssueResult{}, cleanupWorkspace(failureErr)
+		}
+	}
 
 	run, err = s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository:    repository,
@@ -294,6 +300,11 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 		if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
 			return next, fmt.Errorf("persist state transition before GitHub effects: %w", err)
 		}
+		if recorder, ok := runStore.(evaluationRecorder); ok {
+			if err := recordEvaluationTransition(ctx, recorder, transition.Previous, next, next.UpdatedAt); err != nil {
+				return next, fmt.Errorf("record evaluation state transition: %w", err)
+			}
+		}
 	}
 	oldLabels := append([]string(nil), transition.Issue.Labels...)
 	newLabels := replaceFactoryState(oldLabels, factoryLabelForStatus(next.Status))
@@ -328,6 +339,11 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 			return next, errors.Join(append([]error{fmt.Errorf("persist state transition: %w", err)}, compensationErrors...)...)
 		}
 		return next, fmt.Errorf("persist claim state: %w", err)
+	}
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recordEvaluationTransition(ctx, recorder, transition.Previous, next, next.UpdatedAt); err != nil {
+			return next, fmt.Errorf("record evaluation state transition: %w", err)
+		}
 	}
 	return next, nil
 }
@@ -517,6 +533,13 @@ func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Ru
 	}
 	if err := runStore.SaveRun(ctx, run); err != nil {
 		compensationErrors = append(compensationErrors, fmt.Errorf("persist failed claim: %w", err))
+	}
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.EnsureEvaluationSummary(ctx, run); err != nil {
+			compensationErrors = append(compensationErrors, fmt.Errorf("ensure failed-claim evaluation summary: %w", err))
+		} else if err := recorder.FinalizeEvaluation(ctx, run.ID, store.EvaluationOutcomeFailed, run.UpdatedAt); err != nil {
+			compensationErrors = append(compensationErrors, fmt.Errorf("finalize failed-claim evaluation summary: %w", err))
+		}
 	}
 	for _, compensationErr := range compensationErrors {
 		if compensationErr != nil {

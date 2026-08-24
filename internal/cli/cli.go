@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
@@ -35,6 +36,9 @@ var commandTable = []commandDefinition{
 	{name: "draft-pr", handler: runDraftPullRequest},
 	{name: "poll", handler: runPollCommands},
 	{name: "status", handler: runStatus},
+	{name: "evaluation", handler: runEvaluation},
+	{name: "evaluation-delete", handler: runEvaluationDelete},
+	{name: "evaluation-disposition", handler: runEvaluationDisposition},
 }
 
 // Run dispatches the requested CLI command and returns its exit status.
@@ -446,6 +450,146 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 				return 1
 			}
 		}
+	}
+	return 0
+}
+
+// runEvaluation reports retained per-run summaries and local aggregate values
+// without making a network call or displaying work content.
+func runEvaluation(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("evaluation", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "one opaque evaluation run identifier")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("evaluation does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).EvaluationReport(ctx, factory.EvaluationReportRequest{RunID: *runID})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "evaluation summaries: %d\n", len(result.Summaries)) {
+		return 1
+	}
+	if result.Retention == "" {
+		if !writeOutput(output, errorsOutput, "retention: explicit deletion only\n") {
+			return 1
+		}
+	} else if !writeOutput(output, errorsOutput, "retention: %s (deletion remains explicit)\n", result.Retention) {
+		return 1
+	}
+	for _, summary := range result.Summaries {
+		if !writeOutput(output, errorsOutput, "run: %s outcome=%s started=%s completed=%s wall=%s stages=%v versions=%v invocations=%d gates=%d check_repairs=%d test_revisions=%d review_revisions=%d budget_exhausted=%t exemptions=%v escalations=%v blockers=%v usage_available=%t\n", summary.RunID, summary.Outcome, summary.StartedAt.Format(time.RFC3339Nano), summary.CompletedAt.Format(time.RFC3339Nano), summary.TotalWallTime, summary.StageDurations, summary.InvocationVersions, summary.InvocationCount, summary.GateCount, summary.CheckRepairCount, summary.TestRevisionCount, summary.ReviewRevisionCount, summary.BudgetExhausted, summary.Exemptions, summary.EscalationCategories, summary.RepeatedBlockers, summary.Usage.Available) {
+			return 1
+		}
+		if summary.Usage.Available {
+			if !writeOutput(output, errorsOutput, "run usage: run=%s input_tokens=%d output_tokens=%d total_tokens=%d cost_reported=%t cost_micros=%d currency=%s cost_status=%s\n", summary.RunID, summary.Usage.InputTokens, summary.Usage.OutputTokens, summary.Usage.TotalTokens, summary.Usage.CostReported, summary.Usage.CostMicros, summary.Usage.Currency, evaluationCostStatus(summary.Usage)) {
+				return 1
+			}
+		} else if !writeOutput(output, errorsOutput, "run usage: run=%s unavailable (%s)\n", summary.RunID, summary.Usage.UnavailableReason) {
+			return 1
+		}
+	}
+	aggregate := result.Aggregate
+	if !writeOutput(output, errorsOutput, "aggregate: runs=%d outcomes=%v outcome_rates=%v success_rate=%.4f budget_exhaustion_rate=%.4f total_wall=%s average_wall=%s stages=%v invocations=%d gates=%d check_repairs=%d test_revisions=%d review_revisions=%d escalations=%v escalation_rates=%v dispositions=%v usage_available_runs=%d usage_cost_reported_runs=%d\n", aggregate.RunCount, aggregate.OutcomeCounts, aggregate.OutcomeRates, aggregate.SuccessRate, aggregate.BudgetExhaustionRate, aggregate.TotalWallTime, aggregate.AverageTotalWallTime, aggregate.StageDurations, aggregate.InvocationCount, aggregate.GateCount, aggregate.CheckRepairCount, aggregate.TestRevisionCount, aggregate.ReviewRevisionCount, aggregate.EscalationCounts, aggregate.EscalationRates, aggregate.DispositionCounts, aggregate.UsageAvailableRuns, aggregate.UsageCostReportedRuns) {
+		return 1
+	}
+	if aggregate.Usage.Available {
+		if !writeOutput(output, errorsOutput, "aggregate usage: input_tokens=%d output_tokens=%d total_tokens=%d cost_reported=%t cost_micros=%d currency=%s cost_status=%s\n", aggregate.Usage.InputTokens, aggregate.Usage.OutputTokens, aggregate.Usage.TotalTokens, aggregate.Usage.CostReported, aggregate.Usage.CostMicros, aggregate.Usage.Currency, evaluationCostStatus(aggregate.Usage)) {
+			return 1
+		}
+	} else if !writeOutput(output, errorsOutput, "aggregate usage: unavailable (%s)\n", aggregate.Usage.UnavailableReason) {
+		return 1
+	}
+	return 0
+}
+
+// evaluationCostStatus renders whether aggregate cost was reported or why it
+// remains unavailable, independently of token availability.
+func evaluationCostStatus(usage store.EvaluationUsage) string {
+	if usage.CostReported {
+		return "reported"
+	}
+	if usage.UnavailableReason == "" {
+		return "not_reported"
+	}
+	return "unavailable:" + usage.UnavailableReason
+}
+
+// runEvaluationDelete performs deliberate, visible deletion of selected
+// terminal evaluation summaries and requires an explicit confirmation flag.
+func runEvaluationDelete(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("evaluation-delete", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	before := flags.String("before", "", "RFC3339 cutoff; only terminal summaries before it are deleted")
+	confirm := flags.Bool("confirm", false, "confirm deliberate deletion of evaluation summaries")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("evaluation-delete does not accept positional arguments"))
+		return 2
+	}
+	if !*confirm {
+		writeError(errorsOutput, errors.New("evaluation-delete requires --confirm"))
+		return 2
+	}
+	cutoff, err := time.Parse(time.RFC3339Nano, *before)
+	if err != nil {
+		writeError(errorsOutput, errors.New("evaluation-delete requires --before as an RFC3339 timestamp"))
+		return 2
+	}
+	result, err := factory.New(*configPath).DeleteEvaluation(ctx, factory.EvaluationDeleteRequest{Before: cutoff})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "deleted evaluation summaries: %d (dispositions=%d usage=%d cutoff=%s)\n", result.Deleted.Summaries, result.Deleted.Dispositions, result.Deleted.UsageRows, result.Before.Format(time.RFC3339Nano)) {
+		return 1
+	}
+	return 0
+}
+
+// runEvaluationDisposition attaches one explicit human disposition to a
+// test-dispute or review-finding escalation without retaining finding text.
+func runEvaluationDisposition(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("evaluation-disposition", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "evaluation run identifier")
+	eventID := flags.String("event-id", "", "opaque escalation identity; it is hashed before persistence")
+	category := flags.String("category", "", "test_dispute or review_finding")
+	disposition := flags.String("disposition", "", "upheld, advisory, or overturned")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("evaluation-disposition does not accept positional arguments"))
+		return 2
+	}
+	if strings.TrimSpace(*runID) == "" || strings.TrimSpace(*eventID) == "" || strings.TrimSpace(*category) == "" || strings.TrimSpace(*disposition) == "" {
+		writeError(errorsOutput, errors.New("evaluation-disposition requires --run-id, --event-id, --category, and --disposition"))
+		return 2
+	}
+	result, err := factory.New(*configPath).AttachEvaluationDisposition(ctx, factory.EvaluationDispositionRequest{
+		RunID:       *runID,
+		EventID:     *eventID,
+		Category:    store.EvaluationEscalationCategory(*category),
+		Disposition: store.EvaluationDisposition(*disposition),
+		DecidedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "evaluation disposition recorded: run=%s category=%s disposition=%s event_id_hash=%s\n", result.Disposition.RunID, result.Disposition.Category, result.Disposition.Disposition, result.Disposition.EventIDHash) {
+		return 1
 	}
 	return 0
 }

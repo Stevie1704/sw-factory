@@ -267,6 +267,14 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 		return AgentLaunchResult{}, fmt.Errorf("persist visible invocation: %w", err)
 	}
 	invocationPersisted = true
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.EnsureEvaluationSummary(ctx, *run); err != nil {
+			return AgentLaunchResult{}, fmt.Errorf("ensure local evaluation summary: %w", err)
+		}
+		if err := recorder.RecordEvaluationInvocation(ctx, run.ID, invocation, run.ImageDigest, report.SchemaVersion); err != nil {
+			return AgentLaunchResult{}, fmt.Errorf("record local evaluation invocation: %w", err)
+		}
+	}
 	credentialStoreID := ""
 	if authPath != "" {
 		credentialStoreID = registration.Path
@@ -428,6 +436,54 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	if err := report.Validate(value, validationContext); err != nil {
 		return AgentResult{}, err
+	}
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.EnsureEvaluationSummary(ctx, *run); err != nil {
+			return AgentResult{}, fmt.Errorf("ensure local evaluation summary: %w", err)
+		}
+		if value.BudgetExhausted {
+			if err := recorder.RecordEvaluationBudgetExhaustion(ctx, run.ID); err != nil {
+				return AgentResult{}, fmt.Errorf("record local evaluation budget exhaustion: %w", err)
+			}
+		}
+		for _, exemption := range value.Exemptions {
+			if err := recorder.RecordEvaluationExemption(ctx, run.ID, store.EvaluationExemption(exemption)); err != nil {
+				return AgentResult{}, fmt.Errorf("record local evaluation exemption: %w", err)
+			}
+		}
+		for _, escalation := range value.Escalations {
+			if err := recorder.RecordEvaluationEscalation(ctx, run.ID, store.EvaluationEscalationCategory(escalation)); err != nil {
+				return AgentResult{}, fmt.Errorf("record local evaluation escalation: %w", err)
+			}
+		}
+		for _, blocker := range value.Blockers {
+			if err := recorder.RecordEvaluationBlocker(ctx, run.ID, store.EvaluationBlockerCategory(blocker)); err != nil {
+				return AgentResult{}, fmt.Errorf("record local evaluation blocker: %w", err)
+			}
+		}
+		if value.Usage != nil {
+			if err := recorder.RecordEvaluationUsage(ctx, run.ID, invocation.ID, store.EvaluationUsage{
+				Available:    value.Usage.Available,
+				InputTokens:  value.Usage.InputTokens,
+				OutputTokens: value.Usage.OutputTokens,
+				TotalTokens:  value.Usage.TotalTokens,
+				CostReported: value.Usage.CostReported,
+				CostMicros:   value.Usage.CostMicros,
+				Currency:     value.Usage.Currency,
+			}); err != nil {
+				return AgentResult{}, fmt.Errorf("record local evaluation usage: %w", err)
+			}
+		}
+		switch value.Outcome {
+		case report.OutcomeNeedsClarification:
+			if err := recorder.RecordEvaluationEscalation(ctx, run.ID, store.EvaluationEscalationClarification); err != nil {
+				return AgentResult{}, fmt.Errorf("record local evaluation clarification: %w", err)
+			}
+		case report.OutcomeCannotProceed:
+			if err := recorder.RecordEvaluationEscalation(ctx, run.ID, store.EvaluationEscalationBlocked); err != nil {
+				return AgentResult{}, fmt.Errorf("record local evaluation blocker escalation: %w", err)
+			}
+		}
 	}
 	_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath)
 	if err != nil {

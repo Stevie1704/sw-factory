@@ -18,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 12
+const CurrentSchemaVersion = 13
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -1177,6 +1177,71 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			if _, err := tx.ExecContext(ctx, `CREATE INDEX gate_results_by_run
 					ON gate_results (run_id, phase, checkpoint_sha, ordinal)`); err != nil {
 				return fmt.Errorf("apply store migration 12 index: %w", err)
+			}
+		case 13:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE evaluation_summaries (
+				run_id TEXT PRIMARY KEY,
+				outcome TEXT NOT NULL,
+				started_at TEXT NOT NULL,
+				completed_at TEXT NOT NULL DEFAULT '',
+				total_wall_nanos INTEGER NOT NULL DEFAULT 0,
+				stage_durations TEXT NOT NULL DEFAULT '[]',
+				invocation_versions TEXT NOT NULL DEFAULT '[]',
+				invocation_count INTEGER NOT NULL DEFAULT 0,
+				gate_count INTEGER NOT NULL DEFAULT 0,
+				check_repair_count INTEGER NOT NULL DEFAULT 0,
+				test_revision_count INTEGER NOT NULL DEFAULT 0,
+				review_revision_count INTEGER NOT NULL DEFAULT 0,
+				budget_exhausted INTEGER NOT NULL DEFAULT 0,
+				exemptions TEXT NOT NULL DEFAULT '[]',
+				escalation_categories TEXT NOT NULL DEFAULT '[]',
+				repeated_blockers TEXT NOT NULL DEFAULT '[]',
+				usage_available INTEGER NOT NULL DEFAULT 0,
+				usage_unavailable_reason TEXT NOT NULL DEFAULT 'not_reported',
+				usage_input_tokens INTEGER NOT NULL DEFAULT 0,
+				usage_output_tokens INTEGER NOT NULL DEFAULT 0,
+				usage_total_tokens INTEGER NOT NULL DEFAULT 0,
+				usage_cost_reported INTEGER NOT NULL DEFAULT 0,
+				usage_cost_micros INTEGER NOT NULL DEFAULT 0,
+				usage_currency TEXT NOT NULL DEFAULT '',
+				active_stage TEXT NOT NULL DEFAULT '',
+				active_stage_started_at TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)`); err != nil {
+				return fmt.Errorf("apply store migration 13 evaluation summaries: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE evaluation_usage (
+				run_id TEXT NOT NULL,
+				invocation_id TEXT NOT NULL,
+				input_tokens INTEGER NOT NULL DEFAULT 0,
+				output_tokens INTEGER NOT NULL DEFAULT 0,
+				total_tokens INTEGER NOT NULL DEFAULT 0,
+				cost_reported INTEGER NOT NULL DEFAULT 0,
+				cost_micros INTEGER NOT NULL DEFAULT 0,
+				currency TEXT NOT NULL DEFAULT '',
+				recorded_at TEXT NOT NULL,
+				PRIMARY KEY (run_id, invocation_id)
+			)`); err != nil {
+				return fmt.Errorf("apply store migration 13 evaluation usage: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE INDEX evaluation_usage_by_run
+					ON evaluation_usage (run_id, recorded_at)`); err != nil {
+				return fmt.Errorf("apply store migration 13 evaluation usage index: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE evaluation_dispositions (
+				run_id TEXT NOT NULL,
+				event_id_hash TEXT NOT NULL,
+				category TEXT NOT NULL,
+				disposition TEXT NOT NULL,
+				decided_at TEXT NOT NULL,
+				PRIMARY KEY (run_id, event_id_hash)
+			)`); err != nil {
+				return fmt.Errorf("apply store migration 13 evaluation dispositions: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE INDEX evaluation_dispositions_by_run
+					ON evaluation_dispositions (run_id, decided_at)`); err != nil {
+				return fmt.Errorf("apply store migration 13 evaluation dispositions index: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

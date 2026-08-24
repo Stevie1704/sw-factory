@@ -64,6 +64,18 @@ func Run(request Request) int {
 	flags.Var(&questions, "question", "question-id=question text; may be repeated")
 	evidence := pairList{}
 	flags.Var(&evidence, "evidence", "kind=detail; may be repeated")
+	exemptions := stringList{}
+	flags.Var(&exemptions, "exemption", "human, technical, or baseline; may be repeated")
+	escalations := stringList{}
+	flags.Var(&escalations, "escalation", "test_dispute or review_finding; may be repeated")
+	blockers := stringList{}
+	flags.Var(&blockers, "blocker", "setup, gate, test, review, harness, budget, or unknown; may be repeated")
+	budgetExhausted := flags.Bool("budget-exhausted", false, "explicit harness signal that the configured budget was exhausted")
+	inputTokens := flags.Int64("input-tokens", 0, "reliable harness-reported input tokens")
+	outputTokens := flags.Int64("output-tokens", 0, "reliable harness-reported output tokens")
+	totalTokens := flags.Int64("total-tokens", 0, "reliable harness-reported total tokens")
+	costMicros := flags.Int64("cost-micros", 0, "reliable harness-reported cost in millionths of currency")
+	costCurrency := flags.String("cost-currency", "", "three-letter uppercase currency for --cost-micros")
 	nativeSessionID := flags.String("native-session-id", "", "harness-native session identifier")
 	if err := flags.Parse(request.Args); err != nil {
 		return 2
@@ -99,8 +111,29 @@ func Run(request Request) int {
 		Stage:           identity["stage"],
 		Outcome:         report.Outcome(*outcome),
 		Summary:         *summary,
+		BudgetExhausted: *budgetExhausted,
 		NativeSessionID: *nativeSessionID,
 		ReportedAt:      request.Now().UTC(),
+	}
+	for _, item := range exemptions {
+		value.Exemptions = append(value.Exemptions, report.Exemption(item))
+	}
+	for _, item := range escalations {
+		value.Escalations = append(value.Escalations, report.EscalationCategory(item))
+	}
+	for _, item := range blockers {
+		value.Blockers = append(value.Blockers, report.BlockerCategory(item))
+	}
+	if flagWasSet(flags, "input-tokens", "output-tokens", "total-tokens", "cost-micros", "cost-currency") {
+		value.Usage = &report.Usage{
+			Available:    true,
+			InputTokens:  *inputTokens,
+			OutputTokens: *outputTokens,
+			TotalTokens:  *totalTokens,
+			CostReported: flagWasSet(flags, "cost-micros", "cost-currency"),
+			CostMicros:   *costMicros,
+			Currency:     *costCurrency,
+		}
 	}
 	for _, pair := range acceptance {
 		value.Handoff = ensureHandoff(value.Handoff)
@@ -137,6 +170,19 @@ func ensureHandoff(value *report.Handoff) *report.Handoff {
 		return value
 	}
 	return &report.Handoff{}
+}
+
+// flagWasSet reports whether a caller explicitly supplied one of the optional
+// usage flags, preserving the distinction between zero and unavailable data.
+func flagWasSet(flags *flag.FlagSet, names ...string) bool {
+	set := make(map[string]struct{}, len(names))
+	flags.Visit(func(value *flag.Flag) { set[value.Name] = struct{}{} })
+	for _, name := range names {
+		if _, ok := set[name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // writeError writes one CLI error without exposing credentials or transcripts.

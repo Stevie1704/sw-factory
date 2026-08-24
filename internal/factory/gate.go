@@ -134,6 +134,11 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 		return result, nil
 	}
 	if persistErr == nil && baselineFailureErrorTargeted(packet.Issue.Body, suite, suiteErr) {
+		if recorder, ok := runStore.(evaluationRecorder); ok {
+			if err := recorder.RecordEvaluationExemption(ctx, run.ID, store.EvaluationExemptionBaseline); err != nil {
+				return result, fmt.Errorf("record baseline evaluation exemption: %w", err)
+			}
+		}
 		return result, nil
 	}
 	effectiveErr := errors.Join(suiteErr, persistErr)
@@ -313,6 +318,11 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 	if !ok || len(suite.Gates) == 0 {
 		return nil
 	}
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.EnsureEvaluationSummary(ctx, run); err != nil {
+			return fmt.Errorf("ensure local evaluation summary: %w", err)
+		}
+	}
 	results := make([]store.GateResult, 0, len(suite.Gates))
 	for ordinal, result := range suite.Gates {
 		results = append(results, store.GateResult{
@@ -328,7 +338,29 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 			SetupFingerprint: result.SetupFingerprint,
 		})
 	}
-	return resultStore.SaveGateResults(ctx, results)
+	if err := resultStore.SaveGateResults(ctx, results); err != nil {
+		return err
+	}
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.RefreshEvaluationCounts(ctx, run.ID); err != nil {
+			return fmt.Errorf("refresh local evaluation counts: %w", err)
+		}
+		for _, result := range suite.Gates {
+			var category store.EvaluationBlockerCategory
+			switch result.Outcome {
+			case gate.OutcomeSetupFailed:
+				category = store.EvaluationBlockerSetup
+			case gate.OutcomeFailed, gate.OutcomeError, gate.OutcomeSkipped:
+				category = store.EvaluationBlockerGate
+			default:
+				continue
+			}
+			if err := recorder.RecordEvaluationBlocker(ctx, run.ID, category); err != nil {
+				return fmt.Errorf("record local evaluation blocker: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // setupInputFingerprint hashes the configured manifest and lockfile contents

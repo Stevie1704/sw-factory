@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/cli"
+	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
 func TestRunInitializesRegistersAndReportsStatus(t *testing.T) {
@@ -370,6 +372,65 @@ func TestRunStatusReportsNoRegisteredRepository(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "config: "+configPath) {
 		t.Fatalf("output = %q, want it to report the config path", output.String())
+	}
+}
+
+// TestRunEvaluationReportsAndDeliberatelyDeletesLocalSummaries verifies the
+// user-facing local report and explicit deletion commands do not need GitHub.
+func TestRunEvaluationReportsAndDeliberatelyDeletesLocalSummaries(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidRepositoryConfig(t, repositoryPath)
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"register", "--config", configPath, "--repository", repositoryPath, "--github-owner", "example", "--github-repository", "project", "--authorized-user", "alice", "--operational-data", operationalPath}, &output, &output); code != 0 {
+		t.Fatalf("register exit code = %d, output = %s", code, output.String())
+	}
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	if err := opened.EnsureEvaluationSummary(context.Background(), store.Run{ID: "run-cli-evaluation", RepositoryPath: repositoryPath, Stage: store.StageClaim, Status: store.StatusActive, CreatedAt: started, UpdatedAt: started}); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.FinalizeEvaluation(context.Background(), "run-cli-evaluation", store.EvaluationOutcomeComplete, started.Add(time.Hour)); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"evaluation", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("evaluation exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "evaluation summaries: 1") || !strings.Contains(output.String(), "aggregate: runs=1") || !strings.Contains(output.String(), "success_rate=1.0000") {
+		t.Fatalf("evaluation output = %q, want per-run and aggregate report", output.String())
+	}
+
+	output.Reset()
+	cutoff := started.Add(2 * time.Hour).Format(time.RFC3339Nano)
+	if code := cli.Run(context.Background(), []string{"evaluation-delete", "--config", configPath, "--before", cutoff}, &output, &output); code != 2 || !strings.Contains(output.String(), "--confirm") {
+		t.Fatalf("unconfirmed deletion exit/output = %d/%q, want explicit confirmation error", code, output.String())
+	}
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"evaluation-delete", "--config", configPath, "--before", cutoff, "--confirm"}, &output, &output); code != 0 {
+		t.Fatalf("confirmed deletion exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "deleted evaluation summaries: 1") {
+		t.Fatalf("deletion output = %q, want one deleted summary", output.String())
 	}
 }
 

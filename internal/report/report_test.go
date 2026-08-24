@@ -96,6 +96,67 @@ func TestValidateRejectsAReportThatDoesNotMatchTheInvocation(t *testing.T) {
 	}
 }
 
+// TestReportedUsageRoundTripsOnlyReliableMeasurements verifies optional
+// harness usage is accepted as numeric metadata and remains separate from the
+// ordinary human-readable handoff text.
+func TestReportedUsageRoundTripsOnlyReliableMeasurements(t *testing.T) {
+	want := completedReport()
+	want.Usage = &report.Usage{Available: true, InputTokens: 12, OutputTokens: 8, TotalTokens: 20, CostReported: true, CostMicros: 15, Currency: "USD"}
+	path, err := report.WriteAtomicForInvocation(filepath.Join(t.TempDir(), "results"), "inv-1", want)
+	if err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	got, err := report.Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got.Usage == nil || !got.Usage.Available || got.Usage.TotalTokens != 20 || got.Usage.CostMicros != 15 || got.Usage.Currency != "USD" {
+		t.Fatalf("usage = %#v, want reported numeric usage", got.Usage)
+	}
+}
+
+// TestReportedEvaluationSignalsRoundTripAsFixedMetadata verifies a harness can
+// report budget, escalation, exemption, and blocker categories without adding
+// finding or blocker text to the report envelope.
+func TestReportedEvaluationSignalsRoundTripAsFixedMetadata(t *testing.T) {
+	want := completedReport()
+	want.BudgetExhausted = true
+	want.Exemptions = []report.Exemption{report.ExemptionTechnical}
+	want.Escalations = []report.EscalationCategory{report.EscalationReviewFinding}
+	want.Blockers = []report.BlockerCategory{report.BlockerReview, report.BlockerReview}
+	path, err := report.WriteAtomicForInvocation(filepath.Join(t.TempDir(), "results"), "inv-1", want)
+	if err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	got, err := report.Read(path)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if !got.BudgetExhausted || len(got.Exemptions) != 1 || len(got.Escalations) != 1 || len(got.Blockers) != 2 {
+		t.Fatalf("evaluation signals = %#v, want fixed metadata signals", got)
+	}
+}
+
+// TestValidateRejectsUnknownEvaluationSignals verifies report categories are
+// closed vocabularies rather than a path for arbitrary work content.
+func TestValidateRejectsUnknownEvaluationSignals(t *testing.T) {
+	value := completedReport()
+	value.Escalations = []report.EscalationCategory{"review finding text"}
+	if err := report.Validate(value, report.ValidationContext{InvocationID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: "implementation"}); err == nil || !strings.Contains(err.Error(), "unsupported report escalation") {
+		t.Fatalf("Validate() error = %v, want fixed escalation vocabulary error", err)
+	}
+}
+
+// TestValidateRejectsUnavailableReportedUsage verifies a report cannot disguise
+// an unavailable measurement as a reliable value.
+func TestValidateRejectsUnavailableReportedUsage(t *testing.T) {
+	value := completedReport()
+	value.Usage = &report.Usage{Available: false, TotalTokens: 20}
+	if err := report.Validate(value, report.ValidationContext{InvocationID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: "implementation"}); err == nil || !strings.Contains(err.Error(), "available") {
+		t.Fatalf("Validate() error = %v, want unavailable-usage rejection", err)
+	}
+}
+
 // TestValidateRequiresTheStructuredPayloadForEachOutcome verifies that each
 // outcome carries the handoff or evidence needed by the coordinator.
 func TestValidateRequiresTheStructuredPayloadForEachOutcome(t *testing.T) {

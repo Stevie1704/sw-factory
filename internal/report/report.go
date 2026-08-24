@@ -38,6 +38,7 @@ const (
 	maxPermittedPaths     = 128
 	maxQuestions          = 32
 	maxEvidenceEntries    = 32
+	maxEvaluationSignals  = 32
 )
 
 // ReportFileName is the only accepted report filename in an invocation result
@@ -94,6 +95,68 @@ type Evidence struct {
 	Detail string `json:"detail"`
 }
 
+// EscalationCategory identifies a content-free workflow escalation that a
+// harness may report for later human disposition.
+type EscalationCategory string
+
+const (
+	// EscalationTestDispute identifies a disputed deterministic test result.
+	EscalationTestDispute EscalationCategory = "test_dispute"
+	// EscalationReviewFinding identifies an escalated review finding.
+	EscalationReviewFinding EscalationCategory = "review_finding"
+)
+
+// Exemption identifies a content-free policy exemption reported by a harness.
+type Exemption string
+
+const (
+	// ExemptionHuman identifies a human-approved exemption.
+	ExemptionHuman Exemption = "human"
+	// ExemptionTechnical identifies an infrastructure exemption.
+	ExemptionTechnical Exemption = "technical"
+	// ExemptionBaseline identifies an accepted pre-existing baseline condition.
+	ExemptionBaseline Exemption = "baseline"
+)
+
+// BlockerCategory identifies a repeated content-free blocker class.
+type BlockerCategory string
+
+const (
+	// BlockerSetup identifies dependency setup blockage.
+	BlockerSetup BlockerCategory = "setup"
+	// BlockerGate identifies deterministic gate blockage.
+	BlockerGate BlockerCategory = "gate"
+	// BlockerTest identifies test-policy blockage.
+	BlockerTest BlockerCategory = "test"
+	// BlockerReview identifies review blockage.
+	BlockerReview BlockerCategory = "review"
+	// BlockerHarness identifies harness blockage.
+	BlockerHarness BlockerCategory = "harness"
+	// BlockerBudget identifies budget blockage.
+	BlockerBudget BlockerCategory = "budget"
+	// BlockerUnknown identifies an unavailable stable blocker class.
+	BlockerUnknown BlockerCategory = "unknown"
+)
+
+// Usage contains only reliable harness-reported measurements. It is optional;
+// an omitted value means the coordinator must retain usage as unavailable.
+type Usage struct {
+	// Available distinguishes reported measurements from an unavailable value.
+	Available bool `json:"available"`
+	// InputTokens is the reported input-token count, when supplied.
+	InputTokens int64 `json:"input_tokens,omitempty"`
+	// OutputTokens is the reported output-token count, when supplied.
+	OutputTokens int64 `json:"output_tokens,omitempty"`
+	// TotalTokens is the reported total-token count, when supplied.
+	TotalTokens int64 `json:"total_tokens,omitempty"`
+	// CostReported distinguishes a reported zero cost from no cost measurement.
+	CostReported bool `json:"cost_reported,omitempty"`
+	// CostMicros is the exact harness-reported cost in millionths of Currency.
+	CostMicros int64 `json:"cost_micros,omitempty"`
+	// Currency is the three-letter uppercase currency for CostMicros.
+	Currency string `json:"currency,omitempty"`
+}
+
 // Report is the schema-versioned proposal written by one invocation.
 type Report struct {
 	// SchemaVersion identifies this report envelope shape.
@@ -118,6 +181,16 @@ type Report struct {
 	Questions []Question `json:"questions,omitempty"`
 	// Evidence is required only for a cannot-proceed outcome.
 	Evidence []Evidence `json:"evidence,omitempty"`
+	// BudgetExhausted is an explicit harness signal, never inferred by the host.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+	// Exemptions contains only fixed policy-exemption categories.
+	Exemptions []Exemption `json:"exemptions,omitempty"`
+	// Escalations contains only fixed human-disposition categories.
+	Escalations []EscalationCategory `json:"escalations,omitempty"`
+	// Blockers contains repeated fixed blocker categories without blocker text.
+	Blockers []BlockerCategory `json:"blockers,omitempty"`
+	// Usage is optional reliable usage or cost reported by the harness.
+	Usage *Usage `json:"usage,omitempty"`
 	// NativeSessionID is the harness-native continuation identifier, when known.
 	NativeSessionID string `json:"native_session_id,omitempty"`
 	// ReportedAt records when the harness published the proposal.
@@ -362,7 +435,82 @@ func Validate(value Report, context ValidationContext) error {
 	if value.NativeSessionID != "" && !safeIdentifier(value.NativeSessionID) {
 		return errors.New("native_session_id contains unsafe characters")
 	}
+	if value.Usage != nil {
+		if err := validateUsage(*value.Usage); err != nil {
+			return err
+		}
+	}
+	if err := validateEvaluationSignals(value); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateEvaluationSignals accepts only bounded categories and explicit
+// harness-provided budget state, keeping work content outside the report's
+// evaluation projection.
+func validateEvaluationSignals(value Report) error {
+	if len(value.Exemptions) > maxEvaluationSignals || len(value.Escalations) > maxEvaluationSignals || len(value.Blockers) > maxEvaluationSignals {
+		return errors.New("report evaluation signal count exceeds the limit")
+	}
+	for _, exemption := range value.Exemptions {
+		switch exemption {
+		case ExemptionHuman, ExemptionTechnical, ExemptionBaseline:
+		default:
+			return fmt.Errorf("unsupported report exemption %q", exemption)
+		}
+	}
+	for _, escalation := range value.Escalations {
+		switch escalation {
+		case EscalationTestDispute, EscalationReviewFinding:
+		default:
+			return fmt.Errorf("unsupported report escalation %q", escalation)
+		}
+	}
+	for _, blocker := range value.Blockers {
+		switch blocker {
+		case BlockerSetup, BlockerGate, BlockerTest, BlockerReview, BlockerHarness, BlockerBudget, BlockerUnknown:
+		default:
+			return fmt.Errorf("unsupported report blocker %q", blocker)
+		}
+	}
+	return nil
+}
+
+// validateUsage ensures a report never presents guessed or malformed harness
+// measurements as reliable usage or cost.
+func validateUsage(value Usage) error {
+	if !value.Available {
+		return errors.New("reported usage must be marked available")
+	}
+	if value.InputTokens < 0 || value.OutputTokens < 0 || value.TotalTokens < 0 || value.CostMicros < 0 {
+		return errors.New("reported usage values must not be negative")
+	}
+	if value.InputTokens == 0 && value.OutputTokens == 0 && value.TotalTokens == 0 && !value.CostReported {
+		return errors.New("reported usage must contain at least one measurement")
+	}
+	if value.CostReported {
+		if !validCurrency(value.Currency) {
+			return errors.New("reported cost requires a three-letter uppercase currency")
+		}
+	} else if value.CostMicros != 0 || value.Currency != "" {
+		return errors.New("reported cost metadata requires cost_reported")
+	}
+	return nil
+}
+
+// validCurrency accepts the bounded ISO-style identifier used for reported
+// cost metadata without accepting arbitrary content.
+func validCurrency(value string) bool {
+	if len(value) != 3 || strings.ToUpper(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character < 'A' || character > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // validateHandoff checks handoff text, path safety, permitted prefixes, and

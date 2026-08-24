@@ -76,6 +76,17 @@ type RepositoryConfig struct {
 	Caches                 []CacheConfig       `yaml:"caches"`
 	WorkerBuild            WorkerBuildConfig   `yaml:"worker_build"`
 	BaseSynchronization    BaseSynchronization `yaml:"base_synchronization"`
+	// Evaluation controls explicit local evaluation-summary retention. A blank
+	// value retains summaries until a deliberate deletion command is run.
+	Evaluation EvaluationConfig `yaml:"evaluation"`
+}
+
+// EvaluationConfig contains repository-declared retention policy for the
+// separate content-free local evaluation projection.
+type EvaluationConfig struct {
+	// Retention is a positive Go duration used by operators when selecting
+	// deliberate deletion cutoffs; the coordinator never deletes automatically.
+	Retention string `yaml:"retention"`
 }
 
 type EnvironmentPolicy string
@@ -462,6 +473,11 @@ func ValidateRepository(config RepositoryConfig) error {
 	}
 	if config.BaseSynchronization.Mode == BaseSynchronizationBeforeReady && strings.TrimSpace(config.BaseSynchronization.Branch) == "" {
 		return validation("base_synchronization.branch", "is required when synchronization is enabled")
+	}
+	if strings.TrimSpace(config.Evaluation.Retention) != "" {
+		if err := validateDuration("evaluation.retention", config.Evaluation.Retention, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }

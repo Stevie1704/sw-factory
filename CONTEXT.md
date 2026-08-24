@@ -102,5 +102,7 @@ Checked-in `factory.yaml` that declares the repository's target branch, setup, d
 _Avoid_: Host configuration
 
 **Operational store**:
-The versioned, host-local SQLite store for current run state. It is separate from repository configuration, disposable run artifacts, and local evaluation summaries.
+The versioned, host-local SQLite store for current run state. Its current-state
+tables are separate from repository configuration, disposable run artifacts,
+and the isolated local evaluation-summary projection.
 _Avoid_: Event journal, telemetry, transcript archive
