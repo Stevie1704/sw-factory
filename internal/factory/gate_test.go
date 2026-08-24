@@ -117,6 +117,13 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 	if len(statuses.values) != 1 || statuses.repositories[0] != (github.Repository{Owner: "example", Name: "project"}) || statuses.values[0].SHA != factoryGateCheckpoint || statuses.values[0].Context != "factory/gate/test" {
 		t.Fatalf("published statuses = %#v, want exact stable status", statuses.values)
 	}
+	workspace.state.HeadSHA = "stale-checkpoint"
+	if _, err := service.RunGate(context.Background(), factory.RunGateRequest{RunID: run.ID, GateName: policy.Gates[0].Name}); err == nil {
+		t.Fatal("RunGate() succeeded with a worktree HEAD that differs from the persisted checkpoint")
+	}
+	if len(statuses.values) != 1 {
+		t.Fatalf("statuses after stale checkpoint = %#v, want no additional gate evaluation", statuses.values)
+	}
 }
 
 // gateWorker is a WorkerRuntime adapter that records coordinator requests.

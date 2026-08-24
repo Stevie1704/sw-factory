@@ -21,6 +21,14 @@ _Avoid_: Live issue, prompt
 An immutable commit representing accepted work at a stage boundary and identifying the exact subject of gates or review.
 _Avoid_: Snapshot, latest code
 
+**Baseline**:
+The repository-declared setup and gate suite evaluated against the claimed run's base checkpoint before any agent edit; a blocking failure moves the run to failed preflight unless the frozen issue explicitly targets it.
+_Avoid_: Preflight assumption, agent diagnosis
+
+**Setup fingerprint**:
+The SHA-256 identity of the configured manifest and lockfile contents observed by setup for one run phase and exact checkpoint.
+_Avoid_: Dependency cache key, mutable latest state
+
 **Recovery diagnosis**:
 A read-only comparison of one persisted non-terminal run with its registered repository, worktree, Git projection, and GitHub projections.
 _Avoid_: Reconciliation, recovery

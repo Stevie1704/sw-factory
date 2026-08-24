@@ -2,6 +2,8 @@ package factory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -28,9 +31,33 @@ type RunGateRequest struct {
 	GateName string
 }
 
+// BaselineRequest selects the active run whose frozen gate model should be
+// evaluated before the first agent edit.
+type BaselineRequest struct {
+	// RunID optionally identifies the active run.
+	RunID string
+}
+
+// BaselineResult reports the persisted run and every pre-edit gate outcome.
+type BaselineResult struct {
+	// Run is the run after baseline evaluation and any blocking transition.
+	Run store.Run
+	// Gates contains one result for every configured gate.
+	Gates []gate.Result
+}
+
+// GateResultStore is the optional durable projection used to retain gate
+// outcomes by phase and exact checkpoint without coupling the gate package to
+// SQLite.
+type GateResultStore interface {
+	SaveGateResults(context.Context, []store.GateResult) error
+	GateResults(context.Context, string, store.GatePhase, string) ([]store.GateResult, error)
+}
+
 // RunGate starts the active run's pinned worker and executes repository setup
-// plus exactly one gate from its frozen specification packet. The resulting
-// status is attached to the run's exact checkpoint SHA.
+// plus the requested gate and its declared prerequisites from the frozen
+// specification packet. The resulting statuses are attached to the exact
+// checkpoint SHA.
 func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Result, error) {
 	if strings.TrimSpace(request.GateName) == "" {
 		return gate.Result{}, errors.New("gate name is required")
@@ -50,26 +77,181 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 	if err != nil {
 		return gate.Result{}, err
 	}
-	declaredGate, ok := declaredGate(packet, request.GateName)
-	if !ok {
+	if _, ok := declaredGate(packet, request.GateName); !ok {
 		return gate.Result{}, fmt.Errorf("gate %q is not declared in the frozen specification packet", request.GateName)
 	}
-	return s.runGate(ctx, registration, *run, packet, declaredGate)
+	if err := s.verifyGateCheckpoint(ctx, *run); err != nil {
+		return gate.Result{}, err
+	}
+	plan, err := gateDependencyPlan(packet.RepositoryConfig.Gates, request.GateName)
+	if err != nil {
+		return gate.Result{}, err
+	}
+	suite, err := s.runGateSuite(ctx, registration, runStore, *run, packet, gate.PhaseCheckpoint, plan)
+	if persistErr := persistGateSuite(ctx, runStore, *run, suite); persistErr != nil {
+		err = errors.Join(err, persistErr)
+	}
+	for _, result := range suite.Gates {
+		if result.GateName == request.GateName {
+			return result, err
+		}
+	}
+	if len(suite.Gates) == 0 {
+		return gate.Result{}, err
+	}
+	return gate.Result{}, errors.Join(err, fmt.Errorf("gate %q was not evaluated", request.GateName))
 }
 
-// runGate executes one frozen gate for an already selected run. Keeping the
-// run selection outside this helper lets the draft-PR boundary run every
-// configured gate without re-reading mutable state between gates.
-func (s *Service) runGate(ctx context.Context, registration config.RepositoryRegistration, run store.Run, packet SpecificationPacket, declared config.GateConfig) (gate.Result, error) {
+// RunBaseline evaluates every frozen gate before agent edits. A blocking
+// baseline failure moves the run to a visible failed preflight state unless
+// the frozen issue explicitly targets each failed baseline gate.
+func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (BaselineResult, error) {
+	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	if err != nil {
+		return BaselineResult{}, err
+	}
+	defer func() { _ = runStore.Close() }()
+	if run == nil {
+		return BaselineResult{}, errors.New("no active run")
+	}
+	if request.RunID != "" && request.RunID != run.ID {
+		return BaselineResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	}
+	if run.Stage != store.StageClaim || run.Status != store.StatusActive {
+		return BaselineResult{}, fmt.Errorf("run %q must be in claim/active state for baseline, not %s/%s", run.ID, run.Stage, run.Status)
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return BaselineResult{}, err
+	}
+	if err := s.verifyGateCheckpoint(ctx, *run); err != nil {
+		return BaselineResult{}, err
+	}
+	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, *run, packet, gate.PhaseBaseline, packet.RepositoryConfig.Gates)
+	result := BaselineResult{Run: *run, Gates: suite.Gates}
+	persistErr := persistGateSuite(ctx, runStore, *run, suite)
+	if suiteErr == nil && persistErr == nil {
+		return result, nil
+	}
+	if persistErr == nil && baselineFailureErrorTargeted(packet.Issue.Body, suite, suiteErr) {
+		return result, nil
+	}
+	effectiveErr := errors.Join(suiteErr, persistErr)
+
+	next := *run
+	next.Stage = store.StagePreflight
+	next.Status = store.StatusFailed
+	if suiteErr == nil && persistErr != nil {
+		next.LifecycleReason = "baseline gate result persistence failure"
+	} else {
+		next.LifecycleReason = "baseline gate failure"
+	}
+	next.UpdatedAt = s.deps.Now().UTC()
+	issue := packet.Issue
+	updated, transitionErr := s.applyStateTransition(ctx, runStore, stateTransition{
+		Repository: commandRepository(registration),
+		Issue:      issue,
+		Previous:   *run,
+		Next:       next,
+	})
+	result.Run = updated
+	return result, errors.Join(fmt.Errorf("baseline is unhealthy: %w", effectiveErr), transitionErr)
+}
+
+// ensureBaselineReady requires the durable pre-edit suite before a visible
+// agent can start. It checks the frozen gate set, exact checkpoint, and current
+// dependency-input fingerprint so an old baseline cannot authorize new edits.
+func (s *Service) ensureBaselineReady(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) error {
+	resultStore, ok := runStore.(GateResultStore)
+	if !ok {
+		return errors.New("operational store does not support baseline gate results")
+	}
+	fingerprint, err := setupInputFingerprint(run.Worktree, packet.RepositoryConfig.SetupFiles)
+	if err != nil {
+		return fmt.Errorf("fingerprint baseline setup files: %w", err)
+	}
+	stored, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseBaseline, run.CheckpointSHA)
+	if err != nil {
+		return fmt.Errorf("read baseline gate results: %w", err)
+	}
+	if len(stored) != len(packet.RepositoryConfig.Gates) {
+		return fmt.Errorf("baseline gate results are incomplete: got %d, want %d", len(stored), len(packet.RepositoryConfig.Gates))
+	}
+	suite := gate.SuiteResult{CheckpointSHA: run.CheckpointSHA, Phase: gate.PhaseBaseline}
+	setupFailed := false
+	for index, declared := range packet.RepositoryConfig.Gates {
+		result := stored[index]
+		if result.RunID != run.ID || result.CheckpointSHA != run.CheckpointSHA || result.Phase != store.GatePhaseBaseline || result.GateName != declared.Name || result.Blocking != declared.Blocking || result.SetupFingerprint != fingerprint {
+			return fmt.Errorf("baseline gate result %q does not match the frozen run identity", declared.Name)
+		}
+		outcome := gate.Outcome(result.Outcome)
+		suite.Gates = append(suite.Gates, gate.Result{
+			CheckpointSHA:    result.CheckpointSHA,
+			GateName:         result.GateName,
+			Phase:            gate.PhaseBaseline,
+			Blocking:         result.Blocking,
+			SetupFingerprint: result.SetupFingerprint,
+			Outcome:          outcome,
+		})
+		switch outcome {
+		case gate.OutcomePassed, gate.OutcomeFailed, gate.OutcomeError, gate.OutcomeSkipped, gate.OutcomeSetupFailed:
+		default:
+			return fmt.Errorf("baseline gate result %q has unsupported outcome %q", declared.Name, outcome)
+		}
+		if outcome == gate.OutcomeSetupFailed {
+			setupFailed = true
+		}
+	}
+	if setupFailed && !baselineSetupTargeted(packet.Issue.Body) {
+		return errors.New("baseline setup failed and is not explicitly targeted by the issue")
+	}
+	if suiteErrHasBlockingFailure(suite) && !baselineFailureTargeted(packet.Issue.Body, suite) {
+		return errors.New("baseline has an untargeted blocking gate failure")
+	}
+	return nil
+}
+
+// verifyGateCheckpoint refuses to evaluate a mutable or dirty worktree under
+// a stale checkpoint identity.
+func (s *Service) verifyGateCheckpoint(ctx context.Context, run store.Run) error {
+	var inspector gitadapter.WorktreeInspector
+	if s.deps.GitWorkspace != nil {
+		inspector = s.deps.GitWorkspace
+	} else if candidate, ok := s.deps.Worktree.(gitadapter.WorktreeInspector); ok {
+		inspector = candidate
+	}
+	if inspector == nil {
+		return errors.New("a GitWorkspace inspector is required before running gates")
+	}
+	state, err := inspector.Inspect(ctx, run.Worktree)
+	if err != nil {
+		return fmt.Errorf("inspect gate worktree: %w", err)
+	}
+	if state.HeadSHA != run.CheckpointSHA {
+		return fmt.Errorf("worktree HEAD %q does not match gate checkpoint %q", state.HeadSHA, run.CheckpointSHA)
+	}
+	if len(state.ChangedPaths) != 0 {
+		return errors.New("worktree has uncommitted changes; checkpoint it before running gates")
+	}
+	return nil
+}
+
+// runGateSuite starts the pinned gate worker and evaluates one frozen ordered
+// gate suite with setup shared across every gate.
+func (s *Service) runGateSuite(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket, phase gate.Phase, gates []config.GateConfig) (gate.SuiteResult, error) {
 	if run.ImageDigest != packet.RepositoryConfig.WorkerBuild.Digest {
-		return gate.Result{}, fmt.Errorf("run %q image digest %q differs from frozen packet digest %q", run.ID, run.ImageDigest, packet.RepositoryConfig.WorkerBuild.Digest)
+		return gate.SuiteResult{}, fmt.Errorf("run %q image digest %q differs from frozen packet digest %q", run.ID, run.ImageDigest, packet.RepositoryConfig.WorkerBuild.Digest)
 	}
 	if s.deps.CommitStatuses == nil {
-		return gate.Result{}, errors.New("GitHub client does not support Commit Statuses")
+		return gate.SuiteResult{}, errors.New("GitHub client does not support Commit Statuses")
+	}
+	fingerprint, err := setupInputFingerprint(run.Worktree, packet.RepositoryConfig.SetupFiles)
+	if err != nil {
+		return gate.SuiteResult{}, fmt.Errorf("fingerprint configured setup files: %w", err)
 	}
 	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
 	if err != nil {
-		return gate.Result{}, fmt.Errorf("prepare worker git metadata: %w", err)
+		return gate.SuiteResult{}, fmt.Errorf("prepare worker git metadata: %w", err)
 	}
 	if err := s.deps.Worker.Start(ctx, worker.StartRequest{
 		RunID:           run.ID,
@@ -80,19 +262,165 @@ func (s *Service) runGate(ctx context.Context, registration config.RepositoryReg
 		Caches:          workerCaches(packet.RepositoryConfig.Caches),
 		Role:            "gate",
 	}); err != nil {
-		return gate.Result{}, err
+		return gate.SuiteResult{}, err
 	}
+	skipSetup := setupAlreadySucceeded(ctx, runStore, run, phase, fingerprint)
 	return (gate.Runner{
 		Runtime:    s.deps.Worker,
 		Repository: github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
 		Statuses:   s.deps.CommitStatuses,
-	}).Run(ctx, gate.Request{
-		RunID:         run.ID,
-		CheckpointSHA: run.CheckpointSHA,
-		Setup:         packet.RepositoryConfig.Setup,
-		SetupTimeout:  packet.RepositoryConfig.Timeouts.Setup,
-		Gate:          declared,
+	}).RunSuite(ctx, gate.SuiteRequest{
+		RunID:                  run.ID,
+		CheckpointSHA:          run.CheckpointSHA,
+		Setup:                  packet.RepositoryConfig.Setup,
+		SetupEnvironmentPolicy: packet.RepositoryConfig.SetupEnvironmentPolicy,
+		SetupTimeout:           packet.RepositoryConfig.Timeouts.Setup,
+		Gates:                  gates,
+		Phase:                  phase,
+		SetupFingerprint:       fingerprint,
+		SkipSetup:              skipSetup,
 	})
+}
+
+// setupAlreadySucceeded reports whether durable results prove setup completed
+// for this exact run, phase, checkpoint, and configured dependency fingerprint.
+// An empty fingerprint deliberately disables reuse because no dependency-input
+// contract exists for that configuration.
+func setupAlreadySucceeded(ctx context.Context, runStore RunStore, run store.Run, phase gate.Phase, fingerprint string) bool {
+	if runStore == nil || fingerprint == "" {
+		return false
+	}
+	resultStore, ok := runStore.(GateResultStore)
+	if !ok {
+		return false
+	}
+	results, err := resultStore.GateResults(ctx, run.ID, store.GatePhase(phase), run.CheckpointSHA)
+	if err != nil || len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if result.SetupFingerprint != fingerprint || result.Outcome == store.GateOutcomeSetupFailed {
+			return false
+		}
+	}
+	return true
+}
+
+// persistGateSuite records content-limited gate projections when the selected
+// operational store supports the issue #9 result table.
+func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, suite gate.SuiteResult) error {
+	resultStore, ok := runStore.(GateResultStore)
+	if !ok || len(suite.Gates) == 0 {
+		return nil
+	}
+	results := make([]store.GateResult, 0, len(suite.Gates))
+	for ordinal, result := range suite.Gates {
+		results = append(results, store.GateResult{
+			RunID:            run.ID,
+			CheckpointSHA:    result.CheckpointSHA,
+			Phase:            store.GatePhase(result.Phase),
+			Ordinal:          ordinal,
+			GateName:         result.GateName,
+			Outcome:          store.GateOutcome(result.Outcome),
+			Status:           string(result.Status.State),
+			Blocking:         result.Blocking,
+			SkipReason:       result.SkipReason,
+			SetupFingerprint: result.SetupFingerprint,
+		})
+	}
+	return resultStore.SaveGateResults(ctx, results)
+}
+
+// setupInputFingerprint hashes the configured manifest and lockfile contents
+// so each suite records which dependency graph setup evaluated.
+func setupInputFingerprint(worktree string, files []string) (string, error) {
+	if len(files) == 0 {
+		return "", nil
+	}
+	hasher := sha256.New()
+	for _, relative := range files {
+		path := filepath.Join(worktree, filepath.FromSlash(relative))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read %q: %w", relative, err)
+		}
+		_, _ = hasher.Write([]byte(relative))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write(data)
+		_, _ = hasher.Write([]byte{0})
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// baselineFailureTargeted recognizes the coordinator-owned issue marker for an
+// explicitly accepted pre-existing gate failure. The marker is intentionally
+// exact so ordinary issue prose cannot silently bypass the baseline boundary.
+func baselineFailureTargeted(body string, suite gate.SuiteResult) bool {
+	body = strings.ToLower(body)
+	for _, result := range suite.Gates {
+		if result.Outcome != gate.OutcomeFailed && result.Outcome != gate.OutcomeError && result.Outcome != gate.OutcomeSkipped && result.Outcome != gate.OutcomeSetupFailed {
+			continue
+		}
+		if !result.Blocking {
+			continue
+		}
+		if !strings.Contains(body, "<!-- factory-baseline-target: all -->") && !strings.Contains(body, "<!-- factory-baseline-target: "+strings.ToLower(result.GateName)+" -->") && !(result.Outcome == gate.OutcomeSetupFailed && strings.Contains(body, "<!-- factory-baseline-target: setup -->")) {
+			return false
+		}
+	}
+	return suiteErrHasBlockingFailure(suite)
+}
+
+// baselineSetupTargeted reports whether the frozen issue explicitly accepts a
+// pre-existing setup failure, including the all-failures shorthand.
+func baselineSetupTargeted(body string) bool {
+	body = strings.ToLower(body)
+	return strings.Contains(body, "<!-- factory-baseline-target: all -->") || strings.Contains(body, "<!-- factory-baseline-target: setup -->")
+}
+
+// baselineFailureErrorTargeted ensures an issue marker suppresses only the
+// declared baseline failure, never status publication or other infrastructure
+// errors that happen to accompany it.
+func baselineFailureErrorTargeted(body string, suite gate.SuiteResult, suiteErr error) bool {
+	if suiteErr == nil || (!baselineFailureTargeted(body, suite) && !baselineSetupFailureTargeted(body, suite)) {
+		return false
+	}
+	var failure *gate.SuiteFailure
+	if !errors.As(suiteErr, &failure) {
+		return false
+	}
+	for _, cause := range failure.Failures {
+		var gateFailure *gate.GateFailure
+		var setupFailure *gate.SetupFailure
+		var dependencyFailure *gate.DependencyFailure
+		if errors.As(cause, &gateFailure) || errors.As(cause, &setupFailure) || errors.As(cause, &dependencyFailure) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// baselineSetupFailureTargeted recognizes a setup-only exemption when setup
+// prevented every declared gate from running, including all-advisory suites.
+func baselineSetupFailureTargeted(body string, suite gate.SuiteResult) bool {
+	for _, result := range suite.Gates {
+		if result.Outcome == gate.OutcomeSetupFailed {
+			return baselineSetupTargeted(body)
+		}
+	}
+	return false
+}
+
+// suiteErrHasBlockingFailure reports whether the suite contains a blocking
+// result that required baseline disposition.
+func suiteErrHasBlockingFailure(suite gate.SuiteResult) bool {
+	for _, result := range suite.Gates {
+		if result.Blocking && (result.Outcome == gate.OutcomeFailed || result.Outcome == gate.OutcomeError || result.Outcome == gate.OutcomeSkipped || result.Outcome == gate.OutcomeSetupFailed) {
+			return true
+		}
+	}
+	return false
 }
 
 // prepareGitMetadataProjection creates or reuses a sanitized Git metadata
@@ -352,6 +680,37 @@ func declaredGate(packet SpecificationPacket, name string) (config.GateConfig, b
 		}
 	}
 	return config.GateConfig{}, false
+}
+
+// gateDependencyPlan returns the requested gate and every declared prerequisite
+// in repository order, preserving the ordered dependency contract for the
+// single-gate compatibility API.
+func gateDependencyPlan(gates []config.GateConfig, target string) ([]config.GateConfig, error) {
+	required := map[string]bool{target: true}
+	for changed := true; changed; {
+		changed = false
+		for _, candidate := range gates {
+			if !required[candidate.Name] {
+				continue
+			}
+			for _, dependency := range candidate.DependsOn {
+				if !required[dependency] {
+					required[dependency] = true
+					changed = true
+				}
+			}
+		}
+	}
+	plan := make([]config.GateConfig, 0, len(required))
+	for _, candidate := range gates {
+		if required[candidate.Name] {
+			plan = append(plan, candidate)
+		}
+	}
+	if len(plan) == 0 {
+		return nil, fmt.Errorf("gate %q is not declared in the frozen specification packet", target)
+	}
+	return plan, nil
 }
 
 // workerCaches converts repository cache configurations into worker cache mounts.

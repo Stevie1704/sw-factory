@@ -27,6 +27,8 @@ type Factory interface {
 	Register(context.Context, RegisterRequest) (RegisterResult, error)
 	BootstrapLabels(context.Context) (BootstrapLabelsResult, error)
 	RunCoordinator
+	// RunBaseline evaluates the frozen repository gate model before agent edits.
+	RunBaseline(context.Context, BaselineRequest) (BaselineResult, error)
 	RunGate(context.Context, RunGateRequest) (gate.Result, error)
 	// StartAgent launches the visible Codex implementation role for an active run.
 	StartAgent(context.Context, AgentRequest) (AgentLaunchResult, error)

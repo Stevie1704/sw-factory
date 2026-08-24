@@ -122,7 +122,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		return DraftPullRequestResult{}, err
 	}
 
-	gates, gateErr := s.runConfiguredGates(ctx, registration, next, packet)
+	gates, gateErr := s.runConfiguredGates(ctx, registration, runStore, next, packet)
 	result := DraftPullRequestResult{Run: next, Gates: gates}
 	if gateErr != nil {
 		return result, gateErr
@@ -163,20 +163,17 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	return DraftPullRequestResult{Run: next, Gates: gates, PullRequest: pullRequest}, nil
 }
 
-// runConfiguredGates executes every gate from the frozen specification in
-// declaration order and joins failures so the operator sees the complete
-// deterministic result set from one checkpoint.
-func (s *Service) runConfiguredGates(ctx context.Context, registration config.RepositoryRegistration, run store.Run, packet SpecificationPacket) ([]gate.Result, error) {
-	results := make([]gate.Result, 0, len(packet.RepositoryConfig.Gates))
-	var failures []error
-	for _, declared := range packet.RepositoryConfig.Gates {
-		result, err := s.runGate(ctx, registration, run, packet, declared)
-		results = append(results, result)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("gate %q: %w", declared.Name, err))
-		}
+// runConfiguredGates executes the frozen gate suite once and joins blocking
+// failures while retaining every independent and skipped result.
+func (s *Service) runConfiguredGates(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket) ([]gate.Result, error) {
+	if err := s.verifyGateCheckpoint(ctx, run); err != nil {
+		return nil, err
 	}
-	return results, errors.Join(failures...)
+	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, run, packet, gate.PhaseCheckpoint, packet.RepositoryConfig.Gates)
+	if persistErr := persistGateSuite(ctx, runStore, run, suite); persistErr != nil {
+		suiteErr = errors.Join(suiteErr, persistErr)
+	}
+	return suite.Gates, suiteErr
 }
 
 // upsertDraftPullRequest finds a prior branch pull request before creating one
@@ -298,17 +295,24 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 	gateLines := make([]string, 0, len(gates))
 	for _, result := range gates {
 		var status string
-		switch result.Status.State {
-		case github.CommitStatusSuccess:
-			status = "passed"
-		case github.CommitStatusFailure:
-			status = "failed"
-		case github.CommitStatusError:
-			status = "error"
-		case github.CommitStatusPending:
-			status = "pending"
-		default:
-			status = "unknown"
+		if result.Skipped {
+			status = "skipped"
+			if strings.TrimSpace(result.SkipReason) != "" {
+				status += ": " + result.SkipReason
+			}
+		} else {
+			switch result.Status.State {
+			case github.CommitStatusSuccess:
+				status = "passed"
+			case github.CommitStatusFailure:
+				status = "failed"
+			case github.CommitStatusError:
+				status = "error"
+			case github.CommitStatusPending:
+				status = "pending"
+			default:
+				status = "unknown"
+			}
 		}
 		gateName := result.GateName
 		if gateName == "" {

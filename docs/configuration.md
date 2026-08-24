@@ -61,6 +61,8 @@ The default checked-in file is `factory.yaml` at the repository root. It is pars
 schema_version: 1
 target_branch: main
 setup: scripts/worker-go.sh mod download
+setup_files: [go.mod, go.sum]
+setup_environment_policy: clean
 gates:
   - name: format
     command: gofmt -l .
@@ -106,7 +108,7 @@ base_synchronization:
   branch: main
 ```
 
-The validator checks the schema version, target branch, setup, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, and base-synchronization mode. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 ## Worker image build and digest pinning
 
@@ -157,14 +159,21 @@ configuration variables, keeps Git prompts disabled, and turns off Go VCS
 stamping; this lets local Git fixtures in `go test` run without touching the
 worker's read-only `/git` projection.
 
-Issue #3 establishes and validates this repository-declared gate contract. Issue #5 adds the worker runtime and the coordinator path that runs setup plus one selected gate in the pinned worker and publishes its result to the exact checkpoint SHA. Issue #7 uses that same frozen gate contract to run every declared gate before the first branch push. Full baseline health, dependency skipping, independent-gate execution, manifest-triggered setup, and retained checkpoint-keyed gate results remain the expanded gate model in issue #9. The commands declared by this repository's `factory.yaml` are also run as part of the repository verification suite.
+Issue #3 establishes and validates this repository-declared gate contract. Issue #5 adds the worker runtime and the coordinator path that runs setup plus one selected gate in the pinned worker and publishes its result to the exact checkpoint SHA. Issue #7 uses that same frozen gate contract to run every declared gate before the first branch push. The issue #9 gate model runs one baseline suite before the first agent invocation, runs setup once per suite, continues independent gates after a failure, records dependency skips, reruns setup for every new dependency-input fingerprint, and retains results by phase and exact checkpoint SHA. The commands declared by this repository's `factory.yaml` are also run as part of the repository verification suite.
+
+An issue may explicitly accept a known pre-existing blocking baseline failure by
+including one exact marker in its frozen body, for example
+`<!-- factory-baseline-target: test -->`. The special `all` target accepts all
+blocking baseline failures, and `setup` targets a setup failure. Without a
+matching marker, the baseline moves the run to failed preflight and no agent
+invocation is permitted.
 
 Worker execution uses stable in-container paths (`/work`, `/git`, and
 `/cache/<name>`), a non-root uid, dropped capabilities, disabled privilege
 escalation, and no Docker socket. The coordinator prepares `/git` as a
 credential-free projection of Git history, refs, and run worktree state while
-omitting Git configuration, remotes, and hooks. Setup and gates receive a clean
-explicit environment; they do not inherit the coordinator's host environment
+omitting Git configuration, remotes, and hooks. Setup and gates receive their
+configured clean or role environment explicitly; they do not inherit the coordinator's host environment
 or credentials. Explicit worker mounts receive owner-plus-group permissions,
 and the runtime passes their existing non-root host groups to Docker as
 supplemental groups; other-user access is removed. See [Worker runtime](worker-runtime.md)

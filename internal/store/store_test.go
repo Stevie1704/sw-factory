@@ -280,6 +280,44 @@ func TestOpenReopensAnExistingCurrentVersionStoreWithoutCreatingABackup(t *testi
 	}
 }
 
+// TestGateResultsSurviveReopenAndRemainKeyedByPhaseAndCheckpoint verifies
+// deterministic results cannot be reused after the evaluated commit changes.
+func TestGateResultsSurviveReopenAndRemainKeyedByPhaseAndCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSHA := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	secondSHA := "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	if err := opened.SaveGateResults(context.Background(), []store.GateResult{
+		{RunID: "run-gates", CheckpointSHA: firstSHA, Phase: store.GatePhaseBaseline, Ordinal: 0, GateName: "format", Outcome: store.GateOutcomePassed, Status: "success", Blocking: true, SetupFingerprint: "deps-a"},
+		{RunID: "run-gates", CheckpointSHA: firstSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "format", Outcome: store.GateOutcomeFailed, Status: "failure", Blocking: true, SetupFingerprint: "deps-a"},
+		{RunID: "run-gates", CheckpointSHA: secondSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "format", Outcome: store.GateOutcomePassed, Status: "success", Blocking: true, SetupFingerprint: "deps-b"},
+	}); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveGateResults() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.GateResults(context.Background(), "run-gates", store.GatePhaseCheckpoint, secondSHA)
+	if err != nil {
+		t.Fatalf("GateResults() error = %v", err)
+	}
+	if len(got) != 1 || got[0].GateName != "format" || got[0].Outcome != store.GateOutcomePassed || got[0].SetupFingerprint != "deps-b" {
+		t.Fatalf("GateResults() = %#v, want only the second checkpoint result", got)
+	}
+}
+
 // TestRunTerminalProjectionSurvivesStoreReopen verifies merge and lifecycle
 // metadata remain available to status after a terminal transition.
 func TestRunTerminalProjectionSurvivesStoreReopen(t *testing.T) {

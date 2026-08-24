@@ -162,6 +162,9 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
+	if err := s.ensureBaselineReady(ctx, runStore, *run, packet); err != nil {
+		return AgentLaunchResult{}, err
+	}
 	harnessName, model, err := resolveAgentPolicy(packet.RepositoryConfig, request)
 	if err != nil {
 		return AgentLaunchResult{}, err
@@ -596,6 +599,23 @@ func validateAgentRunState(run store.Run) error {
 	default:
 		return fmt.Errorf("cannot start implementation agent from run stage %q", run.Stage)
 	}
+}
+
+// ensureTransitionBaseline prevents a checkpoint created during the check
+// stage from re-entering test or implementation without a matching baseline
+// projection for that exact checkpoint.
+func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStore, run store.Run, request TransitionRequest) error {
+	if run.Stage != store.StageCheck || (request.Stage != store.StageTest && request.Stage != store.StageImplementation) {
+		return nil
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return fmt.Errorf("validate baseline before %q transition: %w", request.Stage, err)
+	}
+	if err := s.ensureBaselineReady(ctx, runStore, run, packet); err != nil {
+		return fmt.Errorf("cannot transition from check to %q at checkpoint %q without complete baseline results: %w", request.Stage, run.CheckpointSHA, err)
+	}
+	return nil
 }
 
 // persistAgentRunState uses the coordinator's GitHub label/comment transition

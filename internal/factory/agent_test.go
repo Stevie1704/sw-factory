@@ -89,6 +89,21 @@ func TestStartAgentAllowsAClaimedRunAfterCoordinatorRestart(t *testing.T) {
 	}
 }
 
+// TestTransitionRejectsAChangedCheckCheckpointWithoutABaseline verifies a
+// failed check cannot re-enter implementation with an unproven checkpoint.
+func TestTransitionRejectsAChangedCheckCheckpointWithoutABaseline(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	runStore.current.Stage = store.StageCheck
+	runStore.current.CheckpointSHA = factoryGateCheckpoint
+
+	if _, err := service.Transition(context.Background(), factory.TransitionRequest{Stage: store.StageImplementation, Status: store.StatusActive}); err == nil || !strings.Contains(err.Error(), "without complete baseline results") {
+		t.Fatalf("Transition() error = %v, want incomplete-baseline refusal", err)
+	}
+	if runStore.current.Stage != store.StageCheck {
+		t.Fatalf("run stage = %q, want unchanged check stage", runStore.current.Stage)
+	}
+}
+
 // TestStartAgentPersistsInvocationBeforeStartingTheWorker verifies the
 // durable invocation identity is published before any worker effect begins.
 func TestStartAgentPersistsInvocationBeforeStartingTheWorker(t *testing.T) {
@@ -421,7 +436,7 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 	policy := validRepositoryConfig()
 	created := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml")}}}
-	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}}
+	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	runtime := &agentWorker{}
 	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
@@ -455,6 +470,12 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 	if _, err := service.ClaimIssue(context.Background(), 6); err != nil {
 		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
 	}
+	run := *runStore.current
+	runStore.gateResults[run.ID] = []store.GateResult{{
+		RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseBaseline,
+		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
+		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+	}}
 	return service, runStore, runtime, terminalRuntime, harnessRuntime
 }
 
@@ -524,6 +545,7 @@ type agentRunStore struct {
 	runs            map[string]store.Run
 	current         *store.Run
 	invocations     map[string]store.Invocation
+	gateResults     map[string][]store.GateResult
 	lifecycleClaims map[string]map[store.Status]bool
 	events          *[]string
 }
@@ -598,6 +620,41 @@ func (s *agentRunStore) ActiveInvocation(_ context.Context, runID string) (*stor
 		}
 	}
 	return nil, nil
+}
+
+// SaveGateResults upserts the fixture's exact gate projections by durable identity.
+func (s *agentRunStore) SaveGateResults(_ context.Context, results []store.GateResult) error {
+	if len(results) == 0 {
+		return errors.New("at least one gate result is required")
+	}
+	for _, incoming := range results {
+		runResults := s.gateResults[incoming.RunID]
+		replaced := false
+		for index, existing := range runResults {
+			if existing.RunID == incoming.RunID && existing.CheckpointSHA == incoming.CheckpointSHA && existing.Phase == incoming.Phase && existing.GateName == incoming.GateName {
+				runResults[index] = incoming
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			runResults = append(runResults, incoming)
+		}
+		s.gateResults[incoming.RunID] = runResults
+	}
+	return nil
+}
+
+// GateResults returns the fixture's exact phase and checkpoint projection.
+func (s *agentRunStore) GateResults(_ context.Context, runID string, phase store.GatePhase, checkpointSHA string) ([]store.GateResult, error) {
+	results := s.gateResults[runID]
+	filtered := make([]store.GateResult, 0, len(results))
+	for _, result := range results {
+		if result.Phase == phase && result.CheckpointSHA == checkpointSHA {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered, nil
 }
 
 // Close implements the operational-store seam.

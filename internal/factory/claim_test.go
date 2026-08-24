@@ -370,9 +370,10 @@ func newClaimService(githubAdapter *fakeGitHub, worktree *fakeWorktree, runStore
 // claim tests.
 func validRepositoryConfig() config.RepositoryConfig {
 	return config.RepositoryConfig{
-		SchemaVersion: 1,
-		TargetBranch:  "main",
-		Setup:         "go mod download",
+		SchemaVersion:          1,
+		TargetBranch:           "main",
+		Setup:                  "go mod download",
+		SetupEnvironmentPolicy: config.EnvironmentPolicyClean,
 		Gates: []config.GateConfig{{
 			Name:              "test",
 			Command:           "go test ./...",
