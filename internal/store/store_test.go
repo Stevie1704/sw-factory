@@ -280,6 +280,50 @@ func TestOpenReopensAnExistingCurrentVersionStoreWithoutCreatingABackup(t *testi
 	}
 }
 
+// TestRunTerminalProjectionSurvivesStoreReopen verifies merge and lifecycle
+// metadata remain available to status after a terminal transition.
+func TestRunTerminalProjectionSurvivesStoreReopen(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	run := store.Run{
+		ID:                        "run-terminal",
+		RepositoryPath:            "/work/repository",
+		IssueNumber:               42,
+		Stage:                     store.StageReady,
+		Status:                    store.StatusComplete,
+		PullRequestNumber:         17,
+		PullRequestURL:            "https://github.com/example/project/pull/17",
+		MergeCommitSHA:            "0123456789abcdef0123456789abcdef0123456789",
+		LifecycleReason:           "pull request #17 merged",
+		LifecycleNotificationSent: true,
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	latest, err := reopened.LatestRun(context.Background())
+	if err != nil {
+		t.Fatalf("LatestRun() error = %v", err)
+	}
+	if latest == nil || latest.MergeCommitSHA != run.MergeCommitSHA || latest.LifecycleReason != run.LifecycleReason || !latest.LifecycleNotificationSent {
+		t.Fatalf("LatestRun() = %#v, want terminal lifecycle projection", latest)
+	}
+}
+
 func TestOpenRejectsAnOperationalStorePathThatIsADirectory(t *testing.T) {
 	t.Parallel()
 

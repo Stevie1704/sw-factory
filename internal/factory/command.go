@@ -49,6 +49,8 @@ const (
 	// PolicyRejectionHarnessUnavailable means the current role has no adapter
 	// for the requested harness yet.
 	PolicyRejectionHarnessUnavailable PolicyRejectionCode = "harness_unavailable"
+	// PolicyRejectionCancelState means cancellation is not legal for the run.
+	PolicyRejectionCancelState PolicyRejectionCode = "cancel_state"
 )
 
 // PolicyRejection is returned after a recognized command is visibly recorded
@@ -135,6 +137,13 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	if request.IssueNumber != run.IssueNumber && request.IssueNumber != run.PullRequestNumber {
 		return CommandResult{Outcome: CommandRejected, Run: *run}, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("comment target #%d does not belong to run %q", request.IssueNumber, run.ID)}
 	}
+	if (run.Status == store.StatusComplete || run.Status == store.StatusCancelled) && !run.LifecycleNotificationSent {
+		updated, notificationErr := s.ensureTerminalNotification(ctx, registration, runStore, *run)
+		if notificationErr != nil {
+			return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: updated}, notificationErr
+		}
+		*run = updated
+	}
 	if commentAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
 	}
@@ -151,6 +160,8 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	case commandlanguage.Status, commandlanguage.Refresh:
 		updated, persistErr := s.persistCommandProjection(ctx, registration, runStore, *run, request.Comment, parsed.Command, string(parsed.Command.Kind), "command accepted")
 		return CommandResult{Outcome: CommandAccepted, Command: parsed.Command, Run: updated}, persistErr
+	case commandlanguage.Cancel:
+		return s.handleCancelCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.ConfigureHarness:
 		return s.handleHarnessConfiguration(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Retry:
@@ -159,6 +170,33 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		rejection := &PolicyRejection{Code: PolicyRejectionMalformed, Problem: "the parsed command is not registered by the coordinator"}
 		return s.persistCommandRejection(ctx, registration, runStore, *run, request.Comment, parsed.Command, rejection)
 	}
+}
+
+// handleCancelCommand applies an authorized, idempotent cancellation request
+// while retaining every run artifact needed for later inspection or retry.
+func (s *Service) handleCancelCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+	if run.Status == store.StatusCancelled {
+		next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; run was already cancelled")
+		updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
+		return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
+	}
+	if store.IsTerminalStatus(run.Status) {
+		rejection := &PolicyRejection{Code: PolicyRejectionCancelState, Problem: fmt.Sprintf("run status %q cannot be cancelled", run.Status)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	repository := commandRepository(registration)
+	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read issue for cancellation: %w", err)
+	}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; run cancelled")
+	next.Status = store.StatusCancelled
+	next.LifecycleReason = "authorized cancel command"
+	next.MergeCommitSHA = ""
+	next.LifecycleNotificationSent = false
+	next.UpdatedAt = s.deps.Now().UTC()
+	updated, err := s.transitionTerminal(ctx, registration, runStore, run, next, issue)
+	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
 }
 
 // PollCommands lists comments for the run's issue and draft pull request and
@@ -176,6 +214,13 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 	}
 	if request.RunID != "" && request.RunID != run.ID {
 		return nil, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("run %q is not the selected run", request.RunID)}
+	}
+	lifecycle, lifecycleErr := s.observeLifecycle(ctx, registration, runStore, run)
+	if lifecycleErr != nil {
+		return nil, lifecycleErr
+	}
+	if lifecycle.Outcome != LifecycleUnchanged {
+		return nil, nil
 	}
 	if s.deps.Comments == nil {
 		return nil, errors.New("GitHub comment reader is required for command polling")
@@ -245,8 +290,8 @@ type commandRevisionStore interface {
 // handleRetryCommand reopens a failed run at its existing stage and applies
 // the normal label/comment transition without creating a new status comment.
 func (s *Service) handleRetryCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
-	if run.Status != store.StatusFailed {
-		rejection := &PolicyRejection{Code: PolicyRejectionRetryState, Problem: fmt.Sprintf("retry is only allowed for a failed run, not status %q", run.Status)}
+	if run.Status != store.StatusFailed && run.Status != store.StatusCancelled {
+		rejection := &PolicyRejection{Code: PolicyRejectionRetryState, Problem: fmt.Sprintf("retry is only allowed for a failed or cancelled run, not status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	if run.StatusCommentID == "" {
@@ -261,8 +306,21 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 	if err != nil {
 		return CommandResult{}, err
 	}
-	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; retrying failed run")
+	if run.Status == store.StatusCancelled {
+		open, openErr := s.retryTargetIsOpen(ctx, registration, run, issue)
+		if openErr != nil {
+			return CommandResult{}, openErr
+		}
+		if !open {
+			rejection := &PolicyRejection{Code: PolicyRejectionRetryState, Problem: "a cancelled run can be retried only after its issue or pull request is reopened"}
+			return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+		}
+	}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; retrying run")
 	next.Status = store.StatusActive
+	next.MergeCommitSHA = ""
+	next.LifecycleReason = ""
+	next.LifecycleNotificationSent = false
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository:           repository,
 		Issue:                issue,

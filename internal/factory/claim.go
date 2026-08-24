@@ -456,6 +456,13 @@ func statusCommentBody(run store.Run) string {
 	if run.PullRequestNumber > 0 {
 		pullRequest = fmt.Sprintf("- pull request: #%d %s\n", run.PullRequestNumber, run.PullRequestURL)
 	}
+	lifecycle := ""
+	if run.MergeCommitSHA != "" {
+		lifecycle += fmt.Sprintf("- merge commit: `%s`\n", safeStatusCommentValue(run.MergeCommitSHA))
+	}
+	if run.LifecycleReason != "" {
+		lifecycle += fmt.Sprintf("- lifecycle reason: %s\n", safeStatusCommentValue(run.LifecycleReason))
+	}
 	commandFeedback := ""
 	if run.LastCommandName != "" {
 		commandFeedback = fmt.Sprintf("\n### Last command\n\n- comment: `%s`\n- revision: `%d`\n- command: `%s`\n- outcome: `%s`\n- message: %s\n", safeStatusCommentValue(run.ProcessedCommentID), run.ProcessedCommentRevision, safeStatusCommentValue(run.LastCommandName), safeStatusCommentValue(run.LastCommandOutcome), safeStatusCommentValue(run.LastCommandMessage))
@@ -464,7 +471,7 @@ func statusCommentBody(run store.Run) string {
 	if run.HarnessOverride != "" {
 		harness = fmt.Sprintf("\n- harness override: `%s`\n", safeStatusCommentValue(run.HarnessOverride))
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, pullRequest, harness, commandFeedback)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, pullRequest, lifecycle, harness, commandFeedback)
 }
 
 // safeStatusCommentValue keeps command feedback single-line and prevents

@@ -483,8 +483,9 @@ func (f *fakeWorktree) Remove(context.Context, string, gitadapter.Workspace) err
 
 // fakeRunStore keeps run records in insertion order for coordinator tests.
 type fakeRunStore struct {
-	saved      []store.Run
-	saveErrors []error
+	saved           []store.Run
+	saveErrors      []error
+	lifecycleClaims map[string]map[store.Status]bool
 }
 
 // CurrentRun returns the newest non-terminal record.
@@ -509,6 +510,29 @@ func (f *fakeRunStore) SaveRun(_ context.Context, run store.Run) error {
 		}
 	}
 	f.saved = append(f.saved, run)
+	return nil
+}
+
+// ClaimLifecycleNotification atomically claims notification delivery.
+func (f *fakeRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
+	if f.lifecycleClaims == nil {
+		f.lifecycleClaims = make(map[string]map[store.Status]bool)
+	}
+	if f.lifecycleClaims[runID] == nil {
+		f.lifecycleClaims[runID] = make(map[store.Status]bool)
+	}
+	if f.lifecycleClaims[runID][terminalStatus] {
+		return false, nil
+	}
+	f.lifecycleClaims[runID][terminalStatus] = true
+	return true, nil
+}
+
+// ReleaseLifecycleNotification removes a notification claim.
+func (f *fakeRunStore) ReleaseLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) error {
+	if f.lifecycleClaims != nil && f.lifecycleClaims[runID] != nil {
+		delete(f.lifecycleClaims[runID], terminalStatus)
+	}
 	return nil
 }
 

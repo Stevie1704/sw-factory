@@ -17,6 +17,8 @@ const (
 	Status Kind = "status"
 	// Retry asks the coordinator to retry a failed run at its current stage.
 	Retry Kind = "retry"
+	// Cancel asks the coordinator to stop an active run while retaining its work.
+	Cancel Kind = "cancel"
 	// Refresh asks the coordinator to refresh the supervision projection.
 	Refresh Kind = "refresh"
 	// ConfigureHarness changes the selected harness for a later invocation.
@@ -110,6 +112,8 @@ func Parse(body string) (ParseResult, error) {
 		return parseFixedArity(result, fields, Status)
 	case string(Retry):
 		return parseFixedArity(result, fields, Retry)
+	case string(Cancel):
+		return parseFixedArity(result, fields, Cancel)
 	case string(Refresh):
 		return parseFixedArity(result, fields, Refresh)
 	case "config", "configure", "harness":

@@ -264,7 +264,19 @@ func runPollCommands(ctx context.Context, args []string, defaultConfigPath strin
 		writeError(errorsOutput, errors.New("poll does not accept positional arguments"))
 		return 2
 	}
-	results, err := factory.New(*configPath).PollCommands(ctx, factory.CommandPollRequest{RunID: *runID})
+	service := factory.New(*configPath)
+	lifecycle, err := service.PollLifecycle(ctx, factory.LifecycleRequest{RunID: *runID})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if lifecycle.Outcome != factory.LifecycleUnchanged {
+		if !writeOutput(output, errorsOutput, "lifecycle: %s run=%s status=%s\n", lifecycle.Outcome, lifecycle.Run.ID, lifecycle.Run.Status) {
+			return 1
+		}
+		return 0
+	}
+	results, err := service.PollCommands(ctx, factory.CommandPollRequest{RunID: *runID})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1

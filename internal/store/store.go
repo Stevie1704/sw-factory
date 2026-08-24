@@ -18,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 8
+const CurrentSchemaVersion = 11
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -113,6 +113,12 @@ type Run struct {
 	PullRequestNumber int
 	// PullRequestURL is the operator-facing URL of the draft PR.
 	PullRequestURL string
+	// MergeCommitSHA is the immutable commit recorded when the tracked PR merges.
+	MergeCommitSHA string
+	// LifecycleReason explains an automatic or authorized terminal transition.
+	LifecycleReason string
+	// LifecycleNotificationSent records successful cmux notification delivery.
+	LifecycleNotificationSent bool
 	// Revision is the monotonic coordinator revision used by command replay
 	// prevention and persisted supervision updates.
 	Revision int64
@@ -273,7 +279,8 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
-		       pull_request_number, pull_request_url,
+		       pull_request_number, pull_request_url, merge_commit_sha,
+		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override,
@@ -291,7 +298,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, image_digest, coordinator, status_comment_id,
-		       pull_request_number, pull_request_url,
+		       pull_request_number, pull_request_url, merge_commit_sha,
+		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override,
@@ -320,6 +328,9 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.StatusCommentID,
 		&run.PullRequestNumber,
 		&run.PullRequestURL,
+		&run.MergeCommitSHA,
+		&run.LifecycleReason,
+		&run.LifecycleNotificationSent,
 		&run.Revision,
 		&run.ProcessedCommentID,
 		&run.ProcessedCommentRevision,
@@ -422,6 +433,9 @@ func runValues(run Run) []any {
 		run.StatusCommentID,
 		run.PullRequestNumber,
 		run.PullRequestURL,
+		run.MergeCommitSHA,
+		run.LifecycleReason,
+		run.LifecycleNotificationSent,
 		run.Revision,
 		run.ProcessedCommentID,
 		run.ProcessedCommentRevision,
@@ -439,10 +453,12 @@ const saveRunStatement = `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
 			checkpoint_sha, image_digest, coordinator, status_comment_id,
-			pull_request_number, pull_request_url, revision, processed_comment_id,
+			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
+			lifecycle_notification_sent,
+			revision, processed_comment_id,
 			processed_comment_revision, last_command_name, last_command_outcome,
 			last_command_message, harness_override, specification_packet, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
 			issue_number = excluded.issue_number,
@@ -456,6 +472,9 @@ const saveRunStatement = `
 			status_comment_id = excluded.status_comment_id,
 			pull_request_number = excluded.pull_request_number,
 			pull_request_url = excluded.pull_request_url,
+			merge_commit_sha = excluded.merge_commit_sha,
+			lifecycle_reason = excluded.lifecycle_reason,
+			lifecycle_notification_sent = excluded.lifecycle_notification_sent,
 			revision = excluded.revision,
 			processed_comment_id = excluded.processed_comment_id,
 			processed_comment_revision = excluded.processed_comment_revision,
@@ -470,7 +489,9 @@ const saveRunIfRevisionStatement = `
 		UPDATE operational_runs SET
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
 			checkpoint_sha = ?, image_digest = ?, coordinator = ?, status_comment_id = ?,
-			pull_request_number = ?, pull_request_url = ?, revision = ?, processed_comment_id = ?,
+			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
+			lifecycle_notification_sent = ?,
+			revision = ?, processed_comment_id = ?,
 			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
 			last_command_message = ?, harness_override = ?, specification_packet = ?,
 			created_at = ?, updated_at = ?
@@ -636,6 +657,55 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 		return nil, fmt.Errorf("parse invocation updated_at: %w", err)
 	}
 	return &invocation, nil
+}
+
+// ClaimLifecycleNotification atomically claims the right to send one terminal
+// notification, returning true if the claim succeeded (caller should send),
+// false if the claim already exists (notification already sent or being sent).
+func (s *Store) ClaimLifecycleNotification(ctx context.Context, runID string, terminalStatus Status) (bool, error) {
+	if runID == "" {
+		return false, errors.New("run id is required for lifecycle notification claim")
+	}
+	if !IsTerminalStatus(terminalStatus) {
+		return false, fmt.Errorf("cannot claim lifecycle notification for non-terminal status %q", terminalStatus)
+	}
+	now := time.Now().UTC().Format(runTimestampLayout)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO lifecycle_notifications (run_id, terminal_status, created_at)
+		VALUES (?, ?, ?)`, runID, terminalStatus, now)
+	if err != nil {
+		if isLifecycleNotificationClaimConflict(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("claim lifecycle notification for run %q status %q: %w", runID, terminalStatus, err)
+	}
+	return true, nil
+}
+
+// ReleaseLifecycleNotification removes a notification claim, allowing a future
+// retry to attempt delivery again. This is called when notification delivery
+// fails after the claim was successfully recorded.
+func (s *Store) ReleaseLifecycleNotification(ctx context.Context, runID string, terminalStatus Status) error {
+	if runID == "" {
+		return errors.New("run id is required for lifecycle notification release")
+	}
+	if !IsTerminalStatus(terminalStatus) {
+		return fmt.Errorf("cannot release lifecycle notification for non-terminal status %q", terminalStatus)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM lifecycle_notifications
+		WHERE run_id = ? AND terminal_status = ?`, runID, terminalStatus)
+	if err != nil {
+		return fmt.Errorf("release lifecycle notification claim for run %q status %q: %w", runID, terminalStatus, err)
+	}
+	return nil
+}
+
+// isLifecycleNotificationClaimConflict recognizes the primary key violation
+// without depending on a driver-specific SQLite error type.
+func isLifecycleNotificationClaimConflict(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "primary key") || strings.Contains(message, "unique constraint failed: lifecycle_notifications")
 }
 
 // databaseState reports whether the path identifies an existing database file and whether that file is empty.
@@ -823,6 +893,28 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 8: %w", err)
 				}
+			}
+		case 9:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN merge_commit_sha TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN lifecycle_reason TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 9: %w", err)
+				}
+			}
+		case 10:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN lifecycle_notification_sent INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("apply store migration 10: %w", err)
+			}
+		case 11:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE lifecycle_notifications (
+				run_id TEXT NOT NULL,
+				terminal_status TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				PRIMARY KEY (run_id, terminal_status)
+			)`); err != nil {
+				return fmt.Errorf("apply store migration 11: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

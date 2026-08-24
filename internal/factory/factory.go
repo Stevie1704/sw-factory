@@ -42,6 +42,8 @@ type Factory interface {
 	HandleCommand(context.Context, CommandRequest) (CommandResult, error)
 	// PollCommands reads issue and pull-request comments for the current run.
 	PollCommands(context.Context, CommandPollRequest) ([]CommandResult, error)
+	// PollLifecycle observes merge and closure decisions for the current run.
+	PollLifecycle(context.Context, LifecycleRequest) (LifecycleResult, error)
 }
 
 // RunCoordinator is the single claim/state-transition seam used by the
@@ -67,6 +69,8 @@ type OperationalStore interface {
 type RunStore interface {
 	OperationalStore
 	SaveRun(context.Context, store.Run) error
+	ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error)
+	ReleaseLifecycleNotification(context.Context, string, store.Status) error
 }
 
 // LatestRunStore extends the operational-store seam with the most recently
