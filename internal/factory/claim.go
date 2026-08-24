@@ -408,10 +408,30 @@ func (s *Service) openActiveRunStore(ctx context.Context) (config.RepositoryRegi
 	return registration, runStore, run, nil
 }
 
-// ensureProgressionStartup performs the one read-only startup guard for a
-// service instance. A service that found no interrupted run may continue a run
-// it claims during that same process; a fresh service refuses every persisted
-// non-terminal run until issue #21 supplies reconciliation.
+// openAgentStartRunStore opens the active run for the one progression seam
+// allowed to cross a clean claim-to-first-invocation process boundary.
+func (s *Service) openAgentStartRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
+	registration, runStore, err := s.openRunStore(ctx)
+	if err != nil {
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	run, err := runStore.CurrentRun(ctx)
+	if err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	if err := s.ensureAgentStartup(ctx, registration, runStore, run); err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	return registration, runStore, run, nil
+}
+
+// ensureProgressionStartup performs the read-only startup guard shared by all
+// progression seams except the dedicated first-agent handoff. A service that
+// found no interrupted run may continue a run it claims during that same
+// process; a fresh service refuses every persisted non-terminal run until issue
+// #21 supplies reconciliation.
 func (s *Service) ensureProgressionStartup(ctx context.Context, registration config.RepositoryRegistration, run *store.Run) error {
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()
@@ -425,6 +445,60 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 	diagnosis := s.diagnoseInterruptedRun(ctx, registration, *run)
 	s.startupErr = recoveryRequiredError(diagnosis)
 	return s.startupErr
+}
+
+// ensureAgentStartup permits only a clean persisted claim to cross into its
+// first implementation invocation. Every later or interrupted state retains
+// the typed #24 refusal until issue #21 supplies reconciliation.
+func (s *Service) ensureAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) error {
+	s.startupMu.Lock()
+	defer s.startupMu.Unlock()
+	if s.startupChecked {
+		return s.startupErr
+	}
+	s.startupChecked = true
+	if run == nil || store.IsTerminalStatus(run.Status) {
+		return nil
+	}
+	diagnosis := s.diagnoseInterruptedRun(ctx, registration, *run)
+	if !diagnosis.SourcesAgree {
+		s.startupErr = recoveryRequiredError(diagnosis)
+		return s.startupErr
+	}
+	if run.Stage != store.StageClaim || run.Status != store.StatusActive {
+		s.startupErr = recoveryRequiredError(diagnosis)
+		return s.startupErr
+	}
+	historyStore, ok := runStore.(InvocationHistoryStore)
+	if !ok {
+		addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+			Source:   "operational store",
+			Field:    "invocation history",
+			Expected: "read-only invocation history lookup",
+			Observed: "store does not support invocation history",
+		})
+		diagnosis.SourcesAgree = false
+		s.startupErr = recoveryRequiredError(diagnosis)
+		return s.startupErr
+	}
+	hasInvocation, err := historyStore.HasInvocation(ctx, run.ID)
+	if err != nil {
+		addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+			Source:   "operational store",
+			Field:    "invocation history",
+			Expected: "read invocation history",
+			Observed: err.Error(),
+		})
+		diagnosis.SourcesAgree = false
+		s.startupErr = recoveryRequiredError(diagnosis)
+		return s.startupErr
+	}
+	if hasInvocation {
+		diagnosis.InvocationExists = true
+		s.startupErr = recoveryRequiredError(diagnosis)
+		return s.startupErr
+	}
+	return nil
 }
 
 // failClaim records a terminal failure and best-effort moves the issue label

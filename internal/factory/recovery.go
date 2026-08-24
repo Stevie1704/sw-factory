@@ -43,6 +43,8 @@ type RecoveryDiagnosis struct {
 	SourcesAgree bool
 	// Discrepancies contains every disagreement found during the read-only check.
 	Discrepancies []RecoveryDiscrepancy
+	// InvocationExists reports persisted invocation history for the diagnosed run.
+	InvocationExists bool
 	// SafeActions identifies operator actions that do not claim recovery.
 	SafeActions []string
 }
@@ -72,6 +74,9 @@ func (e *RecoveryRequiredError) Error() string {
 			details = append(details, fmt.Sprintf("%s.%s expected=%q observed=%q", discrepancy.Source, discrepancy.Field, discrepancy.Expected, discrepancy.Observed))
 		}
 		message += "; discrepancies: " + strings.Join(details, ", ")
+	}
+	if e.Diagnosis.InvocationExists {
+		message += "; persisted invocation history exists"
 	}
 	if len(e.Diagnosis.SafeActions) != 0 {
 		message += "; safe actions: " + strings.Join(e.Diagnosis.SafeActions, "; ")

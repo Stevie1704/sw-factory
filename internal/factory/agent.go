@@ -34,6 +34,12 @@ type ActiveInvocationStore interface {
 	ActiveInvocation(context.Context, string) (*store.Invocation, error)
 }
 
+// InvocationHistoryStore is the operational-store seam used to distinguish a
+// completed claim from a run that has ever attempted a visible invocation.
+type InvocationHistoryStore interface {
+	HasInvocation(context.Context, string) (bool, error)
+}
+
 // AgentRequest selects one coordinator-owned visible role invocation.
 type AgentRequest struct {
 	// RunID selects the active factory run. Empty selects the only active run.
@@ -119,7 +125,7 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openAgentStartRunStore(ctx)
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}

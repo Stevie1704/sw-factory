@@ -69,6 +69,124 @@ func TestStartAgentRejectsADuplicateActiveInvocation(t *testing.T) {
 	}
 }
 
+// TestStartAgentAllowsAClaimedRunAfterCoordinatorRestart verifies the clean
+// claim-to-first-invocation handoff through a freshly opened coordinator.
+func TestStartAgentAllowsAClaimedRunAfterCoordinatorRestart(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	run := *runStore.current
+	worktree := &inspectingWorktree{
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
+		state:        gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA},
+	}
+	fresh := newFreshAgentService(t, runStore, worktree, runtime, terminalRuntime, harnessRuntime)
+
+	launch, err := fresh.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("fresh StartAgent() error = %v, want clean claim handoff", err)
+	}
+	if launch.Invocation.ID == "" || len(runtime.starts) != 1 || len(runStore.invocations) != 1 {
+		t.Fatalf("fresh launch = %#v, worker starts = %#v, invocations = %#v", launch, runtime.starts, runStore.invocations)
+	}
+}
+
+// TestStartAgentPersistsInvocationBeforeStartingTheWorker verifies the
+// durable invocation identity is published before any worker effect begins.
+func TestStartAgentPersistsInvocationBeforeStartingTheWorker(t *testing.T) {
+	service, runStore, runtime, _, _ := newAgentService(t)
+	events := []string{}
+	runStore.events = &events
+	runtime.events = &events
+
+	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	persistedAt := eventIndex(events, "persist invocation")
+	startedAt := eventIndex(events, "start worker")
+	if persistedAt < 0 || startedAt < 0 || persistedAt > startedAt {
+		t.Fatalf("effect order = %#v, want invocation persistence before worker start", events)
+	}
+}
+
+// TestStartAgentRefusesARecoveryDiscrepancyBeforeEffects verifies a fresh
+// coordinator returns the typed recovery refusal without starting any effect.
+func TestStartAgentRefusesARecoveryDiscrepancyBeforeEffects(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	run := *runStore.current
+	worktree := &inspectingWorktree{
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
+		state:        gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: "different-checkpoint"},
+	}
+	fresh := newFreshAgentService(t, runStore, worktree, runtime, terminalRuntime, harnessRuntime)
+
+	_, err := fresh.StartAgent(context.Background(), factory.AgentRequest{})
+	var recoveryErr *factory.RecoveryRequiredError
+	if !errors.As(err, &recoveryErr) {
+		t.Fatalf("fresh StartAgent() error = %v, want RecoveryRequiredError", err)
+	}
+	if len(runtime.starts) != 0 || len(terminalRuntime.notifications) != 0 || len(harnessRuntime.starts) != 0 || len(runStore.invocations) != 0 {
+		t.Fatalf("recovery refusal effects: workers=%d notifications=%d harnesses=%d invocations=%d, want none", len(runtime.starts), len(terminalRuntime.notifications), len(harnessRuntime.starts), len(runStore.invocations))
+	}
+}
+
+// TestStartAgentRefusesAnyPreviouslyPersistedInvocation verifies that a
+// terminal or non-terminal invocation keeps a fresh coordinator behind #24.
+func TestStartAgentRefusesAnyPreviouslyPersistedInvocation(t *testing.T) {
+	statuses := []store.InvocationStatus{
+		store.InvocationStatusActive,
+		store.InvocationStatusCompleted,
+		store.InvocationStatusWaitingForHuman,
+		store.InvocationStatusCannotProceed,
+	}
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+			run := *runStore.current
+			if err := runStore.SaveInvocation(context.Background(), store.Invocation{
+				ID: "inv-existing", RunID: run.ID, Harness: "codex", Role: "implementation", Stage: store.StageClaim,
+				Status: status,
+			}); err != nil {
+				t.Fatalf("SaveInvocation() error = %v", err)
+			}
+			worktree := &inspectingWorktree{
+				fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
+				state:        gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA},
+			}
+			fresh := newFreshAgentService(t, runStore, worktree, runtime, terminalRuntime, harnessRuntime)
+
+			_, err := fresh.StartAgent(context.Background(), factory.AgentRequest{})
+			var recoveryErr *factory.RecoveryRequiredError
+			if !errors.As(err, &recoveryErr) {
+				t.Fatalf("fresh StartAgent() error = %v, want RecoveryRequiredError", err)
+			}
+			if len(runtime.starts) != 0 || len(terminalRuntime.notifications) != 0 || len(harnessRuntime.starts) != 0 {
+				t.Fatalf("existing invocation effects: workers=%d notifications=%d harnesses=%d, want none", len(runtime.starts), len(terminalRuntime.notifications), len(harnessRuntime.starts))
+			}
+		})
+	}
+}
+
+// TestStartAgentAppliesTheExceptionOnlyToAClaimStage verifies implementation
+// stage runs still use the #24 startup guard even without an invocation.
+func TestStartAgentAppliesTheExceptionOnlyToAClaimStage(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	runStore.current.Stage = store.StageImplementation
+	run := *runStore.current
+	worktree := &inspectingWorktree{
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
+		state:        gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA},
+	}
+	fresh := newFreshAgentService(t, runStore, worktree, runtime, terminalRuntime, harnessRuntime)
+
+	_, err := fresh.StartAgent(context.Background(), factory.AgentRequest{})
+	var recoveryErr *factory.RecoveryRequiredError
+	if !errors.As(err, &recoveryErr) {
+		t.Fatalf("fresh StartAgent() error = %v, want RecoveryRequiredError", err)
+	}
+	if len(runtime.starts) != 0 || len(terminalRuntime.notifications) != 0 || len(harnessRuntime.starts) != 0 {
+		t.Fatalf("non-claim effects: workers=%d notifications=%d harnesses=%d, want none", len(runtime.starts), len(terminalRuntime.notifications), len(harnessRuntime.starts))
+	}
+}
+
 // TestStartAgentRollsBackASetupFailure verifies a partially launched session
 // cannot remain active after the harness fails to start.
 func TestStartAgentRollsBackASetupFailure(t *testing.T) {
@@ -340,6 +458,50 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 	return service, runStore, runtime, terminalRuntime, harnessRuntime
 }
 
+// newFreshAgentService recreates a coordinator around the persisted claim so
+// tests exercise the cross-process startup seam rather than cached service state.
+func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspectingWorktree, runtime *agentWorker, terminalRuntime *agentTerminal, harnessRuntime *agentHarness) *factory.Service {
+	t.Helper()
+	if runStore.current == nil {
+		t.Fatal("fresh coordinator fixture requires a persisted run")
+	}
+	run := *runStore.current
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path:                 run.RepositoryPath,
+		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+		Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+		Cmux:                 config.CmuxConfig{ControlWorkspace: "factory-control"},
+		OperationalDataPath:  filepath.Join(filepath.Dir(run.RepositoryPath), "state", "factory.db"),
+		RepositoryConfigPath: filepath.Join(run.RepositoryPath, "factory.yaml"),
+	}}}
+	githubRuntime := &fakeGitHub{
+		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: "<!-- factory-status: " + run.ID + " -->"},
+	}
+	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:         &fakeConfig{value: host},
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil },
+		Worker:         runtime,
+		Terminal:       terminalRuntime,
+		Harness:        harnessRuntime,
+		GitHub:         githubRuntime,
+		Worktree:       worktree,
+		Now:            func() time.Time { return time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC) },
+		NewRunID:       func() (string, error) { return "generated", nil },
+	})
+}
+
+// eventIndex returns the first position of one recorded test effect.
+func eventIndex(events []string, wanted string) int {
+	for index, event := range events {
+		if event == wanted {
+			return index
+		}
+	}
+	return -1
+}
+
 // inspectingWorktree adds the read-only report inspection seam to the shared
 // claim-test worktree fake.
 type inspectingWorktree struct {
@@ -363,6 +525,7 @@ type agentRunStore struct {
 	current         *store.Run
 	invocations     map[string]store.Invocation
 	lifecycleClaims map[string]map[store.Status]bool
+	events          *[]string
 }
 
 // CurrentRun returns the configured active run.
@@ -400,8 +563,21 @@ func (s *agentRunStore) ReleaseLifecycleNotification(_ context.Context, runID st
 
 // SaveInvocation stores one updated invocation state.
 func (s *agentRunStore) SaveInvocation(_ context.Context, invocation store.Invocation) error {
+	if s.events != nil {
+		*s.events = append(*s.events, "persist invocation")
+	}
 	s.invocations[invocation.ID] = invocation
 	return nil
+}
+
+// HasInvocation reports whether any invocation history exists for one run.
+func (s *agentRunStore) HasInvocation(_ context.Context, runID string) (bool, error) {
+	for _, value := range s.invocations {
+		if value.RunID == runID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Invocation loads one invocation only for its owning run.
@@ -431,10 +607,14 @@ func (*agentRunStore) Close() error { return nil }
 type agentWorker struct {
 	starts []worker.StartRequest
 	stops  int
+	events *[]string
 }
 
 // Start records one worker start.
 func (w *agentWorker) Start(_ context.Context, request worker.StartRequest) error {
+	if w.events != nil {
+		*w.events = append(*w.events, "start worker")
+	}
 	w.starts = append(w.starts, request)
 	return nil
 }
@@ -530,6 +710,7 @@ func (h *agentHarness) Finish(_ context.Context, session harness.Session) error 
 }
 
 var _ factory.InvocationStore = (*agentRunStore)(nil)
+var _ factory.InvocationHistoryStore = (*agentRunStore)(nil)
 var _ worker.WorkerRuntime = (*agentWorker)(nil)
 var _ terminal.TerminalRuntime = (*agentTerminal)(nil)
 var _ harness.Runtime = (*agentHarness)(nil)
