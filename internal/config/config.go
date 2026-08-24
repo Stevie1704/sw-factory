@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -474,7 +475,7 @@ func validateSetupFiles(values []string) error {
 		if strings.TrimSpace(value) == "" {
 			return validation(field, "must not be empty")
 		}
-		if strings.ContainsAny(value, "\x00\r\n") {
+		if strings.IndexFunc(value, unicode.IsControl) >= 0 {
 			return validation(field, "must not contain control characters")
 		}
 		if filepath.IsAbs(value) {

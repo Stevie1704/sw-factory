@@ -601,6 +601,23 @@ func validateAgentRunState(run store.Run) error {
 	}
 }
 
+// ensureTransitionBaseline prevents a checkpoint created during the check
+// stage from re-entering test or implementation without a matching baseline
+// projection for that exact checkpoint.
+func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStore, run store.Run, request TransitionRequest) error {
+	if run.Stage != store.StageCheck || (request.Stage != store.StageTest && request.Stage != store.StageImplementation) {
+		return nil
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return fmt.Errorf("validate baseline before %q transition: %w", request.Stage, err)
+	}
+	if err := s.ensureBaselineReady(ctx, runStore, run, packet); err != nil {
+		return fmt.Errorf("cannot transition from check to %q at checkpoint %q without complete baseline results: %w", request.Stage, run.CheckpointSHA, err)
+	}
+	return nil
+}
+
 // persistAgentRunState uses the coordinator's GitHub label/comment transition
 // when the claimed run has a status comment, retaining a direct-store fallback
 // for legacy runs that predate that supervision record.

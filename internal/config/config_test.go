@@ -156,6 +156,8 @@ func TestValidateRepositoryRejectsUnsafeSetupFiles(t *testing.T) {
 		{name: "absolute", files: []string{"/tmp/go.mod"}, field: "setup_files[0]"},
 		{name: "parent traversal", files: []string{"../go.mod"}, field: "setup_files[0]"},
 		{name: "duplicate", files: []string{"go.mod", "go.mod"}, field: "setup_files[1]"},
+		{name: "tab control character", files: []string{"go\t.mod"}, field: "setup_files[0]"},
+		{name: "unicode control character", files: []string{"go\u0085.mod"}, field: "setup_files[0]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := validRepositoryConfig()

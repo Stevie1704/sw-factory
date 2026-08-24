@@ -141,7 +141,11 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	next := *run
 	next.Stage = store.StagePreflight
 	next.Status = store.StatusFailed
-	next.LifecycleReason = "baseline gate failure"
+	if suiteErr == nil && persistErr != nil {
+		next.LifecycleReason = "baseline gate result persistence failure"
+	} else {
+		next.LifecycleReason = "baseline gate failure"
+	}
 	next.UpdatedAt = s.deps.Now().UTC()
 	issue := packet.Issue
 	updated, transitionErr := s.applyStateTransition(ctx, runStore, stateTransition{
@@ -354,7 +358,7 @@ func setupInputFingerprint(worktree string, files []string) (string, error) {
 func baselineFailureTargeted(body string, suite gate.SuiteResult) bool {
 	body = strings.ToLower(body)
 	for _, result := range suite.Gates {
-		if result.Outcome != gate.OutcomeFailed && result.Outcome != gate.OutcomeError && result.Outcome != gate.OutcomeSetupFailed {
+		if result.Outcome != gate.OutcomeFailed && result.Outcome != gate.OutcomeError && result.Outcome != gate.OutcomeSkipped && result.Outcome != gate.OutcomeSetupFailed {
 			continue
 		}
 		if !result.Blocking {
@@ -388,7 +392,8 @@ func baselineFailureErrorTargeted(body string, suite gate.SuiteResult, suiteErr 
 	for _, cause := range failure.Failures {
 		var gateFailure *gate.GateFailure
 		var setupFailure *gate.SetupFailure
-		if errors.As(cause, &gateFailure) || errors.As(cause, &setupFailure) {
+		var dependencyFailure *gate.DependencyFailure
+		if errors.As(cause, &gateFailure) || errors.As(cause, &setupFailure) || errors.As(cause, &dependencyFailure) {
 			continue
 		}
 		return false
@@ -411,7 +416,7 @@ func baselineSetupFailureTargeted(body string, suite gate.SuiteResult) bool {
 // result that required baseline disposition.
 func suiteErrHasBlockingFailure(suite gate.SuiteResult) bool {
 	for _, result := range suite.Gates {
-		if result.Blocking && (result.Outcome == gate.OutcomeFailed || result.Outcome == gate.OutcomeError || result.Outcome == gate.OutcomeSetupFailed) {
+		if result.Blocking && (result.Outcome == gate.OutcomeFailed || result.Outcome == gate.OutcomeError || result.Outcome == gate.OutcomeSkipped || result.Outcome == gate.OutcomeSetupFailed) {
 			return true
 		}
 	}

@@ -89,6 +89,21 @@ func TestStartAgentAllowsAClaimedRunAfterCoordinatorRestart(t *testing.T) {
 	}
 }
 
+// TestTransitionRejectsAChangedCheckCheckpointWithoutABaseline verifies a
+// failed check cannot re-enter implementation with an unproven checkpoint.
+func TestTransitionRejectsAChangedCheckCheckpointWithoutABaseline(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	runStore.current.Stage = store.StageCheck
+	runStore.current.CheckpointSHA = factoryGateCheckpoint
+
+	if _, err := service.Transition(context.Background(), factory.TransitionRequest{Stage: store.StageImplementation, Status: store.StatusActive}); err == nil || !strings.Contains(err.Error(), "without complete baseline results") {
+		t.Fatalf("Transition() error = %v, want incomplete-baseline refusal", err)
+	}
+	if runStore.current.Stage != store.StageCheck {
+		t.Fatalf("run stage = %q, want unchanged check stage", runStore.current.Stage)
+	}
+}
+
 // TestStartAgentPersistsInvocationBeforeStartingTheWorker verifies the
 // durable invocation identity is published before any worker effect begins.
 func TestStartAgentPersistsInvocationBeforeStartingTheWorker(t *testing.T) {
@@ -607,13 +622,26 @@ func (s *agentRunStore) ActiveInvocation(_ context.Context, runID string) (*stor
 	return nil, nil
 }
 
-// SaveGateResults stores the fixture's exact baseline projection.
+// SaveGateResults upserts the fixture's exact gate projections by durable identity.
 func (s *agentRunStore) SaveGateResults(_ context.Context, results []store.GateResult) error {
 	if len(results) == 0 {
 		return errors.New("at least one gate result is required")
 	}
-	copyResults := append([]store.GateResult(nil), results...)
-	s.gateResults[results[0].RunID] = copyResults
+	for _, incoming := range results {
+		runResults := s.gateResults[incoming.RunID]
+		replaced := false
+		for index, existing := range runResults {
+			if existing.RunID == incoming.RunID && existing.CheckpointSHA == incoming.CheckpointSHA && existing.Phase == incoming.Phase && existing.GateName == incoming.GateName {
+				runResults[index] = incoming
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			runResults = append(runResults, incoming)
+		}
+		s.gateResults[incoming.RunID] = runResults
+	}
 	return nil
 }
 

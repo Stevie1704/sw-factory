@@ -217,6 +217,44 @@ func TestRunnerDoesNotBlockOnANonBlockingIndependentFailure(t *testing.T) {
 	}
 }
 
+// TestRunnerFailsWhenABlockingGateDependsOnANonBlockingFailure verifies an
+// advisory failure still blocks a required dependent gate from continuation.
+func TestRunnerFailsWhenABlockingGateDependsOnANonBlockingFailure(t *testing.T) {
+	t.Parallel()
+
+	runtime := &fakeRuntime{results: []worker.CommandResult{
+		{ExitCode: 0}, // setup
+		{ExitCode: 3}, // advisory prerequisite
+	}}
+	statuses := &fakeStatusPublisher{}
+	runner := gate.Runner{Runtime: runtime, Statuses: statuses}
+
+	result, err := runner.RunSuite(context.Background(), gate.SuiteRequest{
+		RunID:         "run-suite-dependent-advisory",
+		CheckpointSHA: gateCheckpoint,
+		Setup:         "setup",
+		SetupTimeout:  "1m",
+		Gates: []config.GateConfig{
+			{Name: "advisory", Command: "advisory", Timeout: "1m", Blocking: false, EnvironmentPolicy: config.EnvironmentPolicyClean},
+			{Name: "required", Command: "required", Timeout: "1m", Blocking: true, DependsOn: []string{"advisory"}, EnvironmentPolicy: config.EnvironmentPolicyClean},
+		},
+	})
+	var suiteFailure *gate.SuiteFailure
+	if !errors.As(err, &suiteFailure) {
+		t.Fatalf("RunSuite() error = %v, want blocking dependency failure", err)
+	}
+	var dependencyFailure *gate.DependencyFailure
+	if !errors.As(err, &dependencyFailure) {
+		t.Fatalf("RunSuite() error = %v, want DependencyFailure", err)
+	}
+	if len(result.Gates) != 2 || !result.Gates[1].Skipped || result.Gates[1].Outcome != gate.OutcomeSkipped {
+		t.Fatalf("suite gates = %#v, want required gate skipped", result.Gates)
+	}
+	if len(runtime.commands) != 2 {
+		t.Fatalf("commands = %#v, want setup and advisory only", runtime.commands)
+	}
+}
+
 // TestRunnerAggregatesIndependentBlockingFailures verifies one suite error
 // carries every independent blocking failure for one repair decision.
 func TestRunnerAggregatesIndependentBlockingFailures(t *testing.T) {

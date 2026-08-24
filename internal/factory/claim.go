@@ -242,6 +242,9 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	if request.RunID != "" && request.RunID != run.ID {
 		return store.Run{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
+	if err := s.ensureTransitionBaseline(ctx, runStore, *run, request); err != nil {
+		return store.Run{}, err
+	}
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {

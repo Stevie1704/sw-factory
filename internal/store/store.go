@@ -735,15 +735,17 @@ func (s *Store) SaveGateResults(ctx context.Context, results []GateResult) error
 	if len(results) == 0 {
 		return errors.New("at least one gate result is required")
 	}
+	for _, result := range results {
+		if err := validateGateResult(result); err != nil {
+			return err
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin gate-result save: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, result := range results {
-		if err := validateGateResult(result); err != nil {
-			return err
-		}
 		createdAt := result.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = time.Now().UTC()

@@ -198,8 +198,25 @@ func (e *GateFailure) Unwrap() error {
 	return e.Cause
 }
 
+// DependencyFailure identifies a blocking gate that could not run because a
+// declared prerequisite failed, including when that prerequisite was advisory.
+type DependencyFailure struct {
+	// Name is the blocked declared gate.
+	Name string
+	// Dependency is the failed declared prerequisite.
+	Dependency string
+}
+
+// Error describes why a blocking gate was skipped.
+func (e *DependencyFailure) Error() string {
+	if e == nil {
+		return "gate dependency failed"
+	}
+	return fmt.Sprintf("gate %q skipped because dependency %q failed", e.Name, e.Dependency)
+}
+
 // SuiteFailure aggregates all blocking failures from one ordered suite while
-// retaining independent gate failures for errors.As and diagnostics.
+// retaining gate and dependency failures for errors.As and diagnostics.
 type SuiteFailure struct {
 	// Failures contains setup or blocking gate failures in evaluation order.
 	Failures []error
@@ -314,6 +331,9 @@ func (r Runner) RunSuite(ctx context.Context, request SuiteRequest) (SuiteResult
 			result.Gates = append(result.Gates, gateResult)
 			if err := r.publish(ctx, gateResult.Status); err != nil {
 				blockingFailures = append(blockingFailures, err)
+			}
+			if declared.Blocking {
+				blockingFailures = append(blockingFailures, &DependencyFailure{Name: declared.Name, Dependency: dependency})
 			}
 			failed[declared.Name] = true
 			continue

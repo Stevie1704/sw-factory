@@ -235,14 +235,19 @@ func newRealHandoffFixture(t *testing.T) *realHandoffFixture {
 // command's successful pre-edit gate suite for handoff-only tests.
 func recordReadyBaseline(t *testing.T, operationalPath string, run store.Run) {
 	t.Helper()
+	policy := validRepositoryConfig()
+	if len(policy.Gates) == 0 {
+		t.Fatal("baseline fixture policy has no declared gates")
+	}
+	declared := policy.Gates[0]
 	opened, err := store.Open(context.Background(), operationalPath)
 	if err != nil {
 		t.Fatalf("open baseline fixture store: %v", err)
 	}
 	err = opened.SaveGateResults(context.Background(), []store.GateResult{{
 		RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseBaseline,
-		Ordinal: 0, GateName: "test", Outcome: store.GateOutcomePassed,
-		Status: string(github.CommitStatusSuccess), Blocking: true,
+		Ordinal: 0, GateName: declared.Name, Outcome: store.GateOutcomePassed,
+		Status: string(github.CommitStatusSuccess), Blocking: declared.Blocking,
 	}})
 	closeErr := opened.Close()
 	if err != nil {
