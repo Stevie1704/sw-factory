@@ -58,19 +58,23 @@ type AuthenticationConfig struct {
 }
 
 type RepositoryConfig struct {
-	SchemaVersion       int                 `yaml:"schema_version"`
-	TargetBranch        string              `yaml:"target_branch"`
-	Setup               string              `yaml:"setup"`
-	Gates               []GateConfig        `yaml:"gates"`
-	RoleHarnessDefaults map[string]Harness  `yaml:"role_harness_defaults"`
-	ModelOptions        map[string][]string `yaml:"model_options"`
-	Timeouts            TimeoutConfig       `yaml:"timeouts"`
-	RetryLimits         RetryLimits         `yaml:"retry_limits"`
-	TestPolicy          TestPolicy          `yaml:"test_policy"`
-	AllowedOverrides    []OverrideName      `yaml:"allowed_overrides"`
-	Caches              []CacheConfig       `yaml:"caches"`
-	WorkerBuild         WorkerBuildConfig   `yaml:"worker_build"`
-	BaseSynchronization BaseSynchronization `yaml:"base_synchronization"`
+	SchemaVersion int    `yaml:"schema_version"`
+	TargetBranch  string `yaml:"target_branch"`
+	Setup         string `yaml:"setup"`
+	// SetupFiles identifies checked-in manifests and lockfiles used to fingerprint setup.
+	SetupFiles []string `yaml:"setup_files"`
+	// SetupEnvironmentPolicy selects the checked-in worker environment for setup.
+	SetupEnvironmentPolicy EnvironmentPolicy   `yaml:"setup_environment_policy"`
+	Gates                  []GateConfig        `yaml:"gates"`
+	RoleHarnessDefaults    map[string]Harness  `yaml:"role_harness_defaults"`
+	ModelOptions           map[string][]string `yaml:"model_options"`
+	Timeouts               TimeoutConfig       `yaml:"timeouts"`
+	RetryLimits            RetryLimits         `yaml:"retry_limits"`
+	TestPolicy             TestPolicy          `yaml:"test_policy"`
+	AllowedOverrides       []OverrideName      `yaml:"allowed_overrides"`
+	Caches                 []CacheConfig       `yaml:"caches"`
+	WorkerBuild            WorkerBuildConfig   `yaml:"worker_build"`
+	BaseSynchronization    BaseSynchronization `yaml:"base_synchronization"`
 }
 
 type EnvironmentPolicy string
@@ -330,6 +334,12 @@ func ValidateRepository(config RepositoryConfig) error {
 	if strings.TrimSpace(config.Setup) == "" {
 		return validation("setup", "is required")
 	}
+	if err := validateSetupFiles(config.SetupFiles); err != nil {
+		return err
+	}
+	if config.SetupEnvironmentPolicy != EnvironmentPolicyClean && config.SetupEnvironmentPolicy != EnvironmentPolicyRole {
+		return validation("setup_environment_policy", "must be clean or role")
+	}
 	if len(config.Gates) == 0 {
 		return validation("gates", "must declare at least one ordered gate")
 	}
@@ -451,6 +461,33 @@ func ValidateRepository(config RepositoryConfig) error {
 	}
 	if config.BaseSynchronization.Mode == BaseSynchronizationBeforeReady && strings.TrimSpace(config.BaseSynchronization.Branch) == "" {
 		return validation("base_synchronization.branch", "is required when synchronization is enabled")
+	}
+	return nil
+}
+
+// validateSetupFiles validates optional repository-relative manifest and
+// lockfile paths whose contents identify the dependency graph used by setup.
+func validateSetupFiles(values []string) error {
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		field := fmt.Sprintf("setup_files[%d]", index)
+		if strings.TrimSpace(value) == "" {
+			return validation(field, "must not be empty")
+		}
+		if strings.ContainsAny(value, "\x00\r\n") {
+			return validation(field, "must not contain control characters")
+		}
+		if filepath.IsAbs(value) {
+			return validation(field, "must be relative to the repository checkout")
+		}
+		normalized := filepath.Clean(filepath.FromSlash(value))
+		if normalized == ".." || strings.HasPrefix(normalized, ".."+string(filepath.Separator)) {
+			return validation(field, "must remain inside the repository checkout")
+		}
+		if _, exists := seen[normalized]; exists {
+			return validation(field, "must be unique")
+		}
+		seen[normalized] = struct{}{}
 	}
 	return nil
 }

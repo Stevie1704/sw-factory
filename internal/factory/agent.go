@@ -162,6 +162,9 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
+	if err := s.ensureBaselineReady(ctx, runStore, *run, packet); err != nil {
+		return AgentLaunchResult{}, err
+	}
 	harnessName, model, err := resolveAgentPolicy(packet.RepositoryConfig, request)
 	if err != nil {
 		return AgentLaunchResult{}, err

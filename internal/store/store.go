@@ -18,7 +18,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 11
+const CurrentSchemaVersion = 12
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -74,6 +74,32 @@ const (
 	InvocationStatusWaitingForHuman InvocationStatus = "waiting_for_human"
 	// InvocationStatusCannotProceed means the report contained blocking evidence.
 	InvocationStatusCannotProceed InvocationStatus = "cannot_proceed"
+)
+
+// GatePhase identifies why a deterministic gate result was recorded.
+type GatePhase string
+
+const (
+	// GatePhaseBaseline identifies the pre-edit health evaluation.
+	GatePhaseBaseline GatePhase = "baseline"
+	// GatePhaseCheckpoint identifies an implementation checkpoint evaluation.
+	GatePhaseCheckpoint GatePhase = "checkpoint"
+)
+
+// GateOutcome identifies the coordinator-owned semantic result of one gate.
+type GateOutcome string
+
+const (
+	// GateOutcomePassed records a successful declared command.
+	GateOutcomePassed GateOutcome = "passed"
+	// GateOutcomeFailed records a declared command failure or timeout.
+	GateOutcomeFailed GateOutcome = "failed"
+	// GateOutcomeError records a worker/runtime execution error.
+	GateOutcomeError GateOutcome = "error"
+	// GateOutcomeSkipped records a dependency that was not evaluated.
+	GateOutcomeSkipped GateOutcome = "skipped"
+	// GateOutcomeSetupFailed records a gate blocked by setup failure.
+	GateOutcomeSetupFailed GateOutcome = "setup_failed"
 )
 
 type UnknownSchemaVersionError struct {
@@ -182,6 +208,36 @@ type Invocation struct {
 	// CreatedAt is the immutable invocation creation time.
 	CreatedAt time.Time
 	// UpdatedAt is the latest coordinator update time.
+	UpdatedAt time.Time
+}
+
+// GateResult is the content-limited durable projection of one deterministic
+// gate outcome. Its primary identity includes the exact checkpoint and phase,
+// so a later code change cannot reuse an earlier result.
+type GateResult struct {
+	// RunID identifies the factory run.
+	RunID string
+	// CheckpointSHA identifies the exact evaluated commit.
+	CheckpointSHA string
+	// Phase distinguishes baseline from checkpoint evaluation.
+	Phase GatePhase
+	// Ordinal preserves repository declaration order.
+	Ordinal int
+	// GateName identifies the repository-declared gate.
+	GateName string
+	// Outcome is the coordinator-owned semantic result.
+	Outcome GateOutcome
+	// Status is the published exact-SHA status state.
+	Status string
+	// Blocking records the repository policy for the gate.
+	Blocking bool
+	// SkipReason explains a dependency or setup skip.
+	SkipReason string
+	// SetupFingerprint identifies the configured dependency inputs used by setup.
+	SetupFingerprint string
+	// CreatedAt is the first persistence time for this result identity.
+	CreatedAt time.Time
+	// UpdatedAt is the latest persistence time for this result identity.
 	UpdatedAt time.Time
 }
 
@@ -673,6 +729,174 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 	return &invocation, nil
 }
 
+// SaveGateResults atomically upserts the ordered deterministic results from
+// one suite while preserving their exact run, phase, and checkpoint identity.
+func (s *Store) SaveGateResults(ctx context.Context, results []GateResult) error {
+	if len(results) == 0 {
+		return errors.New("at least one gate result is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin gate-result save: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, result := range results {
+		if err := validateGateResult(result); err != nil {
+			return err
+		}
+		createdAt := result.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		updatedAt := result.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = createdAt
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO gate_results (
+				run_id, checkpoint_sha, phase, ordinal, gate_name, outcome, status,
+				blocking, skip_reason, setup_fingerprint, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(run_id, checkpoint_sha, phase, gate_name) DO UPDATE SET
+				ordinal = excluded.ordinal,
+				outcome = excluded.outcome,
+				status = excluded.status,
+				blocking = excluded.blocking,
+				skip_reason = excluded.skip_reason,
+				setup_fingerprint = excluded.setup_fingerprint,
+				updated_at = excluded.updated_at`,
+			result.RunID,
+			result.CheckpointSHA,
+			result.Phase,
+			result.Ordinal,
+			result.GateName,
+			result.Outcome,
+			result.Status,
+			result.Blocking,
+			result.SkipReason,
+			result.SetupFingerprint,
+			createdAt.UTC().Format(runTimestampLayout),
+			updatedAt.UTC().Format(runTimestampLayout),
+		); err != nil {
+			return fmt.Errorf("save gate result %q: %w", result.GateName, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit gate-result save: %w", err)
+	}
+	return nil
+}
+
+// GateResults returns results only for the requested exact checkpoint and
+// phase, ordered as declared in the frozen repository configuration.
+func (s *Store) GateResults(ctx context.Context, runID string, phase GatePhase, checkpointSHA string) ([]GateResult, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, errors.New("gate result run id is required")
+	}
+	if err := validateGatePhase(phase); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(checkpointSHA) == "" {
+		return nil, errors.New("gate result checkpoint SHA is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT run_id, checkpoint_sha, phase, ordinal, gate_name, outcome, status,
+		       blocking, skip_reason, setup_fingerprint, created_at, updated_at
+		FROM gate_results
+		WHERE run_id = ? AND phase = ? AND checkpoint_sha = ?
+		ORDER BY ordinal, gate_name`, runID, phase, checkpointSHA)
+	if err != nil {
+		return nil, fmt.Errorf("read gate results: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	results := []GateResult{}
+	for rows.Next() {
+		var result GateResult
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&result.RunID,
+			&result.CheckpointSHA,
+			&result.Phase,
+			&result.Ordinal,
+			&result.GateName,
+			&result.Outcome,
+			&result.Status,
+			&result.Blocking,
+			&result.SkipReason,
+			&result.SetupFingerprint,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan gate result: %w", err)
+		}
+		var parseErr error
+		result.CreatedAt, parseErr = time.Parse(time.RFC3339Nano, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse gate result created_at: %w", parseErr)
+		}
+		result.UpdatedAt, parseErr = time.Parse(time.RFC3339Nano, updatedAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse gate result updated_at: %w", parseErr)
+		}
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read gate results: %w", err)
+	}
+	return results, nil
+}
+
+// validateGateResult validates the durable result identity and vocabulary.
+func validateGateResult(result GateResult) error {
+	if strings.TrimSpace(result.RunID) == "" {
+		return errors.New("gate result run id is required")
+	}
+	if !validGateCheckpointSHA(result.CheckpointSHA) {
+		return errors.New("gate result checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
+	}
+	if err := validateGatePhase(result.Phase); err != nil {
+		return err
+	}
+	if result.Ordinal < 0 {
+		return errors.New("gate result ordinal must not be negative")
+	}
+	if strings.TrimSpace(result.GateName) == "" {
+		return errors.New("gate result gate name is required")
+	}
+	switch result.Outcome {
+	case GateOutcomePassed, GateOutcomeFailed, GateOutcomeError, GateOutcomeSkipped, GateOutcomeSetupFailed:
+	default:
+		return fmt.Errorf("unsupported gate result outcome %q", result.Outcome)
+	}
+	if strings.TrimSpace(result.Status) == "" {
+		return errors.New("gate result status is required")
+	}
+	return nil
+}
+
+// validGateCheckpointSHA validates the exact commit identity retained by a
+// durable gate result without importing the host-side GitHub adapter.
+func validGateCheckpointSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// validateGatePhase validates the durable baseline/checkpoint phase vocabulary.
+func validateGatePhase(phase GatePhase) error {
+	if phase != GatePhaseBaseline && phase != GatePhaseCheckpoint {
+		return fmt.Errorf("unsupported gate result phase %q", phase)
+	}
+	return nil
+}
+
 // ClaimLifecycleNotification atomically claims the right to send one terminal
 // notification, returning true if the claim succeeded (caller should send),
 // false if the claim already exists (notification already sent or being sent).
@@ -923,12 +1147,34 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			}
 		case 11:
 			if _, err := tx.ExecContext(ctx, `CREATE TABLE lifecycle_notifications (
-				run_id TEXT NOT NULL,
-				terminal_status TEXT NOT NULL,
-				created_at TEXT NOT NULL,
-				PRIMARY KEY (run_id, terminal_status)
-			)`); err != nil {
+					run_id TEXT NOT NULL,
+					terminal_status TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					PRIMARY KEY (run_id, terminal_status)
+				)`); err != nil {
 				return fmt.Errorf("apply store migration 11: %w", err)
+			}
+		case 12:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE gate_results (
+					run_id TEXT NOT NULL,
+					checkpoint_sha TEXT NOT NULL,
+					phase TEXT NOT NULL,
+					ordinal INTEGER NOT NULL,
+					gate_name TEXT NOT NULL,
+					outcome TEXT NOT NULL,
+					status TEXT NOT NULL,
+					blocking INTEGER NOT NULL,
+					skip_reason TEXT NOT NULL DEFAULT '',
+					setup_fingerprint TEXT NOT NULL DEFAULT '',
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					PRIMARY KEY (run_id, checkpoint_sha, phase, gate_name)
+				)`); err != nil {
+				return fmt.Errorf("apply store migration 12: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `CREATE INDEX gate_results_by_run
+					ON gate_results (run_id, phase, checkpoint_sha, ordinal)`); err != nil {
+				return fmt.Errorf("apply store migration 12 index: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

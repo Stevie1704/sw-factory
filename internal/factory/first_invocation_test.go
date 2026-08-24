@@ -28,8 +28,8 @@ func TestStartAgentUsesTheRealStoreAcrossAClaimProcessBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktree := &inspectingWorktree{
-		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-real", Worktree: worktreePath}},
-		state:        gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-real", HeadSHA: "base"},
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-real", Worktree: worktreePath}},
+		state:        gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-real", HeadSHA: factoryGateCheckpoint},
 	}
 	githubRuntime := &fakeGitHub{issueValue: github.Issue{
 		Number: 42, Title: "Real store handoff", Body: "Repository guidance", State: "open", Labels: []string{github.LabelAgentReady},
@@ -68,6 +68,7 @@ func TestStartAgentUsesTheRealStoreAcrossAClaimProcessBoundary(t *testing.T) {
 	if err := githubRuntime.setStatusComment(claimed.Run); err != nil {
 		t.Fatal(err)
 	}
+	recordReadyBaseline(t, operationalPath, claimed.Run)
 	// A separate service models the next process opening the same host store.
 	startService := factory.NewWithDependencies("/host/config.yaml", dependencies("generated"))
 	launch, err := startService.StartAgent(context.Background(), factory.AgentRequest{})
@@ -197,8 +198,8 @@ func newRealHandoffFixture(t *testing.T) *realHandoffFixture {
 		t.Fatal(err)
 	}
 	worktree := &inspectingWorktree{
-		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-real", Worktree: worktreePath}},
-		state:        gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-real", HeadSHA: "base"},
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-real", Worktree: worktreePath}},
+		state:        gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-real", HeadSHA: factoryGateCheckpoint},
 	}
 	githubRuntime := &fakeGitHub{issueValue: github.Issue{
 		Number: 42, Title: "Real store handoff", Body: "Repository guidance", State: "open", Labels: []string{github.LabelAgentReady},
@@ -226,7 +227,30 @@ func newRealHandoffFixture(t *testing.T) *realHandoffFixture {
 	if err := githubRuntime.setStatusComment(claimed.Run); err != nil {
 		t.Fatal(err)
 	}
+	recordReadyBaseline(t, operationalPath, claimed.Run)
 	return fixture
+}
+
+// recordReadyBaseline seeds the persisted projection representing the issue
+// command's successful pre-edit gate suite for handoff-only tests.
+func recordReadyBaseline(t *testing.T, operationalPath string, run store.Run) {
+	t.Helper()
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatalf("open baseline fixture store: %v", err)
+	}
+	err = opened.SaveGateResults(context.Background(), []store.GateResult{{
+		RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseBaseline,
+		Ordinal: 0, GateName: "test", Outcome: store.GateOutcomePassed,
+		Status: string(github.CommitStatusSuccess), Blocking: true,
+	}})
+	closeErr := opened.Close()
+	if err != nil {
+		t.Fatalf("save baseline fixture result: %v", err)
+	}
+	if closeErr != nil {
+		t.Fatalf("close baseline fixture store: %v", closeErr)
+	}
 }
 
 // newService creates a coordinator with a selected run-id generator while

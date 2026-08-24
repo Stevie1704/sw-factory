@@ -1,6 +1,8 @@
 schema_version: 1
 target_branch: main
 setup: scripts/worker-go.sh mod download
+setup_files: [go.mod, go.sum]
+setup_environment_policy: clean
 gates:
   - name: format
     command: test -z "$(gofmt -l .)"

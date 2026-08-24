@@ -131,12 +131,18 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 		writeError(errorsOutput, errors.New("issue requires a positive issue number"))
 		return 2
 	}
-	result, err := factory.New(*configPath).ClaimIssue(ctx, issueNumber)
+	service := factory.New(*configPath)
+	result, err := service.ClaimIssue(ctx, issueNumber)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
-	if !writeOutput(output, errorsOutput, "claimed issue #%d\nrun: %s\nbranch: %s\nworktree: %s\nstage: %s\nstatus: %s\n", result.Run.IssueNumber, result.Run.ID, result.Run.Branch, result.Run.Worktree, result.Run.Stage, result.Run.Status) {
+	baseline, err := service.RunBaseline(ctx, factory.BaselineRequest{RunID: result.Run.ID})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "claimed issue #%d\nrun: %s\nbranch: %s\nworktree: %s\nstage: %s\nstatus: %s\nbaseline gates: %d\n", baseline.Run.IssueNumber, baseline.Run.ID, baseline.Run.Branch, baseline.Run.Worktree, baseline.Run.Stage, baseline.Run.Status, len(baseline.Gates)) {
 		return 1
 	}
 	return 0

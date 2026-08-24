@@ -48,7 +48,7 @@ func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-draft", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{Branch: "factory/run-draft", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory.go"}},
 	}
-	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
+	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
 	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}}
 
@@ -92,8 +92,8 @@ func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *
 	if len(pullRequests.createdRequests) != 1 || len(pullRequests.updatedRequests) != 0 {
 		t.Fatalf("PR effects = creates %#v updates %#v, want one create", pullRequests.createdRequests, pullRequests.updatedRequests)
 	}
-	if len(workerRuntime.commands) != 4 || workerRuntime.commands[1].Command != "format" || workerRuntime.commands[3].Command != "test" {
-		t.Fatalf("gate commands = %#v, want setup/gate for each declared gate", workerRuntime.commands)
+	if len(workerRuntime.commands) != 3 || workerRuntime.commands[0].Command != policy.Setup || workerRuntime.commands[1].Command != "format" || workerRuntime.commands[2].Command != "test" {
+		t.Fatalf("gate commands = %#v, want one setup followed by ordered gates", workerRuntime.commands)
 	}
 	body := pullRequests.createdRequests[0].Body
 	for _, expected := range []string{

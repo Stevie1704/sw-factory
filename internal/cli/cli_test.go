@@ -23,6 +23,7 @@ func TestRunInitializesRegistersAndReportsStatus(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repositoryPath, "factory.yaml"), []byte(`schema_version: 1
 target_branch: main
 setup: go mod download
+setup_environment_policy: clean
 gates:
   - name: test
     command: go test ./...
@@ -377,6 +378,7 @@ func writeValidRepositoryConfig(t *testing.T, repositoryPath string) {
 	contents := `schema_version: 1
 target_branch: main
 setup: go mod download
+setup_environment_policy: clean
 gates:
   - name: test
     command: go test ./...

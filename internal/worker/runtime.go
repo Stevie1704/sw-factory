@@ -46,8 +46,8 @@ const (
 )
 
 // EnvironmentPolicy controls which explicit environment a worker command may
-// receive. Clean commands are used for coordinator setup and gates; role
-// commands additionally identify the workflow role that owns the invocation.
+// receive. The repository config selects clean or role for setup and gates;
+// role commands additionally identify the workflow role that owns invocation.
 type EnvironmentPolicy string
 
 const (

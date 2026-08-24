@@ -18,6 +18,8 @@ func TestLoadRepositoryConfigValidatesAndPreservesTheDeclaredWorkflow(t *testing
 	contents := `schema_version: 1
 target_branch: main
 setup: go mod download
+setup_environment_policy: clean
+setup_files: [go.mod, go.sum]
 gates:
   - name: format
     command: gofmt -l .
@@ -76,6 +78,12 @@ base_synchronization:
 	if len(got.Gates) != 2 || got.Gates[1].DependsOn[0] != "format" {
 		t.Fatalf("Gates = %#v, want ordered dependency", got.Gates)
 	}
+	if len(got.SetupFiles) != 2 || got.SetupFiles[0] != "go.mod" || got.SetupFiles[1] != "go.sum" {
+		t.Fatalf("SetupFiles = %#v, want configured manifest and lockfile", got.SetupFiles)
+	}
+	if got.SetupEnvironmentPolicy != config.EnvironmentPolicyClean {
+		t.Fatalf("SetupEnvironmentPolicy = %q, want clean", got.SetupEnvironmentPolicy)
+	}
 	if got.RetryLimits.CheckRepair != 3 || got.TestPolicy.Mode != "required" {
 		t.Fatalf("workflow policy was not preserved: %#v %#v", got.RetryLimits, got.TestPolicy)
 	}
@@ -132,6 +140,49 @@ func TestValidateRepositoryRejectsUnsupportedOverrides(t *testing.T) {
 	}
 	if validationErr.Field != "allowed_overrides[0]" {
 		t.Fatalf("field = %q, want allowed_overrides[0]", validationErr.Field)
+	}
+}
+
+// TestValidateRepositoryRejectsUnsafeSetupFiles verifies setup dependency
+// inputs remain repository-relative and unique.
+func TestValidateRepositoryRejectsUnsafeSetupFiles(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		files []string
+		field string
+	}{
+		{name: "absolute", files: []string{"/tmp/go.mod"}, field: "setup_files[0]"},
+		{name: "parent traversal", files: []string{"../go.mod"}, field: "setup_files[0]"},
+		{name: "duplicate", files: []string{"go.mod", "go.mod"}, field: "setup_files[1]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := validRepositoryConfig()
+			policy.SetupFiles = tc.files
+			err := config.ValidateRepository(policy)
+			var validationErr *config.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+			}
+			if validationErr.Field != tc.field {
+				t.Fatalf("field = %q, want %q", validationErr.Field, tc.field)
+			}
+		})
+	}
+}
+
+// TestValidateRepositoryRejectsInvalidSetupEnvironmentPolicy verifies setup
+// cannot silently select an unconfigured worker environment.
+func TestValidateRepositoryRejectsInvalidSetupEnvironmentPolicy(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.SetupEnvironmentPolicy = "host"
+	err := config.ValidateRepository(policy)
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) || validationErr.Field != "setup_environment_policy" {
+		t.Fatalf("ValidateRepository() error = %v, want setup_environment_policy validation", err)
 	}
 }
 
@@ -703,9 +754,10 @@ func TestUnknownSchemaVersionErrorMessageUsesTheProvidedKindAndField(t *testing.
 
 func validRepositoryConfig() config.RepositoryConfig {
 	return config.RepositoryConfig{
-		SchemaVersion: 1,
-		TargetBranch:  "main",
-		Setup:         "go mod download",
+		SchemaVersion:          1,
+		TargetBranch:           "main",
+		Setup:                  "go mod download",
+		SetupEnvironmentPolicy: config.EnvironmentPolicyClean,
 		Gates: []config.GateConfig{{
 			Name:              "test",
 			Command:           "go test ./...",
