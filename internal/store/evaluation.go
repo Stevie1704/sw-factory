@@ -934,13 +934,6 @@ func (s *Store) RecordEvaluationInvocation(ctx context.Context, runID string, in
 			return fmt.Errorf("evaluation %s contains unsafe metadata", field)
 		}
 	}
-	summary, err := s.EvaluationSummary(ctx, runID)
-	if err != nil {
-		return err
-	}
-	if summary == nil {
-		return fmt.Errorf("evaluation summary %q does not exist", runID)
-	}
 	version := EvaluationInvocationVersion{
 		InvocationID:        invocation.ID,
 		Harness:             invocation.Harness,
@@ -949,6 +942,18 @@ func (s *Store) RecordEvaluationInvocation(ctx context.Context, runID string, in
 		ReportSchemaVersion: reportSchemaVersion,
 		WorkerVersion:       workerVersion,
 	}
+	if err := s.RefreshEvaluationCounts(ctx, runID); err != nil {
+		return err
+	}
+	// Re-read summary after RefreshEvaluationCounts to get current gate_count and invocation_count
+	summary, err := s.EvaluationSummary(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if summary == nil {
+		return fmt.Errorf("evaluation summary %q does not exist", runID)
+	}
+	// Apply the invocation version changes to the refreshed summary
 	found := false
 	for index := range summary.InvocationVersions {
 		if summary.InvocationVersions[index].InvocationID == invocation.ID {
@@ -966,9 +971,6 @@ func (s *Store) RecordEvaluationInvocation(ctx context.Context, runID string, in
 	summary.InvocationVersions = filteredVersions
 	if !found {
 		summary.InvocationVersions = append(summary.InvocationVersions, version)
-	}
-	if err := s.RefreshEvaluationCounts(ctx, runID); err != nil {
-		return err
 	}
 	summary.InvocationCount = len(summary.InvocationVersions)
 	summary.UpdatedAt = time.Now().UTC()
@@ -1089,6 +1091,10 @@ func (s *Store) RecordEvaluationExemption(ctx context.Context, runID string, exe
 	if !validEvaluationExemption(exemption) {
 		return fmt.Errorf("unsupported evaluation exemption %q", exemption)
 	}
+	if err := s.RefreshEvaluationCounts(ctx, runID); err != nil {
+		return err
+	}
+	// Re-read summary after RefreshEvaluationCounts to get current gate_count and invocation_count
 	summary, err := s.EvaluationSummary(ctx, runID)
 	if err != nil {
 		return err
@@ -1110,6 +1116,10 @@ func (s *Store) RecordEvaluationEscalation(ctx context.Context, runID string, ca
 	if !validEvaluationEscalation(category) {
 		return fmt.Errorf("unsupported evaluation escalation category %q", category)
 	}
+	if err := s.RefreshEvaluationCounts(ctx, runID); err != nil {
+		return err
+	}
+	// Re-read summary after RefreshEvaluationCounts to get current gate_count and invocation_count
 	summary, err := s.EvaluationSummary(ctx, runID)
 	if err != nil {
 		return err
@@ -1130,6 +1140,10 @@ func (s *Store) RecordEvaluationBlocker(ctx context.Context, runID string, categ
 	if !validEvaluationBlocker(category) {
 		return fmt.Errorf("unsupported evaluation blocker category %q", category)
 	}
+	if err := s.RefreshEvaluationCounts(ctx, runID); err != nil {
+		return err
+	}
+	// Re-read summary after RefreshEvaluationCounts to get current gate_count and invocation_count
 	summary, err := s.EvaluationSummary(ctx, runID)
 	if err != nil {
 		return err
