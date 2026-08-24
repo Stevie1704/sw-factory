@@ -231,9 +231,9 @@ func (c commandConfig) Create(string) (config.HostConfig, error) { return c.host
 
 // commandRunStore is a restartable in-memory store fixture.
 type commandRunStore struct {
-	current    *store.Run
-	latest     *store.Run
-	saved      []store.Run
+	current *store.Run
+	latest  *store.Run
+	saved   []store.Run
 	// closeCount records store lifetime in polling tests.
 	closeCount int
 	// saveErrors allows tests to inject save failures.

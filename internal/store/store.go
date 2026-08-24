@@ -593,6 +593,20 @@ func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*In
 	return scanInvocation(row)
 }
 
+// HasInvocation reports whether any invocation, including terminal history,
+// has been persisted for one run.
+func (s *Store) HasInvocation(ctx context.Context, runID string) (bool, error) {
+	if strings.TrimSpace(runID) == "" {
+		return false, errors.New("invocation run id is required")
+	}
+	var found bool
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM invocations WHERE run_id = ?)`, runID).Scan(&found); err != nil {
+		return false, fmt.Errorf("check invocation history: %w", err)
+	}
+	return found, nil
+}
+
 // ActiveInvocation returns the newest active visible invocation for one run.
 // The coordinator uses it to avoid launching duplicate harness sessions after
 // a process restart or a repeated operator command.

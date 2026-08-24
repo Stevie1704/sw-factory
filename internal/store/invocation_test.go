@@ -112,6 +112,41 @@ func TestStoreFindsOnlyTheNewestActiveInvocation(t *testing.T) {
 	}
 }
 
+// TestStoreFindsInvocationHistoryRegardlessOfStatus verifies startup can
+// distinguish a clean claim from a run that already attempted an invocation.
+func TestStoreFindsInvocationHistoryRegardlessOfStatus(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	for _, status := range []store.InvocationStatus{
+		store.InvocationStatusCompleted,
+		store.InvocationStatusWaitingForHuman,
+		store.InvocationStatusCannotProceed,
+	} {
+		if err := opened.SaveInvocation(context.Background(), store.Invocation{
+			ID: "inv-" + string(status), RunID: "run-history", Harness: "codex", Role: "implementation", Stage: store.StageClaim, Status: status,
+		}); err != nil {
+			t.Fatalf("SaveInvocation(%s) error = %v", status, err)
+		}
+	}
+	found, err := opened.HasInvocation(context.Background(), "run-history")
+	if err != nil {
+		t.Fatalf("HasInvocation() error = %v", err)
+	}
+	if !found {
+		t.Fatal("HasInvocation() = false, want invocation history")
+	}
+	found, err = opened.HasInvocation(context.Background(), "run-without-history")
+	if err != nil {
+		t.Fatalf("HasInvocation(empty) error = %v", err)
+	}
+	if found {
+		t.Fatal("HasInvocation(empty) = true, want no invocation history")
+	}
+}
+
 // TestStoreRejectsTwoActiveInvocationsForOneRun verifies the database index,
 // rather than only the coordinator lookup, owns active-invocation uniqueness.
 func TestStoreRejectsTwoActiveInvocationsForOneRun(t *testing.T) {

@@ -135,7 +135,7 @@ func TestPollLifecycleDoesNotResendAfterNotifySucceedsPersistFails(t *testing.T)
 		pullRequest:   github.PullRequest{Number: 19, State: "closed", Merged: true, MergeCommitSHA: strings.Repeat("f", 40), HeadBranch: run.Branch, BaseBranch: "main"},
 	}
 	// Inject a save error that will occur after notification succeeds.
-	runStore := &commandRunStore{current: &run, latest: &run, saveErrors: []error{errors.New("transient database error")}}
+	runStore := &commandRunStore{current: &run, latest: &run, saveErrors: []error{nil, errors.New("transient database error"), errors.New("transient database error")}}
 	terminalRuntime := &lifecycleTerminal{}
 	service := newLifecycleService(runStore, githubAdapter, &lifecycleWorker{}, terminalRuntime)
 
