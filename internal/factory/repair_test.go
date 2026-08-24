@@ -506,7 +506,9 @@ func (s *repairLaunchStore) Invocation(_ context.Context, runID, invocationID st
 func (s *repairLaunchStore) LatestInvocation(_ context.Context, runID string) (*store.Invocation, error) {
 	var latest *store.Invocation
 	for _, value := range s.invocations {
-		if value.RunID != runID || (latest != nil && !value.UpdatedAt.After(latest.UpdatedAt)) {
+		if value.RunID != runID || (latest != nil &&
+			(value.UpdatedAt.Before(latest.UpdatedAt) ||
+				(value.UpdatedAt.Equal(latest.UpdatedAt) && value.ID <= latest.ID))) {
 			continue
 		}
 		copy := value

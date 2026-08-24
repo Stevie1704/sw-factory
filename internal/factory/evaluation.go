@@ -176,6 +176,8 @@ type evaluationRecorder interface {
 	ReopenEvaluation(context.Context, string, store.Stage, time.Time) error
 }
 
+var _ evaluationRecorder = (*store.Store)(nil)
+
 // recordEvaluationTransition keeps the optional evaluation projection aligned
 // with a persisted run transition without making fake coordinator stores carry
 // the production SQLite surface.

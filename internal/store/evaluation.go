@@ -1007,7 +1007,7 @@ func (s *Store) RefreshEvaluationCounts(ctx context.Context, runID string) error
 	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE evaluation_summaries
-		SET invocation_count = ?, gate_count = ?, updated_at = ?
+		SET invocation_count = ?, gate_count = MAX(gate_count, ?), updated_at = ?
 		WHERE run_id = ?`, invocationCount, gateCount, time.Now().UTC().Format(runTimestampLayout), runID)
 	if err != nil {
 		return fmt.Errorf("refresh evaluation counts for %q: %w", runID, err)

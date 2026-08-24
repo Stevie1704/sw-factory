@@ -322,9 +322,6 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 		if err := recorder.EnsureEvaluationSummary(ctx, run); err != nil {
 			return fmt.Errorf("ensure local evaluation summary: %w", err)
 		}
-		if err := recorder.RecordEvaluationGateRun(ctx, run.ID, len(suite.Gates)); err != nil {
-			return fmt.Errorf("record local gate run: %w", err)
-		}
 	}
 	results := make([]store.GateResult, 0, len(suite.Gates))
 	for ordinal, result := range suite.Gates {
@@ -345,6 +342,9 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 		return err
 	}
 	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.RecordEvaluationGateRun(ctx, run.ID, len(suite.Gates)); err != nil {
+			return fmt.Errorf("record local gate run: %w", err)
+		}
 		if err := recorder.RefreshEvaluationCounts(ctx, run.ID); err != nil {
 			return fmt.Errorf("refresh local evaluation counts: %w", err)
 		}

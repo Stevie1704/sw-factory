@@ -574,10 +574,7 @@ func statusCommentBody(run store.Run) string {
 	}
 	checkRepair := ""
 	if run.CheckRepairBudget > 0 {
-		remaining := run.CheckRepairBudget - run.CheckRepairAttempts
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := remainingCheckRepairBudget(run.CheckRepairAttempts, run.CheckRepairBudget)
 		checkRepair = fmt.Sprintf("\n- check-repair attempts: %d/%d\n- check-repair remaining: %d\n", run.CheckRepairAttempts, run.CheckRepairBudget, remaining)
 		if run.CheckRepairPendingAttempt > 0 {
 			checkRepair += fmt.Sprintf("- check-repair pending: attempt %d\n", run.CheckRepairPendingAttempt)

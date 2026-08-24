@@ -103,9 +103,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if err != nil {
 		return DraftPullRequestResult{}, err
 	}
-	if issue.Number == 0 {
-		issue = ensureIssueIdentity(issue, packet.Issue, run.IssueNumber)
-	}
+	issue = ensureIssueIdentity(issue, packet.Issue, run.IssueNumber)
 	next := *run
 	if next.CheckRepairBudget <= 0 {
 		next.CheckRepairBudget = packet.RepositoryConfig.RetryLimits.CheckRepair
