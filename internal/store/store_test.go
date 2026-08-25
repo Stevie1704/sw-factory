@@ -668,20 +668,23 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	wanted := store.Run{
-		ID:                  "run-claim",
-		RepositoryPath:      "/work/repository",
-		IssueNumber:         42,
-		Stage:               store.StageClaim,
-		Status:              store.StatusActive,
-		Branch:              "factory/run-claim",
-		Worktree:            "/worktrees/run-claim",
-		CheckpointSHA:       "0123456789abcdef",
-		ImageDigest:         "sha256:worker",
-		Coordinator:         "host-a",
-		StatusCommentID:     "12345",
-		SpecificationPacket: `{"version":1,"issue":{"number":42}}`,
-		CreatedAt:           time.Unix(100, 0).UTC(),
-		UpdatedAt:           time.Unix(200, 0).UTC(),
+		ID:                            "run-claim",
+		RepositoryPath:                "/work/repository",
+		IssueNumber:                   42,
+		Stage:                         store.StageClaim,
+		Status:                        store.StatusActive,
+		Branch:                        "factory/run-claim",
+		Worktree:                      "/worktrees/run-claim",
+		CheckpointSHA:                 "0123456789abcdef",
+		ImageDigest:                   "sha256:worker",
+		Coordinator:                   "host-a",
+		StatusCommentID:               "12345",
+		SpecificationPacket:           `{"version":1,"issue":{"number":42}}`,
+		PendingQuestions:              []store.PendingQuestion{{ID: "clarification-1", Prompt: "Which behavior is intended?"}},
+		ClarificationCommentID:        "67890",
+		ClarificationNotificationSent: true,
+		CreatedAt:                     time.Unix(100, 0).UTC(),
+		UpdatedAt:                     time.Unix(200, 0).UTC(),
 	}
 	if err := opened.SaveRun(context.Background(), wanted); err != nil {
 		_ = opened.Close()
@@ -703,8 +706,8 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 	if got == nil {
 		t.Fatal("CurrentRun() = nil, want persisted run")
 	}
-	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket {
-		t.Fatalf("persisted claim metadata = %#v, want coordinator/comment/packet from %#v", got, wanted)
+	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket || len(got.PendingQuestions) != 1 || got.ClarificationCommentID != wanted.ClarificationCommentID || !got.ClarificationNotificationSent {
+		t.Fatalf("persisted claim metadata = %#v, want coordinator/comment/packet/clarification state from %#v", got, wanted)
 	}
 }
 

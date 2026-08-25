@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	commandlanguage "github.com/Stevie1704/sw-factory/internal/command"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -51,6 +53,12 @@ const (
 	PolicyRejectionHarnessUnavailable PolicyRejectionCode = "harness_unavailable"
 	// PolicyRejectionCancelState means cancellation is not legal for the run.
 	PolicyRejectionCancelState PolicyRejectionCode = "cancel_state"
+	// PolicyRejectionAnswerState means the run is not waiting for clarification.
+	PolicyRejectionAnswerState PolicyRejectionCode = "answer_state"
+	// PolicyRejectionAnswerQuestion means an answer referenced no pending question.
+	PolicyRejectionAnswerQuestion PolicyRejectionCode = "answer_question"
+	// PolicyRejectionRefreshState means refresh is not legal for the run.
+	PolicyRejectionRefreshState PolicyRejectionCode = "refresh_state"
 )
 
 // PolicyRejection is returned after a recognized command is visibly recorded
@@ -155,11 +163,20 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		rejection := &PolicyRejection{Code: PolicyRejectionMalformed, Problem: parseErr.Error()}
 		return s.persistCommandRejection(ctx, registration, runStore, *run, request.Comment, parsed.Command, rejection)
 	}
+	if published, publicationErr := s.ensureClarificationPublication(ctx, registration, runStore, *run); publicationErr != nil {
+		return CommandResult{Outcome: CommandRejected, Command: parsed.Command, Run: published}, publicationErr
+	} else {
+		*run = published
+	}
 
 	switch parsed.Command.Kind {
-	case commandlanguage.Status, commandlanguage.Refresh:
+	case commandlanguage.Status:
 		updated, persistErr := s.persistCommandProjection(ctx, registration, runStore, *run, request.Comment, parsed.Command, string(parsed.Command.Kind), "command accepted")
 		return CommandResult{Outcome: CommandAccepted, Command: parsed.Command, Run: updated}, persistErr
+	case commandlanguage.Refresh:
+		return s.handleRefreshCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
+	case commandlanguage.Answer:
+		return s.handleAnswerCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Cancel:
 		return s.handleCancelCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.ConfigureHarness:
@@ -170,6 +187,201 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		rejection := &PolicyRejection{Code: PolicyRejectionMalformed, Problem: "the parsed command is not registered by the coordinator"}
 		return s.persistCommandRejection(ctx, registration, runStore, *run, request.Comment, parsed.Command, rejection)
 	}
+}
+
+// runResultInvalidator is the persistence seam used when a new specification
+// packet makes prior invocations and checkpoint results ineligible.
+type runResultInvalidator interface {
+	InvalidateRunResults(context.Context, string) error
+}
+
+// handleAnswerCommand applies one authorized answer, versions the packet, and
+// resumes the implementation role with that answer mounted in its packet.
+func (s *Service) handleAnswerCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+	if run.Status != store.StatusWaitingForHuman && !(run.Status == store.StatusActive && len(run.PendingQuestions) > 0) {
+		rejection := &PolicyRejection{Code: PolicyRejectionAnswerState, Problem: fmt.Sprintf("answer is only allowed while the run waits for human input, not status %q", run.Status)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	pending, found := pendingQuestion(run.PendingQuestions, parsed.QuestionID)
+	if !found {
+		rejection := &PolicyRejection{Code: PolicyRejectionAnswerQuestion, Problem: fmt.Sprintf("question %q is not pending for run %q", parsed.QuestionID, run.ID)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("decode specification packet for answer: %w", err)
+	}
+	packet.Clarifications = append(packet.Clarifications, Clarification{QuestionID: pending.ID, Question: pending.Prompt, Answer: parsed.Answer})
+	packet.Version++
+	encodedPacket, err := json.Marshal(packet)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("encode answered specification packet: %w", err)
+	}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; clarification answered")
+	next.Status = store.StatusActive
+	next.Stage = store.StageImplementation
+	next.SpecificationPacket = string(encodedPacket)
+	next.PendingQuestions = removePendingQuestion(run.PendingQuestions, parsed.QuestionID)
+	next.ClarificationCommentID = ""
+	next.ClarificationNotificationSent = false
+	next.UpdatedAt = s.deps.Now().UTC()
+	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
+		return CommandResult{}, err
+	}
+	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read issue for answer: %w", err)
+	}
+	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
+		Repository:           commandRepository(registration),
+		Issue:                issue,
+		Previous:             run,
+		Next:                 next,
+		PersistBeforeEffects: true,
+	})
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if err := invalidateRunResults(ctx, runStore, run.ID); err != nil {
+		return CommandResult{}, err
+	}
+	updated, err = s.resumeAfterPacketChange(ctx, registration, runStore, updated)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("resume implementation after answer: %w", err)
+	}
+	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
+}
+
+// handleRefreshCommand re-reads the issue, creates a new packet version, and
+// resumes implementation against the refreshed specification.
+func (s *Service) handleRefreshCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+	if store.IsTerminalStatus(run.Status) {
+		rejection := &PolicyRejection{Code: PolicyRejectionRefreshState, Problem: fmt.Sprintf("refresh is not allowed after run status %q", run.Status)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if run.CheckRepairPendingAttempt != 0 {
+		rejection := &PolicyRejection{Code: PolicyRejectionRefreshState, Problem: fmt.Sprintf("refresh is blocked while check-repair attempt %d awaits reconciliation", run.CheckRepairPendingAttempt)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	oldPacket, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("decode specification packet for refresh: %w", err)
+	}
+	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read issue for refresh: %w", err)
+	}
+	if issue.Number == 0 {
+		issue.Number = run.IssueNumber
+	}
+	if issue.Number != run.IssueNumber || issue.IsPullRequest {
+		return CommandResult{}, fmt.Errorf("refresh returned an invalid issue identity for #%d", run.IssueNumber)
+	}
+	if !strings.EqualFold(strings.TrimSpace(issue.State), "open") {
+		rejection := &PolicyRejection{Code: PolicyRejectionRefreshState, Problem: fmt.Sprintf("cannot refresh a %s issue", defaultString(issue.State, "non-open"))}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	refreshedPacket := oldPacket
+	refreshedPacket.Version++
+	refreshedPacket.Issue = cloneIssue(issue)
+	encodedPacket, err := json.Marshal(refreshedPacket)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("encode refreshed specification packet: %w", err)
+	}
+	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
+		return CommandResult{}, err
+	}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; specification refreshed")
+	next.Status = store.StatusActive
+	next.Stage = store.StageImplementation
+	next.SpecificationPacket = string(encodedPacket)
+	next.PendingQuestions = nil
+	next.ClarificationCommentID = ""
+	next.ClarificationNotificationSent = false
+	next.UpdatedAt = s.deps.Now().UTC()
+	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
+		Repository:           commandRepository(registration),
+		Issue:                issue,
+		Previous:             run,
+		Next:                 next,
+		PersistBeforeEffects: true,
+	})
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if err := invalidateRunResults(ctx, runStore, run.ID); err != nil {
+		return CommandResult{}, err
+	}
+	updated, err = s.resumeAfterPacketChange(ctx, registration, runStore, updated)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("resume implementation after refresh: %w", err)
+	}
+	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
+}
+
+// resumeAfterPacketChange launches the implementation role when the store has
+// the visible-invocation seam; reduced command-test stores still receive the
+// durable packet/state projection and can resume through StartAgent later.
+func (s *Service) resumeAfterPacketChange(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
+	if _, ok := runStore.(InvocationStore); !ok {
+		return run, nil
+	}
+	request := normalizeAgentRequest(AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation})
+	if err := validateAgentRequest(request); err != nil {
+		return run, err
+	}
+	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
+		return run, err
+	}
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, &run, request); err != nil {
+		return run, err
+	}
+	if current, err := runStore.CurrentRun(ctx); err == nil && current != nil {
+		return *current, nil
+	}
+	return run, nil
+}
+
+// stopRunWorkerIfActive stops only a currently active invocation so an answer
+// or refresh does not create a spurious worker-stop side effect after a pause.
+func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, run store.Run) error {
+	activeStore, ok := runStore.(ActiveInvocationStore)
+	if !ok {
+		return nil
+	}
+	active, err := activeStore.ActiveInvocation(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("look up active invocation before packet refresh: %w", err)
+	}
+	if active == nil {
+		return nil
+	}
+	return s.stopRunWorker(ctx, run.ID)
+}
+
+// invalidateRunResults makes the packet revision boundary visible to the
+// operational store before a new invocation is launched.
+func invalidateRunResults(ctx context.Context, runStore RunStore, runID string) error {
+	invalidator, ok := runStore.(runResultInvalidator)
+	if !ok {
+		return errors.New("operational store does not support specification result invalidation")
+	}
+	if err := invalidator.InvalidateRunResults(ctx, runID); err != nil {
+		return fmt.Errorf("invalidate superseded specification results: %w", err)
+	}
+	return nil
+}
+
+// removePendingQuestion returns all unresolved questions except the answered
+// identifier, preserving the status-comment order.
+func removePendingQuestion(questions []store.PendingQuestion, questionID string) []store.PendingQuestion {
+	remaining := make([]store.PendingQuestion, 0, len(questions))
+	for _, question := range questions {
+		if question.ID != questionID {
+			remaining = append(remaining, question)
+		}
+	}
+	return remaining
 }
 
 // handleCancelCommand applies an authorized, idempotent cancellation request
@@ -222,6 +434,11 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 	if lifecycle.Outcome != LifecycleUnchanged {
 		return nil, nil
 	}
+	published, publicationErr := s.ensureClarificationPublication(ctx, registration, runStore, *run)
+	if publicationErr != nil {
+		return nil, publicationErr
+	}
+	*run = published
 	if s.deps.Comments == nil {
 		return nil, errors.New("GitHub comment reader is required for command polling")
 	}

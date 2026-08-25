@@ -724,7 +724,7 @@ func decodeSpecificationPacket(serialized string) (SpecificationPacket, error) {
 	if err := json.Unmarshal([]byte(serialized), &packet); err != nil {
 		return SpecificationPacket{}, fmt.Errorf("decode frozen specification packet: %w", err)
 	}
-	if packet.Version != specificationPacketVersion {
+	if packet.Version < specificationPacketVersion {
 		return SpecificationPacket{}, fmt.Errorf("unsupported frozen specification packet version %d", packet.Version)
 	}
 	return packet, nil

@@ -14,18 +14,31 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// specificationPacketVersion identifies the persisted claim packet shape.
+// specificationPacketVersion is the first instance version assigned at claim.
 const specificationPacketVersion = 1
 
 // stateTransitionRetryDelay bounds the pause before the one persistence retry.
 const stateTransitionRetryDelay = 10 * time.Millisecond
 
-// SpecificationPacket is the immutable issue and resolved repository
-// configuration captured when a run is claimed.
+// Clarification is one accepted human answer retained in a specification
+// packet so later invocations receive the resolved product intent.
+type Clarification struct {
+	// QuestionID identifies the question answered by the maintainer.
+	QuestionID string `json:"question_id"`
+	// Question preserves the prompt that the answer resolves.
+	Question string `json:"question"`
+	// Answer is the authorized maintainer's response.
+	Answer string `json:"answer"`
+}
+
+// SpecificationPacket is the versioned issue snapshot and resolved repository
+// configuration captured when a run is claimed or intentionally refreshed.
 type SpecificationPacket struct {
 	Version          int                     `json:"version"`
 	Issue            github.Issue            `json:"issue"`
 	RepositoryConfig config.RepositoryConfig `json:"repository_config"`
+	// Clarifications contains the authorized answers resolved after claim.
+	Clarifications []Clarification `json:"clarifications,omitempty"`
 }
 
 // BootstrapLabelsResult reports the labels explicitly created for a repository.
@@ -485,6 +498,11 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		s.startupErr = recoveryRequiredError(diagnosis)
 		return s.startupErr
 	}
+	if run.Status == store.StatusActive && run.Stage == store.StageImplementation &&
+		(run.LastCommandName == "answer" || run.LastCommandName == "refresh") &&
+		run.LastCommandOutcome == string(CommandAccepted) {
+		return nil
+	}
 	if run.Stage != store.StageClaim || run.Status != store.StatusActive {
 		s.startupErr = recoveryRequiredError(diagnosis)
 		return s.startupErr
@@ -580,7 +598,14 @@ func statusCommentBody(run store.Run) string {
 			checkRepair += fmt.Sprintf("- check-repair pending: attempt %d\n", run.CheckRepairPendingAttempt)
 		}
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, checkRepair, pullRequest, lifecycle, harness, commandFeedback)
+	questions := ""
+	if len(run.PendingQuestions) > 0 {
+		questions = "\n### Pending clarification\n\n"
+		for _, question := range run.PendingQuestions {
+			questions += fmt.Sprintf("- `%s`: %s\n", safeStatusCommentValue(question.ID), safeStatusCommentValue(question.Prompt))
+		}
+	}
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, checkRepair, pullRequest, lifecycle, harness, questions, commandFeedback)
 }
 
 // safeStatusCommentValue keeps command feedback single-line and prevents

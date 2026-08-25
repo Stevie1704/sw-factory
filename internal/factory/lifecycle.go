@@ -270,12 +270,24 @@ func (s *Service) stopRunWorker(ctx context.Context, runID string) error {
 // notifyTerminal sends one concise cmux notification while retaining all run
 // surfaces for later inspection or explicit resume.
 func (s *Service) notifyTerminal(ctx context.Context, registration config.RepositoryRegistration, run store.Run) error {
+	title := "factory run cancelled"
+	body := fmt.Sprintf("%s cancelled: %s", run.ID, safeStatusCommentValue(run.LifecycleReason))
+	if run.Status == store.StatusComplete {
+		title = "factory run completed"
+		body = fmt.Sprintf("%s completed after pull request #%d merged", run.ID, run.PullRequestNumber)
+	}
+	return s.notifyWorkspace(ctx, registration, title, body)
+}
+
+// notifyWorkspace sends one concise coordinator notification through the
+// registered control workspace, lazily constructing the runtime when needed.
+func (s *Service) notifyWorkspace(ctx context.Context, registration config.RepositoryRegistration, title, body string) error {
 	terminalRuntime := s.deps.Terminal
 	if terminalRuntime == nil {
 		var err error
 		terminalRuntime, _, err = s.ensureAgentRuntime(registration.Cmux.SocketPath)
 		if err != nil {
-			return fmt.Errorf("ensure terminal runtime for lifecycle notification: %w", err)
+			return fmt.Errorf("ensure terminal runtime for notification: %w", err)
 		}
 	}
 	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
@@ -284,16 +296,10 @@ func (s *Service) notifyTerminal(ctx context.Context, registration config.Reposi
 		WorkingDirectory: registration.Path,
 	})
 	if err != nil {
-		return fmt.Errorf("ensure control workspace for lifecycle notification: %w", err)
-	}
-	title := "factory run cancelled"
-	body := fmt.Sprintf("%s cancelled: %s", run.ID, safeStatusCommentValue(run.LifecycleReason))
-	if run.Status == store.StatusComplete {
-		title = "factory run completed"
-		body = fmt.Sprintf("%s completed after pull request #%d merged", run.ID, run.PullRequestNumber)
+		return fmt.Errorf("ensure control workspace for notification: %w", err)
 	}
 	if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: control.ID, Title: title, Body: body}); err != nil {
-		return fmt.Errorf("notify lifecycle transition: %w", err)
+		return fmt.Errorf("notify coordinator: %w", err)
 	}
 	return nil
 }
