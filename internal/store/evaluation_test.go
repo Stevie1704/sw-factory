@@ -160,6 +160,45 @@ func TestEvaluationSummaryCountsRepeatedGateRuns(t *testing.T) {
 	}
 }
 
+// TestGateResultTransactionRollsBackResultsWhenGateRunFails verifies a failed
+// evaluation counter write cannot leave its gate results committed.
+func TestGateResultTransactionRollsBackResultsWhenGateRunFails(t *testing.T) {
+	ctx := context.Background()
+	opened, err := store.Open(ctx, filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	const runID = "run-atomic-gate-failure"
+	transaction, err := opened.BeginGateResultTransaction(ctx)
+	if err != nil {
+		t.Fatalf("BeginGateResultTransaction() error = %v", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	result := store.GateResult{
+		RunID: runID, CheckpointSHA: evaluationCheckpoint, Phase: store.GatePhaseCheckpoint,
+		Ordinal: 0, GateName: "test", Outcome: store.GateOutcomePassed, Status: "success", Blocking: true,
+	}
+	if err := transaction.SaveGateResults(ctx, []store.GateResult{result}); err != nil {
+		t.Fatalf("transaction.SaveGateResults() error = %v", err)
+	}
+	if err := transaction.RecordEvaluationGateRun(ctx, runID, 1); err == nil {
+		t.Fatal("transaction.RecordEvaluationGateRun() error = nil, want missing-summary failure")
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatalf("transaction.Rollback() error = %v", err)
+	}
+
+	got, err := opened.GateResults(ctx, runID, store.GatePhaseCheckpoint, evaluationCheckpoint)
+	if err != nil {
+		t.Fatalf("GateResults() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("GateResults() = %#v, want rollback to remove saved results", got)
+	}
+}
+
 // TestEvaluationDispositionHashesTheOpaqueFindingIdentity verifies a human
 // disposition is attached to a category while the finding identity itself is
 // never persisted as content.

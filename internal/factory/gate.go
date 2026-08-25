@@ -54,6 +54,14 @@ type GateResultStore interface {
 	GateResults(context.Context, string, store.GatePhase, string) ([]store.GateResult, error)
 }
 
+// GateResultTransactionStore is the optional durable seam for atomically
+// persisting gate results with their evaluation execution count.
+type GateResultTransactionStore interface {
+	BeginGateResultTransaction(context.Context) (store.GateResultTransaction, error)
+}
+
+var _ GateResultTransactionStore = (*store.Store)(nil)
+
 // RunGate starts the active run's pinned worker and executes repository setup
 // plus the requested gate and its declared prerequisites from the frozen
 // specification packet. The resulting statuses are attached to the exact
@@ -318,7 +326,8 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 	if !ok || len(suite.Gates) == 0 {
 		return nil
 	}
-	if recorder, ok := runStore.(evaluationRecorder); ok {
+	recorder, hasRecorder := runStore.(evaluationRecorder)
+	if hasRecorder {
 		if err := recorder.EnsureEvaluationSummary(ctx, run); err != nil {
 			return fmt.Errorf("ensure local evaluation summary: %w", err)
 		}
@@ -338,13 +347,29 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 			SetupFingerprint: result.SetupFingerprint,
 		})
 	}
-	if err := resultStore.SaveGateResults(ctx, results); err != nil {
-		return err
-	}
-	if recorder, ok := runStore.(evaluationRecorder); ok {
-		if err := recorder.RecordEvaluationGateRun(ctx, run.ID, len(suite.Gates)); err != nil {
+	if hasRecorder {
+		transactionStore, ok := runStore.(GateResultTransactionStore)
+		if !ok {
+			return errors.New("operational store does not support atomic gate result persistence")
+		}
+		transaction, err := transactionStore.BeginGateResultTransaction(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = transaction.Rollback() }()
+		if err := transaction.SaveGateResults(ctx, results); err != nil {
+			return err
+		}
+		if err := transaction.RecordEvaluationGateRun(ctx, run.ID, len(suite.Gates)); err != nil {
 			return fmt.Errorf("record local gate run: %w", err)
 		}
+		if err := transaction.Commit(); err != nil {
+			return fmt.Errorf("commit gate-result save: %w", err)
+		}
+	} else if err := resultStore.SaveGateResults(ctx, results); err != nil {
+		return err
+	}
+	if hasRecorder {
 		if err := recorder.RefreshEvaluationCounts(ctx, run.ID); err != nil {
 			return fmt.Errorf("refresh local evaluation counts: %w", err)
 		}

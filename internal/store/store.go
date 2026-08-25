@@ -254,6 +254,15 @@ type GateResult struct {
 	UpdatedAt time.Time
 }
 
+// GateResultTransaction atomically persists gate results and the corresponding
+// content-free evaluation gate-run count.
+type GateResultTransaction interface {
+	SaveGateResults(context.Context, []GateResult) error
+	RecordEvaluationGateRun(context.Context, string, int) error
+	Commit() error
+	Rollback() error
+}
+
 type Store struct {
 	db            *sql.DB
 	path          string
@@ -799,9 +808,9 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 	return &invocation, nil
 }
 
-// SaveGateResults atomically upserts the ordered deterministic results from
-// one suite while preserving their exact run, phase, and checkpoint identity.
-func (s *Store) SaveGateResults(ctx context.Context, results []GateResult) error {
+// validateGateResults validates the complete batch before a transaction is
+// opened, keeping invalid input from creating any partial durable state.
+func validateGateResults(results []GateResult) error {
 	if len(results) == 0 {
 		return errors.New("at least one gate result is required")
 	}
@@ -810,11 +819,11 @@ func (s *Store) SaveGateResults(ctx context.Context, results []GateResult) error
 			return err
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin gate-result save: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return nil
+}
+
+// saveGateResults writes one validated batch through the supplied transaction.
+func saveGateResults(ctx context.Context, tx *sql.Tx, results []GateResult) error {
 	for _, result := range results {
 		createdAt := result.CreatedAt
 		if createdAt.IsZero() {
@@ -853,10 +862,67 @@ func (s *Store) SaveGateResults(ctx context.Context, results []GateResult) error
 			return fmt.Errorf("save gate result %q: %w", result.GateName, err)
 		}
 	}
+	return nil
+}
+
+// SaveGateResults atomically upserts the ordered deterministic results from
+// one suite while preserving their exact run, phase, and checkpoint identity.
+func (s *Store) SaveGateResults(ctx context.Context, results []GateResult) error {
+	if err := validateGateResults(results); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin gate-result save: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := saveGateResults(ctx, tx, results); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit gate-result save: %w", err)
 	}
 	return nil
+}
+
+// BeginGateResultTransaction starts the transaction used to persist gate
+// results together with their evaluation execution count.
+func (s *Store) BeginGateResultTransaction(ctx context.Context) (GateResultTransaction, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin gate-result save: %w", err)
+	}
+	return &gateResultTransaction{tx: tx}, nil
+}
+
+// gateResultTransaction adapts a SQLite transaction to the durable gate
+// persistence seam used by the coordinator.
+type gateResultTransaction struct {
+	tx *sql.Tx
+}
+
+// SaveGateResults persists validated gate results within the open transaction.
+func (t *gateResultTransaction) SaveGateResults(ctx context.Context, results []GateResult) error {
+	if err := validateGateResults(results); err != nil {
+		return err
+	}
+	return saveGateResults(ctx, t.tx, results)
+}
+
+// RecordEvaluationGateRun persists the execution count within the open
+// transaction so it commits or rolls back with the gate results.
+func (t *gateResultTransaction) RecordEvaluationGateRun(ctx context.Context, runID string, count int) error {
+	return recordEvaluationGateRun(ctx, t.tx, runID, count)
+}
+
+// Commit commits all writes made through the transaction.
+func (t *gateResultTransaction) Commit() error {
+	return t.tx.Commit()
+}
+
+// Rollback discards all writes made through the transaction.
+func (t *gateResultTransaction) Rollback() error {
+	return t.tx.Rollback()
 }
 
 // GateResults returns results only for the requested exact checkpoint and

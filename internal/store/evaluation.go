@@ -1018,18 +1018,30 @@ func (s *Store) RefreshEvaluationCounts(ctx context.Context, runID string) error
 // RecordEvaluationGateRun increments the content-free count for one complete
 // gate-suite execution, including a retry against an unchanged checkpoint.
 func (s *Store) RecordEvaluationGateRun(ctx context.Context, runID string, count int) error {
+	return recordEvaluationGateRun(ctx, s.db, runID, count)
+}
+
+// evaluationDatabase is the SQL surface shared by a store and its transaction.
+type evaluationDatabase interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// recordEvaluationGateRun updates the gate-run count through either the store
+// database or the gate-result transaction that owns the surrounding writes.
+func recordEvaluationGateRun(ctx context.Context, database evaluationDatabase, runID string, count int) error {
 	if err := validateEvaluationRunID(runID); err != nil {
 		return err
 	}
 	if count <= 0 {
 		return errors.New("evaluation gate run count must be positive")
 	}
-	if summary, err := s.EvaluationSummary(ctx, runID); err != nil {
+	if summary, err := scanEvaluationSummary(database.QueryRowContext(ctx, evaluationSummarySelect+" WHERE run_id = ?", runID)); err != nil {
 		return err
 	} else if summary == nil {
 		return fmt.Errorf("evaluation summary %q does not exist", runID)
 	}
-	result, err := s.db.ExecContext(ctx, `
+	result, err := database.ExecContext(ctx, `
 		UPDATE evaluation_summaries
 		SET gate_count = gate_count + ?, updated_at = ?
 		WHERE run_id = ?`, count, time.Now().UTC().Format(runTimestampLayout), runID)
