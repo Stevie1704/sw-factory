@@ -27,6 +27,7 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 		Stage:                   store.StageImplementation,
 		Model:                   "gpt-5",
 		ReasoningEffort:         "medium",
+		CredentialStoreID:       "/registered/repository",
 		NativeSessionID:         "session-1",
 		WorkspaceID:             "workspace-run",
 		StatusSurfaceID:         "surface-status",
@@ -55,7 +56,7 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invocation() error = %v", err)
 	}
-	if got == nil || got.NativeSessionID != want.NativeSessionID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
+	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
 		t.Fatalf("Invocation() = %#v, want %#v", got, want)
 	}
 	if got.UpdatedAt.UTC() != created {
@@ -109,6 +110,34 @@ func TestStoreFindsOnlyTheNewestActiveInvocation(t *testing.T) {
 	}
 	if active == nil || active.ID != "inv-active-new" {
 		t.Fatalf("ActiveInvocation() = %#v, want newest active invocation", active)
+	}
+}
+
+// TestStoreFindsTheLatestInvocationForRepair verifies terminal history lookup
+// returns the most recently updated implementation session, not only active
+// rows.
+func TestStoreFindsTheLatestInvocationForRepair(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	created := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	for _, invocation := range []store.Invocation{
+		{ID: "inv-old", RunID: "run-repair", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, NativeSessionID: "session-old", Status: store.InvocationStatusCompleted, CreatedAt: created, UpdatedAt: created},
+		{ID: "inv-latest", RunID: "run-repair", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, NativeSessionID: "session-latest", Status: store.InvocationStatusCompleted, CreatedAt: created, UpdatedAt: created.Add(time.Minute)},
+		{ID: "inv-other", RunID: "other-run", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, NativeSessionID: "session-other", Status: store.InvocationStatusCompleted, CreatedAt: created, UpdatedAt: created.Add(2 * time.Minute)},
+	} {
+		if err := opened.SaveInvocation(context.Background(), invocation); err != nil {
+			t.Fatalf("SaveInvocation(%s) error = %v", invocation.ID, err)
+		}
+	}
+	got, err := opened.LatestInvocation(context.Background(), "run-repair")
+	if err != nil {
+		t.Fatalf("LatestInvocation() error = %v", err)
+	}
+	if got == nil || got.ID != "inv-latest" || got.NativeSessionID != "session-latest" {
+		t.Fatalf("LatestInvocation() = %#v, want latest terminal implementation session", got)
 	}
 }
 

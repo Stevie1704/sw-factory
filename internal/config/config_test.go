@@ -603,6 +603,14 @@ func TestValidateRepositoryRejectsInvalidFieldsOneAtATime(t *testing.T) {
 			field: "retry_limits.check_repair",
 		},
 		{
+			name: "check repair limit above hard ceiling",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.RetryLimits.CheckRepair = config.MaxCheckRepairAttempts + 1
+				return c
+			},
+			field: "retry_limits.check_repair",
+		},
+		{
 			name: "invalid test policy mode",
 			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
 				c.TestPolicy.Mode = "sometimes"

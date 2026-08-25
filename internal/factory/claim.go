@@ -200,6 +200,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		CheckpointSHA:       workspace.BaseSHA,
 		ImageDigest:         repositoryConfig.WorkerBuild.Digest,
 		Coordinator:         s.deps.Coordinator,
+		CheckRepairBudget:   repositoryConfig.RetryLimits.CheckRepair,
 		SpecificationPacket: string(packetData),
 		CreatedAt:           startedAt,
 		UpdatedAt:           startedAt,
@@ -571,7 +572,15 @@ func statusCommentBody(run store.Run) string {
 	if run.HarnessOverride != "" {
 		harness = fmt.Sprintf("\n- harness override: `%s`\n", safeStatusCommentValue(run.HarnessOverride))
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, pullRequest, lifecycle, harness, commandFeedback)
+	checkRepair := ""
+	if run.CheckRepairBudget > 0 {
+		remaining := remainingCheckRepairBudget(run.CheckRepairAttempts, run.CheckRepairBudget)
+		checkRepair = fmt.Sprintf("\n- check-repair attempts: %d/%d\n- check-repair remaining: %d\n", run.CheckRepairAttempts, run.CheckRepairBudget, remaining)
+		if run.CheckRepairPendingAttempt > 0 {
+			checkRepair += fmt.Sprintf("- check-repair pending: attempt %d\n", run.CheckRepairPendingAttempt)
+		}
+	}
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, checkRepair, pullRequest, lifecycle, harness, commandFeedback)
 }
 
 // safeStatusCommentValue keeps command feedback single-line and prevents

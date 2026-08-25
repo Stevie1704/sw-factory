@@ -480,6 +480,47 @@ func TestSaveRunDefaultsTimestampsWhenUnset(t *testing.T) {
 	}
 }
 
+// TestStorePersistsCheckRepairBudget verifies the retry ceiling, consumed
+// attempt count, and in-flight reservation survive the restart boundary.
+func TestStorePersistsCheckRepairBudget(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	run := store.Run{
+		ID:                        "run-repair-budget",
+		RepositoryPath:            "/work/repository",
+		Stage:                     store.StageImplementation,
+		Status:                    store.StatusActive,
+		CheckRepairAttempts:       2,
+		CheckRepairBudget:         3,
+		CheckRepairPendingAttempt: 3,
+		CreatedAt:                 time.Unix(100, 0).UTC(),
+		UpdatedAt:                 time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.CheckRepairAttempts != 2 || got.CheckRepairBudget != 3 || got.CheckRepairPendingAttempt != 3 {
+		t.Fatalf("CurrentRun() = %#v, want repair attempts 2, pending attempt 3, and budget 3", got)
+	}
+}
+
 func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
 	t.Parallel()
 

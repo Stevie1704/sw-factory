@@ -118,6 +118,10 @@ type RetryLimits struct {
 	TestRevision int `yaml:"test_revision"`
 }
 
+// MaxCheckRepairAttempts is the hard safety ceiling for deterministic repairs.
+// Repository policy may choose a lower value, but never a higher one.
+const MaxCheckRepairAttempts = 3
+
 type TestMode string
 
 const (
@@ -434,6 +438,9 @@ func ValidateRepository(config RepositoryConfig) error {
 	} {
 		if value < 1 {
 			return validation(field, "must be greater than zero")
+		}
+		if field == "retry_limits.check_repair" && value > MaxCheckRepairAttempts {
+			return validation(field, fmt.Sprintf("must not exceed %d", MaxCheckRepairAttempts))
 		}
 	}
 	if config.TestPolicy.Mode != TestModeRequired && config.TestPolicy.Mode != TestModeAdvisory && config.TestPolicy.Mode != TestModeDisabled {

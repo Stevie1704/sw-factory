@@ -161,14 +161,16 @@ type EvaluationUsage struct {
 // artifacts, and it never contains issue text, prompts, transcripts, diffs,
 // source contents, command output, logs, or credentials.
 type EvaluationSummary struct {
-	RunID                string                         `json:"run_id"`
-	Outcome              EvaluationOutcome              `json:"outcome"`
-	StartedAt            time.Time                      `json:"started_at"`
-	CompletedAt          time.Time                      `json:"completed_at,omitempty"`
-	TotalWallTime        time.Duration                  `json:"total_wall_time"`
-	StageDurations       []EvaluationStageDuration      `json:"stage_durations,omitempty"`
-	InvocationVersions   []EvaluationInvocationVersion  `json:"invocation_versions,omitempty"`
-	InvocationCount      int                            `json:"invocation_count"`
+	RunID              string                        `json:"run_id"`
+	Outcome            EvaluationOutcome             `json:"outcome"`
+	StartedAt          time.Time                     `json:"started_at"`
+	CompletedAt        time.Time                     `json:"completed_at,omitempty"`
+	TotalWallTime      time.Duration                 `json:"total_wall_time"`
+	StageDurations     []EvaluationStageDuration     `json:"stage_durations,omitempty"`
+	InvocationVersions []EvaluationInvocationVersion `json:"invocation_versions,omitempty"`
+	InvocationCount    int                           `json:"invocation_count"`
+	// GateCount counts gate executions, including repeated evaluations of one
+	// exact checkpoint whose durable result projection is idempotently upserted.
 	GateCount            int                            `json:"gate_count"`
 	CheckRepairCount     int                            `json:"check_repair_count"`
 	TestRevisionCount    int                            `json:"test_revision_count"`
@@ -990,19 +992,64 @@ func (s *Store) RefreshEvaluationCounts(ctx context.Context, runID string) error
 	if summary == nil {
 		return fmt.Errorf("evaluation summary %q does not exist", runID)
 	}
-	var invocationCount, gateCount int
+	var invocationCount, uniqueGateCount, gateCount int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM invocations WHERE run_id = ?`, runID).Scan(&invocationCount); err != nil {
 		return fmt.Errorf("count evaluation invocations for %q: %w", runID, err)
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM gate_results WHERE run_id = ?`, runID).Scan(&gateCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM gate_results WHERE run_id = ?`, runID).Scan(&uniqueGateCount); err != nil {
 		return fmt.Errorf("count evaluation gates for %q: %w", runID, err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT gate_count FROM evaluation_summaries WHERE run_id = ?`, runID).Scan(&gateCount); err != nil {
+		return fmt.Errorf("read evaluation gate count for %q: %w", runID, err)
+	}
+	if uniqueGateCount > gateCount {
+		gateCount = uniqueGateCount
 	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE evaluation_summaries
-		SET invocation_count = ?, gate_count = ?, updated_at = ?
+		SET invocation_count = ?, gate_count = MAX(gate_count, ?), updated_at = ?
 		WHERE run_id = ?`, invocationCount, gateCount, time.Now().UTC().Format(runTimestampLayout), runID)
 	if err != nil {
 		return fmt.Errorf("refresh evaluation counts for %q: %w", runID, err)
+	}
+	return nil
+}
+
+// RecordEvaluationGateRun increments the content-free count for one complete
+// gate-suite execution, including a retry against an unchanged checkpoint.
+func (s *Store) RecordEvaluationGateRun(ctx context.Context, runID string, count int) error {
+	return recordEvaluationGateRun(ctx, s.db, runID, count)
+}
+
+// evaluationDatabase is the SQL surface shared by a store and its transaction.
+type evaluationDatabase interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// recordEvaluationGateRun updates the gate-run count through either the store
+// database or the gate-result transaction that owns the surrounding writes.
+func recordEvaluationGateRun(ctx context.Context, database evaluationDatabase, runID string, count int) error {
+	if err := validateEvaluationRunID(runID); err != nil {
+		return err
+	}
+	if count <= 0 {
+		return errors.New("evaluation gate run count must be positive")
+	}
+	if summary, err := scanEvaluationSummary(database.QueryRowContext(ctx, evaluationSummarySelect+" WHERE run_id = ?", runID)); err != nil {
+		return err
+	} else if summary == nil {
+		return fmt.Errorf("evaluation summary %q does not exist", runID)
+	}
+	result, err := database.ExecContext(ctx, `
+		UPDATE evaluation_summaries
+		SET gate_count = gate_count + ?, updated_at = ?
+		WHERE run_id = ?`, count, time.Now().UTC().Format(runTimestampLayout), runID)
+	if err != nil {
+		return fmt.Errorf("record evaluation gate run for %q: %w", runID, err)
+	}
+	if changed, rowsErr := result.RowsAffected(); rowsErr == nil && changed != 1 {
+		return fmt.Errorf("evaluation summary %q does not exist", runID)
 	}
 	return nil
 }

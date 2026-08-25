@@ -73,3 +73,30 @@ func TestBuildRedactsFactoryFenceMarkers(t *testing.T) {
 		t.Fatalf("untrusted content retained a closing fence:\n%s", value)
 	}
 }
+
+// TestBuildIncludesCheckRepairContext verifies a resumed implementation sees
+// the bounded coordinator packet and the operator-visible attempt boundary.
+func TestBuildIncludesCheckRepairContext(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-repair",
+		RunID:               "run-1",
+		Role:                "implementation",
+		Stage:               "implementation",
+		SpecificationPacket: `{"issue":{"title":"Repair"}}`,
+		CheckRepairAttempt:  2,
+		CheckRepairBudget:   3,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"Check-repair context:",
+		"repair attempt 2 of 3",
+		"/invocation/specification.json",
+		"do not edit tests or gates",
+	} {
+		if !strings.Contains(value, marker) {
+			t.Fatalf("repair prompt missing %q:\n%s", marker, value)
+		}
+	}
+}

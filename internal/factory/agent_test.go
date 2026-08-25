@@ -611,6 +611,21 @@ func (s *agentRunStore) Invocation(_ context.Context, runID, invocationID string
 	return &value, nil
 }
 
+// LatestInvocation returns the newest persisted invocation for one run.
+func (s *agentRunStore) LatestInvocation(_ context.Context, runID string) (*store.Invocation, error) {
+	var latest *store.Invocation
+	for _, value := range s.invocations {
+		if value.RunID != runID {
+			continue
+		}
+		if latest == nil || value.UpdatedAt.After(latest.UpdatedAt) || (value.UpdatedAt.Equal(latest.UpdatedAt) && value.ID > latest.ID) {
+			copy := value
+			latest = &copy
+		}
+	}
+	return latest, nil
+}
+
 // ActiveInvocation returns the only active invocation for the fake run.
 func (s *agentRunStore) ActiveInvocation(_ context.Context, runID string) (*store.Invocation, error) {
 	for _, value := range s.invocations {
@@ -662,9 +677,11 @@ func (*agentRunStore) Close() error { return nil }
 
 // agentWorker records the worker start request without running Docker.
 type agentWorker struct {
-	starts []worker.StartRequest
-	stops  int
-	events *[]string
+	starts   []worker.StartRequest
+	stops    int
+	commands []worker.CommandRequest
+	results  []worker.CommandResult
+	events   *[]string
 }
 
 // Start records one worker start.
@@ -679,9 +696,16 @@ func (w *agentWorker) Start(_ context.Context, request worker.StartRequest) erro
 // Resume implements WorkerRuntime.
 func (*agentWorker) Resume(context.Context, worker.ResumeRequest) error { return nil }
 
-// RunCommand implements WorkerRuntime.
-func (*agentWorker) RunCommand(context.Context, worker.CommandRequest) (worker.CommandResult, error) {
-	return worker.CommandResult{}, nil
+// RunCommand implements WorkerRuntime and consumes optional deterministic test
+// results in declaration order.
+func (w *agentWorker) RunCommand(_ context.Context, request worker.CommandRequest) (worker.CommandResult, error) {
+	w.commands = append(w.commands, request)
+	if len(w.results) == 0 {
+		return worker.CommandResult{}, nil
+	}
+	result := w.results[0]
+	w.results = w.results[1:]
+	return result, nil
 }
 
 // Stop implements WorkerRuntime.
@@ -741,9 +765,11 @@ func (*agentTerminal) CloseWorkspace(context.Context, terminal.WorkspaceID) erro
 
 // agentHarness records visible session lifecycle operations.
 type agentHarness struct {
-	starts   []harness.StartRequest
-	finished []harness.Session
-	startErr error
+	starts    []harness.StartRequest
+	resumes   []harness.StartRequest
+	finished  []harness.Session
+	startErr  error
+	resumeErr error
 }
 
 // Start records the coordinator-owned prompt request.
@@ -755,9 +781,13 @@ func (h *agentHarness) Start(_ context.Context, request harness.StartRequest) (h
 	return harness.Session{InvocationID: request.InvocationID, Surface: request.Surface}, nil
 }
 
-// Resume implements harness.Runtime.
-func (*agentHarness) Resume(context.Context, harness.StartRequest) (harness.Session, error) {
-	return harness.Session{}, nil
+// Resume implements harness.Runtime and records native session continuation.
+func (h *agentHarness) Resume(_ context.Context, request harness.StartRequest) (harness.Session, error) {
+	h.resumes = append(h.resumes, request)
+	if h.resumeErr != nil {
+		return harness.Session{}, h.resumeErr
+	}
+	return harness.Session{InvocationID: request.InvocationID, NativeSessionID: "session-repaired", Surface: request.Surface}, nil
 }
 
 // Finish records the accepted session close.
@@ -768,6 +798,7 @@ func (h *agentHarness) Finish(_ context.Context, session harness.Session) error 
 
 var _ factory.InvocationStore = (*agentRunStore)(nil)
 var _ factory.InvocationHistoryStore = (*agentRunStore)(nil)
+var _ factory.LatestInvocationStore = (*agentRunStore)(nil)
 var _ worker.WorkerRuntime = (*agentWorker)(nil)
 var _ terminal.TerminalRuntime = (*agentTerminal)(nil)
 var _ harness.Runtime = (*agentHarness)(nil)

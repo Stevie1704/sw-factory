@@ -248,6 +248,17 @@ func runDraftPullRequest(ctx context.Context, args []string, defaultConfigPath s
 		writeError(errorsOutput, err)
 		return 1
 	}
+	if result.Repair != nil {
+		if !writeOutput(output, errorsOutput, "check repair: outcome=%s\nrun: %s\nattempts: %d/%d\nremaining: %d\nstage: %s\nstatus: %s\n", result.Repair.Outcome, result.Repair.Run.ID, result.Repair.Attempt, result.Repair.Budget, result.Repair.Remaining, result.Repair.Run.Stage, result.Repair.Run.Status) {
+			return 1
+		}
+		for _, gateResult := range result.Gates {
+			if !writeOutput(output, errorsOutput, "gate: %s (%s)\n", gateResult.GateName, gateResult.Status.State) {
+				return 1
+			}
+		}
+		return 0
+	}
 	if !writeOutput(output, errorsOutput, "draft pull request ready\nrun: %s\ncheckpoint: %s\npull request: #%d %s\nstage: %s\n", result.Run.ID, result.Run.CheckpointSHA, result.PullRequest.Number, result.PullRequest.URL, result.Run.Stage) {
 		return 1
 	}
