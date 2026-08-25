@@ -833,6 +833,55 @@ func (s *Store) InvalidateRunResults(ctx context.Context, runID string) error {
 	return nil
 }
 
+// SaveRunAndInvalidateResults atomically persists a run state transition and
+// invalidates prior invocations and checkpoint results when a specification
+// packet revision boundary is crossed. This operation ensures packet updates,
+// command watermark advances, and result invalidation commit or roll back
+// together, preventing inconsistent persistence when resumption is attempted.
+func (s *Store) SaveRunAndInvalidateResults(ctx context.Context, expectedRevision int64, run Run) error {
+	run, err := normalizeRun(run)
+	if err != nil {
+		return err
+	}
+	if run.Revision <= expectedRevision {
+		return fmt.Errorf("%w: got %d, expected greater than %d", ErrRevisionNotAdvanced, run.Revision, expectedRevision)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin atomic run update and result invalidation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Update the run state with revision check
+	result, err := tx.ExecContext(ctx, saveRunIfRevisionStatement, append(runValues(run)[1:], run.ID, expectedRevision)...)
+	if err != nil {
+		return fmt.Errorf("save run at revision %d: %w", expectedRevision, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect run revision %d update: %w", expectedRevision, err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("%w: run %q no longer has revision %d", ErrRevisionConflict, run.ID, expectedRevision)
+	}
+
+	// Invalidate prior results in the same transaction
+	now := time.Now().UTC().Format(runTimestampLayout)
+	if _, err := tx.ExecContext(ctx, `UPDATE invocations
+		SET status = ?, updated_at = ?
+		WHERE run_id = ? AND status IN (?, ?, ?, ?)`, InvocationStatusSuperseded, now, run.ID, InvocationStatusActive, InvocationStatusCompleted, InvocationStatusWaitingForHuman, InvocationStatusCannotProceed); err != nil {
+		return fmt.Errorf("supersede invocations for run %q: %w", run.ID, err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gate_results WHERE run_id = ? AND phase <> ?", run.ID, GatePhaseBaseline); err != nil {
+		return fmt.Errorf("invalidate gate results for run %q: %w", run.ID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit atomic run update and result invalidation: %w", err)
+	}
+	return nil
+}
+
 // Invocation loads one persisted invocation only when both identifiers match.
 func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*Invocation, error) {
 	row := s.db.QueryRowContext(ctx, `

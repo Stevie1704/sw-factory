@@ -195,6 +195,13 @@ type runResultInvalidator interface {
 	InvalidateRunResults(context.Context, string) error
 }
 
+// atomicPacketTransitionStore is the persistence seam that atomically applies
+// a state transition with result invalidation, ensuring packet persistence,
+// command watermark updates, and result invalidation commit or roll back together.
+type atomicPacketTransitionStore interface {
+	SaveRunAndInvalidateResults(context.Context, int64, store.Run) error
+}
+
 // handleAnswerCommand applies one authorized answer, versions the packet, and
 // resumes the implementation role with that answer mounted in its packet.
 func (s *Service) handleAnswerCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
@@ -225,6 +232,9 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
 	next.UpdatedAt = s.deps.Now().UTC()
+	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
+	processedCommentID := next.ProcessedCommentID
+	next.ProcessedCommentID = run.ProcessedCommentID
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
 	}
@@ -232,22 +242,19 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for answer: %w", err)
 	}
-	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository:           commandRepository(registration),
-		Issue:                issue,
-		Previous:             run,
-		Next:                 next,
-		PersistBeforeEffects: true,
-	})
+	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next, processedCommentID)
 	if err != nil {
-		return CommandResult{}, err
-	}
-	if err := invalidateRunResults(ctx, runStore, run.ID); err != nil {
 		return CommandResult{}, err
 	}
 	updated, err = s.resumeAfterPacketChange(ctx, registration, runStore, updated)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("resume implementation after answer: %w", err)
+	}
+	// Claim the comment watermark only after successful resumption to keep
+	// packet-change resumption retryable when startAgentWithStore fails.
+	updated, err = s.persistPacketChangeWatermark(ctx, runStore, updated, processedCommentID)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("persist answer command watermark: %w", err)
 	}
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
 }
@@ -299,22 +306,22 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
 	next.UpdatedAt = s.deps.Now().UTC()
-	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository:           commandRepository(registration),
-		Issue:                issue,
-		Previous:             run,
-		Next:                 next,
-		PersistBeforeEffects: true,
-	})
+	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
+	processedCommentID := next.ProcessedCommentID
+	next.ProcessedCommentID = run.ProcessedCommentID
+	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next, processedCommentID)
 	if err != nil {
-		return CommandResult{}, err
-	}
-	if err := invalidateRunResults(ctx, runStore, run.ID); err != nil {
 		return CommandResult{}, err
 	}
 	updated, err = s.resumeAfterPacketChange(ctx, registration, runStore, updated)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("resume implementation after refresh: %w", err)
+	}
+	// Claim the comment watermark only after successful resumption to keep
+	// packet-change resumption retryable when startAgentWithStore fails.
+	updated, err = s.persistPacketChangeWatermark(ctx, runStore, updated, processedCommentID)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("persist refresh command watermark: %w", err)
 	}
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
 }
@@ -357,6 +364,68 @@ func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, 
 		return nil
 	}
 	return s.stopRunWorker(ctx, run.ID)
+}
+
+// applyPacketChangeTransition atomically applies the state transition and
+// invalidates prior run results, ensuring packet persistence and result
+// invalidation commit or roll back together. The command watermark (ProcessedCommentID)
+// is intentionally not set here; it is deferred until after successful resumption
+// to keep packet-change resumption retryable when startAgentWithStore fails.
+func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run, commandName string) (store.Run, error) {
+	repository := commandRepository(registration)
+	next.UpdatedAt = s.deps.Now().UTC()
+	if next.Revision <= previous.Revision {
+		next.Revision = previous.Revision + 1
+	}
+	next.LastCommandName = commandName
+
+	// Apply GitHub effects first (labels and status comment update)
+	oldLabels := append([]string(nil), issue.Labels...)
+	newLabels := replaceFactoryState(oldLabels, factoryLabelForStatus(next.Status))
+	if err := s.deps.GitHub.ReplaceIssueLabels(ctx, repository, next.IssueNumber, newLabels); err != nil {
+		return next, fmt.Errorf("set issue #%d state: %w", next.IssueNumber, err)
+	}
+	if err := s.deps.GitHub.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
+		_ = s.deps.GitHub.ReplaceIssueLabels(ctx, repository, next.IssueNumber, oldLabels)
+		return next, fmt.Errorf("edit status comment: %w", err)
+	}
+
+	// Atomically persist state and invalidate results, or use fallback
+	if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
+		if err := atomicStore.SaveRunAndInvalidateResults(ctx, previous.Revision, next); err != nil {
+			return next, fmt.Errorf("persist packet transition and invalidate results: %w", err)
+		}
+	} else {
+		// Fallback for stores that don't support atomic operation
+		if err := saveCommandRun(ctx, runStore, previous.Revision, next); err != nil {
+			return next, fmt.Errorf("persist packet transition: %w", err)
+		}
+		if err := invalidateRunResults(ctx, runStore, next.ID); err != nil {
+			return next, err
+		}
+	}
+
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recordEvaluationTransition(ctx, recorder, previous, next, next.UpdatedAt); err != nil {
+			return next, fmt.Errorf("record evaluation state transition: %w", err)
+		}
+	}
+
+	return next, nil
+}
+
+// persistPacketChangeWatermark claims the command watermark after successful
+// packet change resumption, ensuring retryability when startAgentWithStore fails.
+func (s *Service) persistPacketChangeWatermark(ctx context.Context, runStore RunStore, run store.Run, commentID string) (store.Run, error) {
+	previousRevision := run.Revision
+	run.ProcessedCommentID = commentID
+	run.ProcessedCommentRevision = run.Revision + 1
+	run.Revision = run.ProcessedCommentRevision
+	run.UpdatedAt = s.deps.Now().UTC()
+	if err := saveCommandRun(ctx, runStore, previousRevision, run); err != nil {
+		return run, fmt.Errorf("persist command watermark after resumption: %w", err)
+	}
+	return run, nil
 }
 
 // invalidateRunResults makes the packet revision boundary visible to the
