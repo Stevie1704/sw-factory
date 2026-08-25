@@ -263,6 +263,239 @@ func TestAcceptAgentReportUsesOnlyTheStructuredReportAndFinishesTheSession(t *te
 	}
 }
 
+// TestAcceptAgentReportPublishesClarificationAndPausesTheRun verifies a
+// clarification report becomes visible human work without consuming repair
+// budget or leaving the worker running.
+func TestAcceptAgentReportPublishesClarificationAndPausesTheRun(t *testing.T) {
+	service, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	reportValue := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  launch.Invocation.ID,
+		RunID:         launch.Invocation.RunID,
+		Harness:       launch.Invocation.Harness,
+		Role:          launch.Invocation.Role,
+		Stage:         string(launch.Invocation.Stage),
+		Outcome:       report.OutcomeNeedsClarification,
+		Summary:       "product intent is ambiguous",
+		Questions: []report.Question{{
+			ID:     "clarification-1",
+			Prompt: "Should the response use the existing JSON format?",
+		}},
+		NativeSessionID: "session-clarification",
+		ReportedAt:      time.Now().UTC(),
+	}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, reportValue); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+
+	accepted, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID})
+	if err != nil {
+		t.Fatalf("AcceptAgentReport() error = %v", err)
+	}
+	if accepted.Invocation.Status != store.InvocationStatusWaitingForHuman {
+		t.Fatalf("accepted invocation status = %q, want waiting_for_human", accepted.Invocation.Status)
+	}
+	paused := runStore.runs[launch.Invocation.RunID]
+	if paused.Status != store.StatusWaitingForHuman || len(paused.PendingQuestions) != 1 || paused.PendingQuestions[0].ID != "clarification-1" {
+		t.Fatalf("paused run = %#v, want one pending clarification", paused)
+	}
+	if paused.CheckRepairAttempts != 0 {
+		t.Fatalf("check-repair attempts = %d, want clarification pause to consume none", paused.CheckRepairAttempts)
+	}
+	if len(runStore.github.createdComments) != 2 || !strings.Contains(runStore.github.createdComments[1], "clarification-1") || !strings.Contains(runStore.github.createdComments[1], "Should the response use the existing JSON format?") {
+		t.Fatalf("clarification comments = %#v, want one question comment after claim", runStore.github.createdComments)
+	}
+	if len(runStore.github.editedComments) == 0 || !strings.Contains(runStore.github.editedComments[len(runStore.github.editedComments)-1].body, "clarification-1") {
+		t.Fatalf("status comment edits = %#v, want pending question", runStore.github.editedComments)
+	}
+	if runtime.stops != 1 || len(terminalRuntime.notifications) != 2 || len(harnessRuntime.finished) != 1 {
+		t.Fatalf("clarification effects = stops=%d notifications=%d finished=%d, want 1/2/1", runtime.stops, len(terminalRuntime.notifications), len(harnessRuntime.finished))
+	}
+}
+
+// TestClarificationPublicationCanRetryFromAStatusCommand verifies durable
+// publication markers make a GitHub/cmux failure recoverable after the report
+// itself has already moved the run to waiting_for_human.
+func TestClarificationPublicationCanRetryFromAStatusCommand(t *testing.T) {
+	service, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	reportValue := report.Report{
+		SchemaVersion:   report.SchemaVersion,
+		InvocationID:    launch.Invocation.ID,
+		RunID:           launch.Invocation.RunID,
+		Harness:         launch.Invocation.Harness,
+		Role:            launch.Invocation.Role,
+		Stage:           string(launch.Invocation.Stage),
+		Outcome:         report.OutcomeNeedsClarification,
+		Summary:         "needs product input",
+		Questions:       []report.Question{{ID: "clarification-retry", Prompt: "Which behavior is intended?"}},
+		NativeSessionID: "session-clarification",
+		ReportedAt:      time.Now().UTC(),
+	}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, reportValue); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	runStore.github.createCommentErr = errors.New("GitHub temporarily unavailable")
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err == nil {
+		t.Fatal("AcceptAgentReport() succeeded while clarification publication failed")
+	}
+	if runStore.current.ClarificationCommentID != "" || runStore.current.ClarificationNotificationSent {
+		t.Fatalf("failed publication markers = %#v, want no completed effects", runStore.current)
+	}
+	runStore.github.createCommentErr = nil
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 6,
+		Comment:     github.Comment{ID: "status-retry", Author: "alice", Body: "/factory status"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() retry error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || runStore.current.ClarificationCommentID == "" || !runStore.current.ClarificationNotificationSent {
+		t.Fatalf("retry result = %#v, persisted run = %#v, want published clarification", result, runStore.current)
+	}
+	if len(runStore.github.createdComments) != 2 || len(terminalRuntime.notifications) != 2 || runtime.stops != 1 || len(harnessRuntime.finished) != 1 {
+		t.Fatalf("retry effects = comments=%d notifications=%d stops=%d finished=%d, want 2/2/1/1", len(runStore.github.createdComments), len(terminalRuntime.notifications), runtime.stops, len(harnessRuntime.finished))
+	}
+}
+
+// TestAnswerCommandVersionsThePacketAndResumesImplementation verifies only an
+// authorized answer can resolve a pending question and launch a new packet.
+func TestAnswerCommandVersionsThePacketAndResumesImplementation(t *testing.T) {
+	service, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	clarification := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  launch.Invocation.ID,
+		RunID:         launch.Invocation.RunID,
+		Harness:       launch.Invocation.Harness,
+		Role:          launch.Invocation.Role,
+		Stage:         string(launch.Invocation.Stage),
+		Outcome:       report.OutcomeNeedsClarification,
+		Summary:       "intent is ambiguous",
+		Questions: []report.Question{
+			{ID: "clarification-1", Prompt: "Which output format should be used?"},
+			{ID: "clarification-2", Prompt: "Should the response include examples?"},
+		},
+		NativeSessionID: "session-clarification",
+		ReportedAt:      time.Now().UTC(),
+	}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, clarification); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err != nil {
+		t.Fatalf("AcceptAgentReport() error = %v", err)
+	}
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 6,
+		Comment:     github.Comment{ID: "answer-1", Author: "alice", Body: "/factory answer clarification-1 use the existing JSON format"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive || len(result.Run.PendingQuestions) != 1 || result.Run.PendingQuestions[0].ID != "clarification-2" {
+		t.Fatalf("first answer result = %#v, want active run with the second question pending", result)
+	}
+	if runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusSuperseded {
+		t.Fatalf("old invocation = %#v, want superseded", runStore.invocations[launch.Invocation.ID])
+	}
+	if len(runtime.starts) != 2 || len(harnessRuntime.starts) != 2 || len(terminalRuntime.notifications) != 3 {
+		t.Fatalf("first resume effects = workers=%d harnesses=%d notifications=%d, want 2/2/3", len(runtime.starts), len(harnessRuntime.starts), len(terminalRuntime.notifications))
+	}
+	result, err = service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 6,
+		Comment:     github.Comment{ID: "answer-2", Author: "alice", Body: "/factory answer clarification-2 omit examples"},
+	})
+	if err != nil {
+		t.Fatalf("second HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive || len(result.Run.PendingQuestions) != 0 {
+		t.Fatalf("second answer result = %#v, want active run without pending questions", result)
+	}
+	if len(runtime.starts) != 3 || len(harnessRuntime.starts) != 3 || len(terminalRuntime.notifications) != 4 {
+		t.Fatalf("second resume effects = workers=%d harnesses=%d notifications=%d, want 3/3/4", len(runtime.starts), len(harnessRuntime.starts), len(terminalRuntime.notifications))
+	}
+	packetData, err := os.ReadFile(filepath.Join(runtime.starts[2].InvocationPath, "specification.json"))
+	if err != nil {
+		t.Fatalf("read resumed invocation packet: %v", err)
+	}
+	var invocationPacket factory.InvocationPacket
+	if err := json.Unmarshal(packetData, &invocationPacket); err != nil {
+		t.Fatalf("decode resumed invocation packet: %v", err)
+	}
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(invocationPacket.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode resumed specification packet: %v", err)
+	}
+	if packet.Version != 3 || len(packet.Clarifications) != 2 || packet.Clarifications[0].Answer != "use the existing JSON format" || packet.Clarifications[1].Answer != "omit examples" {
+		t.Fatalf("resumed specification packet = %#v, want both versioned answers", packet)
+	}
+}
+
+// TestRefreshCommandReReadsTheIssueAndInvalidatesCheckpointResults verifies a
+// refresh creates a new packet while preserving the independent baseline.
+func TestRefreshCommandReReadsTheIssueAndInvalidatesCheckpointResults(t *testing.T) {
+	service, runStore, runtime, _, _ := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	if _, err := writeAgentTestReport(t, launch, "internal/factory/agent.go"); err != nil {
+		t.Fatalf("writeAgentTestReport() error = %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err != nil {
+		t.Fatalf("AcceptAgentReport() error = %v", err)
+	}
+	run := *runStore.current
+	runStore.gateResults[run.ID] = append(runStore.gateResults[run.ID], store.GateResult{
+		RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseCheckpoint,
+		Ordinal: 0, GateName: "tests", Outcome: store.GateOutcomePassed,
+	})
+	runStore.github.issueValue.Body = "refreshed product intent"
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 6,
+		Comment:     github.Comment{ID: "refresh-1", Author: "alice", Body: "/factory refresh"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive || len(runtime.starts) != 2 {
+		t.Fatalf("refresh result = %#v, worker starts = %d, want accepted active resume", result, len(runtime.starts))
+	}
+	if runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusSuperseded {
+		t.Fatalf("refreshed invocation = %#v, want superseded", runStore.invocations[launch.Invocation.ID])
+	}
+	results := runStore.gateResults[run.ID]
+	if len(results) != 1 || results[0].Phase != store.GatePhaseBaseline {
+		t.Fatalf("remaining gate results = %#v, want baseline only", results)
+	}
+	var packet factory.SpecificationPacket
+	packetData, err := os.ReadFile(filepath.Join(runtime.starts[1].InvocationPath, "specification.json"))
+	if err != nil {
+		t.Fatalf("read refreshed invocation packet: %v", err)
+	}
+	var invocationPacket factory.InvocationPacket
+	if err := json.Unmarshal(packetData, &invocationPacket); err != nil {
+		t.Fatalf("decode refreshed invocation packet: %v", err)
+	}
+	if err := json.Unmarshal([]byte(invocationPacket.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode refreshed specification packet: %v", err)
+	}
+	if packet.Version != 2 || packet.Issue.Body != "refreshed product intent" {
+		t.Fatalf("refreshed packet = %#v, want issue snapshot version 2", packet)
+	}
+}
+
 // TestAcceptAgentReportTrustsThePersistedNativeSession verifies a report
 // cannot replace the native session identity already bound to the invocation.
 func TestAcceptAgentReportTrustsThePersistedNativeSession(t *testing.T) {
@@ -443,11 +676,12 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 	issue := githubIssueFixture()
 	issue.Labels = []string{github.LabelAgentReady}
 	githubRuntime := &fakeGitHub{issueValue: issue}
+	runStore.github = githubRuntime
 	worktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-agent", Worktree: worktreePath}},
 		state:        gitadapter.WorktreeState{Branch: "factory/run-agent", HeadSHA: "base", ChangedPaths: []string{"internal/factory/agent.go"}},
 	}
-	ids := []string{"run-agent", "generated"}
+	ids := []string{"run-agent", "generated", "generated-2", "generated-3"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
 		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
@@ -548,6 +782,7 @@ type agentRunStore struct {
 	gateResults     map[string][]store.GateResult
 	lifecycleClaims map[string]map[store.Status]bool
 	events          *[]string
+	github          *fakeGitHub
 }
 
 // CurrentRun returns the configured active run.
@@ -635,6 +870,26 @@ func (s *agentRunStore) ActiveInvocation(_ context.Context, runID string) (*stor
 		}
 	}
 	return nil, nil
+}
+
+// InvalidateRunResults supersedes prior invocations and clears checkpoint
+// results when a new specification packet becomes authoritative.
+func (s *agentRunStore) InvalidateRunResults(_ context.Context, runID string) error {
+	for id, invocation := range s.invocations {
+		if invocation.RunID == runID && invocation.Status != store.InvocationStatusSuperseded {
+			invocation.Status = store.InvocationStatusSuperseded
+			s.invocations[id] = invocation
+		}
+	}
+	results := s.gateResults[runID]
+	baseline := make([]store.GateResult, 0, len(results))
+	for _, result := range results {
+		if result.Phase == store.GatePhaseBaseline {
+			baseline = append(baseline, result)
+		}
+	}
+	s.gateResults[runID] = baseline
+	return nil
 }
 
 // SaveGateResults upserts the fixture's exact gate projections by durable identity.

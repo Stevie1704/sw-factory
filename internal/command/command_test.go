@@ -1,6 +1,7 @@
 package command_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/command"
@@ -33,6 +34,34 @@ func TestParseDistinguishesOrdinaryDiscussionFromStructuredCommands(t *testing.T
 	}
 	if !nonBreakingSpace.Recognized || nonBreakingSpace.Command.Kind != command.Status {
 		t.Fatalf("parsed non-breaking-space status = %#v, want recognized status command", nonBreakingSpace)
+	}
+}
+
+// TestAnswerCommandCarriesItsQuestionIdentifierAndText verifies the structured
+// answer payload is distinguishable from ordinary discussion.
+func TestAnswerCommandCarriesItsQuestionIdentifierAndText(t *testing.T) {
+	parsed, err := command.Parse("/factory answer clarification-1 use the existing JSON format")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !parsed.Recognized || parsed.Command.Kind != command.Answer {
+		t.Fatalf("Parse() = %#v, want recognized answer command", parsed)
+	}
+	if parsed.Command.QuestionID != "clarification-1" || parsed.Command.Answer != "use the existing JSON format" {
+		t.Fatalf("answer command = %#v, want identifier and text", parsed.Command)
+	}
+}
+
+// TestAnswerCommandRejectsAnUnsafeQuestionIdentifier verifies malformed
+// structured input fails closed before it can reach workflow policy.
+func TestAnswerCommandRejectsAnUnsafeQuestionIdentifier(t *testing.T) {
+	parsed, err := command.Parse("/factory answer question-id=clarification/1 yes")
+	if !parsed.Recognized || err == nil {
+		t.Fatalf("Parse() = %#v/%v, want recognized typed rejection", parsed, err)
+	}
+	var parseErr *command.ParseError
+	if !errors.As(err, &parseErr) || parseErr.Code != command.ParseErrorInvalidQuestionArgument {
+		t.Fatalf("Parse() error = %v, want invalid question argument", err)
 	}
 }
 

@@ -289,6 +289,10 @@ func (s *commandRunStore) SaveRunIfRevision(ctx context.Context, expected int64,
 	return s.SaveRun(ctx, run)
 }
 
+// InvalidateRunResults satisfies the packet-version seam for command tests;
+// this reduced store has no invocation or gate-result tables to clear.
+func (*commandRunStore) InvalidateRunResults(context.Context, string) error { return nil }
+
 // ClaimLifecycleNotification atomically claims notification delivery.
 func (s *commandRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
 	if s.lifecycleClaims == nil {

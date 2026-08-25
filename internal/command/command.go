@@ -21,6 +21,8 @@ const (
 	Cancel Kind = "cancel"
 	// Refresh asks the coordinator to refresh the supervision projection.
 	Refresh Kind = "refresh"
+	// Answer supplies an authorized answer to one pending clarification question.
+	Answer Kind = "answer"
 	// ConfigureHarness changes the selected harness for a later invocation.
 	ConfigureHarness Kind = "configure_harness"
 )
@@ -41,6 +43,10 @@ type Request struct {
 	Kind Kind
 	// Harness is set only for ConfigureHarness.
 	Harness Harness
+	// QuestionID is set only for Answer and identifies one pending question.
+	QuestionID string
+	// Answer is set only for Answer and contains the maintainer's response.
+	Answer string
 }
 
 // ParseResult distinguishes ordinary discussion from a structured command.
@@ -65,6 +71,10 @@ const (
 	ParseErrorUnexpectedArgument ParseErrorCode = "unexpected_argument"
 	// ParseErrorMissingHarness means a harness configuration had no value.
 	ParseErrorMissingHarness ParseErrorCode = "missing_harness"
+	// ParseErrorMissingAnswer means an answer command omitted required content.
+	ParseErrorMissingAnswer ParseErrorCode = "missing_answer"
+	// ParseErrorInvalidQuestionArgument means an answer question identifier was malformed.
+	ParseErrorInvalidQuestionArgument ParseErrorCode = "invalid_question_argument"
 	// ParseErrorInvalidHarnessArgument means the harness key was malformed.
 	ParseErrorInvalidHarnessArgument ParseErrorCode = "invalid_harness_argument"
 	// ParseErrorUnsupportedHarness means the harness is outside the grammar.
@@ -116,6 +126,8 @@ func Parse(body string) (ParseResult, error) {
 		return parseFixedArity(result, fields, Cancel)
 	case string(Refresh):
 		return parseFixedArity(result, fields, Refresh)
+	case string(Answer):
+		return parseAnswer(result, fields[2:])
 	case "config", "configure", "harness":
 		harness, parseErr := parseHarness(fields[2:])
 		if parseErr != nil {
@@ -126,6 +138,51 @@ func Parse(body string) (ParseResult, error) {
 	default:
 		return result, &ParseError{Code: ParseErrorUnknownVerb, Problem: fmt.Sprintf("command %q is not supported", fields[1])}
 	}
+}
+
+// parseAnswer parses the question identifier and answer text from an answer
+// command while preserving the answer's word boundaries for the coordinator.
+func parseAnswer(result ParseResult, arguments []string) (ParseResult, error) {
+	if len(arguments) < 2 {
+		return result, &ParseError{Code: ParseErrorMissingAnswer, Problem: "answer requires a question identifier and answer text"}
+	}
+	questionID := arguments[0]
+	if key, value, found := strings.Cut(questionID, "="); found {
+		if key != "question" && key != "question-id" && key != "id" {
+			return result, &ParseError{Code: ParseErrorInvalidQuestionArgument, Problem: "the first answer argument must be a question identifier"}
+		}
+		questionID = value
+	}
+	if !safeArgument(questionID) {
+		return result, &ParseError{Code: ParseErrorInvalidQuestionArgument, Problem: "the question identifier must be a nonempty safe value"}
+	}
+	answer := strings.Join(arguments[1:], " ")
+	if key, value, found := strings.Cut(answer, "answer="); found && key == "" {
+		answer = value
+	}
+	if strings.TrimSpace(answer) == "" {
+		return result, &ParseError{Code: ParseErrorMissingAnswer, Problem: "answer text must not be empty"}
+	}
+	if strings.ContainsAny(answer, "\x00\r\n") {
+		return result, &ParseError{Code: ParseErrorControlCharacter, Problem: "the answer contains a control character"}
+	}
+	result.Command = Request{Kind: Answer, QuestionID: questionID, Answer: answer}
+	return result, nil
+}
+
+// safeArgument reports whether a command identifier contains only a bounded
+// single-line token that cannot alter command parsing.
+func safeArgument(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) || strings.ContainsRune("._-", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // parseFixedArity parses a registered verb that accepts no arguments.

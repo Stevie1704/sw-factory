@@ -12,13 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 16
+const CurrentSchemaVersion = 18
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -74,6 +75,9 @@ const (
 	InvocationStatusWaitingForHuman InvocationStatus = "waiting_for_human"
 	// InvocationStatusCannotProceed means the report contained blocking evidence.
 	InvocationStatusCannotProceed InvocationStatus = "cannot_proceed"
+	// InvocationStatusSuperseded means a later specification packet invalidated
+	// the invocation before its result could be used for progression.
+	InvocationStatusSuperseded InvocationStatus = "superseded"
 )
 
 // GatePhase identifies why a deterministic gate result was recorded.
@@ -121,6 +125,16 @@ func (e *UnversionedDatabaseError) Error() string {
 }
 
 func (e *UnversionedDatabaseError) Unwrap() error { return e.Err }
+
+// PendingQuestion is one clarification request awaiting an authorized answer.
+// It is deliberately small so the operational store retains workflow state
+// rather than a transcript.
+type PendingQuestion struct {
+	// ID is the stable identifier referenced by an answer command.
+	ID string
+	// Prompt is the bounded human-readable clarification request.
+	Prompt string
+}
 
 // Run is the persisted operational identity and current state of one run.
 type Run struct {
@@ -174,8 +188,17 @@ type Run struct {
 	// launch from a successfully consumed attempt.
 	CheckRepairPendingAttempt int
 	SpecificationPacket       string
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
+	// PendingQuestions contains clarification requests awaiting authorized
+	// answers for the current specification packet.
+	PendingQuestions []PendingQuestion
+	// ClarificationCommentID identifies the question comment already published
+	// for the current pending clarification set.
+	ClarificationCommentID string
+	// ClarificationNotificationSent records successful cmux notification delivery
+	// for the current pending clarification set.
+	ClarificationNotificationSent bool
+	CreatedAt                     time.Time
+	UpdatedAt                     time.Time
 }
 
 // Invocation is the persisted recoverable identity of one harness session.
@@ -363,7 +386,8 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
-		       specification_packet, created_at, updated_at
+		       specification_packet, pending_questions, clarification_comment_id,
+		       clarification_notification_sent, created_at, updated_at
 		FROM operational_runs
 		WHERE status NOT IN (?, ?, ?)
 		ORDER BY updated_at DESC
@@ -383,7 +407,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
-		       specification_packet, created_at, updated_at
+		       specification_packet, pending_questions, clarification_comment_id,
+		       clarification_notification_sent, created_at, updated_at
 		FROM operational_runs
 		ORDER BY updated_at DESC
 		LIMIT 1`)
@@ -393,7 +418,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 // scanRun decodes one operational run row and its RFC3339 timestamps.
 func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
-	var createdAt, updatedAt string
+	var pendingQuestionsJSON, clarificationCommentID, createdAt, updatedAt string
+	var clarificationNotificationSent bool
 	if err := row.Scan(
 		&run.ID,
 		&run.RepositoryPath,
@@ -422,6 +448,9 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.CheckRepairBudget,
 		&run.CheckRepairPendingAttempt,
 		&run.SpecificationPacket,
+		&pendingQuestionsJSON,
+		&clarificationCommentID,
+		&clarificationNotificationSent,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -430,6 +459,13 @@ func scanRun(row *sql.Row) (*Run, error) {
 		}
 		return nil, fmt.Errorf("read run row: %w", err)
 	}
+	if pendingQuestionsJSON != "" {
+		if err := json.Unmarshal([]byte(pendingQuestionsJSON), &run.PendingQuestions); err != nil {
+			return nil, fmt.Errorf("decode pending clarification questions: %w", err)
+		}
+	}
+	run.ClarificationCommentID = clarificationCommentID
+	run.ClarificationNotificationSent = clarificationNotificationSent
 	var err error
 	run.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
@@ -508,6 +544,12 @@ func normalizeRun(run Run) (Run, error) {
 	if run.CheckRepairPendingAttempt != 0 && run.CheckRepairPendingAttempt != run.CheckRepairAttempts+1 {
 		return Run{}, errors.New("run pending check-repair attempt must be the next attempt")
 	}
+	if strings.ContainsAny(run.ClarificationCommentID, "\x00\r\n") {
+		return Run{}, errors.New("run clarification comment id contains a control character")
+	}
+	if err := validatePendingQuestions(run.PendingQuestions); err != nil {
+		return Run{}, err
+	}
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = time.Now().UTC()
 	}
@@ -515,6 +557,59 @@ func normalizeRun(run Run) (Run, error) {
 		run.UpdatedAt = run.CreatedAt
 	}
 	return run, nil
+}
+
+// validatePendingQuestions checks the bounded workflow projection before it is
+// serialized into the operational store.
+func validatePendingQuestions(values []PendingQuestion) error {
+	if len(values) > 32 {
+		return errors.New("run pending questions exceed 32 entries")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if !safeQuestionIdentifier(value.ID) {
+			return fmt.Errorf("run pending question %d has an unsafe identifier", index)
+		}
+		if _, exists := seen[value.ID]; exists {
+			return fmt.Errorf("run pending question %q is duplicated", value.ID)
+		}
+		seen[value.ID] = struct{}{}
+		if strings.TrimSpace(value.Prompt) == "" {
+			return fmt.Errorf("run pending question %d has an empty prompt", index)
+		}
+		if strings.ContainsAny(value.Prompt, "\x00\r\n") {
+			return fmt.Errorf("run pending question %q contains a control character", value.ID)
+		}
+	}
+	return nil
+}
+
+// safeQuestionIdentifier reports whether a pending-question ID is safe to
+// reference from the structured GitHub command surface.
+func safeQuestionIdentifier(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsLetter(character) || unicode.IsDigit(character) || strings.ContainsRune("._-", character) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// pendingQuestionsJSON serializes an empty projection as an empty JSON array
+// so migrated and newly created stores have one stable representation.
+func pendingQuestionsJSON(values []PendingQuestion) string {
+	if values == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
 }
 
 // runValues returns the ordered SQL values shared by normal and revision-safe
@@ -548,6 +643,9 @@ func runValues(run Run) []any {
 		run.CheckRepairBudget,
 		run.CheckRepairPendingAttempt,
 		run.SpecificationPacket,
+		pendingQuestionsJSON(run.PendingQuestions),
+		run.ClarificationCommentID,
+		run.ClarificationNotificationSent,
 		run.CreatedAt.UTC().Format(runTimestampLayout),
 		run.UpdatedAt.UTC().Format(runTimestampLayout),
 	}
@@ -563,8 +661,14 @@ const saveRunStatement = `
 			processed_comment_revision, last_command_name, last_command_outcome,
 			last_command_message, harness_override, check_repair_attempts,
 			check_repair_budget, check_repair_pending_attempt, specification_packet,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			pending_questions, clarification_comment_id,
+			clarification_notification_sent, created_at, updated_at
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?
+		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
 			issue_number = excluded.issue_number,
@@ -592,6 +696,9 @@ const saveRunStatement = `
 			check_repair_budget = excluded.check_repair_budget,
 			check_repair_pending_attempt = excluded.check_repair_pending_attempt,
 			specification_packet = excluded.specification_packet,
+			pending_questions = excluded.pending_questions,
+			clarification_comment_id = excluded.clarification_comment_id,
+			clarification_notification_sent = excluded.clarification_notification_sent,
 			updated_at = excluded.updated_at`
 
 const saveRunIfRevisionStatement = `
@@ -604,7 +711,8 @@ const saveRunIfRevisionStatement = `
 			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
 			last_command_message = ?, harness_override = ?, check_repair_attempts = ?,
 			check_repair_budget = ?, check_repair_pending_attempt = ?, specification_packet = ?,
-			created_at = ?, updated_at = ?
+			pending_questions = ?, clarification_comment_id = ?,
+			clarification_notification_sent = ?, created_at = ?, updated_at = ?
 		WHERE id = ? AND revision = ?`
 
 // SaveInvocation validates and upserts one recoverable harness invocation.
@@ -692,6 +800,84 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			return fmt.Errorf("save invocation: active invocation already exists for run %q: %w", invocation.RunID, err)
 		}
 		return fmt.Errorf("save invocation: %w", err)
+	}
+	return nil
+}
+
+// InvalidateRunResults supersedes invocations and removes downstream checkpoint
+// results produced before a new specification packet was accepted. Baseline
+// results remain valid because the packet change only revises issue intent and
+// clarifications; the frozen repository configuration and checkpoint remain.
+// The evaluation summary remains intact because it is content-free history.
+func (s *Store) InvalidateRunResults(ctx context.Context, runID string) error {
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("run id is required for result invalidation")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin run-result invalidation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UTC().Format(runTimestampLayout)
+	if _, err := tx.ExecContext(ctx, `UPDATE invocations
+		SET status = ?, updated_at = ?
+		WHERE run_id = ? AND status IN (?, ?, ?, ?)`, InvocationStatusSuperseded, now, runID, InvocationStatusActive, InvocationStatusCompleted, InvocationStatusWaitingForHuman, InvocationStatusCannotProceed); err != nil {
+		return fmt.Errorf("supersede invocations for run %q: %w", runID, err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gate_results WHERE run_id = ? AND phase <> ?", runID, GatePhaseBaseline); err != nil {
+		return fmt.Errorf("invalidate gate results for run %q: %w", runID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit run-result invalidation: %w", err)
+	}
+	return nil
+}
+
+// SaveRunAndInvalidateResults atomically persists a run state transition and
+// invalidates prior invocations and checkpoint results when a specification
+// packet revision boundary is crossed. This operation ensures packet updates,
+// command watermark advances, and result invalidation commit or roll back
+// together, preventing inconsistent persistence when resumption is attempted.
+func (s *Store) SaveRunAndInvalidateResults(ctx context.Context, expectedRevision int64, run Run) error {
+	run, err := normalizeRun(run)
+	if err != nil {
+		return err
+	}
+	if run.Revision <= expectedRevision {
+		return fmt.Errorf("%w: got %d, expected greater than %d", ErrRevisionNotAdvanced, run.Revision, expectedRevision)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin atomic run update and result invalidation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Update the run state with revision check
+	result, err := tx.ExecContext(ctx, saveRunIfRevisionStatement, append(runValues(run)[1:], run.ID, expectedRevision)...)
+	if err != nil {
+		return fmt.Errorf("save run at revision %d: %w", expectedRevision, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect run revision %d update: %w", expectedRevision, err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("%w: run %q no longer has revision %d", ErrRevisionConflict, run.ID, expectedRevision)
+	}
+
+	// Invalidate prior results in the same transaction
+	now := time.Now().UTC().Format(runTimestampLayout)
+	if _, err := tx.ExecContext(ctx, `UPDATE invocations
+		SET status = ?, updated_at = ?
+		WHERE run_id = ? AND status IN (?, ?, ?, ?)`, InvocationStatusSuperseded, now, run.ID, InvocationStatusActive, InvocationStatusCompleted, InvocationStatusWaitingForHuman, InvocationStatusCannotProceed); err != nil {
+		return fmt.Errorf("supersede invocations for run %q: %w", run.ID, err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gate_results WHERE run_id = ? AND phase <> ?", run.ID, GatePhaseBaseline); err != nil {
+		return fmt.Errorf("invalidate gate results for run %q: %w", run.ID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit atomic run update and result invalidation: %w", err)
 	}
 	return nil
 }
@@ -1395,6 +1581,19 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 16:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN check_repair_pending_attempt INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return fmt.Errorf("apply store migration 16: %w", err)
+			}
+		case 17:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN pending_questions TEXT NOT NULL DEFAULT '[]'"); err != nil {
+				return fmt.Errorf("apply store migration 17: %w", err)
+			}
+		case 18:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN clarification_comment_id TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN clarification_notification_sent INTEGER NOT NULL DEFAULT 0",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 18: %w", err)
+				}
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

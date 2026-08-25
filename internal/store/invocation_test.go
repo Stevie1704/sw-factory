@@ -176,6 +176,83 @@ func TestStoreFindsInvocationHistoryRegardlessOfStatus(t *testing.T) {
 	}
 }
 
+// TestStoreInvalidatesSupersededResultsRetainsBaseline verifies a packet
+// revision supersedes prior invocation work and checkpoint results without
+// discarding the independent baseline evaluation.
+func TestStoreInvalidatesSupersededResultsRetainsBaseline(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	for _, status := range []store.InvocationStatus{
+		store.InvocationStatusActive,
+		store.InvocationStatusCompleted,
+		store.InvocationStatusWaitingForHuman,
+		store.InvocationStatusCannotProceed,
+	} {
+		if err := opened.SaveInvocation(context.Background(), store.Invocation{
+			ID: "inv-invalidate-" + string(status), RunID: "run-invalidate", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: status,
+		}); err != nil {
+			t.Fatalf("SaveInvocation(%s) error = %v", status, err)
+		}
+	}
+	if err := opened.SaveInvocation(context.Background(), store.Invocation{
+		ID: "inv-other-run", RunID: "run-other", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusActive,
+	}); err != nil {
+		t.Fatalf("SaveInvocation(other) error = %v", err)
+	}
+	baselineSHA := strings.Repeat("a", 40)
+	checkpointSHA := strings.Repeat("b", 40)
+	if err := opened.SaveGateResults(context.Background(), []store.GateResult{
+		{RunID: "run-invalidate", CheckpointSHA: baselineSHA, Phase: store.GatePhaseBaseline, Ordinal: 0, GateName: "baseline", Outcome: store.GateOutcomePassed, Status: "success"},
+		{RunID: "run-invalidate", CheckpointSHA: checkpointSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "checkpoint", Outcome: store.GateOutcomePassed, Status: "success"},
+	}); err != nil {
+		t.Fatalf("SaveGateResults() error = %v", err)
+	}
+	if err := opened.InvalidateRunResults(context.Background(), "run-invalidate"); err != nil {
+		t.Fatalf("InvalidateRunResults() error = %v", err)
+	}
+	for _, status := range []store.InvocationStatus{
+		store.InvocationStatusActive,
+		store.InvocationStatusCompleted,
+		store.InvocationStatusWaitingForHuman,
+	} {
+		got, err := opened.Invocation(context.Background(), "run-invalidate", "inv-invalidate-"+string(status))
+		if err != nil {
+			t.Fatalf("Invocation(%s) error = %v", status, err)
+		}
+		if got == nil || got.Status != store.InvocationStatusSuperseded {
+			t.Fatalf("Invocation(%s) = %#v, want superseded", status, got)
+		}
+	}
+	unchanged, err := opened.Invocation(context.Background(), "run-invalidate", "inv-invalidate-"+string(store.InvocationStatusCannotProceed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged == nil || unchanged.Status != store.InvocationStatusSuperseded {
+		t.Fatalf("cannot-proceed invocation = %#v, want superseded", unchanged)
+	}
+	other, err := opened.Invocation(context.Background(), "run-other", "inv-other-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == nil || other.Status != store.InvocationStatusActive {
+		t.Fatalf("other-run invocation = %#v, want unchanged active", other)
+	}
+	baseline, err := opened.GateResults(context.Background(), "run-invalidate", store.GatePhaseBaseline, baselineSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := opened.GateResults(context.Background(), "run-invalidate", store.GatePhaseCheckpoint, checkpointSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(baseline) != 1 || len(checkpoint) != 0 {
+		t.Fatalf("remaining gate results = baseline=%#v checkpoint=%#v, want baseline only", baseline, checkpoint)
+	}
+}
+
 // TestStoreRejectsTwoActiveInvocationsForOneRun verifies the database index,
 // rather than only the coordinator lookup, owns active-invocation uniqueness.
 func TestStoreRejectsTwoActiveInvocationsForOneRun(t *testing.T) {

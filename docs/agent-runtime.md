@@ -95,6 +95,17 @@ Terminal rendering, scrollback, and screen text are never parsed for stage
 completion. A report is a proposal; only coordinator validation changes the
 run or invocation state.
 
+An accepted `needs_clarification` report finishes the current harness session,
+stops the worker, and places the run in `waiting_for_human` without consuming a
+retry attempt. The coordinator publishes each question ID and prompt on the
+active issue or pull request, mirrors them in the editable status comment, and
+notifies cmux. An authorized maintainer answers with a structured GitHub
+comment such as `/factory answer clarification-1 use the existing JSON format`.
+The answer is stored in the next specification-packet version, and a fresh
+invocation receives that packet. A `/factory refresh` command similarly
+re-reads the issue, versions the packet, and invalidates downstream results
+before resuming the role.
+
 ## Authentication and session state
 
 Registration may name one explicit host Codex auth file:
