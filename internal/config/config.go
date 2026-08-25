@@ -537,8 +537,12 @@ func validateTestPolicyPaths(field string, values []string) error {
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
 		entryField := fmt.Sprintf("%s[%d]", field, index)
-		if strings.TrimSpace(value) == "" {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
 			return validation(entryField, "must not be empty")
+		}
+		if trimmed == "." {
+			return validation(entryField, "must remain inside the repository checkout")
 		}
 		if strings.IndexFunc(value, unicode.IsControl) >= 0 || filepath.IsAbs(value) {
 			return validation(entryField, "must be a safe repository-relative path")

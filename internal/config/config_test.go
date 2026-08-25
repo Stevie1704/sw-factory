@@ -135,6 +135,7 @@ func TestValidateRepositoryRequiresTheMandatoryTestRole(t *testing.T) {
 
 	policy := validRepositoryConfig()
 	delete(policy.RoleHarnessDefaults, "test")
+	delete(policy.ModelOptions, "test")
 	err := config.ValidateRepository(policy)
 	var validationErr *config.ValidationError
 	if !errors.As(err, &validationErr) {

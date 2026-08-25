@@ -132,7 +132,7 @@ func (s *Service) advanceAfterBaseline(ctx context.Context, registration config.
 // parseHumanTestExemption recognizes the exact frozen issue marker used to
 // pre-authorize a test-stage skip. Ordinary issue prose cannot authorize one.
 func parseHumanTestExemption(body string) (string, bool) {
-	start := strings.Index(strings.ToLower(body), testExemptionMarkerPrefix)
+	start := indexFold(body, testExemptionMarkerPrefix)
 	if start < 0 {
 		return "", false
 	}
@@ -155,6 +155,25 @@ func parseHumanTestExemption(body string) (string, bool) {
 		return "", false
 	}
 	return justification, true
+}
+
+// indexFold returns the index of the first case-insensitive occurrence of
+// substr in s, or -1 if substr is not present in s.
+func indexFold(s, substr string) int {
+	substrLen := len(substr)
+	if substrLen == 0 {
+		return 0
+	}
+	if substrLen > len(s) {
+		return -1
+	}
+	lowerSubstr := strings.ToLower(substr)
+	for i := 0; i <= len(s)-substrLen; i++ {
+		if strings.EqualFold(s[i:i+substrLen], lowerSubstr) {
+			return i
+		}
+	}
+	return -1
 }
 
 // validateTestStageReportPolicy rejects harness-reported exemptions that the

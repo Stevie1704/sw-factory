@@ -789,7 +789,16 @@ func isTestOwnedPath(path string, context ValidationContext) bool {
 	if strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, "test/") || strings.HasPrefix(path, "tests/") || strings.HasPrefix(path, "test-support/") || strings.HasPrefix(path, "__tests__/") {
 		return true
 	}
-	return withinAnyPrefix(path, append(append([]string(nil), context.TestPaths...), context.TestInfrastructurePaths...))
+	// Filter out root-level entries that would grant access to the entire repository.
+	combined := append(append([]string(nil), context.TestPaths...), context.TestInfrastructurePaths...)
+	filtered := make([]string, 0, len(combined))
+	for _, prefix := range combined {
+		trimmed := strings.TrimSpace(prefix)
+		if trimmed != "." && trimmed != "" {
+			filtered = append(filtered, prefix)
+		}
+	}
+	return withinAnyPrefix(path, filtered)
 }
 
 // ValidatePermittedPaths validates the repository-relative prefixes stored

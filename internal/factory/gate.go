@@ -127,14 +127,16 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	}
 	baselineReady := run.Stage == store.StageClaim
 	if run.Stage == store.StageTest && run.TestHandoff == nil && !run.TestStageSkipped {
-		if activeStore, ok := runStore.(ActiveInvocationStore); ok {
-			active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
-			if lookupErr != nil {
-				return BaselineResult{}, fmt.Errorf("look up active test invocation before baseline rerun: %w", lookupErr)
-			}
-			if active != nil {
-				return BaselineResult{}, fmt.Errorf("run %q has active test invocation %q", run.ID, active.ID)
-			}
+		activeStore, ok := runStore.(ActiveInvocationStore)
+		if !ok {
+			return BaselineResult{}, errors.New("operational store does not support active invocation lookup for test-stage baseline")
+		}
+		active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
+		if lookupErr != nil {
+			return BaselineResult{}, fmt.Errorf("look up active test invocation before baseline rerun: %w", lookupErr)
+		}
+		if active != nil {
+			return BaselineResult{}, fmt.Errorf("run %q has active test invocation %q", run.ID, active.ID)
 		}
 		baselineReady = true
 	}
