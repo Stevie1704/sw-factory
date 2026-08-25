@@ -211,6 +211,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		Branch:              workspace.Branch,
 		Worktree:            workspace.Worktree,
 		CheckpointSHA:       workspace.BaseSHA,
+		BaseCheckpointSHA:   workspace.BaseSHA,
 		ImageDigest:         repositoryConfig.WorkerBuild.Digest,
 		Coordinator:         s.deps.Coordinator,
 		CheckRepairBudget:   repositoryConfig.RetryLimits.CheckRepair,
@@ -261,6 +262,18 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	}
 	if request.RunID != "" && request.RunID != run.ID {
 		return store.Run{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	}
+	if request.Stage == store.StageTest || request.Stage == store.StageImplementation {
+		if strings.TrimSpace(run.SpecificationPacket) == "" {
+			return store.Run{}, errors.New("stage transition requires a frozen specification packet")
+		}
+		packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+		if err != nil {
+			return store.Run{}, fmt.Errorf("decode specification packet for stage transition: %w", err)
+		}
+		if err := validateTestStageTransition(*run, packet, request.Stage); err != nil {
+			return store.Run{}, err
+		}
 	}
 	if err := s.ensureTransitionBaseline(ctx, runStore, *run, request); err != nil {
 		return store.Run{}, err
@@ -480,9 +493,9 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 	return s.startupErr
 }
 
-// ensureAgentStartup permits only a clean persisted claim to cross into its
-// first implementation invocation. Every later or interrupted state retains
-// the typed #24 refusal until issue #21 supplies reconciliation.
+// ensureAgentStartup permits only clean claim/test or explicitly skipped-test
+// states to cross into their first visible invocation. Every later or
+// interrupted state retains the typed #24 refusal until reconciliation exists.
 func (s *Service) ensureAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) error {
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()
@@ -503,7 +516,8 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		run.LastCommandOutcome == string(CommandAccepted) {
 		return nil
 	}
-	if run.Stage != store.StageClaim || run.Status != store.StatusActive {
+	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && run.TestStageSkipped)
+	if !cleanStart || run.Status != store.StatusActive {
 		s.startupErr = recoveryRequiredError(diagnosis)
 		return s.startupErr
 	}

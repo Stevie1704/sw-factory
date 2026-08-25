@@ -480,6 +480,41 @@ func TestSaveRunDefaultsTimestampsWhenUnset(t *testing.T) {
 	}
 }
 
+// TestRunPersistsTheProtectedTestHandoffProjection verifies the separate base
+// and test checkpoints, handoff, exemption, and path hashes survive SQLite
+// round trips.
+func TestRunPersistsTheProtectedTestHandoffProjection(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	want := store.Run{
+		ID:                 "run-test-projection",
+		RepositoryPath:     "/work/repository",
+		Stage:              store.StageImplementation,
+		Status:             store.StatusActive,
+		CheckpointSHA:      strings.Repeat("b", 64),
+		BaseCheckpointSHA:  strings.Repeat("a", 64),
+		TestCheckpointSHA:  strings.Repeat("b", 64),
+		TestHandoff:        &store.TestHandoff{AcceptanceCoverage: []store.TestAcceptanceCoverage{{Criterion: "criterion", Evidence: "red test"}}, ChangedFiles: []string{"internal/factory/agent_test.go"}, FocusedTestCommand: "go test ./internal/factory -run TestBehavior", ExpectedFailureReason: "expected behavior assertion", ObservedFailureEvidence: []store.TestFailureEvidence{{Kind: "exit_code", Detail: "1"}}},
+		TestExemption:      &store.TestExemption{Kind: "technical", Justification: "test runtime unavailable during pilot"},
+		ProtectedTestPaths: []store.ProtectedTestPath{{Path: "internal/factory/agent_test.go", SHA256: strings.Repeat("c", 64)}},
+		TestStageSkipped:   true,
+		CheckRepairBudget:  1,
+	}
+	if err := opened.SaveRun(context.Background(), want); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	got, err := opened.LatestRun(context.Background())
+	if err != nil {
+		t.Fatalf("LatestRun() error = %v", err)
+	}
+	if got == nil || got.BaseCheckpointSHA != want.BaseCheckpointSHA || got.TestCheckpointSHA != want.TestCheckpointSHA || got.TestHandoff == nil || got.TestExemption == nil || len(got.ProtectedTestPaths) != 1 || !got.TestStageSkipped {
+		t.Fatalf("LatestRun() = %#v, want persisted test projection", got)
+	}
+}
+
 // TestStorePersistsCheckRepairBudget verifies the retry ceiling, consumed
 // attempt count, and in-flight reservation survive the restart boundary.
 func TestStorePersistsCheckRepairBudget(t *testing.T) {

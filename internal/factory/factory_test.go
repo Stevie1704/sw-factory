@@ -707,8 +707,10 @@ gates:
     blocking: true
     environment_policy: clean
 role_harness_defaults:
+  test: codex
   implementation: codex
 model_options:
+  test: [gpt-5]
   implementation: [gpt-5]
 timeouts:
   setup: 5m

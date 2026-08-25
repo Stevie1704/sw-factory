@@ -207,6 +207,98 @@ func TestValidateRequiresTheStructuredPayloadForEachOutcome(t *testing.T) {
 	}
 }
 
+// TestValidateAcceptsTheTestStageHandoff verifies the test role reports
+// acceptance coverage and independently verifiable red-test evidence instead
+// of using the implementation handoff shape.
+func TestValidateAcceptsTheTestStageHandoff(t *testing.T) {
+	value := testStageReport()
+	if err := report.Validate(value, report.ValidationContext{
+		InvocationID:     "inv-test",
+		RunID:            "run-test",
+		Harness:          "codex",
+		Role:             "test",
+		Stage:            "test",
+		WorktreeObserved: true,
+		ObservedChanges:  []string{"internal/factory/agent_test.go", "test-support/fixtures.go"},
+	}); err != nil {
+		t.Fatalf("Validate() error = %v, want accepted test handoff", err)
+	}
+}
+
+// TestValidateRejectsAProductionPathInTheTestHandoff verifies the test role
+// cannot smuggle a production behavior change through its changed-file list.
+func TestValidateRejectsAProductionPathInTheTestHandoff(t *testing.T) {
+	value := testStageReport()
+	value.TestHandoff.ChangedFiles = append(value.TestHandoff.ChangedFiles, "internal/factory/agent.go")
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID:     "inv-test",
+		RunID:            "run-test",
+		Harness:          "codex",
+		Role:             "test",
+		Stage:            "test",
+		WorktreeObserved: true,
+		ObservedChanges:  []string{"internal/factory/agent_test.go", "test-support/fixtures.go", "internal/factory/agent.go"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "test changed_files") {
+		t.Fatalf("Validate() error = %v, want test production-path rejection", err)
+	}
+}
+
+// TestValidateRequiresRedEvidenceForATestHandoff verifies an empty or
+// unverifiable focused failure cannot authorize implementation handoff.
+func TestValidateRequiresRedEvidenceForATestHandoff(t *testing.T) {
+	value := testStageReport()
+	value.TestHandoff.ObservedFailureEvidence = nil
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID:     "inv-test",
+		RunID:            "run-test",
+		Harness:          "codex",
+		Role:             "test",
+		Stage:            "test",
+		WorktreeObserved: true,
+		ObservedChanges:  []string{"internal/factory/agent_test.go", "test-support/fixtures.go"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "observed_failure_evidence") {
+		t.Fatalf("Validate() error = %v, want red-evidence requirement", err)
+	}
+}
+
+// TestValidateRequiresTheExpectedFailureReason verifies the coordinator has a
+// stable failure identifier to compare with its independent rerun output.
+func TestValidateRequiresTheExpectedFailureReason(t *testing.T) {
+	value := testStageReport()
+	value.TestHandoff.ExpectedFailureReason = ""
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID:     "inv-test",
+		RunID:            "run-test",
+		Harness:          "codex",
+		Role:             "test",
+		Stage:            "test",
+		WorktreeObserved: true,
+		ObservedChanges:  []string{"internal/factory/agent_test.go", "test-support/fixtures.go"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "expected_failure_reason") {
+		t.Fatalf("Validate() error = %v, want expected-failure-reason requirement", err)
+	}
+}
+
+// TestValidateRequiresTheTestHandoffForTestCompletion verifies a test agent
+// cannot complete using the implementation handoff envelope.
+func TestValidateRequiresTheTestHandoffForTestCompletion(t *testing.T) {
+	value := testStageReport()
+	value.TestHandoff = nil
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID: "inv-test",
+		RunID:        "run-test",
+		Harness:      "codex",
+		Role:         "test",
+		Stage:        "test",
+	})
+	if err == nil || !strings.Contains(err.Error(), "test handoff") {
+		t.Fatalf("Validate() error = %v, want missing-test-handoff rejection", err)
+	}
+}
+
 // TestValidateChecksPermittedFilesAgainstTheObservedWorktree verifies that a
 // handoff cannot claim a path outside the coordinator-approved worktree state.
 func TestValidateChecksPermittedFilesAgainstTheObservedWorktree(t *testing.T) {
@@ -329,5 +421,31 @@ func completedReport() report.Report {
 			FocusedCommands:        []string{"go test ./internal/factory"},
 		},
 		ReportedAt: time.Now().UTC(),
+	}
+}
+
+// testStageReport returns the smallest valid completed test-stage report.
+func testStageReport() report.Report {
+	return report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  "inv-test",
+		RunID:         "run-test",
+		Harness:       "codex",
+		Role:          "test",
+		Stage:         "test",
+		Outcome:       report.OutcomeCompleted,
+		Summary:       "verified the new behavior is red on the base implementation",
+		TestHandoff: &report.TestHandoff{
+			AcceptanceCoverage:    []report.AcceptanceMapping{{Criterion: "test-stage handoff", Evidence: "focused red test"}},
+			ChangedFiles:          []string{"internal/factory/agent_test.go", "test-support/fixtures.go"},
+			FocusedTestCommand:    "go test ./internal/factory -run TestNewBehavior",
+			ExpectedFailureReason: "expected behavior assertion",
+			ObservedFailureEvidence: []report.Evidence{{
+				Kind:   "exit_code",
+				Detail: "focused command exited with code 1",
+			}},
+			InfrastructureChanges: []string{"test-support/fixtures.go"},
+		},
+		ReportedAt: time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC),
 	}
 }

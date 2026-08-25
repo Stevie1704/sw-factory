@@ -60,6 +60,16 @@ func Run(request Request) int {
 	flags.Var(&focusedCommands, "focused-command", "focused command run; may be repeated")
 	limitations := stringList{}
 	flags.Var(&limitations, "known-limitation", "known limitation; may be repeated")
+	testFiles := stringList{}
+	flags.Var(&testFiles, "test-file", "repository-relative test file; may be repeated")
+	infrastructureFiles := stringList{}
+	flags.Var(&infrastructureFiles, "infrastructure-file", "repository-relative test-infrastructure file; may be repeated")
+	focusedTestCommand := flags.String("focused-test-command", "", "focused test command the coordinator must rerun")
+	expectedFailureReason := flags.String("expected-failure-reason", "", "failure identifier expected in the coordinator rerun output")
+	observedFailures := pairList{}
+	flags.Var(&observedFailures, "observed-failure", "red-test evidence kind=detail; may be repeated")
+	uncoveredCriteria := stringList{}
+	flags.Var(&uncoveredCriteria, "uncovered-criterion", "acceptance criterion not covered by this test handoff; may be repeated")
 	questions := pairList{}
 	flags.Var(&questions, "question", "question-id=question text; may be repeated")
 	evidence := pairList{}
@@ -135,16 +145,39 @@ func Run(request Request) int {
 			Currency:     *costCurrency,
 		}
 	}
-	for _, pair := range acceptance {
-		value.Handoff = ensureHandoff(value.Handoff)
-		value.Handoff.AcceptanceMapping = append(value.Handoff.AcceptanceMapping, report.AcceptanceMapping{Criterion: pair.Key, Evidence: pair.Value})
-	}
-	if *changeSummary != "" || len(productionFiles) > 0 || len(focusedCommands) > 0 || len(limitations) > 0 {
-		value.Handoff = ensureHandoff(value.Handoff)
-		value.Handoff.ChangeSummary = *changeSummary
-		value.Handoff.ProductionFilesChanged = append([]string(nil), productionFiles...)
-		value.Handoff.FocusedCommands = append([]string(nil), focusedCommands...)
-		value.Handoff.KnownLimitations = append([]string(nil), limitations...)
+	if identity["role"] == "test" && identity["stage"] == "test" {
+		for _, pair := range acceptance {
+			value.TestHandoff = ensureTestHandoff(value.TestHandoff)
+			value.TestHandoff.AcceptanceCoverage = append(value.TestHandoff.AcceptanceCoverage, report.AcceptanceMapping{Criterion: pair.Key, Evidence: pair.Value})
+		}
+		if len(testFiles) > 0 || len(infrastructureFiles) > 0 || *focusedTestCommand != "" || *expectedFailureReason != "" || len(observedFailures) > 0 || len(uncoveredCriteria) > 0 {
+			value.TestHandoff = ensureTestHandoff(value.TestHandoff)
+			value.TestHandoff.ChangedFiles = append(value.TestHandoff.ChangedFiles, testFiles...)
+			for _, path := range infrastructureFiles {
+				if !containsString(value.TestHandoff.ChangedFiles, path) {
+					value.TestHandoff.ChangedFiles = append(value.TestHandoff.ChangedFiles, path)
+				}
+			}
+			value.TestHandoff.InfrastructureChanges = append(value.TestHandoff.InfrastructureChanges, infrastructureFiles...)
+			value.TestHandoff.FocusedTestCommand = *focusedTestCommand
+			value.TestHandoff.ExpectedFailureReason = *expectedFailureReason
+			value.TestHandoff.UncoveredCriteria = append(value.TestHandoff.UncoveredCriteria, uncoveredCriteria...)
+			for _, pair := range observedFailures {
+				value.TestHandoff.ObservedFailureEvidence = append(value.TestHandoff.ObservedFailureEvidence, report.Evidence{Kind: pair.Key, Detail: pair.Value})
+			}
+		}
+	} else {
+		for _, pair := range acceptance {
+			value.Handoff = ensureHandoff(value.Handoff)
+			value.Handoff.AcceptanceMapping = append(value.Handoff.AcceptanceMapping, report.AcceptanceMapping{Criterion: pair.Key, Evidence: pair.Value})
+		}
+		if *changeSummary != "" || len(productionFiles) > 0 || len(focusedCommands) > 0 || len(limitations) > 0 {
+			value.Handoff = ensureHandoff(value.Handoff)
+			value.Handoff.ChangeSummary = *changeSummary
+			value.Handoff.ProductionFilesChanged = append([]string(nil), productionFiles...)
+			value.Handoff.FocusedCommands = append([]string(nil), focusedCommands...)
+			value.Handoff.KnownLimitations = append([]string(nil), limitations...)
+		}
 	}
 	for _, pair := range questions {
 		value.Questions = append(value.Questions, report.Question{ID: pair.Key, Prompt: pair.Value})
@@ -170,6 +203,25 @@ func ensureHandoff(value *report.Handoff) *report.Handoff {
 		return value
 	}
 	return &report.Handoff{}
+}
+
+// ensureTestHandoff returns a mutable test handoff value for repeated test
+// stage flags.
+func ensureTestHandoff(value *report.TestHandoff) *report.TestHandoff {
+	if value != nil {
+		return value
+	}
+	return &report.TestHandoff{}
+}
+
+// containsString reports whether a repeatable path flag was already included.
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // flagWasSet reports whether a caller explicitly supplied one of the optional

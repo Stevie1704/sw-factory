@@ -266,6 +266,8 @@ func TestTransitionEditsThePersistedStatusCommentAndKeepsStageAndStatusSeparate(
 	if _, err := service.ClaimIssue(context.Background(), 42); err != nil {
 		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
 	}
+	runStore.saved[len(runStore.saved)-1].TestStageSkipped = true
+	runStore.saved[len(runStore.saved)-1].TestExemption = &store.TestExemption{Kind: "human", Justification: "transition seam fixture"}
 	githubAdapter.createdComments = nil
 
 	got, err := service.Transition(context.Background(), factory.TransitionRequest{
@@ -308,6 +310,8 @@ func TestTransitionRecoversACommentIdentityAfterAnInterruptedPersistence(t *test
 	if _, err := service.ClaimIssue(context.Background(), 42); err != nil {
 		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
 	}
+	runStore.saved[len(runStore.saved)-1].TestStageSkipped = true
+	runStore.saved[len(runStore.saved)-1].TestExemption = &store.TestExemption{Kind: "human", Justification: "transition seam fixture"}
 	runStore.saved[len(runStore.saved)-1].StatusCommentID = ""
 
 	got, err := service.Transition(context.Background(), factory.TransitionRequest{Stage: store.StageImplementation, Status: store.StatusActive})
@@ -381,8 +385,8 @@ func validRepositoryConfig() config.RepositoryConfig {
 			Blocking:          true,
 			EnvironmentPolicy: config.EnvironmentPolicyClean,
 		}},
-		RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex},
-		ModelOptions:        map[string][]string{"implementation": {"gpt-5"}},
+		RoleHarnessDefaults: map[string]config.Harness{"test": config.HarnessCodex, "implementation": config.HarnessCodex},
+		ModelOptions:        map[string][]string{"test": {"gpt-5"}, "implementation": {"gpt-5"}},
 		Timeouts:            config.TimeoutConfig{Setup: "5m", Agent: "30m", Gate: "5m", Review: "10m"},
 		RetryLimits:         config.RetryLimits{CheckRepair: 3, ReviewRepair: 2, TestRevision: 2},
 		TestPolicy:          config.TestPolicy{Mode: config.TestModeRequired},

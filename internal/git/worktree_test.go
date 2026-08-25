@@ -81,6 +81,55 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	}
 }
 
+// TestLocalWorktreeManagerCreatesAScopedTestCheckpoint verifies the test
+// checkpoint cannot accidentally commit an implementation path and carries a
+// distinct marker from the later implementation checkpoint.
+func TestLocalWorktreeManagerCreatesAScopedTestCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repository := filepath.Join(root, "project")
+	remote := filepath.Join(root, "project-origin.git")
+	initializeGitRepository(t, repository, remote)
+	manager := &gitadapter.LocalWorktreeManager{WorktreeDir: filepath.Join(root, "worktrees")}
+	workspace, err := manager.Create(context.Background(), repository, "main", "run-test-checkpoint")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace.Worktree, "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Worktree, "tests", "behavior_test.go"), []byte("package tests\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Worktree, "implementation.txt"), []byte("must remain uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := manager.CreateCheckpoint(context.Background(), gitadapter.CheckpointRequest{
+		RunID:        "run-test-checkpoint",
+		WorktreePath: workspace.Worktree,
+		ParentSHA:    workspace.BaseSHA,
+		Kind:         gitadapter.CheckpointKindTest,
+		Paths:        []string{"tests/behavior_test.go"},
+		Message:      "verified the behavior is red",
+	})
+	if err != nil {
+		t.Fatalf("CreateCheckpoint() error = %v", err)
+	}
+	if !checkpoint.Created || !validCommitSHA(checkpoint.SHA) {
+		t.Fatalf("checkpoint = %#v, want new test checkpoint", checkpoint)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Worktree, "log", "-1", "--format=%B")); got != "factory: test checkpoint run-test-checkpoint\n\nverified the behavior is red" {
+		t.Fatalf("checkpoint message = %q, want test marker", got)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Worktree, "status", "--porcelain")); got != "?? implementation.txt" {
+		t.Fatalf("checkpoint status = %q, want implementation path left uncommitted", got)
+	}
+	if err := manager.Remove(context.Background(), repository, workspace); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+}
+
 // TestLocalGitWorkspaceCreatesOneImplementationCheckpoint verifies the host
 // Git seam commits the worktree's changes and returns the resulting full SHA.
 func TestLocalGitWorkspaceCreatesOneImplementationCheckpoint(t *testing.T) {

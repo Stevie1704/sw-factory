@@ -125,8 +125,21 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	if request.RunID != "" && request.RunID != run.ID {
 		return BaselineResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	if run.Stage != store.StageClaim || run.Status != store.StatusActive {
-		return BaselineResult{}, fmt.Errorf("run %q must be in claim/active state for baseline, not %s/%s", run.ID, run.Stage, run.Status)
+	baselineReady := run.Stage == store.StageClaim
+	if run.Stage == store.StageTest && run.TestHandoff == nil && !run.TestStageSkipped {
+		if activeStore, ok := runStore.(ActiveInvocationStore); ok {
+			active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
+			if lookupErr != nil {
+				return BaselineResult{}, fmt.Errorf("look up active test invocation before baseline rerun: %w", lookupErr)
+			}
+			if active != nil {
+				return BaselineResult{}, fmt.Errorf("run %q has active test invocation %q", run.ID, active.ID)
+			}
+		}
+		baselineReady = true
+	}
+	if !baselineReady || run.Status != store.StatusActive {
+		return BaselineResult{}, fmt.Errorf("run %q must be in claim/active or pre-invocation test/active state for baseline, not %s/%s", run.ID, run.Stage, run.Status)
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
@@ -139,6 +152,11 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	result := BaselineResult{Run: *run, Gates: suite.Gates}
 	persistErr := persistGateSuite(ctx, runStore, *run, suite)
 	if suiteErr == nil && persistErr == nil {
+		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, *run, packet)
+		result.Run = advanced
+		if advanceErr != nil {
+			return result, advanceErr
+		}
 		return result, nil
 	}
 	if persistErr == nil && baselineFailureErrorTargeted(packet.Issue.Body, suite, suiteErr) {
@@ -146,6 +164,11 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 			if err := recorder.RecordEvaluationExemption(ctx, run.ID, store.EvaluationExemptionBaseline); err != nil {
 				return result, fmt.Errorf("record baseline evaluation exemption: %w", err)
 			}
+		}
+		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, *run, packet)
+		result.Run = advanced
+		if advanceErr != nil {
+			return result, advanceErr
 		}
 		return result, nil
 	}
@@ -175,6 +198,17 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 // agent can start. It checks the frozen gate set, exact checkpoint, and current
 // dependency-input fingerprint so an old baseline cannot authorize new edits.
 func (s *Service) ensureBaselineReady(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) error {
+	checkpoint := run.BaseCheckpointSHA
+	if checkpoint == "" {
+		checkpoint = run.CheckpointSHA
+	}
+	return s.ensureBaselineReadyAtCheckpoint(ctx, runStore, run, packet, checkpoint)
+}
+
+// ensureBaselineReadyAtCheckpoint validates a baseline projection at an
+// explicit checkpoint for check-stage transitions that intentionally require
+// the current implementation checkpoint rather than the immutable base.
+func (s *Service) ensureBaselineReadyAtCheckpoint(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket, checkpoint string) error {
 	resultStore, ok := runStore.(GateResultStore)
 	if !ok {
 		return errors.New("operational store does not support baseline gate results")
@@ -183,18 +217,19 @@ func (s *Service) ensureBaselineReady(ctx context.Context, runStore RunStore, ru
 	if err != nil {
 		return fmt.Errorf("fingerprint baseline setup files: %w", err)
 	}
-	stored, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseBaseline, run.CheckpointSHA)
+	baselineCheckpoint := checkpoint
+	stored, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseBaseline, baselineCheckpoint)
 	if err != nil {
 		return fmt.Errorf("read baseline gate results: %w", err)
 	}
 	if len(stored) != len(packet.RepositoryConfig.Gates) {
 		return fmt.Errorf("baseline gate results are incomplete: got %d, want %d", len(stored), len(packet.RepositoryConfig.Gates))
 	}
-	suite := gate.SuiteResult{CheckpointSHA: run.CheckpointSHA, Phase: gate.PhaseBaseline}
+	suite := gate.SuiteResult{CheckpointSHA: baselineCheckpoint, Phase: gate.PhaseBaseline}
 	setupFailed := false
 	for index, declared := range packet.RepositoryConfig.Gates {
 		result := stored[index]
-		if result.RunID != run.ID || result.CheckpointSHA != run.CheckpointSHA || result.Phase != store.GatePhaseBaseline || result.GateName != declared.Name || result.Blocking != declared.Blocking || result.SetupFingerprint != fingerprint {
+		if result.RunID != run.ID || result.CheckpointSHA != baselineCheckpoint || result.Phase != store.GatePhaseBaseline || result.GateName != declared.Name || result.Blocking != declared.Blocking || result.SetupFingerprint != fingerprint {
 			return fmt.Errorf("baseline gate result %q does not match the frozen run identity", declared.Name)
 		}
 		outcome := gate.Outcome(result.Outcome)

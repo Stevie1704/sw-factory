@@ -152,14 +152,15 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 	return 0
 }
 
-// runAgent starts the visible implementation agent for the active run.
+// runAgent starts the visible agent for the active run, selecting the required
+// test stage automatically when the frozen repository policy declares it.
 func runAgent(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
-	role := flags.String("role", "implementation", "workflow role")
-	stage := flags.String("stage", "implementation", "workflow stage")
+	role := flags.String("role", "", "workflow role; empty selects the active stage")
+	stage := flags.String("stage", "", "workflow stage; empty selects the active stage")
 	harnessName := flags.String("harness", "", "validated harness override")
 	model := flags.String("model", "", "validated model override")
 	reasoningEffort := flags.String("reasoning-effort", "", "validated reasoning-effort override")
@@ -187,7 +188,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 		writeError(errorsOutput, err)
 		return 1
 	}
-	message := fmt.Sprintf("agent started\nrun: %s\ninvocation: %s\nworkspace: %s\nimplementation surface: %s\n", launch.Invocation.RunID, launch.Invocation.ID, launch.Invocation.WorkspaceID, launch.Invocation.ImplementationSurfaceID)
+	message := fmt.Sprintf("agent started\nrun: %s\nrole: %s\nstage: %s\ninvocation: %s\nworkspace: %s\nagent surface: %s\n", launch.Invocation.RunID, launch.Invocation.Role, launch.Invocation.Stage, launch.Invocation.ID, launch.Invocation.WorkspaceID, launch.Invocation.ImplementationSurfaceID)
 	if launch.Invocation.ChecksSurfaceID != "" {
 		message += fmt.Sprintf("checks surface: %s\n", launch.Invocation.ChecksSurfaceID)
 	}

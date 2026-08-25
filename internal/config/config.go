@@ -127,13 +127,16 @@ type TestMode string
 const (
 	TestModeRequired TestMode = "required"
 	TestModeAdvisory TestMode = "advisory"
-	TestModeDisabled TestMode = "disabled"
 )
 
 type TestPolicy struct {
 	Mode                    TestMode `yaml:"mode"`
 	AllowHumanExemption     bool     `yaml:"allow_human_exemption"`
 	AllowTechnicalExemption bool     `yaml:"allow_technical_exemption"`
+	// TestPaths adds repository-relative prefixes where the test role may edit.
+	TestPaths []string `yaml:"test_paths"`
+	// InfrastructurePaths adds essential test-support prefixes owned by the test role.
+	InfrastructurePaths []string `yaml:"infrastructure_paths"`
 }
 
 type CacheConfig struct {
@@ -421,6 +424,12 @@ func ValidateRepository(config RepositoryConfig) error {
 			return validation("role_harness_defaults."+role, "must declare a harness for every model role")
 		}
 	}
+	if _, exists := config.RoleHarnessDefaults["test"]; !exists {
+		return validation("role_harness_defaults.test", "must declare the mandatory test role")
+	}
+	if _, exists := config.ModelOptions["test"]; !exists {
+		return validation("model_options.test", "must declare a model for the mandatory test role")
+	}
 	for field, value := range map[string]string{
 		"timeouts.setup":  config.Timeouts.Setup,
 		"timeouts.agent":  config.Timeouts.Agent,
@@ -443,8 +452,14 @@ func ValidateRepository(config RepositoryConfig) error {
 			return validation(field, fmt.Sprintf("must not exceed %d", MaxCheckRepairAttempts))
 		}
 	}
-	if config.TestPolicy.Mode != TestModeRequired && config.TestPolicy.Mode != TestModeAdvisory && config.TestPolicy.Mode != TestModeDisabled {
-		return validation("test_policy.mode", "must be required, advisory, or disabled")
+	if config.TestPolicy.Mode != TestModeRequired && config.TestPolicy.Mode != TestModeAdvisory {
+		return validation("test_policy.mode", "must be required or advisory")
+	}
+	if err := validateTestPolicyPaths("test_policy.test_paths", config.TestPolicy.TestPaths); err != nil {
+		return err
+	}
+	if err := validateTestPolicyPaths("test_policy.infrastructure_paths", config.TestPolicy.InfrastructurePaths); err != nil {
+		return err
 	}
 	if err := validateOptionalOverrides(config.AllowedOverrides); err != nil {
 		return err
@@ -510,6 +525,30 @@ func validateSetupFiles(values []string) error {
 		}
 		if _, exists := seen[normalized]; exists {
 			return validation(field, "must be unique")
+		}
+		seen[normalized] = struct{}{}
+	}
+	return nil
+}
+
+// validateTestPolicyPaths validates optional repository-relative test-role
+// prefixes used to authorize essential test infrastructure edits.
+func validateTestPolicyPaths(field string, values []string) error {
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		entryField := fmt.Sprintf("%s[%d]", field, index)
+		if strings.TrimSpace(value) == "" {
+			return validation(entryField, "must not be empty")
+		}
+		if strings.IndexFunc(value, unicode.IsControl) >= 0 || filepath.IsAbs(value) {
+			return validation(entryField, "must be a safe repository-relative path")
+		}
+		normalized := filepath.Clean(filepath.FromSlash(value))
+		if normalized == "." || normalized == ".." || strings.HasPrefix(normalized, ".."+string(filepath.Separator)) || normalized == ".git" || strings.HasPrefix(normalized, ".git"+string(filepath.Separator)) {
+			return validation(entryField, "must remain inside the repository checkout")
+		}
+		if _, exists := seen[normalized]; exists {
+			return validation(entryField, "must be unique")
 		}
 		seen[normalized] = struct{}{}
 	}

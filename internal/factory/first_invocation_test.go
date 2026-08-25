@@ -244,6 +244,12 @@ func recordReadyBaseline(t *testing.T, operationalPath string, run store.Run) {
 	if err != nil {
 		t.Fatalf("open baseline fixture store: %v", err)
 	}
+	run.TestStageSkipped = true
+	run.TestExemption = &store.TestExemption{Kind: "human", Justification: "implementation handoff fixture"}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		_ = opened.Close()
+		t.Fatalf("save baseline fixture run: %v", err)
+	}
 	err = opened.SaveGateResults(context.Background(), []store.GateResult{{
 		RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseBaseline,
 		Ordinal: 0, GateName: declared.Name, Outcome: store.GateOutcomePassed,
