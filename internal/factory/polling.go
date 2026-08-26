@@ -26,6 +26,12 @@ const (
 	PollClaimed PollOutcome = "claimed"
 )
 
+const (
+	// maxConsecutiveLeaseFailures limits lease-renewal retry attempts before
+	// returning a persistent error to the caller.
+	maxConsecutiveLeaseFailures = 5
+)
+
 // PollResult reports one deterministic polling observation and any run it
 // found or claimed.
 type PollResult struct {
@@ -109,6 +115,7 @@ func (s *Service) Start(ctx context.Context) error {
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	leaseRunID := ""
 	delay := time.Duration(0)
+	consecutiveLeaseFailures := 0
 	for {
 		if err := waitPolling(pollContext, delay); err != nil {
 			if pollingContextDone(err) {
@@ -133,9 +140,14 @@ func (s *Service) Start(ctx context.Context) error {
 			if pollingContextDone(err) {
 				return nil
 			}
+			consecutiveLeaseFailures++
+			if consecutiveLeaseFailures > maxConsecutiveLeaseFailures {
+				return fmt.Errorf("lease renewal failed after %d consecutive attempts: %w", maxConsecutiveLeaseFailures, err)
+			}
 			delay = backoff
 			continue
 		}
+		consecutiveLeaseFailures = 0
 
 		result, err := s.pollOnce(pollContext, registration)
 		if err != nil {
