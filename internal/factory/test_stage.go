@@ -13,6 +13,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -424,41 +425,62 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	if workspace == nil {
 		return AgentResult{}, errors.New("GitWorkspace is required for the test checkpoint")
 	}
-	checkpoint, err := workspace.CreateCheckpoint(ctx, gitadapter.CheckpointRequest{
+	protected, err := protectedTestPathsForCheckpoint(run.Worktree, verifiedState.ChangedPaths)
+	if err != nil {
+		return AgentResult{}, err
+	}
+	checkpointRequest := gitadapter.CheckpointRequest{
 		RunID:        run.ID,
 		WorktreePath: run.Worktree,
 		ParentSHA:    run.CheckpointSHA,
 		Kind:         gitadapter.CheckpointKindTest,
 		Paths:        append([]string(nil), verifiedState.ChangedPaths...),
 		Message:      "verified focused test is red",
-	})
+	}
+	previous := *run
+	handoff := convertTestHandoff(*value.TestHandoff)
+	next := *run
+	next.TestCheckpointSHA = ""
+	next.SpecificationReview = nil
+	next.TestHandoff = &handoff
+	next.ProtectedTestPaths = protected
+	next.Stage = store.StageImplementation
+	next.Status = store.StatusActive
+	next.PendingQuestions = nil
+	next.LifecycleReason = "test stage completed; protected handoff ready for implementation"
+	next.Revision = previous.Revision + 1
+	next.UpdatedAt = s.deps.Now().UTC()
+	checkpoint := gitadapter.CheckpointResult{}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		repository := commandRepository(registration)
+		issue, issueErr := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+		if issueErr != nil {
+			return AgentResult{}, fmt.Errorf("read issue for test handoff checkpoint: %w", issueErr)
+		}
+		packet, packetErr := decodeSpecificationPacket(run.SpecificationPacket)
+		if packetErr != nil {
+			return AgentResult{}, fmt.Errorf("decode specification packet for test handoff checkpoint: %w", packetErr)
+		}
+		issue = ensureIssueIdentity(issue, packet.Issue, run.IssueNumber)
+		checkpoint, next, err = s.checkpointAndPersistWithEffect(ctx, runStore, workspace, checkpointRequest, repository, issue, previous, next)
+	} else {
+		checkpoint, err = workspace.CreateCheckpoint(ctx, checkpointRequest)
+	}
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("create test checkpoint: %w", err)
 	}
-	protected, err := protectedTestPathsForCheckpoint(run.Worktree, verifiedState.ChangedPaths)
-	if err != nil {
-		return AgentResult{}, err
+	if !github.ValidCommitSHA(checkpoint.SHA) {
+		return AgentResult{}, errors.New("test checkpoint returned an invalid commit SHA")
 	}
-	handoff := convertTestHandoff(*value.TestHandoff)
-	run.TestCheckpointSHA = checkpoint.SHA
-	run.CheckpointSHA = checkpoint.SHA
-	run.SpecificationReview = nil
-	run.TestHandoff = &handoff
-	run.ProtectedTestPaths = protected
-	run.Stage = store.StageImplementation
-	run.Status = store.StatusActive
-	run.PendingQuestions = nil
-	run.LifecycleReason = "test stage completed; protected handoff ready for implementation"
-	run.UpdatedAt = s.deps.Now().UTC()
-	previous := *run
-	previous.Stage = store.StageTest
-	previous.Status = store.StatusActive
-	previous.CheckpointSHA = verifiedState.HeadSHA
-	previous.TestCheckpointSHA = ""
-	previous.TestHandoff = nil
-	previous.ProtectedTestPaths = nil
-	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
-		return AgentResult{}, fmt.Errorf("persist test handoff: %w", err)
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		*run = next
+	} else {
+		next.TestCheckpointSHA = checkpoint.SHA
+		next.CheckpointSHA = checkpoint.SHA
+		if err := s.persistAgentRunState(ctx, registration, runStore, previous, next); err != nil {
+			return AgentResult{}, fmt.Errorf("persist test handoff: %w", err)
+		}
+		*run = next
 	}
 	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation}); err != nil {
 		return AgentResult{}, fmt.Errorf("launch implementation after test handoff: %w", err)

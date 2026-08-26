@@ -80,12 +80,14 @@ read-only recovery diagnosis finds that every checked projection agrees and
 the operational store contains no invocation history. This is a completed
 claim or test handoff awaiting its first invocation, not an interrupted run.
 
-The exception applies only to first-agent startup. Any persisted invocation,
-including a terminal one, or any recovery discrepancy returns the typed
-`recovery-required` result without starting a worker, terminal surface, or
-harness. Gates, reports, transitions, draft pull requests, and other
-progression paths retain the fail-closed boundary until issue #21 provides
-complete reconciliation.
+The exception applies only to first-agent startup. A persisted active invocation
+with a complete native-session identity is resumed once against its persisted
+worker and terminal handles; a missing identity or any other recovery
+discrepancy pauses the run for a human. Terminal report acceptance is replayed
+from its durable effect record without finalizing the same invocation twice.
+Gates, reports, transitions, draft pull requests, and other progression paths
+reconcile the durable effect journal and external identities before they resume
+an interrupted run.
 
 The `TerminalRuntime` seam owns workspace, surface, input, notification, and
 lifecycle behavior. The macOS adapter invokes cmux; workflow code never sees

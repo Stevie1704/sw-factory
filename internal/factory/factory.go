@@ -55,6 +55,11 @@ type Factory interface {
 	PollCommands(context.Context, CommandPollRequest) ([]CommandResult, error)
 	// PollLifecycle observes merge and closure decisions for the current run.
 	PollLifecycle(context.Context, LifecycleRequest) (LifecycleResult, error)
+	// Reconcile completes one restart reconciliation pass for the current run.
+	Reconcile(context.Context) (RecoveryResult, error)
+	// AbandonPendingEffect explicitly discards one ambiguous effect after human
+	// review and leaves the run waiting for human reconciliation.
+	AbandonPendingEffect(context.Context, AbandonPendingEffectRequest) (RecoveryResult, error)
 	// EvaluationReport reads content-free local evaluation summaries and aggregates.
 	EvaluationReport(context.Context, EvaluationReportRequest) (EvaluationReportResult, error)
 	// DeleteEvaluation deliberately removes selected terminal evaluation summaries.
@@ -159,11 +164,39 @@ type Service struct {
 	runtimeSocketPath string
 	runtimePathSet    bool
 	harnessRuntimes   map[config.Harness]harness.Runtime
-	startupMu         sync.Mutex
-	startupChecked    bool
-	startupErr        error
-	pollMu            sync.Mutex
-	pollCancel        context.CancelFunc
+	// startedInvocations records invocations launched by this coordinator
+	// process, so same-process duplicate commands are not mistaken for restart
+	// recovery.
+	startedInvocations map[string]struct{}
+	startupMu          sync.Mutex
+	startupChecked     bool
+	startupErr         error
+	pollMu             sync.Mutex
+	pollCancel         context.CancelFunc
+}
+
+// markInvocationStarted records an invocation launched by this coordinator
+// process so a repeated command in the same process is rejected rather than
+// mistaken for a restart recovery.
+func (s *Service) markInvocationStarted(invocationID string) {
+	if strings.TrimSpace(invocationID) == "" {
+		return
+	}
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	if s.startedInvocations == nil {
+		s.startedInvocations = make(map[string]struct{})
+	}
+	s.startedInvocations[invocationID] = struct{}{}
+}
+
+// invocationStartedHere reports whether this service already launched the
+// persisted invocation during its current process lifetime.
+func (s *Service) invocationStartedHere(invocationID string) bool {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	_, exists := s.startedInvocations[invocationID]
+	return exists
 }
 
 type InitResult struct {
@@ -461,9 +494,29 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	if err != nil {
 		return StatusResult{}, err
 	}
-	if result.LatestRun != nil && !store.IsTerminalStatus(result.LatestRun.Status) {
-		diagnosis := s.diagnoseInterruptedRun(ctx, registration, *result.LatestRun)
-		result.Recovery = &diagnosis
+	if result.LatestRun != nil {
+		var pending *store.PendingEffect
+		if journal, ok := opened.(PendingEffectStore); ok {
+			pending, err = journal.PendingEffect(ctx, result.LatestRun.ID)
+			if err != nil {
+				return StatusResult{}, fmt.Errorf("read pending effect for status: %w", err)
+			}
+		}
+		if !store.IsTerminalStatus(result.LatestRun.Status) {
+			diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, opened, *result.LatestRun)
+			diagnosis.PendingEffect = pending
+			appendPendingEffectAction(&diagnosis)
+			result.Recovery = &diagnosis
+		} else if pending != nil {
+			// A terminal projection can be durable before the final journal clear.
+			// Keep that ambiguity visible without downgrading the terminal run or
+			// replaying an external effect from the read-only status command.
+			diagnosis := newRecoveryDiagnosis(result.LatestRun.ID)
+			diagnosis.PendingEffect = pending
+			diagnosis.SourcesAgree = false
+			appendPendingEffectAction(&diagnosis)
+			result.Recovery = &diagnosis
+		}
 	}
 	return result, nil
 }

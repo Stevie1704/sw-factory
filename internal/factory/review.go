@@ -148,7 +148,7 @@ func (s *Service) captureReviewDiff(ctx context.Context, run store.Run) (string,
 // The stable context is deliberately independent of invocation identity so a
 // later review replaces the status for the same checkpoint rather than adding
 // an unrelated status stream.
-func (s *Service) publishSpecificationReviewStatus(ctx context.Context, registration config.RepositoryRegistration, run store.Run, state github.CommitStatusState, description string) error {
+func (s *Service) publishSpecificationReviewStatus(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, state github.CommitStatusState, description string) error {
 	if s.deps.CommitStatuses == nil {
 		return errors.New("commit-status publisher is required for specification review")
 	}
@@ -156,7 +156,9 @@ func (s *Service) publishSpecificationReviewStatus(ctx context.Context, registra
 		return errors.New("specification review requires a valid checkpoint SHA")
 	}
 	description = reviewStatusDescription(description)
-	return s.deps.CommitStatuses.CreateCommitStatus(ctx, github.Repository{
+	statuses := github.CommitStatusPublisher(s.deps.CommitStatuses)
+	statuses = commitStatusPublisher{service: s, runStore: runStore, runID: run.ID, delegate: statuses}
+	return statuses.CreateCommitStatus(ctx, github.Repository{
 		Owner: registration.GitHub.Owner,
 		Name:  registration.GitHub.Repository,
 	}, github.CommitStatus{
@@ -287,14 +289,14 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 		return AgentResult{}, fmt.Errorf("unsupported specification review outcome %q", value.Outcome)
 	}
 	run.UpdatedAt = s.deps.Now().UTC()
-	if err := s.publishSpecificationReviewStatus(ctx, registration, *run, statusState, statusDescription); err != nil {
+	if err := s.publishSpecificationReviewStatus(ctx, registration, runStore, *run, statusState, statusDescription); err != nil {
 		return AgentResult{}, fmt.Errorf("publish specification review status: %w", err)
 	}
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist specification review state: %w", err)
 	}
 	if value.Outcome == report.OutcomeCompleted {
-		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, *run); err != nil {
+		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
 			return AgentResult{}, err
 		}
 	}
@@ -310,7 +312,7 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 
 // refreshSpecificationReviewPullRequest updates only the generated review
 // subsection of the tracked draft PR, preserving all human-authored text.
-func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, registration config.RepositoryRegistration, run store.Run) error {
+func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) error {
 	client := s.pullRequestClient()
 	if client == nil {
 		return errors.New("GitHub client does not support pull-request operations")
@@ -328,13 +330,24 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 		return fmt.Errorf("tracked pull request #%d was not found for review projection", run.PullRequestNumber)
 	}
 	body := mergeGeneratedReviewSection(existing.Body, generatedReviewSection(run))
-	updated, err := client.UpdatePullRequest(ctx, repository, existing.Number, github.PullRequestRequest{
+	updateRequest := github.PullRequestRequest{
 		Title:      defaultString(existing.Title, defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number))),
 		Body:       body,
 		HeadBranch: run.Branch,
 		BaseBranch: packet.RepositoryConfig.TargetBranch,
 		Draft:      true,
-	})
+	}
+	updated := existing
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		if err := s.updatePullRequestWithEffect(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest); err != nil {
+			return fmt.Errorf("update pull request with specification review: %w", err)
+		}
+		updated.Body = updateRequest.Body
+		updated.Title = updateRequest.Title
+		updated.Draft = updateRequest.Draft
+	} else {
+		updated, err = client.UpdatePullRequest(ctx, repository, existing.Number, updateRequest)
+	}
 	if err != nil {
 		return fmt.Errorf("update pull request with specification review: %w", err)
 	}

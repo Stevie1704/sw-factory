@@ -303,7 +303,7 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 	if err != nil {
 		return gate.SuiteResult{}, fmt.Errorf("prepare worker git metadata: %w", err)
 	}
-	if err := s.deps.Worker.Start(ctx, worker.StartRequest{
+	workerRequest := worker.StartRequest{
 		RunID:           run.ID,
 		WorktreePath:    run.Worktree,
 		GitMetadataPath: gitMetadataPath,
@@ -311,14 +311,19 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 		ImageDigest:     run.ImageDigest,
 		Caches:          workerCaches(packet.RepositoryConfig.Caches),
 		Role:            "gate",
-	}); err != nil {
+	}
+	if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {
 		return gate.SuiteResult{}, err
 	}
 	skipSetup := setupAlreadySucceeded(ctx, runStore, run, phase, fingerprint)
+	statuses := s.deps.CommitStatuses
+	if statuses != nil {
+		statuses = commitStatusPublisher{service: s, runStore: runStore, runID: run.ID, delegate: statuses}
+	}
 	return (gate.Runner{
 		Runtime:    s.deps.Worker,
 		Repository: github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
-		Statuses:   s.deps.CommitStatuses,
+		Statuses:   statuses,
 	}).RunSuite(ctx, gate.SuiteRequest{
 		RunID:                  run.ID,
 		CheckpointSHA:          run.CheckpointSHA,

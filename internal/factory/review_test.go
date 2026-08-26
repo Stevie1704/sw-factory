@@ -189,7 +189,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	if err := runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("SaveRun() review fixture error = %v", err)
 	}
-	githubAdapter.statusComment = github.Comment{ID: run.StatusCommentID, Body: "<!-- factory-status: " + run.ID + " -->"}
+	githubAdapter.statusComment = github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
 	worktree.state.HeadSHA = reviewCheckpoint
 	worktree.state.ChangedPaths = nil
 	runStore.gateResults[run.ID] = []store.GateResult{

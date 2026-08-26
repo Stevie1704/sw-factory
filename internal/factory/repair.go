@@ -407,6 +407,21 @@ func (s *Service) routeCheckRepair(ctx context.Context, registration config.Repo
 			baseResult.Remaining = remainingCheckRepairBudget(updated.CheckRepairAttempts, updated.CheckRepairBudget)
 			return baseResult, nil
 		}
+		if journal, journaled := runStore.(PendingEffectStore); journaled {
+			pending, pendingErr := journal.PendingEffect(ctx, run.ID)
+			if pendingErr != nil {
+				return baseResult, errors.Join(launchErr, fmt.Errorf("inspect pending check-repair effect: %w", pendingErr))
+			}
+			if pending != nil {
+				// The failed launch has a durable external intent. Do not issue a
+				// competing stop or state transition; startup reconciliation owns
+				// the retry and the one-effect invariant.
+				baseResult.Run = updated
+				baseResult.Attempt = updated.CheckRepairAttempts
+				baseResult.Remaining = remainingCheckRepairBudget(updated.CheckRepairAttempts, updated.CheckRepairBudget)
+				return baseResult, launchErr
+			}
+		}
 		next := updated
 		next.CheckRepairBudget = run.CheckRepairBudget
 		if errors.Is(launchErr, ErrCheckRepairSessionUnavailable) {
@@ -552,6 +567,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	workerStarted := false
 	attemptReserved := false
 	resumeStarted := false
+	_, journaled := runStore.(PendingEffectStore)
 	reservedRun := run
 	persistedInvocation := invocation
 	defer func() {
@@ -560,8 +576,16 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		}
 		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if workerStarted {
+		if workerStarted && !(journaled && resumeStarted) {
 			_ = s.deps.Worker.Stop(rollbackContext, run.ID)
+		}
+		if journaled && resumeStarted {
+			// A journaled resume crossed an external boundary. Leave its active
+			// worker and invocation available for the pending state/resume
+			// effect to reconcile instead of declaring a successful session
+			// unusable during error cleanup.
+			updated = reservedRun
+			return
 		}
 		if attemptReserved && !resumeStarted {
 			rollbackErr := s.persistAgentRunState(rollbackContext, registration, runStore, reservedRun, run)
@@ -619,7 +643,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("prepare check-repair Git metadata: %w", err)
 	}
-	if err := s.deps.Worker.Start(ctx, worker.StartRequest{
+	workerRequest := worker.StartRequest{
 		RunID:             run.ID,
 		WorktreePath:      run.Worktree,
 		GitMetadataPath:   gitMetadataPath,
@@ -630,7 +654,8 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		ResultPath:        resultDirectory,
 		CredentialStoreID: credentialStoreID,
 		Role:              previous.Role,
-	}); err != nil {
+	}
+	if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {
 		return store.Invocation{}, run, fmt.Errorf("start worker for check repair: %w", err)
 	}
 	workerStarted = true
@@ -647,7 +672,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	reservedRun = next
 	attemptReserved = true
 	updated = reservedRun
-	session, err := harnessRuntime.Resume(ctx, harness.StartRequest{
+	resumeRequest := harness.StartRequest{
 		InvocationID:    invocation.ID,
 		RunID:           run.ID,
 		Role:            previous.Role,
@@ -658,18 +683,16 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		Model:           previous.Model,
 		ReasoningEffort: previous.ReasoningEffort,
 		ResumeSessionID: previous.NativeSessionID,
-	})
-	if err != nil {
-		return store.Invocation{}, run, fmt.Errorf("resume %s implementation agent for check repair: %w", previous.Harness, err)
 	}
-	resumeStarted = true
-	if session.NativeSessionID != "" {
-		invocation.NativeSessionID = session.NativeSessionID
+	resumedInvocation, resumeErr := s.resumeHarnessWithEffect(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	if resumedInvocation.RecoveryResumeCount > invocation.RecoveryResumeCount {
+		resumeStarted = true
 	}
+	if resumeErr != nil {
+		return store.Invocation{}, run, fmt.Errorf("resume %s implementation agent for check repair: %w", previous.Harness, resumeErr)
+	}
+	invocation = resumedInvocation
 	persistedInvocation = invocation
-	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
-		return store.Invocation{}, run, fmt.Errorf("persist check-repair native session: %w", err)
-	}
 	if recorder, ok := runStore.(evaluationRecorder); ok {
 		if err := recorder.RecordEvaluationAttempt(ctx, run.ID, store.EvaluationAttemptCheckRepair); err != nil {
 			return store.Invocation{}, run, fmt.Errorf("record check-repair attempt: %w", err)

@@ -20,7 +20,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 20
+const CurrentSchemaVersion = 22
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -29,6 +29,10 @@ var ErrRevisionConflict = errors.New("run revision conflict")
 // ErrRevisionNotAdvanced reports that a compare-and-set update did not move
 // the run to a strictly newer revision.
 var ErrRevisionNotAdvanced = errors.New("run revision did not advance")
+
+// ErrPendingEffectConflict reports that a run already has a different
+// external effect reserved in its durable journal.
+var ErrPendingEffectConflict = errors.New("pending effect conflict")
 
 // runTimestampLayout keeps serialized run timestamps fixed-width so SQLite
 // text ordering matches chronological ordering for sub-second timestamps.
@@ -62,6 +66,58 @@ const (
 // progression state to reconcile.
 func IsTerminalStatus(status Status) bool {
 	return status == StatusComplete || status == StatusCancelled || status == StatusFailed
+}
+
+// PendingEffectKind identifies the external mutation reserved before a
+// coordinator process crosses its restart boundary.
+type PendingEffectKind string
+
+const (
+	// PendingEffectKindStateTransition covers the paired issue-label and status
+	// comment projection for one run revision.
+	PendingEffectKindStateTransition PendingEffectKind = "state_transition"
+	// PendingEffectKindLabelTransition identifies a standalone issue-label
+	// projection when a caller does not use a complete state transition.
+	PendingEffectKindLabelTransition PendingEffectKind = "label_transition"
+	// PendingEffectKindStatusComment identifies a standalone status-comment
+	// projection when a caller does not use a complete state transition.
+	PendingEffectKindStatusComment PendingEffectKind = "status_comment"
+	// PendingEffectKindCommitStatus identifies one exact-SHA Commit Status.
+	PendingEffectKindCommitStatus PendingEffectKind = "commit_status"
+	// PendingEffectKindPush identifies one run-branch push.
+	PendingEffectKindPush PendingEffectKind = "push"
+	// PendingEffectKindPullRequest identifies one draft pull-request mutation.
+	PendingEffectKindPullRequest PendingEffectKind = "pull_request"
+	// PendingEffectKindCheckpoint identifies one checkpoint commit.
+	PendingEffectKindCheckpoint PendingEffectKind = "checkpoint"
+	// PendingEffectKindWorkerLaunch identifies one worker creation or reuse.
+	PendingEffectKindWorkerLaunch PendingEffectKind = "worker_launch"
+	// PendingEffectKindHarnessResume identifies one native-session resume.
+	PendingEffectKindHarnessResume PendingEffectKind = "harness_resume"
+	// PendingEffectKindResultAcceptance identifies one accepted report
+	// projection.
+	PendingEffectKindResultAcceptance PendingEffectKind = "result_acceptance"
+	// PendingEffectKindClarificationComment identifies one clarification
+	// question comment and its persisted comment identity.
+	PendingEffectKindClarificationComment PendingEffectKind = "clarification_comment"
+)
+
+// PendingEffect is the bounded intent record for one external mutation. A run
+// may have at most one row, so a restart can inspect and finish the exact
+// operation that was in flight without replaying an unrelated effect.
+type PendingEffect struct {
+	// RunID identifies the run owning the effect.
+	RunID string
+	// ID is the deterministic idempotency key for the effect.
+	ID string
+	// Kind identifies the adapter operation represented by Payload.
+	Kind PendingEffectKind
+	// Payload is bounded JSON containing the complete replay intent.
+	Payload string
+	// CreatedAt is the first reservation time.
+	CreatedAt time.Time
+	// UpdatedAt is the latest reservation time.
+	UpdatedAt time.Time
 }
 
 // InvocationStatus describes the lifecycle of one visible harness invocation.
@@ -364,6 +420,9 @@ type Invocation struct {
 	PromptVersion string
 	// Status is the invocation lifecycle state.
 	Status InvocationStatus
+	// RecoveryResumeCount records the number of coordinator-owned native resume
+	// attempts completed for this invocation. Reconciliation permits one.
+	RecoveryResumeCount int
 	// CreatedAt is the immutable invocation creation time.
 	CreatedAt time.Time
 	// UpdatedAt is the latest coordinator update time.
@@ -718,6 +777,141 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 		return fmt.Errorf("save run: %w", err)
 	}
 	return nil
+}
+
+// PendingEffect returns the one durable external-effect reservation for a run,
+// or nil when the run has no mutation awaiting reconciliation.
+func (s *Store) PendingEffect(ctx context.Context, runID string) (*PendingEffect, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, errors.New("pending effect run id is required")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT run_id, effect_id, kind, payload, created_at, updated_at
+		FROM pending_effects
+		WHERE run_id = ?`, runID)
+	return scanPendingEffect(row)
+}
+
+// SavePendingEffect reserves one external mutation. Re-saving the same
+// run/effect identity and payload is a no-op; a different effect is rejected
+// until the existing reservation is completed or abandoned.
+func (s *Store) SavePendingEffect(ctx context.Context, effect PendingEffect) error {
+	effect, err := normalizePendingEffect(effect)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO pending_effects (run_id, effect_id, kind, payload, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(run_id) DO NOTHING`,
+		effect.RunID, effect.ID, effect.Kind, effect.Payload,
+		effect.CreatedAt.UTC().Format(runTimestampLayout),
+		effect.UpdatedAt.UTC().Format(runTimestampLayout)); err != nil {
+		return fmt.Errorf("save pending effect: %w", err)
+	}
+	current, err := s.PendingEffect(ctx, effect.RunID)
+	if err != nil {
+		return err
+	}
+	if current == nil || current.ID != effect.ID || current.Kind != effect.Kind || current.Payload != effect.Payload {
+		return fmt.Errorf("%w: run %q already has effect %q", ErrPendingEffectConflict, effect.RunID, pendingEffectIdentity(current))
+	}
+	return nil
+}
+
+// ClearPendingEffect completes a matching external-effect reservation. A
+// missing row is already complete; a different row is left untouched so a
+// caller cannot accidentally acknowledge another operation.
+func (s *Store) ClearPendingEffect(ctx context.Context, runID, effectID string) error {
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("pending effect run id is required")
+	}
+	if strings.TrimSpace(effectID) == "" {
+		return errors.New("pending effect id is required")
+	}
+	result, err := s.db.ExecContext(ctx, "DELETE FROM pending_effects WHERE run_id = ? AND effect_id = ?", runID, effectID)
+	if err != nil {
+		return fmt.Errorf("clear pending effect: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect cleared pending effect: %w", err)
+	}
+	if changed == 1 {
+		return nil
+	}
+	current, err := s.PendingEffect(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if current != nil && current.ID != effectID {
+		return fmt.Errorf("%w: cannot clear effect %q while effect %q is pending", ErrPendingEffectConflict, effectID, current.ID)
+	}
+	return nil
+}
+
+// AbandonPendingEffect removes a matching reservation after an operator has
+// deliberately decided that the effect must not be replayed. The reason is
+// intentionally supplied by the caller and is not retained in the store.
+func (s *Store) AbandonPendingEffect(ctx context.Context, runID, effectID, _ string) error {
+	return s.ClearPendingEffect(ctx, runID, effectID)
+}
+
+// scanPendingEffect decodes one pending-effect row and its canonical
+// timestamps.
+func scanPendingEffect(row *sql.Row) (*PendingEffect, error) {
+	var effect PendingEffect
+	var kind, createdAt, updatedAt string
+	if err := row.Scan(&effect.RunID, &effect.ID, &kind, &effect.Payload, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read pending effect: %w", err)
+	}
+	effect.Kind = PendingEffectKind(kind)
+	var err error
+	effect.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse pending effect created_at: %w", err)
+	}
+	effect.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse pending effect updated_at: %w", err)
+	}
+	return &effect, nil
+}
+
+// normalizePendingEffect validates the bounded journal identity and fills
+// absent timestamps before persistence.
+func normalizePendingEffect(effect PendingEffect) (PendingEffect, error) {
+	if strings.TrimSpace(effect.RunID) == "" {
+		return PendingEffect{}, errors.New("pending effect run id is required")
+	}
+	if strings.TrimSpace(effect.ID) == "" || strings.ContainsAny(effect.ID, "\x00\r\n") {
+		return PendingEffect{}, errors.New("pending effect id is required and must be a single line")
+	}
+	if strings.TrimSpace(string(effect.Kind)) == "" || strings.ContainsAny(string(effect.Kind), "\x00\r\n") {
+		return PendingEffect{}, errors.New("pending effect kind is required and must be a single line")
+	}
+	if strings.TrimSpace(effect.Payload) == "" || len(effect.Payload) > 1<<20 || !json.Valid([]byte(effect.Payload)) {
+		return PendingEffect{}, errors.New("pending effect payload must be valid bounded JSON")
+	}
+	if effect.CreatedAt.IsZero() {
+		effect.CreatedAt = time.Now().UTC()
+	}
+	if effect.UpdatedAt.IsZero() {
+		effect.UpdatedAt = effect.CreatedAt
+	}
+	return effect, nil
+}
+
+// pendingEffectIdentity keeps a conflict error useful even if a malformed
+// legacy row is ever encountered.
+func pendingEffectIdentity(effect *PendingEffect) string {
+	if effect == nil {
+		return "<missing>"
+	}
+	return effect.ID
 }
 
 // SaveRunIfRevision persists one command result only when the run still has
@@ -1173,6 +1367,9 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	if invocation.Status == "" {
 		return errors.New("invocation status is required")
 	}
+	if invocation.RecoveryResumeCount < 0 {
+		return errors.New("invocation recovery resume count must not be negative")
+	}
 	if strings.ContainsAny(invocation.CredentialStoreID, "\x00\r\n") {
 		return errors.New("invocation credential store id contains control characters")
 	}
@@ -1190,9 +1387,9 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		INSERT INTO invocations (
 			id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 			native_session_id, workspace_id, status_surface_id,
-			implementation_surface_id, checks_surface_id, invocation_directory,
-			result_directory, permitted_paths, prompt_version, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				implementation_surface_id, checks_surface_id, invocation_directory,
+				result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -1208,10 +1405,11 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			checks_surface_id = excluded.checks_surface_id,
 			invocation_directory = excluded.invocation_directory,
 			result_directory = excluded.result_directory,
-			permitted_paths = excluded.permitted_paths,
-			prompt_version = excluded.prompt_version,
-			status = excluded.status,
-			updated_at = excluded.updated_at`,
+				permitted_paths = excluded.permitted_paths,
+				prompt_version = excluded.prompt_version,
+				status = excluded.status,
+				recovery_resume_count = excluded.recovery_resume_count,
+				updated_at = excluded.updated_at`,
 		invocation.ID,
 		invocation.RunID,
 		invocation.Harness,
@@ -1230,6 +1428,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		string(permittedPathJSON),
 		invocation.PromptVersion,
 		invocation.Status,
+		invocation.RecoveryResumeCount,
 		invocation.CreatedAt.UTC().Format(runTimestampLayout),
 		invocation.UpdatedAt.UTC().Format(runTimestampLayout),
 	)
@@ -1326,7 +1525,7 @@ func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*In
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND id = ?`, runID, invocationID)
 	return scanInvocation(row)
@@ -1343,7 +1542,7 @@ func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ?
 		ORDER BY updated_at DESC, id DESC
@@ -1376,7 +1575,7 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at DESC
@@ -1407,6 +1606,7 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 		&permittedPathJSON,
 		&invocation.PromptVersion,
 		&invocation.Status,
+		&invocation.RecoveryResumeCount,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -2071,6 +2271,21 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 20: %w", err)
 				}
+			}
+		case 21:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE pending_effects (
+				run_id TEXT PRIMARY KEY,
+				effect_id TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				payload TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)`); err != nil {
+				return fmt.Errorf("apply store migration 21: %w", err)
+			}
+		case 22:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN recovery_resume_count INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("apply store migration 22: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

@@ -183,8 +183,11 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 	if store.IsTerminalStatus(previous.Status) {
 		return previous, nil
 	}
-	if err := s.stopRunWorker(ctx, previous.ID); err != nil {
-		return next, err
+	journaled := false
+	if _, journaled = runStore.(PendingEffectStore); !journaled {
+		if err := s.stopRunWorker(ctx, previous.ID); err != nil {
+			return next, err
+		}
 	}
 	repository := commandRepository(registration)
 	if next.StatusCommentID == "" {
@@ -203,6 +206,7 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 		Issue:      issue,
 		Previous:   previous,
 		Next:       next,
+		StopWorker: journaled,
 	})
 	if err != nil {
 		return updated, err

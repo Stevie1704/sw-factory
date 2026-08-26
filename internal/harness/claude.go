@@ -39,6 +39,19 @@ func (*Claude) Capabilities() Capabilities {
 	return Capabilities{Name: NameClaude, InteractiveResume: true}
 }
 
+// NativeSessionID returns the Claude Code session identity observed in the
+// worker's persisted project state for restart reconciliation.
+func (c *Claude) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
+	if request.Harness != "" && request.Harness != NameClaude {
+		return "", fmt.Errorf("Claude adapter cannot inspect harness %q", request.Harness)
+	}
+	provider, ok := c.Worker.(worker.NativeSessionProvider)
+	if !ok {
+		return "", errors.New("worker runtime does not support native session inspection")
+	}
+	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: NameClaude})
+}
+
 // Start launches a fresh Claude Code TUI with an adapter-assigned native
 // session identifier in a worker-backed terminal surface.
 func (c *Claude) Start(ctx context.Context, request StartRequest) (Session, error) {

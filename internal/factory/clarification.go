@@ -130,14 +130,31 @@ func (s *Service) ensureClarificationPublication(ctx context.Context, registrati
 		return run, fmt.Errorf("decode specification packet for clarification publication: %w", err)
 	}
 	if run.ClarificationCommentID == "" {
-		comment, postErr := s.postClarification(ctx, registration, run, packet.Version, run.PendingQuestions)
-		if postErr != nil {
-			return run, postErr
+		target := run.IssueNumber
+		if run.PullRequestNumber > 0 {
+			target = run.PullRequestNumber
 		}
-		run.ClarificationCommentID = comment.ID
-		run.UpdatedAt = s.deps.Now().UTC()
-		if err := saveRunWithRetry(ctx, runStore, run); err != nil {
-			return run, fmt.Errorf("persist clarification comment identity: %w", err)
+		body := clarificationCommentBody(run, packet.Version, run.PendingQuestions)
+		payload := clarificationCommentEffectPayload{
+			Repository: commandRepository(registration), Target: target, Body: body,
+		}
+		effect, effectErr := s.newPendingEffect(run.ID, store.PendingEffectKindClarificationComment, fmt.Sprintf("target=%d\x00body=%s", target, body), payload)
+		if effectErr != nil {
+			return run, effectErr
+		}
+		if effectErr := s.withPendingEffect(ctx, runStore, effect, func() error {
+			comment, findErr := s.findOrCreateClarificationComment(ctx, payload.Repository, target, run.ID, body)
+			if findErr != nil {
+				return findErr
+			}
+			run.ClarificationCommentID = comment.ID
+			run.UpdatedAt = s.deps.Now().UTC()
+			if err := saveRunWithRetry(ctx, runStore, run); err != nil {
+				return fmt.Errorf("persist clarification comment identity: %w", err)
+			}
+			return nil
+		}); effectErr != nil {
+			return run, effectErr
 		}
 	}
 	if !run.ClarificationNotificationSent {
@@ -151,6 +168,42 @@ func (s *Service) ensureClarificationPublication(ctx context.Context, registrati
 		}
 	}
 	return run, nil
+}
+
+// findOrCreateClarificationComment observes the coordinator-owned marker and
+// repairs its body before creating a question comment, making publication
+// safe across response loss and stale question edits.
+func (s *Service) findOrCreateClarificationComment(ctx context.Context, repository github.Repository, target int, runID, body string) (github.Comment, error) {
+	if s.deps.GitHub == nil {
+		return github.Comment{}, errors.New("GitHub client is required for clarification publication")
+	}
+	comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, target, clarificationCommentMarker(runID))
+	if err != nil {
+		return github.Comment{}, fmt.Errorf("find existing clarification questions on #%d: %w", target, err)
+	}
+	if strings.TrimSpace(comment.ID) != "" {
+		if comment.Body != body {
+			if err := s.deps.GitHub.EditIssueComment(ctx, repository, comment.ID, body); err != nil {
+				return github.Comment{}, fmt.Errorf("repair clarification questions on #%d: %w", target, err)
+			}
+			comment.Body = body
+		}
+		return comment, nil
+	}
+	created, err := s.deps.GitHub.CreateIssueComment(ctx, repository, target, body)
+	if err != nil {
+		return github.Comment{}, fmt.Errorf("post clarification questions on #%d: %w", target, err)
+	}
+	if strings.TrimSpace(created.ID) == "" {
+		return github.Comment{}, fmt.Errorf("post clarification questions on #%d returned an empty comment id", target)
+	}
+	return created, nil
+}
+
+// clarificationCommentMarker identifies the coordinator-authored clarification
+// comment so a response-loss restart can recover it before creating another.
+func clarificationCommentMarker(runID string) string {
+	return fmt.Sprintf("<!-- factory-clarification: %s -->", runID)
 }
 
 // pendingQuestion returns one run question by its stable identifier.

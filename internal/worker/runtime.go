@@ -553,19 +553,25 @@ func dockerStderrDetail(err error) error {
 	return err
 }
 
-// NativeSessionIDs discovers Codex sessions from persisted role-home files,
+// NativeSessionIDs discovers harness sessions from persisted role-home files,
 // never by scraping terminal output. An empty result means the harness has not
 // persisted a session file yet.
 func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSessionRequest) ([]string, error) {
 	if err := validateRunID(request.RunID); err != nil {
 		return nil, err
 	}
-	if request.Harness != "codex" {
+	var command string
+	switch request.Harness {
+	case "codex":
+		command = `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`
+	case "claude":
+		command = `find "$HOME/.claude/projects" -type f -name '*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`
+	default:
 		return nil, fmt.Errorf("native session lookup does not support harness %q", request.Harness)
 	}
 	result, err := r.RunCommand(ctx, CommandRequest{
 		RunID:             request.RunID,
-		Command:           `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`,
+		Command:           command,
 		EnvironmentPolicy: EnvironmentPolicyClean,
 		Role:              "coordinator",
 	})
@@ -598,7 +604,7 @@ func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSess
 	return identifiers, nil
 }
 
-// NativeSessionID returns the newest currently persisted Codex session for
+// NativeSessionID returns the newest currently persisted harness session for
 // compatibility with runtimes that only need one identifier.
 func (r *DockerRuntime) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
 	identifiers, err := r.NativeSessionIDs(ctx, request)

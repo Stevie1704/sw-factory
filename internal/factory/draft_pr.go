@@ -71,7 +71,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		return DraftPullRequestResult{}, err
 	}
 	if run.Stage == store.StageDraftPR {
-		pullRequest, err := s.regenerateDraftPullRequest(ctx, registration, *run, packet, request.Intervention)
+		pullRequest, err := s.regenerateDraftPullRequest(ctx, registration, runStore, *run, packet, request.Intervention)
 		if err != nil {
 			return DraftPullRequestResult{Run: *run}, err
 		}
@@ -132,12 +132,25 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 			}
 		}
 	} else {
-		checkpoint, checkpointErr := workspace.CreateCheckpoint(ctx, gitadapter.CheckpointRequest{
+		checkpointRequest := gitadapter.CheckpointRequest{
 			RunID:        run.ID,
 			WorktreePath: run.Worktree,
 			ParentSHA:    run.CheckpointSHA,
 			Message:      checkpointMessage(*run),
-		})
+		}
+		checkpoint := gitadapter.CheckpointResult{}
+		checkpointErr := error(nil)
+		next.SpecificationReview = nil
+		next.Stage = store.StageCheck
+		next.Status = store.StatusActive
+		next.LifecycleReason = "evaluating implementation checkpoint"
+		next.Revision = run.Revision + 1
+		next.UpdatedAt = s.deps.Now().UTC()
+		if _, journaled := runStore.(PendingEffectStore); journaled {
+			checkpoint, next, checkpointErr = s.checkpointAndPersistWithEffect(ctx, runStore, workspace, checkpointRequest, repository, issue, *run, next)
+		} else {
+			checkpoint, checkpointErr = workspace.CreateCheckpoint(ctx, checkpointRequest)
+		}
 		if checkpointErr != nil {
 			return DraftPullRequestResult{}, checkpointErr
 		}
@@ -147,17 +160,14 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		if run.CheckRepairAttempts > 0 && checkpoint.SHA == run.CheckpointSHA {
 			return DraftPullRequestResult{}, fmt.Errorf("check-repair attempt %d did not produce a new checkpoint SHA", run.CheckRepairAttempts)
 		}
-		next.CheckpointSHA = checkpoint.SHA
-		next.SpecificationReview = nil
-		next.Stage = store.StageCheck
-		next.Status = store.StatusActive
-		next.LifecycleReason = "evaluating implementation checkpoint"
-		next.UpdatedAt = s.deps.Now().UTC()
-		next, err = s.applyStateTransition(ctx, runStore, stateTransition{
-			Repository: repository, Issue: issue, Previous: *run, Next: next,
-		})
-		if err != nil {
-			return DraftPullRequestResult{}, err
+		if _, journaled := runStore.(PendingEffectStore); !journaled {
+			next.CheckpointSHA = checkpoint.SHA
+			next, err = s.applyStateTransition(ctx, runStore, stateTransition{
+				Repository: repository, Issue: issue, Previous: *run, Next: next,
+			})
+			if err != nil {
+				return DraftPullRequestResult{}, err
+			}
 		}
 	}
 
@@ -179,26 +189,46 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if len(state.ChangedPaths) != 0 {
 		return result, errors.New("worktree has uncommitted changes after deterministic gates")
 	}
-	if err := workspace.Push(ctx, gitadapter.PushRequest{WorktreePath: next.Worktree, Branch: next.Branch}); err != nil {
-		return result, err
+	pushRequest := gitadapter.PushRequest{WorktreePath: next.Worktree, Branch: next.Branch}
+	var pushErr error
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		pushErr = s.pushWithEffect(ctx, runStore, next.ID, workspace, pushRequest, next.CheckpointSHA)
+	} else {
+		pushErr = workspace.Push(ctx, pushRequest)
+	}
+	if pushErr != nil {
+		return result, pushErr
 	}
 
 	pullRequests := s.pullRequestClient()
 	if pullRequests == nil {
 		return result, errors.New("GitHub client does not support pull-request operations")
 	}
-	pullRequest, err := s.upsertDraftPullRequest(ctx, pullRequests, repository, next, packet, gates, request.Intervention)
-	if err != nil {
-		return result, err
+	pullRequest := github.PullRequest{}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		plannedRequest, expectedNumber, planErr := s.planDraftPullRequest(ctx, pullRequests, repository, next, packet, gates, request.Intervention)
+		if planErr != nil {
+			return result, planErr
+		}
+		next.Stage = store.StageDraftPR
+		next.Status = store.StatusActive
+		next.Revision = result.Run.Revision + 1
+		next.UpdatedAt = s.deps.Now().UTC()
+		pullRequest, next, err = s.upsertPullRequestAndPersistWithEffect(ctx, runStore, pullRequests, repository, issue, result.Run, next, plannedRequest, expectedNumber)
+	} else {
+		pullRequest, err = s.upsertDraftPullRequest(ctx, pullRequests, repository, next, packet, gates, request.Intervention)
+		if err != nil {
+			return result, err
+		}
+		next.PullRequestNumber = pullRequest.Number
+		next.PullRequestURL = pullRequest.URL
+		next.Stage = store.StageDraftPR
+		next.Status = store.StatusActive
+		next.UpdatedAt = s.deps.Now().UTC()
+		next, err = s.applyStateTransition(ctx, runStore, stateTransition{
+			Repository: repository, Issue: issue, Previous: result.Run, Next: next,
+		})
 	}
-	next.PullRequestNumber = pullRequest.Number
-	next.PullRequestURL = pullRequest.URL
-	next.Stage = store.StageDraftPR
-	next.Status = store.StatusActive
-	next.UpdatedAt = s.deps.Now().UTC()
-	next, err = s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository: repository, Issue: issue, Previous: result.Run, Next: next,
-	})
 	if err != nil {
 		return DraftPullRequestResult{Run: next, Gates: gates, PullRequest: pullRequest}, err
 	}
@@ -221,9 +251,19 @@ func (s *Service) runConfiguredGates(ctx context.Context, registration config.Re
 // upsertDraftPullRequest finds a prior branch pull request before creating one
 // and merges the generated section into its existing body when present.
 func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequest, error) {
-	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
+	request, expectedNumber, err := s.planDraftPullRequest(ctx, client, repository, run, packet, gates, intervention)
 	if err != nil {
 		return github.PullRequest{}, err
+	}
+	return s.upsertPullRequestRequest(ctx, client, repository, expectedNumber, request)
+}
+
+// planDraftPullRequest reads the current branch PR once and freezes the exact
+// request used by both the first mutation and a restart replay.
+func (s *Service) planDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequestRequest, int, error) {
+	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
+	if err != nil {
+		return github.PullRequestRequest{}, 0, err
 	}
 	body := generatedPullRequestBody(run, packet, gates, intervention)
 	request := github.PullRequestRequest{
@@ -235,29 +275,14 @@ func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.Pull
 	}
 	if existing.Number > 0 {
 		request.Body = mergeGeneratedPullRequestBody(existing.Body, body)
-		updated, err := client.UpdatePullRequest(ctx, repository, existing.Number, request)
-		if err != nil {
-			return github.PullRequest{}, err
-		}
-		if updated.Number <= 0 {
-			return github.PullRequest{}, errors.New("pull-request update returned no pull-request identity")
-		}
-		return updated, nil
 	}
-	created, err := client.CreatePullRequest(ctx, repository, request)
-	if err != nil {
-		return github.PullRequest{}, err
-	}
-	if created.Number <= 0 {
-		return github.PullRequest{}, errors.New("pull-request creation returned no pull-request identity")
-	}
-	return created, nil
+	return request, existing.Number, nil
 }
 
 // regenerateDraftPullRequest refreshes a previously created PR without
 // rerunning gates or pushing again. The branch lookup supplies the current
 // human-authored body for preservation.
-func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration config.RepositoryRegistration, run store.Run, packet SpecificationPacket, intervention string) (github.PullRequest, error) {
+func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket, intervention string) (github.PullRequest, error) {
 	client := s.pullRequestClient()
 	if client == nil {
 		return github.PullRequest{}, errors.New("GitHub client does not support pull-request operations")
@@ -271,13 +296,22 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 		return github.PullRequest{}, fmt.Errorf("draft pull request for branch %q was not found", run.Branch)
 	}
 	body := mergeGeneratedPullRequestBody(existing.Body, generatedPullRequestBody(run, packet, nil, intervention))
-	updated, err := client.UpdatePullRequest(ctx, repository, existing.Number, github.PullRequestRequest{
+	updateRequest := github.PullRequestRequest{
 		Title: defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number)), Body: body,
 		HeadBranch: run.Branch, BaseBranch: packet.RepositoryConfig.TargetBranch, Draft: true,
-	})
+	}
+	updated := existing
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		err = s.updatePullRequestWithEffect(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest)
+	} else {
+		updated, err = client.UpdatePullRequest(ctx, repository, existing.Number, updateRequest)
+	}
 	if err != nil {
 		return github.PullRequest{}, err
 	}
+	updated.Body = updateRequest.Body
+	updated.Title = updateRequest.Title
+	updated.Draft = updateRequest.Draft
 	if updated.Number <= 0 {
 		return github.PullRequest{}, errors.New("pull-request regeneration returned no pull-request identity")
 	}

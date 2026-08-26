@@ -306,17 +306,19 @@ The coordinator then fetches `origin/<target_branch>`, records that fetched comm
 The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
 
 Before any later coordinator command can progress a persisted non-terminal run,
-the new process performs a read-only recovery diagnosis. It compares the run
+the new process reconciles the durable effect journal and compares the run
 identifier, registered repository, worktree, branch, checkpoint SHA, issue
 number and factory state label, marked status-comment identity, and persisted
 pull-request identity when present. A missing or mismatched projection is
-reported alongside every other discovered discrepancy. Even when all sources
-agree, the command returns the typed `recovery-required` result and refuses to
-resume: this version performs no Git, GitHub, worker, terminal, harness, or
-workflow-state mutation and consumes no workflow budget. `factory status`
-remains available and prints the run, agreement state, discrepancies, and safe
-operator actions. Issue #21 explicitly supersedes this boundary with complete
-reconciliation and idempotent effect recovery.
+reported alongside every other discovered discrepancy and pauses the run for
+human disposition. A journaled effect is replayed only when its exact intent
+can be recognized or completed idempotently; otherwise the run remains waiting
+with the pending effect visible to `factory status`. `factory status` reports
+the run, agreement state, pending effect, discrepancies, and safe operator
+actions. After inspecting an ambiguous mutation, an operator can explicitly
+discard it with `factory reconcile --abandon-effect <effect-id> --reason <reason>`;
+the run remains paused. Legacy stores without the journal retain the typed
+`recovery-required` refusal.
 
 ## Authorized GitHub commands
 
@@ -392,7 +394,7 @@ prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 18 and persists invocation
+result. The operational store schema is version 22 and persists invocation
 identity, opaque surface handles, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state. It
 also persists the draft pull-request number and URL so a restarted command can

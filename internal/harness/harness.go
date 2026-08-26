@@ -75,6 +75,22 @@ type Capabilities struct {
 	InteractiveResume bool
 }
 
+// NativeSessionRequest identifies the worker-backed native session projection
+// that an adapter may inspect during restart reconciliation.
+type NativeSessionRequest struct {
+	// RunID identifies the worker run whose native session is checked.
+	RunID string
+	// Harness identifies the adapter-owned session format.
+	Harness string
+}
+
+// NativeSessionInspector is an optional adapter capability for comparing a
+// persisted native session identity with the current worker projection.
+type NativeSessionInspector interface {
+	// NativeSessionID returns the currently observed native session identity.
+	NativeSessionID(context.Context, NativeSessionRequest) (string, error)
+}
+
 // Runtime is the portable harness lifecycle seam used by the coordinator.
 type Runtime interface {
 	// Capabilities reports the adapter identity and supported lifecycle.
@@ -83,7 +99,9 @@ type Runtime interface {
 	Start(context.Context, StartRequest) (Session, error)
 	// Resume launches a native-resume session.
 	Resume(context.Context, StartRequest) (Session, error)
-	// Finish detaches the visible surface after accepted completion.
+	// Finish detaches the visible surface after accepted completion. Adapters
+	// must make this operation idempotent because reconciliation may replay it
+	// after a response-loss boundary.
 	Finish(context.Context, Session) error
 }
 

@@ -30,7 +30,7 @@ func TestProgressionRefusesAnAgreeingInterruptedRun(t *testing.T) {
 	run := recoveryRun(worktreePath)
 	githubAdapter := &fakeGitHub{
 		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: "<!-- factory-status: run-recovery -->"},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 	storeAdapter := &recoveryRunStore{run: run}
@@ -105,8 +105,15 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 		},
 		{
 			name: "mismatched status comment",
-			configure: func(_ *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
-				githubAdapter.statusComment = github.Comment{ID: "comment-other", Body: "<!-- factory-status: run-recovery -->"}
+			configure: func(run *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
+				githubAdapter.statusComment = github.Comment{ID: "comment-other", Body: factory.StatusCommentBody(*run)}
+			},
+			wantFields: []string{"github.status comment"},
+		},
+		{
+			name: "stale status comment body",
+			configure: func(run *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
+				githubAdapter.statusComment.Body = factory.StatusCommentBody(*run) + "\nstale projection"
 			},
 			wantFields: []string{"github.status comment"},
 		},
@@ -140,7 +147,7 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			run := recoveryRun(worktreePath)
 			githubAdapter := &fakeGitHub{
 				issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-				statusComment: github.Comment{ID: run.StatusCommentID, Body: "<!-- factory-status: run-recovery -->"},
+				statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 			}
 			worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 			pullRequests := &fakePullRequests{}
@@ -171,6 +178,82 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 				t.Fatalf("status effects = saved=%d labels=%d comments=%d, want none", len(storeAdapter.saved), len(githubAdapter.replacedHistory), len(githubAdapter.editedComments))
 			}
 		})
+	}
+}
+
+// TestAbandonPendingEffectLeavesTheRunWaitingForHuman verifies that an
+// explicitly abandoned ambiguous mutation is removed from the journal while
+// the workflow remains paused instead of silently continuing.
+func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := filepath.Join(root, "worktree")
+	if err := mkdir(worktreePath); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(root, "state", "factory.db")
+	ctx := context.Background()
+	opened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := recoveryRun(worktreePath)
+	run.RepositoryPath = root
+	run.Coordinator = "coordinator-test"
+	if err := opened.SaveRun(ctx, run); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	effect := store.PendingEffect{RunID: run.ID, ID: "effect-abandon", Kind: store.PendingEffectKindPush, Payload: "{}"}
+	if err := opened.SavePendingEffect(ctx, effect); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path: root, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
+	}}}
+	githubAdapter := &fakeGitHub{
+		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+	}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:    &fakeConfig{value: host},
+		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
+		GitHub:    githubAdapter,
+		Now:       func() time.Time { return time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC) },
+	})
+	result, err := service.AbandonPendingEffect(ctx, factory.AbandonPendingEffectRequest{RunID: run.ID, EffectID: effect.ID, Reason: "operator verified the remote branch manually"})
+	if err != nil {
+		t.Fatalf("AbandonPendingEffect() error = %v", err)
+	}
+	if result.Run == nil || result.Run.Status != store.StatusWaitingForHuman || result.Outcome != factory.RecoveryOutcomeWaitingForHuman {
+		t.Fatalf("abandon result = %#v, want waiting-for-human run", result)
+	}
+	reopened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	pending, err := reopened.PendingEffect(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != nil {
+		t.Fatalf("pending effect after abandonment = %#v, want nil", pending)
+	}
+	latest, err := reopened.LatestRun(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil || latest.Status != store.StatusWaitingForHuman {
+		t.Fatalf("latest run after abandonment = %#v, want waiting-for-human", latest)
 	}
 }
 

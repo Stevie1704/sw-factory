@@ -88,6 +88,9 @@ func (s *Service) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := s.reconcileRegisteredRun(ctx, registration); err != nil {
+		return fmt.Errorf("reconcile persisted run at startup: %w", err)
+	}
 	if s.issuePoller() == nil {
 		return errors.New("GitHub issue poller is required to start the coordinator")
 	}
@@ -164,6 +167,27 @@ func (s *Service) Start(ctx context.Context) error {
 		leaseRunID = result.Run.ID
 		delay = interval
 	}
+}
+
+// reconcileRegisteredRun opens the operational store once before the polling
+// loop acquires its host lock. This makes a process restart converge an active
+// run before queue work is considered.
+func (s *Service) reconcileRegisteredRun(ctx context.Context, registration config.RepositoryRegistration) error {
+	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
+	if err != nil {
+		return fmt.Errorf("open operational store for startup reconciliation: %w", err)
+	}
+	runStore, ok := opened.(RunStore)
+	if !ok {
+		_ = opened.Close()
+		return errors.New("operational store does not support startup reconciliation")
+	}
+	defer func() { _ = runStore.Close() }()
+	run, err := readReconciliationRun(ctx, runStore)
+	if err != nil {
+		return fmt.Errorf("read persisted run for startup reconciliation: %w", err)
+	}
+	return s.ensureProgressionStartup(ctx, registration, runStore, run)
 }
 
 // Stop asks the current coordinator process to stop polling. A same-process

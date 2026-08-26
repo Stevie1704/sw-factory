@@ -29,6 +29,20 @@ func (*Codex) Capabilities() Capabilities {
 	return Capabilities{Name: NameCodex, InteractiveResume: true}
 }
 
+// NativeSessionID returns the Codex session identity observed in the worker's
+// role home for restart reconciliation. The worker lookup remains behind this
+// adapter capability so coordinator code stays harness-neutral.
+func (c *Codex) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
+	if request.Harness != "" && request.Harness != NameCodex {
+		return "", fmt.Errorf("Codex adapter cannot inspect harness %q", request.Harness)
+	}
+	provider, ok := c.Worker.(worker.NativeSessionProvider)
+	if !ok {
+		return "", errors.New("worker runtime does not support native session inspection")
+	}
+	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: NameCodex})
+}
+
 // Start launches a fresh Codex TUI in a worker-backed terminal surface.
 func (c *Codex) Start(ctx context.Context, request StartRequest) (Session, error) {
 	if request.ResumeSessionID != "" {
