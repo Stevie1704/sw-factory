@@ -125,7 +125,20 @@ func (m *LocalWorktreeManager) CheckRemote(ctx context.Context, request DoctorRe
 		return remoteFailure(remoteFailureCheckout)
 	}
 	root, err := filepath.Abs(strings.TrimSpace(string(rootOutput)))
-	if err != nil || filepath.Clean(root) != filepath.Clean(request.RepositoryPath) {
+	if err != nil {
+		return remoteFailure(remoteFailureRoot)
+	}
+	// Resolve symlinks for both paths before comparing to handle cases like
+	// macOS /tmp vs /private/tmp where symlink-equivalent paths should match.
+	resolvedRoot := root
+	if evalRoot, err := filepath.EvalSymlinks(root); err == nil {
+		resolvedRoot = evalRoot
+	}
+	resolvedRepoPath := request.RepositoryPath
+	if evalRepoPath, err := filepath.EvalSymlinks(request.RepositoryPath); err == nil {
+		resolvedRepoPath = evalRepoPath
+	}
+	if filepath.Clean(resolvedRoot) != filepath.Clean(resolvedRepoPath) {
 		return remoteFailure(remoteFailureRoot)
 	}
 	remoteOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"remote", "get-url", request.RemoteName})
