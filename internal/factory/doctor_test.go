@@ -10,6 +10,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -37,6 +38,13 @@ func TestDoctorComposesEverySubsystemAndKeepsOptionalAuthNonBlocking(t *testing.
 		}},
 	}); err != nil {
 		t.Fatal(err)
+	}
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Open().Close() error = %v", err)
 	}
 
 	gitWorkspace := &factoryDoctorGitWorkspace{}

@@ -31,6 +31,8 @@ capabilities, harness authentication sources, and SQLite. It runs every
 contributor even after a failure and returns a nonzero exit status when any
 blocking prerequisite remains. Each failure includes a bounded problem and a
 corrective action; command output and credential contents are never rendered.
+The SQLite check opens the existing store read-only; it does not create,
+migrate, back up, chmod, or initialize store state.
 Missing optional host credential files are warnings because a harness may be
 authenticated during its first visible worker session.
 

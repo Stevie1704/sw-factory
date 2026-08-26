@@ -27,6 +27,37 @@ type DoctorRequest struct {
 	TargetBranch string
 }
 
+// remoteFailureKind identifies the bounded failure categories rendered by the
+// Git remote diagnosis without retaining command output.
+type remoteFailureKind string
+
+const (
+	remoteFailureConfiguration  remoteFailureKind = "configuration"
+	remoteFailureCheckout       remoteFailureKind = "checkout"
+	remoteFailureRoot           remoteFailureKind = "root"
+	remoteFailureFetchRead      remoteFailureKind = "fetch-read"
+	remoteFailureFetchIdentity  remoteFailureKind = "fetch-identity"
+	remoteFailurePushRead       remoteFailureKind = "push-read"
+	remoteFailurePushIdentity   remoteFailureKind = "push-identity"
+	remoteFailureBranchRead     remoteFailureKind = "branch-read"
+	remoteFailureBranchNoCommit remoteFailureKind = "branch-no-commit"
+)
+
+// remoteCheckError carries only a safe category from one Git remote probe.
+type remoteCheckError struct {
+	kind remoteFailureKind
+}
+
+// Error returns a bounded error that never includes Git command output.
+func (e *remoteCheckError) Error() string {
+	return "Git remote diagnosis failed"
+}
+
+// remoteFailure creates one categorized Git remote diagnosis error.
+func remoteFailure(kind remoteFailureKind) error {
+	return &remoteCheckError{kind: kind}
+}
+
 // DoctorChecker is the Git-owned startup diagnosis seam.
 type DoctorChecker interface {
 	CheckRemote(context.Context, DoctorRequest) error
@@ -42,7 +73,8 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 				return doctor.Failure("git remote", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckRemote(ctx, request); err != nil {
-				return doctor.Failure("git remote", "the registered checkout cannot reach the configured GitHub target", "repair the origin remote and ensure the configured target branch exists")
+				problem, action := remoteDiagnosis(err)
+				return doctor.Failure("git remote", problem, action)
 			}
 			return doctor.Success("git remote")
 		},
@@ -67,54 +99,88 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 	}
 }
 
-// CheckRemote verifies the ordinary checkout, its origin identity, and the
-// configured target branch without changing any Git reference.
+// CheckRemote verifies the ordinary checkout, its configured remote identity,
+// and the target branch without changing any Git reference.
 func (m *LocalWorktreeManager) CheckRemote(ctx context.Context, request DoctorRequest) error {
 	if err := validateDoctorRepository(request.RepositoryPath); err != nil {
-		return err
+		return remoteFailure(remoteFailureCheckout)
 	}
 	if strings.TrimSpace(request.RemoteName) == "" {
-		return errors.New("Git remote name is required")
+		return remoteFailure(remoteFailureConfiguration)
+	}
+	if err := validateRefPart(request.RemoteName); err != nil {
+		return remoteFailure(remoteFailureConfiguration)
 	}
 	if strings.TrimSpace(request.ExpectedOwner) == "" || strings.TrimSpace(request.ExpectedRepository) == "" {
-		return errors.New("expected GitHub repository identity is required")
+		return remoteFailure(remoteFailureConfiguration)
 	}
 	if strings.TrimSpace(request.TargetBranch) == "" {
-		return errors.New("Git target branch is required")
+		return remoteFailure(remoteFailureConfiguration)
 	}
 	if err := validateRefPart(request.TargetBranch); err != nil {
-		return fmt.Errorf("Git target branch: %w", err)
+		return remoteFailure(remoteFailureConfiguration)
 	}
 	rootOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"rev-parse", "--show-toplevel"})
 	if err != nil {
-		return fmt.Errorf("inspect Git checkout: %w", err)
+		return remoteFailure(remoteFailureCheckout)
 	}
 	root, err := filepath.Abs(strings.TrimSpace(string(rootOutput)))
 	if err != nil || filepath.Clean(root) != filepath.Clean(request.RepositoryPath) {
-		return errors.New("Git checkout root does not match the registered repository")
+		return remoteFailure(remoteFailureRoot)
 	}
 	remoteOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"remote", "get-url", request.RemoteName})
 	if err != nil {
-		return fmt.Errorf("read Git remote: %w", err)
+		return remoteFailure(remoteFailureFetchRead)
 	}
 	if !remoteMatches(string(remoteOutput), request.ExpectedOwner, request.ExpectedRepository) {
-		return errors.New("Git remote does not identify the registered GitHub repository")
+		return remoteFailure(remoteFailureFetchIdentity)
 	}
 	pushRemoteOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"remote", "get-url", "--push", request.RemoteName})
 	if err != nil {
-		return fmt.Errorf("read Git push remote: %w", err)
+		return remoteFailure(remoteFailurePushRead)
 	}
 	if !remoteMatches(string(pushRemoteOutput), request.ExpectedOwner, request.ExpectedRepository) {
-		return errors.New("Git push remote does not identify the registered GitHub repository")
+		return remoteFailure(remoteFailurePushIdentity)
 	}
 	branchOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"ls-remote", "--exit-code", request.RemoteName, "refs/heads/" + request.TargetBranch})
 	if err != nil {
-		return fmt.Errorf("probe Git target branch: %w", err)
+		return remoteFailure(remoteFailureBranchRead)
 	}
 	if strings.TrimSpace(string(branchOutput)) == "" {
-		return errors.New("Git target branch returned no commit")
+		return remoteFailure(remoteFailureBranchNoCommit)
 	}
 	return nil
+}
+
+// remoteDiagnosis translates one safe Git remote category into the specific
+// problem and corrective action shown by the startup report.
+func remoteDiagnosis(err error) (string, string) {
+	var failure *remoteCheckError
+	if !errors.As(err, &failure) {
+		return "the Git remote diagnosis could not be classified", "repair the registered checkout and configured Git remote, then retry the diagnosis"
+	}
+	switch failure.kind {
+	case remoteFailureConfiguration:
+		return "the Git remote diagnosis request is incomplete or unsafe", "repair the registered repository identity, remote name, and target branch"
+	case remoteFailureCheckout:
+		return "the registered checkout cannot be inspected as a Git repository", "repair the registered checkout path and initialize or restore its Git metadata"
+	case remoteFailureRoot:
+		return "Git resolved a checkout root different from the registered repository", "register the checkout's actual Git root or correct the repository path"
+	case remoteFailureFetchRead:
+		return "the configured Git fetch remote is missing or unreadable", "configure the factory remote and verify the checkout can read it"
+	case remoteFailureFetchIdentity:
+		return "the Git fetch remote does not identify the registered GitHub repository", "set the configured remote's fetch URL to the registered GitHub repository"
+	case remoteFailurePushRead:
+		return "the configured Git push remote is missing or unreadable", "configure a push URL for the factory remote and verify the checkout can read it"
+	case remoteFailurePushIdentity:
+		return "the Git push remote does not identify the registered GitHub repository", "set the configured remote's push URL to the registered GitHub repository"
+	case remoteFailureBranchRead:
+		return "the configured Git target branch cannot be read from the remote", "fetch the target branch and verify network and remote permissions"
+	case remoteFailureBranchNoCommit:
+		return "the configured Git target branch has no commit on the remote", "choose an existing target branch or publish the branch before starting the factory"
+	default:
+		return "the Git remote diagnosis returned an unknown failure", "repair the registered checkout and configured Git remote, then retry the diagnosis"
+	}
 }
 
 // CheckHooks verifies the configured Git hooks path is present and readable.

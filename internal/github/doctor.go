@@ -26,6 +26,7 @@ var (
 	errRepositoryUnreadable     = errors.New("registered GitHub repository is not readable")
 	errRepositoryContentsWrite  = errors.New("registered GitHub repository does not permit contents writes")
 	errRepositoryIssueSupervise = errors.New("registered GitHub repository does not permit issue and pull-request supervision")
+	errRepositoryTokenAccess    = errors.New("GitHub token permissions are not sufficient for factory operations")
 	errFactoryLabelsUnavailable = errors.New("factory labels are unavailable")
 	errFactoryLabelsMalformed   = errors.New("factory labels response is malformed")
 )
@@ -106,7 +107,48 @@ func (c *GhClient) CheckRepositoryAccess(ctx context.Context, repository Reposit
 	if !response.Permissions.Triage && !response.Permissions.Maintain && !response.Permissions.Admin {
 		return errRepositoryIssueSupervise
 	}
+	if err := c.checkTokenPermissions(ctx, response.Private); err != nil {
+		return err
+	}
 	return nil
+}
+
+// checkTokenPermissions verifies the scope metadata exposed by gh without
+// requesting or printing the token. Fine-grained tokens that expose no
+// inspectable scope metadata fail closed because repository role data alone
+// cannot establish their write categories.
+func (c *GhClient) checkTokenPermissions(ctx context.Context, private bool) error {
+	output, err := c.runner().Run(ctx, []string{"auth", "status", "--hostname", "github.com", "--json", "hosts"}, nil)
+	if err != nil {
+		return errRepositoryTokenAccess
+	}
+	var response doctorAuthStatusResponse
+	if err := json.Unmarshal(output, &response); err != nil {
+		return errRepositoryTokenAccess
+	}
+	for _, host := range response.Hosts["github.com"] {
+		if !host.Active || host.State != "success" {
+			continue
+		}
+		scopes := make(map[string]struct{})
+		for _, scope := range strings.Split(host.Scopes, ",") {
+			scope = strings.TrimSpace(scope)
+			if scope != "" {
+				scopes[scope] = struct{}{}
+			}
+		}
+		if _, ok := scopes["repo"]; ok {
+			return nil
+		}
+		if !private {
+			_, publicRepo := scopes["public_repo"]
+			_, repoStatus := scopes["repo:status"]
+			if publicRepo && repoStatus {
+				return nil
+			}
+		}
+	}
+	return errRepositoryTokenAccess
 }
 
 // repositoryAccessDiagnosis translates a read-only repository permission
@@ -121,6 +163,8 @@ func repositoryAccessDiagnosis(err error) (string, string) {
 		return "the authenticated account cannot write repository contents", "grant contents write access so the factory can publish its run branch"
 	case errors.Is(err, errRepositoryIssueSupervise):
 		return "the authenticated account cannot supervise issues and pull requests", "grant triage, maintain, or administrator repository access for labels, comments, and pull requests"
+	case errors.Is(err, errRepositoryTokenAccess):
+		return "the GitHub token does not expose the scopes required by factory operations", "authenticate gh with repo access, or with public_repo plus repo:status for a public repository"
 	default:
 		return "the registered GitHub repository permissions could not be validated", "verify repository access and retry the diagnosis"
 	}
@@ -183,6 +227,7 @@ func validateDoctorRepository(repository Repository) error {
 // doctorRepositoryResponse is the small repository API projection needed for
 // permission diagnosis.
 type doctorRepositoryResponse struct {
+	Private     bool `json:"private"`
 	Permissions struct {
 		Pull     bool `json:"pull"`
 		Push     bool `json:"push"`
@@ -190,6 +235,16 @@ type doctorRepositoryResponse struct {
 		Maintain bool `json:"maintain"`
 		Admin    bool `json:"admin"`
 	} `json:"permissions"`
+}
+
+// doctorAuthStatusResponse is the credential-free gh auth status projection
+// used to establish classic-token scope coverage.
+type doctorAuthStatusResponse struct {
+	Hosts map[string][]struct {
+		Active bool   `json:"active"`
+		State  string `json:"state"`
+		Scopes string `json:"scopes"`
+	} `json:"hosts"`
 }
 
 // doctorLabelResponse is the small label API projection needed by diagnosis.

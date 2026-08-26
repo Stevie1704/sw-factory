@@ -16,6 +16,7 @@ func TestStartupChecksReportMissingFactoryLabelsAlongsideSuccessfulAccessChecks(
 	runner := &doctorRunner{responses: []doctorResponse{
 		{output: []byte("authenticated\n")},
 		{output: []byte(`{"permissions":{"pull":true,"push":true,"triage":true}}`)},
+		{output: []byte(`{"hosts":{"github.com":[{"state":"success","active":true,"scopes":"repo"}]}}`)},
 		{output: []byte(`[[{"name":"agent-ready"}]]`)},
 	}}
 	client := &github.GhClient{Runner: runner}
@@ -49,6 +50,7 @@ func TestStartupChecksDistinguishLabelReadFailuresFromMissingLabels(t *testing.T
 			runner := &doctorRunner{responses: []doctorResponse{
 				{output: []byte("authenticated\n")},
 				{output: []byte(`{"permissions":{"pull":true,"push":true,"triage":true}}`)},
+				{output: []byte(`{"hosts":{"github.com":[{"state":"success","active":true,"scopes":"repo"}]}}`)},
 				{output: test.output, err: test.err},
 			}}
 			client := &github.GhClient{Runner: runner}
@@ -78,12 +80,29 @@ func TestStartupChecksNeverRenderAnAuthenticationError(t *testing.T) {
 	}
 }
 
+// TestStartupChecksRejectMissingTokenScopes verifies repository role data does
+// not overstate the effective classic-token permissions needed by the factory.
+func TestStartupChecksRejectMissingTokenScopes(t *testing.T) {
+	runner := &doctorRunner{responses: []doctorResponse{
+		{output: []byte("authenticated\n")},
+		{output: []byte(`{"private":true,"permissions":{"pull":true,"push":true,"triage":true}}`)},
+		{output: []byte(`{"hosts":{"github.com":[{"state":"success","active":true,"scopes":"public_repo"}]}}`)},
+	}}
+	client := &github.GhClient{Runner: runner}
+	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+	result := report.Results[1]
+	if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, "token") || result.Action == "" {
+		t.Fatalf("permission result = %#v, want missing-token-scope diagnosis", result)
+	}
+}
+
 // TestGhClientDoctorUsesReadOnlyGitHubOperations verifies diagnosis does not
 // create labels or mutate repository state.
 func TestGhClientDoctorUsesReadOnlyGitHubOperations(t *testing.T) {
 	runner := &doctorRunner{responses: []doctorResponse{
 		{output: []byte("authenticated\n")},
 		{output: []byte(`{"permissions":{"pull":true,"push":true,"triage":true}}`)},
+		{output: []byte(`{"hosts":{"github.com":[{"state":"success","active":true,"scopes":"repo"}]}}`)},
 		{output: []byte(`[[{"name":"agent-ready"},{"name":"agent-running"},{"name":"agent-needs-input"},{"name":"agent-failed"},{"name":"agent-cancelled"},{"name":"agent-complete"}]]`)},
 	}}
 	client := &github.GhClient{Runner: runner}
