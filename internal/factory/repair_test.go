@@ -600,7 +600,7 @@ type repairLaunchHarness struct {
 
 // Capabilities satisfies the harness runtime seam.
 func (*repairLaunchHarness) Capabilities() harness.Capabilities {
-	return harness.Capabilities{Name: string(config.HarnessCodex), NativeResume: true}
+	return harness.Capabilities{Name: string(config.HarnessCodex), ReasoningEffort: true}
 }
 
 // Start satisfies the harness runtime seam.

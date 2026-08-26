@@ -29,38 +29,38 @@ func policyRepository() config.RepositoryConfig {
 // and reasoning effort come from the frozen per-role policy.
 func TestResolveAgentPolicySelectsEachRoleIndependently(t *testing.T) {
 	repository := policyRepository()
-	harnessName, model, effort, err := resolveAgentPolicy(repository, AgentRequest{Role: "test"})
+	policy, err := resolveAgentPolicy(repository, AgentRequest{Role: "test"})
 	if err != nil {
 		t.Fatalf("resolveAgentPolicy(test) error = %v", err)
 	}
-	if harnessName != config.HarnessCodex || model != "gpt-5.6-luna" || effort != "medium" {
-		t.Fatalf("test role policy = %q/%q/%q, want the declared Codex defaults", harnessName, model, effort)
+	if policy != (AgentPolicy{Harness: config.HarnessCodex, Model: "gpt-5.6-luna", ReasoningEffort: "medium"}) {
+		t.Fatalf("test role policy = %#v, want the declared Codex defaults", policy)
 	}
-	harnessName, model, effort, err = resolveAgentPolicy(repository, AgentRequest{Role: "implementation"})
+	policy, err = resolveAgentPolicy(repository, AgentRequest{Role: "implementation"})
 	if err != nil {
 		t.Fatalf("resolveAgentPolicy(implementation) error = %v", err)
 	}
-	if harnessName != config.HarnessClaude || model != "claude-opus-5" || effort != "" {
-		t.Fatalf("implementation role policy = %q/%q/%q, want the declared Claude defaults", harnessName, model, effort)
+	if policy != (AgentPolicy{Harness: config.HarnessClaude, Model: "claude-opus-5"}) {
+		t.Fatalf("implementation role policy = %#v, want the declared Claude defaults", policy)
 	}
 }
 
 // TestResolveAgentPolicyAcceptsADeclaredSelection verifies a request may choose
 // any repository-declared option without an override permission.
 func TestResolveAgentPolicyAcceptsADeclaredSelection(t *testing.T) {
-	_, model, _, err := resolveAgentPolicy(policyRepository(), AgentRequest{Role: "implementation", Model: "claude-sonnet-5"})
+	policy, err := resolveAgentPolicy(policyRepository(), AgentRequest{Role: "implementation", Model: "claude-sonnet-5"})
 	if err != nil {
 		t.Fatalf("resolveAgentPolicy() error = %v", err)
 	}
-	if model != "claude-sonnet-5" {
-		t.Fatalf("model = %q, want the declared alternative", model)
+	if policy.Model != "claude-sonnet-5" {
+		t.Fatalf("model = %q, want the declared alternative", policy.Model)
 	}
-	_, _, effort, err := resolveAgentPolicy(policyRepository(), AgentRequest{Role: "test", ReasoningEffort: "high"})
+	policy, err = resolveAgentPolicy(policyRepository(), AgentRequest{Role: "test", ReasoningEffort: "high"})
 	if err != nil {
 		t.Fatalf("resolveAgentPolicy() error = %v", err)
 	}
-	if effort != "high" {
-		t.Fatalf("reasoning effort = %q, want the declared alternative", effort)
+	if policy.ReasoningEffort != "high" {
+		t.Fatalf("reasoning effort = %q, want the declared alternative", policy.ReasoningEffort)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestResolveAgentPolicyRefusesOverridesOutsidePolicy(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, _, err := resolveAgentPolicy(policyRepository(), test.request)
+			_, err := resolveAgentPolicy(policyRepository(), test.request)
 			var rejection *PolicyRejection
 			if !errors.As(err, &rejection) {
 				t.Fatalf("resolveAgentPolicy() error = %v, want a typed policy rejection", err)
@@ -112,7 +112,7 @@ func TestResolveAgentPolicyRefusesOverridesOutsidePolicy(t *testing.T) {
 func TestResolveAgentPolicyHonoursDeclaredOverridePermissions(t *testing.T) {
 	repository := policyRepository()
 	repository.AllowedOverrides = []config.OverrideName{config.OverrideHarness, config.OverrideModel, config.OverrideReasoningEffort}
-	harnessName, model, effort, err := resolveAgentPolicy(repository, AgentRequest{
+	policy, err := resolveAgentPolicy(repository, AgentRequest{
 		Role:            "test",
 		Harness:         config.HarnessClaude,
 		Model:           "gpt-9",
@@ -121,8 +121,8 @@ func TestResolveAgentPolicyHonoursDeclaredOverridePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveAgentPolicy() error = %v", err)
 	}
-	if harnessName != config.HarnessClaude || model != "gpt-9" || effort != "extreme" {
-		t.Fatalf("policy = %q/%q/%q, want the explicitly permitted overrides", harnessName, model, effort)
+	if policy != (AgentPolicy{Harness: config.HarnessClaude, Model: "gpt-9", ReasoningEffort: "extreme"}) {
+		t.Fatalf("policy = %#v, want the explicitly permitted overrides", policy)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestResolveAgentPolicyHonoursDeclaredOverridePermissions(t *testing.T) {
 func TestResolveAgentPolicyRefusesAnUnsupportedHarness(t *testing.T) {
 	repository := policyRepository()
 	repository.RoleHarnessDefaults["test"] = config.Harness("gemini")
-	_, _, _, err := resolveAgentPolicy(repository, AgentRequest{Role: "test"})
+	_, err := resolveAgentPolicy(repository, AgentRequest{Role: "test"})
 	var rejection *PolicyRejection
 	if !errors.As(err, &rejection) || rejection.Code != PolicyRejectionHarnessUnavailable {
 		t.Fatalf("resolveAgentPolicy() error = %v, want a typed harness-unavailable rejection", err)

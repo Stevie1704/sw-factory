@@ -1034,7 +1034,6 @@ func (*agentTerminal) CloseWorkspace(context.Context, terminal.WorkspaceID) erro
 
 // agentHarness records visible session lifecycle operations.
 type agentHarness struct {
-	name      string
 	starts    []harness.StartRequest
 	resumes   []harness.StartRequest
 	finished  []harness.Session
@@ -1043,12 +1042,8 @@ type agentHarness struct {
 }
 
 // Capabilities reports the harness identity this fake stands in for.
-func (h *agentHarness) Capabilities() harness.Capabilities {
-	name := h.name
-	if name == "" {
-		name = harness.NameCodex
-	}
-	return harness.Capabilities{Name: name, NativeResume: true}
+func (*agentHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: harness.NameCodex, ReasoningEffort: true}
 }
 
 // Start records the coordinator-owned prompt request.

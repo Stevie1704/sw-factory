@@ -26,7 +26,7 @@ func NewCodex(runtime worker.WorkerRuntime, terminalRuntime terminal.TerminalRun
 
 // Capabilities reports the Codex adapter identity and native resume support.
 func (*Codex) Capabilities() Capabilities {
-	return Capabilities{Name: NameCodex, NativeResume: true}
+	return Capabilities{Name: NameCodex, ReasoningEffort: true}
 }
 
 // Start launches a fresh Codex TUI in a worker-backed terminal surface.
@@ -49,13 +49,13 @@ func (c *Codex) Resume(ctx context.Context, request StartRequest) (Session, erro
 // Finish requests a graceful Codex exit while leaving the opaque surface open
 // so cmux can recover it and a later coordinator can reattach or resume.
 func (c *Codex) Finish(ctx context.Context, session Session) error {
-	return requestExit(ctx, c.Terminal, "Codex", session)
+	return requestExit(ctx, c.Terminal, NameCodex, session)
 }
 
 // launch builds the safe Codex command with its immutable prompt and creates a
 // visible surface. It never uses terminal input or output as a launch protocol.
 func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, error) {
-	if err := validateStartRequest("Codex", request); err != nil {
+	if err := validateStartRequest(NameCodex, request); err != nil {
 		return Session{}, err
 	}
 	interactive, ok := c.Worker.(worker.InteractiveRuntime)
@@ -104,7 +104,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 			}
 		}
 	}
-	surface, err := launchSurface(ctx, c.Terminal, "Codex", request, attach)
+	surface, err := launchSurface(ctx, c.Terminal, NameCodex, request, attach)
 	if err != nil {
 		return Session{}, err
 	}

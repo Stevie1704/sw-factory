@@ -54,9 +54,14 @@ const (
 	// PolicyRejectionModelOverride means the requested model is outside the
 	// role's repository-declared options.
 	PolicyRejectionModelOverride PolicyRejectionCode = "model_override"
+	// PolicyRejectionModelUnavailable means the role declares no model at all.
+	PolicyRejectionModelUnavailable PolicyRejectionCode = "model_unavailable"
 	// PolicyRejectionReasoningEffortOverride means the requested reasoning
 	// effort is outside the role's repository-declared options.
 	PolicyRejectionReasoningEffortOverride PolicyRejectionCode = "reasoning_effort_override"
+	// PolicyRejectionReasoningEffortUnsupported means the selected harness
+	// cannot honor a reasoning-effort selection at all.
+	PolicyRejectionReasoningEffortUnsupported PolicyRejectionCode = "reasoning_effort_unsupported"
 	// PolicyRejectionCancelState means cancellation is not legal for the run.
 	PolicyRejectionCancelState PolicyRejectionCode = "cancel_state"
 	// PolicyRejectionAnswerState means the run is not waiting for clarification.

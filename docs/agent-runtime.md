@@ -14,9 +14,12 @@ commands and owns no workflow, Git, retry, or terminal-layout decision.
 
 The coordinator resolves the adapter from the frozen repository policy for the
 role, so workflow code never names a tool. `Capabilities` reports the adapter
-identity and whether it supports native resume; the check-repair path uses it
-to refuse continuing a session in a harness that did not create it. Mid-session
-migration between Codex and Claude is therefore not possible.
+identity and whether the harness can honor a reasoning-effort selection. The
+check-repair path dispatches on the harness recorded for the session under
+repair and refuses to continue when the resolved adapter reports a different
+identity, so mid-session migration between Codex and Claude is not possible.
+The launch path refuses a reasoning effort the selected harness cannot honor
+before it creates any side effect.
 
 The two adapters differ in how a native session identity is obtained:
 
@@ -33,7 +36,7 @@ file. A factory role home is created by the worker image and is never seeded
 from a host harness directory, so a session inherits no personal plugin, hook,
 MCP server, skill, or setting. `DISABLE_AUTOUPDATER=1` keeps Claude Code on the
 version pinned by the run's worker image digest, so a tool upgrade cannot
-change behaviour halfway through a run.
+change behavior halfway through a run.
 
 Harness contract tests drive both adapters through the complete lifecycle
 against controlled stub executables before any live run.

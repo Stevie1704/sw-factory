@@ -34,9 +34,10 @@ func NewClaude(runtime worker.WorkerRuntime, terminalRuntime terminal.TerminalRu
 	return &Claude{Worker: runtime, Terminal: terminalRuntime, NewSessionID: newSessionID}
 }
 
-// Capabilities reports the Claude adapter identity and native resume support.
+// Capabilities reports the Claude adapter identity. Claude Code exposes no
+// reasoning-effort process argument, so it reports that setting unsupported.
 func (*Claude) Capabilities() Capabilities {
-	return Capabilities{Name: NameClaude, NativeResume: true}
+	return Capabilities{Name: NameClaude, ReasoningEffort: false}
 }
 
 // Start launches a fresh Claude Code TUI with an adapter-assigned native
@@ -68,14 +69,14 @@ func (c *Claude) Resume(ctx context.Context, request StartRequest) (Session, err
 // Finish requests a graceful Claude Code exit while leaving the opaque surface
 // open so cmux can recover it and a later coordinator can reattach or resume.
 func (c *Claude) Finish(ctx context.Context, session Session) error {
-	return requestExit(ctx, c.Terminal, "Claude", session)
+	return requestExit(ctx, c.Terminal, NameClaude, session)
 }
 
 // launch builds the safe Claude Code command with its immutable prompt and
 // places it in the coordinator-owned surface. It never uses terminal input or
 // output as a launch protocol.
 func (c *Claude) launch(ctx context.Context, request StartRequest, sessionID string, resume bool) (Session, error) {
-	if err := validateStartRequest("Claude", request); err != nil {
+	if err := validateStartRequest(NameClaude, request); err != nil {
 		return Session{}, err
 	}
 	if request.ReasoningEffort != "" {
@@ -123,7 +124,7 @@ func (c *Claude) launch(ctx context.Context, request StartRequest, sessionID str
 	if err != nil {
 		return Session{}, fmt.Errorf("build Claude interactive command: %w", err)
 	}
-	surface, err := launchSurface(ctx, c.Terminal, "Claude", request, attach)
+	surface, err := launchSurface(ctx, c.Terminal, NameClaude, request, attach)
 	if err != nil {
 		return Session{}, err
 	}

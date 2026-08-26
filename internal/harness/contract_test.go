@@ -27,15 +27,17 @@ const stubCodexSession = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 // stub writes is validated against the invocation identity the adapter set.
 func TestHarnessAdaptersSatisfyTheSameContract(t *testing.T) {
 	for _, test := range []struct {
-		name            string
-		harness         string
-		wantExecutable  string
-		wantLaunchFlag  string
-		wantResumeFlag  string
-		wantAssignedID  bool
-		wantResumeFirst bool
+		name           string
+		harness        string
+		wantExecutable string
+		wantLaunchFlag string
+		wantResumeFlag string
+		wantAssignedID bool
+		// wantReasoningEffort records the one capability the two adapters do
+		// not share.
+		wantReasoningEffort bool
 	}{
-		{name: "codex", harness: harness.NameCodex, wantExecutable: "codex", wantLaunchFlag: "-s", wantResumeFlag: "resume"},
+		{name: "codex", harness: harness.NameCodex, wantExecutable: "codex", wantLaunchFlag: "-s", wantResumeFlag: "resume", wantReasoningEffort: true},
 		{name: "claude", harness: harness.NameClaude, wantExecutable: "claude", wantLaunchFlag: "--session-id", wantResumeFlag: "--resume", wantAssignedID: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -47,8 +49,11 @@ func TestHarnessAdaptersSatisfyTheSameContract(t *testing.T) {
 
 			// Capability discovery.
 			capabilities := runtime.Capabilities()
-			if capabilities.Name != test.harness || !capabilities.NativeResume {
-				t.Fatalf("Capabilities() = %#v, want %q with native resume", capabilities, test.harness)
+			if capabilities.Name != test.harness {
+				t.Fatalf("Capabilities() = %#v, want harness %q", capabilities, test.harness)
+			}
+			if capabilities.ReasoningEffort != test.wantReasoningEffort {
+				t.Fatalf("Capabilities() = %#v, want reasoning-effort support %t", capabilities, test.wantReasoningEffort)
 			}
 
 			// Launch.

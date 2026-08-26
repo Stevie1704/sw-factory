@@ -481,9 +481,6 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if capabilities.Name != previous.Harness {
 		return store.Invocation{}, run, fmt.Errorf("%w: harness %q cannot resume a %q session", ErrCheckRepairSessionUnavailable, capabilities.Name, previous.Harness)
 	}
-	if !capabilities.NativeResume {
-		return store.Invocation{}, run, fmt.Errorf("%w: harness %q has no native repair adapter", ErrCheckRepairSessionUnavailable, previous.Harness)
-	}
 	identifier, err := s.deps.NewRunID()
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("generate check-repair invocation identifier: %w", err)

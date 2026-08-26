@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -94,7 +94,7 @@ func TestStartAgentRefusesAnIssueHarnessOverrideOutsidePolicy(t *testing.T) {
 }
 
 // TestStartAgentAcceptsAnIssueHarnessOverridePermittedByPolicy verifies the
-// recorded override from a `/factory configure harness=claude` comment selects
+// recorded override from a `/factory config harness=claude` comment selects
 // the Claude adapter once the repository permits harness overrides.
 func TestStartAgentAcceptsAnIssueHarnessOverridePermittedByPolicy(t *testing.T) {
 	_, runStore, runtime, terminalRuntime, _ := newAgentService(t)
@@ -117,19 +117,48 @@ func TestStartAgentAcceptsAnIssueHarnessOverridePermittedByPolicy(t *testing.T) 
 	}
 }
 
-// TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonour verifies a
-// validated repository setting is refused rather than silently dropped when
-// the selected harness has no native representation for it.
-func TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonour(t *testing.T) {
+// TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonor verifies a
+// validated repository setting is refused as a typed policy rejection rather
+// than silently dropped, and that the refusal happens before the launch
+// creates a worker, a credential copy, or a visible surface.
+func TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonor(t *testing.T) {
 	_, runStore, runtime, terminalRuntime, _ := newAgentService(t)
 	policy := validRepositoryConfig()
 	policy.RoleHarnessDefaults["implementation"] = config.HarnessClaude
 	policy.ModelOptions["implementation"] = []string{"claude-opus-5"}
 	policy.ReasoningEffortOptions = map[string][]string{"implementation": {"high"}}
-	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, policy, config.AuthenticationConfig{})
+	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, policy, config.AuthenticationConfig{
+		ClaudeAuthPath: filepath.Join(t.TempDir(), ".credentials.json"),
+	})
 
-	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
-		t.Fatalf("StartAgent() error = %v, want the harness to refuse an unsupported setting", err)
+	_, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	var rejection *factory.PolicyRejection
+	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionReasoningEffortUnsupported {
+		t.Fatalf("StartAgent() error = %v, want a typed unsupported-setting rejection", err)
+	}
+	if len(runtime.starts) != 0 || len(runtime.claudeSeeds) != 0 || len(runtime.interactive) != 0 {
+		t.Fatal("a refused setting started a worker, seeded a credential, or launched a harness")
+	}
+	if len(runStore.invocations) != 0 {
+		t.Fatalf("persisted invocations = %#v, want none after a refused setting", runStore.invocations)
+	}
+}
+
+// TestClaudeAdapterRefusesAnUnsupportedSettingAsABackstop verifies the adapter
+// itself still fails closed if a caller reaches it with a setting the harness
+// cannot honor.
+func TestClaudeAdapterRefusesAnUnsupportedSettingAsABackstop(t *testing.T) {
+	_, err := harness.NewClaude(&agentWorker{}, &agentTerminal{}).Start(context.Background(), harness.StartRequest{
+		InvocationID:    "inv-backstop",
+		RunID:           "run-backstop",
+		Role:            "implementation",
+		Stage:           "implementation",
+		WorkspaceID:     "workspace-run",
+		Prompt:          "Implement the frozen specification.",
+		ReasoningEffort: "high",
+	})
+	if !errors.Is(err, harness.ErrUnsupportedSetting) {
+		t.Fatalf("Start() error = %v, want the unsupported-setting sentinel", err)
 	}
 }
 

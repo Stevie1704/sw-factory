@@ -63,14 +63,17 @@ type Session struct {
 	Surface terminal.Surface
 }
 
-// Capabilities describes what a harness adapter can do, so the coordinator can
-// decide dispatch without naming a specific tool in workflow code.
+// Capabilities describes a harness adapter, so the coordinator can decide
+// dispatch without naming a specific tool in workflow code.
 type Capabilities struct {
-	// Name is the stable harness identity recorded on an invocation.
+	// Name is the stable harness identity recorded on an invocation. A native
+	// session belongs to the harness that created it, so the coordinator
+	// compares this name before it resumes one.
 	Name string
-	// NativeResume reports whether the adapter can continue an existing native
-	// session rather than only starting a fresh one.
-	NativeResume bool
+	// ReasoningEffort reports whether the harness can honor a reasoning-effort
+	// selection. The coordinator refuses a selection the harness cannot honor
+	// before it creates any invocation side effect.
+	ReasoningEffort bool
 }
 
 // Runtime is the portable harness lifecycle seam used by the coordinator.
@@ -120,7 +123,7 @@ const (
 
 // ErrNativeSessionUnavailable reports that a fresh launch did not expose a
 // newly persisted native session before discovery timed out or was canceled.
-var ErrNativeSessionUnavailable = errors.New("native Codex session was not discovered before the deadline")
+var ErrNativeSessionUnavailable = errors.New("native harness session was not discovered before the deadline")
 
 // discoverNativeSession returns a session identifier that was not present
 // before the prompt-bearing command was launched. It returns

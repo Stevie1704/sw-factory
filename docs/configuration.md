@@ -128,7 +128,7 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies (including the mandatory `test` role), optional `reasoning_effort_options` for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies (including the mandatory `test` role), optional `reasoning_effort_options` for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 ## Per-role harness, model, and reasoning effort
 
@@ -144,9 +144,17 @@ launch as a typed policy rejection with the code `harness_override`,
 `model_override`, or `reasoning_effort_override`.
 
 Claude Code exposes no reasoning-effort process argument. A role that runs on
-`claude` therefore declares no `reasoning_effort_options`; if one is selected
-anyway, the adapter refuses the launch rather than running the role at an
-effort the policy never authorized.
+`claude` therefore declares no `reasoning_effort_options`, and the validator
+refuses a configuration that declares them anyway. If a selection still reaches
+a launch, the coordinator refuses it as a `reasoning_effort_unsupported`
+rejection before it starts a worker, and the adapter refuses it again as a
+fail-closed backstop.
+
+`model_options` is declared per role, not per harness. A repository that adds
+`harness` to `allowed_overrides` therefore accepts responsibility for declaring
+model options that every permitted harness accepts; otherwise an authorized
+override can pair one harness with another harness's model name, and the
+harness rejects the model at launch.
 
 An authorized maintainer selects a harness for a later invocation with one
 structured comment:
@@ -159,7 +167,7 @@ The comment grammar accepts nothing else. A recognized command with an extra
 word, a flag, or an unknown key is refused as a typed malformed-command
 rejection, so a comment cannot inject a process argument into a launched
 harness. The recorded choice is still validated against the frozen repository
-policy when the next invocation starts. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+policy when the next invocation starts.
 
 The test stage is default-on for both supported `test_policy.mode` values.
 A human skip requires `allow_human_exemption: true` and the frozen issue marker

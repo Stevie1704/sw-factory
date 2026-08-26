@@ -436,58 +436,102 @@ func validateAgentRequest(request AgentRequest) error {
 	return nil
 }
 
+// AgentPolicy is the frozen repository selection resolved for one role. The
+// three settings are chosen independently, so they travel together rather than
+// as interchangeable bare strings.
+type AgentPolicy struct {
+	// Harness is the adapter that will run the invocation.
+	Harness config.Harness
+	// Model is the validated model selection.
+	Model string
+	// ReasoningEffort is the validated reasoning-effort selection. It is empty
+	// when the role declares none.
+	ReasoningEffort string
+}
+
 // resolveAgentPolicy applies the frozen repository harness, model, and
-// reasoning-effort policy for one role. Harness, model, and reasoning effort
-// are selected independently; each defaults to the role's declared option and
-// only a repository-declared override permission widens it. Every refusal is a
-// typed policy rejection so the coordinator can report it in stable vocabulary.
-func resolveAgentPolicy(repository config.RepositoryConfig, request AgentRequest) (config.Harness, string, string, error) {
-	defaultHarness := repository.RoleHarnessDefaults[request.Role]
-	harnessName := request.Harness
-	if harnessName == "" {
-		harnessName = defaultHarness
+// reasoning-effort policy for one role. Each setting defaults to the role's
+// declared option, and only a repository-declared override permission widens
+// it. Every refusal is a typed policy rejection so the coordinator can report
+// it in stable vocabulary.
+func resolveAgentPolicy(repository config.RepositoryConfig, request AgentRequest) (AgentPolicy, error) {
+	harnessName, err := resolveHarnessPolicy(repository, request)
+	if err != nil {
+		return AgentPolicy{}, err
 	}
-	if harnessName != config.HarnessCodex && harnessName != config.HarnessClaude {
-		return "", "", "", &PolicyRejection{
+	model, err := resolveModelPolicy(repository, request)
+	if err != nil {
+		return AgentPolicy{}, err
+	}
+	effort, err := resolveReasoningEffortPolicy(repository, request)
+	if err != nil {
+		return AgentPolicy{}, err
+	}
+	return AgentPolicy{Harness: harnessName, Model: model, ReasoningEffort: effort}, nil
+}
+
+// resolveHarnessPolicy selects the role's harness and refuses an override the
+// repository has not explicitly permitted.
+func resolveHarnessPolicy(repository config.RepositoryConfig, request AgentRequest) (config.Harness, error) {
+	declared := repository.RoleHarnessDefaults[request.Role]
+	selected := request.Harness
+	if selected == "" {
+		selected = declared
+	}
+	if selected != config.HarnessCodex && selected != config.HarnessClaude {
+		return "", &PolicyRejection{
 			Code:    PolicyRejectionHarnessUnavailable,
 			Problem: fmt.Sprintf("no supported harness policy for role %q", request.Role),
 		}
 	}
-	if request.Harness != "" && request.Harness != defaultHarness && !hasOverride(repository.AllowedOverrides, config.OverrideHarness) {
-		return "", "", "", &PolicyRejection{
+	if request.Harness != "" && request.Harness != declared && !hasOverride(repository.AllowedOverrides, config.OverrideHarness) {
+		return "", &PolicyRejection{
 			Code:    PolicyRejectionHarnessOverride,
-			Problem: fmt.Sprintf("repository configuration does not allow harness override from %q to %q for role %q", defaultHarness, request.Harness, request.Role),
+			Problem: fmt.Sprintf("repository configuration does not allow harness override from %q to %q for role %q", declared, request.Harness, request.Role),
 		}
 	}
+	return selected, nil
+}
+
+// resolveModelPolicy selects the role's model and refuses a value outside its
+// declared options unless the repository permits model overrides.
+func resolveModelPolicy(repository config.RepositoryConfig, request AgentRequest) (string, error) {
 	options := repository.ModelOptions[request.Role]
-	model := request.Model
-	if model == "" && len(options) > 0 {
-		model = options[0]
+	selected := request.Model
+	if selected == "" && len(options) > 0 {
+		selected = options[0]
 	}
-	if model == "" {
-		return "", "", "", &PolicyRejection{
-			Code:    PolicyRejectionModelOverride,
+	if selected == "" {
+		return "", &PolicyRejection{
+			Code:    PolicyRejectionModelUnavailable,
 			Problem: fmt.Sprintf("no model policy for role %q", request.Role),
 		}
 	}
-	if !contains(options, model) && !hasOverride(repository.AllowedOverrides, config.OverrideModel) {
-		return "", "", "", &PolicyRejection{
+	if !contains(options, selected) && !hasOverride(repository.AllowedOverrides, config.OverrideModel) {
+		return "", &PolicyRejection{
 			Code:    PolicyRejectionModelOverride,
-			Problem: fmt.Sprintf("model %q is not a declared option for role %q", model, request.Role),
+			Problem: fmt.Sprintf("model %q is not a declared option for role %q", selected, request.Role),
 		}
 	}
-	efforts := repository.ReasoningEffortOptions[request.Role]
-	effort := request.ReasoningEffort
-	if effort == "" && len(efforts) > 0 {
-		effort = efforts[0]
+	return selected, nil
+}
+
+// resolveReasoningEffortPolicy selects the role's reasoning effort. A role that
+// declares no options accepts no selection unless the repository permits
+// reasoning-effort overrides.
+func resolveReasoningEffortPolicy(repository config.RepositoryConfig, request AgentRequest) (string, error) {
+	options := repository.ReasoningEffortOptions[request.Role]
+	selected := request.ReasoningEffort
+	if selected == "" && len(options) > 0 {
+		selected = options[0]
 	}
-	if effort != "" && !contains(efforts, effort) && !hasOverride(repository.AllowedOverrides, config.OverrideReasoningEffort) {
-		return "", "", "", &PolicyRejection{
+	if selected != "" && !contains(options, selected) && !hasOverride(repository.AllowedOverrides, config.OverrideReasoningEffort) {
+		return "", &PolicyRejection{
 			Code:    PolicyRejectionReasoningEffortOverride,
-			Problem: fmt.Sprintf("reasoning effort %q is not a declared option for role %q", effort, request.Role),
+			Problem: fmt.Sprintf("reasoning effort %q is not a declared option for role %q", selected, request.Role),
 		}
 	}
-	return harnessName, model, effort, nil
+	return selected, nil
 }
 
 // hasOverride reports whether a repository policy explicitly permits a setting.

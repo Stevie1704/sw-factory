@@ -453,7 +453,12 @@ func (r *DockerRuntime) InteractiveCommand(_ context.Context, request Interactiv
 // factory-managed credential volume and links only that file into Codex's role
 // home. It never mounts the host file or returns credential contents.
 func (r *DockerRuntime) SeedCodexCredentials(ctx context.Context, request CredentialSeedRequest) error {
-	return r.seedCredentialFile(ctx, request, "Codex", codexCredentialFile, "$HOME/.codex", "$HOME/.codex/auth.json")
+	return r.seedCredentialFile(ctx, request, harnessCredential{
+		Harness:        "codex",
+		CredentialFile: codexCredentialFile,
+		RoleHome:       "$HOME/.codex",
+		LinkName:       "auth.json",
+	})
 }
 
 // SeedClaudeCredentials streams one explicit Claude Code credential file into
@@ -461,56 +466,76 @@ func (r *DockerRuntime) SeedCodexCredentials(ctx context.Context, request Creden
 // Claude's role home. It never mounts the host file or returns credential
 // contents.
 func (r *DockerRuntime) SeedClaudeCredentials(ctx context.Context, request CredentialSeedRequest) error {
-	return r.seedCredentialFile(ctx, request, "Claude", claudeCredentialFile, "$HOME/.claude", "$HOME/.claude/.credentials.json")
+	return r.seedCredentialFile(ctx, request, harnessCredential{
+		Harness:        "claude",
+		CredentialFile: claudeCredentialFile,
+		RoleHome:       "$HOME/.claude",
+		LinkName:       ".credentials.json",
+	})
+}
+
+// harnessCredential locates one harness's credential copy and the role-home
+// link that exposes it. The fields always travel together, so they are one
+// value rather than four positional parameters.
+type harnessCredential struct {
+	// Harness is the lowercase harness identity used in refusals.
+	Harness string
+	// CredentialFile is the file name inside the credential volume.
+	CredentialFile string
+	// RoleHome is the in-worker directory holding the harness role state.
+	RoleHome string
+	// LinkName is the file name the harness reads inside RoleHome.
+	LinkName string
 }
 
 // seedCredentialFile is the one credential-seeding primitive shared by every
 // harness. It reads one explicit host file, streams its bytes into the
 // factory-managed credential volume, and links that copy into the role home.
 // The host source is only ever read.
-func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request CredentialSeedRequest, harnessName, credentialFile, roleHome, linkPath string) error {
+func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request CredentialSeedRequest, credential harnessCredential) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
 	}
 	if !filepath.IsAbs(request.AuthPath) || strings.ContainsAny(request.AuthPath, "\x00\r\n") {
-		return fmt.Errorf("%s auth path must be an absolute safe path", strings.ToLower(harnessName))
+		return fmt.Errorf("%s auth path must be an absolute safe path", credential.Harness)
 	}
 	info, err := os.Lstat(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("inspect %s auth file: %w", strings.ToLower(harnessName), err)
+		return fmt.Errorf("inspect %s auth file: %w", credential.Harness, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s auth path must not be a symbolic link", strings.ToLower(harnessName))
+		return fmt.Errorf("%s auth path must not be a symbolic link", credential.Harness)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("%s auth path must be a regular file", strings.ToLower(harnessName))
+		return fmt.Errorf("%s auth path must be a regular file", credential.Harness)
 	}
 	data, err := os.ReadFile(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("read %s auth file: %w", strings.ToLower(harnessName), err)
+		return fmt.Errorf("read %s auth file: %w", credential.Harness, err)
 	}
 	if len(data) == 0 {
-		return fmt.Errorf("%s auth file is empty", strings.ToLower(harnessName))
+		return fmt.Errorf("%s auth file is empty", credential.Harness)
 	}
 	// The worker drops every capability, so uid 0 holds neither CAP_CHOWN nor
 	// CAP_DAC_OVERRIDE and is less able to write the factory-owned role home
 	// than the worker user itself. Each step therefore runs as the owner of the
 	// directory it writes, and no step changes ownership.
 	name := containerName(request.RunID)
-	credentialPath := CredentialPath + "/" + credentialFile
+	credentialPath := CredentialPath + "/" + credential.CredentialFile
+	linkPath := credential.RoleHome + "/" + credential.LinkName
 	if _, err := r.runDockerWithInput(ctx, []string{
 		"exec", "-i", "--user", "0:0", "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
 		"umask 077; rm -f \"" + credentialPath + "\"; cat > \"" + credentialPath + "\"; chmod 0444 \"" + credentialPath + "\"",
 	}, data); err != nil {
-		return fmt.Errorf("seed %s credentials: %w", harnessName, dockerStderrDetail(err))
+		return fmt.Errorf("seed %s credentials: %w", credential.Harness, dockerStderrDetail(err))
 	}
 	if _, err := r.runDocker(ctx, []string{
 		"exec", "--user", WorkerUser, "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
-		"mkdir -p \"" + roleHome + "\"; rm -f \"" + linkPath + "\"; ln -s \"" + credentialPath + "\" \"" + linkPath + "\"",
+		"mkdir -p \"" + credential.RoleHome + "\"; rm -f \"" + linkPath + "\"; ln -s \"" + credentialPath + "\" \"" + linkPath + "\"",
 	}); err != nil {
-		return fmt.Errorf("link %s credentials into the role home: %w", harnessName, dockerStderrDetail(err))
+		return fmt.Errorf("link %s credentials into the role home: %w", credential.Harness, dockerStderrDetail(err))
 	}
 	return nil
 }
@@ -1487,6 +1512,9 @@ func roleVolumeName(runID, role string) string {
 
 // credentialVolumeName derives a persistent factory-managed credential volume
 // without exposing its coordinator-side key or the host auth path to Docker.
+// One volume holds every harness's credential copy under its own file name;
+// the historical name prefix is retained because it is part of the mount
+// contract that Resume validates against an existing worker.
 func credentialVolumeName(runID, storeID string) string {
 	if strings.TrimSpace(storeID) == "" {
 		storeID = runID
