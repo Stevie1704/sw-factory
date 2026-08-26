@@ -943,11 +943,14 @@ func (*agentRunStore) Close() error { return nil }
 
 // agentWorker records the worker start request without running Docker.
 type agentWorker struct {
-	starts   []worker.StartRequest
-	stops    int
-	commands []worker.CommandRequest
-	results  []worker.CommandResult
-	events   *[]string
+	starts      []worker.StartRequest
+	stops       int
+	commands    []worker.CommandRequest
+	results     []worker.CommandResult
+	events      *[]string
+	interactive []worker.InteractiveRequest
+	codexSeeds  []worker.CredentialSeedRequest
+	claudeSeeds []worker.CredentialSeedRequest
 }
 
 // Start records one worker start.
@@ -1036,6 +1039,11 @@ type agentHarness struct {
 	finished  []harness.Session
 	startErr  error
 	resumeErr error
+}
+
+// Capabilities reports the harness identity this fake stands in for.
+func (*agentHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: harness.NameCodex, ReasoningEffort: true}
 }
 
 // Start records the coordinator-owned prompt request.

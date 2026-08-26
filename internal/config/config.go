@@ -56,6 +56,10 @@ type CmuxConfig struct {
 type AuthenticationConfig struct {
 	// CodexAuthPath is an optional host path to one Codex auth.json file.
 	CodexAuthPath string `yaml:"codex_auth_path"`
+	// ClaudeAuthPath is an optional host path to one Claude Code credential
+	// file. A macOS host keeps this credential in the login Keychain rather
+	// than a file, so the path is declared only where a file exists.
+	ClaudeAuthPath string `yaml:"claude_auth_path"`
 }
 
 type RepositoryConfig struct {
@@ -69,6 +73,10 @@ type RepositoryConfig struct {
 	Gates                  []GateConfig        `yaml:"gates"`
 	RoleHarnessDefaults    map[string]Harness  `yaml:"role_harness_defaults"`
 	ModelOptions           map[string][]string `yaml:"model_options"`
+	// ReasoningEffortOptions declares the validated reasoning-effort values a
+	// role may use. A role that declares none accepts no reasoning-effort
+	// selection at all.
+	ReasoningEffortOptions map[string][]string `yaml:"reasoning_effort_options"`
 	Timeouts               TimeoutConfig       `yaml:"timeouts"`
 	RetryLimits            RetryLimits         `yaml:"retry_limits"`
 	TestPolicy             TestPolicy          `yaml:"test_policy"`
@@ -424,6 +432,29 @@ func ValidateRepository(config RepositoryConfig) error {
 			return validation("role_harness_defaults."+role, "must declare a harness for every model role")
 		}
 	}
+	for role, efforts := range config.ReasoningEffortOptions {
+		harness, exists := config.RoleHarnessDefaults[role]
+		if !exists {
+			return validation("reasoning_effort_options."+role, "must reference a role with a declared harness")
+		}
+		if !harnessHonorsReasoningEffort(harness) {
+			return validation("reasoning_effort_options."+role, fmt.Sprintf("harness %q cannot honor a reasoning-effort selection", harness))
+		}
+		if len(efforts) == 0 {
+			return validation("reasoning_effort_options."+role, "must declare at least one value or be omitted")
+		}
+		seen := make(map[string]struct{}, len(efforts))
+		for index, effort := range efforts {
+			field := fmt.Sprintf("reasoning_effort_options.%s[%d]", role, index)
+			if strings.TrimSpace(effort) == "" || strings.ContainsAny(effort, "\x00\r\n \t") {
+				return validation(field, "must be a nonempty single-token value")
+			}
+			if _, exists := seen[effort]; exists {
+				return validation(field, "must be unique")
+			}
+			seen[effort] = struct{}{}
+		}
+	}
 	if _, exists := config.RoleHarnessDefaults["test"]; !exists {
 		return validation("role_harness_defaults.test", "must declare the mandatory test role")
 	}
@@ -502,6 +533,14 @@ func ValidateRepository(config RepositoryConfig) error {
 		}
 	}
 	return nil
+}
+
+// harnessHonorsReasoningEffort reports whether a harness accepts a
+// reasoning-effort selection. Claude Code exposes no reasoning-effort process
+// argument, so a role that runs on it declares no options rather than
+// declaring options that every launch would refuse.
+func harnessHonorsReasoningEffort(harness Harness) bool {
+	return harness == HarnessCodex
 }
 
 // validateSetupFiles validates optional repository-relative manifest and
@@ -591,12 +630,18 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	if repository.Cmux.SocketPath != "" && !filepath.IsAbs(repository.Cmux.SocketPath) {
 		return validation(prefix+".cmux.socket_path", "must be absolute when set")
 	}
-	if repository.Authentication.CodexAuthPath != "" {
-		if strings.ContainsAny(repository.Authentication.CodexAuthPath, "\x00\r\n") {
-			return validation(prefix+".authentication.codex_auth_path", "must not contain control characters")
+	for field, path := range map[string]string{
+		prefix + ".authentication.codex_auth_path":  repository.Authentication.CodexAuthPath,
+		prefix + ".authentication.claude_auth_path": repository.Authentication.ClaudeAuthPath,
+	} {
+		if path == "" {
+			continue
 		}
-		if !filepath.IsAbs(repository.Authentication.CodexAuthPath) {
-			return validation(prefix+".authentication.codex_auth_path", "must be absolute when set")
+		if strings.ContainsAny(path, "\x00\r\n") {
+			return validation(field, "must not contain control characters")
+		}
+		if !filepath.IsAbs(path) {
+			return validation(field, "must be absolute when set")
 		}
 	}
 	if strings.TrimSpace(repository.RepositoryConfigPath) == "" {

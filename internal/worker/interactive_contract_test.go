@@ -225,3 +225,105 @@ func TestDockerRuntimeSeedsCredentialsWithoutPrivilegedOperations(t *testing.T) 
 		t.Fatal("role home symlink was not created as the worker user")
 	}
 }
+
+// TestDockerRuntimeSeedsOnlyTheClaudeCredentialFile verifies Claude Code is
+// seeded on the same narrow terms as Codex: one explicit host file streamed
+// into the factory-managed credential volume, with no host harness directory
+// mounted and no write back to the host source.
+func TestDockerRuntimeSeedsOnlyTheClaudeCredentialFile(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	authPath := filepath.Join(t.TempDir(), ".credentials.json")
+	contents := []byte(`{"claudeAiOauth":{"accessToken":"test-only"}}`)
+	if err := os.WriteFile(authPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if err := runtime.Start(context.Background(), worker.StartRequest{
+		RunID:           "run-claude-auth",
+		WorktreePath:    makeDirectory(t, "worktree"),
+		GitMetadataPath: makeDirectory(t, "git-metadata"),
+		Role:            "implementation",
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     interactiveWorkerDigest,
+	}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := runtime.SeedClaudeCredentials(context.Background(), worker.CredentialSeedRequest{RunID: "run-claude-auth", AuthPath: authPath}); err != nil {
+		t.Fatalf("SeedClaudeCredentials() error = %v", err)
+	}
+	lines := readStubLog(t, logPath)
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, filepath.Dir(authPath)) || strings.Contains(joined, "docker.sock") {
+		t.Fatalf("credential seed leaked the host harness path or Docker socket: %q", joined)
+	}
+	if !strings.Contains(joined, worker.CredentialPath+"/claude-credentials.json") {
+		t.Fatalf("credential seed did not target the factory-managed credential volume: %q", joined)
+	}
+	after, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(contents) {
+		t.Fatal("credential seed wrote back to the host source")
+	}
+	var wroteCredential, linkedRoleHome bool
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "exec ") {
+			continue
+		}
+		if strings.Contains(line, "chown") {
+			t.Fatalf("credential seed requires a capability the worker drops: %q", line)
+		}
+		switch {
+		case strings.Contains(line, "--user 0:0"):
+			if strings.Contains(line, "$HOME/.claude") {
+				t.Fatalf("uid 0 cannot write the factory-owned role home: %q", line)
+			}
+			if strings.Contains(line, "cat > \""+worker.CredentialPath+"/claude-credentials.json\"") {
+				wroteCredential = true
+			}
+		case strings.Contains(line, "--user "+worker.WorkerUser):
+			if strings.Contains(line, "ln -s") && strings.Contains(line, "$HOME/.claude/.credentials.json") {
+				linkedRoleHome = true
+			}
+		}
+	}
+	if !wroteCredential {
+		t.Fatal("credential file was not written as the owner of the credential volume")
+	}
+	if !linkedRoleHome {
+		t.Fatal("role home symlink was not created as the worker user")
+	}
+}
+
+// TestDockerRuntimeRefusesAnUnsafeClaudeCredentialSource verifies the Claude
+// seam applies the same source checks as the Codex seam.
+func TestDockerRuntimeRefusesAnUnsafeClaudeCredentialSource(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	root := t.TempDir()
+	regular := filepath.Join(root, "regular.json")
+	if err := os.WriteFile(regular, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link.json")
+	if err := os.Symlink(regular, link); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	for _, test := range []struct {
+		name    string
+		path    string
+		problem string
+	}{
+		{name: "relative", path: ".credentials.json", problem: "absolute safe path"},
+		{name: "symlink", path: link, problem: "symbolic link"},
+		{name: "empty", path: regular, problem: "empty"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := runtime.SeedClaudeCredentials(context.Background(), worker.CredentialSeedRequest{RunID: "run-claude-auth", AuthPath: test.path})
+			if err == nil || !strings.Contains(err.Error(), test.problem) {
+				t.Fatalf("SeedClaudeCredentials() error = %v, want %q refusal", err, test.problem)
+			}
+		})
+	}
+}

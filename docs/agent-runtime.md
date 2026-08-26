@@ -1,9 +1,45 @@
 # Visible agent runtime
 
-Issues #6 and #12 add the visible role-agent boundary. The coordinator owns
-the run, invocation identity, stage, policy, and report decision. Codex is an
-interactive proposal-maker; it does not own GitHub mutations, Git history, or
-workflow transitions.
+Issues #6, #12, and #14 add the visible role-agent boundary. The coordinator
+owns the run, invocation identity, stage, policy, and report decision. A
+harness is an interactive proposal-maker; it does not own GitHub mutations, Git
+history, or workflow transitions.
+
+## Harness adapters
+
+Codex and Claude Code are interchangeable. Both implement the same `Runtime`
+seam: capability discovery, launch, native session identification, resume, and
+graceful stop. An adapter translates one harness-neutral invocation into native
+commands and owns no workflow, Git, retry, or terminal-layout decision.
+
+The coordinator resolves the adapter from the frozen repository policy for the
+role, so workflow code never names a tool. `Capabilities` reports the adapter
+identity and whether the harness can honor a reasoning-effort selection. The
+check-repair path dispatches on the harness recorded for the session under
+repair and refuses to continue when the resolved adapter reports a different
+identity, so mid-session migration between Codex and Claude is not possible.
+The launch path refuses a reasoning effort the selected harness cannot honor
+before it creates any side effect.
+
+The two adapters differ in how a native session identity is obtained:
+
+| Harness | Native session identity | Resume |
+| --- | --- | --- |
+| Codex | Persisted by Codex; the adapter snapshots the role home before launch and discovers the new session file | `codex ... resume <uuid>` with the global flags first |
+| Claude Code | Assigned by the adapter with `--session-id <uuid>` before launch, which removes the discovery race | `claude ... --resume <uuid>` |
+
+Both adapters disable the harness's own approval gates, because the worker is
+the security boundary and an inner gate would stall an unattended invocation.
+The Claude launch additionally passes `--strict-mcp-config` with an empty
+`--mcp-config` set, so a session loads no MCP server from any configuration
+file. A factory role home is created by the worker image and is never seeded
+from a host harness directory, so a session inherits no personal plugin, hook,
+MCP server, skill, or setting. `DISABLE_AUTOUPDATER=1` keeps Claude Code on the
+version pinned by the run's worker image digest, so a tool upgrade cannot
+change behavior halfway through a run.
+
+Harness contract tests drive both adapters through the complete lifecycle
+against controlled stub executables before any live run.
 
 ## Starting an invocation
 
@@ -13,10 +49,13 @@ After an issue has been claimed, start the visible Codex session with:
 factory agent \
   --config /Users/me/.config/factory/config.yaml \
   --run-id run-123 \
-  --codex-auth /Users/me/.codex/auth.json
+  --codex-auth /Users/me/.codex/auth.json \
+  --claude-auth /Users/me/.claude/.credentials.json
 ```
 
-The command selects the active role automatically. For a repository with a
+The command selects the active role automatically, together with the harness,
+model, and reasoning effort declared for that role. Only the credential source
+of the selected harness is used. For a repository with a
 configured `test` role, `factory issue` leaves a healthy run in `test/active`,
 and this command starts the test agent. An implementation agent is started only
 after the test handoff is accepted, or after an authorized exemption. The
@@ -180,23 +219,32 @@ before resuming the role.
 
 ## Authentication and session state
 
-Registration may name one explicit host Codex auth file:
+Registration may name one explicit host credential file per harness:
 
 ```sh
-factory register ... --codex-auth /Users/me/.codex/auth.json
+factory register ... \
+  --codex-auth /Users/me/.codex/auth.json \
+  --claude-auth /Users/me/.claude/.credentials.json
 ```
 
-The worker adapter reads that one file and streams its bytes into a separate,
-factory-managed Codex credential volume. The role home contains only a link to
-that credential copy, while Codex session files remain in the private run/role
-volume. It never mounts the host harness directory and never writes back to the
-host source. A fresh role can reuse the credential volume without inheriting
-another role's session context.
+The worker adapter reads the one file belonging to the selected harness and
+streams its bytes into a separate, factory-managed credential volume. The role
+home contains only a link to that credential copy, while harness session files
+remain in the private run/role volume. It never mounts the host harness
+directory and never writes back to the host source. A fresh role can reuse the
+credential volume without inheriting another role's session context.
+
+Each harness keeps its own source because a host can hold one harness
+credential as a file without holding the other. macOS keeps the Claude Code
+credential in the login Keychain rather than a file, so `--claude-auth` is
+supplied only where a credential file exists; without it, Claude Code uses the
+credential the worker itself persisted in its role volume.
 
 Codex native session identifiers are recovered from its persisted session files,
-not from the terminal screen. Accepted reports retain the native session id and
-opaque surface handle so a later coordinator recovery operation can resume the
-session.
+not from the terminal screen. Claude Code accepts a coordinator-assigned
+identifier at launch, so no discovery is needed. Accepted reports retain the
+native session id and opaque surface handle so a later coordinator recovery
+operation can resume the session in the same harness.
 
 ## Check-repair loop
 

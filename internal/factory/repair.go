@@ -470,12 +470,16 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if previous.WorkspaceID == "" || previous.ImplementationSurfaceID == "" {
 		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no recoverable surface", ErrCheckRepairSessionUnavailable)
 	}
-	if previous.Harness != string(config.HarnessCodex) {
-		return store.Invocation{}, run, fmt.Errorf("%w: harness %q has no native repair adapter", ErrCheckRepairSessionUnavailable, previous.Harness)
-	}
-	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath)
+	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(previous.Harness))
 	if err != nil {
-		return store.Invocation{}, run, fmt.Errorf("ensure check-repair runtime: %w", err)
+		return store.Invocation{}, run, fmt.Errorf("%w: %v", ErrCheckRepairSessionUnavailable, err)
+	}
+	// A native session belongs to the harness that created it, so a repair
+	// continues in that harness or not at all. This is what makes mid-session
+	// migration between Codex and Claude impossible.
+	capabilities := harnessRuntime.Capabilities()
+	if capabilities.Name != previous.Harness {
+		return store.Invocation{}, run, fmt.Errorf("%w: harness %q cannot resume a %q session", ErrCheckRepairSessionUnavailable, capabilities.Name, previous.Harness)
 	}
 	identifier, err := s.deps.NewRunID()
 	if err != nil {
@@ -656,7 +660,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		ResumeSessionID: previous.NativeSessionID,
 	})
 	if err != nil {
-		return store.Invocation{}, run, fmt.Errorf("resume Codex implementation agent for check repair: %w", err)
+		return store.Invocation{}, run, fmt.Errorf("resume %s implementation agent for check repair: %w", previous.Harness, err)
 	}
 	resumeStarted = true
 	if session.NativeSessionID != "" {

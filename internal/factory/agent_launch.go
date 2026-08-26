@@ -89,30 +89,26 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if request.Role == "implementation" && run.Stage == store.StageClaim && !run.TestStageSkipped {
 		return AgentLaunchResult{}, errors.New("implementation agent cannot bypass the configured test stage")
 	}
-	harnessName, model, err := resolveAgentPolicy(packet.RepositoryConfig, request)
+	policy, err := resolveAgentPolicy(packet.RepositoryConfig, request)
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
-	if harnessName != config.HarnessCodex {
-		return AgentLaunchResult{}, fmt.Errorf("harness %q is not supported by the Codex implementation agent", harnessName)
+	seedCredentials, credentialStoreID, err := s.credentialSeeding(registration, request, policy.Harness)
+	if err != nil {
+		return AgentLaunchResult{}, err
 	}
-	authPath := request.CodexAuthPath
-	if authPath == "" {
-		authPath = registration.Authentication.CodexAuthPath
-	}
-	credentialStoreID := ""
-	var seeder worker.CredentialSeeder
-	if authPath != "" {
-		credentialStoreID = registration.Path
-		var ok bool
-		seeder, ok = s.deps.Worker.(worker.CredentialSeeder)
-		if !ok {
-			return AgentLaunchResult{}, errors.New("worker runtime does not support Codex credential seeding")
-		}
-	}
-	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath)
+	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, policy.Harness)
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("ensure agent runtime: %w", err)
+	}
+	// A setting the selected harness cannot honor is refused here, before the
+	// launch creates any directory, worker, credential copy, or surface. The
+	// adapter refuses it again at launch as a fail-closed backstop.
+	if policy.ReasoningEffort != "" && !harnessRuntime.Capabilities().ReasoningEffort {
+		return AgentLaunchResult{}, &PolicyRejection{
+			Code:    PolicyRejectionReasoningEffortUnsupported,
+			Problem: fmt.Sprintf("harness %q cannot honor a reasoning-effort selection for role %q", policy.Harness, request.Role),
+		}
 	}
 	runID, err := s.deps.NewRunID()
 	if err != nil {
@@ -169,11 +165,11 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	invocation := store.Invocation{
 		ID:                  invocationID,
 		RunID:               run.ID,
-		Harness:             string(harnessName),
+		Harness:             string(policy.Harness),
 		Role:                role,
 		Stage:               stage,
-		Model:               model,
-		ReasoningEffort:     request.ReasoningEffort,
+		Model:               policy.Model,
+		ReasoningEffort:     policy.ReasoningEffort,
 		CredentialStoreID:   credentialStoreID,
 		InvocationDirectory: packetDirectory,
 		ResultDirectory:     resultDirectory,
@@ -248,8 +244,8 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, err
 		}
 	}
-	if authPath != "" {
-		if err := seeder.SeedCodexCredentials(ctx, worker.CredentialSeedRequest{RunID: run.ID, AuthPath: authPath}); err != nil {
+	if seedCredentials != nil {
+		if err := seedCredentials(ctx, run.ID); err != nil {
 			return AgentLaunchResult{}, err
 		}
 	}
@@ -274,7 +270,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if role == "test" {
 		agentSurface = runWorkspace.Checks
 	} else if isReview {
-		// The Codex adapter creates a fresh command-backed surface for the
+		// The harness adapter creates a fresh command-backed surface for the
 		// reviewer, rather than reusing the implementation surface.
 		agentSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: "spec-review"}
 	}
@@ -298,11 +294,11 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		WorkspaceID:     runWorkspace.ID,
 		Surface:         agentSurface,
 		Prompt:          promptText,
-		Model:           model,
-		ReasoningEffort: request.ReasoningEffort,
+		Model:           policy.Model,
+		ReasoningEffort: policy.ReasoningEffort,
 	})
 	if err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("launch Codex %s agent: %w", role, err)
+		return AgentLaunchResult{}, fmt.Errorf("launch %s %s agent: %w", policy.Harness, role, err)
 	}
 	if session.NativeSessionID != "" {
 		invocation.NativeSessionID = session.NativeSessionID
@@ -313,7 +309,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		invocation.ImplementationSurfaceID = string(agentSurface.ID)
 	}
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("persist Codex session identity: %w", err)
+		return AgentLaunchResult{}, fmt.Errorf("persist harness session identity: %w", err)
 	}
 	previousRun := *run
 	run.Stage = stage
@@ -336,4 +332,36 @@ func reviewCheckpointSHA(review bool, checkpoint string) string {
 		return ""
 	}
 	return checkpoint
+}
+
+// credentialSeeding resolves the narrowly scoped credential source for one
+// harness and returns the seeding step to run after the worker starts. Each
+// harness keeps its own host source, because a host can hold one harness
+// credential as a file without holding the other. It returns a nil step when
+// no source is registered, leaving the credential the worker itself persisted
+// in its role volume in place.
+func (s *Service) credentialSeeding(registration config.RepositoryRegistration, request AgentRequest, harnessName config.Harness) (func(context.Context, string) error, string, error) {
+	var authPath string
+	var seed func(context.Context, worker.CredentialSeedRequest) error
+	switch harnessName {
+	case config.HarnessCodex:
+		authPath = defaultString(request.CodexAuthPath, registration.Authentication.CodexAuthPath)
+		if seeder, ok := s.deps.Worker.(worker.CredentialSeeder); ok {
+			seed = seeder.SeedCodexCredentials
+		}
+	case config.HarnessClaude:
+		authPath = defaultString(request.ClaudeAuthPath, registration.Authentication.ClaudeAuthPath)
+		if seeder, ok := s.deps.Worker.(worker.ClaudeCredentialSeeder); ok {
+			seed = seeder.SeedClaudeCredentials
+		}
+	}
+	if authPath == "" {
+		return nil, "", nil
+	}
+	if seed == nil {
+		return nil, "", fmt.Errorf("worker runtime does not support %s credential seeding", harnessName)
+	}
+	return func(ctx context.Context, runID string) error {
+		return seed(ctx, worker.CredentialSeedRequest{RunID: runID, AuthPath: authPath})
+	}, registration.Path, nil
 }

@@ -142,6 +142,61 @@ func TestHandleCommandPersistsHarnessConfiguration(t *testing.T) {
 	}
 }
 
+// TestHandleCommandPersistsAClaudeHarnessConfiguration verifies an authorized
+// issue comment can select Claude Code now that the adapter exists, and that
+// the run records the choice for the next invocation.
+func TestHandleCommandPersistsAClaudeHarnessConfiguration(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusActive)
+	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	service := newCommandService(runStore, githubAdapter, nil)
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: github.Comment{ID: "14", Author: "alice", Body: "/factory config harness=claude"}})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.HarnessOverride != "claude" {
+		t.Fatalf("result = %#v, want an accepted Claude harness override", result)
+	}
+}
+
+// TestHandleCommandRefusesIssueSuppliedProcessArguments verifies a comment
+// cannot inject a flag or an extra argument into a launched harness process.
+func TestHandleCommandRefusesIssueSuppliedProcessArguments(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{
+		"/factory config harness=claude --dangerously-skip-permissions",
+		"/factory config harness=claude extra",
+		"/factory config --mcp-config",
+		"/factory retry --model gpt-9",
+		"/factory config model=gpt-9",
+	} {
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+
+			run := commandRun(t, store.StatusActive)
+			githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+			runStore := &commandRunStore{current: &run, latest: &run}
+			service := newCommandService(runStore, githubAdapter, nil)
+
+			result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: github.Comment{ID: "14", Author: "alice", Body: body}})
+			if result.Outcome != factory.CommandRejected {
+				t.Fatalf("outcome = %q, want a rejection of issue-supplied process arguments", result.Outcome)
+			}
+			var rejection *factory.PolicyRejection
+			if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionMalformed {
+				t.Fatalf("HandleCommand() error = %v, want a typed malformed-command rejection", err)
+			}
+			if result.Run.HarnessOverride != "" {
+				t.Fatalf("harness override = %q, want no recorded configuration", result.Run.HarnessOverride)
+			}
+		})
+	}
+}
+
 // TestPollCommandsSkipsThePersistedWatermark verifies polling sees issue
 // comments while a second poll, including after a fresh service, is inert.
 func TestPollCommandsSkipsThePersistedWatermark(t *testing.T) {

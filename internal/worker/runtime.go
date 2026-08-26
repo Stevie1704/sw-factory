@@ -32,9 +32,16 @@ const (
 	InvocationPath = "/invocation"
 	// ResultPath is the stable writable path for structured invocation reports.
 	ResultPath = "/results"
-	// CredentialPath is the stable worker path for the factory-managed Codex
+	// CredentialPath is the stable worker path for the factory-managed harness
 	// credential volume. It is separate from the role session home.
 	CredentialPath = "/run/factory-auth"
+	// codexCredentialFile is the credential copy Codex reads through a link in
+	// its role home.
+	codexCredentialFile = "auth.json"
+	// claudeCredentialFile is the credential copy Claude Code reads through a
+	// link in its role home. The two harnesses share one volume and never
+	// share a file.
+	claudeCredentialFile = "claude-credentials.json"
 	// WorkerUser is the fixed non-root identity used for worker processes.
 	WorkerUser = "10001:10001"
 	// workerPrimaryGroupID is already present in WorkerUser and does not need
@@ -189,6 +196,16 @@ type InteractiveRuntime interface {
 type CredentialSeeder interface {
 	// SeedCodexCredentials streams one explicit Codex auth file into the worker.
 	SeedCodexCredentials(context.Context, CredentialSeedRequest) error
+}
+
+// ClaudeCredentialSeeder is the optional extension for narrowly scoped Claude
+// Code auth seeding. It is separate from CredentialSeeder because a host can
+// hold one harness credential as a file without holding the other; macOS keeps
+// the Claude Code credential in the login Keychain rather than a file.
+type ClaudeCredentialSeeder interface {
+	// SeedClaudeCredentials streams one explicit Claude credential file into
+	// the worker.
+	SeedClaudeCredentials(context.Context, CredentialSeedRequest) error
 }
 
 // NativeSessionProvider is the optional extension for non-screen session
@@ -436,47 +453,89 @@ func (r *DockerRuntime) InteractiveCommand(_ context.Context, request Interactiv
 // factory-managed credential volume and links only that file into Codex's role
 // home. It never mounts the host file or returns credential contents.
 func (r *DockerRuntime) SeedCodexCredentials(ctx context.Context, request CredentialSeedRequest) error {
+	return r.seedCredentialFile(ctx, request, harnessCredential{
+		Harness:        "codex",
+		CredentialFile: codexCredentialFile,
+		RoleHome:       "$HOME/.codex",
+		LinkName:       "auth.json",
+	})
+}
+
+// SeedClaudeCredentials streams one explicit Claude Code credential file into
+// the same factory-managed credential volume and links only that file into
+// Claude's role home. It never mounts the host file or returns credential
+// contents.
+func (r *DockerRuntime) SeedClaudeCredentials(ctx context.Context, request CredentialSeedRequest) error {
+	return r.seedCredentialFile(ctx, request, harnessCredential{
+		Harness:        "claude",
+		CredentialFile: claudeCredentialFile,
+		RoleHome:       "$HOME/.claude",
+		LinkName:       ".credentials.json",
+	})
+}
+
+// harnessCredential locates one harness's credential copy and the role-home
+// link that exposes it. The fields always travel together, so they are one
+// value rather than four positional parameters.
+type harnessCredential struct {
+	// Harness is the lowercase harness identity used in refusals.
+	Harness string
+	// CredentialFile is the file name inside the credential volume.
+	CredentialFile string
+	// RoleHome is the in-worker directory holding the harness role state.
+	RoleHome string
+	// LinkName is the file name the harness reads inside RoleHome.
+	LinkName string
+}
+
+// seedCredentialFile is the one credential-seeding primitive shared by every
+// harness. It reads one explicit host file, streams its bytes into the
+// factory-managed credential volume, and links that copy into the role home.
+// The host source is only ever read.
+func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request CredentialSeedRequest, credential harnessCredential) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
 	}
 	if !filepath.IsAbs(request.AuthPath) || strings.ContainsAny(request.AuthPath, "\x00\r\n") {
-		return errors.New("codex auth path must be an absolute safe path")
+		return fmt.Errorf("%s auth path must be an absolute safe path", credential.Harness)
 	}
 	info, err := os.Lstat(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("inspect codex auth file: %w", err)
+		return fmt.Errorf("inspect %s auth file: %w", credential.Harness, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("codex auth path must not be a symbolic link")
+		return fmt.Errorf("%s auth path must not be a symbolic link", credential.Harness)
 	}
 	if !info.Mode().IsRegular() {
-		return errors.New("codex auth path must be a regular file")
+		return fmt.Errorf("%s auth path must be a regular file", credential.Harness)
 	}
 	data, err := os.ReadFile(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("read codex auth file: %w", err)
+		return fmt.Errorf("read %s auth file: %w", credential.Harness, err)
 	}
 	if len(data) == 0 {
-		return errors.New("codex auth file is empty")
+		return fmt.Errorf("%s auth file is empty", credential.Harness)
 	}
 	// The worker drops every capability, so uid 0 holds neither CAP_CHOWN nor
 	// CAP_DAC_OVERRIDE and is less able to write the factory-owned role home
 	// than the worker user itself. Each step therefore runs as the owner of the
 	// directory it writes, and no step changes ownership.
 	name := containerName(request.RunID)
+	credentialPath := CredentialPath + "/" + credential.CredentialFile
+	linkPath := credential.RoleHome + "/" + credential.LinkName
 	if _, err := r.runDockerWithInput(ctx, []string{
 		"exec", "-i", "--user", "0:0", "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
-		"umask 077; rm -f \"" + CredentialPath + "/auth.json\"; cat > \"" + CredentialPath + "/auth.json\"; chmod 0444 \"" + CredentialPath + "/auth.json\"",
+		"umask 077; rm -f \"" + credentialPath + "\"; cat > \"" + credentialPath + "\"; chmod 0444 \"" + credentialPath + "\"",
 	}, data); err != nil {
-		return fmt.Errorf("seed Codex credentials: %w", dockerStderrDetail(err))
+		return fmt.Errorf("seed %s credentials: %w", credential.Harness, dockerStderrDetail(err))
 	}
 	if _, err := r.runDocker(ctx, []string{
 		"exec", "--user", WorkerUser, "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
-		"mkdir -p \"$HOME/.codex\"; rm -f \"$HOME/.codex/auth.json\"; ln -s \"" + CredentialPath + "/auth.json\" \"$HOME/.codex/auth.json\"",
+		"mkdir -p \"" + credential.RoleHome + "\"; rm -f \"" + linkPath + "\"; ln -s \"" + credentialPath + "\" \"" + linkPath + "\"",
 	}); err != nil {
-		return fmt.Errorf("link Codex credentials into the role home: %w", dockerStderrDetail(err))
+		return fmt.Errorf("link %s credentials into the role home: %w", credential.Harness, dockerStderrDetail(err))
 	}
 	return nil
 }
@@ -1453,6 +1512,9 @@ func roleVolumeName(runID, role string) string {
 
 // credentialVolumeName derives a persistent factory-managed credential volume
 // without exposing its coordinator-side key or the host auth path to Docker.
+// One volume holds every harness's credential copy under its own file name;
+// the historical name prefix is retained because it is part of the mount
+// contract that Resume validates against an existing worker.
 func credentialVolumeName(runID, storeID string) string {
 	if strings.TrimSpace(storeID) == "" {
 		storeID = runID
@@ -1524,3 +1586,7 @@ func isDockerRuntimeFailure(commandErr *dockerCommandError) bool {
 }
 
 var _ WorkerRuntime = (*DockerRuntime)(nil)
+var _ InteractiveRuntime = (*DockerRuntime)(nil)
+var _ CredentialSeeder = (*DockerRuntime)(nil)
+var _ ClaudeCredentialSeeder = (*DockerRuntime)(nil)
+var _ NativeSessionSnapshotProvider = (*DockerRuntime)(nil)
