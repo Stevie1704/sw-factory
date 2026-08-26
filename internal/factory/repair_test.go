@@ -598,6 +598,11 @@ type repairLaunchHarness struct {
 	resumes   int
 }
 
+// Capabilities satisfies the harness runtime seam.
+func (*repairLaunchHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: string(config.HarnessCodex), NativeResume: true}
+}
+
 // Start satisfies the harness runtime seam.
 func (*repairLaunchHarness) Start(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, nil

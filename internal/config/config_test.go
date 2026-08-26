@@ -826,3 +826,54 @@ func validRepositoryConfig() config.RepositoryConfig {
 		BaseSynchronization: config.BaseSynchronization{Mode: config.BaseSynchronizationNever},
 	}
 }
+
+// TestValidateRepositoryAcceptsDeclaredReasoningEffortOptions verifies a role
+// may declare the validated reasoning-effort values its harness accepts.
+func TestValidateRepositoryAcceptsDeclaredReasoningEffortOptions(t *testing.T) {
+	value := validRepositoryConfig()
+	value.ReasoningEffortOptions = map[string][]string{"implementation": {"medium", "high"}}
+	if err := config.ValidateRepository(value); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want declared reasoning-effort options to be accepted", err)
+	}
+}
+
+// TestValidateRepositoryRejectsReasoningEffortOptionsForAnUndeclaredRole
+// verifies reasoning effort cannot be declared for a role that has no harness.
+func TestValidateRepositoryRejectsReasoningEffortOptionsForAnUndeclaredRole(t *testing.T) {
+	value := validRepositoryConfig()
+	value.ReasoningEffortOptions = map[string][]string{"standards_review": {"high"}}
+	if err := config.ValidateRepository(value); err == nil || !strings.Contains(err.Error(), "reasoning_effort_options.standards_review") {
+		t.Fatalf("ValidateRepository() error = %v, want undeclared-role rejection", err)
+	}
+}
+
+// TestValidateRepositoryRejectsUnsafeReasoningEffortOptions verifies a
+// declared value cannot smuggle separators into a launched process argument.
+func TestValidateRepositoryRejectsUnsafeReasoningEffortOptions(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "empty", value: "   "},
+		{name: "space", value: "high --flag"},
+		{name: "newline", value: "high\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := validRepositoryConfig()
+			value.ReasoningEffortOptions = map[string][]string{"implementation": {test.value}}
+			if err := config.ValidateRepository(value); err == nil || !strings.Contains(err.Error(), "reasoning_effort_options.implementation[0]") {
+				t.Fatalf("ValidateRepository() error = %v, want unsafe-value rejection", err)
+			}
+		})
+	}
+}
+
+// TestValidateRepositoryRejectsDuplicateReasoningEffortOptions verifies a role
+// declares each validated value once.
+func TestValidateRepositoryRejectsDuplicateReasoningEffortOptions(t *testing.T) {
+	value := validRepositoryConfig()
+	value.ReasoningEffortOptions = map[string][]string{"implementation": {"high", "high"}}
+	if err := config.ValidateRepository(value); err == nil || !strings.Contains(err.Error(), "must be unique") {
+		t.Fatalf("ValidateRepository() error = %v, want duplicate rejection", err)
+	}
+}
