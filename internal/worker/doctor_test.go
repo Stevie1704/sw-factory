@@ -105,6 +105,9 @@ func TestDockerRuntimeChecksHarnessAuthenticationInsideThePinnedWorker(t *testin
 		"--pull=never", "--network none", "--user 10001:10001",
 		"--cap-drop ALL", "--security-opt no-new-privileges", "codex login status",
 		"ghcr.io/example/factory-worker@"+testWorkerDigest,
+		// Without attached standard input the probe writes an empty
+		// credential file and every authenticated harness fails diagnosis.
+		"run --rm -i ",
 	)
 	if strings.Contains(line, secret) || strings.Contains(line, authPath) {
 		t.Fatalf("credential material or host path entered Docker arguments: %q", line)

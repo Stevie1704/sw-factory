@@ -139,7 +139,9 @@ func (r *DockerRuntime) CheckHarness(ctx context.Context, request HarnessCheckRe
 
 // CheckHarnessAuthentication streams one explicit credential file into a
 // disposable, network-isolated worker and runs that harness's local auth
-// status command. Neither credential contents nor process output is returned.
+// status command. The probe keeps container standard input attached so the
+// credential reaches the in-worker file instead of arriving empty. Neither
+// credential contents nor process output is returned.
 func (r *DockerRuntime) CheckHarnessAuthentication(ctx context.Context, request HarnessAuthenticationCheckRequest) error {
 	if err := validateImageReference(request.Image); err != nil {
 		return err
@@ -156,7 +158,7 @@ func (r *DockerRuntime) CheckHarnessAuthentication(ctx context.Context, request 
 	writeCommand := "umask 077; mkdir -p " + roleHome + "; cat > " + authFile + "; chmod 0400 " + authFile
 	probe := writeCommand + " && " + command
 	if _, err := r.runDockerWithInput(ctx, []string{
-		"run", "--rm", "--pull=never", "--network", "none", "--user", WorkerUser,
+		"run", "--rm", "-i", "--pull=never", "--network", "none", "--user", WorkerUser,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--entrypoint", "/bin/sh", imageReference(request.Image.Name, request.Image.Digest), "-c", probe,
 	}, data); err != nil {
