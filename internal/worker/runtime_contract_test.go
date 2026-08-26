@@ -344,6 +344,9 @@ case "$command_name" in
     printf '\n'
     ;;
   run)
+    if [ -n "${WORKER_DOCKER_INPUT_DIR:-}" ]; then
+      cat > "$WORKER_DOCKER_INPUT_DIR/input.$$"
+    fi
     printf 'running\n' > "$WORKER_DOCKER_STATE"
     # Extract and record mount information from run command
     printf '' > "$WORKER_DOCKER_MOUNTS"

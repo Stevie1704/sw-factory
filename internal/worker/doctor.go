@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
+	"golang.org/x/sys/unix"
 )
 
 // ImageReference identifies the immutable worker image required by a run.
@@ -183,11 +185,16 @@ func readAuthenticationSource(path string) ([]byte, error) {
 	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") {
 		return nil, errors.New("harness authentication path must be absolute and safe")
 	}
-	info, err := os.Lstat(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, errors.New("harness authentication source is unavailable or unsafe")
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 || info.Size() == 0 {
 		return nil, errors.New("harness authentication source is unavailable or unsafe")
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(file)
 	if err != nil || len(data) == 0 {
 		return nil, errors.New("harness authentication source cannot be read")
 	}

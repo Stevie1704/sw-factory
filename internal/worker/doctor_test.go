@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
@@ -106,5 +108,113 @@ func TestDockerRuntimeChecksHarnessAuthenticationInsideThePinnedWorker(t *testin
 	)
 	if strings.Contains(line, secret) || strings.Contains(line, authPath) {
 		t.Fatalf("credential material or host path entered Docker arguments: %q", line)
+	}
+}
+
+// TestDockerRuntimeDoesNotSendContentsFromReplacedAuthenticationPath verifies
+// replacing the validated path cannot redirect the credential sent to Docker.
+func TestDockerRuntimeDoesNotSendContentsFromReplacedAuthenticationPath(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	inputDirectory := filepath.Join(t.TempDir(), "docker-input")
+	if err := os.Mkdir(inputDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKER_DOCKER_INPUT_DIR", inputDirectory)
+
+	root := t.TempDir()
+	safeSourcePath := filepath.Join(root, "safe-auth.json")
+	authPath := filepath.Join(root, "auth.json")
+	replacementPath := filepath.Join(root, "replacement")
+	restorePath := filepath.Join(root, "restore")
+	arbitraryHostFilePath := filepath.Join(root, "host-file")
+	safeContents := []byte("expected-credential")
+	arbitraryHostContents := []byte("arbitrary-host-file-contents")
+	if err := os.WriteFile(safeSourcePath, safeContents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(arbitraryHostFilePath, arbitraryHostContents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(safeSourcePath, authPath); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.HarnessAuthenticationCheckRequest{
+		Image:    worker.ImageReference{Name: "ghcr.io/example/factory-worker", Digest: testWorkerDigest},
+		Name:     "codex",
+		AuthPath: authPath,
+	}
+	if err := runtime.CheckHarnessAuthentication(context.Background(), request); err != nil {
+		t.Fatalf("baseline CheckHarnessAuthentication() error = %v", err)
+	}
+
+	stopReplacement := make(chan struct{})
+	replacementDone := make(chan struct{})
+	replacementReady := make(chan struct{})
+	var replacementCount atomic.Int64
+	var replacementReadyOnce sync.Once
+	go func() {
+		defer close(replacementDone)
+		for {
+			select {
+			case <-stopReplacement:
+				return
+			default:
+			}
+
+			_ = os.Remove(replacementPath)
+			if err := os.Symlink(arbitraryHostFilePath, replacementPath); err != nil {
+				continue
+			}
+			if err := os.Rename(replacementPath, authPath); err != nil {
+				_ = os.Remove(replacementPath)
+				continue
+			}
+			replacementCount.Add(1)
+			replacementReadyOnce.Do(func() { close(replacementReady) })
+
+			_ = os.Remove(restorePath)
+			if err := os.Link(safeSourcePath, restorePath); err != nil {
+				continue
+			}
+			_ = os.Rename(restorePath, authPath)
+		}
+	}()
+	<-replacementReady
+
+	const attempts = 512
+	const workers = 8
+	var checks sync.WaitGroup
+	checks.Add(workers)
+	for range workers {
+		go func() {
+			defer checks.Done()
+			for range attempts / workers {
+				_ = runtime.CheckHarnessAuthentication(context.Background(), request)
+			}
+		}()
+	}
+	checks.Wait()
+	close(stopReplacement)
+	<-replacementDone
+	if replacementCount.Load() == 0 {
+		t.Fatal("authentication path was not replaced during the check")
+	}
+
+	entries, err := os.ReadDir(inputDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("Docker received no authentication input")
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(inputDirectory, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != string(safeContents) {
+			t.Fatalf("Docker received unexpected authentication input: %q", data)
+		}
 	}
 }
