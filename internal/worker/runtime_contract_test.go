@@ -64,7 +64,7 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 		Command:           "printf gate-ok",
 		EnvironmentPolicy: worker.EnvironmentPolicyClean,
 		Role:              "gate",
-		Environment:       map[string]string{"FACTORY_CHECKPOINT_SHA": "0123456789abcdef"},
+		Environment:       map[string]string{"FACTORY_TEST_MARKER": "marker-value"},
 	})
 	if err != nil {
 		t.Fatalf("RunCommand() error = %v", err)
@@ -127,7 +127,7 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 		t.Fatalf("Docker exec calls = %d, want clean and role calls; calls = %#v", len(execLines), lines)
 	}
 	execLine := execLines[0]
-	assertContainsAll(t, execLine, "/work", "/git", "FACTORY_CHECKPOINT_SHA=0123456789abcdef", "/bin/sh -c")
+	assertContainsAll(t, execLine, "/work", "/git", "FACTORY_TEST_MARKER=marker-value", "/bin/sh -c")
 	if strings.Contains(execLine, "FACTORY_ROLE=gate") {
 		t.Fatalf("clean environment included role identity: %q", execLine)
 	}
@@ -211,6 +211,15 @@ func TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment(t *testing.T)
 		Environment:       map[string]string{"GH_TOKEN": "secret-value"},
 	}); err == nil {
 		t.Fatal("RunCommand() accepted a GitHub credential")
+	}
+	if _, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
+		RunID:             request.RunID,
+		Command:           "printf nope",
+		EnvironmentPolicy: worker.EnvironmentPolicyClean,
+		Role:              "gate",
+		Environment:       map[string]string{"FACTORY_CHECKPOINT_SHA": "0123456789abcdef"},
+	}); err == nil || !strings.Contains(err.Error(), "reserved by the worker") {
+		t.Fatalf("RunCommand() checkpoint override error = %v, want reserved-environment rejection", err)
 	}
 	if lines := readStubLog(t, logPath); len(lines) != 0 {
 		t.Fatalf("Docker was invoked after rejecting unsafe input: %#v", lines)
