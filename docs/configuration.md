@@ -39,6 +39,7 @@ repositories:
       control_workspace: factory-control
     authentication:
       codex_auth_path: /Users/me/.codex/auth.json
+      claude_auth_path: /Users/me/.claude/.credentials.json
     operational_data_path: /Users/me/.local/share/factory/factory.db
     repository_config_path: /Users/me/src/project/factory.yaml
 ```
@@ -47,11 +48,19 @@ All paths persisted in a repository registration are absolute. The coordinator d
 
 `cmux.socket_path` is optional and is passed to the cmux adapter as its
 connection endpoint; the coordinator still keeps cmux identifiers behind the
-`TerminalRuntime` seam. `authentication.codex_auth_path` is optional and names one host-side Codex
-`auth.json` file. The factory stores only this path. During an implementation
-invocation the worker adapter streams the file into a separate,
-factory-managed credential volume and links that copy into the role home; it
-never mounts the host harness directory or writes back to the host source.
+`TerminalRuntime` seam.
+
+`authentication.codex_auth_path` and `authentication.claude_auth_path` are both
+optional and each names one host-side harness credential file. The factory
+stores only these paths. When an invocation selects a harness that has a
+registered source, the worker adapter streams that one file into a separate,
+factory-managed credential volume and links the copy into the role home. It
+never mounts the host harness directory and never writes back to the host
+source. Each harness has its own source because a host can hold one harness
+credential as a file without holding the other: macOS keeps the Claude Code
+credential in the login Keychain, so `claude_auth_path` is declared only where
+a credential file exists. A harness with no registered source keeps the
+credential the worker itself persisted in its role volume.
 
 ## Checked-in repository configuration
 
@@ -77,12 +86,16 @@ gates:
     environment_policy: clean
 role_harness_defaults:
   test: codex
-  implementation: codex
+  implementation: claude
   spec_review: codex
 model_options:
   test: [gpt-5]
-  implementation: [gpt-5]
+  implementation: [claude-opus-5, claude-sonnet-5]
   spec_review: [gpt-5]
+# Optional. A role that declares no values accepts no reasoning-effort
+# selection at all.
+reasoning_effort_options:
+  test: [medium, high]
 timeouts:
   setup: 5m
   agent: 30m
@@ -115,7 +128,38 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies (including the mandatory `test` role), positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies (including the mandatory `test` role), optional `reasoning_effort_options` for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled.
+
+## Per-role harness, model, and reasoning effort
+
+`role_harness_defaults`, `model_options`, and `reasoning_effort_options` are
+selected independently for each role, so the best harness can be used for each
+stage. The supported harness values are `codex` and `claude`.
+
+A request selects one declared option per setting. When it selects nothing, the
+role uses its declared harness, its first declared model, and its first
+declared reasoning effort. A selection outside the declared options needs the
+matching `allowed_overrides` entry; without it the coordinator refuses the
+launch as a typed policy rejection with the code `harness_override`,
+`model_override`, or `reasoning_effort_override`.
+
+Claude Code exposes no reasoning-effort process argument. A role that runs on
+`claude` therefore declares no `reasoning_effort_options`; if one is selected
+anyway, the adapter refuses the launch rather than running the role at an
+effort the policy never authorized.
+
+An authorized maintainer selects a harness for a later invocation with one
+structured comment:
+
+```text
+/factory config harness=claude
+```
+
+The comment grammar accepts nothing else. A recognized command with an extra
+word, a flag, or an unknown key is refused as a typed malformed-command
+rejection, so a comment cannot inject a process argument into a launched
+harness. The recorded choice is still validated against the frozen repository
+policy when the next invocation starts. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 The test stage is default-on for both supported `test_policy.mode` values.
 A human skip requires `allow_human_exemption: true` and the frozen issue marker
