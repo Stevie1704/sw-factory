@@ -70,10 +70,6 @@ type Capabilities struct {
 	// session belongs to the harness that created it, so the coordinator
 	// compares this name before it resumes one.
 	Name string
-	// ReasoningEffort reports whether the harness can honor a reasoning-effort
-	// selection. The coordinator refuses a selection the harness cannot honor
-	// before it creates any invocation side effect.
-	ReasoningEffort bool
 }
 
 // Runtime is the portable harness lifecycle seam used by the coordinator.
@@ -87,11 +83,6 @@ type Runtime interface {
 	// Finish detaches the visible surface after accepted completion.
 	Finish(context.Context, Session) error
 }
-
-// ErrUnsupportedSetting reports that a validated repository setting has no
-// native representation in the selected harness. The adapter refuses the
-// launch rather than silently dropping a policy selection.
-var ErrUnsupportedSetting = errors.New("harness does not support the requested setting")
 
 // ErrUnknownHarness reports that no adapter implements the requested harness.
 var ErrUnknownHarness = errors.New("no adapter implements the requested harness")

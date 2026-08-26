@@ -12,7 +12,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
-	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -117,13 +116,38 @@ func TestStartAgentAcceptsAnIssueHarnessOverridePermittedByPolicy(t *testing.T) 
 	}
 }
 
-// TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonor verifies a
-// validated repository setting is refused as a typed policy rejection rather
-// than silently dropped, and that the refusal happens before the launch
-// creates a worker, a credential copy, or a visible surface.
-func TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonor(t *testing.T) {
+// TestStartAgentPassesTheDeclaredReasoningEffortToClaude verifies reasoning
+// effort is selected per role from the repository-declared options and reaches
+// the Claude adapter, which is what constrains the value: Claude Code warns
+// about an unrecognized level and then silently uses its default.
+func TestStartAgentPassesTheDeclaredReasoningEffortToClaude(t *testing.T) {
 	_, runStore, runtime, terminalRuntime, _ := newAgentService(t)
 	policy := validRepositoryConfig()
+	policy.RoleHarnessDefaults["implementation"] = config.HarnessClaude
+	policy.ModelOptions["implementation"] = []string{"claude-opus-5"}
+	policy.ReasoningEffortOptions = map[string][]string{"implementation": {"high", "max"}}
+	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, policy, config.AuthenticationConfig{})
+
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	if launch.Invocation.ReasoningEffort != "high" {
+		t.Fatalf("invocation reasoning effort = %q, want the role's first declared option", launch.Invocation.ReasoningEffort)
+	}
+	command := runtime.interactive[0].Command
+	if !containsAdjacentArguments(command, "--effort", "high") {
+		t.Fatalf("Claude command = %#v, want the declared effort level", command)
+	}
+}
+
+// TestStartAgentRefusesAnUndeclaredReasoningEffort verifies an effort outside
+// the role's declared options is refused as a typed policy rejection before
+// the launch creates a worker, a credential copy, or a visible surface.
+func TestStartAgentRefusesAnUndeclaredReasoningEffort(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, _ := newAgentService(t)
+	policy := validRepositoryConfig()
+	policy.AllowedOverrides = nil
 	policy.RoleHarnessDefaults["implementation"] = config.HarnessClaude
 	policy.ModelOptions["implementation"] = []string{"claude-opus-5"}
 	policy.ReasoningEffortOptions = map[string][]string{"implementation": {"high"}}
@@ -131,10 +155,10 @@ func TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonor(t *testing.T) {
 		ClaudeAuthPath: filepath.Join(t.TempDir(), ".credentials.json"),
 	})
 
-	_, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	_, err := service.StartAgent(context.Background(), factory.AgentRequest{ReasoningEffort: "bogus"})
 	var rejection *factory.PolicyRejection
-	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionReasoningEffortUnsupported {
-		t.Fatalf("StartAgent() error = %v, want a typed unsupported-setting rejection", err)
+	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionReasoningEffortOverride {
+		t.Fatalf("StartAgent() error = %v, want a typed reasoning-effort rejection", err)
 	}
 	if len(runtime.starts) != 0 || len(runtime.claudeSeeds) != 0 || len(runtime.interactive) != 0 {
 		t.Fatal("a refused setting started a worker, seeded a credential, or launched a harness")
@@ -144,22 +168,15 @@ func TestStartAgentRefusesAReasoningEffortTheHarnessCannotHonor(t *testing.T) {
 	}
 }
 
-// TestClaudeAdapterRefusesAnUnsupportedSettingAsABackstop verifies the adapter
-// itself still fails closed if a caller reaches it with a setting the harness
-// cannot honor.
-func TestClaudeAdapterRefusesAnUnsupportedSettingAsABackstop(t *testing.T) {
-	_, err := harness.NewClaude(&agentWorker{}, &agentTerminal{}).Start(context.Background(), harness.StartRequest{
-		InvocationID:    "inv-backstop",
-		RunID:           "run-backstop",
-		Role:            "implementation",
-		Stage:           "implementation",
-		WorkspaceID:     "workspace-run",
-		Prompt:          "Implement the frozen specification.",
-		ReasoningEffort: "high",
-	})
-	if !errors.Is(err, harness.ErrUnsupportedSetting) {
-		t.Fatalf("Start() error = %v, want the unsupported-setting sentinel", err)
+// containsAdjacentArguments reports whether a flag is immediately followed by
+// its expected value.
+func containsAdjacentArguments(arguments []string, flag, value string) bool {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == flag && arguments[index+1] == value {
+			return true
+		}
 	}
+	return false
 }
 
 // newDispatchingAgentService recreates the coordinator around a persisted claim

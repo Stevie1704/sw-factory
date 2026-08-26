@@ -33,11 +33,8 @@ func TestHarnessAdaptersSatisfyTheSameContract(t *testing.T) {
 		wantLaunchFlag string
 		wantResumeFlag string
 		wantAssignedID bool
-		// wantReasoningEffort records the one capability the two adapters do
-		// not share.
-		wantReasoningEffort bool
 	}{
-		{name: "codex", harness: harness.NameCodex, wantExecutable: "codex", wantLaunchFlag: "-s", wantResumeFlag: "resume", wantReasoningEffort: true},
+		{name: "codex", harness: harness.NameCodex, wantExecutable: "codex", wantLaunchFlag: "-s", wantResumeFlag: "resume"},
 		{name: "claude", harness: harness.NameClaude, wantExecutable: "claude", wantLaunchFlag: "--session-id", wantResumeFlag: "--resume", wantAssignedID: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -51,9 +48,6 @@ func TestHarnessAdaptersSatisfyTheSameContract(t *testing.T) {
 			capabilities := runtime.Capabilities()
 			if capabilities.Name != test.harness {
 				t.Fatalf("Capabilities() = %#v, want harness %q", capabilities, test.harness)
-			}
-			if capabilities.ReasoningEffort != test.wantReasoningEffort {
-				t.Fatalf("Capabilities() = %#v, want reasoning-effort support %t", capabilities, test.wantReasoningEffort)
 			}
 
 			// Launch.
