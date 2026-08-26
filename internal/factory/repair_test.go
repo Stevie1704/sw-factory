@@ -674,3 +674,33 @@ func (w *repairStateWorker) Stop(context.Context, string) error {
 func (*repairStateWorker) Inspect(context.Context, string) (worker.Inspection, error) {
 	return worker.Inspection{Exists: true}, nil
 }
+
+// TestCheckRepairRefusesMidSessionHarnessMigration verifies a native session
+// can only be continued by the harness that created it, so a repair cannot
+// migrate an implementation session from one harness to another.
+func TestCheckRepairRefusesMidSessionHarnessMigration(t *testing.T) {
+	service, registration, runStore, harnessRuntime := newRepairLaunchService(t, nil, 0, 0)
+	previous := runStore.invocations["inv-initial"]
+	previous.Harness = string(config.HarnessClaude)
+	runStore.invocations["inv-initial"] = previous
+	run := runStore.run
+
+	_, _, err := service.startCheckRepair(context.Background(), registration, runStore, run, SpecificationPacket{
+		Issue: github.Issue{Body: "repair guidance"},
+	}, CheckRepairPacket{
+		Version:       checkRepairPacketVersion,
+		RunID:         run.ID,
+		CheckpointSHA: run.CheckpointSHA,
+		Attempt:       1,
+		Budget:        3,
+	})
+	if !errors.Is(err, ErrCheckRepairSessionUnavailable) {
+		t.Fatalf("startCheckRepair() error = %v, want the unavailable-session sentinel", err)
+	}
+	if !strings.Contains(err.Error(), "cannot resume") {
+		t.Fatalf("startCheckRepair() error = %v, want a harness-mismatch refusal", err)
+	}
+	if harnessRuntime.resumes != 0 {
+		t.Fatalf("resume calls = %d, want no cross-harness resume attempt", harnessRuntime.resumes)
+	}
+}

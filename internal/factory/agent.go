@@ -52,8 +52,10 @@ type AgentRequest struct {
 	Model string
 	// ReasoningEffort is an optional policy-validated setting.
 	ReasoningEffort string
-	// CodexAuthPath overrides the registered narrow auth source when set.
+	// CodexAuthPath overrides the registered narrow Codex auth source when set.
 	CodexAuthPath string
+	// ClaudeAuthPath overrides the registered narrow Claude auth source when set.
+	ClaudeAuthPath string
 	// PermittedPaths constrains production paths in the accepted handoff.
 	PermittedPaths []string
 }
@@ -303,7 +305,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			}
 		}
 	}
-	_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath)
+	_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("ensure agent runtime: %w", err)
 	}
@@ -423,42 +425,69 @@ func validateAgentRequest(request AgentRequest) error {
 	if request.ReasoningEffort != "" && strings.ContainsAny(request.ReasoningEffort, "\x00\r\n ") {
 		return errors.New("agent reasoning effort contains unsafe characters")
 	}
-	if request.CodexAuthPath != "" {
-		if !filepath.IsAbs(request.CodexAuthPath) || strings.ContainsAny(request.CodexAuthPath, "\x00\r\n") {
-			return errors.New("agent Codex auth path must be absolute and free of control characters")
+	for harnessName, path := range map[string]string{"Codex": request.CodexAuthPath, "Claude": request.ClaudeAuthPath} {
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") {
+			return fmt.Errorf("agent %s auth path must be absolute and free of control characters", harnessName)
 		}
 	}
 	return nil
 }
 
-// resolveAgentPolicy applies frozen repository harness/model policy and only
-// permits explicit overrides declared by that packet.
-func resolveAgentPolicy(repository config.RepositoryConfig, request AgentRequest) (config.Harness, string, error) {
+// resolveAgentPolicy applies the frozen repository harness, model, and
+// reasoning-effort policy for one role. Harness, model, and reasoning effort
+// are selected independently; each defaults to the role's declared option and
+// only a repository-declared override permission widens it. Every refusal is a
+// typed policy rejection so the coordinator can report it in stable vocabulary.
+func resolveAgentPolicy(repository config.RepositoryConfig, request AgentRequest) (config.Harness, string, string, error) {
+	defaultHarness := repository.RoleHarnessDefaults[request.Role]
 	harnessName := request.Harness
 	if harnessName == "" {
-		harnessName = repository.RoleHarnessDefaults[request.Role]
+		harnessName = defaultHarness
 	}
 	if harnessName != config.HarnessCodex && harnessName != config.HarnessClaude {
-		return "", "", fmt.Errorf("no supported harness policy for role %q", request.Role)
+		return "", "", "", &PolicyRejection{
+			Code:    PolicyRejectionHarnessUnavailable,
+			Problem: fmt.Sprintf("no supported harness policy for role %q", request.Role),
+		}
 	}
-	if request.Harness != "" && !hasOverride(repository.AllowedOverrides, config.OverrideHarness) && request.Harness != repository.RoleHarnessDefaults[request.Role] {
-		return "", "", errors.New("harness override is not allowed by repository policy")
+	if request.Harness != "" && request.Harness != defaultHarness && !hasOverride(repository.AllowedOverrides, config.OverrideHarness) {
+		return "", "", "", &PolicyRejection{
+			Code:    PolicyRejectionHarnessOverride,
+			Problem: fmt.Sprintf("repository configuration does not allow harness override from %q to %q for role %q", defaultHarness, request.Harness, request.Role),
+		}
 	}
-	model := request.Model
 	options := repository.ModelOptions[request.Role]
+	model := request.Model
 	if model == "" && len(options) > 0 {
 		model = options[0]
 	}
 	if model == "" {
-		return "", "", fmt.Errorf("no model policy for role %q", request.Role)
+		return "", "", "", &PolicyRejection{
+			Code:    PolicyRejectionModelOverride,
+			Problem: fmt.Sprintf("no model policy for role %q", request.Role),
+		}
 	}
 	if !contains(options, model) && !hasOverride(repository.AllowedOverrides, config.OverrideModel) {
-		return "", "", fmt.Errorf("model %q is not allowed for role %q", model, request.Role)
+		return "", "", "", &PolicyRejection{
+			Code:    PolicyRejectionModelOverride,
+			Problem: fmt.Sprintf("model %q is not a declared option for role %q", model, request.Role),
+		}
 	}
-	if request.ReasoningEffort != "" && !hasOverride(repository.AllowedOverrides, config.OverrideReasoningEffort) {
-		return "", "", errors.New("reasoning_effort override is not allowed by repository policy")
+	efforts := repository.ReasoningEffortOptions[request.Role]
+	effort := request.ReasoningEffort
+	if effort == "" && len(efforts) > 0 {
+		effort = efforts[0]
 	}
-	return harnessName, model, nil
+	if effort != "" && !contains(efforts, effort) && !hasOverride(repository.AllowedOverrides, config.OverrideReasoningEffort) {
+		return "", "", "", &PolicyRejection{
+			Code:    PolicyRejectionReasoningEffortOverride,
+			Problem: fmt.Sprintf("reasoning effort %q is not a declared option for role %q", effort, request.Role),
+		}
+	}
+	return harnessName, model, effort, nil
 }
 
 // hasOverride reports whether a repository policy explicitly permits a setting.

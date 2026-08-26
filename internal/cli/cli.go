@@ -165,6 +165,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 	model := flags.String("model", "", "validated model override")
 	reasoningEffort := flags.String("reasoning-effort", "", "validated reasoning-effort override")
 	codexAuthPath := flags.String("codex-auth", "", "explicit Codex auth.json source")
+	claudeAuthPath := flags.String("claude-auth", "", "explicit Claude credential source")
 	permittedPaths := stringList{}
 	flags.Var(&permittedPaths, "permitted-path", "repository-relative handoff path prefix; may be repeated")
 	if err := flags.Parse(args); err != nil {
@@ -182,6 +183,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 		Model:           *model,
 		ReasoningEffort: *reasoningEffort,
 		CodexAuthPath:   *codexAuthPath,
+		ClaudeAuthPath:  *claudeAuthPath,
 		PermittedPaths:  append([]string(nil), permittedPaths...),
 	})
 	if err != nil {
@@ -362,6 +364,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	cmuxSocketPath := flags.String("cmux-socket", "", "cmux socket path")
 	cmuxWorkspace := flags.String("cmux-workspace", "", "cmux control workspace")
 	codexAuthPath := flags.String("codex-auth", "", "host Codex auth.json path")
+	claudeAuthPath := flags.String("claude-auth", "", "host Claude credential path")
 	repositoryConfigPath := flags.String("repository-config", "", "checked-in repository configuration path")
 	authorizedUsers := stringList{}
 	flags.Var(&authorizedUsers, "authorized-user", "authorized GitHub username; may be repeated")
@@ -388,6 +391,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		CmuxSocketPath:       *cmuxSocketPath,
 		CmuxControlWorkspace: *cmuxWorkspace,
 		CodexAuthPath:        *codexAuthPath,
+		ClaudeAuthPath:       *claudeAuthPath,
 		RepositoryConfigPath: *repositoryConfigPath,
 	})
 	if err != nil {

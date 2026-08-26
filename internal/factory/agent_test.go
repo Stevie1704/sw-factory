@@ -943,11 +943,14 @@ func (*agentRunStore) Close() error { return nil }
 
 // agentWorker records the worker start request without running Docker.
 type agentWorker struct {
-	starts   []worker.StartRequest
-	stops    int
-	commands []worker.CommandRequest
-	results  []worker.CommandResult
-	events   *[]string
+	starts      []worker.StartRequest
+	stops       int
+	commands    []worker.CommandRequest
+	results     []worker.CommandResult
+	events      *[]string
+	interactive []worker.InteractiveRequest
+	codexSeeds  []worker.CredentialSeedRequest
+	claudeSeeds []worker.CredentialSeedRequest
 }
 
 // Start records one worker start.

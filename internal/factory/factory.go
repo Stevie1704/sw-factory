@@ -135,6 +135,7 @@ type Service struct {
 	runtimeMu         sync.Mutex
 	runtimeSocketPath string
 	runtimePathSet    bool
+	harnessRuntimes   map[config.Harness]harness.Runtime
 	startupMu         sync.Mutex
 	startupChecked    bool
 	startupErr        error
@@ -155,7 +156,9 @@ type RegisterRequest struct {
 	CmuxSocketPath       string
 	CmuxControlWorkspace string
 	// CodexAuthPath is an optional host-side Codex auth.json path.
-	CodexAuthPath        string
+	CodexAuthPath string
+	// ClaudeAuthPath is an optional host-side Claude credential file path.
+	ClaudeAuthPath       string
 	RepositoryConfigPath string
 }
 
@@ -254,16 +257,22 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	return &Service{configPath: configPath, deps: dependencies}
 }
 
-// ensureAgentRuntime lazily constructs the default terminal and harness only
-// after registration has supplied the cmux socket path. The mutex keeps the
-// first construction atomic without mutating a live runtime during a launch.
-// A service owns one registered cmux endpoint, so a later conflicting path is
+// ensureTerminalRuntime lazily constructs the default terminal only after
+// registration has supplied the cmux socket path. The mutex keeps the first
+// construction atomic without mutating a live runtime during a launch. A
+// service owns one registered cmux endpoint, so a later conflicting path is
 // rejected rather than silently reusing the wrong terminal adapter.
-func (s *Service) ensureAgentRuntime(socketPath string) (terminal.TerminalRuntime, harness.Runtime, error) {
+func (s *Service) ensureTerminalRuntime(socketPath string) (terminal.TerminalRuntime, error) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
+	return s.terminalRuntimeLocked(socketPath)
+}
+
+// terminalRuntimeLocked resolves the cached terminal adapter. Callers hold the
+// runtime mutex.
+func (s *Service) terminalRuntimeLocked(socketPath string) (terminal.TerminalRuntime, error) {
 	if s.runtimePathSet && s.runtimeSocketPath != socketPath {
-		return nil, nil, fmt.Errorf("cmux socket path %q conflicts with cached path %q", socketPath, s.runtimeSocketPath)
+		return nil, fmt.Errorf("cmux socket path %q conflicts with cached path %q", socketPath, s.runtimeSocketPath)
 	}
 	if !s.runtimePathSet {
 		s.runtimeSocketPath = socketPath
@@ -272,10 +281,35 @@ func (s *Service) ensureAgentRuntime(socketPath string) (terminal.TerminalRuntim
 	if s.deps.Terminal == nil {
 		s.deps.Terminal = terminal.NewCmuxRuntime(nil, socketPath)
 	}
-	if s.deps.Harness == nil {
-		s.deps.Harness = harness.NewCodex(s.deps.Worker, s.deps.Terminal)
+	return s.deps.Terminal, nil
+}
+
+// ensureAgentRuntime resolves the terminal and the adapter for one validated
+// harness. An explicitly injected harness runtime always wins, so an embedding
+// caller keeps one seam; otherwise each selected harness gets its own cached
+// adapter.
+func (s *Service) ensureAgentRuntime(socketPath string, selected config.Harness) (terminal.TerminalRuntime, harness.Runtime, error) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	terminalRuntime, err := s.terminalRuntimeLocked(socketPath)
+	if err != nil {
+		return nil, nil, err
 	}
-	return s.deps.Terminal, s.deps.Harness, nil
+	if s.deps.Harness != nil {
+		return terminalRuntime, s.deps.Harness, nil
+	}
+	if cached, exists := s.harnessRuntimes[selected]; exists {
+		return terminalRuntime, cached, nil
+	}
+	harnessRuntime, err := harness.New(string(selected), s.deps.Worker, terminalRuntime)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.harnessRuntimes == nil {
+		s.harnessRuntimes = make(map[config.Harness]harness.Runtime, 2)
+	}
+	s.harnessRuntimes[selected] = harnessRuntime
+	return terminalRuntime, harnessRuntime, nil
 }
 
 func (s *Service) Init(_ context.Context) (InitResult, error) {
@@ -337,7 +371,7 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		AuthorizedUsers:      request.AuthorizedUsers,
 		Polling:              config.PollingConfig{Interval: defaultString(request.PollingInterval, "30s"), Backoff: defaultString(request.PollingBackoff, "5m")},
 		Cmux:                 config.CmuxConfig{SocketPath: request.CmuxSocketPath, ControlWorkspace: request.CmuxControlWorkspace},
-		Authentication:       config.AuthenticationConfig{CodexAuthPath: request.CodexAuthPath},
+		Authentication:       config.AuthenticationConfig{CodexAuthPath: request.CodexAuthPath, ClaudeAuthPath: request.ClaudeAuthPath},
 		OperationalDataPath:  operationalPath,
 		RepositoryConfigPath: repositoryConfigPath,
 	}
