@@ -26,7 +26,7 @@ var (
 	errRepositoryUnreadable     = errors.New("registered GitHub repository is not readable")
 	errRepositoryContentsWrite  = errors.New("registered GitHub repository does not permit contents writes")
 	errRepositoryIssueSupervise = errors.New("registered GitHub repository does not permit issue and pull-request supervision")
-	errRepositoryTokenAccess    = errors.New("GitHub token permissions are not sufficient for factory operations")
+	errRepositoryTokenAccess    = errors.New("github token permissions are not sufficient for factory operations")
 	errFactoryLabelsUnavailable = errors.New("factory labels are unavailable")
 	errFactoryLabelsMalformed   = errors.New("factory labels response is malformed")
 )
@@ -142,8 +142,7 @@ func (c *GhClient) checkTokenPermissions(ctx context.Context, private bool) erro
 		}
 		if !private {
 			_, publicRepo := scopes["public_repo"]
-			_, repoStatus := scopes["repo:status"]
-			if publicRepo && repoStatus {
+			if publicRepo {
 				return nil
 			}
 		}
@@ -164,7 +163,7 @@ func repositoryAccessDiagnosis(err error) (string, string) {
 	case errors.Is(err, errRepositoryIssueSupervise):
 		return "the authenticated account cannot supervise issues and pull requests", "grant triage, maintain, or administrator repository access for labels, comments, and pull requests"
 	case errors.Is(err, errRepositoryTokenAccess):
-		return "the GitHub token does not expose the scopes required by factory operations", "authenticate gh with repo access, or with public_repo plus repo:status for a public repository"
+		return "the GitHub token does not expose the scopes required by factory operations", "authenticate gh with repo access, or with public_repo for a public repository"
 	default:
 		return "the registered GitHub repository permissions could not be validated", "verify repository access and retry the diagnosis"
 	}

@@ -96,6 +96,26 @@ func TestStartupChecksRejectMissingTokenScopes(t *testing.T) {
 	}
 }
 
+// TestStartupChecksAcceptPublicRepoScopeForPublicRepository verifies that a
+// classic token with only public_repo scope is accepted for public repositories.
+func TestStartupChecksAcceptPublicRepoScopeForPublicRepository(t *testing.T) {
+	runner := &doctorRunner{responses: []doctorResponse{
+		{output: []byte("authenticated\n")},
+		{output: []byte(`{"private":false,"permissions":{"pull":true,"push":true,"triage":true}}`)},
+		{output: []byte(`{"hosts":{"github.com":[{"state":"success","active":true,"scopes":"public_repo"}]}}`)},
+		{output: []byte(`[[{"name":"agent-ready"},{"name":"agent-running"},{"name":"agent-needs-input"},{"name":"agent-failed"},{"name":"agent-cancelled"},{"name":"agent-complete"}]]`)},
+	}}
+	client := &github.GhClient{Runner: runner}
+	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+	if !report.Ready() {
+		t.Fatalf("GitHub report failed with public_repo scope on public repository: %+v", report.Results)
+	}
+	result := report.Results[1]
+	if result.Status != doctor.StatusPassed {
+		t.Fatalf("permission result = %#v, want success with public_repo scope", result)
+	}
+}
+
 // TestGhClientDoctorUsesReadOnlyGitHubOperations verifies diagnosis does not
 // create labels or mutate repository state.
 func TestGhClientDoctorUsesReadOnlyGitHubOperations(t *testing.T) {

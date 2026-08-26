@@ -50,7 +50,7 @@ type remoteCheckError struct {
 
 // Error returns a bounded error that never includes Git command output.
 func (e *remoteCheckError) Error() string {
-	return "Git remote diagnosis failed"
+	return "git remote diagnosis failed"
 }
 
 // remoteFailure creates one categorized Git remote diagnosis error.
