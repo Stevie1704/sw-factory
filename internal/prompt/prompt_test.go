@@ -100,3 +100,33 @@ func TestBuildIncludesCheckRepairContext(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildIncludesIndependentReviewRules verifies the reviewer is directed to
+// the immutable packet and the complete finding contract without transcripts.
+func TestBuildIncludesIndependentReviewRules(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-review",
+		RunID:               "run-review",
+		Role:                "spec_review",
+		Stage:               "review",
+		SpecificationPacket: `{"issue":{"title":"Review"}}`,
+		ReviewContext: &prompt.ReviewContext{
+			CheckpointSHA: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"factory prompt version " + prompt.ReviewVersion,
+		"exact checkpoint",
+		"/invocation/specification.json",
+		"no upstream harness transcript",
+		"--finding location|claim|evidence|severity|category|resolution|owner",
+		"Taste and scope concerns are visible advisory findings",
+	} {
+		if !strings.Contains(value, marker) {
+			t.Fatalf("review prompt missing %q:\n%s", marker, value)
+		}
+	}
+}

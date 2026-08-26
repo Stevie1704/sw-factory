@@ -299,6 +299,54 @@ func TestValidateRequiresTheTestHandoffForTestCompletion(t *testing.T) {
 	}
 }
 
+// TestValidateAcceptsACompleteSpecificationReview verifies a review binds its
+// findings to the exact immutable checkpoint and preserves advisory findings.
+func TestValidateAcceptsACompleteSpecificationReview(t *testing.T) {
+	value := specificationReviewReport()
+	if err := report.Validate(value, report.ValidationContext{
+		InvocationID:  "inv-review",
+		RunID:         "run-review",
+		Harness:       "codex",
+		Role:          "spec_review",
+		Stage:         "review",
+		CheckpointSHA: value.ReviewHandoff.ReviewedSHA,
+	}); err != nil {
+		t.Fatalf("Validate() error = %v, want accepted specification review", err)
+	}
+	if !report.ReviewFindingBlocks(value.ReviewHandoff.Findings[0]) {
+		t.Fatal("concrete blocker was classified as advisory")
+	}
+	if report.ReviewFindingBlocks(value.ReviewHandoff.Findings[1]) {
+		t.Fatal("scope finding blocked readiness")
+	}
+}
+
+// TestValidateRejectsAnIncompleteReviewFinding verifies every finding field is
+// required before a reviewer can influence readiness.
+func TestValidateRejectsAnIncompleteReviewFinding(t *testing.T) {
+	value := specificationReviewReport()
+	value.ReviewHandoff.Findings[0].SuggestedOwner = ""
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID: "inv-review", RunID: "run-review", Harness: "codex", Role: "spec_review", Stage: "review",
+	})
+	if err == nil || !strings.Contains(err.Error(), "suggested_owner") {
+		t.Fatalf("Validate() error = %v, want missing-owner rejection", err)
+	}
+}
+
+// TestValidateRejectsAReviewForAStaleCheckpoint verifies review output cannot
+// be reused after the reviewed commit changes.
+func TestValidateRejectsAReviewForAStaleCheckpoint(t *testing.T) {
+	value := specificationReviewReport()
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID: "inv-review", RunID: "run-review", Harness: "codex", Role: "spec_review", Stage: "review",
+		CheckpointSHA: strings.Repeat("b", 40),
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match checkpoint") {
+		t.Fatalf("Validate() error = %v, want stale-checkpoint rejection", err)
+	}
+}
+
 // TestValidateChecksPermittedFilesAgainstTheObservedWorktree verifies that a
 // handoff cannot claim a path outside the coordinator-approved worktree state.
 func TestValidateChecksPermittedFilesAgainstTheObservedWorktree(t *testing.T) {
@@ -447,5 +495,44 @@ func testStageReport() report.Report {
 			InfrastructureChanges: []string{"test-support/fixtures.go"},
 		},
 		ReportedAt: time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC),
+	}
+}
+
+// specificationReviewReport returns a valid review report with one blocker
+// and one advisory scope observation.
+func specificationReviewReport() report.Report {
+	return report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  "inv-review",
+		RunID:         "run-review",
+		Harness:       "codex",
+		Role:          "spec_review",
+		Stage:         "review",
+		Outcome:       report.OutcomeCompleted,
+		Summary:       "review complete",
+		ReviewHandoff: &report.ReviewHandoff{
+			ReviewedSHA: strings.Repeat("a", 40),
+			Findings: []report.ReviewFinding{
+				{
+					Location:            "internal/factory/agent.go:42",
+					Claim:               "the implementation accepts stale review output",
+					Evidence:            "checkpoint identity is not compared",
+					Severity:            report.ReviewSeverityBlocker,
+					Category:            report.ReviewCategoryCorrectness,
+					SuggestedResolution: "compare the reviewed SHA before acceptance",
+					SuggestedOwner:      "implementation",
+				},
+				{
+					Location:            "internal/factory/review.go",
+					Claim:               "the review packet could explain the scope boundary more clearly",
+					Evidence:            "the packet already contains the frozen issue",
+					Severity:            report.ReviewSeverityAdvisory,
+					Category:            report.ReviewCategoryScope,
+					SuggestedResolution: "clarify the prompt if later scope remains ambiguous",
+					SuggestedOwner:      "human",
+				},
+			},
+		},
+		ReportedAt: time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC),
 	}
 }

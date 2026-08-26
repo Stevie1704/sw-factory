@@ -144,3 +144,38 @@ func TestRunWritesTheTestStageHandoff(t *testing.T) {
 		t.Fatalf("test handoff = %#v, want focused command and red evidence", value.TestHandoff)
 	}
 }
+
+// TestRunWritesTheSpecificationReviewFindingContract verifies repeated review
+// flags bind complete findings to the coordinator-provided checkpoint.
+func TestRunWritesTheSpecificationReviewFindingContract(t *testing.T) {
+	resultDirectory := t.TempDir()
+	var errorsOutput bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{
+			"--outcome", "completed", "--summary", "review complete",
+			"--finding", "internal/factory/review.go:1|behavior is incorrect|focused assertion|blocker|correctness|reject the behavior|implementation",
+			"--finding", "internal/factory/review.go:2|name is subjective|style preference|advisory|taste|consider renaming|implementation",
+		},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID":  "inv-review",
+			"FACTORY_RUN_ID":         "run-review",
+			"FACTORY_HARNESS":        "codex",
+			"FACTORY_ROLE":           "spec_review",
+			"FACTORY_STAGE":          "review",
+			"FACTORY_CHECKPOINT_SHA": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"FACTORY_RESULT_DIR":     resultDirectory,
+		},
+		Output:       &bytes.Buffer{},
+		ErrorsOutput: &errorsOutput,
+	})
+	if status != 0 {
+		t.Fatalf("Run() status = %d, stderr = %s", status, errorsOutput.String())
+	}
+	value, err := report.Read(resultDirectory + "/report.json")
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if value.ReviewHandoff == nil || value.ReviewHandoff.ReviewedSHA != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" || len(value.ReviewHandoff.Findings) != 2 {
+		t.Fatalf("review handoff = %#v, want exact SHA and two findings", value.ReviewHandoff)
+	}
+}

@@ -78,9 +78,11 @@ gates:
 role_harness_defaults:
   test: codex
   implementation: codex
+  spec_review: codex
 model_options:
   test: [gpt-5]
   implementation: [gpt-5]
+  spec_review: [gpt-5]
 timeouts:
   setup: 5m
   agent: 30m

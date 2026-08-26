@@ -18,6 +18,10 @@ const (
 	generatedPullRequestStart = "<!-- factory-generated:start -->"
 	// generatedPullRequestEnd marks the end of the coordinator-owned PR body section.
 	generatedPullRequestEnd = "<!-- factory-generated:end -->"
+	// generatedReviewStart marks the nested coordinator-owned review section.
+	generatedReviewStart = "<!-- factory-generated:review:start -->"
+	// generatedReviewEnd marks the end of the nested review section.
+	generatedReviewEnd = "<!-- factory-generated:review:end -->"
 )
 
 // DraftPullRequestRequest selects the active run whose accepted implementation
@@ -144,6 +148,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 			return DraftPullRequestResult{}, fmt.Errorf("check-repair attempt %d did not produce a new checkpoint SHA", run.CheckRepairAttempts)
 		}
 		next.CheckpointSHA = checkpoint.SHA
+		next.SpecificationReview = nil
 		next.Stage = store.StageCheck
 		next.Status = store.StatusActive
 		next.LifecycleReason = "evaluating implementation checkpoint"
@@ -383,7 +388,44 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 	if run.TestExemption != nil {
 		testStageDisposition = fmt.Sprintf("- test-stage disposition: `%s` (provisional): %s", safeStatusCommentValue(run.TestExemption.Kind), safeStatusCommentValue(run.TestExemption.Justification))
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s\n\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, generatedReviewSection(run), issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
+}
+
+// generatedReviewSection renders the latest exact-checkpoint review, including
+// advisory findings that never gate readiness but must remain visible.
+func generatedReviewSection(run store.Run) string {
+	lines := []string{generatedReviewStart, "### Specification review", ""}
+	if run.SpecificationReview == nil || run.SpecificationReview.CheckpointSHA != run.CheckpointSHA {
+		if run.Stage == store.StageReview {
+			lines = append(lines, fmt.Sprintf("- status: pending for checkpoint `%s`", safeStatusCommentValue(run.CheckpointSHA)))
+		} else {
+			lines = append(lines, "- status: not run")
+		}
+		lines = append(lines, generatedReviewEnd)
+		return strings.Join(lines, "\n")
+	}
+	review := run.SpecificationReview
+	blockers, advisories := reviewFindingCounts(review.Findings)
+	lines = append(lines,
+		fmt.Sprintf("- reviewed checkpoint: `%s`", safeStatusCommentValue(review.CheckpointSHA)),
+		fmt.Sprintf("- outcome: %d blocking findings, %d advisory findings", blockers, advisories),
+	)
+	if len(review.Findings) == 0 {
+		lines = append(lines, "- findings: none")
+	} else {
+		for index, finding := range review.Findings {
+			lines = append(lines,
+				fmt.Sprintf("\n#### Finding %d — %s/%s", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category)),
+				fmt.Sprintf("- location: `%s`", safeStatusCommentValue(finding.Location)),
+				fmt.Sprintf("- claim: %s", safeStatusCommentValue(finding.Claim)),
+				fmt.Sprintf("- evidence: %s", safeStatusCommentValue(finding.Evidence)),
+				fmt.Sprintf("- suggested resolution: %s", safeStatusCommentValue(finding.SuggestedResolution)),
+				fmt.Sprintf("- suggested owner: `%s`", safeStatusCommentValue(finding.SuggestedOwner)),
+			)
+		}
+	}
+	lines = append(lines, generatedReviewEnd)
+	return strings.Join(lines, "\n")
 }
 
 // mergeGeneratedPullRequestBody replaces only the marked factory section and
@@ -399,4 +441,19 @@ func mergeGeneratedPullRequestBody(existing, generated string) string {
 		return generated
 	}
 	return strings.TrimRight(existing, "\n") + "\n\n" + generated
+}
+
+// mergeGeneratedReviewSection replaces only the nested review projection and
+// preserves both human PR text and the surrounding generated sections.
+func mergeGeneratedReviewSection(existing, generated string) string {
+	start := strings.Index(existing, generatedReviewStart)
+	end := strings.Index(existing, generatedReviewEnd)
+	if start >= 0 && end >= start {
+		end += len(generatedReviewEnd)
+		return existing[:start] + generated + existing[end:]
+	}
+	if end := strings.Index(existing, generatedPullRequestEnd); end >= 0 {
+		return existing[:end] + "\n\n" + generated + "\n" + existing[end:]
+	}
+	return mergeGeneratedPullRequestBody(existing, generated)
 }
