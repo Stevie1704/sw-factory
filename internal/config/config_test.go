@@ -128,6 +128,24 @@ func TestValidateRepositoryRequiresMatchingHarnessAndModelRoles(t *testing.T) {
 	}
 }
 
+// TestValidateRepositoryRequiresTheMandatoryTestRole verifies a repository
+// cannot silently opt out of the default test-stage boundary.
+func TestValidateRepositoryRequiresTheMandatoryTestRole(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	delete(policy.RoleHarnessDefaults, "test")
+	delete(policy.ModelOptions, "test")
+	err := config.ValidateRepository(policy)
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	}
+	if validationErr.Field != "role_harness_defaults.test" {
+		t.Fatalf("field = %q, want role_harness_defaults.test", validationErr.Field)
+	}
+}
+
 func TestValidateRepositoryRejectsUnsupportedOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -795,8 +813,8 @@ func validRepositoryConfig() config.RepositoryConfig {
 			Blocking:          true,
 			EnvironmentPolicy: config.EnvironmentPolicyClean,
 		}},
-		RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex},
-		ModelOptions:        map[string][]string{"implementation": {"gpt-5"}},
+		RoleHarnessDefaults: map[string]config.Harness{"test": config.HarnessCodex, "implementation": config.HarnessCodex},
+		ModelOptions:        map[string][]string{"test": {"gpt-5"}, "implementation": {"gpt-5"}},
 		Timeouts: config.TimeoutConfig{
 			Setup: "5m", Agent: "30m", Gate: "5m", Review: "10m",
 		},

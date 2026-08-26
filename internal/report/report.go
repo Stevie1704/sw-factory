@@ -39,6 +39,10 @@ const (
 	maxQuestions          = 32
 	maxEvidenceEntries    = 32
 	maxEvaluationSignals  = 32
+	// maxTestFiles bounds changed test and test-infrastructure paths in one handoff.
+	maxTestFiles = 256
+	// maxUncoveredCriteria bounds criteria the test role explicitly leaves open.
+	maxUncoveredCriteria = 64
 )
 
 // ReportFileName is the only accepted report filename in an invocation result
@@ -77,6 +81,28 @@ type Handoff struct {
 	FocusedCommands []string `json:"focused_commands"`
 	// KnownLimitations records limitations that remain visible to later stages.
 	KnownLimitations []string `json:"known_limitations,omitempty"`
+}
+
+// TestHandoff contains the bounded evidence needed to transfer a test-stage
+// result to implementation. It deliberately excludes production files and
+// requires the coordinator to verify the focused command independently.
+type TestHandoff struct {
+	// AcceptanceCoverage maps frozen acceptance criteria to test evidence.
+	AcceptanceCoverage []AcceptanceMapping `json:"acceptance_coverage"`
+	// ChangedFiles lists repository-relative test or test-infrastructure paths.
+	ChangedFiles []string `json:"changed_files"`
+	// FocusedTestCommand is the exact command the coordinator reruns for red
+	// verification.
+	FocusedTestCommand string `json:"focused_test_command"`
+	// ExpectedFailureReason is the bounded failure identifier that must appear
+	// in the coordinator-captured rerun output.
+	ExpectedFailureReason string `json:"expected_failure_reason"`
+	// ObservedFailureEvidence is content-limited evidence supplied by the role.
+	ObservedFailureEvidence []Evidence `json:"observed_failure_evidence"`
+	// InfrastructureChanges lists the subset of changed files that support tests.
+	InfrastructureChanges []string `json:"infrastructure_changes,omitempty"`
+	// UncoveredCriteria records acceptance criteria not covered by this handoff.
+	UncoveredCriteria []string `json:"uncovered_criteria,omitempty"`
 }
 
 // Question identifies one clarification requested from an authorized human.
@@ -177,6 +203,9 @@ type Report struct {
 	Summary string `json:"summary"`
 	// Handoff is required only for a completed outcome.
 	Handoff *Handoff `json:"handoff,omitempty"`
+	// TestHandoff is required for a completed test-stage outcome unless a
+	// technical exemption is explicitly reported.
+	TestHandoff *TestHandoff `json:"test_handoff,omitempty"`
 	// Questions are required only for a clarification outcome.
 	Questions []Question `json:"questions,omitempty"`
 	// Evidence is required only for a cannot-proceed outcome.
@@ -219,6 +248,14 @@ type ValidationContext struct {
 	// WorktreeObserved distinguishes an inspected clean worktree from a
 	// coordinator that has no worktree-inspection capability.
 	WorktreeObserved bool
+	// TestPaths contains configured repository-relative test prefixes.
+	TestPaths []string
+	// TestInfrastructurePaths contains configured repository-relative prefixes
+	// for essential test infrastructure.
+	TestInfrastructurePaths []string
+	// deferTestPathPolicy defers repository-specific ownership checks until the
+	// coordinator supplies the frozen configuration during report acceptance.
+	deferTestPathPolicy bool
 }
 
 // WriteAtomic validates and publishes a report as report.json below the
@@ -313,6 +350,20 @@ func writeAtomicReport(resultDirectory string, value Report) (string, error) {
 // Read loads and validates the JSON envelope at path without accepting unknown
 // fields or trailing data.
 func Read(path string) (Report, error) {
+	value, err := ReadEnvelope(path)
+	if err != nil {
+		return Report{}, err
+	}
+	if err := Validate(value, identityFrom(value, value.InvocationID)); err != nil {
+		return Report{}, err
+	}
+	return value, nil
+}
+
+// ReadEnvelope loads a syntactically valid report envelope without applying
+// semantic validation, allowing the coordinator to route unverifiable test
+// evidence to human disposition instead of leaving an active run unattended.
+func ReadEnvelope(path string) (Report, error) {
 	cleanPath := filepath.Clean(path)
 	directoryFD, err := unix.Open(filepath.Dir(cleanPath), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -361,9 +412,6 @@ func Read(path string) (Report, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return Report{}, fmt.Errorf("read trailing agent report data: %w", err)
 	}
-	if err := Validate(value, identityFrom(value, value.InvocationID)); err != nil {
-		return Report{}, err
-	}
 	return value, nil
 }
 
@@ -400,20 +448,36 @@ func Validate(value Report, context ValidationContext) error {
 	}
 	switch value.Outcome {
 	case OutcomeCompleted:
-		if value.Handoff == nil {
-			return errors.New("completed report requires a handoff")
+		if isTestReport(value) {
+			if value.Handoff != nil {
+				return errors.New("test completed report must contain only a test handoff")
+			}
+			if value.TestHandoff == nil {
+				if !hasExemption(value.Exemptions, ExemptionTechnical) {
+					return errors.New("completed test report requires a test handoff")
+				}
+			} else if err := validateTestHandoff(*value.TestHandoff, context); err != nil {
+				return err
+			}
+		} else {
+			if value.Handoff == nil {
+				return errors.New("completed report requires a handoff")
+			}
+			if value.TestHandoff != nil {
+				return errors.New("implementation completed report must not contain a test handoff")
+			}
+			if err := validateHandoff(*value.Handoff, context); err != nil {
+				return err
+			}
 		}
 		if len(value.Questions) != 0 || len(value.Evidence) != 0 {
 			return errors.New("completed report must contain only a handoff")
-		}
-		if err := validateHandoff(*value.Handoff, context); err != nil {
-			return err
 		}
 	case OutcomeNeedsClarification:
 		if len(value.Questions) == 0 {
 			return errors.New("needs_clarification report requires at least one question")
 		}
-		if value.Handoff != nil || len(value.Evidence) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || len(value.Evidence) != 0 {
 			return errors.New("needs_clarification report must contain only questions")
 		}
 		if err := validateQuestions(value.Questions); err != nil {
@@ -423,7 +487,7 @@ func Validate(value Report, context ValidationContext) error {
 		if len(value.Evidence) == 0 {
 			return errors.New("cannot_proceed report requires evidence")
 		}
-		if value.Handoff != nil || len(value.Questions) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || len(value.Questions) != 0 {
 			return errors.New("cannot_proceed report must contain only evidence")
 		}
 		if err := validateEvidence(value.Evidence); err != nil {
@@ -593,6 +657,150 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 	return nil
 }
 
+// isTestReport identifies the coordinator-owned test-stage envelope.
+func isTestReport(value Report) bool {
+	return value.Role == "test" && value.Stage == "test"
+}
+
+// hasExemption reports whether one fixed exemption category is present.
+func hasExemption(values []Exemption, wanted Exemption) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+// validateTestHandoff checks test ownership, observed paths, and the evidence
+// required before the implementation role receives protected tests.
+func validateTestHandoff(value TestHandoff, context ValidationContext) error {
+	if len(value.AcceptanceCoverage) == 0 {
+		return errors.New("test handoff acceptance_coverage is required")
+	}
+	if len(value.AcceptanceCoverage) > maxAcceptanceMappings {
+		return fmt.Errorf("test handoff acceptance_coverage exceeds %d entries", maxAcceptanceMappings)
+	}
+	for index, mapping := range value.AcceptanceCoverage {
+		if err := validateText(fmt.Sprintf("test acceptance_coverage[%d].criterion", index), mapping.Criterion, maxTextRunes, true); err != nil {
+			return err
+		}
+		if err := validateText(fmt.Sprintf("test acceptance_coverage[%d].evidence", index), mapping.Evidence, maxTextRunes, true); err != nil {
+			return err
+		}
+	}
+	if len(value.ChangedFiles) == 0 {
+		return errors.New("test handoff changed_files is required")
+	}
+	if len(value.ChangedFiles) > maxTestFiles {
+		return fmt.Errorf("test handoff changed_files exceeds %d entries", maxTestFiles)
+	}
+	observed := make(map[string]struct{}, len(context.ObservedChanges))
+	for _, path := range context.ObservedChanges {
+		clean, err := cleanRelativePath(path)
+		if err != nil {
+			return fmt.Errorf("observed worktree path %q: %w", path, err)
+		}
+		observed[clean] = struct{}{}
+		if len(context.PermittedPaths) > 0 && !withinAnyPrefix(clean, context.PermittedPaths) {
+			return fmt.Errorf("observed worktree path %q is outside permitted paths", path)
+		}
+	}
+	changed := make(map[string]struct{}, len(value.ChangedFiles))
+	for index, path := range value.ChangedFiles {
+		clean, err := validateTestPath(fmt.Sprintf("test changed_files[%d]", index), path, context)
+		if err != nil {
+			return err
+		}
+		if _, exists := changed[clean]; exists {
+			return fmt.Errorf("test handoff changed_files[%d] %q is duplicated", index, path)
+		}
+		changed[clean] = struct{}{}
+		if len(context.PermittedPaths) > 0 && !withinAnyPrefix(clean, context.PermittedPaths) {
+			return fmt.Errorf("test changed_files[%d] %q is outside permitted paths", index, path)
+		}
+		if context.WorktreeObserved {
+			if _, exists := observed[clean]; !exists {
+				return fmt.Errorf("test changed_files[%d] %q was not observed in the worktree", index, path)
+			}
+		}
+	}
+	if context.WorktreeObserved {
+		for path := range observed {
+			if _, exists := changed[path]; !exists {
+				return fmt.Errorf("test handoff omitted observed changed path %q", path)
+			}
+		}
+	}
+	if err := validateText("test handoff focused_test_command", value.FocusedTestCommand, maxTextRunes, true); err != nil {
+		return err
+	}
+	if err := validateText("test handoff expected_failure_reason", value.ExpectedFailureReason, maxTextRunes, true); err != nil {
+		return err
+	}
+	if len(value.ObservedFailureEvidence) == 0 {
+		return errors.New("test handoff observed_failure_evidence is required")
+	}
+	if err := validateEvidence(value.ObservedFailureEvidence); err != nil {
+		return fmt.Errorf("test handoff: %w", err)
+	}
+	if len(value.InfrastructureChanges) > maxTestFiles {
+		return fmt.Errorf("test handoff infrastructure_changes exceeds %d entries", maxTestFiles)
+	}
+	for index, path := range value.InfrastructureChanges {
+		clean, err := validateTestPath(fmt.Sprintf("test infrastructure_changes[%d]", index), path, context)
+		if err != nil {
+			return err
+		}
+		if _, exists := changed[clean]; !exists {
+			return fmt.Errorf("test infrastructure_changes[%d] %q is not in changed_files", index, path)
+		}
+	}
+	if len(value.UncoveredCriteria) > maxUncoveredCriteria {
+		return fmt.Errorf("test handoff uncovered_criteria exceeds %d entries", maxUncoveredCriteria)
+	}
+	for index, criterion := range value.UncoveredCriteria {
+		if err := validateText(fmt.Sprintf("test uncovered_criteria[%d]", index), criterion, maxTextRunes, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateTestPath applies the report-layer safe default test ownership rules;
+// repository-specific prefixes are supplied through the validation context.
+func validateTestPath(field, path string, context ValidationContext) (string, error) {
+	if err := validateText(field, path, maxPathRunes, true); err != nil {
+		return "", err
+	}
+	clean, err := cleanRelativePath(path)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", field, err)
+	}
+	if !context.deferTestPathPolicy && !isTestOwnedPath(clean, context) {
+		return "", fmt.Errorf("%s %q is outside configured test paths", field, path)
+	}
+	return clean, nil
+}
+
+// isTestOwnedPath recognizes conventional test paths and explicit repository
+// policy prefixes without granting the test role the whole checkout.
+func isTestOwnedPath(path string, context ValidationContext) bool {
+	if strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, "test/") || strings.HasPrefix(path, "tests/") || strings.HasPrefix(path, "test-support/") || strings.HasPrefix(path, "__tests__/") {
+		return true
+	}
+	// Filter out root-level entries that would grant access to the entire repository.
+	combined := append(append([]string(nil), context.TestPaths...), context.TestInfrastructurePaths...)
+	filtered := make([]string, 0, len(combined))
+	for _, prefix := range combined {
+		trimmed := strings.TrimSpace(prefix)
+		if trimmed != "." && trimmed != "" {
+			filtered = append(filtered, prefix)
+		}
+	}
+	return withinAnyPrefix(path, filtered)
+}
+
 // ValidatePermittedPaths validates the repository-relative prefixes stored
 // with an invocation and reused when its report is accepted.
 func ValidatePermittedPaths(values []string) error {
@@ -715,11 +923,12 @@ func safeIdentifier(value string) bool {
 // public read and write paths apply the same identity binding rules.
 func identityFrom(value Report, invocationID string) ValidationContext {
 	return ValidationContext{
-		InvocationID: invocationID,
-		RunID:        value.RunID,
-		Harness:      value.Harness,
-		Role:         value.Role,
-		Stage:        value.Stage,
+		InvocationID:        invocationID,
+		RunID:               value.RunID,
+		Harness:             value.Harness,
+		Role:                value.Role,
+		Stage:               value.Stage,
+		deferTestPathPolicy: true,
 	}
 }
 

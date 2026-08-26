@@ -105,3 +105,42 @@ func TestRunAcceptsExplicitHarnessUsage(t *testing.T) {
 		t.Fatalf("evaluation signals = %#v, want explicit CLI signals", value)
 	}
 }
+
+// TestRunWritesTheTestStageHandoff verifies the worker-facing command can
+// publish acceptance coverage, changed test files, and observed red evidence.
+func TestRunWritesTheTestStageHandoff(t *testing.T) {
+	resultDirectory := t.TempDir()
+	var errorsOutput bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{
+			"--outcome", "completed",
+			"--summary", "red test suite published",
+			"--acceptance", "criterion=focused red test",
+			"--test-file", "internal/factory/agent_test.go",
+			"--infrastructure-file", "test-support/fixtures.go",
+			"--focused-test-command", "go test ./internal/factory -run TestNewBehavior",
+			"--expected-failure-reason", "expected behavior assertion",
+			"--observed-failure", "exit_code=1",
+		},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID": "inv-test",
+			"FACTORY_RUN_ID":        "run-test",
+			"FACTORY_HARNESS":       "codex",
+			"FACTORY_ROLE":          "test",
+			"FACTORY_STAGE":         "test",
+			"FACTORY_RESULT_DIR":    resultDirectory,
+		},
+		Output:       &bytes.Buffer{},
+		ErrorsOutput: &errorsOutput,
+	})
+	if status != 0 {
+		t.Fatalf("Run() status = %d, stderr = %s", status, errorsOutput.String())
+	}
+	value, err := report.Read(resultDirectory + "/report.json")
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if value.TestHandoff == nil || value.TestHandoff.FocusedTestCommand == "" || value.TestHandoff.ExpectedFailureReason != "expected behavior assertion" || len(value.TestHandoff.ObservedFailureEvidence) != 1 {
+		t.Fatalf("test handoff = %#v, want focused command and red evidence", value.TestHandoff)
+	}
+}

@@ -94,6 +94,9 @@ test_policy:
   mode: required
   allow_human_exemption: true
   allow_technical_exemption: true
+  # Optional prefixes for essential test infrastructure.
+  test_paths: []
+  infrastructure_paths: []
 allowed_overrides: [model, reasoning_effort]
 caches:
   - name: go-build
@@ -110,7 +113,13 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, positive durations, positive retry limits, test policy, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies (including the mandatory `test` role), positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+
+The test stage is default-on for both supported `test_policy.mode` values.
+A human skip requires `allow_human_exemption: true` and the frozen issue marker
+`<!-- factory-test-exemption: human | justification -->`. The test checkpoint
+and implementation checkpoint are separate commits; the operational store
+retains the test handoff and protected-path hashes between them.
 
 ## Worker image build and digest pinning
 

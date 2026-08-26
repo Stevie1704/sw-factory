@@ -21,8 +21,16 @@ _Avoid_: Live issue, prompt
 An immutable commit representing accepted work at a stage boundary and identifying the exact subject of gates or review.
 _Avoid_: Snapshot, latest code
 
+**Test-stage handoff**:
+The bounded acceptance coverage, changed test paths, focused red-test command, expected failure reason, observed failure evidence, infrastructure changes, uncovered criteria, and exemption state transferred from test to implementation.
+_Avoid_: Agent claim, transcript, implementation handoff
+
+**Protected test path**:
+A repository-relative test or authorized test-infrastructure path recorded at the test checkpoint with its SHA-256 content identity; implementation cannot edit it directly.
+_Avoid_: Mutable test file, permitted production path
+
 **Baseline**:
-The repository-declared setup and gate suite evaluated against the claimed run's base checkpoint before any agent edit; a blocking failure moves the run to failed preflight unless the frozen issue explicitly targets it.
+The repository-declared setup and gate suite evaluated against the claimed run's base checkpoint before any agent edit; a blocking failure moves the run to failed preflight unless the frozen issue explicitly targets it. A healthy configured run enters test stage before implementation.
 _Avoid_: Preflight assumption, agent diagnosis
 
 **Setup fingerprint**:

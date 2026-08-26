@@ -226,8 +226,9 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	}
 	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; clarification answered")
 	next.Status = store.StatusActive
-	next.Stage = store.StageImplementation
+	next.Stage = packetResumeStageForPacket(run, packet)
 	next.SpecificationPacket = string(encodedPacket)
+	resetTestProjectionForPacketChange(&next, packet)
 	next.PendingQuestions = removePendingQuestion(run.PendingQuestions, parsed.QuestionID)
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
@@ -300,8 +301,9 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	}
 	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; specification refreshed")
 	next.Status = store.StatusActive
-	next.Stage = store.StageImplementation
+	next.Stage = packetResumeStageForPacket(run, refreshedPacket)
 	next.SpecificationPacket = string(encodedPacket)
+	resetTestProjectionForPacketChange(&next, refreshedPacket)
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
@@ -333,7 +335,7 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
-	request := normalizeAgentRequest(AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation})
+	request := normalizeAgentRequest(agentRequestForRun(run))
 	if err := validateAgentRequest(request); err != nil {
 		return run, err
 	}
@@ -347,6 +349,51 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 		return *current, nil
 	}
 	return run, nil
+}
+
+// packetResumeStageForPacket preserves test ownership when a configured test
+// stage receives a new specification packet, including refreshes initiated
+// after implementation has already started.
+func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store.Stage {
+	if !testStageConfigured(packet.RepositoryConfig) {
+		return store.StageTest
+	}
+	if testStageShouldRun(packet) && (run.Stage == store.StageTest || !run.TestStageSkipped) {
+		return store.StageTest
+	}
+	return store.StageImplementation
+}
+
+// resetTestProjectionForPacketChange removes downstream test evidence that was
+// produced for an older specification packet before a new role starts.
+func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPacket) {
+	run.TestHandoff = nil
+	run.ProtectedTestPaths = nil
+	run.TestCheckpointSHA = ""
+	run.TestExemption = nil
+	run.TestStageSkipped = false
+	if !testStageConfigured(packet.RepositoryConfig) {
+		run.Stage = store.StageTest
+		run.Status = store.StatusWaitingForHuman
+		run.LifecycleReason = "frozen repository packet lacks the mandatory test-stage role policy"
+		return
+	}
+	if exemption, ok := testStageHumanExemption(packet); ok {
+		run.TestStageSkipped = true
+		run.Stage = store.StageImplementation
+		run.TestExemption = exemption
+		run.LifecycleReason = "test stage skipped by human exemption"
+		return
+	}
+	run.LifecycleReason = "specification packet changed; test stage restarted"
+}
+
+// agentRequestForRun selects the role that owns the current packet boundary.
+func agentRequestForRun(run store.Run) AgentRequest {
+	if run.Stage == store.StageTest {
+		return AgentRequest{RunID: run.ID, Role: "test", Stage: store.StageTest}
+	}
+	return AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation}
 }
 
 // stopRunWorkerIfActive stops only a currently active invocation so an answer

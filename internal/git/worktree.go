@@ -20,7 +20,17 @@ type Workspace struct {
 	Worktree string
 }
 
-// CheckpointRequest selects one host-side implementation checkpoint.
+// CheckpointKind identifies the workflow checkpoint represented by a commit.
+type CheckpointKind string
+
+const (
+	// CheckpointKindImplementation is the production implementation checkpoint.
+	CheckpointKindImplementation CheckpointKind = "implementation"
+	// CheckpointKindTest is the protected test-stage checkpoint.
+	CheckpointKindTest CheckpointKind = "test"
+)
+
+// CheckpointRequest selects one host-side checkpoint.
 type CheckpointRequest struct {
 	// RunID identifies the factory run owning the checkpoint.
 	RunID string
@@ -28,6 +38,12 @@ type CheckpointRequest struct {
 	WorktreePath string
 	// ParentSHA is the last checkpoint known by the coordinator.
 	ParentSHA string
+	// Kind selects the marker and ownership of the checkpoint. Empty means an
+	// implementation checkpoint for compatibility with earlier callers.
+	Kind CheckpointKind
+	// Paths are optional repository-relative paths to stage. Empty stages all
+	// changes, which is used only by the implementation checkpoint.
+	Paths []string
 	// Message is the human-readable portion of the checkpoint commit message.
 	Message string
 }
@@ -254,11 +270,23 @@ func (m *LocalWorktreeManager) CreateCheckpoint(ctx context.Context, request Che
 	if !validCommitSHA(request.ParentSHA) {
 		return CheckpointResult{}, errors.New("checkpoint parent SHA must be a full commit identity")
 	}
+	kind := request.Kind
+	if kind == "" {
+		kind = CheckpointKindImplementation
+	}
+	if kind != CheckpointKindImplementation && kind != CheckpointKindTest {
+		return CheckpointResult{}, fmt.Errorf("unsupported checkpoint kind %q", kind)
+	}
+	for index, path := range request.Paths {
+		if err := validateCheckpointPath(path); err != nil {
+			return CheckpointResult{}, fmt.Errorf("checkpoint path %d: %w", index, err)
+		}
+	}
 	message := strings.TrimSpace(request.Message)
 	if strings.ContainsRune(message, '\x00') {
 		return CheckpointResult{}, errors.New("checkpoint message contains a NUL byte")
 	}
-	marker := "factory: implementation checkpoint " + request.RunID
+	marker := checkpointMarker(kind, request.RunID)
 	state, err := m.Inspect(ctx, request.WorktreePath)
 	if err != nil {
 		return CheckpointResult{}, fmt.Errorf("inspect worktree before checkpoint: %w", err)
@@ -266,7 +294,7 @@ func (m *LocalWorktreeManager) CreateCheckpoint(ctx context.Context, request Che
 	if state.HeadSHA != request.ParentSHA {
 		if m.hasCheckpointMarker(ctx, request.WorktreePath, marker) {
 			if len(state.ChangedPaths) != 0 {
-				return CheckpointResult{}, errors.New("worktree has changes after the existing implementation checkpoint")
+				return CheckpointResult{}, fmt.Errorf("worktree has changes after the existing %s checkpoint", kind)
 			}
 			return CheckpointResult{SHA: state.HeadSHA}, nil
 		}
@@ -276,7 +304,7 @@ func (m *LocalWorktreeManager) CreateCheckpoint(ctx context.Context, request Che
 		if m.hasCheckpointMarker(ctx, request.WorktreePath, marker) {
 			return CheckpointResult{SHA: state.HeadSHA}, nil
 		}
-		return CheckpointResult{}, errors.New("worktree has no implementation changes to checkpoint")
+		return CheckpointResult{}, fmt.Errorf("worktree has no %s changes to checkpoint", kind)
 	}
 	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"diff", "--check"}); err != nil {
 		return CheckpointResult{}, fmt.Errorf("validate worktree before checkpoint: %w", err)
@@ -285,21 +313,46 @@ func (m *LocalWorktreeManager) CreateCheckpoint(ctx context.Context, request Che
 	if message != "" {
 		commitMessage += "\n\n" + message
 	}
-	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"add", "--all", "--"}); err != nil {
-		return CheckpointResult{}, fmt.Errorf("stage implementation checkpoint: %w", err)
+	stageArgs := []string{"add"}
+	if len(request.Paths) == 0 {
+		stageArgs = append(stageArgs, "--all", "--")
+	} else {
+		stageArgs = append(stageArgs, "--")
+		stageArgs = append(stageArgs, request.Paths...)
+	}
+	if _, err := m.runner().Run(ctx, request.WorktreePath, stageArgs); err != nil {
+		return CheckpointResult{}, fmt.Errorf("stage %s checkpoint: %w", kind, err)
 	}
 	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"commit", "--message", commitMessage}); err != nil {
-		return CheckpointResult{}, fmt.Errorf("create implementation checkpoint: %w", err)
+		return CheckpointResult{}, fmt.Errorf("create %s checkpoint: %w", kind, err)
 	}
 	headOutput, err := m.runner().Run(ctx, request.WorktreePath, []string{"rev-parse", "HEAD"})
 	if err != nil {
-		return CheckpointResult{}, fmt.Errorf("resolve implementation checkpoint: %w", err)
+		return CheckpointResult{}, fmt.Errorf("resolve %s checkpoint: %w", kind, err)
 	}
 	head := strings.TrimSpace(string(headOutput))
 	if !validCommitSHA(head) {
-		return CheckpointResult{}, errors.New("implementation checkpoint did not produce a full commit identity")
+		return CheckpointResult{}, fmt.Errorf("%s checkpoint did not produce a full commit identity", kind)
 	}
 	return CheckpointResult{SHA: head, Created: true}, nil
+}
+
+// checkpointMarker returns the first-line idempotency marker for one checkpoint.
+func checkpointMarker(kind CheckpointKind, runID string) string {
+	return "factory: " + string(kind) + " checkpoint " + runID
+}
+
+// validateCheckpointPath rejects paths that could escape the run checkout or
+// address Git metadata during scoped staging.
+func validateCheckpointPath(path string) error {
+	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
+		return errors.New("must be a safe repository-relative path")
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean == ".git" || strings.HasPrefix(clean, ".git/") {
+		return errors.New("must remain inside the repository checkout")
+	}
+	return nil
 }
 
 // Push publishes the current run worktree HEAD to its named remote branch

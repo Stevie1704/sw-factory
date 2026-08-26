@@ -185,6 +185,7 @@ func TestStartAgentRefusesAnyPreviouslyPersistedInvocation(t *testing.T) {
 func TestStartAgentAppliesTheExceptionOnlyToAClaimStage(t *testing.T) {
 	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
 	runStore.current.Stage = store.StageImplementation
+	runStore.current.TestStageSkipped = false
 	run := *runStore.current
 	worktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
@@ -667,6 +668,9 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 		t.Fatal(err)
 	}
 	policy := validRepositoryConfig()
+	policy.RoleHarnessDefaults["test"] = config.HarnessCodex
+	policy.ModelOptions["test"] = []string{"gpt-5"}
+	policy.TestPolicy.AllowTechnicalExemption = true
 	created := time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml")}}}
 	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
@@ -681,6 +685,7 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-agent", Worktree: worktreePath}},
 		state:        gitadapter.WorktreeState{Branch: "factory/run-agent", HeadSHA: "base", ChangedPaths: []string{"internal/factory/agent.go"}},
 	}
+	runStore.worktree = worktree
 	ids := []string{"run-agent", "generated", "generated-2", "generated-3"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
@@ -705,6 +710,11 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
 	}
 	run := *runStore.current
+	run.TestStageSkipped = true
+	run.TestExemption = &store.TestExemption{Kind: "human", Justification: "implementation seam fixture"}
+	if err := runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("persist implementation-only test fixture: %v", err)
+	}
 	runStore.gateResults[run.ID] = []store.GateResult{{
 		RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseBaseline,
 		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
@@ -783,6 +793,7 @@ type agentRunStore struct {
 	lifecycleClaims map[string]map[store.Status]bool
 	events          *[]string
 	github          *fakeGitHub
+	worktree        *inspectingWorktree
 }
 
 // CurrentRun returns the configured active run.

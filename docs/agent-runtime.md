@@ -1,11 +1,11 @@
 # Visible agent runtime
 
-Issue #6 adds the visible implementation-agent boundary. The coordinator owns
+Issues #6 and #12 add the visible role-agent boundary. The coordinator owns
 the run, invocation identity, stage, policy, and report decision. Codex is an
 interactive proposal-maker; it does not own GitHub mutations, Git history, or
 workflow transitions.
 
-## Starting an implementation invocation
+## Starting an invocation
 
 After an issue has been claimed, start the visible Codex session with:
 
@@ -16,8 +16,12 @@ factory agent \
   --codex-auth /Users/me/.codex/auth.json
 ```
 
-The command creates or reuses the control workspace and creates one run
-workspace with an implementation surface. Dormant status and checks layout
+The command selects the active role automatically. For a repository with a
+configured `test` role, `factory issue` leaves a healthy run in `test/active`,
+and this command starts the test agent. An implementation agent is started only
+after the test handoff is accepted, or after an authorized exemption. The
+command creates or reuses the control workspace and creates one run workspace
+with role surfaces. Dormant status and checks layout
 definitions remain in the terminal adapter so they can return when they display
 live coordinator and gate output rather than duplicate the one-shot
 `factory status` command. The output reports the invocation identifier, run, and opaque terminal
@@ -25,12 +29,13 @@ handles. It does not print the role prompt or terminal contents.
 
 ### Clean claim handoff and recovery boundary
 
-`factory issue` completes a claim at `claim/active` and persists the worktree,
-branch, checkpoint, issue projection, and status-comment identity. A separate
-coordinator process may start the first implementation invocation when its
+`factory issue` completes a claim, runs the frozen baseline suite, and persists
+the worktree, branch, checkpoint, issue projection, and status-comment identity.
+A validated repository advances to `test/active`. A separate coordinator process may
+start the first test or implementation invocation when its
 read-only recovery diagnosis finds that every checked projection agrees and
 the operational store contains no invocation history. This is a completed
-claim awaiting its first invocation, not an interrupted run.
+claim or test handoff awaiting its first invocation, not an interrupted run.
 
 The exception applies only to first-agent startup. Any persisted invocation,
 including a terminal one, or any recovery discrepancy returns the typed
@@ -50,8 +55,10 @@ adapter.
 
 Each invocation receives a read-only `specification.json` packet under the
 worker path `/invocation`. It contains the frozen claim packet, invocation
-identity, role, stage, and prompt version. The worker receives a separate
-writable `/results` mount containing only that invocation's result directory.
+identity, role, stage, and prompt version. An implementation packet also carries
+the accepted test handoff and content hashes of protected test paths. The worker
+receives a separate writable `/results` mount containing only that invocation's
+result directory.
 
 The harness reports through the worker-image command:
 
@@ -84,6 +91,42 @@ The three valid proposals are:
   files, focused commands, and known limitations;
 - `needs_clarification`, with one or more uniquely identified questions;
 - `cannot_proceed`, with concise observable evidence.
+
+Test-stage completion uses a separate handoff and never accepts production
+paths. For example:
+
+```sh
+factory-report \
+  --outcome completed \
+  --summary 'focused behavior test is red on base' \
+  --acceptance 'criterion=focused red test' \
+  --test-file internal/example_test.go \
+  --focused-test-command 'go test ./internal -run TestBehavior' \
+  --expected-failure-reason 'expected behavior assertion' \
+  --observed-failure 'exit_code=1'
+```
+
+The coordinator independently reruns `focused_test_command` inside the worker
+and requires the reported `expected_failure_reason` to appear in the captured
+output. Only that matching non-zero exit is verified red evidence. A passing
+command, worker failure, missing expected reason, or path-ownership dispute moves the run to `test/waiting_for_human`;
+the coordinator records only the content-free `test_dispute` evaluation
+category and does not revise the test automatically.
+
+On verified red evidence, the coordinator creates a distinct test checkpoint,
+records every changed test/infrastructure path and its SHA-256 content hash,
+then launches implementation. Implementation report acceptance rechecks those
+hashes and rejects any direct edit to a protected test path.
+
+Human skips must be frozen in the issue before claim with an exact marker:
+
+```text
+<!-- factory-test-exemption: human | documentation-only change -->
+```
+
+The repository must allow human exemptions. Technical exemptions may be
+reported by the test agent only when policy allows them; they are provisional
+and are carried to later review.
 
 When the harness has reliable measurements or content-free policy signals, it
 may also pass `--input-tokens`, `--output-tokens`, `--total-tokens`,

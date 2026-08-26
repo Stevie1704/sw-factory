@@ -190,6 +190,11 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	if err != nil {
 		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
 	}
+	claimed.Run.TestStageSkipped = true
+	claimed.Run.TestExemption = &store.TestExemption{Kind: "human", Justification: "implementation repair fixture"}
+	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
+		t.Fatalf("save implementation repair fixture: %v", err)
+	}
 	runStore.gateResults[claimed.Run.ID] = []store.GateResult{{
 		RunID: claimed.Run.ID, CheckpointSHA: claimed.Run.CheckpointSHA, Phase: store.GatePhaseBaseline,
 		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,

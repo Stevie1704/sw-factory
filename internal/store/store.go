@@ -19,7 +19,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 18
+const CurrentSchemaVersion = 19
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -136,19 +136,85 @@ type PendingQuestion struct {
 	Prompt string
 }
 
+// TestAcceptanceCoverage maps one frozen criterion to test-stage evidence in
+// the durable handoff projection.
+type TestAcceptanceCoverage struct {
+	// Criterion identifies the acceptance criterion covered by a test.
+	Criterion string `json:"criterion"`
+	// Evidence identifies the observable test evidence for the criterion.
+	Evidence string `json:"evidence"`
+}
+
+// TestFailureEvidence is the content-limited red-test observation retained in
+// the run handoff.
+type TestFailureEvidence struct {
+	// Kind identifies the observation category, such as exit_code.
+	Kind string `json:"kind"`
+	// Detail identifies the bounded observable detail.
+	Detail string `json:"detail"`
+}
+
+// TestHandoff is the durable test-stage transfer packet for implementation.
+type TestHandoff struct {
+	// AcceptanceCoverage maps acceptance criteria to test evidence.
+	AcceptanceCoverage []TestAcceptanceCoverage `json:"acceptance_coverage"`
+	// ChangedFiles lists test-role files changed by the test invocation.
+	ChangedFiles []string `json:"changed_files"`
+	// FocusedTestCommand is the command independently rerun for red verification.
+	FocusedTestCommand string `json:"focused_test_command"`
+	// ExpectedFailureReason is the bounded failure identifier verified in rerun output.
+	ExpectedFailureReason string `json:"expected_failure_reason"`
+	// ObservedFailureEvidence records bounded evidence supplied by the test role.
+	ObservedFailureEvidence []TestFailureEvidence `json:"observed_failure_evidence"`
+	// InfrastructureChanges lists changed files that support tests.
+	InfrastructureChanges []string `json:"infrastructure_changes,omitempty"`
+	// UncoveredCriteria records criteria not covered by this handoff.
+	UncoveredCriteria []string `json:"uncovered_criteria,omitempty"`
+}
+
+// TestExemption records a human or technical reason the normal test handoff
+// was skipped or provisionally accepted.
+type TestExemption struct {
+	// Kind is human or technical.
+	Kind string `json:"kind"`
+	// Justification is the bounded operator-visible reason.
+	Justification string `json:"justification"`
+}
+
+// ProtectedTestPath records the content identity implementation must preserve.
+type ProtectedTestPath struct {
+	// Path is the repository-relative protected test path.
+	Path string `json:"path"`
+	// SHA256 is the content hash recorded at the test checkpoint.
+	SHA256 string `json:"sha256"`
+}
+
 // Run is the persisted operational identity and current state of one run.
 type Run struct {
-	ID              string
-	RepositoryPath  string
-	IssueNumber     int
-	Stage           Stage
-	Status          Status
-	Branch          string
-	Worktree        string
-	CheckpointSHA   string
-	ImageDigest     string
-	Coordinator     string
-	StatusCommentID string
+	ID             string
+	RepositoryPath string
+	IssueNumber    int
+	Stage          Stage
+	Status         Status
+	Branch         string
+	Worktree       string
+	CheckpointSHA  string
+	// BaseCheckpointSHA remains the immutable pre-edit checkpoint after test
+	// files receive their own checkpoint.
+	BaseCheckpointSHA string
+	// TestCheckpointSHA identifies the separate protected test checkpoint.
+	TestCheckpointSHA string
+	// TestHandoff is the accepted structured test-stage transfer packet.
+	TestHandoff *TestHandoff
+	// TestExemption records a pre-authorized or technical test-stage exemption.
+	TestExemption *TestExemption
+	// ProtectedTestPaths records every test-stage path and its checkpoint hash.
+	ProtectedTestPaths []ProtectedTestPath
+	// TestStageSkipped records an authorized skip before implementation.
+	TestStageSkipped bool
+	ImageDigest      string
+	Coordinator      string
+	StatusCommentID  string
 	// PullRequestNumber is the persisted idempotency identity of the draft PR.
 	PullRequestNumber int
 	// PullRequestURL is the operator-facing URL of the draft PR.
@@ -379,7 +445,9 @@ func (s *Store) SchemaVersion() int { return s.schemaVersion }
 func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, image_digest, coordinator, status_comment_id,
+		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
+		       test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
@@ -400,7 +468,9 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, image_digest, coordinator, status_comment_id,
+		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
+		       test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
@@ -418,6 +488,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 // scanRun decodes one operational run row and its RFC3339 timestamps.
 func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
+	var baseCheckpointSHA, testCheckpointSHA string
+	var testHandoffJSON, testExemptionJSON, protectedTestPathsJSON string
 	var pendingQuestionsJSON, clarificationCommentID, createdAt, updatedAt string
 	var clarificationNotificationSent bool
 	if err := row.Scan(
@@ -429,6 +501,12 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.Branch,
 		&run.Worktree,
 		&run.CheckpointSHA,
+		&baseCheckpointSHA,
+		&testCheckpointSHA,
+		&testHandoffJSON,
+		&testExemptionJSON,
+		&protectedTestPathsJSON,
+		&run.TestStageSkipped,
 		&run.ImageDigest,
 		&run.Coordinator,
 		&run.StatusCommentID,
@@ -462,6 +540,28 @@ func scanRun(row *sql.Row) (*Run, error) {
 	if pendingQuestionsJSON != "" {
 		if err := json.Unmarshal([]byte(pendingQuestionsJSON), &run.PendingQuestions); err != nil {
 			return nil, fmt.Errorf("decode pending clarification questions: %w", err)
+		}
+	}
+	run.BaseCheckpointSHA = baseCheckpointSHA
+	if run.BaseCheckpointSHA == "" {
+		run.BaseCheckpointSHA = run.CheckpointSHA
+	}
+	run.TestCheckpointSHA = testCheckpointSHA
+	if testHandoffJSON != "" {
+		run.TestHandoff = &TestHandoff{}
+		if err := json.Unmarshal([]byte(testHandoffJSON), run.TestHandoff); err != nil {
+			return nil, fmt.Errorf("decode test handoff: %w", err)
+		}
+	}
+	if testExemptionJSON != "" {
+		run.TestExemption = &TestExemption{}
+		if err := json.Unmarshal([]byte(testExemptionJSON), run.TestExemption); err != nil {
+			return nil, fmt.Errorf("decode test exemption: %w", err)
+		}
+	}
+	if protectedTestPathsJSON != "" {
+		if err := json.Unmarshal([]byte(protectedTestPathsJSON), &run.ProtectedTestPaths); err != nil {
+			return nil, fmt.Errorf("decode protected test paths: %w", err)
 		}
 	}
 	run.ClarificationCommentID = clarificationCommentID
@@ -526,6 +626,15 @@ func normalizeRun(run Run) (Run, error) {
 	if run.Status == "" {
 		return Run{}, errors.New("run status is required")
 	}
+	if run.BaseCheckpointSHA == "" {
+		run.BaseCheckpointSHA = run.CheckpointSHA
+	}
+	if run.CheckpointSHA == "" && run.BaseCheckpointSHA != "" {
+		run.CheckpointSHA = run.BaseCheckpointSHA
+	}
+	if err := validateTestProjection(run); err != nil {
+		return Run{}, err
+	}
 	if run.CheckRepairAttempts < 0 {
 		return Run{}, errors.New("run check-repair attempts must not be negative")
 	}
@@ -557,6 +666,74 @@ func normalizeRun(run Run) (Run, error) {
 		run.UpdatedAt = run.CreatedAt
 	}
 	return run, nil
+}
+
+// validateTestProjection checks the bounded durable test-stage state before it
+// is serialized into SQLite.
+func validateTestProjection(run Run) error {
+	if len(run.ProtectedTestPaths) > 256 {
+		return errors.New("run protected test paths exceed 256 entries")
+	}
+	seen := make(map[string]struct{}, len(run.ProtectedTestPaths))
+	for index, value := range run.ProtectedTestPaths {
+		if err := validateStoreRelativePath(value.Path); err != nil {
+			return fmt.Errorf("run protected test path %d: %w", index, err)
+		}
+		if len(value.SHA256) != 64 || !isLowerHex(value.SHA256) {
+			return fmt.Errorf("run protected test path %q has an invalid SHA256", value.Path)
+		}
+		if _, exists := seen[value.Path]; exists {
+			return fmt.Errorf("run protected test path %q is duplicated", value.Path)
+		}
+		seen[value.Path] = struct{}{}
+	}
+	if run.TestExemption != nil {
+		if run.TestExemption.Kind != "human" && run.TestExemption.Kind != "technical" {
+			return fmt.Errorf("unsupported test exemption %q", run.TestExemption.Kind)
+		}
+		if strings.TrimSpace(run.TestExemption.Justification) == "" || strings.ContainsAny(run.TestExemption.Justification, "\x00\r\n") {
+			return errors.New("test exemption justification is required and must be single-line")
+		}
+	}
+	if run.TestHandoff != nil {
+		if len(run.TestHandoff.AcceptanceCoverage) == 0 || len(run.TestHandoff.ChangedFiles) == 0 || strings.TrimSpace(run.TestHandoff.FocusedTestCommand) == "" || strings.TrimSpace(run.TestHandoff.ExpectedFailureReason) == "" || len(run.TestHandoff.ObservedFailureEvidence) == 0 {
+			return errors.New("run test handoff is incomplete")
+		}
+		for _, value := range run.TestHandoff.ChangedFiles {
+			if err := validateStoreRelativePath(value); err != nil {
+				return fmt.Errorf("run test handoff changed file: %w", err)
+			}
+		}
+		for _, value := range run.TestHandoff.InfrastructureChanges {
+			if err := validateStoreRelativePath(value); err != nil {
+				return fmt.Errorf("run test handoff infrastructure file: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// validateStoreRelativePath validates one persisted repository-relative path.
+func validateStoreRelativePath(value string) error {
+	if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n\\") || filepath.IsAbs(value) {
+		return errors.New("path must be a safe repository-relative path")
+	}
+	clean := filepath.ToSlash(filepath.Clean(value))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean == ".git" || strings.HasPrefix(clean, ".git/") {
+		return errors.New("path must remain inside the repository checkout")
+	}
+	return nil
+}
+
+// isLowerHex reports whether value is a lowercase hexadecimal digest.
+func isLowerHex(value string) bool {
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // validatePendingQuestions checks the bounded workflow projection before it is
@@ -612,6 +789,42 @@ func pendingQuestionsJSON(values []PendingQuestion) string {
 	return string(data)
 }
 
+// testHandoffJSON serializes a nullable test handoff projection.
+func testHandoffJSON(value *TestHandoff) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// testExemptionJSON serializes a nullable test exemption projection.
+func testExemptionJSON(value *TestExemption) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// protectedTestPathsJSON serializes protected paths as a stable JSON array.
+func protectedTestPathsJSON(values []ProtectedTestPath) string {
+	if values == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
 // runValues returns the ordered SQL values shared by normal and revision-safe
 // run persistence.
 func runValues(run Run) []any {
@@ -624,6 +837,12 @@ func runValues(run Run) []any {
 		run.Branch,
 		run.Worktree,
 		run.CheckpointSHA,
+		run.BaseCheckpointSHA,
+		run.TestCheckpointSHA,
+		testHandoffJSON(run.TestHandoff),
+		testExemptionJSON(run.TestExemption),
+		protectedTestPathsJSON(run.ProtectedTestPaths),
+		run.TestStageSkipped,
 		run.ImageDigest,
 		run.Coordinator,
 		run.StatusCommentID,
@@ -654,7 +873,9 @@ func runValues(run Run) []any {
 const saveRunStatement = `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
-			checkpoint_sha, image_digest, coordinator, status_comment_id,
+			checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
+			test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+			image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
 			lifecycle_notification_sent,
 			revision, processed_comment_id,
@@ -667,7 +888,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?
+			?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -677,6 +898,12 @@ const saveRunStatement = `
 			branch = excluded.branch,
 			worktree = excluded.worktree,
 			checkpoint_sha = excluded.checkpoint_sha,
+			base_checkpoint_sha = excluded.base_checkpoint_sha,
+			test_checkpoint_sha = excluded.test_checkpoint_sha,
+			test_handoff = excluded.test_handoff,
+			test_exemption = excluded.test_exemption,
+			protected_test_paths = excluded.protected_test_paths,
+			test_stage_skipped = excluded.test_stage_skipped,
 			image_digest = excluded.image_digest,
 			coordinator = excluded.coordinator,
 			status_comment_id = excluded.status_comment_id,
@@ -704,7 +931,9 @@ const saveRunStatement = `
 const saveRunIfRevisionStatement = `
 		UPDATE operational_runs SET
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
-			checkpoint_sha = ?, image_digest = ?, coordinator = ?, status_comment_id = ?,
+			checkpoint_sha = ?, base_checkpoint_sha = ?, test_checkpoint_sha = ?,
+			test_handoff = ?, test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
+			image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
 			lifecycle_notification_sent = ?,
 			revision = ?, processed_comment_id = ?,
@@ -1593,6 +1822,19 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			} {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 18: %w", err)
+				}
+			}
+		case 19:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN base_checkpoint_sha TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN test_checkpoint_sha TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN test_handoff TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN test_exemption TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN protected_test_paths TEXT NOT NULL DEFAULT '[]'",
+				"ALTER TABLE operational_runs ADD COLUMN test_stage_skipped INTEGER NOT NULL DEFAULT 0",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 19: %w", err)
 				}
 			}
 		default:

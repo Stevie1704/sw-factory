@@ -98,6 +98,16 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if workspace == nil {
 		return DraftPullRequestResult{}, errors.New("GitWorkspace is required to create a draft pull request")
 	}
+	protectedState, err := workspace.Inspect(ctx, run.Worktree)
+	if err != nil {
+		return DraftPullRequestResult{}, fmt.Errorf("inspect implementation worktree before checkpoint: %w", err)
+	}
+	if protectedState.HeadSHA != run.CheckpointSHA {
+		return DraftPullRequestResult{}, fmt.Errorf("implementation worktree HEAD %q does not match checkpoint %q", protectedState.HeadSHA, run.CheckpointSHA)
+	}
+	if err := validateProtectedTestPaths(run.Worktree, protectedState, run.ProtectedTestPaths); err != nil {
+		return DraftPullRequestResult{}, err
+	}
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
@@ -369,7 +379,11 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 	if len(gateLines) == 0 {
 		gateLines = append(gateLines, "- (none)")
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
+	testStageDisposition := "- test-stage disposition: none"
+	if run.TestExemption != nil {
+		testStageDisposition = fmt.Sprintf("- test-stage disposition: `%s` (provisional): %s", safeStatusCommentValue(run.TestExemption.Kind), safeStatusCommentValue(run.TestExemption.Justification))
+	}
+	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
 }
 
 // mergeGeneratedPullRequestBody replaces only the marked factory section and

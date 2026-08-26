@@ -17,9 +17,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
-// startAgentWithStore launches one visible implementation invocation using an
-// already-open operational store. Command-driven resumes use this seam to
-// avoid reopening SQLite while the command projection is being applied.
+// startAgentWithStore launches one visible role invocation using an already-open
+// operational store. Command-driven resumes use this seam to avoid reopening
+// SQLite while the command projection is being applied.
 func (s *Service) startAgentWithStore(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) (result AgentLaunchResult, returnErr error) {
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
@@ -56,8 +56,21 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
+	if !testStageConfigured(packet.RepositoryConfig) {
+		return AgentLaunchResult{}, errors.New("frozen repository packet lacks the mandatory test-stage role policy")
+	}
+	request, err = selectAgentRole(*run, request)
+	if err != nil {
+		return AgentLaunchResult{}, err
+	}
+	if err := validateAgentRequest(request); err != nil {
+		return AgentLaunchResult{}, err
+	}
 	if err := s.ensureBaselineReady(ctx, runStore, *run, packet); err != nil {
 		return AgentLaunchResult{}, err
+	}
+	if request.Role == "implementation" && run.Stage == store.StageClaim && !run.TestStageSkipped {
+		return AgentLaunchResult{}, errors.New("implementation agent cannot bypass the configured test stage")
 	}
 	harnessName, model, err := resolveAgentPolicy(packet.RepositoryConfig, request)
 	if err != nil {
@@ -102,12 +115,17 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	role := request.Role
 	stage := request.Stage
 	promptText, err := prompt.Build(prompt.Request{
-		InvocationID:        invocationID,
-		RunID:               run.ID,
-		Role:                role,
-		Stage:               string(stage),
-		SpecificationPacket: run.SpecificationPacket,
-		RepositoryGuidance:  packet.Issue.Body,
+		InvocationID:            invocationID,
+		RunID:                   run.ID,
+		Role:                    role,
+		Stage:                   string(stage),
+		SpecificationPacket:     run.SpecificationPacket,
+		RepositoryGuidance:      packet.Issue.Body,
+		TestHandoff:             run.TestHandoff,
+		ProtectedTestPaths:      run.ProtectedTestPaths,
+		TestExemption:           run.TestExemption,
+		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
+		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
 	})
 	if err != nil {
 		return AgentLaunchResult{}, err
@@ -119,8 +137,11 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Role:                role,
 		Stage:               stage,
 		SpecificationPacket: run.SpecificationPacket,
-		PromptVersion:       prompt.Version,
+		PromptVersion:       prompt.VersionFor(role, string(stage)),
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
+		TestHandoff:         run.TestHandoff,
+		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
+		TestExemption:       run.TestExemption,
 	}); err != nil {
 		return AgentLaunchResult{}, err
 	}
@@ -136,7 +157,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		InvocationDirectory: packetDirectory,
 		ResultDirectory:     resultDirectory,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
-		PromptVersion:       prompt.Version,
+		PromptVersion:       prompt.VersionFor(role, string(stage)),
 		Status:              store.InvocationStatusActive,
 		CreatedAt:           createdAt,
 		UpdatedAt:           createdAt,
@@ -213,15 +234,19 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
-	cleanupSurface = runWorkspace.Implementation
+	agentSurface := runWorkspace.Implementation
+	if role == "test" {
+		agentSurface = runWorkspace.Checks
+	}
+	cleanupSurface = agentSurface
 	invocation.WorkspaceID = string(runWorkspace.ID)
 	invocation.StatusSurfaceID = string(runWorkspace.Status.ID)
-	invocation.ImplementationSurfaceID = string(runWorkspace.Implementation.ID)
+	invocation.ImplementationSurfaceID = string(agentSurface.ID)
 	invocation.ChecksSurfaceID = string(runWorkspace.Checks.ID)
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist visible terminal handles: %w", err)
 	}
-	if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: control.ID, Title: "factory run started", Body: run.ID + " implementation agent active"}); err != nil {
+	if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: control.ID, Title: "factory run started", Body: fmt.Sprintf("%s %s agent active", run.ID, role)}); err != nil {
 		return AgentLaunchResult{}, err
 	}
 	session, err := harnessRuntime.Start(ctx, harness.StartRequest{
@@ -230,7 +255,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Role:            role,
 		Stage:           string(stage),
 		WorkspaceID:     runWorkspace.ID,
-		Surface:         runWorkspace.Implementation,
+		Surface:         agentSurface,
 		Prompt:          promptText,
 		Model:           model,
 		ReasoningEffort: request.ReasoningEffort,
@@ -245,7 +270,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, fmt.Errorf("persist Codex session identity: %w", err)
 	}
 	previousRun := *run
-	run.Stage = store.StageImplementation
+	run.Stage = stage
 	run.Status = store.StatusActive
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {

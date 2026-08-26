@@ -31,8 +31,8 @@ func TestRunBaselineRecordsAHealthyPreEditSuiteBeforeAgentProgression(t *testing
 	if err != nil {
 		t.Fatalf("RunBaseline() error = %v", err)
 	}
-	if baseline.Run.Status != store.StatusActive || baseline.Run.Stage != store.StageClaim || len(baseline.Gates) != 1 || baseline.Gates[0].Phase != gate.PhaseBaseline {
-		t.Fatalf("baseline = %#v, want active claim with one baseline result", baseline)
+	if baseline.Run.Status != store.StatusActive || baseline.Run.Stage != store.StageTest || len(baseline.Gates) != 1 || baseline.Gates[0].Phase != gate.PhaseBaseline {
+		t.Fatalf("baseline = %#v, want active test stage with one baseline result", baseline)
 	}
 	if len(fixture.worker.commands) != 2 || fixture.worker.commands[0].Command != fixture.policy.Setup || fixture.worker.commands[1].Command != fixture.policy.Gates[0].Command {
 		t.Fatalf("baseline commands = %#v, want setup then declared gate", fixture.worker.commands)
@@ -43,6 +43,74 @@ func TestRunBaselineRecordsAHealthyPreEditSuiteBeforeAgentProgression(t *testing
 	}
 	if len(results) != 1 || results[0].Outcome != store.GateOutcomePassed || results[0].Status != string(github.CommitStatusSuccess) {
 		t.Fatalf("stored baseline results = %#v, want exact-checkpoint success", results)
+	}
+}
+
+// TestRunBaselineAdvancesToTheConfiguredTestStage verifies a repository that
+// declares a test role enters test-stage handoff before implementation.
+func TestRunBaselineAdvancesToTheConfiguredTestStage(t *testing.T) {
+	fixture := newBaselineFixture(t, "", []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}})
+	fixture.policy.RoleHarnessDefaults["test"] = config.HarnessCodex
+	fixture.policy.ModelOptions["test"] = []string{"gpt-5"}
+	claimed, err := fixture.service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+
+	baseline, err := fixture.service.RunBaseline(context.Background(), factory.BaselineRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("RunBaseline() error = %v", err)
+	}
+	if baseline.Run.Stage != store.StageTest || baseline.Run.Status != store.StatusActive {
+		t.Fatalf("baseline run = %#v, want active test stage", baseline.Run)
+	}
+}
+
+// TestRunBaselineRecordsTheFrozenHumanTestExemption verifies an exact issue
+// marker can skip the default test stage only when repository policy allows it.
+func TestRunBaselineRecordsTheFrozenHumanTestExemption(t *testing.T) {
+	fixture := newBaselineFixture(t, "<!-- factory-test-exemption: human | documentation-only change -->", []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}})
+	fixture.policy.RoleHarnessDefaults["test"] = config.HarnessCodex
+	fixture.policy.ModelOptions["test"] = []string{"gpt-5"}
+	fixture.policy.TestPolicy.AllowHumanExemption = true
+	claimed, err := fixture.service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+
+	baseline, err := fixture.service.RunBaseline(context.Background(), factory.BaselineRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("RunBaseline() error = %v", err)
+	}
+	if baseline.Run.Stage != store.StageImplementation || !baseline.Run.TestStageSkipped || baseline.Run.TestExemption == nil || baseline.Run.TestExemption.Justification != "documentation-only change" {
+		t.Fatalf("baseline exemption run = %#v, want recorded human skip", baseline.Run)
+	}
+}
+
+// TestTransitionCannotBypassAConfiguredTestStage verifies the generic stage
+// transition seam cannot move a healthy configured run directly to implementation.
+func TestTransitionCannotBypassAConfiguredTestStage(t *testing.T) {
+	fixture := newBaselineFixture(t, "", []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}})
+	fixture.policy.RoleHarnessDefaults["test"] = config.HarnessCodex
+	fixture.policy.ModelOptions["test"] = []string{"gpt-5"}
+	claimed, err := fixture.service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+	if _, err := fixture.service.Transition(context.Background(), factory.TransitionRequest{RunID: claimed.Run.ID, Stage: store.StageImplementation, Status: store.StatusActive}); err == nil || !strings.Contains(err.Error(), "completed test handoff") {
+		t.Fatalf("Transition() error = %v, want test-stage bypass rejection", err)
+	}
+	opened, err := store.Open(context.Background(), fixture.operationalPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	current, err := opened.CurrentRun(context.Background())
+	_ = opened.Close()
+	if err != nil {
+		t.Fatalf("read current run: %v", err)
+	}
+	if current == nil || current.Stage != store.StageClaim {
+		t.Fatalf("run stage = %#v, want claim after rejected bypass", current)
 	}
 }
 
@@ -136,8 +204,8 @@ func TestRunBaselineAllowsAnExplicitlyTargetedFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunBaseline() error = %v, want explicit baseline target to permit progression", err)
 	}
-	if baseline.Run.Status != store.StatusActive || baseline.Run.Stage != store.StageClaim {
-		t.Fatalf("targeted baseline run = %#v, want active claim", baseline.Run)
+	if baseline.Run.Status != store.StatusActive || baseline.Run.Stage != store.StageTest {
+		t.Fatalf("targeted baseline run = %#v, want active test stage", baseline.Run)
 	}
 }
 
