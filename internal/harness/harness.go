@@ -70,6 +70,9 @@ type Capabilities struct {
 	// session belongs to the harness that created it, so the coordinator
 	// compares this name before it resumes one.
 	Name string
+	// InteractiveResume reports whether interrupted sessions can be resumed
+	// through the adapter's native lifecycle.
+	InteractiveResume bool
 }
 
 // Runtime is the portable harness lifecycle seam used by the coordinator.

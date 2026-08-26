@@ -26,7 +26,7 @@ func NewCodex(runtime worker.WorkerRuntime, terminalRuntime terminal.TerminalRun
 
 // Capabilities reports the Codex adapter identity and native resume support.
 func (*Codex) Capabilities() Capabilities {
-	return Capabilities{Name: NameCodex}
+	return Capabilities{Name: NameCodex, InteractiveResume: true}
 }
 
 // Start launches a fresh Codex TUI in a worker-backed terminal surface.
