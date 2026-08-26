@@ -878,14 +878,40 @@ func TestValidateRepositoryRejectsDuplicateReasoningEffortOptions(t *testing.T) 
 	}
 }
 
-// TestValidateRepositoryRejectsReasoningEffortOptionsForAHarnessThatCannotHonorThem
-// verifies a repository cannot declare a setting whose every launch would be
-// refused, because Claude Code exposes no reasoning-effort process argument.
-func TestValidateRepositoryRejectsReasoningEffortOptionsForAHarnessThatCannotHonorThem(t *testing.T) {
+// TestValidateRepositoryRejectsInvalidClaudeCodeReasoningEffort verifies Claude
+// Code roles declare only the supported reasoning effort values.
+func TestValidateRepositoryRejectsInvalidClaudeCodeReasoningEffort(t *testing.T) {
+	t.Parallel()
+
 	value := validRepositoryConfig()
-	value.RoleHarnessDefaults["implementation"] = config.HarnessClaude
-	value.ReasoningEffortOptions = map[string][]string{"implementation": {"high"}}
-	if err := config.ValidateRepository(value); err == nil || !strings.Contains(err.Error(), "cannot honor a reasoning-effort selection") {
-		t.Fatalf("ValidateRepository() error = %v, want an unsupported-harness rejection", err)
+	// Add a Claude role with an invalid reasoning effort
+	value.RoleHarnessDefaults["spec_review"] = config.HarnessClaude
+	value.ModelOptions["spec_review"] = []string{"claude-opus-4-5"}
+	value.ReasoningEffortOptions = map[string][]string{
+		"spec_review": {"bogus"},
+	}
+	err := config.ValidateRepository(value)
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ValidateRepository() error = %v, want ValidationError for invalid Claude Code reasoning effort", err)
+	}
+	if validationErr.Field != "reasoning_effort_options.spec_review[0]" {
+		t.Fatalf("field = %q, want reasoning_effort_options.spec_review[0]", validationErr.Field)
+	}
+	if !strings.Contains(validationErr.Message, "low, medium, high, xhigh, or max") {
+		t.Fatalf("message = %q, want it to list the supported Claude Code values", validationErr.Message)
+	}
+
+	// Verify valid Codex and Claude configurations are accepted
+	validMixed := validRepositoryConfig()
+	validMixed.RoleHarnessDefaults["spec_review"] = config.HarnessClaude
+	validMixed.ModelOptions["spec_review"] = []string{"claude-opus-4-5"}
+	validMixed.ReasoningEffortOptions = map[string][]string{
+		"test":           {"codex-effort"},       // Codex role can use any value
+		"implementation": {"another-codex"},      // Codex role can use any value
+		"spec_review":    {"low", "high", "max"}, // Claude role must use supported values
+	}
+	if err := config.ValidateRepository(validMixed); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want valid mixed Codex and Claude configuration to be accepted", err)
 	}
 }

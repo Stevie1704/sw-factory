@@ -34,10 +34,9 @@ func NewClaude(runtime worker.WorkerRuntime, terminalRuntime terminal.TerminalRu
 	return &Claude{Worker: runtime, Terminal: terminalRuntime, NewSessionID: newSessionID}
 }
 
-// Capabilities reports the Claude adapter identity. Claude Code exposes no
-// reasoning-effort process argument, so it reports that setting unsupported.
+// Capabilities reports the Claude adapter identity.
 func (*Claude) Capabilities() Capabilities {
-	return Capabilities{Name: NameClaude, ReasoningEffort: false}
+	return Capabilities{Name: NameClaude}
 }
 
 // Start launches a fresh Claude Code TUI with an adapter-assigned native
@@ -79,12 +78,6 @@ func (c *Claude) launch(ctx context.Context, request StartRequest, sessionID str
 	if err := validateStartRequest(NameClaude, request); err != nil {
 		return Session{}, err
 	}
-	if request.ReasoningEffort != "" {
-		// Claude Code exposes no reasoning-effort process argument. Dropping a
-		// validated repository selection would run the role at an effort the
-		// policy never authorized, so the launch is refused instead.
-		return Session{}, fmt.Errorf("%w: Claude reasoning effort", ErrUnsupportedSetting)
-	}
 	if !validSessionID(sessionID) {
 		return Session{}, errors.New("Claude native session id must be a version-four UUID")
 	}
@@ -108,8 +101,17 @@ func (c *Claude) launch(ctx context.Context, request StartRequest, sessionID str
 	if request.Model != "" {
 		command = append(command, "--model", request.Model)
 	}
+	// Claude Code warns about an unrecognized effort level and then silently
+	// uses its default, so the coordinator's repository-declared options are
+	// what actually constrain this value.
+	if request.ReasoningEffort != "" {
+		command = append(command, "--effort", request.ReasoningEffort)
+	}
 	command = append(command, strings.TrimSpace(request.Prompt))
 	environment := invocationEnvironment(NameClaude, request)
+	if request.ReasoningEffort != "" {
+		environment["FACTORY_REASONING_EFFORT"] = request.ReasoningEffort
+	}
 	// The harness version is pinned by the worker image. Claude Code otherwise
 	// attempts a self-update at startup, which must never change the tool
 	// halfway through a run.

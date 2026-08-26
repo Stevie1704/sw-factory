@@ -14,12 +14,16 @@ commands and owns no workflow, Git, retry, or terminal-layout decision.
 
 The coordinator resolves the adapter from the frozen repository policy for the
 role, so workflow code never names a tool. `Capabilities` reports the adapter
-identity and whether the harness can honor a reasoning-effort selection. The
-check-repair path dispatches on the harness recorded for the session under
-repair and refuses to continue when the resolved adapter reports a different
-identity, so mid-session migration between Codex and Claude is not possible.
-The launch path refuses a reasoning effort the selected harness cannot honor
-before it creates any side effect.
+identity. The check-repair path dispatches on the harness recorded for the
+session under repair and refuses to continue when the resolved adapter reports
+a different identity, so mid-session migration between Codex and Claude is not
+possible.
+
+Each adapter translates the validated model and reasoning effort into its own
+arguments: Codex uses `-m` and `-c model_reasoning_effort=`, Claude Code uses
+`--model` and `--effort`. The effort names differ between the two, and Claude
+Code silently falls back to its default for a level it does not recognize, so
+the repository-declared options per role are what constrain the value.
 
 The two adapters differ in how a native session identity is obtained:
 
@@ -253,8 +257,8 @@ runs the complete frozen gate suite and retains each result under that exact
 checkpoint SHA. Typed deterministic gate failures are assembled into one
 bounded check-repair packet containing all gate outcomes, skipped dependency
 reasons, and bounded command diagnostics. The next implementation invocation
-uses the existing worker role volume, implementation surface, and native Codex
-session through the harness resume seam.
+uses the existing worker role volume, implementation surface, and native
+session for the recorded harness through the harness resume seam.
 
 The repository's `retry_limits.check_repair` value is frozen into the run. A
 repair reservation is durable before native resume, but the consumed attempt

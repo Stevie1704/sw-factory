@@ -433,12 +433,8 @@ func ValidateRepository(config RepositoryConfig) error {
 		}
 	}
 	for role, efforts := range config.ReasoningEffortOptions {
-		harness, exists := config.RoleHarnessDefaults[role]
-		if !exists {
+		if _, exists := config.RoleHarnessDefaults[role]; !exists {
 			return validation("reasoning_effort_options."+role, "must reference a role with a declared harness")
-		}
-		if !harnessHonorsReasoningEffort(harness) {
-			return validation("reasoning_effort_options."+role, fmt.Sprintf("harness %q cannot honor a reasoning-effort selection", harness))
 		}
 		if len(efforts) == 0 {
 			return validation("reasoning_effort_options."+role, "must declare at least one value or be omitted")
@@ -453,6 +449,16 @@ func ValidateRepository(config RepositoryConfig) error {
 				return validation(field, "must be unique")
 			}
 			seen[effort] = struct{}{}
+			// Claude Code accepts only low, medium, high, xhigh, or max.
+			// Validate Claude roles against these supported values.
+			if harness := config.RoleHarnessDefaults[role]; harness == HarnessClaude {
+				switch effort {
+				case "low", "medium", "high", "xhigh", "max":
+					// Supported value
+				default:
+					return validation(field, "must be low, medium, high, xhigh, or max for Claude Code")
+				}
+			}
 		}
 	}
 	if _, exists := config.RoleHarnessDefaults["test"]; !exists {
@@ -533,14 +539,6 @@ func ValidateRepository(config RepositoryConfig) error {
 		}
 	}
 	return nil
-}
-
-// harnessHonorsReasoningEffort reports whether a harness accepts a
-// reasoning-effort selection. Claude Code exposes no reasoning-effort process
-// argument, so a role that runs on it declares no options rather than
-// declaring options that every launch would refuse.
-func harnessHonorsReasoningEffort(harness Harness) bool {
-	return harness == HarnessCodex
 }
 
 // validateSetupFiles validates optional repository-relative manifest and

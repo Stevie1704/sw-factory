@@ -92,8 +92,9 @@ model_options:
   test: [gpt-5]
   implementation: [claude-opus-5, claude-sonnet-5]
   spec_review: [gpt-5]
-# Optional. A role that declares no values accepts no reasoning-effort
-# selection at all.
+# Optional, and harness-specific: these are Codex effort names because the
+# test role runs on Codex. A role that declares no values accepts no
+# reasoning-effort selection at all.
 reasoning_effort_options:
   test: [medium, high]
 timeouts:
@@ -143,18 +144,19 @@ matching `allowed_overrides` entry; without it the coordinator refuses the
 launch as a typed policy rejection with the code `harness_override`,
 `model_override`, or `reasoning_effort_override`.
 
-Claude Code exposes no reasoning-effort process argument. A role that runs on
-`claude` therefore declares no `reasoning_effort_options`, and the validator
-refuses a configuration that declares them anyway. If a selection still reaches
-a launch, the coordinator refuses it as a `reasoning_effort_unsupported`
-rejection before it starts a worker, and the adapter refuses it again as a
-fail-closed backstop.
+Declared values must match what the role's harness accepts. Codex takes its own
+effort names through `model_reasoning_effort`; Claude Code takes `low`,
+`medium`, `high`, `xhigh`, or `max` through `--effort`. `ValidateRepository`
+rejects Claude Code `reasoning_effort_options` with unsupported values before
+launch, so an invalid declaration never reaches the harness. Declare
+`reasoning_effort_options` for every role, and keep `reasoning_effort` out of
+`allowed_overrides` unless an operator is meant to bypass that check.
 
-`model_options` is declared per role, not per harness. A repository that adds
-`harness` to `allowed_overrides` therefore accepts responsibility for declaring
-model options that every permitted harness accepts; otherwise an authorized
-override can pair one harness with another harness's model name, and the
-harness rejects the model at launch.
+`model_options` and `reasoning_effort_options` are declared per role, not per
+harness. A repository that adds `harness` to `allowed_overrides` therefore accepts
+responsibility for declaring model and effort options that every permitted
+harness accepts; otherwise an authorized override can pair one harness with
+another harness's option names.
 
 An authorized maintainer selects a harness for a later invocation with one
 structured comment:

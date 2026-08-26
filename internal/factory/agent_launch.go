@@ -101,15 +101,6 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("ensure agent runtime: %w", err)
 	}
-	// A setting the selected harness cannot honor is refused here, before the
-	// launch creates any directory, worker, credential copy, or surface. The
-	// adapter refuses it again at launch as a fail-closed backstop.
-	if policy.ReasoningEffort != "" && !harnessRuntime.Capabilities().ReasoningEffort {
-		return AgentLaunchResult{}, &PolicyRejection{
-			Code:    PolicyRejectionReasoningEffortUnsupported,
-			Problem: fmt.Sprintf("harness %q cannot honor a reasoning-effort selection for role %q", policy.Harness, request.Role),
-		}
-	}
 	runID, err := s.deps.NewRunID()
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("generate invocation identifier: %w", err)
