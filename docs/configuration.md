@@ -146,11 +146,11 @@ launch as a typed policy rejection with the code `harness_override`,
 
 Declared values must match what the role's harness accepts. Codex takes its own
 effort names through `model_reasoning_effort`; Claude Code takes `low`,
-`medium`, `high`, `xhigh`, or `max` through `--effort`. Claude Code warns about
-an unrecognized level and then silently uses its default, so
-`reasoning_effort_options` is the only thing that actually constrains the
-value. Declare it, and keep `reasoning_effort` out of `allowed_overrides`
-unless an operator is meant to bypass that check.
+`medium`, `high`, `xhigh`, or `max` through `--effort`. `ValidateRepository`
+rejects Claude Code `reasoning_effort_options` with unsupported values before
+launch, so an invalid declaration never reaches the harness. Declare
+`reasoning_effort_options` for every role, and keep `reasoning_effort` out of
+`allowed_overrides` unless an operator is meant to bypass that check.
 
 `model_options` and `reasoning_effort_options` are declared per role, not per
 harness. A repository that adds `harness` to `allowed_overrides` therefore accepts

@@ -257,8 +257,8 @@ runs the complete frozen gate suite and retains each result under that exact
 checkpoint SHA. Typed deterministic gate failures are assembled into one
 bounded check-repair packet containing all gate outcomes, skipped dependency
 reasons, and bounded command diagnostics. The next implementation invocation
-uses the existing worker role volume, implementation surface, and native Codex
-session through the harness resume seam.
+uses the existing worker role volume, implementation surface, and native
+session for the recorded harness through the harness resume seam.
 
 The repository's `retry_limits.check_repair` value is frozen into the run. A
 repair reservation is durable before native resume, but the consumed attempt

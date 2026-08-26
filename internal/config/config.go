@@ -449,6 +449,16 @@ func ValidateRepository(config RepositoryConfig) error {
 				return validation(field, "must be unique")
 			}
 			seen[effort] = struct{}{}
+			// Claude Code accepts only low, medium, high, xhigh, or max.
+			// Validate Claude roles against these supported values.
+			if harness := config.RoleHarnessDefaults[role]; harness == HarnessClaude {
+				switch effort {
+				case "low", "medium", "high", "xhigh", "max":
+					// Supported value
+				default:
+					return validation(field, "must be low, medium, high, xhigh, or max for Claude Code")
+				}
+			}
 		}
 	}
 	if _, exists := config.RoleHarnessDefaults["test"]; !exists {
