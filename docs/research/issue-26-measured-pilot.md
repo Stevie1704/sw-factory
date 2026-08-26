@@ -179,6 +179,7 @@ Recommend `proceed` only when all conditions hold:
   violation;
 - every corpus entry has a correctness score of at least 3 and no missed mandatory
   acceptance criterion in either path;
+- no score in any matched pair is marked unblinded;
 - the factory correctness and specification-coverage medians are no more than
   one rubric point below the direct path medians;
 - factory human rework is no more than 30 minutes per corpus entry above the
@@ -194,7 +195,7 @@ Recommend `proceed` only when all conditions hold:
 
 Recommend `revise and repeat` when no stop condition is present but a proceed
 condition is not met because the sample is incomplete, a controlled variable
-was not held constant, blinding was lost, operational data is incomplete, or
+was not held constant, any score was marked unblinded, operational data is incomplete, or
 quality and human-rework results are inconclusive. The evidence gate remains
 open, and the next round must name the revision before execution.
 
@@ -237,16 +238,16 @@ set is empty:
 The completed ledger must contain one row for each arm of every matched pair. It is
 content-free apart from opaque packet and checkpoint identities:
 
-| Pair | Arm | Packet hash | Base SHA | Correctness | Coverage | Rework minutes | Escalations/dispositions | Exemptions | Wall time | Invocations | Gate rounds | Review rounds | Usage/cost | Blind |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `P01` | direct | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
-| `P01` | factory | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
-| `P02` | direct | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
-| `P02` | factory | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
-| `P03` | direct | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
-| `P03` | factory | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
-| `P04` | direct | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
-| `P04` | factory | as above | as above | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| Pair | Arm | Packet hash | Base SHA | Test checkpoint | Impl checkpoint | Gate checkpoint | Review checkpoint | Correctness | Coverage | Build/test fail | Missed criterion | Security violation | Scope expansion | Human rework flag | Rework minutes | Escalations/dispositions | Exemptions | Wall time | Invocations | Gate rounds | Review rounds | Usage/cost | Blind |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `P01` | direct | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| `P01` | factory | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| `P02` | direct | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| `P02` | factory | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| `P03` | direct | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| `P03` | factory | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| `P04` | direct | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
+| `P04` | factory | as above | as above | — | — | — | — | — | — | — | — | — | — | — | — | — | not run | — | — | — | — | unavailable | — |
 
 No corpus-entry quality, elapsed-time, invocation, gate, review, escalation,
 exemption, or usage value is inferred from the zero completed pairs. The local
