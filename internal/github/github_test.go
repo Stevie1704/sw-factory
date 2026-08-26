@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/github"
 )
@@ -84,6 +85,82 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	for _, index := range []int{0, 2, 3, 4, 5, 6} {
 		if hasArgs(runner.calls[index].args, "--repo") {
 			t.Errorf("gh api call %d still uses unsupported --repo: %#v", index, runner.calls[index].args)
+		}
+	}
+}
+
+// TestGhClientListsEligibleIssuesInDeterministicOrder verifies the polling
+// adapter asks GitHub for open agent-ready issues and filters the mixed issue
+// endpoint response before returning queue candidates.
+func TestGhClientListsEligibleIssuesInDeterministicOrder(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{[]byte(`[[
+		{"number":12,"title":"newer","state":"open","labels":[{"name":"agent-ready"}]},
+		{"number":4,"title":"pull request","state":"open","labels":[{"name":"agent-ready"}],"pull_request":{"url":"https://api.github.com/pulls/4"}},
+		{"number":2,"title":"older","state":"open","labels":[{"name":"agent-ready"},{"name":"bug"}]},
+		{"number":1,"title":"closed","state":"closed","labels":[{"name":"agent-ready"}]},
+		{"number":8,"title":"unlabeled","state":"open","labels":[{"name":"bug"}]}
+	]]`)}}
+	client := &github.GhClient{Runner: runner}
+
+	issues, err := client.ListEligibleIssues(context.Background(), github.Repository{Owner: "example", Name: "project"})
+	if err != nil {
+		t.Fatalf("ListEligibleIssues() error = %v", err)
+	}
+	if len(issues) != 2 || issues[0].Number != 2 || issues[1].Number != 12 {
+		t.Fatalf("eligible issues = %#v, want issue numbers [2 12]", issues)
+	}
+	if len(runner.calls) != 1 || !containsArgs(runner.calls[0].args, "repos/example/project/issues", "--paginate", "--slurp", "--method", "GET") {
+		t.Fatalf("GitHub call = %#v, want paginated GET issue listing", runner.calls)
+	}
+	if !hasArgs(runner.calls[0].args, "-f", "state=open", "-f", "labels=agent-ready") {
+		t.Fatalf("GitHub call args = %#v, want open agent-ready filters", runner.calls[0].args)
+	}
+}
+
+// TestGhClientPublishesAVisibleRenewableLease verifies the lease adapter
+// records coordinator ownership as an exact target-branch Commit Status.
+func TestGhClientPublishesAVisibleRenewableLease(t *testing.T) {
+	t.Parallel()
+
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`{"sha":"` + sha + `"}`),
+		[]byte(""),
+	}}
+	client := &github.GhClient{Runner: runner}
+	renewed := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	expires := renewed.Add(5 * time.Minute)
+	err := client.RenewLease(context.Background(), github.Repository{Owner: "example", Name: "project"}, github.Lease{
+		TargetBranch: "main",
+		Coordinator:  "coordinator-test",
+		RunID:        "run-42",
+		RenewedAt:    renewed,
+		ExpiresAt:    expires,
+	})
+	if err != nil {
+		t.Fatalf("RenewLease() error = %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("GitHub calls = %d, want branch lookup plus status write", len(runner.calls))
+	}
+	if !containsArgs(runner.calls[0].args, "repos/example/project/commits/main", "--method", "GET") {
+		t.Fatalf("branch lookup args = %#v", runner.calls[0].args)
+	}
+	if !containsArgs(runner.calls[1].args, "repos/example/project/statuses/"+sha, "--method", "POST", "--input", "-") {
+		t.Fatalf("lease status args = %#v", runner.calls[1].args)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(runner.calls[1].input, &payload); err != nil {
+		t.Fatalf("decode lease status payload: %v", err)
+	}
+	if payload["state"] != string(github.CommitStatusPending) || payload["context"] != github.LeaseStatusContext {
+		t.Fatalf("lease status payload = %#v, want pending %q", payload, github.LeaseStatusContext)
+	}
+	for _, expected := range []string{"coordinator-test", "run-42", "expires=2026-08-26T12:05:00Z"} {
+		if !strings.Contains(payload["description"], expected) {
+			t.Errorf("lease description %q does not contain %q", payload["description"], expected)
 		}
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/Stevie1704/sw-factory/internal/ref"
 )
 
 // DefaultRemoteName is the repository remote used by factory Git operations.
@@ -477,10 +479,7 @@ func porcelainPaths(output string) []string {
 // validateRefPart prevents user-controlled ref fragments from becoming
 // ambiguous Git command arguments.
 func validateRefPart(value string) error {
-	if strings.ContainsAny(value, "\r\n") || strings.HasPrefix(value, "-") || strings.Contains(value, "..") || strings.ContainsAny(value, " ~^:?*[\\") {
-		return fmt.Errorf("contains characters that cannot be used safely: %q", value)
-	}
-	return nil
+	return ref.ValidatePart(value)
 }
 
 // validCommitSHA reports whether value is a full SHA-1 or SHA-256 identity.

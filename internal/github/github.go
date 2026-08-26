@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/ref"
 )
 
 const (
@@ -59,6 +62,24 @@ type Issue struct {
 	UpdatedAt     time.Time
 }
 
+// LeaseStatusContext is the stable Commit Status context used to expose the
+// coordinator's renewable GitHub lease on the configured target branch.
+const LeaseStatusContext = "factory/lease"
+
+// Lease describes one visible coordinator ownership heartbeat.
+type Lease struct {
+	// TargetBranch is the branch whose current commit receives the status.
+	TargetBranch string
+	// Coordinator identifies the host holding the lease.
+	Coordinator string
+	// RunID identifies the active run, when one has been claimed.
+	RunID string
+	// RenewedAt is the coordinator's latest heartbeat time.
+	RenewedAt time.Time
+	// ExpiresAt is the time after which the GitHub projection is stale.
+	ExpiresAt time.Time
+}
+
 // Label describes a factory-owned GitHub label.
 type Label struct {
 	Name        string
@@ -83,6 +104,16 @@ type Comment struct {
 // shared GitHub issue-comments endpoint.
 type CommentReader interface {
 	IssueComments(context.Context, Repository, int) ([]Comment, error)
+}
+
+// IssuePoller lists the repository's open, agent-authorized issue queue.
+type IssuePoller interface {
+	ListEligibleIssues(context.Context, Repository) ([]Issue, error)
+}
+
+// LeaseClient publishes a renewable, operator-visible coordinator lease.
+type LeaseClient interface {
+	RenewLease(context.Context, Repository, Lease) error
 }
 
 // PullRequest is the pull-request identity and body returned to the
@@ -214,6 +245,8 @@ type GhClient struct {
 }
 
 var _ CommentReader = (*GhClient)(nil)
+var _ IssuePoller = (*GhClient)(nil)
+var _ LeaseClient = (*GhClient)(nil)
 
 // NewClient returns a GitHub CLI-backed client.
 func NewClient() *GhClient { return &GhClient{Runner: commandRunner{}} }
@@ -235,19 +268,74 @@ func (c *GhClient) Issue(ctx context.Context, repository Repository, number int)
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d", repository.String(), number)}, nil, &response); err != nil {
 		return Issue{}, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
-	labels := make([]string, 0, len(response.Labels))
-	for _, label := range response.Labels {
-		labels = append(labels, label.Name)
+	return response.issue(), nil
+}
+
+// ListEligibleIssues reads open issues labeled agent-ready and returns them in
+// ascending issue-number order. GitHub's issues endpoint also returns pull
+// requests, so those are filtered before the result crosses the adapter seam.
+func (c *GhClient) ListEligibleIssues(ctx context.Context, repository Repository) ([]Issue, error) {
+	args := []string{
+		"api", fmt.Sprintf("repos/%s/issues", repository.String()),
+		"--paginate", "--slurp", "--method", "GET",
+		"-f", "state=open", "-f", "labels=" + LabelAgentReady,
 	}
-	return Issue{
-		Number:        response.Number,
-		Title:         response.Title,
-		Body:          response.Body,
-		State:         response.State,
-		Labels:        labels,
-		IsPullRequest: response.PullRequest != nil,
-		UpdatedAt:     response.UpdatedAt,
-	}, nil
+	output, err := c.callBytes(ctx, args, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list eligible issues: %w", err)
+	}
+	responses, err := decodeIssueList(output)
+	if err != nil {
+		return nil, fmt.Errorf("decode eligible issues: %w", err)
+	}
+	issues := make([]Issue, 0, len(responses))
+	for _, response := range responses {
+		issue := response.issue()
+		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !containsLabel(issue.Labels, LabelAgentReady) {
+			continue
+		}
+		issues = append(issues, issue)
+	}
+	sort.SliceStable(issues, func(left, right int) bool {
+		return issues[left].Number < issues[right].Number
+	})
+	return issues, nil
+}
+
+// RenewLease publishes the coordinator heartbeat as a pending Commit Status
+// on the current target-branch commit. A stale heartbeat remains visible in
+// GitHub with its expiry timestamp after a host process disappears.
+func (c *GhClient) RenewLease(ctx context.Context, repository Repository, lease Lease) error {
+	if strings.TrimSpace(lease.TargetBranch) == "" {
+		return errors.New("lease target branch is required and must be safe")
+	}
+	if err := ref.ValidatePart(lease.TargetBranch); err != nil {
+		return fmt.Errorf("lease target branch: %w", err)
+	}
+	if strings.TrimSpace(lease.Coordinator) == "" || strings.ContainsAny(lease.Coordinator, "\x00\r\n") {
+		return errors.New("lease coordinator is required and must be a single line")
+	}
+	if lease.RenewedAt.IsZero() || lease.ExpiresAt.IsZero() || !lease.ExpiresAt.After(lease.RenewedAt) {
+		return errors.New("lease heartbeat and expiry must be valid")
+	}
+	var response commitResponse
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/commits/%s", repository.String(), lease.TargetBranch), "--method", "GET"}, nil, &response); err != nil {
+		return fmt.Errorf("read target branch for coordinator lease: %w", err)
+	}
+	if !ValidCommitSHA(response.SHA) {
+		return errors.New("target branch response did not contain a valid commit SHA")
+	}
+	description := fmt.Sprintf("coordinator=%s run=%s renewed=%s expires=%s", safeStatusValue(lease.Coordinator), safeStatusValue(lease.RunID), lease.RenewedAt.UTC().Format(time.RFC3339), lease.ExpiresAt.UTC().Format(time.RFC3339))
+	description = truncateStatusDescription(description, 140)
+	if err := c.CreateCommitStatus(ctx, repository, CommitStatus{
+		SHA:         response.SHA,
+		State:       CommitStatusPending,
+		Context:     LeaseStatusContext,
+		Description: description,
+	}); err != nil {
+		return fmt.Errorf("publish coordinator lease: %w", err)
+	}
+	return nil
 }
 
 // CreateLabel creates or updates one factory label through gh.
@@ -524,6 +612,74 @@ type issueResponse struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// issue converts the GitHub issue response into the adapter-neutral model.
+func (r issueResponse) issue() Issue {
+	labels := make([]string, 0, len(r.Labels))
+	for _, label := range r.Labels {
+		labels = append(labels, label.Name)
+	}
+	return Issue{
+		Number:        r.Number,
+		Title:         r.Title,
+		Body:          r.Body,
+		State:         r.State,
+		Labels:        labels,
+		IsPullRequest: r.PullRequest != nil,
+		UpdatedAt:     r.UpdatedAt,
+	}
+}
+
+// decodeIssueList accepts both gh's slurped pagination array and one page of
+// issue responses, keeping the adapter tolerant of test and CLI modes.
+func decodeIssueList(output []byte) ([]issueResponse, error) {
+	var pages [][]issueResponse
+	if err := json.Unmarshal(output, &pages); err == nil {
+		issues := make([]issueResponse, 0)
+		for _, page := range pages {
+			issues = append(issues, page...)
+		}
+		return issues, nil
+	}
+	var singlePage []issueResponse
+	if err := json.Unmarshal(output, &singlePage); err != nil {
+		return nil, err
+	}
+	return singlePage, nil
+}
+
+// containsLabel reports whether one issue projection contains a named label.
+func containsLabel(labels []string, wanted string) bool {
+	for _, label := range labels {
+		if label == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+// safeStatusValue bounds untrusted lease values to one status-comment line.
+func safeStatusValue(value string) string {
+	return strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ", "\x00", " ").Replace(value))
+}
+
+// truncateStatusDescription limits a status description by Unicode code
+// points so an unusually long coordinator identity cannot create invalid UTF-8.
+func truncateStatusDescription(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
+
+// commitResponse is the branch-head projection needed by lease publishing.
+type commitResponse struct {
+	SHA string `json:"sha"`
 }
 
 // commentResponse is the subset of a GitHub comment response needed to retain

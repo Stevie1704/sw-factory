@@ -36,6 +36,25 @@ migrate, back up, chmod, or initialize store state.
 Missing optional host credential files are warnings because a harness may be
 authenticated during its first visible worker session.
 
+Start the persistent coordinator after diagnosis is ready:
+
+```sh
+factory start --config /Users/me/.config/factory/config.yaml
+factory stop --config /Users/me/.config/factory/config.yaml
+```
+
+`factory start` runs the complete startup diagnosis before taking a private
+host lock. It polls immediately and then at the configured interval, claims
+only the oldest open issue carrying `agent-ready`, and skips queue claims while
+any non-terminal run exists. GitHub transport failures use the configured
+backoff and do not change workflow state or retry budgets. The coordinator
+publishes a renewable `factory/lease` Commit Status on the target branch; its
+description includes the coordinator, active run, heartbeat, and expiry so a
+stale owner remains diagnosable in GitHub. `factory stop` signals the locked
+coordinator and leaves any active run, branch, worktree, worker, and session
+artifacts in place. Polling never creates factory labels; use
+`factory bootstrap-labels` explicitly.
+
 ## Host configuration
 
 The generated host file contains the repository path, GitHub identity, authorized maintainers, polling settings, cmux settings, the checked-in repository configuration path, and the operational-data path.

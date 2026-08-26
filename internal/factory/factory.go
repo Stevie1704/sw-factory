@@ -29,6 +29,12 @@ type Factory interface {
 	// Doctor runs every configured startup diagnosis and reports whether a run
 	// can be claimed safely.
 	Doctor(context.Context) (DoctorResult, error)
+	// Start runs the supervised polling coordinator until its context is
+	// cancelled or a separate Stop command signals it.
+	Start(context.Context) error
+	// Stop asks a running coordinator to stop polling without changing the
+	// state of its active run.
+	Stop(context.Context) (StopResult, error)
 	RunCoordinator
 	// RunBaseline evaluates the frozen repository gate model before agent edits.
 	RunBaseline(context.Context, BaselineRequest) (BaselineResult, error)
@@ -58,7 +64,7 @@ type Factory interface {
 }
 
 // RunCoordinator is the single claim/state-transition seam used by the
-// one-shot command and the future poller.
+// one-shot command and the persistent polling coordinator.
 type RunCoordinator interface {
 	ClaimIssue(context.Context, int) (IssueResult, error)
 	Transition(context.Context, TransitionRequest) (store.Run, error)
@@ -106,6 +112,9 @@ type Clock func() time.Time
 // RunIDGenerator supplies an immutable identifier for a new run.
 type RunIDGenerator func() (string, error)
 
+// StartupDiagnosis runs the complete pre-poll startup diagnosis.
+type StartupDiagnosis func(context.Context) (DoctorResult, error)
+
 // Dependencies are the adapters at the high-level factory seam.
 type Dependencies struct {
 	Config          ConfigRepository
@@ -113,8 +122,13 @@ type Dependencies struct {
 	CheckRepository RepositoryChecker
 	LoadRepository  RepositoryConfigLoader
 	GitHub          github.Client
-	CommitStatuses  github.CommitStatusPublisher
-	Worktree        gitadapter.WorktreeManager
+	// IssuePoller lists eligible GitHub work without broadening the mutation
+	// authority of the existing issue client seam.
+	IssuePoller github.IssuePoller
+	// Lease publishes the coordinator's visible GitHub heartbeat.
+	Lease          github.LeaseClient
+	CommitStatuses github.CommitStatusPublisher
+	Worktree       gitadapter.WorktreeManager
 	// GitWorkspace owns checkpoint, base-sync, push, and cleanup effects on the host.
 	GitWorkspace gitadapter.GitWorkspace
 	// PullRequests owns idempotent draft pull-request discovery and mutation.
@@ -132,6 +146,9 @@ type Dependencies struct {
 	Now                 Clock
 	NewRunID            RunIDGenerator
 	Coordinator         string
+	// StartupDiagnosis is injectable for embedders and deterministic polling
+	// tests; nil uses the service's full Doctor implementation.
+	StartupDiagnosis StartupDiagnosis
 }
 
 type Service struct {
@@ -145,6 +162,8 @@ type Service struct {
 	startupMu         sync.Mutex
 	startupChecked    bool
 	startupErr        error
+	pollMu            sync.Mutex
+	pollCancel        context.CancelFunc
 }
 
 type InitResult struct {
@@ -224,6 +243,16 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	}
 	if dependencies.GitHub == nil {
 		dependencies.GitHub = github.NewClient()
+	}
+	if dependencies.IssuePoller == nil {
+		if poller, ok := dependencies.GitHub.(github.IssuePoller); ok {
+			dependencies.IssuePoller = poller
+		}
+	}
+	if dependencies.Lease == nil {
+		if lease, ok := dependencies.GitHub.(github.LeaseClient); ok {
+			dependencies.Lease = lease
+		}
 	}
 	if dependencies.CommitStatuses == nil {
 		if publisher, ok := dependencies.GitHub.(github.CommitStatusPublisher); ok {
