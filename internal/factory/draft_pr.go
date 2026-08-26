@@ -395,7 +395,7 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 // advisory findings that never gate readiness but must remain visible.
 func generatedReviewSection(run store.Run) string {
 	lines := []string{generatedReviewStart, "### Specification review", ""}
-	if run.SpecificationReview == nil {
+	if run.SpecificationReview == nil || run.SpecificationReview.CheckpointSHA != run.CheckpointSHA {
 		if run.Stage == store.StageReview {
 			lines = append(lines, fmt.Sprintf("- status: pending for checkpoint `%s`", safeStatusCommentValue(run.CheckpointSHA)))
 		} else {
