@@ -118,6 +118,35 @@ records every changed test/infrastructure path and its SHA-256 content hash,
 then launches implementation. Implementation report acceptance rechecks those
 hashes and rejects any direct edit to a protected test path.
 
+## Specification review
+
+After `factory draft-pr` creates the draft pull request, the next `factory
+agent` invocation automatically selects the `spec_review` role at the
+`review` stage. The reviewer runs in a fresh role session against the exact
+implementation checkpoint. Its read-only invocation packet contains the frozen
+specification packet, accepted test and implementation handoffs, protected
+test-path hashes, the base-to-checkpoint diff, bounded gate-result summaries,
+and any prior findings. It never receives upstream harness transcripts.
+
+The reviewer publishes a completed report with repeated finding flags:
+
+```sh
+factory-report \
+  --outcome completed \
+  --summary 'review complete' \
+  --finding 'internal/example.go:42|claim|observable evidence|blocker|correctness|repair the behavior|implementation'
+```
+
+Every finding must include a location, claim, evidence, severity, category,
+suggested resolution, and suggested owner. Only blocker findings classified as
+correctness, security, specification, or documented-standards violations gate
+readiness. Taste and scope findings remain visible advisories. The coordinator
+attaches the stable `factory/review/specification` Commit Status to the exact
+reviewed SHA and invalidates the durable review projection when the checkpoint
+changes. Accepted findings appear in both the editable issue status comment and
+the generated pull-request review section. A technical test exemption remains
+marked provisional in the review packet and projections.
+
 Human skips must be frozen in the issue before claim with an exact marker:
 
 ```text

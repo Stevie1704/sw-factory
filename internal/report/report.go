@@ -144,6 +144,82 @@ const (
 	ExemptionBaseline Exemption = "baseline"
 )
 
+// ReviewSeverity describes whether a reviewer proposes a gating or visible
+// non-gating finding.
+type ReviewSeverity string
+
+const (
+	// ReviewSeverityBlocker identifies a finding that proposes blocking
+	// readiness when its category is a concrete violation.
+	ReviewSeverityBlocker ReviewSeverity = "blocker"
+	// ReviewSeverityAdvisory identifies a useful finding that does not block
+	// readiness.
+	ReviewSeverityAdvisory ReviewSeverity = "advisory"
+)
+
+// ReviewCategory identifies the bounded reason a reviewer classified a
+// finding. Taste and scope categories are always advisory by policy.
+type ReviewCategory string
+
+const (
+	// ReviewCategoryCorrectness identifies a concrete behavior violation.
+	ReviewCategoryCorrectness ReviewCategory = "correctness"
+	// ReviewCategorySecurity identifies a concrete security violation.
+	ReviewCategorySecurity ReviewCategory = "security"
+	// ReviewCategorySpecification identifies a frozen-specification violation.
+	ReviewCategorySpecification ReviewCategory = "specification"
+	// ReviewCategoryDocumentedStandards identifies a documented repository
+	// standards violation.
+	ReviewCategoryDocumentedStandards ReviewCategory = "documented_standards"
+	// ReviewCategoryTaste identifies a non-gating preference.
+	ReviewCategoryTaste ReviewCategory = "taste"
+	// ReviewCategoryScope identifies a non-gating scope-expansion concern.
+	ReviewCategoryScope ReviewCategory = "scope"
+)
+
+// ReviewFinding is one actionable, location-bound reviewer observation. The
+// coordinator never accepts a partial finding because repair routing depends
+// on every field being present.
+type ReviewFinding struct {
+	// Location identifies the repository path and optional line or symbol.
+	Location string `json:"location"`
+	// Claim states the concrete observation or preference.
+	Claim string `json:"claim"`
+	// Evidence names the observable evidence supporting the claim.
+	Evidence string `json:"evidence"`
+	// Severity is the reviewer-proposed gating severity.
+	Severity ReviewSeverity `json:"severity"`
+	// Category determines whether a blocker can gate readiness.
+	Category ReviewCategory `json:"category"`
+	// SuggestedResolution makes the finding actionable for repair.
+	SuggestedResolution string `json:"suggested_resolution"`
+	// SuggestedOwner routes the finding to a coordinator-known role or human.
+	SuggestedOwner string `json:"suggested_owner"`
+}
+
+// ReviewHandoff is the structured output of a review-stage invocation.
+type ReviewHandoff struct {
+	// ReviewedSHA binds the findings to the exact immutable commit inspected.
+	ReviewedSHA string `json:"reviewed_sha"`
+	// Findings contains zero or more complete actionable observations.
+	Findings []ReviewFinding `json:"findings"`
+}
+
+// ReviewFindingBlocks reports whether a finding is allowed to gate readiness.
+// Taste and scope-expansion findings are advisory even if a harness attempts
+// to label them as blockers.
+func ReviewFindingBlocks(finding ReviewFinding) bool {
+	if finding.Severity != ReviewSeverityBlocker {
+		return false
+	}
+	switch finding.Category {
+	case ReviewCategoryCorrectness, ReviewCategorySecurity, ReviewCategorySpecification, ReviewCategoryDocumentedStandards:
+		return true
+	default:
+		return false
+	}
+}
+
 // BlockerCategory identifies a repeated content-free blocker class.
 type BlockerCategory string
 
@@ -206,6 +282,8 @@ type Report struct {
 	// TestHandoff is required for a completed test-stage outcome unless a
 	// technical exemption is explicitly reported.
 	TestHandoff *TestHandoff `json:"test_handoff,omitempty"`
+	// ReviewHandoff is required for a completed specification-review outcome.
+	ReviewHandoff *ReviewHandoff `json:"review_handoff,omitempty"`
 	// Questions are required only for a clarification outcome.
 	Questions []Question `json:"questions,omitempty"`
 	// Evidence is required only for a cannot-proceed outcome.
@@ -253,6 +331,10 @@ type ValidationContext struct {
 	// TestInfrastructurePaths contains configured repository-relative prefixes
 	// for essential test infrastructure.
 	TestInfrastructurePaths []string
+	// CheckpointSHA is the exact commit a review report must identify when the
+	// coordinator accepts it. It may be blank while a worker writes its report;
+	// the coordinator supplies it during acceptance.
+	CheckpointSHA string
 	// deferTestPathPolicy defers repository-specific ownership checks until the
 	// coordinator supplies the frozen configuration during report acceptance.
 	deferTestPathPolicy bool
@@ -459,12 +541,22 @@ func Validate(value Report, context ValidationContext) error {
 			} else if err := validateTestHandoff(*value.TestHandoff, context); err != nil {
 				return err
 			}
+		} else if isReviewReport(value) {
+			if value.Handoff != nil || value.TestHandoff != nil {
+				return errors.New("review completed report must contain only a review handoff")
+			}
+			if value.ReviewHandoff == nil {
+				return errors.New("completed review report requires a review handoff")
+			}
+			if err := validateReviewHandoff(*value.ReviewHandoff, context); err != nil {
+				return err
+			}
 		} else {
 			if value.Handoff == nil {
 				return errors.New("completed report requires a handoff")
 			}
-			if value.TestHandoff != nil {
-				return errors.New("implementation completed report must not contain a test handoff")
+			if value.TestHandoff != nil || value.ReviewHandoff != nil {
+				return errors.New("implementation completed report must not contain test or review handoff")
 			}
 			if err := validateHandoff(*value.Handoff, context); err != nil {
 				return err
@@ -477,7 +569,7 @@ func Validate(value Report, context ValidationContext) error {
 		if len(value.Questions) == 0 {
 			return errors.New("needs_clarification report requires at least one question")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || len(value.Evidence) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || len(value.Evidence) != 0 {
 			return errors.New("needs_clarification report must contain only questions")
 		}
 		if err := validateQuestions(value.Questions); err != nil {
@@ -487,7 +579,7 @@ func Validate(value Report, context ValidationContext) error {
 		if len(value.Evidence) == 0 {
 			return errors.New("cannot_proceed report requires evidence")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || len(value.Questions) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || len(value.Questions) != 0 {
 			return errors.New("cannot_proceed report must contain only evidence")
 		}
 		if err := validateEvidence(value.Evidence); err != nil {
@@ -662,6 +754,12 @@ func isTestReport(value Report) bool {
 	return value.Role == "test" && value.Stage == "test"
 }
 
+// isReviewReport identifies the coordinator-owned specification-review
+// envelope.
+func isReviewReport(value Report) bool {
+	return value.Role == "spec_review" && value.Stage == "review"
+}
+
 // hasExemption reports whether one fixed exemption category is present.
 func hasExemption(values []Exemption, wanted Exemption) bool {
 	for _, value := range values {
@@ -765,6 +863,61 @@ func validateTestHandoff(value TestHandoff, context ValidationContext) error {
 		}
 	}
 	return nil
+}
+
+const maxReviewFindings = 64
+
+// validateReviewHandoff enforces exact-commit identity and the complete
+// actionable finding contract before a coordinator accepts review output.
+func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error {
+	if !validCommitSHA(value.ReviewedSHA) {
+		return errors.New("review handoff reviewed_sha must contain exactly 40 or 64 lowercase hexadecimal characters")
+	}
+	if context.CheckpointSHA != "" && value.ReviewedSHA != context.CheckpointSHA {
+		return fmt.Errorf("review handoff reviewed_sha %q does not match checkpoint %q", value.ReviewedSHA, context.CheckpointSHA)
+	}
+	if len(value.Findings) > maxReviewFindings {
+		return fmt.Errorf("review handoff findings exceeds %d entries", maxReviewFindings)
+	}
+	for index, finding := range value.Findings {
+		for field, text := range map[string]string{
+			"location":             finding.Location,
+			"claim":                finding.Claim,
+			"evidence":             finding.Evidence,
+			"suggested_resolution": finding.SuggestedResolution,
+			"suggested_owner":      finding.SuggestedOwner,
+		} {
+			if err := validateText(fmt.Sprintf("review findings[%d].%s", index, field), text, maxTextRunes, true); err != nil {
+				return err
+			}
+		}
+		switch finding.Severity {
+		case ReviewSeverityBlocker, ReviewSeverityAdvisory:
+		default:
+			return fmt.Errorf("unsupported review finding severity %q", finding.Severity)
+		}
+		switch finding.Category {
+		case ReviewCategoryCorrectness, ReviewCategorySecurity, ReviewCategorySpecification, ReviewCategoryDocumentedStandards, ReviewCategoryTaste, ReviewCategoryScope:
+		default:
+			return fmt.Errorf("unsupported review finding category %q", finding.Category)
+		}
+	}
+	return nil
+}
+
+// validCommitSHA validates the immutable commit identity carried by a review
+// handoff without importing the GitHub adapter into the report package.
+func validCommitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // validateTestPath applies the report-layer safe default test ownership rules;

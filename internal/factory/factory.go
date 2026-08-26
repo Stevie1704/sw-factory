@@ -30,7 +30,7 @@ type Factory interface {
 	// RunBaseline evaluates the frozen repository gate model before agent edits.
 	RunBaseline(context.Context, BaselineRequest) (BaselineResult, error)
 	RunGate(context.Context, RunGateRequest) (gate.Result, error)
-	// StartAgent launches the visible Codex test or implementation role for an active run.
+	// StartAgent launches the visible Codex test, implementation, or review role for an active run.
 	StartAgent(context.Context, AgentRequest) (AgentLaunchResult, error)
 	// AcceptAgentReport validates and accepts one structured visible-agent handoff.
 	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)

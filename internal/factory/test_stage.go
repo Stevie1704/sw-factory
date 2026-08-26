@@ -423,6 +423,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	handoff := convertTestHandoff(*value.TestHandoff)
 	run.TestCheckpointSHA = checkpoint.SHA
 	run.CheckpointSHA = checkpoint.SHA
+	run.SpecificationReview = nil
 	run.TestHandoff = &handoff
 	run.ProtectedTestPaths = protected
 	run.Stage = store.StageImplementation

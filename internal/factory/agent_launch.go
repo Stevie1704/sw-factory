@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -66,8 +67,24 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err := validateAgentRequest(request); err != nil {
 		return AgentLaunchResult{}, err
 	}
+	isReview := request.Role == "spec_review" && request.Stage == store.StageReview
+	var reviewContext *prompt.ReviewContext
+	if isReview {
+		if err := s.ensureReviewStart(ctx, *run); err != nil {
+			return AgentLaunchResult{}, err
+		}
+		reviewContext, err = reviewContextForRun(ctx, *run, runStore)
+		if err != nil {
+			return AgentLaunchResult{}, err
+		}
+	}
 	if err := s.ensureBaselineReady(ctx, runStore, *run, packet); err != nil {
 		return AgentLaunchResult{}, err
+	}
+	if isReview {
+		if err := s.publishSpecificationReviewStatus(ctx, registration, *run, github.CommitStatusPending, "specification review in progress"); err != nil {
+			return AgentLaunchResult{}, fmt.Errorf("publish pending specification review status: %w", err)
+		}
 	}
 	if request.Role == "implementation" && run.Stage == store.StageClaim && !run.TestStageSkipped {
 		return AgentLaunchResult{}, errors.New("implementation agent cannot bypass the configured test stage")
@@ -114,23 +131,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	role := request.Role
 	stage := request.Stage
-	promptText, err := prompt.Build(prompt.Request{
-		InvocationID:            invocationID,
-		RunID:                   run.ID,
-		Role:                    role,
-		Stage:                   string(stage),
-		SpecificationPacket:     run.SpecificationPacket,
-		RepositoryGuidance:      packet.Issue.Body,
-		TestHandoff:             run.TestHandoff,
-		ProtectedTestPaths:      run.ProtectedTestPaths,
-		TestExemption:           run.TestExemption,
-		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
-		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
-	})
-	if err != nil {
-		return AgentLaunchResult{}, err
-	}
-	if err := writeInvocationPacket(packetDirectory, InvocationPacket{
+	invocationPacket := InvocationPacket{
 		SchemaVersion:       invocationPacketVersion,
 		InvocationID:        invocationID,
 		RunID:               run.ID,
@@ -142,7 +143,27 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		TestHandoff:         run.TestHandoff,
 		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
 		TestExemption:       run.TestExemption,
-	}); err != nil {
+		ReviewContext:       reviewContext,
+	}
+	promptRequest := prompt.Request{
+		InvocationID:            invocationID,
+		RunID:                   run.ID,
+		Role:                    role,
+		Stage:                   string(stage),
+		SpecificationPacket:     run.SpecificationPacket,
+		RepositoryGuidance:      packet.Issue.Body,
+		TestHandoff:             run.TestHandoff,
+		ProtectedTestPaths:      run.ProtectedTestPaths,
+		TestExemption:           run.TestExemption,
+		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
+		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
+		ReviewContext:           reviewContext,
+	}
+	promptText, err := prompt.Build(promptRequest)
+	if err != nil {
+		return AgentLaunchResult{}, err
+	}
+	if err := writeInvocationPacket(packetDirectory, invocationPacket); err != nil {
 		return AgentLaunchResult{}, err
 	}
 	invocation := store.Invocation{
@@ -212,6 +233,21 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, fmt.Errorf("start worker for visible agent: %w", err)
 	}
 	workerStarted = true
+	if isReview {
+		reviewContext.CurrentDiff, err = s.captureReviewDiff(ctx, *run)
+		if err != nil {
+			return AgentLaunchResult{}, err
+		}
+		invocationPacket.ReviewContext = reviewContext
+		if err := writeInvocationPacket(packetDirectory, invocationPacket); err != nil {
+			return AgentLaunchResult{}, err
+		}
+		promptRequest.ReviewContext = reviewContext
+		promptText, err = prompt.Build(promptRequest)
+		if err != nil {
+			return AgentLaunchResult{}, err
+		}
+	}
 	if authPath != "" {
 		if err := seeder.SeedCodexCredentials(ctx, worker.CredentialSeedRequest{RunID: run.ID, AuthPath: authPath}); err != nil {
 			return AgentLaunchResult{}, err
@@ -237,6 +273,10 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	agentSurface := runWorkspace.Implementation
 	if role == "test" {
 		agentSurface = runWorkspace.Checks
+	} else if isReview {
+		// The Codex adapter creates a fresh command-backed surface for the
+		// reviewer, rather than reusing the implementation surface.
+		agentSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: "spec-review"}
 	}
 	cleanupSurface = agentSurface
 	invocation.WorkspaceID = string(runWorkspace.ID)
@@ -254,6 +294,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		RunID:           run.ID,
 		Role:            role,
 		Stage:           string(stage),
+		CheckpointSHA:   reviewCheckpointSHA(isReview, run.CheckpointSHA),
 		WorkspaceID:     runWorkspace.ID,
 		Surface:         agentSurface,
 		Prompt:          promptText,
@@ -261,10 +302,15 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		ReasoningEffort: request.ReasoningEffort,
 	})
 	if err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("launch Codex implementation agent: %w", err)
+		return AgentLaunchResult{}, fmt.Errorf("launch Codex %s agent: %w", role, err)
 	}
 	if session.NativeSessionID != "" {
 		invocation.NativeSessionID = session.NativeSessionID
+	}
+	if session.Surface.ID != "" {
+		agentSurface = session.Surface
+		cleanupSurface = agentSurface
+		invocation.ImplementationSurfaceID = string(agentSurface.ID)
 	}
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist Codex session identity: %w", err)
@@ -274,7 +320,20 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	run.Status = store.StatusActive
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("persist implementation stage: %w", err)
+		return AgentLaunchResult{}, fmt.Errorf("persist %s stage: %w", role, err)
+	}
+	if isReview {
+		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, *run); err != nil {
+			return AgentLaunchResult{}, err
+		}
 	}
 	return AgentLaunchResult{Invocation: invocation, Prompt: promptText}, nil
+}
+
+// reviewCheckpointSHA supplies an exact checkpoint only to the review harness.
+func reviewCheckpointSHA(review bool, checkpoint string) string {
+	if !review {
+		return ""
+	}
+	return checkpoint
 }

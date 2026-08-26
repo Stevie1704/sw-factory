@@ -12,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
@@ -112,19 +113,22 @@ type InvocationPacket struct {
 	// CheckRepair contains the complete failed-check context when this
 	// invocation is a native-resumed repair.
 	CheckRepair *CheckRepairPacket `json:"check_repair,omitempty"`
+	// ReviewContext contains the exact checkpoint and bounded review inputs for
+	// an independent specification-review invocation.
+	ReviewContext *prompt.ReviewContext `json:"review_context,omitempty"`
 }
 
 const (
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version three adds the test-stage handoff and protected-path projection.
-	invocationPacketVersion = 3
+	// Version four adds the independent-review context projection.
+	invocationPacketVersion = 4
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
 
 // StartAgent prepares the frozen invocation packet, starts the pinned worker,
-// creates the visible run surfaces, and launches the automatic test or
-// implementation Codex role.
+// creates the visible run surfaces, and launches the selected visible Codex
+// role for testing, implementation, or immutable specification review.
 func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result AgentLaunchResult, returnErr error) {
 	request = normalizeAgentRequest(request)
 	if err := validateAgentRequest(request); err != nil {
@@ -133,7 +137,7 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	registration, runStore, run, err := s.openAgentStartRunStore(ctx)
+	registration, runStore, run, err := s.openAgentStartRunStore(ctx, request)
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
@@ -208,6 +212,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		Stage:          string(invocation.Stage),
 		WorktreePath:   run.Worktree,
 		PermittedPaths: invocation.PermittedPaths,
+		CheckpointSHA:  run.CheckpointSHA,
 	}
 	inspector := s.worktreeInspector()
 	if inspector == nil {
@@ -221,6 +226,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	validationContext.WorktreeObserved = true
 	if run.CheckpointSHA != "" && state.HeadSHA != run.CheckpointSHA {
 		return AgentResult{}, fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", state.HeadSHA, run.CheckpointSHA)
+	}
+	if invocation.Role == "spec_review" && len(state.ChangedPaths) != 0 {
+		return AgentResult{}, errors.New("specification reviewer changed the immutable checkpoint worktree")
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
@@ -335,6 +343,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if invocation.Stage == store.StageTest {
 		return s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
 	}
+	if invocation.Role == "spec_review" && invocation.Stage == store.StageReview {
+		return s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
+	}
 	run.Stage = store.StageImplementation
 	switch value.Outcome {
 	case report.OutcomeNeedsClarification:
@@ -349,6 +360,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		run.ClarificationNotificationSent = false
 	default:
 		run.Status = store.StatusActive
+		if value.Handoff != nil {
+			run.ImplementationHandoff = implementationHandoffFromReport(*value.Handoff)
+		}
 		run.PendingQuestions = nil
 		run.ClarificationCommentID = ""
 		run.ClarificationNotificationSent = false
@@ -389,20 +403,19 @@ func normalizeAgentRequest(request AgentRequest) AgentRequest {
 // validateAgentRequest rejects roles and stages outside the supported visible
 // role seams before external side effects occur.
 func validateAgentRequest(request AgentRequest) error {
-	if request.Role != "" && request.Role != "implementation" && request.Role != "test" {
+	if request.Role != "" && request.Role != "implementation" && request.Role != "test" && request.Role != "spec_review" {
 		return fmt.Errorf("agent role %q is not supported", request.Role)
 	}
-	if request.Stage != "" && request.Stage != store.StageTest && request.Stage != store.StageImplementation {
+	if request.Stage != "" && request.Stage != store.StageTest && request.Stage != store.StageImplementation && request.Stage != store.StageReview {
 		return fmt.Errorf("agent stage %q is not supported", request.Stage)
 	}
-	if (request.Role == "test") != (request.Stage == store.StageTest) && request.Role != "" && request.Stage != "" {
-		return errors.New("test role requires test stage and implementation role requires implementation stage")
-	}
-	if request.Role == "implementation" && request.Stage == store.StageTest {
-		return errors.New("implementation role cannot run in test stage")
-	}
-	if request.Role == "test" && request.Stage == store.StageImplementation {
-		return errors.New("test role cannot run in implementation stage")
+	if request.Role != "" && request.Stage != "" {
+		validPair := (request.Role == "test" && request.Stage == store.StageTest) ||
+			(request.Role == "implementation" && request.Stage == store.StageImplementation) ||
+			(request.Role == "spec_review" && request.Stage == store.StageReview)
+		if !validPair {
+			return errors.New("agent role and stage must be a supported pair")
+		}
 	}
 	if request.Model != "" && strings.ContainsAny(request.Model, "\x00\r\n ") {
 		return errors.New("agent model contains unsafe characters")
@@ -485,13 +498,13 @@ func sameStrings(left, right []string) bool {
 // before it starts or resumes a harness session.
 func validateAgentRunState(run store.Run) error {
 	if run.Status != store.StatusActive {
-		return fmt.Errorf("cannot start implementation agent from run status %q", run.Status)
+		return fmt.Errorf("cannot start visible agent from run status %q", run.Status)
 	}
 	switch run.Stage {
-	case store.StageClaim, store.StageTest, store.StageImplementation:
+	case store.StageClaim, store.StageTest, store.StageImplementation, store.StageDraftPR, store.StageReview:
 		return nil
 	default:
-		return fmt.Errorf("cannot start implementation agent from run stage %q", run.Stage)
+		return fmt.Errorf("cannot start visible agent from run stage %q", run.Stage)
 	}
 }
 
@@ -501,6 +514,9 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 		if run.Stage == store.StageTest {
 			request.Role = "test"
 			request.Stage = store.StageTest
+		} else if run.Stage == store.StageDraftPR {
+			request.Role = "spec_review"
+			request.Stage = store.StageReview
 		} else {
 			request.Role = "implementation"
 			request.Stage = store.StageImplementation
@@ -509,6 +525,8 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 	if request.Role == "" {
 		if request.Stage == store.StageTest {
 			request.Role = "test"
+		} else if request.Stage == store.StageReview {
+			request.Role = "spec_review"
 		} else {
 			request.Role = "implementation"
 		}
@@ -516,6 +534,8 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 	if request.Stage == "" {
 		if request.Role == "test" {
 			request.Stage = store.StageTest
+		} else if request.Role == "spec_review" {
+			request.Stage = store.StageReview
 		} else {
 			request.Stage = store.StageImplementation
 		}
@@ -528,6 +548,12 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 	}
 	if request.Role == "implementation" && run.Stage == store.StageTest {
 		return AgentRequest{}, errors.New("implementation agent cannot bypass the test stage")
+	}
+	if request.Role == "spec_review" && run.Stage != store.StageDraftPR {
+		return AgentRequest{}, fmt.Errorf("specification reviewer requires draft_pr stage, not %q", run.Stage)
+	}
+	if request.Role == "implementation" && run.Stage != store.StageClaim && run.Stage != store.StageImplementation {
+		return AgentRequest{}, fmt.Errorf("implementation agent requires claim or implementation stage, not %q", run.Stage)
 	}
 	return request, nil
 }
@@ -553,6 +579,12 @@ func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStor
 // when the claimed run has a status comment, retaining a direct-store fallback
 // for legacy runs that predate that supervision record.
 func (s *Service) persistAgentRunState(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run) error {
+	if previous.CheckpointSHA != "" && next.CheckpointSHA != previous.CheckpointSHA {
+		next.SpecificationReview = nil
+	}
+	if next.SpecificationReview != nil && next.SpecificationReview.CheckpointSHA != next.CheckpointSHA {
+		next.SpecificationReview = nil
+	}
 	if next.StatusCommentID == "" || s.deps.GitHub == nil {
 		return saveRunWithRetry(ctx, runStore, next)
 	}

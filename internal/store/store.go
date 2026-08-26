@@ -19,7 +19,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 19
+const CurrentSchemaVersion = 20
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -181,6 +181,58 @@ type TestExemption struct {
 	Justification string `json:"justification"`
 }
 
+// HandoffAcceptance maps one implementation criterion to observable evidence
+// retained for the independent reviewer.
+type HandoffAcceptance struct {
+	// Criterion identifies the frozen requirement covered by the handoff.
+	Criterion string `json:"criterion"`
+	// Evidence identifies the command or artifact supporting the criterion.
+	Evidence string `json:"evidence"`
+}
+
+// ImplementationHandoff is the bounded structured result transferred from
+// implementation to the independent specification reviewer.
+type ImplementationHandoff struct {
+	// ChangeSummary describes the accepted implementation change.
+	ChangeSummary string `json:"change_summary"`
+	// AcceptanceMapping connects frozen criteria to observable evidence.
+	AcceptanceMapping []HandoffAcceptance `json:"acceptance_mapping"`
+	// ProductionFilesChanged lists the implementation paths reported as changed.
+	ProductionFilesChanged []string `json:"production_files_changed"`
+	// FocusedCommands lists commands the implementation role ran.
+	FocusedCommands []string `json:"focused_commands"`
+	// KnownLimitations carries bounded visible limitations.
+	KnownLimitations []string `json:"known_limitations,omitempty"`
+}
+
+// ReviewFinding is the durable finding projection shared by status and PR
+// renderers without retaining the reviewer transcript.
+type ReviewFinding struct {
+	// Location identifies the repository path and optional line or symbol.
+	Location string `json:"location"`
+	// Claim states the reviewer's observation.
+	Claim string `json:"claim"`
+	// Evidence identifies observable support for the claim.
+	Evidence string `json:"evidence"`
+	// Severity is blocker or advisory as proposed by the reviewer.
+	Severity string `json:"severity"`
+	// Category identifies the bounded policy category.
+	Category string `json:"category"`
+	// SuggestedResolution makes the finding actionable.
+	SuggestedResolution string `json:"suggested_resolution"`
+	// SuggestedOwner identifies the suggested repair owner.
+	SuggestedOwner string `json:"suggested_owner"`
+}
+
+// SpecificationReview is the latest review result and its exact checkpoint
+// identity. A result is stale as soon as the run checkpoint changes.
+type SpecificationReview struct {
+	// CheckpointSHA identifies the exact commit reviewed.
+	CheckpointSHA string `json:"checkpoint_sha"`
+	// Findings contains every accepted complete finding.
+	Findings []ReviewFinding `json:"findings"`
+}
+
 // ProtectedTestPath records the content identity implementation must preserve.
 type ProtectedTestPath struct {
 	// Path is the repository-relative protected test path.
@@ -206,6 +258,10 @@ type Run struct {
 	TestCheckpointSHA string
 	// TestHandoff is the accepted structured test-stage transfer packet.
 	TestHandoff *TestHandoff
+	// ImplementationHandoff is the accepted implementation transfer packet.
+	ImplementationHandoff *ImplementationHandoff
+	// SpecificationReview is the latest exact-checkpoint review result.
+	SpecificationReview *SpecificationReview
 	// TestExemption records a pre-authorized or technical test-stage exemption.
 	TestExemption *TestExemption
 	// ProtectedTestPaths records every test-stage path and its checkpoint hash.
@@ -446,7 +502,8 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
-		       test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+		       test_handoff, implementation_handoff, specification_review,
+		       test_exemption, protected_test_paths, test_stage_skipped,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -469,7 +526,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
-		       test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+		       test_handoff, implementation_handoff, specification_review,
+		       test_exemption, protected_test_paths, test_stage_skipped,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -489,7 +547,8 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, testCheckpointSHA string
-	var testHandoffJSON, testExemptionJSON, protectedTestPathsJSON string
+	var testHandoffJSON, implementationHandoffJSON, specificationReviewJSON string
+	var testExemptionJSON, protectedTestPathsJSON string
 	var pendingQuestionsJSON, clarificationCommentID, createdAt, updatedAt string
 	var clarificationNotificationSent bool
 	if err := row.Scan(
@@ -504,6 +563,8 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&baseCheckpointSHA,
 		&testCheckpointSHA,
 		&testHandoffJSON,
+		&implementationHandoffJSON,
+		&specificationReviewJSON,
 		&testExemptionJSON,
 		&protectedTestPathsJSON,
 		&run.TestStageSkipped,
@@ -551,6 +612,18 @@ func scanRun(row *sql.Row) (*Run, error) {
 		run.TestHandoff = &TestHandoff{}
 		if err := json.Unmarshal([]byte(testHandoffJSON), run.TestHandoff); err != nil {
 			return nil, fmt.Errorf("decode test handoff: %w", err)
+		}
+	}
+	if implementationHandoffJSON != "" {
+		run.ImplementationHandoff = &ImplementationHandoff{}
+		if err := json.Unmarshal([]byte(implementationHandoffJSON), run.ImplementationHandoff); err != nil {
+			return nil, fmt.Errorf("decode implementation handoff: %w", err)
+		}
+	}
+	if specificationReviewJSON != "" {
+		run.SpecificationReview = &SpecificationReview{}
+		if err := json.Unmarshal([]byte(specificationReviewJSON), run.SpecificationReview); err != nil {
+			return nil, fmt.Errorf("decode specification review: %w", err)
 		}
 	}
 	if testExemptionJSON != "" {
@@ -710,6 +783,55 @@ func validateTestProjection(run Run) error {
 			}
 		}
 	}
+	if run.ImplementationHandoff != nil {
+		if strings.TrimSpace(run.ImplementationHandoff.ChangeSummary) == "" || strings.ContainsAny(run.ImplementationHandoff.ChangeSummary, "\x00\r\n") {
+			return errors.New("implementation handoff change summary is required and must be single-line")
+		}
+		if len(run.ImplementationHandoff.AcceptanceMapping) == 0 || len(run.ImplementationHandoff.ProductionFilesChanged) == 0 || len(run.ImplementationHandoff.FocusedCommands) == 0 {
+			return errors.New("implementation handoff is incomplete")
+		}
+		for _, mapping := range run.ImplementationHandoff.AcceptanceMapping {
+			if strings.TrimSpace(mapping.Criterion) == "" || strings.TrimSpace(mapping.Evidence) == "" || strings.ContainsAny(mapping.Criterion+mapping.Evidence, "\x00\r\n") {
+				return errors.New("implementation handoff acceptance mapping is incomplete")
+			}
+		}
+		for _, path := range run.ImplementationHandoff.ProductionFilesChanged {
+			if err := validateStoreRelativePath(path); err != nil {
+				return fmt.Errorf("implementation handoff production file: %w", err)
+			}
+		}
+	}
+	if run.SpecificationReview != nil {
+		if run.SpecificationReview.CheckpointSHA != run.CheckpointSHA {
+			return errors.New("specification review must match the run checkpoint SHA")
+		}
+		if !validGateCheckpointSHA(run.SpecificationReview.CheckpointSHA) {
+			return errors.New("specification review checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
+		}
+		if len(run.SpecificationReview.Findings) > 64 {
+			return errors.New("specification review findings exceed 64 entries")
+		}
+		for index, finding := range run.SpecificationReview.Findings {
+			for field, value := range map[string]string{
+				"location": finding.Location, "claim": finding.Claim, "evidence": finding.Evidence,
+				"suggested_resolution": finding.SuggestedResolution, "suggested_owner": finding.SuggestedOwner,
+			} {
+				if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+					return fmt.Errorf("specification review finding %d %s is required and must be single-line", index, field)
+				}
+			}
+			switch finding.Severity {
+			case "blocker", "advisory":
+			default:
+				return fmt.Errorf("unsupported specification review severity %q", finding.Severity)
+			}
+			switch finding.Category {
+			case "correctness", "security", "specification", "documented_standards", "taste", "scope":
+			default:
+				return fmt.Errorf("unsupported specification review category %q", finding.Category)
+			}
+		}
+	}
 	return nil
 }
 
@@ -801,6 +923,30 @@ func testHandoffJSON(value *TestHandoff) string {
 	return string(data)
 }
 
+// implementationHandoffJSON serializes a nullable implementation handoff.
+func implementationHandoffJSON(value *ImplementationHandoff) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// specificationReviewJSON serializes a nullable exact-checkpoint review.
+func specificationReviewJSON(value *SpecificationReview) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 // testExemptionJSON serializes a nullable test exemption projection.
 func testExemptionJSON(value *TestExemption) string {
 	if value == nil {
@@ -840,6 +986,8 @@ func runValues(run Run) []any {
 		run.BaseCheckpointSHA,
 		run.TestCheckpointSHA,
 		testHandoffJSON(run.TestHandoff),
+		implementationHandoffJSON(run.ImplementationHandoff),
+		specificationReviewJSON(run.SpecificationReview),
 		testExemptionJSON(run.TestExemption),
 		protectedTestPathsJSON(run.ProtectedTestPaths),
 		run.TestStageSkipped,
@@ -874,7 +1022,8 @@ const saveRunStatement = `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
 			checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
-			test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+			test_handoff, implementation_handoff, specification_review,
+			test_exemption, protected_test_paths, test_stage_skipped,
 			image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
 			lifecycle_notification_sent,
@@ -888,7 +1037,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -901,6 +1050,8 @@ const saveRunStatement = `
 			base_checkpoint_sha = excluded.base_checkpoint_sha,
 			test_checkpoint_sha = excluded.test_checkpoint_sha,
 			test_handoff = excluded.test_handoff,
+			implementation_handoff = excluded.implementation_handoff,
+			specification_review = excluded.specification_review,
 			test_exemption = excluded.test_exemption,
 			protected_test_paths = excluded.protected_test_paths,
 			test_stage_skipped = excluded.test_stage_skipped,
@@ -932,7 +1083,8 @@ const saveRunIfRevisionStatement = `
 		UPDATE operational_runs SET
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
 			checkpoint_sha = ?, base_checkpoint_sha = ?, test_checkpoint_sha = ?,
-			test_handoff = ?, test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
+			test_handoff = ?, implementation_handoff = ?, specification_review = ?,
+			test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
 			image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
 			lifecycle_notification_sent = ?,
@@ -1835,6 +1987,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			} {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 19: %w", err)
+				}
+			}
+		case 20:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN implementation_handoff TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN specification_review TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 20: %w", err)
 				}
 			}
 		default:

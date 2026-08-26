@@ -70,6 +70,8 @@ func Run(request Request) int {
 	flags.Var(&observedFailures, "observed-failure", "red-test evidence kind=detail; may be repeated")
 	uncoveredCriteria := stringList{}
 	flags.Var(&uncoveredCriteria, "uncovered-criterion", "acceptance criterion not covered by this test handoff; may be repeated")
+	findings := reviewFindingList{}
+	flags.Var(&findings, "finding", "review finding location|claim|evidence|severity|category|resolution|owner; may be repeated")
 	questions := pairList{}
 	flags.Var(&questions, "question", "question-id=question text; may be repeated")
 	evidence := pairList{}
@@ -125,6 +127,12 @@ func Run(request Request) int {
 		NativeSessionID: *nativeSessionID,
 		ReportedAt:      request.Now().UTC(),
 	}
+	if identity["role"] == "spec_review" && identity["stage"] == "review" && value.Outcome == report.OutcomeCompleted {
+		value.ReviewHandoff = &report.ReviewHandoff{
+			ReviewedSHA: lookup("FACTORY_CHECKPOINT_SHA"),
+			Findings:    append([]report.ReviewFinding(nil), findings...),
+		}
+	}
 	for _, item := range exemptions {
 		value.Exemptions = append(value.Exemptions, report.Exemption(item))
 	}
@@ -166,6 +174,10 @@ func Run(request Request) int {
 				value.TestHandoff.ObservedFailureEvidence = append(value.TestHandoff.ObservedFailureEvidence, report.Evidence{Kind: pair.Key, Detail: pair.Value})
 			}
 		}
+	} else if value.ReviewHandoff != nil {
+		// Review findings are assembled above from the dedicated --finding
+		// flags; ordinary implementation handoff flags are intentionally not
+		// accepted as a review payload.
 	} else {
 		for _, pair := range acceptance {
 			value.Handoff = ensureHandoff(value.Handoff)
@@ -286,5 +298,50 @@ func (value *pairList) Set(input string) error {
 		return errors.New("value must use nonempty key=value form")
 	}
 	*value = append(*value, pair{Key: key, Value: item})
+	return nil
+}
+
+// reviewFindingList parses one complete finding from seven pipe-separated
+// fields. The worker prompt supplies the order so each accepted finding is
+// independently routable without a second mutable parser state.
+type reviewFindingList []report.ReviewFinding
+
+// String renders the compact finding form used by flag help and tests.
+func (value *reviewFindingList) String() string {
+	parts := make([]string, 0, len(*value))
+	for _, finding := range *value {
+		parts = append(parts, strings.Join([]string{
+			finding.Location,
+			finding.Claim,
+			finding.Evidence,
+			string(finding.Severity),
+			string(finding.Category),
+			finding.SuggestedResolution,
+			finding.SuggestedOwner,
+		}, "|"))
+	}
+	return strings.Join(parts, ",")
+}
+
+// Set appends one complete structured review finding.
+func (value *reviewFindingList) Set(input string) error {
+	parts := strings.Split(input, "|")
+	if len(parts) != 7 {
+		return errors.New("finding must use location|claim|evidence|severity|category|resolution|owner form")
+	}
+	for index, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			return fmt.Errorf("finding field %d must not be empty", index+1)
+		}
+	}
+	*value = append(*value, report.ReviewFinding{
+		Location:            parts[0],
+		Claim:               parts[1],
+		Evidence:            parts[2],
+		Severity:            report.ReviewSeverity(parts[3]),
+		Category:            report.ReviewCategory(parts[4]),
+		SuggestedResolution: parts[5],
+		SuggestedOwner:      parts[6],
+	})
 	return nil
 }

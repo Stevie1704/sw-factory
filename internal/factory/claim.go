@@ -456,7 +456,7 @@ func (s *Service) openActiveRunStore(ctx context.Context) (config.RepositoryRegi
 
 // openAgentStartRunStore opens the active run for the one progression seam
 // allowed to cross a clean claim-to-first-invocation process boundary.
-func (s *Service) openAgentStartRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
+func (s *Service) openAgentStartRunStore(ctx context.Context, request AgentRequest) (config.RepositoryRegistration, RunStore, *store.Run, error) {
 	registration, runStore, err := s.openRunStore(ctx)
 	if err != nil {
 		return config.RepositoryRegistration{}, nil, nil, err
@@ -466,7 +466,7 @@ func (s *Service) openAgentStartRunStore(ctx context.Context) (config.Repository
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
-	if err := s.ensureAgentStartup(ctx, registration, runStore, run); err != nil {
+	if err := s.ensureAgentStartup(ctx, registration, runStore, run, request); err != nil {
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
@@ -494,9 +494,10 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 }
 
 // ensureAgentStartup permits only clean claim/test or explicitly skipped-test
-// states to cross into their first visible invocation. Every later or
+// states to cross into their first visible invocation. A clean draft checkpoint
+// may also cross into its independent immutable review. Every other later or
 // interrupted state retains the typed #24 refusal until reconciliation exists.
-func (s *Service) ensureAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) error {
+func (s *Service) ensureAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) error {
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()
 	if s.startupChecked {
@@ -516,7 +517,11 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		run.LastCommandOutcome == string(CommandAccepted) {
 		return nil
 	}
+	reviewStart := request.Role == "spec_review" || (request.Role == "" && run.Stage == store.StageDraftPR)
 	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && run.TestStageSkipped)
+	if reviewStart && run.Stage == store.StageDraftPR {
+		return nil
+	}
 	if !cleanStart || run.Status != store.StatusActive {
 		s.startupErr = recoveryRequiredError(diagnosis)
 		return s.startupErr
@@ -619,7 +624,25 @@ func statusCommentBody(run store.Run) string {
 			questions += fmt.Sprintf("- `%s`: %s\n", safeStatusCommentValue(question.ID), safeStatusCommentValue(question.Prompt))
 		}
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, checkRepair, pullRequest, lifecycle, harness, questions, commandFeedback)
+	review := specificationReviewStatusComment(run)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
+}
+
+// specificationReviewStatusComment renders the complete accepted review
+// finding contract in the single editable issue supervision comment.
+func specificationReviewStatusComment(run store.Run) string {
+	if run.SpecificationReview == nil {
+		if run.Stage != store.StageReview {
+			return ""
+		}
+		return fmt.Sprintf("\n### Specification review\n\n- status: pending for checkpoint `%s`\n", safeStatusCommentValue(run.CheckpointSHA))
+	}
+	blocking, advisory := reviewFindingCounts(run.SpecificationReview.Findings)
+	result := fmt.Sprintf("\n### Specification review\n\n- reviewed checkpoint: `%s`\n- outcome: %d blocking findings, %d advisory findings\n", safeStatusCommentValue(run.SpecificationReview.CheckpointSHA), blocking, advisory)
+	for index, finding := range run.SpecificationReview.Findings {
+		result += fmt.Sprintf("\n#### Finding %d — %s/%s\n\n- location: `%s`\n- claim: %s\n- evidence: %s\n- suggested resolution: %s\n- suggested owner: `%s`\n", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category), safeStatusCommentValue(finding.Location), safeStatusCommentValue(finding.Claim), safeStatusCommentValue(finding.Evidence), safeStatusCommentValue(finding.SuggestedResolution), safeStatusCommentValue(finding.SuggestedOwner))
+	}
+	return result
 }
 
 // safeStatusCommentValue keeps command feedback single-line and prevents

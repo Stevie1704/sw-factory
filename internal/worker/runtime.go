@@ -1343,7 +1343,7 @@ func reservedEnvironmentName(name string) bool {
 // coordinator to a visible harness rather than arbitrary worker commands.
 func interactiveProtocolEnvironmentName(name string) bool {
 	switch strings.ToUpper(name) {
-	case "FACTORY_INVOCATION_ID", "FACTORY_HARNESS", "FACTORY_STAGE", "FACTORY_MODEL", "FACTORY_REASONING_EFFORT":
+	case "FACTORY_INVOCATION_ID", "FACTORY_HARNESS", "FACTORY_STAGE", "FACTORY_CHECKPOINT_SHA", "FACTORY_MODEL", "FACTORY_REASONING_EFFORT":
 		return true
 	default:
 		return false

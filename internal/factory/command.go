@@ -368,6 +368,8 @@ func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store
 // produced for an older specification packet before a new role starts.
 func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPacket) {
 	run.TestHandoff = nil
+	run.ImplementationHandoff = nil
+	run.SpecificationReview = nil
 	run.ProtectedTestPaths = nil
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
@@ -392,6 +394,9 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 func agentRequestForRun(run store.Run) AgentRequest {
 	if run.Stage == store.StageTest {
 		return AgentRequest{RunID: run.ID, Role: "test", Stage: store.StageTest}
+	}
+	if run.Stage == store.StageDraftPR {
+		return AgentRequest{RunID: run.ID, Role: "spec_review", Stage: store.StageReview}
 	}
 	return AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation}
 }
