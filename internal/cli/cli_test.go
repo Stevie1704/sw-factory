@@ -206,6 +206,27 @@ func TestRunPollRejectsPositionalArguments(t *testing.T) {
 	}
 }
 
+// TestRunStartAndStopRejectPositionalArguments keeps lifecycle control
+// explicit and prevents accidental arguments from being treated as paths.
+func TestRunStartAndStopRejectPositionalArguments(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"start", "stop"} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			var output bytes.Buffer
+			code := cli.Run(context.Background(), []string{command, "extra", "--config", configPath}, &output, &output)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
+			}
+			if !strings.Contains(output.String(), command+" does not accept positional arguments") {
+				t.Fatalf("output = %q", output.String())
+			}
+		})
+	}
+}
+
 func TestRunInitRejectsAnUnknownFlag(t *testing.T) {
 	t.Parallel()
 

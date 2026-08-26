@@ -32,6 +32,8 @@ var commandTable = []commandDefinition{
 	{name: "register", handler: runRegister},
 	{name: "bootstrap-labels", handler: runBootstrapLabels},
 	{name: "doctor", handler: runDoctor},
+	{name: "start", handler: runStart},
+	{name: "stop", handler: runStop},
 	{name: "issue", handler: runIssue},
 	{name: "agent", handler: runAgent},
 	{name: "agent-report", handler: runAgentReport},
@@ -146,6 +148,62 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 		return 1
 	}
 	return 1
+}
+
+// runStart starts the persistent polling coordinator and returns when its
+// context is cancelled by factory stop or an operating-system signal.
+func runStart(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("start", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("start does not accept positional arguments"))
+		return 2
+	}
+	if !writeOutput(output, errorsOutput, "factory polling starting\n") {
+		return 1
+	}
+	if err := factory.New(*configPath).Start(ctx); err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "factory polling stopped\n") {
+		return 1
+	}
+	return 0
+}
+
+// runStop signals the persistent polling coordinator without changing any
+// active run state or removing recoverable run artifacts.
+func runStop(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("stop", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("stop does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).Stop(ctx)
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if result.Running {
+		if !writeOutput(output, errorsOutput, "factory stop requested (pid=%d)\n", result.PID) {
+			return 1
+		}
+		return 0
+	}
+	if !writeOutput(output, errorsOutput, "factory is not running\n") {
+		return 1
+	}
+	return 0
 }
 
 // runIssue handles the one-shot issue claim command.
