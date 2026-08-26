@@ -45,6 +45,10 @@ _Avoid_: Reconciliation, recovery
 A typed fail-closed refusal that reports the agreement state and discovered discrepancies without claiming that the run was recovered; issue #21 supersedes it with complete reconciliation.
 _Avoid_: Recovered run, automatic continuation
 
+**Startup diagnosis**:
+A complete pre-claim report of host configuration, external access, repository, terminal, worker, harness, authentication, and operational-store readiness. Every subsystem contributes its own bounded check, and the doctor reports all failures before a run can start.
+_Avoid_: First failure, mid-run diagnosis
+
 **Gate**:
 A repository-declared deterministic command whose result is tied to an exact checkpoint and does not depend on model judgment.
 _Avoid_: Agent check, review

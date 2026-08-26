@@ -18,6 +18,24 @@ factory status --config /Users/me/.config/factory/config.yaml
 
 `factory register` creates the SQLite store before it writes the registration. It does not contact GitHub, create labels, or write into the registered repository.
 
+Before claiming an issue, run the complete startup diagnosis:
+
+```sh
+factory doctor --config /Users/me/.config/factory/config.yaml
+```
+
+The doctor reports configuration, GitHub authentication and permissions, the
+factory labels, the checkout's remote/hooks/worktree support, cmux, Docker,
+the pinned worker image, both supported harness executables, interactive-resume
+capabilities, harness authentication sources, and SQLite. It runs every
+contributor even after a failure and returns a nonzero exit status when any
+blocking prerequisite remains. Each failure includes a bounded problem and a
+corrective action; command output and credential contents are never rendered.
+The SQLite check opens the existing store read-only; it does not create,
+migrate, back up, chmod, or initialize store state.
+Missing optional host credential files are warnings because a harness may be
+authenticated during its first visible worker session.
+
 ## Host configuration
 
 The generated host file contains the repository path, GitHub identity, authorized maintainers, polling settings, cmux settings, the checked-in repository configuration path, and the operational-data path.
@@ -316,9 +334,9 @@ Answer commands normally use `/factory answer <question-id> <answer>`; the
 identifier may also be written as `question=`, `question-id=`, or `id=` for
 automation clients, and an answer may begin with `answer=`.
 
-The command grammar also names `claude` for forward-compatible parsing, but the
-current implementation role has only the Codex adapter; selecting Claude is a
-typed `harness_unavailable` rejection until its later adapter is delivered.
+The command grammar and current implementation support both the Codex and Claude
+adapters. A selected harness is still validated against the frozen role policy
+and the startup capability check before an issue can be claimed.
 
 Each comment is processed at most once. The operational store persists a
 monotonic run revision, the processed comment ID watermark, and the revision at

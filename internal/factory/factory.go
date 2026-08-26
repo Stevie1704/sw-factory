@@ -26,6 +26,9 @@ type Factory interface {
 	Init(context.Context) (InitResult, error)
 	Register(context.Context, RegisterRequest) (RegisterResult, error)
 	BootstrapLabels(context.Context) (BootstrapLabelsResult, error)
+	// Doctor runs every configured startup diagnosis and reports whether a run
+	// can be claimed safely.
+	Doctor(context.Context) (DoctorResult, error)
 	RunCoordinator
 	// RunBaseline evaluates the frozen repository gate model before agent edits.
 	RunBaseline(context.Context, BaselineRequest) (BaselineResult, error)
@@ -122,10 +125,13 @@ type Dependencies struct {
 	// Terminal owns visible control and run workspaces.
 	Terminal terminal.TerminalRuntime
 	// Harness owns interactive role lifecycle and native session recovery.
-	Harness     harness.Runtime
-	Now         Clock
-	NewRunID    RunIDGenerator
-	Coordinator string
+	Harness harness.Runtime
+	// HarnessCapabilities resolves static adapter capabilities for startup and
+	// claim checks without launching a worker or terminal surface.
+	HarnessCapabilities harness.CapabilityResolver
+	Now                 Clock
+	NewRunID            RunIDGenerator
+	Coordinator         string
 }
 
 type Service struct {
@@ -244,6 +250,9 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	}
 	if dependencies.Worker == nil {
 		dependencies.Worker = worker.NewDockerRuntime()
+	}
+	if dependencies.HarnessCapabilities == nil {
+		dependencies.HarnessCapabilities = harness.CapabilitiesFor
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }

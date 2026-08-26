@@ -12,6 +12,9 @@ import (
 	"strings"
 )
 
+// DefaultRemoteName is the repository remote used by factory Git operations.
+const DefaultRemoteName = "origin"
+
 // Workspace identifies the fetched base commit and isolated checkout created
 // for one run.
 type Workspace struct {
@@ -228,7 +231,7 @@ func (m *LocalWorktreeManager) Create(ctx context.Context, repositoryPath, targe
 		return Workspace{}, fmt.Errorf("run id: %w", err)
 	}
 
-	if _, err := m.runner().Run(ctx, repositoryPath, []string{"fetch", "--no-tags", "origin", "refs/heads/" + targetBranch}); err != nil {
+	if _, err := m.runner().Run(ctx, repositoryPath, []string{"fetch", "--no-tags", DefaultRemoteName, "refs/heads/" + targetBranch}); err != nil {
 		return Workspace{}, fmt.Errorf("fetch target branch %q: %w", targetBranch, err)
 	}
 	baseOutput, err := m.runner().Run(ctx, repositoryPath, []string{"rev-parse", "FETCH_HEAD"})
@@ -370,7 +373,7 @@ func (m *LocalWorktreeManager) Push(ctx context.Context, request PushRequest) er
 	if err := validateRefPart(request.Branch); err != nil {
 		return fmt.Errorf("push branch: %w", err)
 	}
-	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"push", "--set-upstream", "origin", "HEAD:refs/heads/" + request.Branch}); err != nil {
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"push", "--set-upstream", DefaultRemoteName, "HEAD:refs/heads/" + request.Branch}); err != nil {
 		return fmt.Errorf("push run branch %q: %w", request.Branch, err)
 	}
 	return nil
@@ -391,7 +394,7 @@ func (m *LocalWorktreeManager) SynchronizeBase(ctx context.Context, request Base
 	if err := validateRefPart(request.TargetBranch); err != nil {
 		return fmt.Errorf("base synchronization target branch: %w", err)
 	}
-	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"fetch", "--no-tags", "origin", "refs/heads/" + request.TargetBranch}); err != nil {
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"fetch", "--no-tags", DefaultRemoteName, "refs/heads/" + request.TargetBranch}); err != nil {
 		return fmt.Errorf("fetch base branch %q: %w", request.TargetBranch, err)
 	}
 	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"merge", "--ff-only", "FETCH_HEAD"}); err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -345,6 +346,38 @@ func TestBootstrapLabelsIsTheExplicitLabelCreationPath(t *testing.T) {
 	}
 }
 
+// TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects
+// verifies the startup capability guard runs before an issue is read or a
+// worktree is created.
+func TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+			Path: "/repo", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+			AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"},
+			OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml",
+		}}}},
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return &fakeRunStore{}, nil },
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil },
+		GitHub:         githubAdapter,
+		Worktree:       worktree,
+		HarnessCapabilities: func(string) (harness.Capabilities, error) {
+			return harness.Capabilities{Name: harness.NameCodex}, nil
+		},
+	})
+
+	_, err := service.ClaimIssue(context.Background(), 42)
+	if err == nil || !strings.Contains(err.Error(), "interactive resume") {
+		t.Fatalf("ClaimIssue() error = %v, want interactive-resume refusal", err)
+	}
+	if githubAdapter.issueCalls != 0 || worktree.called {
+		t.Fatalf("claim effects: issue calls=%d worktree=%t, want none", githubAdapter.issueCalls, worktree.called)
+	}
+}
+
 // newClaimService constructs a deterministic service for claim seam tests.
 func newClaimService(githubAdapter *fakeGitHub, worktree *fakeWorktree, runStore *fakeRunStore, repositoryConfig config.RepositoryConfig) *factory.Service {
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
@@ -404,6 +437,7 @@ func validRepositoryConfig() config.RepositoryConfig {
 type fakeGitHub struct {
 	issueValue       github.Issue
 	issueErr         error
+	issueCalls       int
 	createdLabels    []github.Label
 	replacedLabels   []string
 	replacedHistory  [][]string
@@ -416,6 +450,7 @@ type fakeGitHub struct {
 
 // Issue returns the configured issue snapshot.
 func (f *fakeGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+	f.issueCalls++
 	if f.issueErr != nil {
 		return github.Issue{}, f.issueErr
 	}

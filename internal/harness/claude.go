@@ -36,7 +36,7 @@ func NewClaude(runtime worker.WorkerRuntime, terminalRuntime terminal.TerminalRu
 
 // Capabilities reports the Claude adapter identity.
 func (*Claude) Capabilities() Capabilities {
-	return Capabilities{Name: NameClaude}
+	return Capabilities{Name: NameClaude, InteractiveResume: true}
 }
 
 // Start launches a fresh Claude Code TUI with an adapter-assigned native

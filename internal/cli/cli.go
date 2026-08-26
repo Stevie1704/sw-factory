@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
@@ -30,6 +31,7 @@ var commandTable = []commandDefinition{
 	{name: "init", handler: runInit},
 	{name: "register", handler: runRegister},
 	{name: "bootstrap-labels", handler: runBootstrapLabels},
+	{name: "doctor", handler: runDoctor},
 	{name: "issue", handler: runIssue},
 	{name: "agent", handler: runAgent},
 	{name: "agent-report", handler: runAgentReport},
@@ -103,6 +105,47 @@ func runBootstrapLabels(ctx context.Context, args []string, defaultConfigPath st
 		return 1
 	}
 	return 0
+}
+
+// runDoctor renders every startup diagnosis and returns a nonzero status when
+// any blocking prerequisite remains unresolved.
+func runDoctor(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("doctor does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).Doctor(ctx)
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	for _, check := range result.Report.Results {
+		if check.Status == doctor.StatusPassed {
+			if !writeOutput(output, errorsOutput, "doctor: %s: passed\n", check.Name) {
+				return 1
+			}
+			continue
+		}
+		if !writeOutput(output, errorsOutput, "doctor: %s: %s\nproblem: %s\naction: %s\n", check.Name, check.Status, check.Problem, check.Action) {
+			return 1
+		}
+	}
+	if result.Ready() {
+		if !writeOutput(output, errorsOutput, "doctor: ready\n") {
+			return 1
+		}
+		return 0
+	}
+	if !writeOutput(output, errorsOutput, "doctor: blocked\n") {
+		return 1
+	}
+	return 1
 }
 
 // runIssue handles the one-shot issue claim command.

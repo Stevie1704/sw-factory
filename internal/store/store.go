@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -481,6 +482,62 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return nil, err
 		}
 		version = CurrentSchemaVersion
+	}
+	closeOnError = false
+	return &Store{db: database, path: absolutePath, schemaVersion: version}, nil
+}
+
+// OpenReadOnly opens an existing, current operational store without creating
+// directories, changing permissions, initializing metadata, migrating schema,
+// or creating a backup. It is the only store entry point used by diagnosis.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	if path == "" {
+		return nil, errors.New("operational store path is required")
+	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve operational store path: %w", err)
+	}
+	storeDirectory := filepath.Dir(absolutePath)
+	if info, err := os.Stat(storeDirectory); err != nil {
+		return nil, fmt.Errorf("inspect operational store directory: %w", err)
+	} else if !info.IsDir() {
+		return nil, errors.New("operational store parent is not a directory")
+	} else if info.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("operational store directory is not private")
+	}
+	info, err := os.Lstat(absolutePath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect operational store: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("operational store is not a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 {
+		return nil, errors.New("operational store file is not private and owner-readable")
+	}
+	if info.Size() == 0 {
+		return nil, &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
+	}
+	database, err := openReadOnlyDatabase(ctx, absolutePath)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = database.Close()
+		}
+	}()
+	version, err := readSchemaVersion(ctx, database, absolutePath)
+	if err != nil {
+		return nil, err
+	}
+	if version > CurrentSchemaVersion {
+		return nil, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
+	}
+	if version < CurrentSchemaVersion {
+		return nil, errors.New("operational store schema requires migration")
 	}
 	closeOnError = false
 	return &Store{db: database, path: absolutePath, schemaVersion: version}, nil
@@ -1688,6 +1745,23 @@ func openConfiguredDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		_ = database.Close()
 		return nil, err
 	}
+	return database, nil
+}
+
+// openReadOnlyDatabase opens a SQLite URI in read-only mode and applies only
+// connection-pool settings, never database-changing pragmas.
+func openReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
+	database, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open operational store read-only: %w", err)
+	}
+	if err := database.PingContext(ctx); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("open operational store read-only: %w", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
 	return database, nil
 }
 

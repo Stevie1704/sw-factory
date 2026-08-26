@@ -11,6 +11,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -142,6 +143,9 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	repositoryConfig, err := s.deps.LoadRepository(registration.RepositoryConfigPath)
 	if err != nil {
 		return IssueResult{}, fmt.Errorf("load repository configuration: %w", err)
+	}
+	if err := harness.ValidateInteractiveResumeCapabilities(repositoryConfig, s.deps.HarnessCapabilities); err != nil {
+		return IssueResult{}, fmt.Errorf("validate harness capabilities before claim: %w", err)
 	}
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	if current != nil {
