@@ -125,7 +125,9 @@ func (r *DockerRuntime) CheckHarness(ctx context.Context, request HarnessCheckRe
 	}
 	command := "command -v " + request.Name + " >/dev/null 2>&1 && " + request.Name + " --version >/dev/null 2>&1"
 	if _, err := r.runDocker(ctx, []string{
-		"run", "--rm", "--pull=never", "--entrypoint", "/bin/sh",
+		"run", "--rm", "--pull=never", "--user", WorkerUser,
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--network", "none",
+		"--entrypoint", "/bin/sh",
 		imageReference(request.Image.Name, request.Image.Digest), "-c", command,
 	}); err != nil {
 		return errors.New("harness executable is not usable in the worker image")
@@ -153,6 +155,7 @@ func (r *DockerRuntime) CheckHarnessAuthentication(ctx context.Context, request 
 	probe := writeCommand + " && " + command
 	if _, err := r.runDockerWithInput(ctx, []string{
 		"run", "--rm", "--pull=never", "--network", "none", "--user", WorkerUser,
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--entrypoint", "/bin/sh", imageReference(request.Image.Name, request.Image.Digest), "-c", probe,
 	}, data); err != nil {
 		return errors.New("harness authentication is not usable in the worker image")

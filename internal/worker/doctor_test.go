@@ -62,6 +62,25 @@ func (f *fakeWorkerDoctorChecker) CheckImage(context.Context, worker.ImageRefere
 
 var _ worker.DoctorChecker = (*fakeWorkerDoctorChecker)(nil)
 
+// TestDockerRuntimeChecksHarnessInsideTheHardenedProbe verifies executable
+// diagnosis uses the same least-privilege boundary as a real worker.
+func TestDockerRuntimeChecksHarnessInsideTheHardenedProbe(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if err := runtime.CheckHarness(context.Background(), worker.HarnessCheckRequest{
+		Image: worker.ImageReference{Name: "ghcr.io/example/factory-worker", Digest: testWorkerDigest},
+		Name:  "codex",
+	}); err != nil {
+		t.Fatalf("CheckHarness() error = %v", err)
+	}
+	line := findLogLine(t, readStubLog(t, logPath), " run ")
+	assertContainsAll(t, line,
+		"--pull=never", "--user 10001:10001", "--cap-drop ALL",
+		"--security-opt no-new-privileges", "--network none",
+		"codex --version", "ghcr.io/example/factory-worker@"+testWorkerDigest,
+	)
+}
+
 // TestDockerRuntimeChecksHarnessAuthenticationInsideThePinnedWorker verifies
 // credential input is streamed to a disposable network-isolated probe rather
 // than passed as a command argument or rendered in output.
@@ -80,7 +99,11 @@ func TestDockerRuntimeChecksHarnessAuthenticationInsideThePinnedWorker(t *testin
 		t.Fatalf("CheckHarnessAuthentication() error = %v", err)
 	}
 	line := findLogLine(t, readStubLog(t, logPath), " run ")
-	assertContainsAll(t, line, "--pull=never", "--network none", "--user 10001:10001", "codex login status", "ghcr.io/example/factory-worker@"+testWorkerDigest)
+	assertContainsAll(t, line,
+		"--pull=never", "--network none", "--user 10001:10001",
+		"--cap-drop ALL", "--security-opt no-new-privileges", "codex login status",
+		"ghcr.io/example/factory-worker@"+testWorkerDigest,
+	)
 	if strings.Contains(line, secret) || strings.Contains(line, authPath) {
 		t.Fatalf("credential material or host path entered Docker arguments: %q", line)
 	}
