@@ -84,25 +84,42 @@ func TestClaudeStartRefusesAResumeSessionIdentifier(t *testing.T) {
 	}
 }
 
-// TestClaudeRefusesAReasoningEffortSelection verifies a validated repository
-// setting is refused rather than silently dropped, because Claude Code exposes
-// no reasoning-effort process argument.
-func TestClaudeRefusesAReasoningEffortSelection(t *testing.T) {
+// TestClaudePassesAValidatedReasoningEffort verifies the repository-declared
+// effort reaches the harness. Claude Code warns about an unrecognized level
+// and then silently uses its default, so the coordinator's declared options
+// are what constrain the value.
+func TestClaudePassesAValidatedReasoningEffort(t *testing.T) {
 	workerRuntime := &fakeWorker{}
-	_, err := harness.NewClaude(workerRuntime, &fakeTerminal{surface: claudeSurface()}).Start(context.Background(), harness.StartRequest{
+	terminalRuntime := &fakeTerminal{surface: claudeSurface()}
+	runtime := harness.NewClaude(workerRuntime, terminalRuntime)
+	runtime.NewSessionID = func() (string, error) { return "3f2504e0-4f89-41d3-9a0c-0305e82c3301", nil }
+	if _, err := runtime.Start(context.Background(), harness.StartRequest{
 		InvocationID:    "inv-1",
 		RunID:           "run-1",
 		Role:            "implementation",
 		Stage:           "implementation",
 		WorkspaceID:     "workspace-run",
+		Surface:         terminalRuntime.surface,
 		Prompt:          "Implement the frozen specification.",
+		Model:           "claude-opus-5",
 		ReasoningEffort: "high",
-	})
-	if !errors.Is(err, harness.ErrUnsupportedSetting) {
-		t.Fatalf("Start() error = %v, want the unsupported-setting sentinel", err)
+	}); err != nil {
+		t.Fatalf("Start() error = %v", err)
 	}
-	if len(workerRuntime.requests) != 0 {
-		t.Fatalf("interactive worker requests = %#v, want no launch after a refused setting", workerRuntime.requests)
+	request := workerRuntime.requests[0]
+	wantCommand := []string{
+		"claude", "--dangerously-skip-permissions",
+		"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`,
+		"--session-id", "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+		"--model", "claude-opus-5",
+		"--effort", "high",
+		"Implement the frozen specification.",
+	}
+	if strings.Join(request.Command, "\x00") != strings.Join(wantCommand, "\x00") {
+		t.Fatalf("Claude command = %#v, want the validated effort level", request.Command)
+	}
+	if request.Environment["FACTORY_REASONING_EFFORT"] != "high" {
+		t.Fatalf("Claude environment = %#v, want the reasoning-effort identity", request.Environment)
 	}
 }
 

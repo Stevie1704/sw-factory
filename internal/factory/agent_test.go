@@ -1043,7 +1043,7 @@ type agentHarness struct {
 
 // Capabilities reports the harness identity this fake stands in for.
 func (*agentHarness) Capabilities() harness.Capabilities {
-	return harness.Capabilities{Name: harness.NameCodex, ReasoningEffort: true}
+	return harness.Capabilities{Name: harness.NameCodex}
 }
 
 // Start records the coordinator-owned prompt request.

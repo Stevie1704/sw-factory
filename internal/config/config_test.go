@@ -877,15 +877,3 @@ func TestValidateRepositoryRejectsDuplicateReasoningEffortOptions(t *testing.T) 
 		t.Fatalf("ValidateRepository() error = %v, want duplicate rejection", err)
 	}
 }
-
-// TestValidateRepositoryRejectsReasoningEffortOptionsForAHarnessThatCannotHonorThem
-// verifies a repository cannot declare a setting whose every launch would be
-// refused, because Claude Code exposes no reasoning-effort process argument.
-func TestValidateRepositoryRejectsReasoningEffortOptionsForAHarnessThatCannotHonorThem(t *testing.T) {
-	value := validRepositoryConfig()
-	value.RoleHarnessDefaults["implementation"] = config.HarnessClaude
-	value.ReasoningEffortOptions = map[string][]string{"implementation": {"high"}}
-	if err := config.ValidateRepository(value); err == nil || !strings.Contains(err.Error(), "cannot honor a reasoning-effort selection") {
-		t.Fatalf("ValidateRepository() error = %v, want an unsupported-harness rejection", err)
-	}
-}
