@@ -27,6 +27,7 @@ var (
 	errRepositoryContentsWrite  = errors.New("registered GitHub repository does not permit contents writes")
 	errRepositoryIssueSupervise = errors.New("registered GitHub repository does not permit issue and pull-request supervision")
 	errRepositoryTokenAccess    = errors.New("github token permissions are not sufficient for factory operations")
+	errGhVersionUnsupported     = errors.New("github CLI version does not support required features")
 	errFactoryLabelsUnavailable = errors.New("factory labels are unavailable")
 	errFactoryLabelsMalformed   = errors.New("factory labels response is malformed")
 )
@@ -120,6 +121,10 @@ func (c *GhClient) CheckRepositoryAccess(ctx context.Context, repository Reposit
 func (c *GhClient) checkTokenPermissions(ctx context.Context, private bool) error {
 	output, err := c.runner().Run(ctx, []string{"auth", "status", "--hostname", "github.com", "--json", "hosts"}, nil)
 	if err != nil {
+		// Distinguish unsupported gh CLI version from actual token permission issues
+		if strings.Contains(err.Error(), "unknown flag") || strings.Contains(err.Error(), "unknown command") {
+			return errGhVersionUnsupported
+		}
 		return errRepositoryTokenAccess
 	}
 	var response doctorAuthStatusResponse
@@ -162,6 +167,8 @@ func repositoryAccessDiagnosis(err error) (string, string) {
 		return "the authenticated account cannot write repository contents", "grant contents write access so the factory can publish its run branch"
 	case errors.Is(err, errRepositoryIssueSupervise):
 		return "the authenticated account cannot supervise issues and pull requests", "grant triage, maintain, or administrator repository access for labels, comments, and pull requests"
+	case errors.Is(err, errGhVersionUnsupported):
+		return "the GitHub CLI version does not support token scope inspection", "upgrade gh to version 2.81.0 or newer to enable factory permission diagnosis"
 	case errors.Is(err, errRepositoryTokenAccess):
 		return "the GitHub token does not expose the scopes required by factory operations", "authenticate gh with repo access, or with public_repo for a public repository"
 	default:
