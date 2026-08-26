@@ -32,6 +32,38 @@ func TestStartupChecksReportMissingFactoryLabelsAlongsideSuccessfulAccessChecks(
 	}
 }
 
+// TestStartupChecksDistinguishLabelReadFailuresFromMissingLabels verifies the
+// report preserves the operator-relevant cause of a label diagnosis failure.
+func TestStartupChecksDistinguishLabelReadFailuresFromMissingLabels(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		output  []byte
+		err     error
+		problem string
+	}{
+		{name: "api failure", err: errors.New("network secret"), problem: "could not be read"},
+		{name: "malformed response", output: []byte(`{"labels":`), problem: "invalid factory-label response"},
+		{name: "missing label", output: []byte(`[[{"name":"agent-ready"}]]`), problem: `required factory label "agent-running" is missing`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &doctorRunner{responses: []doctorResponse{
+				{output: []byte("authenticated\n")},
+				{output: []byte(`{"permissions":{"pull":true,"push":true,"triage":true}}`)},
+				{output: test.output, err: test.err},
+			}}
+			client := &github.GhClient{Runner: runner}
+			report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+			result := report.Results[2]
+			if !strings.Contains(result.Problem, test.problem) {
+				t.Fatalf("label problem = %q, want substring %q", result.Problem, test.problem)
+			}
+			if result.Action == "" {
+				t.Fatal("label action is empty")
+			}
+		})
+	}
+}
+
 // TestStartupChecksNeverRenderAnAuthenticationError verifies diagnosis output
 // remains content-free even when the command runner reports a sensitive error.
 func TestStartupChecksNeverRenderAnAuthenticationError(t *testing.T) {

@@ -332,9 +332,9 @@ Answer commands normally use `/factory answer <question-id> <answer>`; the
 identifier may also be written as `question=`, `question-id=`, or `id=` for
 automation clients, and an answer may begin with `answer=`.
 
-The command grammar also names `claude` for forward-compatible parsing, but the
-current implementation role has only the Codex adapter; selecting Claude is a
-typed `harness_unavailable` rejection until its later adapter is delivered.
+The command grammar and current implementation support both the Codex and Claude
+adapters. A selected harness is still validated against the frozen role policy
+and the startup capability check before an issue can be claimed.
 
 Each comment is processed at most once. The operational store persists a
 monotonic run revision, the processed comment ID watermark, and the revision at

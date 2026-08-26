@@ -19,6 +19,28 @@ type DoctorClient interface {
 	CheckFactoryLabels(context.Context, Repository) error
 }
 
+// Sentinel errors preserve safe repository and label diagnosis categories
+// without retaining GitHub CLI output.
+var (
+	errRepositoryUnavailable    = errors.New("registered GitHub repository is unavailable")
+	errRepositoryUnreadable     = errors.New("registered GitHub repository is not readable")
+	errRepositoryContentsWrite  = errors.New("registered GitHub repository does not permit contents writes")
+	errRepositoryIssueSupervise = errors.New("registered GitHub repository does not permit issue and pull-request supervision")
+	errFactoryLabelsUnavailable = errors.New("factory labels are unavailable")
+	errFactoryLabelsMalformed   = errors.New("factory labels response is malformed")
+)
+
+// missingFactoryLabelError identifies one required factory label that the
+// read-only label listing did not contain.
+type missingFactoryLabelError struct {
+	name string
+}
+
+// Error returns a bounded label diagnosis without including API output.
+func (e *missingFactoryLabelError) Error() string {
+	return fmt.Sprintf("factory label %q is missing", e.name)
+}
+
 // StartupChecks returns the GitHub-owned authentication, permission, and
 // factory-label checks in deterministic order.
 func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
@@ -37,7 +59,8 @@ func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
 				return doctor.Failure("github permissions", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckRepositoryAccess(ctx, repository); err != nil {
-				return doctor.Failure("github permissions", "the authenticated account cannot perform the factory's repository operations", "grant repository read, issue-label, issue-comment, contents, pull-request, and commit-status permissions")
+				problem, action := repositoryAccessDiagnosis(err)
+				return doctor.Failure("github permissions", problem, action)
 			}
 			return doctor.Success("github permissions")
 		},
@@ -46,7 +69,8 @@ func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
 				return doctor.Failure("github labels", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckFactoryLabels(ctx, repository); err != nil {
-				return doctor.Failure("github labels", "one or more factory state labels are missing", "run factory bootstrap-labels after granting label-management permission")
+				problem, action := factoryLabelsDiagnosis(err)
+				return doctor.Failure("github labels", problem, action)
 			}
 			return doctor.Success("github labels")
 		},
@@ -71,18 +95,35 @@ func (c *GhClient) CheckRepositoryAccess(ctx context.Context, repository Reposit
 	}
 	var response doctorRepositoryResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s", repository.String())}, nil, &response); err != nil {
-		return errors.New("registered GitHub repository is not readable")
+		return errRepositoryUnavailable
 	}
 	if !response.Permissions.Pull {
-		return errors.New("registered GitHub repository is not readable")
+		return errRepositoryUnreadable
 	}
 	if !response.Permissions.Push {
-		return errors.New("registered GitHub repository does not permit contents writes")
+		return errRepositoryContentsWrite
 	}
 	if !response.Permissions.Triage && !response.Permissions.Maintain && !response.Permissions.Admin {
-		return errors.New("registered GitHub repository does not permit issue and pull-request supervision")
+		return errRepositoryIssueSupervise
 	}
 	return nil
+}
+
+// repositoryAccessDiagnosis translates a read-only repository permission
+// result into the specific problem and corrective action shown by the report.
+func repositoryAccessDiagnosis(err error) (string, string) {
+	switch {
+	case errors.Is(err, errRepositoryUnavailable):
+		return "the registered GitHub repository could not be read", "verify the repository owner/name, network access, and GitHub authentication"
+	case errors.Is(err, errRepositoryUnreadable):
+		return "the authenticated account cannot read the registered GitHub repository", "grant repository read access to the authenticated account"
+	case errors.Is(err, errRepositoryContentsWrite):
+		return "the authenticated account cannot write repository contents", "grant contents write access so the factory can publish its run branch"
+	case errors.Is(err, errRepositoryIssueSupervise):
+		return "the authenticated account cannot supervise issues and pull requests", "grant triage, maintain, or administrator repository access for labels, comments, and pull requests"
+	default:
+		return "the registered GitHub repository permissions could not be validated", "verify repository access and retry the diagnosis"
+	}
 }
 
 // CheckFactoryLabels verifies all factory-owned labels exist without creating
@@ -93,11 +134,11 @@ func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository Repository
 	}
 	output, err := c.callBytes(ctx, []string{"api", fmt.Sprintf("repos/%s/labels", repository.String()), "--paginate", "--slurp"}, nil)
 	if err != nil {
-		return errors.New("factory labels are not readable")
+		return errFactoryLabelsUnavailable
 	}
 	labels, err := decodeDoctorLabels(output)
 	if err != nil {
-		return errors.New("factory labels response is malformed")
+		return errFactoryLabelsMalformed
 	}
 	seen := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
@@ -105,10 +146,26 @@ func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository Repository
 	}
 	for _, required := range FactoryStateLabels {
 		if _, ok := seen[required]; !ok {
-			return fmt.Errorf("factory label %q is missing", required)
+			return &missingFactoryLabelError{name: required}
 		}
 	}
 	return nil
+}
+
+// factoryLabelsDiagnosis translates a read-only GitHub label error into the
+// specific problem and corrective action shown by the startup report.
+func factoryLabelsDiagnosis(err error) (string, string) {
+	if errors.Is(err, errFactoryLabelsUnavailable) {
+		return "the factory state labels could not be read from GitHub", "verify GitHub authentication and repository label-read access, then retry"
+	}
+	if errors.Is(err, errFactoryLabelsMalformed) {
+		return "GitHub returned an invalid factory-label response", "verify gh and GitHub API compatibility, then retry the diagnosis"
+	}
+	var missing *missingFactoryLabelError
+	if errors.As(err, &missing) {
+		return fmt.Sprintf("required factory label %q is missing", missing.name), "run factory bootstrap-labels after granting label-management permission"
+	}
+	return "the registered factory labels could not be validated", "verify the registered repository and GitHub label access, then retry"
 }
 
 // validateDoctorRepository rejects values that could alter a read-only API
