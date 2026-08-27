@@ -31,6 +31,7 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 		NativeSessionID:         "session-1",
 		WorkspaceID:             "workspace-run",
 		StatusSurfaceID:         "surface-status",
+		RoleSurfaceID:           "surface-implementation",
 		ImplementationSurfaceID: "surface-implementation",
 		ChecksSurfaceID:         "surface-checks",
 		InvocationDirectory:     "/tmp/invocation",
@@ -56,7 +57,7 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invocation() error = %v", err)
 	}
-	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
+	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.RoleSurfaceID != want.RoleSurfaceID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
 		t.Fatalf("Invocation() = %#v, want %#v", got, want)
 	}
 	if got.UpdatedAt.UTC() != created {

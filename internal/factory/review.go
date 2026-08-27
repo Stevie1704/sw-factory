@@ -12,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 const (
@@ -22,10 +23,10 @@ const (
 	maxReviewDiffBytes = 512 << 10
 )
 
-// implementationHandoffFromReport converts the report protocol's completed
-// implementation handoff into the durable reviewer-facing projection.
-func implementationHandoffFromReport(value report.Handoff) *store.ImplementationHandoff {
-	result := &store.ImplementationHandoff{
+// roleHandoffFromReport converts the report protocol's completed handoff into
+// the durable reviewer-facing role projection.
+func roleHandoffFromReport(value report.Handoff) *store.RoleHandoff {
+	result := &store.RoleHandoff{
 		ChangeSummary:          value.ChangeSummary,
 		ProductionFilesChanged: append([]string(nil), value.ProductionFilesChanged...),
 		FocusedCommands:        append([]string(nil), value.FocusedCommands...),
@@ -48,7 +49,7 @@ func reviewContextForRun(ctx context.Context, run store.Run, runStore RunStore) 
 	contextValue := &prompt.ReviewContext{
 		CheckpointSHA:         run.CheckpointSHA,
 		TestHandoff:           run.TestHandoff,
-		ImplementationHandoff: run.ImplementationHandoff,
+		ImplementationHandoff: roleHandoffForRun(run),
 		ProtectedTestPaths:    append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
 		TestExemption:         run.TestExemption,
 	}
@@ -115,7 +116,7 @@ func (s *Service) ensureReviewStart(ctx context.Context, run store.Run) error {
 
 // captureReviewDiff obtains the exact base-to-checkpoint diff inside the
 // pinned worker after its review role mount has been established.
-func (s *Service) captureReviewDiff(ctx context.Context, run store.Run) (string, error) {
+func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, role string) (string, error) {
 	if s.deps.Worker == nil {
 		return "", errors.New("worker runtime is required to capture the review diff")
 	}
@@ -130,7 +131,7 @@ func (s *Service) captureReviewDiff(ctx context.Context, run store.Run) (string,
 		RunID:             run.ID,
 		Command:           fmt.Sprintf("git diff --no-ext-diff --binary --unified=80 %s %s -- .", base, run.CheckpointSHA),
 		EnvironmentPolicy: worker.EnvironmentPolicyClean,
-		Role:              "spec_review",
+		Role:              role,
 	})
 	if err != nil {
 		return "", fmt.Errorf("capture exact review diff: %w", err)
@@ -246,6 +247,10 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 	if run.CheckpointSHA == "" || !github.ValidCommitSHA(run.CheckpointSHA) {
 		return AgentResult{}, errors.New("cannot accept review without a valid immutable checkpoint")
 	}
+	roleDefinition, err := roleDefinitionForInvocation(*invocation)
+	if err != nil {
+		return AgentResult{}, err
+	}
 	previous := *run
 	statusState := github.CommitStatusError
 	statusDescription := "specification review requires human disposition"
@@ -254,14 +259,18 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 		review := specificationReviewFromReport(*value.ReviewHandoff)
 		run.SpecificationReview = review
 		if reviewHasBlockingFinding(review.Findings) {
-			run.Stage = store.StageReview
+			run.Stage = invocation.Stage
 			run.Status = store.StatusWaitingForHuman
 			run.LifecycleReason = "specification review found blocking violations"
 			statusState = github.CommitStatusFailure
 			statusDescription = "specification review found blocking findings"
 		} else {
-			run.Stage = store.StageReady
-			run.Status = store.StatusActive
+			transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
+			if transitionErr != nil {
+				return AgentResult{}, transitionErr
+			}
+			run.Stage = transition.Stage
+			run.Status = transition.Status
 			run.LifecycleReason = "specification review accepted; ready for merge"
 			statusState = github.CommitStatusSuccess
 			statusDescription = fmt.Sprintf("specification review passed; %d advisory findings", len(review.Findings))
@@ -271,16 +280,24 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 		run.ClarificationNotificationSent = false
 	case report.OutcomeNeedsClarification:
 		run.SpecificationReview = nil
-		run.Stage = store.StageReview
-		run.Status = store.StatusWaitingForHuman
+		transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
+		if transitionErr != nil {
+			return AgentResult{}, transitionErr
+		}
+		run.Stage = transition.Stage
+		run.Status = transition.Status
 		run.LifecycleReason = "specification reviewer requested clarification"
 		run.PendingQuestions = pendingQuestionsFromReport(value.Questions)
 		run.ClarificationCommentID = ""
 		run.ClarificationNotificationSent = false
 	case report.OutcomeCannotProceed:
 		run.SpecificationReview = nil
-		run.Stage = store.StageReview
-		run.Status = store.StatusWaitingForHuman
+		transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
+		if transitionErr != nil {
+			return AgentResult{}, transitionErr
+		}
+		run.Stage = transition.Stage
+		run.Status = transition.Status
 		run.LifecycleReason = "specification reviewer cannot proceed"
 		run.PendingQuestions = nil
 		run.ClarificationCommentID = ""
@@ -295,7 +312,7 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist specification review state: %w", err)
 	}
-	if value.Outcome == report.OutcomeCompleted {
+	if value.Outcome == report.OutcomeCompleted && roleDefinition.Kind == workflow.RoleKindReview {
 		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
 			return AgentResult{}, err
 		}

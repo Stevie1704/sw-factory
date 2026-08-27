@@ -18,6 +18,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // startAgentWithStore launches one visible role invocation using an already-open
@@ -76,6 +77,16 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err := validateAgentRequest(request); err != nil {
 		return AgentLaunchResult{}, err
 	}
+	roleDefinition, roleDeclared := workflow.DefaultRegistry().Role(request.Role)
+	if !roleDeclared {
+		return AgentLaunchResult{}, fmt.Errorf("agent role %q is not declared by the workflow registry", request.Role)
+	}
+	if len(request.PermittedPaths) == 0 {
+		request.PermittedPaths = append([]string(nil), roleDefinition.DefaultPermittedPaths...)
+	}
+	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
+		return AgentLaunchResult{}, err
+	}
 	if latestStore, ok := runStore.(LatestInvocationStore); ok {
 		latest, latestErr := latestStore.LatestInvocation(ctx, run.ID)
 		if latestErr != nil {
@@ -85,7 +96,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, fmt.Errorf("run %q already has invocation history for %s/%s", run.ID, request.Role, request.Stage)
 		}
 	}
-	isReview := request.Role == "spec_review" && request.Stage == store.StageReview
+	isReview := roleDefinition.Kind == workflow.RoleKindReview
 	var reviewContext *prompt.ReviewContext
 	if isReview {
 		if err := s.ensureReviewStart(ctx, *run); err != nil {
@@ -104,7 +115,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, fmt.Errorf("publish pending specification review status: %w", err)
 		}
 	}
-	if request.Role == "implementation" && run.Stage == store.StageClaim && !run.TestStageSkipped {
+	if roleDefinition.RequiresTestHandoff && run.Stage == store.StageClaim && !run.TestStageSkipped {
 		return AgentLaunchResult{}, errors.New("implementation agent cannot bypass the configured test stage")
 	}
 	policy, err := resolveAgentPolicy(packet.RepositoryConfig, request)
@@ -143,7 +154,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Role:                role,
 		Stage:               stage,
 		SpecificationPacket: run.SpecificationPacket,
-		PromptVersion:       prompt.VersionFor(role, string(stage)),
+		PromptVersion:       roleDefinition.PromptVersion,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
 		TestHandoff:         run.TestHandoff,
 		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
@@ -183,7 +194,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		InvocationDirectory: packetDirectory,
 		ResultDirectory:     resultDirectory,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
-		PromptVersion:       prompt.VersionFor(role, string(stage)),
+		PromptVersion:       roleDefinition.PromptVersion,
 		Status:              store.InvocationStatusActive,
 		CreatedAt:           createdAt,
 		UpdatedAt:           createdAt,
@@ -250,7 +261,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	workerStarted = true
 	if isReview {
-		reviewContext.CurrentDiff, err = s.captureReviewDiff(ctx, *run)
+		reviewContext.CurrentDiff, err = s.captureReviewDiff(ctx, *run, role)
 		if err != nil {
 			return AgentLaunchResult{}, err
 		}
@@ -286,18 +297,21 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
-	agentSurface := runWorkspace.Implementation
-	if role == "test" {
+	var agentSurface terminal.Surface
+	switch roleDefinition.Surface {
+	case workflow.SurfaceChecks:
 		agentSurface = runWorkspace.Checks
-	} else if isReview {
-		// The harness adapter creates a fresh command-backed surface for the
-		// reviewer, rather than reusing the implementation surface.
-		agentSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: "spec-review"}
+	case workflow.SurfaceRole:
+		// The harness adapter creates a fresh command-backed surface for a
+		// role-owned surface, rather than reusing the implementation surface.
+		agentSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: role}
+	default:
+		agentSurface = runWorkspace.Implementation
 	}
 	cleanupSurface = agentSurface
 	invocation.WorkspaceID = string(runWorkspace.ID)
 	invocation.StatusSurfaceID = string(runWorkspace.Status.ID)
-	invocation.ImplementationSurfaceID = string(agentSurface.ID)
+	setInvocationSurface(&invocation, agentSurface)
 	invocation.ChecksSurfaceID = string(runWorkspace.Checks.ID)
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist visible terminal handles: %w", err)
@@ -363,7 +377,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if session.Surface.ID != "" {
 		agentSurface = session.Surface
 		cleanupSurface = agentSurface
-		invocation.ImplementationSurfaceID = string(agentSurface.ID)
+		setInvocationSurface(&invocation, agentSurface)
 	}
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist harness session identity: %w", err)
@@ -414,6 +428,10 @@ func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registr
 	if strings.TrimSpace(invocation.NativeSessionID) == "" {
 		return invocation, errors.New("active invocation has no persisted native session identifier")
 	}
+	roleDefinition, err := roleDefinitionForInvocation(invocation)
+	if err != nil {
+		return invocation, err
+	}
 	if err := s.stopRunWorker(ctx, run.ID); err != nil {
 		return invocation, err
 	}
@@ -439,14 +457,14 @@ func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registr
 	if _, err := s.ensureWorkerForInvocation(ctx, registration, runStore, run, invocation); err != nil {
 		return invocation, err
 	}
-	workspaceID, implementationSurface, statusSurface, checksSurface, restored, err := s.restoreInvocationTerminal(ctx, terminalRuntime, run, invocation)
+	workspaceID, roleSurface, statusSurface, checksSurface, restored, err := s.restoreInvocationTerminal(ctx, terminalRuntime, run, invocation)
 	if err != nil {
 		return invocation, err
 	}
 	if restored {
 		invocation.WorkspaceID = string(workspaceID)
 		invocation.StatusSurfaceID = string(statusSurface.ID)
-		invocation.ImplementationSurfaceID = string(implementationSurface.ID)
+		setInvocationSurface(&invocation, roleSurface)
 		invocation.ChecksSurfaceID = string(checksSurface.ID)
 		if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 			return invocation, fmt.Errorf("persist restored terminal handles: %w", err)
@@ -457,9 +475,9 @@ func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registr
 		RunID:           run.ID,
 		Role:            invocation.Role,
 		Stage:           string(invocation.Stage),
-		CheckpointSHA:   reviewCheckpointSHA(invocation.Stage == store.StageReview, run.CheckpointSHA),
+		CheckpointSHA:   reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA),
 		WorkspaceID:     workspaceID,
-		Surface:         implementationSurface,
+		Surface:         roleSurface,
 		Prompt:          promptText,
 		Model:           invocation.Model,
 		ReasoningEffort: invocation.ReasoningEffort,

@@ -20,7 +20,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 24
+const CurrentSchemaVersion = 25
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -38,6 +38,9 @@ var ErrPendingEffectConflict = errors.New("pending effect conflict")
 // text ordering matches chronological ordering for sub-second timestamps.
 const runTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
+// Stage is an open factory-stage identity. The registry owns the supported
+// graph; the operational store persists any validated declaration without
+// requiring a closed Go enum or a stage-specific schema migration.
 type Stage string
 
 const (
@@ -45,10 +48,12 @@ const (
 	StagePreflight      Stage = "preflight"
 	StageTest           Stage = "test"
 	StageImplementation Stage = "implementation"
-	StageCheck          Stage = "check"
-	StageDraftPR        Stage = "draft_pr"
-	StageReview         Stage = "review"
-	StageReady          Stage = "ready"
+	// StageArchitecture is the optional document-producing architecture stage.
+	StageArchitecture Stage = "architecture"
+	StageCheck        Stage = "check"
+	StageDraftPR      Stage = "draft_pr"
+	StageReview       Stage = "review"
+	StageReady        Stage = "ready"
 )
 
 type Status string
@@ -247,20 +252,25 @@ type HandoffAcceptance struct {
 	Evidence string `json:"evidence"`
 }
 
-// ImplementationHandoff is the bounded structured result transferred from
-// implementation to the independent specification reviewer.
-type ImplementationHandoff struct {
-	// ChangeSummary describes the accepted implementation change.
+// RoleHandoff is the bounded structured result transferred from any
+// implementation-oriented role to the next supervised stage. Its production
+// file field also accepts document artifacts produced by non-code roles.
+type RoleHandoff struct {
+	// ChangeSummary describes the accepted role change.
 	ChangeSummary string `json:"change_summary"`
 	// AcceptanceMapping connects frozen criteria to observable evidence.
 	AcceptanceMapping []HandoffAcceptance `json:"acceptance_mapping"`
-	// ProductionFilesChanged lists the implementation paths reported as changed.
+	// ProductionFilesChanged lists the repository paths reported as changed.
 	ProductionFilesChanged []string `json:"production_files_changed"`
-	// FocusedCommands lists commands the implementation role ran.
+	// FocusedCommands lists commands the role ran.
 	FocusedCommands []string `json:"focused_commands"`
 	// KnownLimitations carries bounded visible limitations.
 	KnownLimitations []string `json:"known_limitations,omitempty"`
 }
+
+// ImplementationHandoff is the legacy name retained for callers and persisted
+// rows created before role-owned handoffs were introduced.
+type ImplementationHandoff = RoleHandoff
 
 // ReviewFinding is the durable finding projection shared by status and PR
 // renderers without retaining the reviewer transcript.
@@ -315,8 +325,11 @@ type Run struct {
 	TestCheckpointSHA string
 	// TestHandoff is the accepted structured test-stage transfer packet.
 	TestHandoff *TestHandoff
-	// ImplementationHandoff is the accepted implementation transfer packet.
-	ImplementationHandoff *ImplementationHandoff
+	// RoleHandoff is the accepted role transfer packet.
+	RoleHandoff *RoleHandoff
+	// ImplementationHandoff is the legacy compatibility projection of
+	// RoleHandoff. New code should use RoleHandoff.
+	ImplementationHandoff *RoleHandoff
 	// SpecificationReview is the latest exact-checkpoint review result.
 	SpecificationReview *SpecificationReview
 	// TestExemption records a pre-authorized or technical test-stage exemption.
@@ -409,7 +422,11 @@ type Invocation struct {
 	WorkspaceID string
 	// StatusSurfaceID is the opaque supervision status surface handle.
 	StatusSurfaceID string
-	// ImplementationSurfaceID is the opaque implementation surface handle.
+	// RoleSurfaceID is the opaque surface handle owned by this invocation's role.
+	RoleSurfaceID string
+	// ImplementationSurfaceID is the legacy opaque implementation surface handle.
+	// New code should use RoleSurfaceID; it remains populated for operational-store
+	// compatibility with runs created before role-owned surfaces were introduced.
 	ImplementationSurfaceID string
 	// ChecksSurfaceID is the opaque deterministic-check surface handle.
 	ChecksSurfaceID string
@@ -670,7 +687,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, testCheckpointSHA string
-	var testHandoffJSON, implementationHandoffJSON, specificationReviewJSON string
+	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON string
 	var testExemptionJSON, protectedTestPathsJSON string
 	var pendingQuestionsJSON, clarificationCommentID, terminalAt, createdAt, updatedAt string
 	var clarificationNotificationSent bool
@@ -687,7 +704,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&baseCheckpointSHA,
 		&testCheckpointSHA,
 		&testHandoffJSON,
-		&implementationHandoffJSON,
+		&roleHandoffJSON,
 		&specificationReviewJSON,
 		&testExemptionJSON,
 		&protectedTestPathsJSON,
@@ -739,11 +756,12 @@ func scanRun(row *sql.Row) (*Run, error) {
 			return nil, fmt.Errorf("decode test handoff: %w", err)
 		}
 	}
-	if implementationHandoffJSON != "" {
-		run.ImplementationHandoff = &ImplementationHandoff{}
-		if err := json.Unmarshal([]byte(implementationHandoffJSON), run.ImplementationHandoff); err != nil {
-			return nil, fmt.Errorf("decode implementation handoff: %w", err)
+	if roleHandoffJSON != "" {
+		run.RoleHandoff = &RoleHandoff{}
+		if err := json.Unmarshal([]byte(roleHandoffJSON), run.RoleHandoff); err != nil {
+			return nil, fmt.Errorf("decode role handoff: %w", err)
 		}
+		run.ImplementationHandoff = run.RoleHandoff
 	}
 	if specificationReviewJSON != "" {
 		run.SpecificationReview = &SpecificationReview{}
@@ -1060,21 +1078,22 @@ func validateTestProjection(run Run) error {
 			}
 		}
 	}
-	if run.ImplementationHandoff != nil {
-		if strings.TrimSpace(run.ImplementationHandoff.ChangeSummary) == "" || strings.ContainsAny(run.ImplementationHandoff.ChangeSummary, "\x00\r\n") {
-			return errors.New("implementation handoff change summary is required and must be single-line")
+	roleHandoff := roleHandoffForRun(run)
+	if roleHandoff != nil {
+		if strings.TrimSpace(roleHandoff.ChangeSummary) == "" || strings.ContainsAny(roleHandoff.ChangeSummary, "\x00\r\n") {
+			return errors.New("role handoff change summary is required and must be single-line")
 		}
-		if len(run.ImplementationHandoff.AcceptanceMapping) == 0 || len(run.ImplementationHandoff.ProductionFilesChanged) == 0 || len(run.ImplementationHandoff.FocusedCommands) == 0 {
-			return errors.New("implementation handoff is incomplete")
+		if len(roleHandoff.AcceptanceMapping) == 0 || len(roleHandoff.ProductionFilesChanged) == 0 || len(roleHandoff.FocusedCommands) == 0 {
+			return errors.New("role handoff is incomplete")
 		}
-		for _, mapping := range run.ImplementationHandoff.AcceptanceMapping {
+		for _, mapping := range roleHandoff.AcceptanceMapping {
 			if strings.TrimSpace(mapping.Criterion) == "" || strings.TrimSpace(mapping.Evidence) == "" || strings.ContainsAny(mapping.Criterion+mapping.Evidence, "\x00\r\n") {
-				return errors.New("implementation handoff acceptance mapping is incomplete")
+				return errors.New("role handoff acceptance mapping is incomplete")
 			}
 		}
-		for _, path := range run.ImplementationHandoff.ProductionFilesChanged {
+		for _, path := range roleHandoff.ProductionFilesChanged {
 			if err := validateStoreRelativePath(path); err != nil {
-				return fmt.Errorf("implementation handoff production file: %w", err)
+				return fmt.Errorf("role handoff changed path: %w", err)
 			}
 		}
 	}
@@ -1200,8 +1219,8 @@ func testHandoffJSON(value *TestHandoff) string {
 	return string(data)
 }
 
-// implementationHandoffJSON serializes a nullable implementation handoff.
-func implementationHandoffJSON(value *ImplementationHandoff) string {
+// roleHandoffJSON serializes a nullable role handoff.
+func roleHandoffJSON(value *RoleHandoff) string {
 	if value == nil {
 		return ""
 	}
@@ -1210,6 +1229,15 @@ func implementationHandoffJSON(value *ImplementationHandoff) string {
 		return ""
 	}
 	return string(data)
+}
+
+// roleHandoffForRun returns the role-neutral handoff while accepting a legacy
+// run value that only populated the implementation compatibility field.
+func roleHandoffForRun(run Run) *RoleHandoff {
+	if run.RoleHandoff != nil {
+		return run.RoleHandoff
+	}
+	return run.ImplementationHandoff
 }
 
 // specificationReviewJSON serializes a nullable exact-checkpoint review.
@@ -1263,7 +1291,7 @@ func runValues(run Run) []any {
 		run.BaseCheckpointSHA,
 		run.TestCheckpointSHA,
 		testHandoffJSON(run.TestHandoff),
-		implementationHandoffJSON(run.ImplementationHandoff),
+		roleHandoffJSON(roleHandoffForRun(run)),
 		specificationReviewJSON(run.SpecificationReview),
 		testExemptionJSON(run.TestExemption),
 		protectedTestPathsJSON(run.ProtectedTestPaths),
@@ -1416,17 +1444,25 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	if invocation.UpdatedAt.IsZero() {
 		invocation.UpdatedAt = invocation.CreatedAt
 	}
+	roleSurfaceID := invocation.RoleSurfaceID
+	if roleSurfaceID == "" {
+		roleSurfaceID = invocation.ImplementationSurfaceID
+	}
+	implementationSurfaceID := invocation.ImplementationSurfaceID
+	if implementationSurfaceID == "" {
+		implementationSurfaceID = roleSurfaceID
+	}
 	permittedPathJSON, err := json.Marshal(invocation.PermittedPaths)
 	if err != nil {
 		return fmt.Errorf("encode invocation permitted paths: %w", err)
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO invocations (
-			id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
-			native_session_id, workspace_id, status_surface_id,
-				implementation_surface_id, checks_surface_id, invocation_directory,
+			INSERT INTO invocations (
+				id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
+				native_session_id, workspace_id, status_surface_id,
+				role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
 				result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -1436,9 +1472,10 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			reasoning_effort = excluded.reasoning_effort,
 			credential_store_id = excluded.credential_store_id,
 			native_session_id = excluded.native_session_id,
-			workspace_id = excluded.workspace_id,
-			status_surface_id = excluded.status_surface_id,
-			implementation_surface_id = excluded.implementation_surface_id,
+				workspace_id = excluded.workspace_id,
+				status_surface_id = excluded.status_surface_id,
+				role_surface_id = excluded.role_surface_id,
+				implementation_surface_id = excluded.implementation_surface_id,
 			checks_surface_id = excluded.checks_surface_id,
 			invocation_directory = excluded.invocation_directory,
 			result_directory = excluded.result_directory,
@@ -1459,7 +1496,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.NativeSessionID,
 		invocation.WorkspaceID,
 		invocation.StatusSurfaceID,
-		invocation.ImplementationSurfaceID,
+		roleSurfaceID,
+		implementationSurfaceID,
 		invocation.ChecksSurfaceID,
 		invocation.InvocationDirectory,
 		invocation.ResultDirectory,
@@ -1563,7 +1601,7 @@ func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*In
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
-		       implementation_surface_id, checks_surface_id, invocation_directory,
+		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
 		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND id = ?`, runID, invocationID)
@@ -1580,7 +1618,7 @@ func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
-		       implementation_surface_id, checks_surface_id, invocation_directory,
+		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
 		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ?
@@ -1613,7 +1651,7 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
-		       implementation_surface_id, checks_surface_id, invocation_directory,
+		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
 		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
@@ -1638,6 +1676,7 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 		&invocation.NativeSessionID,
 		&invocation.WorkspaceID,
 		&invocation.StatusSurfaceID,
+		&invocation.RoleSurfaceID,
 		&invocation.ImplementationSurfaceID,
 		&invocation.ChecksSurfaceID,
 		&invocation.InvocationDirectory,
@@ -1659,6 +1698,12 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 		if err := json.Unmarshal([]byte(permittedPathJSON), &invocation.PermittedPaths); err != nil {
 			return nil, fmt.Errorf("decode invocation permitted paths: %w", err)
 		}
+	}
+	if invocation.RoleSurfaceID == "" {
+		invocation.RoleSurfaceID = invocation.ImplementationSurfaceID
+	}
+	if invocation.ImplementationSurfaceID == "" {
+		invocation.ImplementationSurfaceID = invocation.RoleSurfaceID
 	}
 	var err error
 	invocation.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -2334,6 +2379,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 24:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN terminal_at TEXT NOT NULL DEFAULT ''"); err != nil {
 				return fmt.Errorf("apply store migration 24: %w", err)
+			}
+		case 25:
+			for _, statement := range []string{
+				"ALTER TABLE invocations ADD COLUMN role_surface_id TEXT NOT NULL DEFAULT ''",
+				"UPDATE invocations SET role_surface_id = implementation_surface_id WHERE role_surface_id = '' AND implementation_surface_id <> ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 25: %w", err)
+				}
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

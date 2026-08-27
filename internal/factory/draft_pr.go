@@ -11,6 +11,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 const (
@@ -135,6 +136,10 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 			}
 		}
 	} else {
+		checkpointTransition, transitionErr := workflow.DefaultRegistry().ResolveEventTransition(run.Stage, workflow.StageEventCheckpoint)
+		if transitionErr != nil {
+			return DraftPullRequestResult{}, transitionErr
+		}
 		checkpointRequest := gitadapter.CheckpointRequest{
 			RunID:        run.ID,
 			WorktreePath: run.Worktree,
@@ -144,8 +149,8 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		checkpoint := gitadapter.CheckpointResult{}
 		checkpointErr := error(nil)
 		next.SpecificationReview = nil
-		next.Stage = store.StageCheck
-		next.Status = store.StatusActive
+		next.Stage = checkpointTransition.Stage
+		next.Status = checkpointTransition.Status
 		next.LifecycleReason = "evaluating implementation checkpoint"
 		next.Revision = run.Revision + 1
 		next.UpdatedAt = s.deps.Now().UTC()
@@ -202,6 +207,10 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if pushErr != nil {
 		return result, pushErr
 	}
+	draftTransition, transitionErr := workflow.DefaultRegistry().ResolveEventTransition(next.Stage, workflow.StageEventDraftPullRequest)
+	if transitionErr != nil {
+		return result, transitionErr
+	}
 
 	pullRequests := s.pullRequestClient()
 	if pullRequests == nil {
@@ -213,8 +222,8 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		if planErr != nil {
 			return result, planErr
 		}
-		next.Stage = store.StageDraftPR
-		next.Status = store.StatusActive
+		next.Stage = draftTransition.Stage
+		next.Status = draftTransition.Status
 		next.Revision = result.Run.Revision + 1
 		next.UpdatedAt = s.deps.Now().UTC()
 		pullRequest, next, err = s.upsertPullRequestAndPersistWithEffect(ctx, runStore, pullRequests, repository, issue, result.Run, next, plannedRequest, expectedNumber)
@@ -225,8 +234,8 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		}
 		next.PullRequestNumber = pullRequest.Number
 		next.PullRequestURL = pullRequest.URL
-		next.Stage = store.StageDraftPR
-		next.Status = store.StatusActive
+		next.Stage = draftTransition.Stage
+		next.Status = draftTransition.Status
 		next.UpdatedAt = s.deps.Now().UTC()
 		next, err = s.applyStateTransition(ctx, runStore, stateTransition{
 			Repository: repository, Issue: issue, Previous: result.Run, Next: next,

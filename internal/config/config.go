@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"gopkg.in/yaml.v3"
 )
 
@@ -195,6 +196,24 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("configuration invalid: %s: %s", e.Field, e.Message)
 }
 
+// PolicyError reports a repository configuration attempt to take ownership of
+// factory-owned workflow policy such as roles, prompts, stages, or transitions.
+type PolicyError struct {
+	// Field identifies the repository configuration field that crossed the
+	// factory/repository authority boundary.
+	Field string
+	// Message explains the policy boundary without echoing untrusted content.
+	Message string
+}
+
+// Error returns the stable typed repository-policy diagnostic.
+func (e *PolicyError) Error() string {
+	return fmt.Sprintf("repository policy rejected: %s: %s", e.Field, e.Message)
+}
+
+// RepositoryPolicyError is the descriptive compatibility name for PolicyError.
+type RepositoryPolicyError = PolicyError
+
 type UnknownSchemaVersionError struct {
 	Kind      string
 	Field     string
@@ -266,6 +285,9 @@ func LoadHost(path string) (HostConfig, error) {
 // LoadRepository reads, decodes, and validates a repository configuration from a YAML file.
 func LoadRepository(path string) (RepositoryConfig, error) {
 	var config RepositoryConfig
+	if err := rejectFactoryOwnedWorkflowFields(path); err != nil {
+		return RepositoryConfig{}, err
+	}
 	if err := loadYAML(path, &config); err != nil {
 		return RepositoryConfig{}, err
 	}
@@ -401,9 +423,13 @@ func ValidateRepository(config RepositoryConfig) error {
 	if len(config.RoleHarnessDefaults) == 0 {
 		return validation("role_harness_defaults", "must declare at least one role")
 	}
+	workflowRegistry := workflow.DefaultRegistry()
 	for role, harness := range config.RoleHarnessDefaults {
 		if strings.TrimSpace(role) == "" {
 			return validation("role_harness_defaults", "role names must not be empty")
+		}
+		if _, exists := workflowRegistry.Role(role); !exists {
+			return policy("role_harness_defaults."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if harness != HarnessCodex && harness != HarnessClaude {
 			return validation("role_harness_defaults."+role, "must be codex or claude")
@@ -413,6 +439,9 @@ func ValidateRepository(config RepositoryConfig) error {
 		return validation("model_options", "must declare at least one role")
 	}
 	for role, models := range config.ModelOptions {
+		if _, exists := workflowRegistry.Role(role); !exists {
+			return policy("model_options."+role, "role must be declared by the factory-owned workflow registry")
+		}
 		if len(models) == 0 {
 			return validation("model_options."+role, "must declare at least one model")
 		}
@@ -433,6 +462,9 @@ func ValidateRepository(config RepositoryConfig) error {
 		}
 	}
 	for role, efforts := range config.ReasoningEffortOptions {
+		if _, exists := workflowRegistry.Role(role); !exists {
+			return policy("reasoning_effort_options."+role, "role must be declared by the factory-owned workflow registry")
+		}
 		if _, exists := config.RoleHarnessDefaults[role]; !exists {
 			return validation("reasoning_effort_options."+role, "must reference a role with a declared harness")
 		}
@@ -722,6 +754,57 @@ func validateOptionalOverrides(values []OverrideName) error {
 // validation creates an error describing an invalid configuration field and the reason it is invalid.
 func validation(field, message string) error {
 	return &ValidationError{Field: field, Message: message}
+}
+
+// policy creates a typed repository-policy rejection.
+func policy(field, message string) error {
+	return &PolicyError{Field: field, Message: message}
+}
+
+// rejectFactoryOwnedWorkflowFields rejects YAML fields that would let a
+// repository redefine coordinator-owned roles, prompts, stages, or edges.
+func rejectFactoryOwnedWorkflowFields(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return &ConfigFileError{Path: path, Err: err}
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	var document yaml.Node
+	if err := decoder.Decode(&document); err != nil {
+		return &ConfigFileError{Path: path, Err: err}
+	}
+	if len(document.Content) == 0 {
+		return nil
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		field := root.Content[index].Value
+		if _, forbidden := factoryOwnedWorkflowFields[field]; forbidden {
+			return policy(field, "workflow declarations are factory-owned and cannot be supplied by repository configuration")
+		}
+	}
+	return nil
+}
+
+// factoryOwnedWorkflowFields names repository YAML fields that are never
+// accepted as alternate sources of coordinator authority.
+var factoryOwnedWorkflowFields = map[string]struct{}{
+	"role":              {},
+	"role_registry":     {},
+	"roles":             {},
+	"stage":             {},
+	"stage_registry":    {},
+	"stages":            {},
+	"prompt":            {},
+	"prompt_registry":   {},
+	"prompts":           {},
+	"transition":        {},
+	"transitions":       {},
+	"workflow":          {},
+	"workflow_registry": {},
 }
 
 // loadYAML reads a single YAML document from path into destination and rejects unknown fields or additional documents. Errors are wrapped in ConfigFileError.

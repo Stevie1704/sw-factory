@@ -17,8 +17,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // testExemptionMarkerPrefix identifies the exact issue marker that authorizes
@@ -32,8 +32,8 @@ func testStageConfigured(repository config.RepositoryConfig) bool {
 	if repository.RoleHarnessDefaults == nil || repository.ModelOptions == nil {
 		return false
 	}
-	_, hasHarness := repository.RoleHarnessDefaults["test"]
-	models, hasModels := repository.ModelOptions["test"]
+	_, hasHarness := repository.RoleHarnessDefaults[workflow.RoleTest]
+	models, hasModels := repository.ModelOptions[workflow.RoleTest]
 	return hasHarness && hasModels && len(models) > 0
 }
 
@@ -180,7 +180,7 @@ func indexFold(s, substr string) int {
 // validateTestStageReportPolicy rejects harness-reported exemptions that the
 // frozen repository policy does not authorize.
 func validateTestStageReportPolicy(value report.Report, policy config.TestPolicy) error {
-	if value.Role != "test" || value.Stage != string(store.StageTest) {
+	if value.Role != workflow.RoleTest || value.Stage != string(store.StageTest) {
 		return nil
 	}
 	for _, exemption := range value.Exemptions {
@@ -218,7 +218,7 @@ func isUnverifiableTestReport(value report.Report, invocation store.Invocation) 
 		value.InvocationID == invocation.ID &&
 		value.RunID == invocation.RunID &&
 		value.Harness == invocation.Harness &&
-		value.Role == "test" &&
+		value.Role == workflow.RoleTest &&
 		value.Stage == string(store.StageTest) &&
 		value.Outcome == report.OutcomeCompleted
 }
@@ -390,7 +390,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 		RunID:             run.ID,
 		Command:           value.TestHandoff.FocusedTestCommand,
 		EnvironmentPolicy: worker.EnvironmentPolicyRole,
-		Role:              "test",
+		Role:              workflow.RoleTest,
 	})
 	stopErr := s.stopRunWorker(ctx, run.ID)
 	output := result.Stdout + "\n" + result.Stderr
@@ -444,8 +444,12 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	next.SpecificationReview = nil
 	next.TestHandoff = &handoff
 	next.ProtectedTestPaths = protected
-	next.Stage = store.StageImplementation
-	next.Status = store.StatusActive
+	transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(store.StageTest, report.OutcomeCompleted)
+	if transitionErr != nil {
+		return AgentResult{}, transitionErr
+	}
+	next.Stage = transition.Stage
+	next.Status = transition.Status
 	next.PendingQuestions = nil
 	next.LifecycleReason = "test stage completed; protected handoff ready for implementation"
 	next.Revision = previous.Revision + 1
@@ -482,8 +486,12 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 		}
 		*run = next
 	}
-	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation}); err != nil {
-		return AgentResult{}, fmt.Errorf("launch implementation after test handoff: %w", err)
+	nextRole, nextRoleDeclared := workflow.DefaultRegistry().RoleForRunStage(next.Stage)
+	if !nextRoleDeclared {
+		return AgentResult{}, fmt.Errorf("no role is declared for test handoff stage %q", next.Stage)
+	}
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: nextRole.Name, Stage: nextRole.Stage}); err != nil {
+		return AgentResult{}, fmt.Errorf("launch next role after test handoff: %w", err)
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
 }
@@ -502,11 +510,7 @@ func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration 
 		if err := harnessRuntime.Finish(ctx, harness.Session{
 			InvocationID:    invocation.ID,
 			NativeSessionID: invocation.NativeSessionID,
-			Surface: terminal.Surface{
-				ID:          terminal.SurfaceID(invocation.ImplementationSurfaceID),
-				WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
-				Name:        invocation.Role,
-			},
+			Surface:         invocationSurface(*invocation),
 		}); err != nil {
 			return AgentResult{}, fmt.Errorf("finish unverifiable test session: %w", err)
 		}
@@ -547,9 +551,17 @@ func (s *Service) pauseTestForHuman(ctx context.Context, registration config.Rep
 // launchImplementationAfterTest records an exemption and immediately hands
 // the run to implementation using the same open store and frozen packet.
 func (s *Service) launchImplementationAfterTest(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
+	transition, err := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
+	if err != nil {
+		return AgentResult{}, fmt.Errorf("resolve technical test exemption transition: %w", err)
+	}
+	nextRole, nextRoleDeclared := workflow.DefaultRegistry().RoleForRunStage(transition.Stage)
+	if !nextRoleDeclared {
+		return AgentResult{}, fmt.Errorf("no role is declared for technical test exemption stage %q", transition.Stage)
+	}
 	previous := *run
-	run.Stage = store.StageImplementation
-	run.Status = store.StatusActive
+	run.Stage = transition.Stage
+	run.Status = transition.Status
 	run.TestStageSkipped = true
 	run.PendingQuestions = nil
 	run.LifecycleReason = "test stage completed with technical exemption"
@@ -562,8 +574,8 @@ func (s *Service) launchImplementationAfterTest(ctx context.Context, registratio
 			return AgentResult{}, err
 		}
 	}
-	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation}); err != nil {
-		return AgentResult{}, fmt.Errorf("launch implementation after technical exemption: %w", err)
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: nextRole.Name, Stage: nextRole.Stage}); err != nil {
+		return AgentResult{}, fmt.Errorf("launch next role after technical exemption: %w", err)
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
 }

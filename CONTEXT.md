@@ -69,7 +69,7 @@ The portable seam that starts, resumes, commands, stops, and inspects a worker w
 _Avoid_: Docker API
 
 **Invocation**:
-One immutable harness attempt within a run, with its own invocation packet, result directory, visible surface handles, prompt version, and native session identifier when known.
+One immutable harness attempt within a run, with its own invocation packet, role-owned visible surface handles, factory prompt version, and native session identifier when known.
 _Avoid_: Terminal transcript
 
 **Surface**:
@@ -81,8 +81,12 @@ A configured interactive coding tool, such as Codex, launched through the harnes
 _Avoid_: Lead agent
 
 **Role**:
-The coordinator-owned responsibility assigned to an invocation, such as implementation, test, or review; repository guidance cannot change role ownership.
+The coordinator-owned responsibility assigned to an invocation, such as implementation, architecture, test, or review. The factory-owned role registry couples each role to its invocation stage, prompt version, default permitted paths, report contract, and visible surface strategy; repository guidance cannot change role ownership.
 _Avoid_: Persona
+
+**Workflow registry**:
+The factory-owned declaration of roles, prompts, stages, visible surfaces, and report-outcome transitions. Repository configuration selects harness and model policy for declared roles but cannot add or redefine workflow authority.
+_Avoid_: Repository-defined workflow, prompt configuration
 
 **Invocation packet**:
 The read-only, versioned file containing the frozen specification and role identity that the coordinator mounts into one worker invocation.
@@ -117,7 +121,7 @@ Host-local YAML that registers the one repository, its GitHub identity, authoriz
 _Avoid_: Repository policy
 
 **Repository configuration**:
-Checked-in `factory.yaml` that declares the repository's target branch, setup, deterministic gates, harness and model policy, budgets, worker build, and base synchronization.
+Checked-in `factory.yaml` that declares the repository's target branch, setup, deterministic gates, harness and model policy for factory-declared roles, budgets, worker build, and base synchronization. It cannot declare roles, prompts, stages, or transitions.
 _Avoid_: Host configuration
 
 **Operational store**:

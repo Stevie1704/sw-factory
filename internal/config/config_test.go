@@ -841,9 +841,44 @@ func TestValidateRepositoryAcceptsDeclaredReasoningEffortOptions(t *testing.T) {
 // verifies reasoning effort cannot be declared for a role that has no harness.
 func TestValidateRepositoryRejectsReasoningEffortOptionsForAnUndeclaredRole(t *testing.T) {
 	value := validRepositoryConfig()
-	value.ReasoningEffortOptions = map[string][]string{"standards_review": {"high"}}
-	if err := config.ValidateRepository(value); err == nil || !strings.Contains(err.Error(), "reasoning_effort_options.standards_review") {
+	value.ReasoningEffortOptions = map[string][]string{"custom_review": {"high"}}
+	if err := config.ValidateRepository(value); err == nil || !strings.Contains(err.Error(), "reasoning_effort_options.custom_review") {
 		t.Fatalf("ValidateRepository() error = %v, want undeclared-role rejection", err)
+	}
+}
+
+// TestValidateRepositoryRejectsAnUnknownRoleAsAFactoryPolicyError verifies a
+// repository can select policy only for roles declared by the factory.
+func TestValidateRepositoryRejectsAnUnknownRoleAsAFactoryPolicyError(t *testing.T) {
+	value := validRepositoryConfig()
+	value.RoleHarnessDefaults["custom"] = config.HarnessCodex
+	value.ModelOptions["custom"] = []string{"gpt-5"}
+
+	err := config.ValidateRepository(value)
+	var policyErr *config.PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("ValidateRepository() error = %v, want PolicyError", err)
+	}
+	if policyErr.Field != "role_harness_defaults.custom" {
+		t.Fatalf("policy field = %q, want role_harness_defaults.custom", policyErr.Field)
+	}
+}
+
+// TestLoadRepositoryRejectsWorkflowDeclarationsAsAFactoryPolicyError verifies
+// repository YAML cannot take ownership of roles, stages, prompts, or edges.
+func TestLoadRepositoryRejectsWorkflowDeclarationsAsAFactoryPolicyError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(path, []byte("roles:\n  architecture: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := config.LoadRepository(path)
+	var policyErr *config.PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("LoadRepository() error = %v, want PolicyError", err)
+	}
+	if policyErr.Field != "roles" {
+		t.Fatalf("policy field = %q, want roles", policyErr.Field)
 	}
 }
 
