@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -354,3 +355,88 @@ func (h *journalRecoveryHarness) NativeSessionID(context.Context, harness.Native
 
 var _ harness.Runtime = (*journalRecoveryHarness)(nil)
 var _ harness.NativeSessionInspector = (*journalRecoveryHarness)(nil)
+
+// ancestryGitWorkspace reports a remote head plus a fixed ancestry answer so a
+// reconciliation test can distinguish an unpushed checkpoint from a diverged
+// branch without running Git.
+type ancestryGitWorkspace struct {
+	remoteHead string
+	ancestor   bool
+	calls      int
+}
+
+// Create satisfies the Git workspace seam.
+func (*ancestryGitWorkspace) Create(context.Context, string, string, string) (gitadapter.Workspace, error) {
+	return gitadapter.Workspace{}, nil
+}
+
+// Remove satisfies the Git workspace seam.
+func (*ancestryGitWorkspace) Remove(context.Context, string, gitadapter.Workspace) error { return nil }
+
+// Inspect satisfies the read-only worktree seam.
+func (*ancestryGitWorkspace) Inspect(context.Context, string) (gitadapter.WorktreeState, error) {
+	return gitadapter.WorktreeState{}, nil
+}
+
+// CreateCheckpoint satisfies the Git workspace seam.
+func (*ancestryGitWorkspace) CreateCheckpoint(context.Context, gitadapter.CheckpointRequest) (gitadapter.CheckpointResult, error) {
+	return gitadapter.CheckpointResult{}, nil
+}
+
+// Push satisfies the Git workspace seam.
+func (*ancestryGitWorkspace) Push(context.Context, gitadapter.PushRequest) error { return nil }
+
+// SynchronizeBase satisfies the Git workspace seam.
+func (*ancestryGitWorkspace) SynchronizeBase(context.Context, gitadapter.BaseSyncRequest) error {
+	return nil
+}
+
+// RemoteBranchHead returns the configured remote projection.
+func (w *ancestryGitWorkspace) RemoteBranchHead(context.Context, gitadapter.PushRequest) (string, error) {
+	return w.remoteHead, nil
+}
+
+// IsAncestor reports the configured reachability answer.
+func (w *ancestryGitWorkspace) IsAncestor(_ context.Context, _, _, _ string) (bool, error) {
+	w.calls++
+	return w.ancestor, nil
+}
+
+var _ gitadapter.GitWorkspace = (*ancestryGitWorkspace)(nil)
+var _ gitadapter.RemoteBranchInspector = (*ancestryGitWorkspace)(nil)
+var _ gitadapter.AncestryInspector = (*ancestryGitWorkspace)(nil)
+
+// TestRemoteBranchBehindCheckpointIsNotADiscrepancy verifies that an unpushed
+// checkpoint does not pause the run. A checkpoint is committed and persisted
+// before the gate suite runs and pushed only afterwards, so a remote head that
+// is an ancestor of the local checkpoint is an ordinary in-flight state.
+func TestRemoteBranchBehindCheckpointIsNotADiscrepancy(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	run := store.Run{
+		ID: "run-remote", Branch: "factory/run-remote", Worktree: "/worktree",
+		CheckpointSHA: strings.Repeat("b", 40), PullRequestNumber: 7,
+	}
+	behind := &ancestryGitWorkspace{remoteHead: strings.Repeat("a", 40), ancestor: true}
+	diagnosis := RecoveryDiagnosis{}
+	inspectRemoteBranchProjection(ctx, &diagnosis, behind, run)
+	if len(diagnosis.Discrepancies) != 0 {
+		t.Fatalf("discrepancies for an unpushed checkpoint = %#v, want none", diagnosis.Discrepancies)
+	}
+	if behind.calls != 1 {
+		t.Fatalf("ancestry checks = %d, want one", behind.calls)
+	}
+
+	// A remote head that is not reachable from the checkpoint has diverged and
+	// must still pause the run.
+	diverged := &ancestryGitWorkspace{remoteHead: strings.Repeat("c", 40), ancestor: false}
+	divergedDiagnosis := RecoveryDiagnosis{}
+	inspectRemoteBranchProjection(ctx, &divergedDiagnosis, diverged, run)
+	if len(divergedDiagnosis.Discrepancies) != 1 {
+		t.Fatalf("discrepancies for a diverged branch = %#v, want one", divergedDiagnosis.Discrepancies)
+	}
+	if divergedDiagnosis.Discrepancies[0].Field != "head" {
+		t.Fatalf("diverged discrepancy field = %q, want %q", divergedDiagnosis.Discrepancies[0].Field, "head")
+	}
+}

@@ -283,15 +283,26 @@ func inspectRemoteBranchProjection(ctx context.Context, diagnosis *RecoveryDiagn
 		})
 		return
 	}
-	if head != run.CheckpointSHA {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-			Kind:     RecoveryDiscrepancyInfrastructure,
-			Source:   "remote branch",
-			Field:    "head",
-			Expected: run.CheckpointSHA,
-			Observed: head,
-		})
+	if head == run.CheckpointSHA {
+		return
 	}
+	// A checkpoint is committed and persisted before the gate suite runs, and
+	// pushed only afterwards. A remote head that is an ancestor of the local
+	// checkpoint is therefore an ordinary unpushed commit, not a disagreement:
+	// the branch has not diverged and the pending push effect still owns it.
+	if ancestry, ok := workspace.(gitadapter.AncestryInspector); ok && head != "" {
+		reachable, ancestryErr := ancestry.IsAncestor(ctx, run.Worktree, head, run.CheckpointSHA)
+		if ancestryErr == nil && reachable {
+			return
+		}
+	}
+	addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+		Kind:     RecoveryDiscrepancyInfrastructure,
+		Source:   "remote branch",
+		Field:    "head",
+		Expected: run.CheckpointSHA,
+		Observed: head,
+	})
 }
 
 // inspectInvocationProjection verifies the active invocation's durable
