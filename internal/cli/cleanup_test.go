@@ -43,7 +43,7 @@ func TestCleanupCommandPrintsTargetsBeforeConfirmation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	opened, err := store.Open(context.Background(), operationalPath)
 	if err != nil {
 		t.Fatal(err)
