@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1207,5 +1208,123 @@ func TestStateTransitionRetryAfterTransientFailureIsNotBlocked(t *testing.T) {
 	}
 	if pending, err := opened.PendingEffect(ctx, run.ID); err != nil || pending != nil {
 		t.Fatalf("pending effect after successful retry = %#v, error = %v; want cleared", pending, err)
+	}
+}
+
+// markerAwareGitHub resolves FindStatusComment by the requested marker, so a
+// test can tell one coordinator-owned comment apart from another on the same
+// issue. The shared effectMatrixGitHub deliberately keeps a single comment.
+type markerAwareGitHub struct {
+	issue    github.Issue
+	comments []github.Comment
+	creates  int
+	edits    int
+}
+
+// Issue returns the fixed issue projection.
+func (g *markerAwareGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+	return g.issue, nil
+}
+
+// CreateLabel is unused by clarification publication.
+func (g *markerAwareGitHub) CreateLabel(context.Context, github.Repository, github.Label) error {
+	return nil
+}
+
+// ReplaceIssueLabels records the complete desired label set.
+func (g *markerAwareGitHub) ReplaceIssueLabels(_ context.Context, _ github.Repository, _ int, labels []string) error {
+	g.issue.Labels = append([]string(nil), labels...)
+	return nil
+}
+
+// CreateIssueComment appends a new comment with a distinct identity.
+func (g *markerAwareGitHub) CreateIssueComment(_ context.Context, _ github.Repository, _ int, body string) (github.Comment, error) {
+	g.creates++
+	comment := github.Comment{ID: fmt.Sprintf("comment-%d", g.creates), Body: body}
+	g.comments = append(g.comments, comment)
+	return comment, nil
+}
+
+// FindStatusComment returns the first comment carrying the requested marker.
+func (g *markerAwareGitHub) FindStatusComment(_ context.Context, _ github.Repository, _ int, marker string) (github.Comment, error) {
+	for _, comment := range g.comments {
+		if strings.Contains(comment.Body, marker) {
+			return comment, nil
+		}
+	}
+	return github.Comment{}, nil
+}
+
+// EditIssueComment rewrites one existing comment body in place.
+func (g *markerAwareGitHub) EditIssueComment(_ context.Context, _ github.Repository, id, body string) error {
+	g.edits++
+	for index, comment := range g.comments {
+		if comment.ID == id {
+			g.comments[index].Body = body
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown comment %q", id)
+}
+
+// TestClarificationRoundsDoNotOverwriteEachOther verifies that a second round
+// of questions is published as its own comment. The marker is scoped to the
+// specification packet version, so replay stays idempotent within a round while
+// an answered round's questions remain readable on the issue.
+func TestClarificationRoundsDoNotOverwriteEachOther(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+
+	firstPacket, err := json.Marshal(SpecificationPacket{Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = store.StatusWaitingForHuman
+	run.PendingQuestions = []store.PendingQuestion{{ID: "format", Prompt: "Which format should be used?"}}
+	run.SpecificationPacket = string(firstPacket)
+	run.ClarificationNotificationSent = true
+	if err := opened.SaveRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	githubRuntime := &markerAwareGitHub{issue: github.Issue{Number: run.IssueNumber}}
+	service := newEffectMatrixService(githubRuntime, nil, nil, nil)
+
+	published, err := service.ensureClarificationPublication(ctx, effectMatrixRegistration(), opened, run)
+	if err != nil {
+		t.Fatalf("first clarification round = %v", err)
+	}
+	// Publishing the same round again must recognize the existing comment.
+	republished, err := service.ensureClarificationPublication(ctx, effectMatrixRegistration(), opened, published)
+	if err != nil {
+		t.Fatalf("replayed first clarification round = %v", err)
+	}
+	if githubRuntime.creates != 1 {
+		t.Fatalf("comment creates after replaying one round = %d, want one", githubRuntime.creates)
+	}
+
+	// The answer advances the packet version and clears the round identity.
+	secondPacket, err := json.Marshal(SpecificationPacket{Version: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRound := republished
+	secondRound.SpecificationPacket = string(secondPacket)
+	secondRound.PendingQuestions = []store.PendingQuestion{{ID: "scope", Prompt: "Which scope applies?"}}
+	secondRound.ClarificationCommentID = ""
+	if _, err := service.ensureClarificationPublication(ctx, effectMatrixRegistration(), opened, secondRound); err != nil {
+		t.Fatalf("second clarification round = %v", err)
+	}
+	if githubRuntime.creates != 2 {
+		t.Fatalf("comment creates after a second round = %d, want two", githubRuntime.creates)
+	}
+	if len(githubRuntime.comments) != 2 {
+		t.Fatalf("comments on the issue = %d, want both rounds retained", len(githubRuntime.comments))
+	}
+	if !strings.Contains(githubRuntime.comments[0].Body, "Which format should be used?") {
+		t.Fatalf("first round comment was overwritten: %q", githubRuntime.comments[0].Body)
+	}
+	if !strings.Contains(githubRuntime.comments[1].Body, "Which scope applies?") {
+		t.Fatalf("second round comment = %q, want the new questions", githubRuntime.comments[1].Body)
 	}
 }

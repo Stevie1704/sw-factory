@@ -60,6 +60,9 @@ type clarificationCommentEffectPayload struct {
 	Repository github.Repository
 	Target     int
 	Body       string
+	// PacketVersion scopes the comment marker to one clarification round so a
+	// replay repairs that round's comment instead of overwriting an earlier one.
+	PacketVersion int
 }
 
 // labelTransitionEffectPayload is the serialized intent for a standalone
@@ -424,7 +427,7 @@ func (s *Service) replayPendingClarificationComment(ctx context.Context, runStor
 	if current == nil {
 		return store.Run{}, fmt.Errorf("run %q disappeared during clarification replay", effect.RunID)
 	}
-	comment, err := s.findOrCreateClarificationComment(ctx, payload.Repository, payload.Target, effect.RunID, payload.Body)
+	comment, err := s.findOrCreateClarificationComment(ctx, payload.Repository, payload.Target, effect.RunID, payload.PacketVersion, payload.Body)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("replay clarification comment: %w", err)
 	}
@@ -670,7 +673,6 @@ func (s *Service) resumeHarnessWithEffect(ctx context.Context, runStore RunStore
 		if err != nil {
 			return fmt.Errorf("resume native harness session: %w", err)
 		}
-		updated = reserved
 		if session.NativeSessionID != "" {
 			updated.NativeSessionID = session.NativeSessionID
 		}
