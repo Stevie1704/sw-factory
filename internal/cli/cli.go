@@ -588,6 +588,10 @@ func runReconcile(ctx context.Context, args []string, defaultConfigPath string, 
 		writeError(errorsOutput, errors.New("reconcile does not accept positional arguments"))
 		return 2
 	}
+	if *effectID == "" && *reason != "" {
+		writeError(errorsOutput, errors.New("--reason applies only to --abandon-effect"))
+		return 2
+	}
 	service := factory.New(*configPath)
 	var (
 		result factory.RecoveryResult
@@ -598,11 +602,15 @@ func runReconcile(ctx context.Context, args []string, defaultConfigPath string, 
 	} else {
 		result, err = service.Reconcile(ctx)
 	}
-	if err != nil {
-		writeError(errorsOutput, err)
-		return 1
-	}
+	// A paused run is a reported outcome, not a failed command: reconciliation
+	// returns a typed discrepancy error alongside the diagnosis it just wrote.
+	// Print the structured result first so the operator sees the run, the
+	// pending effect, and every discrepancy, then surface the typed error.
 	if result.Run == nil {
+		if err != nil {
+			writeError(errorsOutput, err)
+			return 1
+		}
 		if !writeOutput(output, errorsOutput, "reconciliation: no persisted run\n") {
 			return 1
 		}
@@ -611,10 +619,24 @@ func runReconcile(ctx context.Context, args []string, defaultConfigPath string, 
 	if !writeOutput(output, errorsOutput, "reconciliation: outcome=%s run=%s status=%s stage=%s\n", result.Outcome, result.Run.ID, result.Run.Status, result.Run.Stage) {
 		return 1
 	}
+	if pending := result.Diagnosis.PendingEffect; pending != nil {
+		if !writeOutput(output, errorsOutput, "reconciliation pending effect: id=%s kind=%s\n", pending.ID, pending.Kind) {
+			return 1
+		}
+	}
 	for _, discrepancy := range result.Diagnosis.Discrepancies {
 		if !writeOutput(output, errorsOutput, "reconciliation discrepancy: %s.%s expected=%q observed=%q\n", discrepancy.Source, discrepancy.Field, discrepancy.Expected, discrepancy.Observed) {
 			return 1
 		}
+	}
+	for _, action := range result.Diagnosis.SafeActions {
+		if !writeOutput(output, errorsOutput, "reconciliation safe action: %s\n", action) {
+			return 1
+		}
+	}
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
 	}
 	return 0
 }
