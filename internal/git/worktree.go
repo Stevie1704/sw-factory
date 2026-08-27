@@ -20,6 +20,9 @@ const DefaultRemoteName = "origin"
 // Workspace identifies the fetched base commit and isolated checkout created
 // for one run.
 type Workspace struct {
+	// RunID identifies the run-owned metadata projection adjacent to Worktree.
+	// It is optional for compatibility with callers that only manage Git state.
+	RunID    string
 	BaseSHA  string
 	Branch   string
 	Worktree string
@@ -266,7 +269,7 @@ func (m *LocalWorktreeManager) Create(ctx context.Context, repositoryPath, targe
 	if _, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "add", "-b", branch, worktree, baseSHA}); err != nil {
 		return Workspace{}, fmt.Errorf("create worktree %q: %w", worktree, err)
 	}
-	return Workspace{BaseSHA: baseSHA, Branch: branch, Worktree: worktree}, nil
+	return Workspace{RunID: runID, BaseSHA: baseSHA, Branch: branch, Worktree: worktree}, nil
 }
 
 // CreateCheckpoint validates the run worktree and creates one host-side
@@ -482,8 +485,9 @@ func (m *LocalWorktreeManager) hasCheckpointMarker(ctx context.Context, worktree
 	return firstLine == marker
 }
 
-// Remove deletes a run worktree and its factory branch after a claim failure.
-// It attempts both operations so a partial cleanup still reports every error.
+// Remove deletes a run worktree, its factory branch, and its exact run-owned
+// Git metadata projection. It attempts every operation so a partial cleanup
+// still reports every error. It never addresses a remote branch.
 func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string, workspace Workspace) error {
 	if strings.TrimSpace(repositoryPath) == "" {
 		return errors.New("repository path is required")
@@ -500,6 +504,14 @@ func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string
 	if err := validateRefPart(workspace.Branch); err != nil {
 		return fmt.Errorf("workspace branch: %w", err)
 	}
+	if workspace.RunID != "" {
+		if err := validateRefPart(workspace.RunID); err != nil {
+			return fmt.Errorf("workspace run id: %w", err)
+		}
+		if filepath.Base(filepath.Clean(workspace.Worktree)) != workspace.RunID {
+			return errors.New("workspace path does not end in its run id")
+		}
+	}
 
 	var cleanupErrors []error
 	if _, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "remove", "--force", workspace.Worktree}); err != nil {
@@ -508,7 +520,36 @@ func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string
 	if _, err := m.runner().Run(ctx, repositoryPath, []string{"branch", "-D", workspace.Branch}); err != nil {
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove branch %q: %w", workspace.Branch, err))
 	}
+	if workspace.RunID != "" {
+		if err := removeRunGitMetadata(workspace); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
+	}
 	return errors.Join(cleanupErrors...)
+}
+
+// removeRunGitMetadata removes one exact run directory under the sibling
+// .factory-git projection. Symlinks and non-directories are rejected so a
+// persisted path cannot widen Git cleanup beyond the run's own metadata.
+func removeRunGitMetadata(workspace Workspace) error {
+	metadataPath := filepath.Join(filepath.Dir(filepath.Clean(workspace.Worktree)), ".factory-git", workspace.RunID)
+	info, err := os.Lstat(metadataPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Git metadata %q: %w", metadataPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Git metadata %q must not be a symbolic link", metadataPath)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("Git metadata %q is not a directory", metadataPath)
+	}
+	if err := os.RemoveAll(metadataPath); err != nil {
+		return fmt.Errorf("remove Git metadata %q: %w", metadataPath, err)
+	}
+	return nil
 }
 
 // worktreePath returns the configured or default sibling worktree location.

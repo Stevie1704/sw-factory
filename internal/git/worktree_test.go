@@ -50,6 +50,9 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	if workspace.Branch != "factory/run-fixed" {
 		t.Fatalf("Branch = %q, want factory/run-fixed", workspace.Branch)
 	}
+	if workspace.RunID != "run-fixed" {
+		t.Fatalf("RunID = %q, want run-fixed", workspace.RunID)
+	}
 	wantWorktree := filepath.Join(root, "worktrees", "run-fixed")
 	if workspace.Worktree != wantWorktree {
 		t.Fatalf("Worktree = %q, want %q", workspace.Worktree, wantWorktree)
@@ -70,11 +73,18 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	if string(contents) != "base\n" {
 		t.Fatalf("worktree README = %q, want target branch contents", contents)
 	}
+	gitMetadataProjection := filepath.Join(root, "worktrees", ".factory-git", "run-fixed")
+	if err := os.MkdirAll(gitMetadataProjection, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.Remove(context.Background(), repository, workspace); err != nil {
 		t.Fatalf("Remove() error = %v", err)
 	}
 	if _, err := os.Stat(workspace.Worktree); !os.IsNotExist(err) {
 		t.Fatalf("worktree path still exists after Remove(): err = %v", err)
+	}
+	if _, err := os.Stat(gitMetadataProjection); !os.IsNotExist(err) {
+		t.Fatalf("Git metadata projection still exists after Remove(): err = %v", err)
 	}
 	if got := strings.TrimSpace(runGit(t, repository, "branch", "--list", workspace.Branch)); got != "" {
 		t.Fatalf("run branch = %q, want branch removed", got)

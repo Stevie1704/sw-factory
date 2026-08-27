@@ -20,7 +20,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 23
+const CurrentSchemaVersion = 24
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -336,6 +336,10 @@ type Run struct {
 	MergeCommitSHA string
 	// LifecycleReason explains an automatic or authorized terminal transition.
 	LifecycleReason string
+	// TerminalAt records when the run first entered its current terminal state.
+	// It remains stable while terminal notifications or status projections are
+	// retried, and is cleared when a terminal run is explicitly reopened.
+	TerminalAt time.Time
 	// LifecycleNotificationSent records successful cmux notification delivery.
 	LifecycleNotificationSent bool
 	// Revision is the monotonic coordinator revision used by command replay
@@ -631,7 +635,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
 		       specification_packet, pending_questions, clarification_comment_id,
-		       clarification_notification_sent, created_at, updated_at
+		       clarification_notification_sent, terminal_at, created_at, updated_at
 		FROM operational_runs
 		WHERE status NOT IN (?, ?, ?)
 		ORDER BY updated_at DESC
@@ -655,7 +659,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
 		       specification_packet, pending_questions, clarification_comment_id,
-		       clarification_notification_sent, created_at, updated_at
+		       clarification_notification_sent, terminal_at, created_at, updated_at
 		FROM operational_runs
 		ORDER BY updated_at DESC
 		LIMIT 1`)
@@ -668,8 +672,9 @@ func scanRun(row *sql.Row) (*Run, error) {
 	var baseCheckpointSHA, testCheckpointSHA string
 	var testHandoffJSON, implementationHandoffJSON, specificationReviewJSON string
 	var testExemptionJSON, protectedTestPathsJSON string
-	var pendingQuestionsJSON, clarificationCommentID, createdAt, updatedAt string
+	var pendingQuestionsJSON, clarificationCommentID, terminalAt, createdAt, updatedAt string
 	var clarificationNotificationSent bool
+	var err error
 	if err := row.Scan(
 		&run.ID,
 		&run.RepositoryPath,
@@ -709,6 +714,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&pendingQuestionsJSON,
 		&clarificationCommentID,
 		&clarificationNotificationSent,
+		&terminalAt,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -758,7 +764,12 @@ func scanRun(row *sql.Row) (*Run, error) {
 	}
 	run.ClarificationCommentID = clarificationCommentID
 	run.ClarificationNotificationSent = clarificationNotificationSent
-	var err error
+	if terminalAt != "" {
+		run.TerminalAt, err = time.Parse(time.RFC3339Nano, terminalAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse run terminal_at: %w", err)
+		}
+	}
 	run.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("parse run created_at: %w", err)
@@ -996,6 +1007,13 @@ func normalizeRun(run Run) (Run, error) {
 	}
 	if run.UpdatedAt.IsZero() {
 		run.UpdatedAt = run.CreatedAt
+	}
+	if IsTerminalStatus(run.Status) {
+		if run.TerminalAt.IsZero() {
+			run.TerminalAt = run.UpdatedAt
+		}
+	} else {
+		run.TerminalAt = time.Time{}
 	}
 	return run, nil
 }
@@ -1272,9 +1290,19 @@ func runValues(run Run) []any {
 		pendingQuestionsJSON(run.PendingQuestions),
 		run.ClarificationCommentID,
 		run.ClarificationNotificationSent,
+		terminalAtValue(run.TerminalAt),
 		run.CreatedAt.UTC().Format(runTimestampLayout),
 		run.UpdatedAt.UTC().Format(runTimestampLayout),
 	}
+}
+
+// terminalAtValue serializes an absent terminal timestamp as the empty
+// projection used by migrated and active runs.
+func terminalAtValue(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(runTimestampLayout)
 }
 
 const saveRunStatement = `
@@ -1291,12 +1319,12 @@ const saveRunStatement = `
 			last_command_message, harness_override, check_repair_attempts,
 			check_repair_budget, check_repair_pending_attempt, specification_packet,
 			pending_questions, clarification_comment_id,
-			clarification_notification_sent, created_at, updated_at
+			clarification_notification_sent, terminal_at, created_at, updated_at
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -1336,6 +1364,7 @@ const saveRunStatement = `
 			pending_questions = excluded.pending_questions,
 			clarification_comment_id = excluded.clarification_comment_id,
 			clarification_notification_sent = excluded.clarification_notification_sent,
+			terminal_at = excluded.terminal_at,
 			updated_at = excluded.updated_at`
 
 const saveRunIfRevisionStatement = `
@@ -1352,7 +1381,7 @@ const saveRunIfRevisionStatement = `
 			last_command_message = ?, harness_override = ?, check_repair_attempts = ?,
 			check_repair_budget = ?, check_repair_pending_attempt = ?, specification_packet = ?,
 			pending_questions = ?, clarification_comment_id = ?,
-			clarification_notification_sent = ?, created_at = ?, updated_at = ?
+			clarification_notification_sent = ?, terminal_at = ?, created_at = ?, updated_at = ?
 		WHERE id = ? AND revision = ?`
 
 // SaveInvocation validates and upserts one recoverable harness invocation.
@@ -2301,6 +2330,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 23:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN attach_required INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return fmt.Errorf("apply store migration 23: %w", err)
+			}
+		case 24:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN terminal_at TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("apply store migration 24: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

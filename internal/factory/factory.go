@@ -73,6 +73,9 @@ type Factory interface {
 	DeleteEvaluation(context.Context, EvaluationDeleteRequest) (EvaluationDeleteResult, error)
 	// AttachEvaluationDisposition records an explicit human escalation disposition.
 	AttachEvaluationDisposition(context.Context, EvaluationDispositionRequest) (EvaluationDispositionResult, error)
+	// Cleanup previews and, when explicitly confirmed, removes eligible local
+	// run artifacts without deleting remote branches or evaluation summaries.
+	Cleanup(context.Context, CleanupRequest) (CleanupResult, error)
 }
 
 // RunCoordinator is the single claim/state-transition seam used by the

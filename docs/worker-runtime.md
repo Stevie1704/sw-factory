@@ -67,6 +67,14 @@ host-side `GitWorkspace` validates the accepted worktree, creates the immutable
 checkpoint, synchronizes a base branch when policy requires it, pushes the run
 branch, and removes the worktree during cleanup.
 
+After the Factory cleanup policy confirms that a terminal run is older than
+seven days, the optional `CleanupRuntime` extension removes the run's private
+worker container, role-home volumes, and the exact invocation packet/result
+directories supplied for that run. It never removes the separate
+factory-managed credential volume; the coordinator supplies only the selected
+run roles, run identity, and validated output directories to this destructive
+adapter operation.
+
 Setup and the selected repository-declared gate run with `env -i` plus an
 explicit worker baseline. Role-policy commands additionally receive the
 coordinator-defined role identity; clean-policy commands do not. The gate

@@ -403,7 +403,7 @@ prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 22 and persists invocation
+result. The operational store schema is version 24 and persists invocation
 identity, opaque surface handles, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state. It
 also persists the draft pull-request number and URL so a restarted command can
@@ -486,8 +486,8 @@ Record the command output and verify the demonstration at each boundary:
 - `factory status` and the issue's status comment report `draft_pr`.
 
 Keep the resulting pull-request URL and the status-comment URL as the
-demonstration evidence. Close the disposable pull request and issue, then
-remove the run's local worktree and operational database after inspection.
+demonstration evidence. Close the disposable pull request and issue, then use
+`factory cleanup` after inspection to remove the eligible local run artifacts.
 
 ## Operational SQLite store
 
@@ -508,5 +508,36 @@ attach a human classification, and the separately confirmed
 `factory evaluation-delete --before <RFC3339> --confirm` command to remove only
 selected terminal summaries. Ordinary run-artifact cleanup does not touch this
 projection.
+
+## Run-artifact cleanup
+
+Ordinary run data becomes eligible seven days after a run enters its current
+terminal state: merged, closed, failed, or cancelled. The coordinator retains
+the current baseline and latest output projections while a run is active, and
+keeps worktrees and implementation session state while its pull request is
+open. It does not select active or waiting runs for cleanup.
+
+`factory cleanup` first prints every exact local worktree, local factory branch,
+logical worker target, and generated stored-output directory selected for
+removal. For a run with a tracked pull request it also reads the current GitHub
+lifecycle and keeps the run when that pull request is still open. It requires
+an explicit `--confirm` flag; the command never deletes a remote branch. A
+pending external-effect reservation, a malformed run identity, or a path that
+cannot be proven run-scoped blocks that run from cleanup. The second
+confirmation pass reuses the displayed cutoff and refuses a changed plan, so
+the printed targets are the targets being authorized.
+
+```sh
+factory cleanup --config /Users/me/.config/factory/config.yaml
+factory cleanup --config /Users/me/.config/factory/config.yaml --confirm
+factory cleanup --config /Users/me/.config/factory/config.yaml --run-id <run-id> --confirm
+```
+
+Cleanup removes operational run rows, invocation history, deterministic gate
+results, worker containers, run-scoped role-home volumes, generated invocation
+packets/results, and Git metadata projections through the WorkerRuntime and
+GitWorkspace adapters. Factory-managed credential volumes and local evaluation
+summaries are retained; `factory evaluation-delete` remains the only summary
+deletion command.
 
 The high-level `Factory` seam injects configuration, repository checking, GitHub, pull requests, `GitWorkspace`, worker, terminal, harness, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; issue #6 adds the portable `TerminalRuntime`, Codex harness, invocation packet, and structured report boundary; issue #7 adds host checkpoint, push, and draft-PR orchestration.

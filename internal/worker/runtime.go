@@ -287,6 +287,29 @@ type WorkerRuntime interface {
 	Inspect(context.Context, string) (Inspection, error)
 }
 
+// CleanupRequest selects the run-scoped worker resources that may be removed
+// after the coordinator has confirmed the run is no longer recoverable.
+type CleanupRequest struct {
+	// RunID identifies the worker container and role volumes.
+	RunID string
+	// Roles identifies the role-home volumes to remove. Credential storage is
+	// deliberately not addressable through this request.
+	Roles []string
+	// StoredOutputs contains exact invocation packet and result directories
+	// owned by this worker runtime.
+	StoredOutputs []string
+}
+
+// CleanupRuntime is the optional destructive extension for a WorkerRuntime.
+// Keeping it separate lets existing embedders provide run execution without
+// gaining an implicit authority to delete worker state.
+type CleanupRuntime interface {
+	WorkerRuntime
+	// Cleanup removes the selected run container and role-home volumes while
+	// preserving factory-managed credential volumes.
+	Cleanup(context.Context, CleanupRequest) error
+}
+
 // DockerRuntime implements WorkerRuntime with the host Docker executable.
 // Docker container names are derived privately from RunID and never appear in
 // the WorkerRuntime interface or its results.
@@ -685,6 +708,205 @@ func (r *DockerRuntime) Stop(ctx context.Context, runID string) error {
 		return fmt.Errorf("stop worker %q: %w", runID, err)
 	}
 	return nil
+}
+
+// Cleanup removes one stopped or running worker and its run-scoped role-home
+// volumes. It is idempotent for absent Docker resources and never removes the
+// credential volume shared by harnesses.
+func (r *DockerRuntime) Cleanup(ctx context.Context, request CleanupRequest) error {
+	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if err := ValidateCleanupStoredOutputs(request.RunID, request.StoredOutputs); err != nil {
+		return err
+	}
+	seenRoles := make(map[string]struct{}, len(request.Roles))
+	for _, role := range request.Roles {
+		if !validName(role) {
+			return fmt.Errorf("worker cleanup role %q contains unsafe characters", role)
+		}
+		if _, exists := seenRoles[role]; exists {
+			return fmt.Errorf("worker cleanup role %q is duplicated", role)
+		}
+		seenRoles[role] = struct{}{}
+	}
+
+	name := containerName(request.RunID)
+	if _, err := r.runDocker(ctx, []string{"rm", "--force", name}); err != nil && !isDockerResourceNotFound(err) {
+		return fmt.Errorf("remove worker %q: %w", request.RunID, dockerStderrDetail(err))
+	}
+	for _, role := range request.Roles {
+		volume := roleVolumeName(request.RunID, role)
+		if _, err := r.runDocker(ctx, []string{"volume", "rm", volume}); err != nil && !isDockerResourceNotFound(err) {
+			return fmt.Errorf("remove worker role storage for %q: %w", role, dockerStderrDetail(err))
+		}
+	}
+	if err := removeCleanupStoredOutputs(request.StoredOutputs); err != nil {
+		return fmt.Errorf("remove stored worker outputs: %w", err)
+	}
+	return nil
+}
+
+// ValidateCleanupStoredOutputs validates the exact invocation packet and
+// result directories accepted by Cleanup. It prevents a persisted path from
+// widening a worker cleanup into an arbitrary host deletion.
+func ValidateCleanupStoredOutputs(runID string, paths []string) error {
+	if err := validateRunID(runID); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if err := validateCleanupStoredOutputPath(runID, path); err != nil {
+			return err
+		}
+		if _, exists := seen[path]; exists {
+			return fmt.Errorf("stored output %q is duplicated", path)
+		}
+		seen[path] = struct{}{}
+	}
+	return nil
+}
+
+// validateCleanupStoredOutputPath accepts only the packet or result directory
+// shape generated beneath one run's private .factory-agents root.
+func validateCleanupStoredOutputPath(runID, path string) error {
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n,") {
+		return fmt.Errorf("stored output %q must be an absolute safe path", path)
+	}
+	clean := filepath.Clean(path)
+	parts := strings.Split(filepath.ToSlash(strings.TrimPrefix(clean, string(filepath.Separator))), "/")
+	for index := 0; index+3 < len(parts); index++ {
+		if parts[index] != ".factory-agents" || parts[index+1] != runID || !validName(parts[index+2]) {
+			continue
+		}
+		if index+3 != len(parts)-1 || (parts[index+3] != "packet" && parts[index+3] != "results") {
+			break
+		}
+		return nil
+	}
+	return fmt.Errorf("stored output %q is outside the run invocation roots", path)
+}
+
+// removeCleanupStoredOutputs removes exact worker-owned output directories and
+// treats missing paths as successful for retry after a partial cleanup.
+func removeCleanupStoredOutputs(paths []string) error {
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("stored output %q must not be a symbolic link", path)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("stored output %q is not a directory", path)
+		}
+		root, err := cleanupStoredOutputRoot(path)
+		if err != nil {
+			return err
+		}
+		if err := validateCleanupStoredOutputTree(root, path); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove stored output %q: %w", path, err)
+		}
+		if err := removeEmptyCleanupParents(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cleanupStoredOutputRoot returns the run's lexical .factory-agents root for
+// one validated output path. It allows normal system-level symlinks such as
+// macOS /var while keeping the run-owned portion of the path symlink-free.
+func cleanupStoredOutputRoot(path string) (string, error) {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	marker := "/.factory-agents/"
+	index := strings.Index(clean, marker)
+	if index < 0 {
+		return "", fmt.Errorf("stored output %q is outside the run invocation roots", path)
+	}
+	return filepath.FromSlash(clean[:index+len("/.factory-agents")]), nil
+}
+
+// validateCleanupStoredOutputTree rejects symlinks and non-directories from
+// the private .factory-agents root through the exact output directory.
+func validateCleanupStoredOutputTree(root, path string) error {
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return fmt.Errorf("inspect stored output root %q: %w", root, err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("stored output root %q must not be a symbolic link", root)
+	}
+	if !rootInfo.IsDir() {
+		return fmt.Errorf("stored output root %q is not a directory", root)
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("stored output %q is outside its run invocation root", path)
+	}
+	current := root
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return fmt.Errorf("inspect stored output component %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("stored output component %q must not be a symbolic link", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("stored output component %q is not a directory", current)
+		}
+	}
+	return nil
+}
+
+// removeEmptyCleanupParents removes only empty invocation and run directories
+// beneath the private .factory-agents root, never the shared root itself.
+func removeEmptyCleanupParents(path string) error {
+	root, err := cleanupStoredOutputRoot(path)
+	if err != nil {
+		return err
+	}
+	runRoot := filepath.Dir(filepath.Dir(filepath.Clean(path)))
+	for current := filepath.Dir(filepath.Clean(path)); current != root; current = filepath.Dir(current) {
+		if !pathWithinCleanupRoot(root, current) || current == root {
+			return fmt.Errorf("stored output parent %q is outside its private root", current)
+		}
+		if _, err := os.Stat(current); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("inspect stored output parent %q: %w", current, err)
+		}
+		if err := os.Remove(current); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if errors.Is(err, syscall.ENOTEMPTY) {
+			break
+		} else if err != nil {
+			return fmt.Errorf("remove empty stored output parent %q: %w", current, err)
+		}
+		if current == runRoot {
+			break
+		}
+	}
+	return nil
+}
+
+// pathWithinCleanupRoot reports lexical containment for already validated
+// paths without resolving ordinary system-level symlinks.
+func pathWithinCleanupRoot(root, target string) bool {
+	relative, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 // Inspect reports a run worker's state and returns an empty inspection when
@@ -1657,6 +1879,20 @@ func isContainerNotFound(err error) bool {
 	}
 	message := strings.ToLower(commandErr.Stderr)
 	return strings.Contains(message, "no such object") || strings.Contains(message, "no such container")
+}
+
+// isDockerResourceNotFound reports whether Docker rejected removal because a
+// container or volume was already absent.
+func isDockerResourceNotFound(err error) bool {
+	var commandErr *dockerCommandError
+	if !errors.As(err, &commandErr) || commandErr.ExitCode != 1 {
+		return false
+	}
+	message := strings.ToLower(commandErr.Stderr)
+	return strings.Contains(message, "no such object") ||
+		strings.Contains(message, "no such container") ||
+		strings.Contains(message, "no such volume") ||
+		strings.Contains(message, "volume not found")
 }
 
 // isDockerRuntimeFailure identifies Docker command errors that indicate a
