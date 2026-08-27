@@ -91,6 +91,16 @@ type NativeSessionInspector interface {
 	NativeSessionID(context.Context, NativeSessionRequest) (string, error)
 }
 
+// NativeSessionLivenessInspector is an optional adapter capability for
+// detecting a native harness process that exited after launch. It deliberately
+// reports only liveness, leaving recovery policy and resume ceilings to the
+// coordinator.
+type NativeSessionLivenessInspector interface {
+	// NativeSessionRunning reports whether the persisted native session process
+	// is still running inside the worker.
+	NativeSessionRunning(context.Context, NativeSessionRequest) (bool, error)
+}
+
 // Runtime is the portable harness lifecycle seam used by the coordinator.
 type Runtime interface {
 	// Capabilities reports the adapter identity and supported lifecycle.

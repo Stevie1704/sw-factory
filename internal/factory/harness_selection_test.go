@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -71,6 +72,41 @@ func TestStartAgentLaunchesTheHarnessDeclaredForTheRole(t *testing.T) {
 	}
 	if launch.Invocation.NativeSessionID == "" {
 		t.Fatal("invocation has no native session id, want the adapter-assigned Claude session")
+	}
+}
+
+// TestRefreshAuthReseedsTheRegisteredSourceWithoutChangingIt verifies an
+// explicit auth refresh updates only the worker-facing credential projection.
+func TestRefreshAuthReseedsTheRegisteredSourceWithoutChangingIt(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, _ := newAgentService(t)
+	root := t.TempDir()
+	authPath := filepath.Join(root, "auth.json")
+	source := []byte("token=super-secret\n")
+	if err := os.WriteFile(authPath, source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), config.AuthenticationConfig{CodexAuthPath: authPath})
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+
+	refreshed, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID})
+	if err != nil {
+		t.Fatalf("RefreshAuth() error = %v", err)
+	}
+	if refreshed.Harness != config.HarnessCodex || refreshed.Invocation.CredentialStoreID == "" {
+		t.Fatalf("RefreshAuth() result = %#v, want Codex and a factory credential store", refreshed)
+	}
+	if len(runtime.codexSeeds) != 2 || runtime.codexSeeds[1].AuthPath != authPath {
+		t.Fatalf("Codex credential seeds = %#v, want launch and refresh from the registered source", runtime.codexSeeds)
+	}
+	unchanged, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(unchanged) != string(source) {
+		t.Fatalf("registered auth source changed to %q", unchanged)
 	}
 }
 

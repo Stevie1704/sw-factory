@@ -34,6 +34,9 @@ var commandTable = []commandDefinition{
 	{name: "doctor", handler: runDoctor},
 	{name: "start", handler: runStart},
 	{name: "stop", handler: runStop},
+	{name: "resume", handler: runResume},
+	{name: "attach", handler: runAttach},
+	{name: "auth", handler: runAuth},
 	{name: "issue", handler: runIssue},
 	{name: "agent", handler: runAgent},
 	{name: "agent-report", handler: runAgentReport},
@@ -202,6 +205,102 @@ func runStop(ctx context.Context, args []string, defaultConfigPath string, outpu
 		return 0
 	}
 	if !writeOutput(output, errorsOutput, "factory is not running\n") {
+		return 1
+	}
+	return 0
+}
+
+// runResume performs one explicit native-session or harness-capacity recovery
+// for the active run. A successful native resume remains behind the attach
+// gate until the operator acknowledges the visible terminal session.
+func runResume(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "active factory run identifier")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("resume does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).Resume(ctx, factory.ResumeRequest{RunID: *runID})
+	if result.Invocation.ID != "" {
+		status := "resumed"
+		switch {
+		case result.WaitingForAttach:
+			status = "resumed; attach required"
+		case result.Run.Status == store.StatusWaitingForHarness:
+			status = "waiting for harness capacity"
+		case result.Run.Status == store.StatusWaitingForHuman:
+			status = "waiting for human"
+		}
+		if !writeOutput(output, errorsOutput, "agent %s\nrun: %s\ninvocation: %s\nstatus: %s\n", status, result.Run.ID, result.Invocation.ID, status) {
+			return 1
+		}
+	}
+	if err != nil {
+		var attachRequired *factory.ManualResumeRequiredError
+		if errors.As(err, &attachRequired) && result.WaitingForAttach {
+			return 0
+		}
+		writeError(errorsOutput, err)
+		return 1
+	}
+	return 0
+}
+
+// runAttach restores the worker and visible terminal topology, then releases
+// the manual native-session gate for the active run.
+func runAttach(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("attach", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "active factory run identifier")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("attach does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).Attach(ctx, factory.AttachRequest{RunID: *runID})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "agent attached\nrun: %s\ninvocation: %s\nstatus: %s\n", result.Run.ID, result.Invocation.ID, result.Run.Status) {
+		return 1
+	}
+	return 0
+}
+
+// runAuth dispatches authentication maintenance subcommands. The refresh
+// operation only seeds a factory-managed worker credential store.
+func runAuth(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	if len(args) == 0 || args[0] != "refresh" {
+		writeError(errorsOutput, errors.New("auth requires the refresh subcommand"))
+		return 2
+	}
+	flags := flag.NewFlagSet("auth refresh", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "active factory run identifier")
+	harnessName := flags.String("harness", "", "codex or claude; empty uses the invocation harness")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("auth refresh does not accept positional arguments"))
+		return 2
+	}
+	result, err := factory.New(*configPath).RefreshAuth(ctx, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName)})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "authentication refreshed\nrun: %s\ninvocation: %s\nharness: %s\n", result.Run.ID, result.Invocation.ID, result.Harness) {
 		return 1
 	}
 	return 0

@@ -153,6 +153,12 @@ func (s *Service) Start(ctx context.Context) error {
 		}
 		consecutiveLeaseFailures = 0
 
+		if err := s.retryWaitingForHarness(pollContext, registration); err != nil {
+			if pollingContextDone(err) {
+				return nil
+			}
+			return err
+		}
 		result, err := s.pollOnce(pollContext, registration)
 		if err != nil {
 			if pollingContextDone(err) {
@@ -223,6 +229,9 @@ func (s *Service) Stop(ctx context.Context) (StopResult, error) {
 func (s *Service) PollOnce(ctx context.Context) (PollResult, error) {
 	registration, _, err := s.pollConfiguration()
 	if err != nil {
+		return PollResult{}, err
+	}
+	if err := s.retryWaitingForHarness(ctx, registration); err != nil {
 		return PollResult{}, err
 	}
 	return s.pollOnce(ctx, registration)

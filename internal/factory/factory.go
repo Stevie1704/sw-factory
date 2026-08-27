@@ -45,6 +45,13 @@ type Factory interface {
 	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
 	// RunAgent launches a visible agent and accepts its already-written report.
 	RunAgent(context.Context, AgentRequest) (AgentResult, error)
+	// Resume performs an explicit native-session or harness-capacity recovery.
+	Resume(context.Context, ResumeRequest) (ResumeResult, error)
+	// Attach acknowledges and reattaches a manually resumed visible session.
+	Attach(context.Context, AttachRequest) (AttachResult, error)
+	// RefreshAuth reseeds one factory-managed harness credential from its host
+	// source without modifying the source.
+	RefreshAuth(context.Context, AuthRefreshRequest) (AuthRefreshResult, error)
 	// CreateDraftPullRequest checkpoints the accepted implementation, runs every
 	// configured gate, pushes the branch, and creates or updates one draft PR.
 	CreateDraftPullRequest(context.Context, DraftPullRequestRequest) (DraftPullRequestResult, error)

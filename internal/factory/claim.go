@@ -273,6 +273,9 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	if request.RunID != "" && request.RunID != run.ID {
 		return store.Run{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
+	if err := s.ensureInvocationAttached(ctx, runStore, *run); err != nil {
+		return store.Run{}, err
+	}
 	if request.Stage == store.StageTest || request.Stage == store.StageImplementation {
 		if strings.TrimSpace(run.SpecificationPacket) == "" {
 			return store.Run{}, errors.New("stage transition requires a frozen specification packet")
@@ -648,6 +651,10 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 		return s.startupErr
 	}
 	*run = updated
+	if err := s.ensureInvocationAttached(ctx, runStore, *run); err != nil {
+		s.startupErr = err
+		return s.startupErr
+	}
 	return s.startupErr
 }
 
@@ -674,44 +681,6 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 	if err != nil {
 		s.startupErr = err
 		return s.startupErr
-	}
-	if activeStore, ok := runStore.(ActiveInvocationStore); ok {
-		active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
-		if lookupErr != nil {
-			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyInfrastructure,
-				Source:   "operational store",
-				Field:    "active invocation",
-				Expected: "read active invocation",
-				Observed: lookupErr.Error(),
-			})
-			diagnosis.SourcesAgree = false
-			return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
-		}
-		if active != nil && !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount == 0 {
-			if strings.TrimSpace(active.NativeSessionID) == "" {
-				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
-					Kind:     RecoveryDiscrepancyInfrastructure,
-					Source:   "harness",
-					Field:    "native session identity",
-					Expected: "persisted native session identifier",
-					Observed: "empty; launch may still be in progress",
-				})
-				diagnosis.SourcesAgree = false
-				return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
-			}
-			if _, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, *run, *active); resumeErr != nil {
-				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
-					Kind:     RecoveryDiscrepancyInfrastructure,
-					Source:   "harness",
-					Field:    "native session resume",
-					Expected: "resume persisted session exactly once",
-					Observed: resumeErr.Error(),
-				})
-				diagnosis.SourcesAgree = false
-				return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
-			}
-		}
 	}
 	if run.CheckRepairPendingAttempt != 0 {
 		updated, completionErr := s.completePendingCheckRepair(ctx, registration, runStore, *run)

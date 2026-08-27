@@ -179,6 +179,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if invocation == nil {
 		return AgentResult{}, fmt.Errorf("invocation %q does not belong to run %q", request.InvocationID, run.ID)
 	}
+	if invocation.AttachRequired {
+		return AgentResult{}, fmt.Errorf("invocation %q requires `factory attach` before report acceptance", invocation.ID)
+	}
 	if invocation.Status != store.InvocationStatusActive {
 		if journal, journaled := runStore.(PendingEffectStore); journaled {
 			pending, pendingErr := journal.PendingEffect(ctx, run.ID)
@@ -380,6 +383,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			nextRun.Revision = previousRun.Revision
 		}
 		nextRun.UpdatedAt = s.deps.Now().UTC()
+		stopWorkerAfterReport := value.Outcome == report.OutcomeNeedsClarification || isReviewReport
 		acceptedInvocation, nextRun, err = s.acceptResultWithEffect(ctx, runStore, invocationStore, registration, harnessRuntime, harness.Session{
 			InvocationID:    acceptedInvocation.ID,
 			NativeSessionID: nativeSessionID,
@@ -388,7 +392,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 				WorkspaceID: terminal.WorkspaceID(acceptedInvocation.WorkspaceID),
 				Name:        acceptedInvocation.Role,
 			},
-		}, acceptedInvocation, previousRun, nextRun, value.Outcome == report.OutcomeNeedsClarification, value)
+		}, acceptedInvocation, previousRun, nextRun, stopWorkerAfterReport, value)
 		if err != nil {
 			return AgentResult{}, err
 		}

@@ -52,6 +52,15 @@ func (c *Claude) NativeSessionID(ctx context.Context, request NativeSessionReque
 	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: NameClaude})
 }
 
+// NativeSessionRunning reports whether a Claude Code process is still running
+// in the worker that owns the persisted session.
+func (c *Claude) NativeSessionRunning(ctx context.Context, request NativeSessionRequest) (bool, error) {
+	if request.Harness != "" && request.Harness != NameClaude {
+		return false, fmt.Errorf("Claude adapter cannot inspect harness %q", request.Harness)
+	}
+	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, Harness: NameClaude}, `[c]laude`)
+}
+
 // Start launches a fresh Claude Code TUI with an adapter-assigned native
 // session identifier in a worker-backed terminal surface.
 func (c *Claude) Start(ctx context.Context, request StartRequest) (Session, error) {
@@ -189,3 +198,4 @@ func validSessionID(value string) bool {
 }
 
 var _ Runtime = (*Claude)(nil)
+var _ NativeSessionLivenessInspector = (*Claude)(nil)

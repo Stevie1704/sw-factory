@@ -114,6 +114,11 @@ func TestRunRequiresACommand(t *testing.T) {
 	if !strings.Contains(output.String(), "a command is required") {
 		t.Fatalf("output = %q", output.String())
 	}
+	for _, command := range []string{"resume", "attach", "auth"} {
+		if !strings.Contains(output.String(), command) {
+			t.Fatalf("missing %q recovery command in help-like error: %q", command, output.String())
+		}
+	}
 }
 
 func TestRunInitRejectsPositionalArguments(t *testing.T) {

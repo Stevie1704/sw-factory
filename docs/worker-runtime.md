@@ -92,3 +92,26 @@ does not scrape its output. A harness publishes completion with
 `factory-report`, which atomically writes a schema-versioned JSON report below
 `/results`; the coordinator validates that report against the persisted
 invocation, current worktree, permitted paths, and stage invariants.
+
+## Recovery lifecycle
+
+The worker lifecycle is recoverable independently of workflow budget. A stopped
+worker is resumed only when its frozen image and complete mount contract still
+match the persisted invocation. If the worker is missing or its immutable
+invocation mounts are stale, the adapter recreates it from the persisted
+`image@digest` request. The bind-mounted worktree, named role volume, and
+factory-managed credential volume survive that recreation; the invocation and
+result directories are mounted again from their persisted paths.
+
+The harness adapters inspect the worker process table through the same command
+seam used by gates. If the persisted native session process exits after launch,
+the coordinator records that interruption and applies its bounded resume policy
+without using terminal text as a correctness signal.
+
+When harness capacity is unavailable, the coordinator stops the worker and
+records `waiting_for_harness`; the polling supervisor retries after capacity
+returns. An expired credential stops the worker and waits for an explicit
+`factory auth refresh`. A native harness resume that needs operator judgment is
+followed by `factory attach`, which can recreate the worker or cmux workspace
+before releasing the workflow attach gate. No worker recreation or harness
+capacity wait changes the run's workflow retry budget.

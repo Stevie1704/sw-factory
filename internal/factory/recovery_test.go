@@ -15,6 +15,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
 // TestProgressionRefusesAnAgreeingInterruptedRun verifies the fail-closed
@@ -227,6 +228,7 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 		Config:    &fakeConfig{value: host},
 		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
 		GitHub:    githubAdapter,
+		Worker:    &recoveryWorker{},
 		Now:       func() time.Time { return time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC) },
 	})
 	result, err := service.AbandonPendingEffect(ctx, factory.AbandonPendingEffectRequest{RunID: run.ID, EffectID: effect.ID, Reason: "operator verified the remote branch manually"})
@@ -284,6 +286,7 @@ func newRecoveryService(t *testing.T, runStore *recoveryRunStore, githubAdapter 
 		Config:    &fakeConfig{value: host},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		GitHub:    githubAdapter, Worktree: worktree,
+		Worker: &recoveryWorker{},
 	}
 	if pullRequests != nil {
 		dependencies.PullRequests = pullRequests
@@ -358,3 +361,28 @@ func (*recoveryRunStore) Close() error { return nil }
 func mkdir(path string) error {
 	return os.MkdirAll(path, 0o755)
 }
+
+// recoveryWorker makes human-waiting recovery tests explicit about the worker
+// stop seam without requiring Docker on the host running the test suite.
+type recoveryWorker struct{}
+
+// Start satisfies the worker runtime for read-only recovery tests.
+func (*recoveryWorker) Start(context.Context, worker.StartRequest) error { return nil }
+
+// Resume satisfies the worker runtime for read-only recovery tests.
+func (*recoveryWorker) Resume(context.Context, worker.ResumeRequest) error { return nil }
+
+// RunCommand satisfies the worker runtime for read-only recovery tests.
+func (*recoveryWorker) RunCommand(context.Context, worker.CommandRequest) (worker.CommandResult, error) {
+	return worker.CommandResult{}, nil
+}
+
+// Stop satisfies the worker runtime for read-only recovery tests.
+func (*recoveryWorker) Stop(context.Context, string) error { return nil }
+
+// Inspect satisfies the worker runtime for read-only recovery tests.
+func (*recoveryWorker) Inspect(context.Context, string) (worker.Inspection, error) {
+	return worker.Inspection{}, nil
+}
+
+var _ worker.WorkerRuntime = (*recoveryWorker)(nil)

@@ -54,6 +54,63 @@ func TestStartAgentPersistsAReadOnlyPacketAndRecoverableSurfaceState(t *testing.
 	}
 }
 
+// TestManualResumeRequiresAttachBeforeAnotherRecoveryCommand verifies an
+// explicit native resume is durable, does not consume the automatic ceiling,
+// and remains gated until the operator acknowledges the visible session.
+func TestManualResumeRequiresAttachBeforeAnotherRecoveryCommand(t *testing.T) {
+	service, runStore, runtime, _, harnessRuntime := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+
+	invocation := runStore.invocations[launch.Invocation.ID]
+	invocation.NativeSessionID = "session-original"
+	if err := runStore.SaveInvocation(context.Background(), invocation); err != nil {
+		t.Fatalf("persist native session identity: %v", err)
+	}
+	workerRequest := runtime.starts[0]
+	runtime.inspectResult = &worker.Inspection{
+		Exists:           true,
+		Running:          true,
+		Image:            workerRequest.Image + "@" + workerRequest.ImageDigest,
+		MountFingerprint: worker.MountContractFingerprint(workerRequest),
+	}
+
+	resumed, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+	var gateErr *factory.ManualResumeRequiredError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("Resume() error = %v, want ManualResumeRequiredError", err)
+	}
+	if !resumed.WaitingForAttach || resumed.Invocation.RecoveryResumeCount != 0 || !resumed.Invocation.AttachRequired {
+		t.Fatalf("manual resume result = %#v, want attach gate without automatic budget use", resumed)
+	}
+	if resumed.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("run after manual resume = %q, want waiting_for_human", resumed.Run.Status)
+	}
+	if len(harnessRuntime.resumes) != 1 {
+		t.Fatalf("native resume calls = %d, want one", len(harnessRuntime.resumes))
+	}
+
+	if _, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID}); !errors.As(err, &gateErr) {
+		t.Fatalf("second Resume() error = %v, want the durable attach gate", err)
+	}
+	if len(harnessRuntime.resumes) != 1 {
+		t.Fatalf("native resume calls after gated retry = %d, want no duplicate", len(harnessRuntime.resumes))
+	}
+
+	attached, err := service.Attach(context.Background(), factory.AttachRequest{RunID: launch.Invocation.RunID})
+	if err != nil {
+		t.Fatalf("Attach() error = %v", err)
+	}
+	if attached.Run.Status != store.StatusActive || attached.Invocation.AttachRequired {
+		t.Fatalf("attach result = %#v, want active run with cleared gate", attached)
+	}
+	if got := runStore.invocations[launch.Invocation.ID]; got.AttachRequired {
+		t.Fatalf("persisted invocation after attach = %#v, want cleared gate", got)
+	}
+}
+
 // TestStartAgentRejectsADuplicateActiveInvocation verifies restart-safe
 // coordination prevents a second visible session for one active run.
 func TestStartAgentRejectsADuplicateActiveInvocation(t *testing.T) {
@@ -943,14 +1000,16 @@ func (*agentRunStore) Close() error { return nil }
 
 // agentWorker records the worker start request without running Docker.
 type agentWorker struct {
-	starts      []worker.StartRequest
-	stops       int
-	commands    []worker.CommandRequest
-	results     []worker.CommandResult
-	events      *[]string
-	interactive []worker.InteractiveRequest
-	codexSeeds  []worker.CredentialSeedRequest
-	claudeSeeds []worker.CredentialSeedRequest
+	starts        []worker.StartRequest
+	stops         int
+	commands      []worker.CommandRequest
+	results       []worker.CommandResult
+	events        *[]string
+	interactive   []worker.InteractiveRequest
+	codexSeeds    []worker.CredentialSeedRequest
+	claudeSeeds   []worker.CredentialSeedRequest
+	inspectResult *worker.Inspection
+	inspectErr    error
 }
 
 // Start records one worker start.
@@ -983,8 +1042,15 @@ func (w *agentWorker) Stop(context.Context, string) error {
 	return nil
 }
 
-// Inspect implements WorkerRuntime.
-func (*agentWorker) Inspect(context.Context, string) (worker.Inspection, error) {
+// Inspect implements WorkerRuntime and optionally returns a configured worker
+// projection for recovery contract tests.
+func (w *agentWorker) Inspect(context.Context, string) (worker.Inspection, error) {
+	if w.inspectErr != nil {
+		return worker.Inspection{}, w.inspectErr
+	}
+	if w.inspectResult != nil {
+		return *w.inspectResult, nil
+	}
 	return worker.Inspection{Exists: true, Running: true}, nil
 }
 
@@ -1043,7 +1109,7 @@ type agentHarness struct {
 
 // Capabilities reports the harness identity this fake stands in for.
 func (*agentHarness) Capabilities() harness.Capabilities {
-	return harness.Capabilities{Name: harness.NameCodex}
+	return harness.Capabilities{Name: harness.NameCodex, InteractiveResume: true}
 }
 
 // Start records the coordinator-owned prompt request.

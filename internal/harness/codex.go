@@ -43,6 +43,15 @@ func (c *Codex) NativeSessionID(ctx context.Context, request NativeSessionReques
 	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, Harness: NameCodex})
 }
 
+// NativeSessionRunning reports whether a Codex process is still running in
+// the worker that owns the persisted session.
+func (c *Codex) NativeSessionRunning(ctx context.Context, request NativeSessionRequest) (bool, error) {
+	if request.Harness != "" && request.Harness != NameCodex {
+		return false, fmt.Errorf("Codex adapter cannot inspect harness %q", request.Harness)
+	}
+	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, Harness: NameCodex}, `[c]odex`)
+}
+
 // Start launches a fresh Codex TUI in a worker-backed terminal surface.
 func (c *Codex) Start(ctx context.Context, request StartRequest) (Session, error) {
 	if request.ResumeSessionID != "" {
@@ -144,3 +153,4 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 }
 
 var _ Runtime = (*Codex)(nil)
+var _ NativeSessionLivenessInspector = (*Codex)(nil)

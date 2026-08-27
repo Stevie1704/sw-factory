@@ -82,12 +82,38 @@ claim or test handoff awaiting its first invocation, not an interrupted run.
 
 The exception applies only to first-agent startup. A persisted active invocation
 with a complete native-session identity is resumed once against its persisted
-worker and terminal handles; a missing identity or any other recovery
-discrepancy pauses the run for a human. Terminal report acceptance is replayed
-from its durable effect record without finalizing the same invocation twice.
-Gates, reports, transitions, draft pull requests, and other progression paths
-reconcile the durable effect journal and external identities before they resume
-an interrupted run.
+worker and terminal handles. If the worker is missing or stopped, the
+coordinator recreates it from the frozen image digest and invocation mount
+identity while preserving the worktree and role volume. An unexpected native
+harness exit, including one observed after launch by the supervisor's worker-side
+process check, receives exactly one automatic resume attempt; a second
+unexpected failure pauses the run for manual recovery. Rate limits enter a
+`waiting_for_harness` state, stop the worker, notify the operator, and are
+retried by the supervisor without consuming workflow or check-repair budget.
+Expired authentication enters `waiting_for_human` with a typed, redacted
+failure and tells the operator to refresh credentials. A missing native identity
+or any other recovery discrepancy pauses the run for a human. Terminal report
+acceptance is replayed from its durable effect record without finalizing the
+same invocation twice. Gates, reports, transitions, draft pull requests, and
+other progression paths reconcile the durable effect journal and external
+identities before they resume an interrupted run.
+
+When automatic recovery is exhausted, an operator can use the explicit
+recovery commands:
+
+```sh
+factory resume --config /Users/me/.config/factory/config.yaml --run-id run-123
+factory attach --config /Users/me/.config/factory/config.yaml --run-id run-123
+factory auth refresh --config /Users/me/.config/factory/config.yaml --run-id run-123
+```
+
+`factory resume` retries harness capacity or performs a manual native resume
+without spending the automatic recovery allowance. A manually resumed session
+sets a durable attach gate; workflow progression and report acceptance remain
+blocked until `factory attach` restores the worker and visible terminal
+topology and clears that gate. `factory auth refresh` reads the explicitly
+registered host credential source and reseeds only the factory-managed worker
+credential volume; it never writes the source file or host harness directory.
 
 The `TerminalRuntime` seam owns workspace, surface, input, notification, and
 lifecycle behavior. The macOS adapter invokes cmux; workflow code never sees

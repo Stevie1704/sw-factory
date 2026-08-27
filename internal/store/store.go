@@ -20,7 +20,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 22
+const CurrentSchemaVersion = 23
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -423,6 +423,9 @@ type Invocation struct {
 	// RecoveryResumeCount records the number of coordinator-owned native resume
 	// attempts completed for this invocation. Reconciliation permits one.
 	RecoveryResumeCount int
+	// AttachRequired blocks workflow progression until an operator has attached
+	// the manually resumed native session through the factory attach command.
+	AttachRequired bool
 	// CreatedAt is the immutable invocation creation time.
 	CreatedAt time.Time
 	// UpdatedAt is the latest coordinator update time.
@@ -1393,8 +1396,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 			native_session_id, workspace_id, status_surface_id,
 				implementation_surface_id, checks_surface_id, invocation_directory,
-				result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -1414,6 +1417,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 				prompt_version = excluded.prompt_version,
 				status = excluded.status,
 				recovery_resume_count = excluded.recovery_resume_count,
+				attach_required = excluded.attach_required,
 				updated_at = excluded.updated_at`,
 		invocation.ID,
 		invocation.RunID,
@@ -1434,6 +1438,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.PromptVersion,
 		invocation.Status,
 		invocation.RecoveryResumeCount,
+		invocation.AttachRequired,
 		invocation.CreatedAt.UTC().Format(runTimestampLayout),
 		invocation.UpdatedAt.UTC().Format(runTimestampLayout),
 	)
@@ -1530,7 +1535,7 @@ func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*In
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND id = ?`, runID, invocationID)
 	return scanInvocation(row)
@@ -1547,7 +1552,7 @@ func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ?
 		ORDER BY updated_at DESC, id DESC
@@ -1580,7 +1585,7 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at DESC
@@ -1612,6 +1617,7 @@ func scanInvocation(row *sql.Row) (*Invocation, error) {
 		&invocation.PromptVersion,
 		&invocation.Status,
 		&invocation.RecoveryResumeCount,
+		&invocation.AttachRequired,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -2291,6 +2297,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 22:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN recovery_resume_count INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return fmt.Errorf("apply store migration 22: %w", err)
+			}
+		case 23:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN attach_required INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("apply store migration 23: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

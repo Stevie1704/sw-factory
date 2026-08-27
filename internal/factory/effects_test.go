@@ -800,6 +800,185 @@ func TestHarnessResumeEffectDoesNotDuplicateAfterResponseLoss(t *testing.T) {
 	}
 }
 
+// TestHarnessResumeRateLimitRollsBackTheAutomaticReservation verifies a
+// temporary capacity failure leaves the one-shot recovery slot unused and the
+// journal clear for a later retry.
+func TestHarnessResumeRateLimitRollsBackTheAutomaticReservation(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	invocation := store.Invocation{
+		ID: "inv-rate-limit", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-rate-limit", Status: store.InvocationStatusActive,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &effectMatrixHarness{resumeErr: harness.NewRateLimitError(harness.NameCodex)}
+	service := newEffectMatrixService(nil, nil, nil, nil)
+	request := harness.StartRequest{
+		InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
+		Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
+	}
+	if _, err := service.resumeHarnessWithEffect(ctx, opened, opened, "", runtime, invocation, request); !harness.IsRateLimited(err) {
+		t.Fatalf("resumeHarnessWithEffect() error = %v, want typed rate limit", err)
+	}
+	persisted, err := opened.Invocation(ctx, run.ID, invocation.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("persisted invocation = %#v, error = %v", persisted, err)
+	}
+	if persisted.RecoveryResumeCount != 0 || persisted.AttachRequired {
+		t.Fatalf("persisted rate-limit reservation = %#v, want count zero and no attach gate", persisted)
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil || pending != nil {
+		t.Fatalf("pending rate-limit effect = %#v, error = %v; want cleared", pending, err)
+	}
+	if runtime.resumeCalls != 1 {
+		t.Fatalf("rate-limit resume calls = %d, want one", runtime.resumeCalls)
+	}
+}
+
+// TestHarnessResumeAuthenticationFailureIsTypedAndRedacted verifies an
+// expired credential pauses before consuming the automatic resume slot.
+func TestHarnessResumeAuthenticationFailureIsTypedAndRedacted(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	invocation := store.Invocation{
+		ID: "inv-auth-expired", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-auth-expired", Status: store.InvocationStatusActive,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	secret := "token=super-secret"
+	runtime := &effectMatrixHarness{resumeErr: errors.New("HTTP 401: " + secret)}
+	service := newEffectMatrixService(nil, nil, nil, nil)
+	request := harness.StartRequest{
+		InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
+		Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
+	}
+	err := error(nil)
+	_, err = service.resumeHarnessWithEffect(ctx, opened, opened, "", runtime, invocation, request)
+	if !harness.IsAuthenticationExpired(err) {
+		t.Fatalf("resumeHarnessWithEffect() error = %v, want typed authentication failure", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("authentication error leaked credential: %v", err)
+	}
+	persisted, lookupErr := opened.Invocation(ctx, run.ID, invocation.ID)
+	if lookupErr != nil || persisted == nil {
+		t.Fatalf("persisted invocation = %#v, error = %v", persisted, lookupErr)
+	}
+	if persisted.RecoveryResumeCount != 0 {
+		t.Fatalf("persisted authentication reservation = %#v, want count zero", persisted)
+	}
+	if pending, pendingErr := opened.PendingEffect(ctx, run.ID); pendingErr != nil || pending != nil {
+		t.Fatalf("pending authentication effect = %#v, error = %v; want cleared", pending, pendingErr)
+	}
+}
+
+// TestPendingHarnessResumeReplayPreservesAuthenticationClassification verifies
+// a restart-time replay that reaches the adapter before its reservation is
+// persisted still rolls back cleanly and retains the typed auth failure.
+func TestPendingHarnessResumeReplayPreservesAuthenticationClassification(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	invocation := store.Invocation{
+		ID: "inv-pending-auth-expired", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-pending-auth-expired", Status: store.InvocationStatusActive,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	service := newEffectMatrixService(nil, nil, nil, nil)
+	payload := harnessResumeEffectPayload{
+		SocketPath: "",
+		Request: harness.StartRequest{
+			InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
+			Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
+		},
+		Invocation: invocation, TargetResumeCount: 1,
+	}
+	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindHarnessResume, "pending-auth", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SavePendingEffect(ctx, effect); err != nil {
+		t.Fatal(err)
+	}
+	secret := "token=super-secret"
+	runtime := &effectMatrixHarness{resumeErr: errors.New("HTTP 401: " + secret)}
+	service.deps.Harness = runtime
+	_, err = service.replayPendingHarnessResume(ctx, opened, effect)
+	if !harness.IsAuthenticationExpired(err) {
+		t.Fatalf("replayPendingHarnessResume() error = %v, want typed authentication failure", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("replay authentication error leaked credential: %v", err)
+	}
+	persisted, lookupErr := opened.Invocation(ctx, run.ID, invocation.ID)
+	if lookupErr != nil || persisted == nil {
+		t.Fatalf("persisted invocation = %#v, error = %v", persisted, lookupErr)
+	}
+	if persisted.RecoveryResumeCount != 0 {
+		t.Fatalf("persisted replay authentication reservation = %#v, want count zero", persisted)
+	}
+	if pending, pendingErr := opened.PendingEffect(ctx, run.ID); pendingErr != nil || pending != nil {
+		t.Fatalf("pending replay authentication effect = %#v, error = %v; want cleared", pending, pendingErr)
+	}
+}
+
+// TestManualHarnessResumeSetsAnAttachGateWithoutConsumingAutomaticBudget
+// verifies explicit recovery is durable and cannot be mistaken for an
+// automatically authorized continuation.
+func TestManualHarnessResumeSetsAnAttachGateWithoutConsumingAutomaticBudget(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	invocation := store.Invocation{
+		ID: "inv-manual-resume", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-manual-resume", Status: store.InvocationStatusActive,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &effectMatrixHarness{}
+	service := newEffectMatrixService(nil, nil, nil, nil)
+	request := harness.StartRequest{
+		InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
+		Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
+	}
+	updated, err := service.resumeHarnessManuallyWithEffect(ctx, opened, opened, "", runtime, invocation, request)
+	if err != nil {
+		t.Fatalf("resumeHarnessManuallyWithEffect() error = %v", err)
+	}
+	if !updated.AttachRequired || updated.RecoveryResumeCount != 0 {
+		t.Fatalf("manual resume = %#v, want attach gate and unchanged automatic count", updated)
+	}
+	if err := service.ensureInvocationAttached(ctx, opened, run); err == nil {
+		t.Fatal("ensureInvocationAttached() = nil, want manual attach gate")
+	} else {
+		var gateErr *ManualResumeRequiredError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("ensureInvocationAttached() error = %v, want ManualResumeRequiredError", err)
+		}
+	}
+	if runtime.resumeCalls != 1 {
+		t.Fatalf("manual resume calls = %d, want one", runtime.resumeCalls)
+	}
+}
+
 // TestCommandProjectionEffectReplaysTheWatermarkAndComment verifies a
 // response lost after the command comment edit leaves a replayable watermark
 // and does not edit the same comment twice after restart.
@@ -1214,6 +1393,8 @@ type effectMatrixHarness struct {
 	failFinishOnce  bool
 	finishCalls     int
 	finishMutations int
+	resumeCalls     int
+	resumeErr       error
 }
 
 // Capabilities reports the harness identity used by the result payload.
@@ -1227,8 +1408,12 @@ func (*effectMatrixHarness) Start(context.Context, harness.StartRequest) (harnes
 }
 
 // Resume satisfies the harness lifecycle seam for effect tests.
-func (*effectMatrixHarness) Resume(context.Context, harness.StartRequest) (harness.Session, error) {
-	return harness.Session{}, nil
+func (h *effectMatrixHarness) Resume(_ context.Context, request harness.StartRequest) (harness.Session, error) {
+	h.resumeCalls++
+	if h.resumeErr != nil {
+		return harness.Session{InvocationID: request.InvocationID, NativeSessionID: request.ResumeSessionID, Surface: request.Surface}, h.resumeErr
+	}
+	return harness.Session{InvocationID: request.InvocationID, NativeSessionID: request.ResumeSessionID, Surface: request.Surface}, nil
 }
 
 // Finish performs one semantic finalization and reports a lost first response.
