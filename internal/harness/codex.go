@@ -23,6 +23,8 @@ type StartRequest struct {
 	Role string
 	// Stage identifies the workflow stage.
 	Stage string
+	// CheckpointSHA binds a specification review to the immutable commit under review.
+	CheckpointSHA string
 	// WorkspaceID identifies the terminal workspace receiving the surface.
 	WorkspaceID terminal.WorkspaceID
 	// Surface is an existing role surface in the run workspace. When empty, the
@@ -136,6 +138,9 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 		"FACTORY_HARNESS":       "codex",
 		"FACTORY_INVOCATION_ID": request.InvocationID,
 		"FACTORY_STAGE":         request.Stage,
+	}
+	if request.CheckpointSHA != "" {
+		environment["FACTORY_CHECKPOINT_SHA"] = request.CheckpointSHA
 	}
 	if request.Model != "" {
 		environment["FACTORY_MODEL"] = request.Model

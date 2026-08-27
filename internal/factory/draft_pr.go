@@ -383,7 +383,12 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 	if run.TestExemption != nil {
 		testStageDisposition = fmt.Sprintf("- test-stage disposition: `%s` (provisional): %s", safeStatusCommentValue(run.TestExemption.Kind), safeStatusCommentValue(run.TestExemption.Justification))
 	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
+	reviewProjection := renderSpecificationReview(run.SpecificationReview)
+	prStage := run.Stage
+	if prStage == store.StageImplementation || prStage == store.StageCheck {
+		prStage = store.StageDraftPR
+	}
+	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- intervention: `%s`\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n%s\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, prStage, intervention, testStageDisposition, issueBody, strings.Join(gateLines, "\n"), reviewProjection, run.ID, generatedPullRequestEnd)
 }
 
 // mergeGeneratedPullRequestBody replaces only the marked factory section and

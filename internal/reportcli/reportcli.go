@@ -68,6 +68,8 @@ func Run(request Request) int {
 	expectedFailureReason := flags.String("expected-failure-reason", "", "failure identifier expected in the coordinator rerun output")
 	observedFailures := pairList{}
 	flags.Var(&observedFailures, "observed-failure", "red-test evidence kind=detail; may be repeated")
+	findings := stringList{}
+	flags.Var(&findings, "finding", "review finding location|claim|evidence|severity|category|resolution|owner; may be repeated")
 	uncoveredCriteria := stringList{}
 	flags.Var(&uncoveredCriteria, "uncovered-criterion", "acceptance criterion not covered by this test handoff; may be repeated")
 	questions := pairList{}
@@ -101,6 +103,7 @@ func Run(request Request) int {
 		"role":          lookup("FACTORY_ROLE"),
 		"stage":         lookup("FACTORY_STAGE"),
 	}
+	checkpointSHA := lookup("FACTORY_CHECKPOINT_SHA")
 	for field, value := range identity {
 		if strings.TrimSpace(value) == "" {
 			writeError(request.ErrorsOutput, fmt.Errorf("%s environment value is required", field))
@@ -166,6 +169,31 @@ func Run(request Request) int {
 				value.TestHandoff.ObservedFailureEvidence = append(value.TestHandoff.ObservedFailureEvidence, report.Evidence{Kind: pair.Key, Detail: pair.Value})
 			}
 		}
+	} else if identity["role"] == "spec_review" && identity["stage"] == "review" {
+		if strings.TrimSpace(checkpointSHA) == "" {
+			writeError(request.ErrorsOutput, errors.New("FACTORY_CHECKPOINT_SHA environment value is required for specification review"))
+			return 1
+		}
+		handoff := &report.ReviewHandoff{ReviewedSHA: checkpointSHA}
+		for index, encoded := range findings {
+			parts := strings.Split(encoded, "|")
+			if len(parts) != 7 {
+				writeError(request.ErrorsOutput, fmt.Errorf("finding %d must use location|claim|evidence|severity|category|resolution|owner", index+1))
+				return 2
+			}
+			for partIndex, part := range parts {
+				if strings.TrimSpace(part) == "" {
+					writeError(request.ErrorsOutput, fmt.Errorf("finding %d field %d must not be empty", index+1, partIndex+1))
+					return 2
+				}
+			}
+			handoff.Findings = append(handoff.Findings, report.ReviewFinding{
+				Location: parts[0], Claim: parts[1], Evidence: parts[2],
+				Severity: report.ReviewSeverity(parts[3]), Category: report.ReviewCategory(parts[4]),
+				SuggestedResolution: parts[5], SuggestedOwner: parts[6],
+			})
+		}
+		value.ReviewHandoff = handoff
 	} else {
 		for _, pair := range acceptance {
 			value.Handoff = ensureHandoff(value.Handoff)

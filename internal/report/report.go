@@ -43,6 +43,7 @@ const (
 	maxTestFiles = 256
 	// maxUncoveredCriteria bounds criteria the test role explicitly leaves open.
 	maxUncoveredCriteria = 64
+	maxReviewFindings    = 128
 )
 
 // ReportFileName is the only accepted report filename in an invocation result
@@ -81,6 +82,46 @@ type Handoff struct {
 	FocusedCommands []string `json:"focused_commands"`
 	// KnownLimitations records limitations that remain visible to later stages.
 	KnownLimitations []string `json:"known_limitations,omitempty"`
+}
+
+// ReviewSeverity classifies the urgency of one specification-review finding.
+type ReviewSeverity string
+
+const (
+	// ReviewSeverityBlocker identifies a concrete violation that prevents readiness.
+	ReviewSeverityBlocker ReviewSeverity = "blocker"
+	// ReviewSeverityAdvisory identifies a visible, non-gating observation.
+	ReviewSeverityAdvisory ReviewSeverity = "advisory"
+)
+
+// ReviewCategory identifies the bounded class of a review observation.
+type ReviewCategory string
+
+const (
+	ReviewCategoryCorrectness   ReviewCategory = "correctness"
+	ReviewCategorySecurity      ReviewCategory = "security"
+	ReviewCategorySpecification ReviewCategory = "specification"
+	ReviewCategoryStandards     ReviewCategory = "standards"
+	ReviewCategoryDocumentedStandards ReviewCategory = "documented_standards"
+	ReviewCategoryTaste         ReviewCategory = "taste"
+	ReviewCategoryScope         ReviewCategory = "scope"
+)
+
+// ReviewFinding is a complete, content-limited observation from the independent reviewer.
+type ReviewFinding struct {
+	Location            string         `json:"location"`
+	Claim               string         `json:"claim"`
+	Evidence            string         `json:"evidence"`
+	Severity            ReviewSeverity `json:"severity"`
+	Category            ReviewCategory `json:"category"`
+	SuggestedResolution string         `json:"suggested_resolution"`
+	SuggestedOwner      string         `json:"suggested_owner"`
+}
+
+// ReviewHandoff binds all findings to the immutable checkpoint they inspected.
+type ReviewHandoff struct {
+	ReviewedSHA string          `json:"reviewed_sha"`
+	Findings    []ReviewFinding `json:"findings"`
 }
 
 // TestHandoff contains the bounded evidence needed to transfer a test-stage
@@ -203,6 +244,8 @@ type Report struct {
 	Summary string `json:"summary"`
 	// Handoff is required only for a completed outcome.
 	Handoff *Handoff `json:"handoff,omitempty"`
+	// ReviewHandoff is required only for a completed specification-review report.
+	ReviewHandoff *ReviewHandoff `json:"review_handoff,omitempty"`
 	// TestHandoff is required for a completed test-stage outcome unless a
 	// technical exemption is explicitly reported.
 	TestHandoff *TestHandoff `json:"test_handoff,omitempty"`
@@ -239,6 +282,8 @@ type ValidationContext struct {
 	Role string
 	// Stage is the expected workflow stage.
 	Stage string
+	// CheckpointSHA is the exact commit a review report must have inspected.
+	CheckpointSHA string
 	// WorktreePath is the host checkout root, when filesystem containment is checked.
 	WorktreePath string
 	// PermittedPaths contains repository-relative prefixes the role may report.
@@ -448,7 +493,17 @@ func Validate(value Report, context ValidationContext) error {
 	}
 	switch value.Outcome {
 	case OutcomeCompleted:
-		if isTestReport(value) {
+		if isReviewReport(value) {
+			if value.Handoff != nil || value.TestHandoff != nil {
+				return errors.New("specification review report must contain only a review handoff")
+			}
+			if value.ReviewHandoff == nil {
+				return errors.New("completed specification review requires a review handoff")
+			}
+			if err := validateReviewHandoff(*value.ReviewHandoff, context); err != nil {
+				return err
+			}
+		} else if isTestReport(value) {
 			if value.Handoff != nil {
 				return errors.New("test completed report must contain only a test handoff")
 			}
@@ -460,6 +515,9 @@ func Validate(value Report, context ValidationContext) error {
 				return err
 			}
 		} else {
+			if value.ReviewHandoff != nil {
+				return errors.New("implementation completed report must not contain a review handoff")
+			}
 			if value.Handoff == nil {
 				return errors.New("completed report requires a handoff")
 			}
@@ -477,7 +535,7 @@ func Validate(value Report, context ValidationContext) error {
 		if len(value.Questions) == 0 {
 			return errors.New("needs_clarification report requires at least one question")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || len(value.Evidence) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || len(value.Evidence) != 0 {
 			return errors.New("needs_clarification report must contain only questions")
 		}
 		if err := validateQuestions(value.Questions); err != nil {
@@ -487,7 +545,7 @@ func Validate(value Report, context ValidationContext) error {
 		if len(value.Evidence) == 0 {
 			return errors.New("cannot_proceed report requires evidence")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || len(value.Questions) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || len(value.Questions) != 0 {
 			return errors.New("cannot_proceed report must contain only evidence")
 		}
 		if err := validateEvidence(value.Evidence); err != nil {
@@ -660,6 +718,81 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 // isTestReport identifies the coordinator-owned test-stage envelope.
 func isTestReport(value Report) bool {
 	return value.Role == "test" && value.Stage == "test"
+}
+
+// isReviewReport identifies the coordinator-owned independent review envelope.
+func isReviewReport(value Report) bool {
+	return value.Role == "spec_review" && value.Stage == "review"
+}
+
+// ReviewFindingBlocks reports whether a finding is a concrete readiness blocker.
+// Taste and scope observations remain visible advisories even when mislabeled
+// with blocker severity, because they do not identify a correctness violation.
+func ReviewFindingBlocks(value ReviewFinding) bool {
+	if value.Severity != ReviewSeverityBlocker {
+		return false
+	}
+	switch value.Category {
+	case ReviewCategoryCorrectness, ReviewCategorySecurity, ReviewCategorySpecification, ReviewCategoryStandards, ReviewCategoryDocumentedStandards:
+		return true
+	default:
+		return false
+	}
+}
+
+// validateReviewHandoff validates the exact checkpoint binding and complete
+// finding contract before a review can influence coordinator readiness.
+func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error {
+	if err := validateSHA("review handoff reviewed_sha", value.ReviewedSHA); err != nil {
+		return err
+	}
+	if context.CheckpointSHA != "" && value.ReviewedSHA != context.CheckpointSHA {
+		return fmt.Errorf("reviewed SHA %q does not match checkpoint %q", value.ReviewedSHA, context.CheckpointSHA)
+	}
+	if len(value.Findings) > maxReviewFindings {
+		return fmt.Errorf("review handoff findings exceeds %d entries", maxReviewFindings)
+	}
+	for index, finding := range value.Findings {
+		fields := []struct {
+			name  string
+			value string
+		}{
+			{fmt.Sprintf("review finding[%d].location", index), finding.Location},
+			{fmt.Sprintf("review finding[%d].claim", index), finding.Claim},
+			{fmt.Sprintf("review finding[%d].evidence", index), finding.Evidence},
+			{fmt.Sprintf("review finding[%d].suggested_resolution", index), finding.SuggestedResolution},
+			{fmt.Sprintf("review finding[%d].suggested_owner", index), finding.SuggestedOwner},
+		}
+		for _, field := range fields {
+			if err := validateText(field.name, field.value, maxTextRunes, true); err != nil {
+				return err
+			}
+		}
+		switch finding.Severity {
+		case ReviewSeverityBlocker, ReviewSeverityAdvisory:
+		default:
+			return fmt.Errorf("review finding[%d].severity %q is unsupported", index, finding.Severity)
+		}
+		switch finding.Category {
+		case ReviewCategoryCorrectness, ReviewCategorySecurity, ReviewCategorySpecification, ReviewCategoryStandards, ReviewCategoryDocumentedStandards, ReviewCategoryTaste, ReviewCategoryScope:
+		default:
+			return fmt.Errorf("review finding[%d].category %q is unsupported", index, finding.Category)
+		}
+	}
+	return nil
+}
+
+// validateSHA accepts the full hexadecimal commit identities used by GitHub.
+func validateSHA(field, value string) error {
+	if len(value) != 40 && len(value) != 64 {
+		return fmt.Errorf("%s must contain exactly 40 or 64 lowercase hexadecimal characters", field)
+	}
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return fmt.Errorf("%s must contain exactly 40 or 64 lowercase hexadecimal characters", field)
+		}
+	}
+	return nil
 }
 
 // hasExemption reports whether one fixed exemption category is present.

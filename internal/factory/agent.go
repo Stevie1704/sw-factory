@@ -109,15 +109,27 @@ type InvocationPacket struct {
 	ProtectedTestPaths []store.ProtectedTestPath `json:"protected_test_paths,omitempty"`
 	// TestExemption carries a provisional technical exemption to the reviewer.
 	TestExemption *store.TestExemption `json:"test_exemption,omitempty"`
+	// ReviewContext contains the exact diff and bounded handoffs for spec review.
+	ReviewContext *ReviewContext `json:"review_context,omitempty"`
 	// CheckRepair contains the complete failed-check context when this
 	// invocation is a native-resumed repair.
 	CheckRepair *CheckRepairPacket `json:"check_repair,omitempty"`
 }
 
+// ReviewContext is the immutable, coordinator-collected input to specification review.
+type ReviewContext struct {
+	CheckpointSHA         string                       `json:"checkpoint_sha"`
+	CurrentDiff           string                       `json:"current_diff"`
+	RelevantLogs          []string                     `json:"relevant_logs"`
+	ImplementationHandoff *store.ImplementationHandoff `json:"implementation_handoff,omitempty"`
+	TestHandoff           *store.TestHandoff           `json:"test_handoff,omitempty"`
+	TestExemption         *store.TestExemption         `json:"test_exemption,omitempty"`
+}
+
 const (
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version three adds the test-stage handoff and protected-path projection.
-	invocationPacketVersion = 3
+	// Version four adds the exact-checkpoint specification-review projection.
+	invocationPacketVersion = 4
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
@@ -206,6 +218,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		Harness:        invocation.Harness,
 		Role:           invocation.Role,
 		Stage:          string(invocation.Stage),
+		CheckpointSHA:  run.CheckpointSHA,
 		WorktreePath:   run.Worktree,
 		PermittedPaths: invocation.PermittedPaths,
 	}
@@ -335,6 +348,20 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if invocation.Stage == store.StageTest {
 		return s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
 	}
+	if invocation.Role == "spec_review" && invocation.Stage == store.StageReview {
+		return s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
+	}
+	if value.Handoff != nil {
+		run.ImplementationHandoff = &store.ImplementationHandoff{
+			ChangeSummary:          value.Handoff.ChangeSummary,
+			ProductionFilesChanged: append([]string(nil), value.Handoff.ProductionFilesChanged...),
+			FocusedCommands:        append([]string(nil), value.Handoff.FocusedCommands...),
+			KnownLimitations:       append([]string(nil), value.Handoff.KnownLimitations...),
+		}
+		for _, mapping := range value.Handoff.AcceptanceMapping {
+			run.ImplementationHandoff.AcceptanceMapping = append(run.ImplementationHandoff.AcceptanceMapping, store.HandoffAcceptance{Criterion: mapping.Criterion, Evidence: mapping.Evidence})
+		}
+	}
 	run.Stage = store.StageImplementation
 	switch value.Outcome {
 	case report.OutcomeNeedsClarification:
@@ -389,10 +416,10 @@ func normalizeAgentRequest(request AgentRequest) AgentRequest {
 // validateAgentRequest rejects roles and stages outside the supported visible
 // role seams before external side effects occur.
 func validateAgentRequest(request AgentRequest) error {
-	if request.Role != "" && request.Role != "implementation" && request.Role != "test" {
+	if request.Role != "" && request.Role != "implementation" && request.Role != "test" && request.Role != "spec_review" {
 		return fmt.Errorf("agent role %q is not supported", request.Role)
 	}
-	if request.Stage != "" && request.Stage != store.StageTest && request.Stage != store.StageImplementation {
+	if request.Stage != "" && request.Stage != store.StageTest && request.Stage != store.StageImplementation && request.Stage != store.StageReview {
 		return fmt.Errorf("agent stage %q is not supported", request.Stage)
 	}
 	if (request.Role == "test") != (request.Stage == store.StageTest) && request.Role != "" && request.Stage != "" {
@@ -403,6 +430,12 @@ func validateAgentRequest(request AgentRequest) error {
 	}
 	if request.Role == "test" && request.Stage == store.StageImplementation {
 		return errors.New("test role cannot run in implementation stage")
+	}
+	if request.Role == "spec_review" && request.Stage != store.StageReview {
+		return errors.New("spec_review role requires review stage")
+	}
+	if request.Stage == store.StageReview && request.Role != "spec_review" {
+		return errors.New("review stage requires spec_review role")
 	}
 	if request.Model != "" && strings.ContainsAny(request.Model, "\x00\r\n ") {
 		return errors.New("agent model contains unsafe characters")
@@ -488,7 +521,7 @@ func validateAgentRunState(run store.Run) error {
 		return fmt.Errorf("cannot start implementation agent from run status %q", run.Status)
 	}
 	switch run.Stage {
-	case store.StageClaim, store.StageTest, store.StageImplementation:
+	case store.StageClaim, store.StageTest, store.StageImplementation, store.StageDraftPR, store.StageReview:
 		return nil
 	default:
 		return fmt.Errorf("cannot start implementation agent from run stage %q", run.Stage)
@@ -501,6 +534,12 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 		if run.Stage == store.StageTest {
 			request.Role = "test"
 			request.Stage = store.StageTest
+		} else if run.Stage == store.StageReview {
+			request.Role = "spec_review"
+			request.Stage = store.StageReview
+		} else if run.Stage == store.StageDraftPR {
+			request.Role = "spec_review"
+			request.Stage = store.StageReview
 		} else {
 			request.Role = "implementation"
 			request.Stage = store.StageImplementation
@@ -509,6 +548,8 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 	if request.Role == "" {
 		if request.Stage == store.StageTest {
 			request.Role = "test"
+		} else if request.Stage == store.StageReview {
+			request.Role = "spec_review"
 		} else {
 			request.Role = "implementation"
 		}
@@ -528,6 +569,12 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 	}
 	if request.Role == "implementation" && run.Stage == store.StageTest {
 		return AgentRequest{}, errors.New("implementation agent cannot bypass the test stage")
+	}
+	if request.Stage == store.StageReview && run.Stage != store.StageReview && run.Stage != store.StageDraftPR {
+		return AgentRequest{}, fmt.Errorf("specification review requires active review stage, not %q", run.Stage)
+	}
+	if request.Role == "spec_review" && run.Stage != store.StageReview && run.Stage != store.StageDraftPR {
+		return AgentRequest{}, fmt.Errorf("specification review requires active review stage, not %q", run.Stage)
 	}
 	return request, nil
 }

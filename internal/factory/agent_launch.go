@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -114,6 +115,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	role := request.Role
 	stage := request.Stage
+	var reviewContext *ReviewContext
 	promptText, err := prompt.Build(prompt.Request{
 		InvocationID:            invocationID,
 		RunID:                   run.ID,
@@ -126,6 +128,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		TestExemption:           run.TestExemption,
 		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
 		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
+		ReviewContext:           nil,
 	})
 	if err != nil {
 		return AgentLaunchResult{}, err
@@ -142,6 +145,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		TestHandoff:         run.TestHandoff,
 		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
 		TestExemption:       run.TestExemption,
+		ReviewContext:       reviewContext,
 	}); err != nil {
 		return AgentLaunchResult{}, err
 	}
@@ -212,6 +216,39 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, fmt.Errorf("start worker for visible agent: %w", err)
 	}
 	workerStarted = true
+	if role == "spec_review" && stage == store.StageReview {
+		reviewContext, err = collectReviewContext(ctx, s.deps.Worker, run.ID, run.CheckpointSHA, *run)
+		if err != nil {
+			return AgentLaunchResult{}, err
+		}
+		promptText, err = prompt.Build(prompt.Request{
+			InvocationID: invocationID, RunID: run.ID, Role: role, Stage: string(stage),
+			SpecificationPacket: run.SpecificationPacket, RepositoryGuidance: packet.Issue.Body,
+			TestHandoff: run.TestHandoff, ProtectedTestPaths: run.ProtectedTestPaths,
+			TestExemption: run.TestExemption, TestPaths: packet.RepositoryConfig.TestPolicy.TestPaths,
+			TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
+			ReviewContext: &prompt.ReviewContext{
+				CheckpointSHA: reviewContext.CheckpointSHA, CurrentDiff: reviewContext.CurrentDiff,
+				RelevantLogs: reviewContext.RelevantLogs, ImplementationHandoff: reviewContext.ImplementationHandoff,
+				TestHandoff: reviewContext.TestHandoff, TestExemption: reviewContext.TestExemption,
+			},
+		})
+		if err != nil {
+			return AgentLaunchResult{}, err
+		}
+		if err := writeInvocationPacket(packetDirectory, InvocationPacket{
+			SchemaVersion: invocationPacketVersion, InvocationID: invocationID, RunID: run.ID,
+			Role: role, Stage: stage, SpecificationPacket: run.SpecificationPacket,
+			PromptVersion: prompt.VersionFor(role, string(stage)), PermittedPaths: append([]string(nil), request.PermittedPaths...),
+			TestHandoff: run.TestHandoff, ProtectedTestPaths: append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
+			TestExemption: run.TestExemption, ReviewContext: reviewContext,
+		}); err != nil {
+			return AgentLaunchResult{}, err
+		}
+		if err := s.publishSpecificationReviewStatus(ctx, registration, run.CheckpointSHA, github.CommitStatusPending, "specification review in progress"); err != nil {
+			return AgentLaunchResult{}, err
+		}
+	}
 	if authPath != "" {
 		if err := seeder.SeedCodexCredentials(ctx, worker.CredentialSeedRequest{RunID: run.ID, AuthPath: authPath}); err != nil {
 			return AgentLaunchResult{}, err
@@ -259,6 +296,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Prompt:          promptText,
 		Model:           model,
 		ReasoningEffort: request.ReasoningEffort,
+		CheckpointSHA:   run.CheckpointSHA,
 	})
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("launch Codex implementation agent: %w", err)

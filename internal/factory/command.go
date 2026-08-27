@@ -367,6 +367,8 @@ func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store
 // resetTestProjectionForPacketChange removes downstream test evidence that was
 // produced for an older specification packet before a new role starts.
 func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPacket) {
+	run.ImplementationHandoff = nil
+	run.SpecificationReview = nil
 	run.TestHandoff = nil
 	run.ProtectedTestPaths = nil
 	run.TestCheckpointSHA = ""

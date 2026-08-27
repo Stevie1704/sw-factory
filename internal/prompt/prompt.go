@@ -15,6 +15,9 @@ const Version = "implementation-v1"
 // TestVersion identifies the factory-owned test-stage prompt.
 const TestVersion = "test-v1"
 
+// ReviewVersion identifies the factory-owned independent specification-review prompt.
+const ReviewVersion = "specification-review-v1"
+
 // fenceMarkers are the delimiters that untrusted prompt content must not contain.
 var fenceMarkers = []string{
 	"--- BEGIN SPECIFICATION PACKET ---",
@@ -55,6 +58,19 @@ type Request struct {
 	TestPaths []string
 	// TestInfrastructurePaths lists frozen essential test-infrastructure prefixes.
 	TestInfrastructurePaths []string
+	// ReviewContext contains the exact checkpoint and bounded handoffs supplied
+	// to an independent specification reviewer.
+	ReviewContext *ReviewContext
+}
+
+// ReviewContext is the packet projection used by the independent reviewer.
+type ReviewContext struct {
+	CheckpointSHA         string
+	CurrentDiff           string
+	RelevantLogs          []string
+	ImplementationHandoff *store.ImplementationHandoff
+	TestHandoff           *store.TestHandoff
+	TestExemption         *store.TestExemption
 }
 
 // Build constructs one role prompt with repository guidance bounded before the
@@ -84,7 +100,25 @@ Check-repair context:
 	}
 	version := VersionFor(request.Role, request.Stage)
 	testContext := ""
-	if request.Role == "test" && request.Stage == "test" {
+	if request.Role == "spec_review" && request.Stage == "review" {
+		data, err := json.Marshal(request.ReviewContext)
+		if err != nil {
+			return "", fmt.Errorf("encode specification-review context: %w", err)
+		}
+		testContext = fmt.Sprintf(`
+Independent specification-review ownership:
+- Review only the exact checkpoint identified in the coordinator packet; do not inspect or infer a moving latest state.
+- Read the immutable review packet from /invocation/specification.json.
+- The packet contains bounded implementation/test handoffs, the exact diff, and relevant logs.
+- Do not request, reproduce, or include any upstream harness transcript; no upstream harness transcript is part of this review.
+- Taste and scope concerns are visible advisory findings and do not block readiness.
+- Report complete findings with: --finding location|claim|evidence|severity|category|resolution|owner.
+- An exact checkpoint finding is a blocker only for a concrete correctness, security, specification, or standards violation.
+
+Review context:
+%s
+`, string(data))
+	} else if request.Role == "test" && request.Stage == "test" {
 		scope, err := json.Marshal(struct {
 			TestPaths           []string `json:"test_paths"`
 			InfrastructurePaths []string `json:"infrastructure_paths"`
@@ -147,6 +181,9 @@ Factory-owned rules:
 
 // VersionFor returns the factory-owned prompt version for one role and stage.
 func VersionFor(role, stage string) string {
+	if role == "spec_review" && stage == "review" {
+		return ReviewVersion
+	}
 	if role == "test" && stage == "test" {
 		return TestVersion
 	}

@@ -19,7 +19,7 @@ import (
 
 // CurrentSchemaVersion is the latest operational-store schema understood by
 // this binary.
-const CurrentSchemaVersion = 19
+const CurrentSchemaVersion = 20
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -189,6 +189,39 @@ type ProtectedTestPath struct {
 	SHA256 string `json:"sha256"`
 }
 
+// HandoffAcceptance maps one acceptance criterion to implementation evidence.
+type HandoffAcceptance struct {
+	Criterion string `json:"criterion"`
+	Evidence  string `json:"evidence"`
+}
+
+// ImplementationHandoff is the durable implementation-stage projection sent
+// to the independent reviewer.
+type ImplementationHandoff struct {
+	ChangeSummary          string              `json:"change_summary"`
+	AcceptanceMapping      []HandoffAcceptance `json:"acceptance_mapping"`
+	ProductionFilesChanged []string            `json:"production_files_changed"`
+	FocusedCommands        []string            `json:"focused_commands"`
+	KnownLimitations       []string            `json:"known_limitations,omitempty"`
+}
+
+// ReviewFinding is the durable copy of one complete specification-review observation.
+type ReviewFinding struct {
+	Location            string `json:"location"`
+	Claim               string `json:"claim"`
+	Evidence            string `json:"evidence"`
+	Severity            string `json:"severity"`
+	Category            string `json:"category"`
+	SuggestedResolution string `json:"suggested_resolution"`
+	SuggestedOwner      string `json:"suggested_owner"`
+}
+
+// SpecificationReview is the durable review projection bound to one checkpoint.
+type SpecificationReview struct {
+	CheckpointSHA string          `json:"checkpoint_sha"`
+	Findings      []ReviewFinding `json:"findings"`
+}
+
 // Run is the persisted operational identity and current state of one run.
 type Run struct {
 	ID             string
@@ -212,9 +245,13 @@ type Run struct {
 	ProtectedTestPaths []ProtectedTestPath
 	// TestStageSkipped records an authorized skip before implementation.
 	TestStageSkipped bool
-	ImageDigest      string
-	Coordinator      string
-	StatusCommentID  string
+	// ImplementationHandoff is the accepted implementation evidence for review.
+	ImplementationHandoff *ImplementationHandoff
+	// SpecificationReview is the accepted review result for the current checkpoint.
+	SpecificationReview *SpecificationReview
+	ImageDigest         string
+	Coordinator         string
+	StatusCommentID     string
 	// PullRequestNumber is the persisted idempotency identity of the draft PR.
 	PullRequestNumber int
 	// PullRequestURL is the operator-facing URL of the draft PR.
@@ -447,6 +484,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+		       implementation_handoff, specification_review,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -470,6 +508,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+		       implementation_handoff, specification_review,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -490,6 +529,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, testCheckpointSHA string
 	var testHandoffJSON, testExemptionJSON, protectedTestPathsJSON string
+	var implementationHandoffJSON, specificationReviewJSON string
 	var pendingQuestionsJSON, clarificationCommentID, createdAt, updatedAt string
 	var clarificationNotificationSent bool
 	if err := row.Scan(
@@ -507,6 +547,8 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&testExemptionJSON,
 		&protectedTestPathsJSON,
 		&run.TestStageSkipped,
+		&implementationHandoffJSON,
+		&specificationReviewJSON,
 		&run.ImageDigest,
 		&run.Coordinator,
 		&run.StatusCommentID,
@@ -562,6 +604,18 @@ func scanRun(row *sql.Row) (*Run, error) {
 	if protectedTestPathsJSON != "" {
 		if err := json.Unmarshal([]byte(protectedTestPathsJSON), &run.ProtectedTestPaths); err != nil {
 			return nil, fmt.Errorf("decode protected test paths: %w", err)
+		}
+	}
+	if implementationHandoffJSON != "" {
+		run.ImplementationHandoff = &ImplementationHandoff{}
+		if err := json.Unmarshal([]byte(implementationHandoffJSON), run.ImplementationHandoff); err != nil {
+			return nil, fmt.Errorf("decode implementation handoff: %w", err)
+		}
+	}
+	if specificationReviewJSON != "" {
+		run.SpecificationReview = &SpecificationReview{}
+		if err := json.Unmarshal([]byte(specificationReviewJSON), run.SpecificationReview); err != nil {
+			return nil, fmt.Errorf("decode specification review: %w", err)
 		}
 	}
 	run.ClarificationCommentID = clarificationCommentID
@@ -635,6 +689,9 @@ func normalizeRun(run Run) (Run, error) {
 	if err := validateTestProjection(run); err != nil {
 		return Run{}, err
 	}
+	if err := validateReviewProjection(run); err != nil {
+		return Run{}, err
+	}
 	if run.CheckRepairAttempts < 0 {
 		return Run{}, errors.New("run check-repair attempts must not be negative")
 	}
@@ -666,6 +723,26 @@ func normalizeRun(run Run) (Run, error) {
 		run.UpdatedAt = run.CreatedAt
 	}
 	return run, nil
+}
+
+// validateReviewProjection keeps durable review findings complete and tied to
+// the run's current immutable checkpoint.
+func validateReviewProjection(run Run) error {
+	if run.SpecificationReview == nil {
+		return nil
+	}
+	if run.SpecificationReview.CheckpointSHA == "" || run.SpecificationReview.CheckpointSHA != run.CheckpointSHA {
+		return errors.New("specification review checkpoint must match the run checkpoint")
+	}
+	if len(run.SpecificationReview.Findings) > 128 {
+		return errors.New("specification review findings exceed 128 entries")
+	}
+	for index, finding := range run.SpecificationReview.Findings {
+		if strings.TrimSpace(finding.Location) == "" || strings.TrimSpace(finding.Claim) == "" || strings.TrimSpace(finding.Evidence) == "" || strings.TrimSpace(finding.Severity) == "" || strings.TrimSpace(finding.Category) == "" || strings.TrimSpace(finding.SuggestedResolution) == "" || strings.TrimSpace(finding.SuggestedOwner) == "" {
+			return fmt.Errorf("specification review finding %d is incomplete", index)
+		}
+	}
+	return nil
 }
 
 // validateTestProjection checks the bounded durable test-stage state before it
@@ -825,6 +902,30 @@ func protectedTestPathsJSON(values []ProtectedTestPath) string {
 	return string(data)
 }
 
+// implementationHandoffJSON serializes a nullable implementation handoff.
+func implementationHandoffJSON(value *ImplementationHandoff) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// specificationReviewJSON serializes a nullable exact-checkpoint review.
+func specificationReviewJSON(value *SpecificationReview) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 // runValues returns the ordered SQL values shared by normal and revision-safe
 // run persistence.
 func runValues(run Run) []any {
@@ -843,6 +944,8 @@ func runValues(run Run) []any {
 		testExemptionJSON(run.TestExemption),
 		protectedTestPathsJSON(run.ProtectedTestPaths),
 		run.TestStageSkipped,
+		implementationHandoffJSON(run.ImplementationHandoff),
+		specificationReviewJSON(run.SpecificationReview),
 		run.ImageDigest,
 		run.Coordinator,
 		run.StatusCommentID,
@@ -875,6 +978,7 @@ const saveRunStatement = `
 			id, repository_path, issue_number, stage, status, branch, worktree,
 			checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
 			test_handoff, test_exemption, protected_test_paths, test_stage_skipped,
+			implementation_handoff, specification_review,
 			image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
 			lifecycle_notification_sent,
@@ -888,7 +992,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -904,6 +1008,8 @@ const saveRunStatement = `
 			test_exemption = excluded.test_exemption,
 			protected_test_paths = excluded.protected_test_paths,
 			test_stage_skipped = excluded.test_stage_skipped,
+			implementation_handoff = excluded.implementation_handoff,
+			specification_review = excluded.specification_review,
 			image_digest = excluded.image_digest,
 			coordinator = excluded.coordinator,
 			status_comment_id = excluded.status_comment_id,
@@ -933,6 +1039,7 @@ const saveRunIfRevisionStatement = `
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
 			checkpoint_sha = ?, base_checkpoint_sha = ?, test_checkpoint_sha = ?,
 			test_handoff = ?, test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
+			implementation_handoff = ?, specification_review = ?,
 			image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
 			lifecycle_notification_sent = ?,
@@ -1835,6 +1942,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			} {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 19: %w", err)
+				}
+			}
+		case 20:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN implementation_handoff TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN specification_review TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 20: %w", err)
 				}
 			}
 		default:
