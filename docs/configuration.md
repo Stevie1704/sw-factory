@@ -311,9 +311,15 @@ identifier, registered repository, worktree, branch, checkpoint SHA, issue
 number and factory state label, marked status-comment identity, and persisted
 pull-request identity when present. A missing or mismatched projection is
 reported alongside every other discovered discrepancy and pauses the run for
-human disposition. A journaled effect is replayed only when its exact intent
-can be recognized or completed idempotently; otherwise the run remains waiting
-with the pending effect visible to `factory status`. `factory status` reports
+human disposition. A remote run branch whose head is an ancestor of the
+persisted checkpoint is not a discrepancy: a checkpoint is committed before the
+gate suite runs and pushed only afterwards, so an unpushed commit is an
+ordinary in-flight state rather than a diverged branch. A journaled effect is
+replayed only when its exact intent can be recognized or completed
+idempotently; otherwise the run remains waiting with the pending effect visible
+to `factory status`. A retried attempt refreshes the payload of its own
+reservation, because the effect identity rather than the payload is the
+reservation. `factory status` reports
 the run, agreement state, pending effect, discrepancies, and safe operator
 actions. After inspecting an ambiguous mutation, an operator can explicitly
 discard it with `factory reconcile --abandon-effect <effect-id> --reason <reason>`;
@@ -372,7 +378,10 @@ without duplicating polling or replay logic.
 When an implementation report requests clarification, the coordinator pauses
 the run with `agent-needs-input`, renders pending question IDs and prompts in
 the editable status comment, posts the questions on the issue (or tracked pull
-request), and notifies cmux. A command such as
+request), and notifies cmux. The question comment carries a marker scoped to
+the run and its specification packet version, so an interrupted publication
+repairs that round's comment while an answered round's questions remain
+readable. A command such as
 `/factory answer clarification-1 use the existing JSON format` records the
 authorized answer in a new specification-packet version and resumes a fresh
 implementation invocation with that packet. Clarification pauses do not
