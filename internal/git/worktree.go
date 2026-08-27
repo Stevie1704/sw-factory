@@ -116,6 +116,19 @@ type GitWorkspace interface {
 	SynchronizeBase(context.Context, BaseSyncRequest) error
 }
 
+// RemoteBranchInspector is the optional read-only projection used to
+// recognize a completed push after a coordinator restart.
+type RemoteBranchInspector interface {
+	RemoteBranchHead(context.Context, PushRequest) (string, error)
+}
+
+// AncestryInspector is the optional read-only projection that reports whether
+// one commit is reachable from another. Reconciliation uses it to tell an
+// unpushed local checkpoint apart from a genuinely diverged remote branch.
+type AncestryInspector interface {
+	IsAncestor(ctx context.Context, worktreePath, ancestor, descendant string) (bool, error)
+}
+
 // CommandRunner is the executable seam for host-side Git commands.
 type CommandRunner interface {
 	Run(context.Context, string, []string) ([]byte, error)
@@ -379,6 +392,59 @@ func (m *LocalWorktreeManager) Push(ctx context.Context, request PushRequest) er
 		return fmt.Errorf("push run branch %q: %w", request.Branch, err)
 	}
 	return nil
+}
+
+// RemoteBranchHead reads the exact origin branch head without changing the
+// local checkout. An empty result means the remote branch does not exist.
+func (m *LocalWorktreeManager) RemoteBranchHead(ctx context.Context, request PushRequest) (string, error) {
+	if strings.TrimSpace(request.WorktreePath) == "" {
+		return "", errors.New("remote branch worktree path is required")
+	}
+	if !filepath.IsAbs(request.WorktreePath) {
+		return "", errors.New("remote branch worktree path must be absolute")
+	}
+	if strings.TrimSpace(request.Branch) == "" {
+		return "", errors.New("remote branch is required")
+	}
+	if err := validateRefPart(request.Branch); err != nil {
+		return "", fmt.Errorf("remote branch: %w", err)
+	}
+	output, err := m.runner().Run(ctx, request.WorktreePath, []string{"ls-remote", "--heads", DefaultRemoteName, "refs/heads/" + request.Branch})
+	if err != nil {
+		return "", fmt.Errorf("read remote branch %q: %w", request.Branch, err)
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) == 0 {
+		return "", nil
+	}
+	if !validCommitSHA(fields[0]) {
+		return "", errors.New("remote branch response did not contain a full commit identity")
+	}
+	return fields[0], nil
+}
+
+// IsAncestor reports whether ancestor is reachable from descendant without
+// changing the local checkout. An unknown commit is reported as not reachable
+// rather than as an error, so a pruned remote object cannot claim agreement.
+func (m *LocalWorktreeManager) IsAncestor(ctx context.Context, worktreePath, ancestor, descendant string) (bool, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return false, errors.New("ancestry worktree path is required")
+	}
+	if !filepath.IsAbs(worktreePath) {
+		return false, errors.New("ancestry worktree path must be absolute")
+	}
+	if !validCommitSHA(ancestor) || !validCommitSHA(descendant) {
+		return false, errors.New("ancestry requires two full commit identities")
+	}
+	if ancestor == descendant {
+		return true, nil
+	}
+	if _, err := m.runner().Run(ctx, worktreePath, []string{"merge-base", "--is-ancestor", ancestor, descendant}); err != nil {
+		// git exits non-zero both for "not an ancestor" and for an unknown
+		// commit. Neither proves agreement, so both report false.
+		return false, nil
+	}
+	return true, nil
 }
 
 // SynchronizeBase fetches the named target branch and fast-forwards the run

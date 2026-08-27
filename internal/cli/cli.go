@@ -39,6 +39,7 @@ var commandTable = []commandDefinition{
 	{name: "agent-report", handler: runAgentReport},
 	{name: "draft-pr", handler: runDraftPullRequest},
 	{name: "poll", handler: runPollCommands},
+	{name: "reconcile", handler: runReconcile},
 	{name: "status", handler: runStatus},
 	{name: "evaluation", handler: runEvaluation},
 	{name: "evaluation-delete", handler: runEvaluationDelete},
@@ -557,6 +558,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		if !writeOutput(output, errorsOutput, "recovery: %s (run=%s sources=%s)\n", result.Recovery.Code, result.Recovery.RunID, agreement) {
 			return 1
 		}
+		if pending := result.Recovery.PendingEffect; pending != nil {
+			if !writeOutput(output, errorsOutput, "recovery pending effect: id=%s kind=%s\n", pending.ID, pending.Kind) {
+				return 1
+			}
+		}
 		for _, discrepancy := range result.Recovery.Discrepancies {
 			if !writeOutput(output, errorsOutput, "recovery discrepancy: %s.%s expected=%q observed=%q\n", discrepancy.Source, discrepancy.Field, discrepancy.Expected, discrepancy.Observed) {
 				return 1
@@ -567,6 +573,79 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 				return 1
 			}
 		}
+	}
+	return 0
+}
+
+// runReconcile executes one restart reconciliation or explicitly abandons the
+// effect named by --abandon-effect after a human has inspected it.
+func runReconcile(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("reconcile", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "optional run identifier")
+	effectID := flags.String("abandon-effect", "", "effect identity to abandon after human review")
+	reason := flags.String("reason", "", "reason for abandoning the pending effect")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("reconcile does not accept positional arguments"))
+		return 2
+	}
+	if *effectID == "" && *reason != "" {
+		writeError(errorsOutput, errors.New("--reason applies only to --abandon-effect"))
+		return 2
+	}
+	if *effectID == "" && *runID != "" {
+		writeError(errorsOutput, errors.New("--run-id applies only to --abandon-effect"))
+		return 2
+	}
+	service := factory.New(*configPath)
+	var (
+		result factory.RecoveryResult
+		err    error
+	)
+	if *effectID != "" {
+		result, err = service.AbandonPendingEffect(ctx, factory.AbandonPendingEffectRequest{RunID: *runID, EffectID: *effectID, Reason: *reason})
+	} else {
+		result, err = service.Reconcile(ctx)
+	}
+	// A paused run is a reported outcome, not a failed command: reconciliation
+	// returns a typed discrepancy error alongside the diagnosis it just wrote.
+	// Print the structured result first so the operator sees the run, the
+	// pending effect, and every discrepancy, then surface the typed error.
+	if result.Run == nil {
+		if err != nil {
+			writeError(errorsOutput, err)
+			return 1
+		}
+		if !writeOutput(output, errorsOutput, "reconciliation: no persisted run\n") {
+			return 1
+		}
+		return 0
+	}
+	if !writeOutput(output, errorsOutput, "reconciliation: outcome=%s run=%s status=%s stage=%s\n", result.Outcome, result.Run.ID, result.Run.Status, result.Run.Stage) {
+		return 1
+	}
+	if pending := result.Diagnosis.PendingEffect; pending != nil {
+		if !writeOutput(output, errorsOutput, "reconciliation pending effect: id=%s kind=%s\n", pending.ID, pending.Kind) {
+			return 1
+		}
+	}
+	for _, discrepancy := range result.Diagnosis.Discrepancies {
+		if !writeOutput(output, errorsOutput, "reconciliation discrepancy: %s.%s expected=%q observed=%q\n", discrepancy.Source, discrepancy.Field, discrepancy.Expected, discrepancy.Observed) {
+			return 1
+		}
+	}
+	for _, action := range result.Diagnosis.SafeActions {
+		if !writeOutput(output, errorsOutput, "reconciliation safe action: %s\n", action) {
+			return 1
+		}
+	}
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
 	}
 	return 0
 }

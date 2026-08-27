@@ -100,13 +100,13 @@ func TestStartAgentAcceptsAnIssueHarnessOverridePermittedByPolicy(t *testing.T) 
 	policy := validRepositoryConfig()
 	policy.AllowedOverrides = append(policy.AllowedOverrides, config.OverrideHarness)
 	policy.ModelOptions["implementation"] = []string{"claude-opus-5"}
-	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, policy, config.AuthenticationConfig{})
 
 	run := *runStore.current
 	run.HarnessOverride = string(config.HarnessClaude)
 	if err := runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
+	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, policy, config.AuthenticationConfig{})
 	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
 	if err != nil {
 		t.Fatalf("StartAgent() error = %v", err)
@@ -200,7 +200,7 @@ func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime *
 	}}}
 	githubRuntime := &fakeGitHub{
 		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: "<!-- factory-status: " + run.ID + " -->"},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	worktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},

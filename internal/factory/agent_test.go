@@ -741,7 +741,7 @@ func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspe
 	}}}
 	githubRuntime := &fakeGitHub{
 		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: "<!-- factory-status: " + run.ID + " -->"},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},

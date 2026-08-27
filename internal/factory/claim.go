@@ -103,9 +103,15 @@ type stateTransition struct {
 	Previous      store.Run
 	Next          store.Run
 	CreateComment bool
+	// StopWorker makes terminal transitions keep worker shutdown inside the
+	// same durable effect as the GitHub and run projections.
+	StopWorker bool
 	// PersistBeforeEffects is used by replay-sensitive commands so the
 	// processed-comment watermark is durable before GitHub mutation.
 	PersistBeforeEffects bool
+	// InvalidateResults makes a packet revision boundary invalidate prior
+	// invocation and gate projections atomically with the run update.
+	InvalidateResults bool
 }
 
 // BootstrapLabels explicitly creates or updates the factory-owned labels for
@@ -323,6 +329,88 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 	if next.Revision <= transition.Previous.Revision {
 		next.Revision = transition.Previous.Revision + 1
 	}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		return s.applyJournaledStateTransition(ctx, runStore, transition, next)
+	}
+	return s.applyLegacyStateTransition(ctx, runStore, transition, next)
+}
+
+// applyJournaledStateTransition reserves the complete label/comment transition
+// before crossing GitHub's mutation boundary. The reservation remains until
+// both the projection and durable run state are complete.
+func (s *Service) applyJournaledStateTransition(ctx context.Context, runStore RunStore, transition stateTransition, next store.Run) (store.Run, error) {
+	payload := stateTransitionEffectPayload{
+		Repository:        transition.Repository,
+		Issue:             transition.Issue,
+		Previous:          transition.Previous,
+		Next:              next,
+		CreateComment:     transition.CreateComment,
+		StopWorker:        transition.StopWorker,
+		InvalidateResults: transition.InvalidateResults,
+	}
+	effect, err := s.newPendingEffect(next.ID, store.PendingEffectKindStateTransition, fmt.Sprintf("revision=%d", next.Revision), payload)
+	if err != nil {
+		return next, err
+	}
+	apply := func() error {
+		if transition.StopWorker {
+			if err := s.stopRunWorker(ctx, transition.Previous.ID); err != nil {
+				return err
+			}
+		}
+		if transition.PersistBeforeEffects {
+			next.UpdatedAt = s.deps.Now().UTC()
+			if transition.CreateComment {
+				return errors.New("cannot persist a command before creating its status comment")
+			}
+			if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
+				return fmt.Errorf("persist state transition before GitHub effects: %w", err)
+			}
+			if recorder, ok := runStore.(evaluationRecorder); ok {
+				if err := recordEvaluationTransition(ctx, recorder, transition.Previous, next, next.UpdatedAt); err != nil {
+					return fmt.Errorf("record evaluation state transition: %w", err)
+				}
+			}
+		}
+		if err := s.applyStateTransitionEffects(ctx, &next, transition); err != nil {
+			return err
+		}
+		next.UpdatedAt = s.deps.Now().UTC()
+		if !transition.PersistBeforeEffects {
+			if transition.InvalidateResults {
+				if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
+					if err := atomicStore.SaveRunAndInvalidateResults(ctx, transition.Previous.Revision, next); err != nil {
+						return fmt.Errorf("persist state transition and invalidate results: %w", err)
+					}
+				} else {
+					if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
+						return fmt.Errorf("persist state transition: %w", err)
+					}
+					if err := invalidateRunResults(ctx, runStore, next.ID); err != nil {
+						return err
+					}
+				}
+			} else if err := saveRunWithRetry(ctx, runStore, next); err != nil {
+				return fmt.Errorf("persist state transition: %w", err)
+			}
+			if recorder, ok := runStore.(evaluationRecorder); ok {
+				if err := recordEvaluationTransition(ctx, recorder, transition.Previous, next, next.UpdatedAt); err != nil {
+					return fmt.Errorf("record evaluation state transition: %w", err)
+				}
+			}
+		}
+		return nil
+	}
+	if err := s.withPendingEffect(ctx, runStore, effect, apply); err != nil {
+		return next, err
+	}
+	return next, nil
+}
+
+// applyLegacyStateTransition retains the pre-journal behavior for embedders
+// that supply an older RunStore implementation. The production SQLite store
+// implements PendingEffectStore and always uses the restart-safe path.
+func (s *Service) applyLegacyStateTransition(ctx context.Context, runStore RunStore, transition stateTransition, next store.Run) (store.Run, error) {
 	if transition.PersistBeforeEffects {
 		next.UpdatedAt = s.deps.Now().UTC()
 		if transition.CreateComment {
@@ -451,9 +539,39 @@ func (s *Service) openActiveRunStore(ctx context.Context) (config.RepositoryRegi
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
-	if err := s.ensureProgressionStartup(ctx, registration, run); err != nil {
+	if err := s.ensureProgressionStartup(ctx, registration, runStore, run); err != nil {
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	if err := s.drainPendingEffect(ctx, registration, runStore, run); err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	return registration, runStore, run, nil
+}
+
+// openReportRunStore opens the active run for report acceptance and also
+// exposes the latest terminal run so a retried report can be recognized as an
+// already-completed idempotent operation.
+func (s *Service) openReportRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
+	registration, runStore, err := s.openRunStore(ctx)
+	if err != nil {
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	run, err := readReconciliationRun(ctx, runStore)
+	if err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	if run != nil {
+		if err := s.ensureProgressionStartup(ctx, registration, runStore, run); err != nil {
+			_ = runStore.Close()
+			return config.RepositoryRegistration{}, nil, nil, err
+		}
+		if err := s.drainPendingEffect(ctx, registration, runStore, run); err != nil {
+			_ = runStore.Close()
+			return config.RepositoryRegistration{}, nil, nil, err
+		}
 	}
 	return registration, runStore, run, nil
 }
@@ -477,30 +595,67 @@ func (s *Service) openAgentStartRunStore(ctx context.Context, request AgentReque
 	return registration, runStore, run, nil
 }
 
-// ensureProgressionStartup performs the read-only startup guard shared by all
-// progression seams except the dedicated first-agent handoff. A service that
-// found no interrupted run may continue a run it claims during that same
-// process; a fresh service refuses every persisted non-terminal run until issue
-// #21 supplies reconciliation.
-func (s *Service) ensureProgressionStartup(ctx context.Context, registration config.RepositoryRegistration, run *store.Run) error {
+// drainPendingEffect consumes a durable effect left behind by an earlier
+// failed attempt in this same process. The one-time startup reconciliation
+// cannot cover it, because a reservation may outlive any operation that failed
+// after startup. Without this drain the next reservation would collide with the
+// stale one and block every later progression until the process restarts.
+func (s *Service) drainPendingEffect(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) error {
+	if run == nil {
+		return nil
+	}
+	journal, journaled := runStore.(PendingEffectStore)
+	if !journaled {
+		return nil
+	}
+	pending, err := journal.PendingEffect(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("read pending effect before progression: %w", err)
+	}
+	if pending == nil {
+		return nil
+	}
+	updated, _, _, reconcileErr := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
+	*run = updated
+	return reconcileErr
+}
+
+// ensureProgressionStartup performs the restart reconciliation shared by all
+// progression seams. A production store consumes one pending effect, verifies
+// the external projections, and permits continuation only after they agree.
+func (s *Service) ensureProgressionStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) error {
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()
 	if s.startupChecked {
 		return s.startupErr
 	}
 	s.startupChecked = true
-	if run == nil || store.IsTerminalStatus(run.Status) {
+	if run == nil {
+		latest, err := readReconciliationRun(ctx, runStore)
+		if err != nil {
+			s.startupErr = fmt.Errorf("read latest run for startup reconciliation: %w", err)
+			return s.startupErr
+		}
+		run = latest
+	}
+	if run == nil {
 		return nil
 	}
-	diagnosis := s.diagnoseInterruptedRun(ctx, registration, *run)
-	s.startupErr = recoveryRequiredError(diagnosis)
+	updated, _, _, err := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
+	if err != nil {
+		*run = updated
+		s.startupErr = err
+		return s.startupErr
+	}
+	*run = updated
 	return s.startupErr
 }
 
 // ensureAgentStartup permits only clean claim/test or explicitly skipped-test
 // states to cross into their first visible invocation. A clean draft checkpoint
-// may also cross into its independent immutable review. Every other later or
-// interrupted state retains the typed #24 refusal until reconciliation exists.
+// may also cross into its independent immutable review. Journaled interrupted
+// runs have already passed reconciliation before this seam is reached; legacy
+// stores retain the typed #24 refusal.
 func (s *Service) ensureAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) error {
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()
@@ -511,9 +666,191 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 	if run == nil || store.IsTerminalStatus(run.Status) {
 		return nil
 	}
+	if _, journaled := runStore.(PendingEffectStore); !journaled {
+		return s.ensureLegacyAgentStartup(ctx, registration, runStore, run, request)
+	}
+	updated, diagnosis, _, err := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
+	*run = updated
+	if err != nil {
+		s.startupErr = err
+		return s.startupErr
+	}
+	if activeStore, ok := runStore.(ActiveInvocationStore); ok {
+		active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
+		if lookupErr != nil {
+			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyInfrastructure,
+				Source:   "operational store",
+				Field:    "active invocation",
+				Expected: "read active invocation",
+				Observed: lookupErr.Error(),
+			})
+			diagnosis.SourcesAgree = false
+			return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+		}
+		if active != nil && !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount == 0 {
+			if strings.TrimSpace(active.NativeSessionID) == "" {
+				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyInfrastructure,
+					Source:   "harness",
+					Field:    "native session identity",
+					Expected: "persisted native session identifier",
+					Observed: "empty; launch may still be in progress",
+				})
+				diagnosis.SourcesAgree = false
+				return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+			}
+			if _, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, *run, *active); resumeErr != nil {
+				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyInfrastructure,
+					Source:   "harness",
+					Field:    "native session resume",
+					Expected: "resume persisted session exactly once",
+					Observed: resumeErr.Error(),
+				})
+				diagnosis.SourcesAgree = false
+				return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+			}
+		}
+	}
+	if run.CheckRepairPendingAttempt != 0 {
+		updated, completionErr := s.completePendingCheckRepair(ctx, registration, runStore, *run)
+		if completionErr != nil {
+			diagnosis.SourcesAgree = false
+			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyInfrastructure,
+				Source:   "check-repair",
+				Field:    "attempt reservation",
+				Expected: "completed resumed invocation",
+				Observed: completionErr.Error(),
+			})
+			s.startupErr = &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
+			return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+		}
+		*run = updated
+	}
+	if run.Status == store.StatusActive && run.Stage == store.StageImplementation &&
+		(run.LastCommandName == "answer" || run.LastCommandName == "refresh") &&
+		run.LastCommandOutcome == string(CommandAccepted) {
+		return nil
+	}
+	reviewStart := request.Role == "spec_review" || (request.Role == "" && run.Stage == store.StageDraftPR)
+	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && run.TestStageSkipped)
+	if reviewStart && run.Stage == store.StageDraftPR {
+		return nil
+	}
+	if !cleanStart || run.Status != store.StatusActive {
+		return nil
+	}
+	if latestStore, ok := runStore.(LatestInvocationStore); ok {
+		latest, latestErr := latestStore.LatestInvocation(ctx, run.ID)
+		if latestErr != nil {
+			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyInfrastructure,
+				Source:   "operational store",
+				Field:    "latest invocation",
+				Expected: "read latest invocation",
+				Observed: latestErr.Error(),
+			})
+			diagnosis.SourcesAgree = false
+			return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+		}
+		resumedActiveInvocation := latest != nil && latest.Status == store.InvocationStatusActive && latest.RecoveryResumeCount > 0
+		if latest != nil && latest.Status != store.InvocationStatusSuperseded && !resumedActiveInvocation && invocationBlocksCleanStart(*run, *latest) {
+			diagnosis.InvocationExists = true
+			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyWorkflow,
+				Source:   "run",
+				Field:    "invocation history",
+				Expected: "no unfinished invocation for the clean stage boundary",
+				Observed: fmt.Sprintf("invocation %q is %s", latest.ID, latest.Status),
+			})
+			diagnosis.SourcesAgree = false
+			return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+		}
+	} else if run.Stage == store.StageClaim {
+		if historyStore, ok := runStore.(InvocationHistoryStore); ok {
+			hasInvocation, historyErr := historyStore.HasInvocation(ctx, run.ID)
+			if historyErr != nil {
+				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyInfrastructure,
+					Source:   "operational store",
+					Field:    "invocation history",
+					Expected: "read invocation history",
+					Observed: historyErr.Error(),
+				})
+				diagnosis.SourcesAgree = false
+				return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+			}
+			if hasInvocation {
+				diagnosis.InvocationExists = true
+				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyWorkflow,
+					Source:   "run",
+					Field:    "invocation history",
+					Expected: "no invocation history for a clean claim stage",
+					Observed: "persisted invocation exists",
+				})
+				diagnosis.SourcesAgree = false
+				return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
+			}
+		}
+	}
+	return nil
+}
+
+// invocationBlocksCleanStart identifies terminal invocation history that means
+// a clean-stage launch may be the second attempt at an already accepted report.
+func invocationBlocksCleanStart(run store.Run, invocation store.Invocation) bool {
+	switch run.Stage {
+	case store.StageClaim:
+		return true
+	case store.StageTest:
+		return invocation.Stage == store.StageTest
+	case store.StageImplementation:
+		return invocation.Stage == store.StageImplementation
+	case store.StageDraftPR:
+		return invocation.Stage == store.StageReview
+	default:
+		return false
+	}
+}
+
+// pauseAgentStartup records a startup disagreement before returning its typed
+// category. Journaled stores use the ordinary waiting transition when the
+// external surface is available and fall back to a local waiting projection
+// while preserving any pending effect that still needs operator resolution.
+func (s *Service) pauseAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, diagnosis RecoveryDiagnosis) error {
+	paused, pauseErr := s.pauseForRecovery(ctx, registration, runStore, *run, diagnosis)
+	*run = paused
+	if pauseErr != nil {
+		local, localErr := s.pauseRunLocally(ctx, runStore, *run, diagnosis)
+		*run = local
+		if localErr != nil {
+			pauseErr = errors.Join(pauseErr, localErr)
+		}
+	}
+	if hasWorkflowDiscrepancy(diagnosis) {
+		// Keep the legacy RecoveryRequiredError discoverable for callers that
+		// used it as the broad startup refusal while exposing workflow failure
+		// as the primary category for new callers.
+		s.startupErr = &WorkflowFailureError{RunID: run.ID, Cause: recoveryRequiredError(diagnosis)}
+	} else {
+		s.startupErr = &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
+	}
+	if pauseErr != nil {
+		s.startupErr = errors.Join(s.startupErr, pauseErr)
+	}
+	return s.startupErr
+}
+
+// ensureLegacyAgentStartup preserves the first-invocation compatibility seam
+// for embedders that have not upgraded their operational store to the durable
+// pending-effect journal.
+func (s *Service) ensureLegacyAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) error {
 	diagnosis := s.diagnoseInterruptedRun(ctx, registration, *run)
 	if !diagnosis.SourcesAgree {
-		s.startupErr = recoveryRequiredError(diagnosis)
+		s.startupErr = recoveryDiscrepancyError(diagnosis)
 		return s.startupErr
 	}
 	if run.Status == store.StatusActive && run.Stage == store.StageImplementation &&
@@ -527,7 +864,7 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		return nil
 	}
 	if !cleanStart || run.Status != store.StatusActive {
-		s.startupErr = recoveryRequiredError(diagnosis)
+		s.startupErr = recoveryDiscrepancyError(diagnosis)
 		return s.startupErr
 	}
 	historyStore, ok := runStore.(InvocationHistoryStore)
@@ -539,7 +876,7 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 			Observed: "store does not support invocation history",
 		})
 		diagnosis.SourcesAgree = false
-		s.startupErr = recoveryRequiredError(diagnosis)
+		s.startupErr = recoveryDiscrepancyError(diagnosis)
 		return s.startupErr
 	}
 	hasInvocation, err := historyStore.HasInvocation(ctx, run.ID)
@@ -551,12 +888,12 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 			Observed: err.Error(),
 		})
 		diagnosis.SourcesAgree = false
-		s.startupErr = recoveryRequiredError(diagnosis)
+		s.startupErr = recoveryDiscrepancyError(diagnosis)
 		return s.startupErr
 	}
 	if hasInvocation {
 		diagnosis.InvocationExists = true
-		s.startupErr = recoveryRequiredError(diagnosis)
+		s.startupErr = recoveryDiscrepancyError(diagnosis)
 		return s.startupErr
 	}
 	return nil
@@ -565,6 +902,50 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 // failClaim records a terminal failure and best-effort moves the issue label
 // away from running so a partial claim is visible and retryable.
 func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Run, repository github.Repository, issue github.Issue, cause error) (IssueResult, error) {
+	if journal, journaled := runStore.(PendingEffectStore); journaled {
+		// Claim failure owns the partially created run. Abandon the in-flight
+		// success transition before recording failure, otherwise a restart
+		// could replay an obsolete agent-running projection over the failed run.
+		if pending, err := journal.PendingEffect(ctx, run.ID); err != nil {
+			cause = errors.Join(cause, fmt.Errorf("inspect failed-claim pending effect: %w", err))
+		} else if pending != nil {
+			if err := journal.ClearPendingEffect(ctx, run.ID, pending.ID); err != nil {
+				cause = errors.Join(cause, fmt.Errorf("abandon failed-claim pending effect: %w", err))
+			}
+		}
+		previous := run
+		next := run
+		next.Status = store.StatusFailed
+		next.Revision = previous.Revision + 1
+		next.UpdatedAt = s.deps.Now().UTC()
+		updated, transitionErr := s.applyStateTransition(ctx, runStore, stateTransition{
+			Repository:    repository,
+			Issue:         issue,
+			Previous:      previous,
+			Next:          next,
+			CreateComment: strings.TrimSpace(previous.StatusCommentID) == "",
+		})
+		if transitionErr != nil {
+			cause = errors.Join(cause, fmt.Errorf("persist failed claim transition: %w", transitionErr))
+			if pending, pendingErr := journal.PendingEffect(ctx, run.ID); pendingErr == nil && pending != nil {
+				_ = journal.ClearPendingEffect(ctx, run.ID, pending.ID)
+			}
+			if saveErr := runStore.SaveRun(ctx, next); saveErr != nil {
+				cause = errors.Join(cause, fmt.Errorf("persist failed claim fallback: %w", saveErr))
+			}
+			run = next
+		} else {
+			run = updated
+		}
+		if recorder, ok := runStore.(evaluationRecorder); ok {
+			if err := recorder.EnsureEvaluationSummary(ctx, run); err != nil {
+				cause = errors.Join(cause, fmt.Errorf("ensure failed-claim evaluation summary: %w", err))
+			} else if err := recorder.FinalizeEvaluation(ctx, run.ID, store.EvaluationOutcomeFailed, run.UpdatedAt); err != nil {
+				cause = errors.Join(cause, fmt.Errorf("finalize failed-claim evaluation summary: %w", err))
+			}
+		}
+		return IssueResult{}, cause
+	}
 	run.Status = store.StatusFailed
 	run.UpdatedAt = s.deps.Now().UTC()
 	compensationErrors := []error{
@@ -631,6 +1012,11 @@ func statusCommentBody(run store.Run) string {
 	review := specificationReviewStatusComment(run)
 	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
 }
+
+// StatusCommentBody renders the coordinator-owned status projection for one
+// run. It is exported for adapters and integration tests that need to compare
+// a recovered GitHub comment without treating its marker alone as agreement.
+func StatusCommentBody(run store.Run) string { return statusCommentBody(run) }
 
 // specificationReviewStatusComment renders the complete accepted review
 // finding contract in the single editable issue supervision comment.

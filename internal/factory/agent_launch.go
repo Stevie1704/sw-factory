@@ -2,10 +2,12 @@ package factory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -47,6 +49,10 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, fmt.Errorf("look up active visible invocation: %w", lookupErr)
 		}
 		if active != nil {
+			if !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount > 0 {
+				s.markInvocationStarted(active.ID)
+				return AgentLaunchResult{Invocation: *active}, nil
+			}
 			return AgentLaunchResult{}, fmt.Errorf("run %q already has active invocation %q", run.ID, active.ID)
 		}
 	}
@@ -67,6 +73,15 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err := validateAgentRequest(request); err != nil {
 		return AgentLaunchResult{}, err
 	}
+	if latestStore, ok := runStore.(LatestInvocationStore); ok {
+		latest, latestErr := latestStore.LatestInvocation(ctx, run.ID)
+		if latestErr != nil {
+			return AgentLaunchResult{}, fmt.Errorf("look up latest invocation before launch: %w", latestErr)
+		}
+		if latest != nil && latest.Status != store.InvocationStatusSuperseded && latest.Role == request.Role && latest.Stage == request.Stage {
+			return AgentLaunchResult{}, fmt.Errorf("run %q already has invocation history for %s/%s", run.ID, request.Role, request.Stage)
+		}
+	}
 	isReview := request.Role == "spec_review" && request.Stage == store.StageReview
 	var reviewContext *prompt.ReviewContext
 	if isReview {
@@ -82,7 +97,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, err
 	}
 	if isReview {
-		if err := s.publishSpecificationReviewStatus(ctx, registration, *run, github.CommitStatusPending, "specification review in progress"); err != nil {
+		if err := s.publishSpecificationReviewStatus(ctx, registration, runStore, *run, github.CommitStatusPending, "specification review in progress"); err != nil {
 			return AgentLaunchResult{}, fmt.Errorf("publish pending specification review status: %w", err)
 		}
 	}
@@ -177,6 +192,15 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		if returnErr == nil || !invocationPersisted {
 			return
 		}
+		if journal, journaled := runStore.(PendingEffectStore); journaled {
+			pending, pendingErr := journal.PendingEffect(context.WithoutCancel(ctx), run.ID)
+			if pendingErr == nil && pending != nil {
+				// Leave the active invocation and its reserved effect intact. A
+				// restart must replay the exact worker boundary before deciding
+				// whether the native session can be resumed or needs human review.
+				return
+			}
+		}
 		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		invocation.Status = store.InvocationStatusCannotProceed
@@ -205,7 +229,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("prepare worker Git metadata: %w", err)
 	}
-	if err := s.deps.Worker.Start(ctx, worker.StartRequest{
+	workerRequest := worker.StartRequest{
 		RunID:             run.ID,
 		WorktreePath:      run.Worktree,
 		GitMetadataPath:   gitMetadataPath,
@@ -216,7 +240,8 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		ResultPath:        resultDirectory,
 		CredentialStoreID: credentialStoreID,
 		Role:              role,
-	}); err != nil {
+	}
+	if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("start worker for visible agent: %w", err)
 	}
 	workerStarted = true
@@ -310,11 +335,205 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, fmt.Errorf("persist %s stage: %w", role, err)
 	}
 	if isReview {
-		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, *run); err != nil {
+		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
 			return AgentLaunchResult{}, err
 		}
 	}
+	s.markInvocationStarted(invocation.ID)
 	return AgentLaunchResult{Invocation: invocation, Prompt: promptText}, nil
+}
+
+// resumePersistedInvocation restores one active invocation after a coordinator
+// restart. It reuses the persisted worker, workspace, surface, harness, and
+// native session identity; it never creates a second invocation for the run.
+func (s *Service) resumePersistedInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (store.Invocation, error) {
+	if invocation.RecoveryResumeCount > 0 {
+		return invocation, nil
+	}
+	invocationStore, ok := runStore.(InvocationStore)
+	if !ok {
+		return invocation, errors.New("operational store does not support invocation recovery")
+	}
+	if strings.TrimSpace(invocation.NativeSessionID) == "" {
+		return invocation, errors.New("active invocation has no persisted native session identifier")
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return invocation, fmt.Errorf("decode specification packet for invocation recovery: %w", err)
+	}
+	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+	if err != nil {
+		return invocation, err
+	}
+	capabilities := harnessRuntime.Capabilities()
+	if capabilities.Name != invocation.Harness {
+		return invocation, fmt.Errorf("harness %q cannot resume persisted %q session", capabilities.Name, invocation.Harness)
+	}
+	if !capabilities.InteractiveResume {
+		return invocation, fmt.Errorf("harness %q does not support native session resume", invocation.Harness)
+	}
+	promptText, err := promptForPersistedInvocation(run, invocation, packet)
+	if err != nil {
+		return invocation, err
+	}
+	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
+	if err != nil {
+		return invocation, fmt.Errorf("prepare recovery Git metadata: %w", err)
+	}
+	workerRequest := worker.StartRequest{
+		RunID:             run.ID,
+		WorktreePath:      run.Worktree,
+		GitMetadataPath:   gitMetadataPath,
+		Image:             packet.RepositoryConfig.WorkerBuild.Image,
+		ImageDigest:       run.ImageDigest,
+		Caches:            workerCaches(packet.RepositoryConfig.Caches),
+		InvocationPath:    invocation.InvocationDirectory,
+		ResultPath:        invocation.ResultDirectory,
+		CredentialStoreID: invocation.CredentialStoreID,
+		Role:              invocation.Role,
+	}
+	if s.deps.Worker == nil {
+		return invocation, errors.New("worker runtime is required for invocation recovery")
+	}
+	inspection, err := s.deps.Worker.Inspect(ctx, run.ID)
+	if err != nil {
+		return invocation, fmt.Errorf("inspect worker for invocation recovery: %w", err)
+	}
+	if inspection.Exists {
+		if !workerImageMatches(inspection.Image, workerRequest.Image, workerRequest.ImageDigest) {
+			return invocation, fmt.Errorf("persisted worker image %q does not match frozen image %q@%s", inspection.Image, workerRequest.Image, workerRequest.ImageDigest)
+		}
+		if inspection.Running {
+			known, matches := inspection.MountContractStatus(workerRequest)
+			if !known {
+				return invocation, errors.New("persisted running worker does not expose mount contract identity")
+			}
+			if !matches {
+				return invocation, errors.New("persisted running worker mount contract does not match the invocation")
+			}
+		}
+	}
+	if !inspection.Exists || !inspection.Running {
+		if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {
+			return invocation, fmt.Errorf("start missing worker during invocation recovery: %w", err)
+		}
+	}
+	workspaceID := terminal.WorkspaceID(invocation.WorkspaceID)
+	implementationSurface := terminal.Surface{
+		ID:          terminal.SurfaceID(invocation.ImplementationSurfaceID),
+		WorkspaceID: workspaceID,
+		Name:        invocation.Role,
+	}
+	if workspaceID == "" || implementationSurface.ID == "" {
+		runWorkspace, workspaceErr := terminalRuntime.EnsureRunWorkspace(ctx, terminal.RunWorkspaceRequest{
+			RunID:            run.ID,
+			Name:             "factory-" + run.ID,
+			Description:      fmt.Sprintf("factory run for issue #%d", run.IssueNumber),
+			WorkingDirectory: run.Worktree,
+		})
+		if workspaceErr != nil {
+			return invocation, fmt.Errorf("restore run terminal workspace: %w", workspaceErr)
+		}
+		workspaceID = runWorkspace.ID
+		implementationSurface = runWorkspace.Implementation
+		if invocation.Role == "test" {
+			implementationSurface = runWorkspace.Checks
+		} else if invocation.Role == "spec_review" {
+			implementationSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: "spec-review"}
+		}
+		invocation.WorkspaceID = string(runWorkspace.ID)
+		invocation.StatusSurfaceID = string(runWorkspace.Status.ID)
+		invocation.ImplementationSurfaceID = string(implementationSurface.ID)
+		invocation.ChecksSurfaceID = string(runWorkspace.Checks.ID)
+		if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
+			return invocation, fmt.Errorf("persist restored terminal handles: %w", err)
+		}
+	}
+	resumeRequest := harness.StartRequest{
+		InvocationID:    invocation.ID,
+		RunID:           run.ID,
+		Role:            invocation.Role,
+		Stage:           string(invocation.Stage),
+		CheckpointSHA:   reviewCheckpointSHA(invocation.Stage == store.StageReview, run.CheckpointSHA),
+		WorkspaceID:     workspaceID,
+		Surface:         implementationSurface,
+		Prompt:          promptText,
+		Model:           invocation.Model,
+		ReasoningEffort: invocation.ReasoningEffort,
+		ResumeSessionID: invocation.NativeSessionID,
+	}
+	updated, err := s.resumeHarnessWithEffect(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	if err != nil {
+		return updated, err
+	}
+	return updated, nil
+}
+
+// promptForPersistedInvocation rebuilds the same role prompt from the frozen
+// packet and invocation packet after a process restart.
+func promptForPersistedInvocation(run store.Run, invocation store.Invocation, packet SpecificationPacket) (string, error) {
+	var persisted InvocationPacket
+	data, err := os.ReadFile(filepath.Join(invocation.InvocationDirectory, invocationPacketFileName))
+	if err != nil {
+		return "", fmt.Errorf("read persisted invocation packet: %w", err)
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		return "", fmt.Errorf("decode persisted invocation packet: %w", err)
+	}
+	if persisted.SchemaVersion != invocationPacketVersion {
+		return "", fmt.Errorf("unsupported persisted invocation packet schema version %d", persisted.SchemaVersion)
+	}
+	if persisted.InvocationID != invocation.ID || persisted.RunID != run.ID {
+		return "", errors.New("persisted invocation packet identity does not match the run")
+	}
+	return prompt.Build(prompt.Request{
+		InvocationID:            invocation.ID,
+		RunID:                   run.ID,
+		Role:                    invocation.Role,
+		Stage:                   string(invocation.Stage),
+		SpecificationPacket:     run.SpecificationPacket,
+		RepositoryGuidance:      packet.Issue.Body,
+		TestHandoff:             persisted.TestHandoff,
+		ProtectedTestPaths:      persisted.ProtectedTestPaths,
+		TestExemption:           persisted.TestExemption,
+		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
+		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
+		CheckRepairAttempt:      checkRepairAttempt(persisted.CheckRepair),
+		CheckRepairBudget:       checkRepairBudget(persisted.CheckRepair),
+		ReviewContext:           persisted.ReviewContext,
+	})
+}
+
+// checkRepairAttempt extracts the bounded repair attempt from a persisted
+// invocation packet while keeping the prompt package independent of factory
+// packet types.
+func checkRepairAttempt(packet *CheckRepairPacket) int {
+	if packet == nil {
+		return 0
+	}
+	return packet.Attempt
+}
+
+// checkRepairBudget extracts the configured repair ceiling from a persisted
+// invocation packet.
+func checkRepairBudget(packet *CheckRepairPacket) int {
+	if packet == nil {
+		return 0
+	}
+	return packet.Budget
+}
+
+// workerImageMatches accepts Docker's image@digest formatting while requiring
+// the frozen digest whenever the runtime exposes an image identity.
+func workerImageMatches(observed, image, digest string) bool {
+	observed = strings.TrimSpace(observed)
+	if observed == "" {
+		return true
+	}
+	if strings.TrimSpace(digest) == "" {
+		return observed == image
+	}
+	return observed == image+"@"+digest || strings.HasSuffix(observed, "@"+digest)
 }
 
 // reviewCheckpointSHA supplies an exact checkpoint only to the review harness.

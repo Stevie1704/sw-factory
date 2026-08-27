@@ -191,6 +191,12 @@ type CommitStatusPublisher interface {
 	CreateCommitStatus(context.Context, Repository, CommitStatus) error
 }
 
+// CommitStatusReader is the read-only projection used to recognize a status
+// that GitHub accepted before the coordinator process stopped.
+type CommitStatusReader interface {
+	ListCommitStatuses(context.Context, Repository, string) ([]CommitStatus, error)
+}
+
 // Client is the small host-side seam used by the claim coordinator. It keeps
 // GitHub credentials inside the local gh process and returns only workflow
 // data to the coordinator.
@@ -247,6 +253,7 @@ type GhClient struct {
 var _ CommentReader = (*GhClient)(nil)
 var _ IssuePoller = (*GhClient)(nil)
 var _ LeaseClient = (*GhClient)(nil)
+var _ CommitStatusReader = (*GhClient)(nil)
 
 // NewClient returns a GitHub CLI-backed client.
 func NewClient() *GhClient { return &GhClient{Runner: commandRunner{}} }
@@ -553,6 +560,39 @@ func (c *GhClient) CreateCommitStatus(ctx context.Context, repository Repository
 	return nil
 }
 
+// ListCommitStatuses reads all statuses attached to one exact commit so a
+// pending status effect can be recognized without publishing a duplicate.
+func (c *GhClient) ListCommitStatuses(ctx context.Context, repository Repository, sha string) ([]CommitStatus, error) {
+	if !ValidCommitSHA(sha) {
+		return nil, errors.New("commit status SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
+	}
+	output, err := c.callBytes(ctx, []string{"api", fmt.Sprintf("repos/%s/commits/%s/statuses", repository.String(), sha), "--method", "GET", "--paginate", "--slurp"}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list commit statuses for %s: %w", sha, err)
+	}
+	var pages [][]commitStatusResponse
+	if err := json.Unmarshal(output, &pages); err != nil {
+		var flat []commitStatusResponse
+		if flatErr := json.Unmarshal(output, &flat); flatErr != nil {
+			return nil, fmt.Errorf("decode commit statuses for %s: %w", sha, flatErr)
+		}
+		pages = [][]commitStatusResponse{flat}
+	}
+	statuses := make([]CommitStatus, 0)
+	for _, page := range pages {
+		for _, response := range page {
+			statuses = append(statuses, CommitStatus{
+				SHA:         sha,
+				State:       CommitStatusState(response.State),
+				Context:     response.Context,
+				Description: response.Description,
+				TargetURL:   response.TargetURL,
+			})
+		}
+	}
+	return statuses, nil
+}
+
 // callJSON executes a GitHub CLI request and decodes its JSON response.
 func (c *GhClient) callJSON(ctx context.Context, args []string, payload any, destination any) error {
 	output, err := c.callBytes(ctx, args, payload)
@@ -680,6 +720,15 @@ func truncateStatusDescription(value string, limit int) string {
 // commitResponse is the branch-head projection needed by lease publishing.
 type commitResponse struct {
 	SHA string `json:"sha"`
+}
+
+// commitStatusResponse is the GitHub status projection needed for replay
+// recognition; GitHub's numeric status id is intentionally not retained.
+type commitStatusResponse struct {
+	State       string `json:"state"`
+	Context     string `json:"context"`
+	Description string `json:"description"`
+	TargetURL   string `json:"target_url"`
 }
 
 // commentResponse is the subset of a GitHub comment response needed to retain

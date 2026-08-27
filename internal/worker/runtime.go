@@ -234,12 +234,31 @@ type Inspection struct {
 	Image string
 	// Mounts are the container's configured bind mounts.
 	Mounts []ContainerMount
+	// MountFingerprint is an opaque identity for the complete immutable mount
+	// contract. An empty value means the runtime could not inspect sources.
+	MountFingerprint string
 	// mountIdentities maps stable in-worker destinations to adapter-private
 	// mount identities used to detect stale bind or volume configuration.
 	mountIdentities map[string]string
+	// mountReadOnly maps stable in-worker destinations to their access mode.
+	mountReadOnly map[string]bool
 	// mountDestinations is the compatibility fallback for runtimes that expose
 	// only destination names rather than Docker's structured inspect payload.
 	mountDestinations map[string]struct{}
+}
+
+// MountContractStatus reports whether this inspection contains adapter-owned
+// source identities and whether every immutable mount matches the start
+// request. It exposes only booleans so host paths and volume names remain
+// private to the worker adapter.
+func (i Inspection) MountContractStatus(request StartRequest) (known bool, matches bool) {
+	if i.mountIdentities != nil {
+		return true, workerMountsPresent(request, i)
+	}
+	if i.MountFingerprint == "" {
+		return false, false
+	}
+	return true, i.MountFingerprint == MountContractFingerprint(request)
 }
 
 // ContainerMount describes one configured container bind mount.
@@ -553,19 +572,25 @@ func dockerStderrDetail(err error) error {
 	return err
 }
 
-// NativeSessionIDs discovers Codex sessions from persisted role-home files,
+// NativeSessionIDs discovers harness sessions from persisted role-home files,
 // never by scraping terminal output. An empty result means the harness has not
 // persisted a session file yet.
 func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSessionRequest) ([]string, error) {
 	if err := validateRunID(request.RunID); err != nil {
 		return nil, err
 	}
-	if request.Harness != "codex" {
+	var command string
+	switch request.Harness {
+	case "codex":
+		command = `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`
+	case "claude":
+		command = `find "$HOME/.claude/projects" -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -n | sed -n -E 's#^[0-9.]+ .*/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`
+	default:
 		return nil, fmt.Errorf("native session lookup does not support harness %q", request.Harness)
 	}
 	result, err := r.RunCommand(ctx, CommandRequest{
 		RunID:             request.RunID,
-		Command:           `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`,
+		Command:           command,
 		EnvironmentPolicy: EnvironmentPolicyClean,
 		Role:              "coordinator",
 	})
@@ -598,7 +623,7 @@ func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSess
 	return identifiers, nil
 }
 
-// NativeSessionID returns the newest currently persisted Codex session for
+// NativeSessionID returns the newest currently persisted harness session for
 // compatibility with runtimes that only need one identifier.
 func (r *DockerRuntime) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
 	identifiers, err := r.NativeSessionIDs(ctx, request)
@@ -775,6 +800,7 @@ func parseDockerInspectionJSON(data []byte) (Inspection, error) {
 		return Inspection{}, fmt.Errorf("docker inspect returned malformed JSON: %w", err)
 	}
 	mountIdentities := make(map[string]string, len(document.Mounts))
+	mountReadOnly := make(map[string]bool, len(document.Mounts))
 	mounts := make([]ContainerMount, 0, len(document.Mounts))
 	for _, mount := range document.Mounts {
 		if strings.TrimSpace(mount.Destination) == "" {
@@ -784,6 +810,7 @@ func parseDockerInspectionJSON(data []byte) (Inspection, error) {
 		if identity != "" {
 			mountIdentities[mount.Destination] = identity
 		}
+		mountReadOnly[mount.Destination] = !mount.RW
 		mounts = append(mounts, ContainerMount{
 			Source:      mount.Source,
 			Destination: mount.Destination,
@@ -791,11 +818,13 @@ func parseDockerInspectionJSON(data []byte) (Inspection, error) {
 		})
 	}
 	return Inspection{
-		Exists:          true,
-		Running:         document.State.Running,
-		Image:           document.Config.Image,
-		Mounts:          mounts,
-		mountIdentities: mountIdentities,
+		Exists:           true,
+		Running:          document.State.Running,
+		Image:            document.Config.Image,
+		Mounts:           mounts,
+		MountFingerprint: mountFingerprint(mountIdentities, mountReadOnly),
+		mountIdentities:  mountIdentities,
+		mountReadOnly:    mountReadOnly,
 	}, nil
 }
 
@@ -809,6 +838,38 @@ func dockerMountIdentity(_ string, source, name string) string {
 		return "bind:" + filepath.Clean(source)
 	}
 	return ""
+}
+
+// MountContractFingerprint derives the adapter-neutral identity of a worker's
+// complete immutable mount contract without returning any source paths.
+func MountContractFingerprint(request StartRequest) string {
+	return mountFingerprint(expectedWorkerMounts(request), expectedWorkerMountReadOnly(request))
+}
+
+// mountFingerprint hashes mount destinations and adapter-owned source
+// identities in stable order so recovery can compare contracts without
+// exposing Docker paths or volume names through the worker seam.
+func mountFingerprint(identities map[string]string, readOnly map[string]bool) string {
+	destinations := make([]string, 0, len(identities))
+	for destination := range identities {
+		destinations = append(destinations, destination)
+	}
+	sort.Strings(destinations)
+	var builder strings.Builder
+	for _, destination := range destinations {
+		builder.WriteString(destination)
+		builder.WriteByte('\x00')
+		builder.WriteString(identities[destination])
+		builder.WriteByte('\x00')
+		if readOnly[destination] {
+			builder.WriteString("ro")
+		} else {
+			builder.WriteString("rw")
+		}
+		builder.WriteByte('\x00')
+	}
+	digest := sha256.Sum256([]byte(builder.String()))
+	return hex.EncodeToString(digest[:])
 }
 
 // runDocker executes one host-side Docker CLI invocation and captures both
@@ -941,8 +1002,18 @@ func validateStartRequest(request StartRequest) error {
 func workerMountsPresent(request StartRequest, inspection Inspection) bool {
 	wanted := expectedWorkerMounts(request)
 	if inspection.mountIdentities != nil {
+		if len(inspection.mountIdentities) != len(wanted) {
+			return false
+		}
+		readOnly := expectedWorkerMountReadOnly(request)
+		if len(inspection.mountReadOnly) != len(readOnly) {
+			return false
+		}
 		for destination, identity := range wanted {
 			if inspection.mountIdentities[destination] != identity {
+				return false
+			}
+			if inspection.mountReadOnly[destination] != readOnly[destination] {
 				return false
 			}
 		}
@@ -992,6 +1063,29 @@ func expectedWorkerMounts(request StartRequest) map[string]string {
 	}
 	for _, cache := range request.Caches {
 		wanted[filepath.Join(CachePath, cache.Name)] = "bind:" + filepath.Clean(cache.HostPath)
+	}
+	return wanted
+}
+
+// expectedWorkerMountReadOnly returns the access mode for every immutable mount
+// that must be present before a worker can be reused.
+func expectedWorkerMountReadOnly(request StartRequest) map[string]bool {
+	wanted := map[string]bool{
+		WorktreePath:    false,
+		GitMetadataPath: true,
+		"/home/factory": false,
+	}
+	if request.CredentialStoreID != "" {
+		wanted[CredentialPath] = false
+	}
+	if request.InvocationPath != "" {
+		wanted[InvocationPath] = true
+	}
+	if request.ResultPath != "" {
+		wanted[ResultPath] = false
+	}
+	for _, cache := range request.Caches {
+		wanted[filepath.Join(CachePath, cache.Name)] = cache.ReadOnly
 	}
 	return wanted
 }

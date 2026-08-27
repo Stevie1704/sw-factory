@@ -309,7 +309,7 @@ func (f *fakeGitHub) setStatusComment(run store.Run) error {
 	if run.StatusCommentID == "" {
 		return &statusCommentFixtureError{message: "claim did not persist a status comment identity"}
 	}
-	f.statusComment = github.Comment{ID: run.StatusCommentID, Body: "<!-- factory-status: " + run.ID + " -->"}
+	f.statusComment = github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
 	return nil
 }
 

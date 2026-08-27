@@ -154,7 +154,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if strings.TrimSpace(request.InvocationID) == "" {
 		return AgentResult{}, errors.New("invocation id is required")
 	}
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openReportRunStore(ctx)
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -180,6 +180,49 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		return AgentResult{}, fmt.Errorf("invocation %q does not belong to run %q", request.InvocationID, run.ID)
 	}
 	if invocation.Status != store.InvocationStatusActive {
+		if journal, journaled := runStore.(PendingEffectStore); journaled {
+			pending, pendingErr := journal.PendingEffect(ctx, run.ID)
+			if pendingErr != nil {
+				return AgentResult{}, fmt.Errorf("read pending effect for repeated report acceptance: %w", pendingErr)
+			}
+			// Capture the accepted report from the pending effect before replay clears it
+			var acceptedReport report.Report
+			var haveAcceptedReport bool
+			if pending != nil && pending.Kind == store.PendingEffectKindResultAcceptance {
+				if extractedReport, extractErr := readAcceptedReportFromEffect(*pending); extractErr == nil {
+					acceptedReport = extractedReport
+					haveAcceptedReport = true
+				}
+			}
+			if pending != nil {
+				updatedRun, replayErr := s.replayPendingEffect(ctx, runStore, *pending)
+				if replayErr != nil {
+					return AgentResult{}, fmt.Errorf("replay pending effect before repeated report acceptance: %w", replayErr)
+				}
+				*run = updatedRun
+			}
+			refreshed, refreshErr := invocationStore.Invocation(ctx, run.ID, request.InvocationID)
+			if refreshErr != nil {
+				return AgentResult{}, fmt.Errorf("refresh repeated report invocation: %w", refreshErr)
+			}
+			if refreshed != nil {
+				invocation = refreshed
+			}
+			// Use the accepted report from the pending effect if available, otherwise
+			// fall back to reading from the filesystem for backward compatibility
+			value := acceptedReport
+			var readErr error
+			if !haveAcceptedReport {
+				value, readErr = readAcceptedAgentReport(*invocation)
+			}
+			if haveAcceptedReport || readErr == nil {
+				resumed, projected, projectionErr := s.resumeAcceptedStageProjection(ctx, registration, runStore, run, invocation, value)
+				if projected {
+					return resumed, projectionErr
+				}
+				return AgentResult{Invocation: *invocation, Report: value}, nil
+			}
+		}
 		return AgentResult{}, fmt.Errorf("invocation %q is already %s", invocation.ID, invocation.Status)
 	}
 	if err := validateAgentRunState(*run); err != nil {
@@ -320,6 +363,52 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if nativeSessionID == "" {
 		return AgentResult{}, errors.New("accepted agent report must retain a native session identifier")
 	}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		acceptedInvocation := *invocation
+		acceptedInvocation.NativeSessionID = nativeSessionID
+		acceptedInvocation.Status = acceptedInvocationStatus(value.Outcome)
+		acceptedInvocation.UpdatedAt = s.deps.Now().UTC()
+		previousRun := *run
+		nextRun := previousRun
+		isTestReport := invocation.Stage == store.StageTest
+		isReviewReport := invocation.Role == "spec_review" && invocation.Stage == store.StageReview
+		if !isTestReport && !isReviewReport {
+			nextRun = agentReportRunProjection(previousRun, value)
+		}
+		nextRun.Revision = previousRun.Revision + 1
+		if isTestReport || isReviewReport {
+			nextRun.Revision = previousRun.Revision
+		}
+		nextRun.UpdatedAt = s.deps.Now().UTC()
+		acceptedInvocation, nextRun, err = s.acceptResultWithEffect(ctx, runStore, invocationStore, registration, harnessRuntime, harness.Session{
+			InvocationID:    acceptedInvocation.ID,
+			NativeSessionID: nativeSessionID,
+			Surface: terminal.Surface{
+				ID:          terminal.SurfaceID(acceptedInvocation.ImplementationSurfaceID),
+				WorkspaceID: terminal.WorkspaceID(acceptedInvocation.WorkspaceID),
+				Name:        acceptedInvocation.Role,
+			},
+		}, acceptedInvocation, previousRun, nextRun, value.Outcome == report.OutcomeNeedsClarification, value)
+		if err != nil {
+			return AgentResult{}, err
+		}
+		*invocation = acceptedInvocation
+		*run = nextRun
+		if isTestReport {
+			return s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
+		}
+		if isReviewReport {
+			return s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
+		}
+		if value.Outcome == report.OutcomeNeedsClarification {
+			published, publicationErr := s.ensureClarificationPublication(ctx, registration, runStore, *run)
+			if publicationErr != nil {
+				return AgentResult{}, publicationErr
+			}
+			*run = published
+		}
+		return AgentResult{Invocation: *invocation, Report: value}, nil
+	}
 	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: nativeSessionID, Surface: terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID), Name: invocation.Role}}); err != nil {
 		return AgentResult{}, fmt.Errorf("finish accepted harness session: %w", err)
 	}
@@ -329,14 +418,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		}
 	}
 	invocation.NativeSessionID = nativeSessionID
-	switch value.Outcome {
-	case report.OutcomeCompleted:
-		invocation.Status = store.InvocationStatusCompleted
-	case report.OutcomeNeedsClarification:
-		invocation.Status = store.InvocationStatusWaitingForHuman
-	case report.OutcomeCannotProceed:
-		invocation.Status = store.InvocationStatusCannotProceed
-	}
+	invocation.Status = acceptedInvocationStatus(value.Outcome)
 	invocation.UpdatedAt = s.deps.Now().UTC()
 	if err := invocationStore.SaveInvocation(ctx, *invocation); err != nil {
 		return AgentResult{}, fmt.Errorf("persist accepted invocation: %w", err)
@@ -348,27 +430,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if invocation.Role == "spec_review" && invocation.Stage == store.StageReview {
 		return s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
 	}
-	run.Stage = store.StageImplementation
-	switch value.Outcome {
-	case report.OutcomeNeedsClarification:
-		run.Status = store.StatusWaitingForHuman
-		run.PendingQuestions = pendingQuestionsFromReport(value.Questions)
-		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
-	case report.OutcomeCannotProceed:
-		run.Status = store.StatusFailed
-		run.PendingQuestions = nil
-		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
-	default:
-		run.Status = store.StatusActive
-		if value.Handoff != nil {
-			run.ImplementationHandoff = implementationHandoffFromReport(*value.Handoff)
-		}
-		run.PendingQuestions = nil
-		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
-	}
+	*run = agentReportRunProjection(previousRun, value)
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist accepted agent state: %w", err)
@@ -381,6 +443,109 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		*run = published
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
+}
+
+// resumeAcceptedStageProjection completes the test- or review-specific run
+// transition when result acceptance made the invocation terminal but a crash
+// left the durable run active at the same stage. A run that already moved away
+// from the invocation stage is the durable proof that no continuation remains.
+func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, bool, error) {
+	if run == nil || run.Status != store.StatusActive || run.Stage != invocation.Stage {
+		return AgentResult{}, false, nil
+	}
+	if invocation.Stage == store.StageTest {
+		inspector := s.worktreeInspector()
+		if inspector == nil {
+			return AgentResult{}, true, errors.New("worktree inspector is required to resume accepted test projection")
+		}
+		state, err := inspector.Inspect(ctx, run.Worktree)
+		if err != nil {
+			return AgentResult{}, true, fmt.Errorf("inspect worktree to resume accepted test projection: %w", err)
+		}
+		result, err := s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
+		return result, true, err
+	}
+	if invocation.Role == "spec_review" && invocation.Stage == store.StageReview {
+		result, err := s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
+		return result, true, err
+	}
+	return AgentResult{}, false, nil
+}
+
+// acceptedInvocationStatus maps a validated report outcome to its durable
+// invocation lifecycle state, keeping result acceptance consistent across all
+// visible roles.
+func acceptedInvocationStatus(outcome report.Outcome) store.InvocationStatus {
+	switch outcome {
+	case report.OutcomeCompleted:
+		return store.InvocationStatusCompleted
+	case report.OutcomeNeedsClarification:
+		return store.InvocationStatusWaitingForHuman
+	case report.OutcomeCannotProceed:
+		return store.InvocationStatusCannotProceed
+	default:
+		return store.InvocationStatusCannotProceed
+	}
+}
+
+// agentReportRunProjection applies the shared workflow projection for a
+// validated non-test, non-review report in both journaled and legacy paths.
+func agentReportRunProjection(previous store.Run, value report.Report) store.Run {
+	next := previous
+	next.Stage = store.StageImplementation
+	switch value.Outcome {
+	case report.OutcomeNeedsClarification:
+		next.Status = store.StatusWaitingForHuman
+		next.PendingQuestions = pendingQuestionsFromReport(value.Questions)
+	case report.OutcomeCannotProceed:
+		next.Status = store.StatusFailed
+		next.PendingQuestions = nil
+	default:
+		next.Status = store.StatusActive
+		if value.Handoff != nil {
+			next.ImplementationHandoff = implementationHandoffFromReport(*value.Handoff)
+		}
+		next.PendingQuestions = nil
+	}
+	next.ClarificationCommentID = ""
+	next.ClarificationNotificationSent = false
+	return next
+}
+
+// readAcceptedAgentReport returns the immutable report belonging to a terminal
+// invocation. It makes repeated acceptance a read-only idempotent operation for
+// the durable journal store without re-finishing its harness session. This
+// function reads from the filesystem and should only be used as a fallback when
+// the pending effect payload is unavailable.
+func readAcceptedAgentReport(invocation store.Invocation) (report.Report, error) {
+	path := filepath.Join(invocation.ResultDirectory, report.ReportFileName)
+	if invocation.Stage == store.StageTest {
+		return report.ReadEnvelope(path)
+	}
+	return report.Read(path)
+}
+
+// readAcceptedReportFromEffect extracts the accepted report from a result
+// acceptance pending effect payload. This provides the immutable snapshot that
+// was validated during acceptance, avoiding re-reading mutable report.json.
+func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, error) {
+	if pending.Kind != store.PendingEffectKindResultAcceptance {
+		return report.Report{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
+	}
+	var payload struct {
+		AcceptedReport string `json:"accepted_report"`
+	}
+	if err := json.Unmarshal([]byte(pending.Payload), &payload); err != nil {
+		return report.Report{}, fmt.Errorf("decode result acceptance payload: %w", err)
+	}
+	if strings.TrimSpace(payload.AcceptedReport) == "" {
+		return report.Report{}, errors.New("result acceptance payload has no accepted report")
+	}
+	var value report.Report
+	if err := json.Unmarshal([]byte(payload.AcceptedReport), &value); err != nil {
+		return report.Report{}, fmt.Errorf("decode accepted report from effect: %w", err)
+	}
+	return value, nil
 }
 
 // RunAgent launches the visible agent and accepts a report when one is already

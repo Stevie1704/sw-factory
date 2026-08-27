@@ -82,6 +82,24 @@ type RunWorkspace struct {
 	Checks Surface
 }
 
+// WorkspaceInspection is a read-only terminal topology projection used during
+// restart reconciliation. It contains only opaque workspace and surface
+// identities; screen contents are deliberately absent.
+type WorkspaceInspection struct {
+	// Exists reports whether the requested workspace is present in the adapter.
+	Exists bool
+	// WorkspaceID is the observed opaque workspace handle.
+	WorkspaceID WorkspaceID
+	// Surfaces contains the currently visible surfaces in the workspace.
+	Surfaces []Surface
+}
+
+// WorkspaceInspector is the optional read-only topology seam used to verify
+// persisted cmux handles before a native session is resumed.
+type WorkspaceInspector interface {
+	InspectWorkspace(context.Context, WorkspaceID) (WorkspaceInspection, error)
+}
+
 // SurfaceRequest asks the adapter to create one additional terminal surface.
 type SurfaceRequest struct {
 	// WorkspaceID identifies the owning workspace.
@@ -357,6 +375,33 @@ func (r *CmuxRuntime) CloseWorkspace(ctx context.Context, workspaceID WorkspaceI
 		return fmt.Errorf("close terminal workspace: %w", err)
 	}
 	return nil
+}
+
+// InspectWorkspace reads one workspace and its surface identities without
+// mutating cmux or interpreting terminal output.
+func (r *CmuxRuntime) InspectWorkspace(ctx context.Context, workspaceID WorkspaceID) (WorkspaceInspection, error) {
+	if strings.TrimSpace(string(workspaceID)) == "" {
+		return WorkspaceInspection{}, errors.New("workspace id is required")
+	}
+	topology, err := r.topology(ctx, []string{"tree", "--workspace", string(workspaceID), "--json", "--id-format", "uuids"})
+	if err != nil {
+		return WorkspaceInspection{}, err
+	}
+	for _, window := range topology.Windows {
+		for _, workspace := range window.Workspaces {
+			if workspace.ID != string(workspaceID) {
+				continue
+			}
+			inspection := WorkspaceInspection{Exists: true, WorkspaceID: workspaceID}
+			for _, pane := range workspace.Panes {
+				for _, surface := range pane.Surfaces {
+					inspection.Surfaces = append(inspection.Surfaces, Surface{ID: SurfaceID(surface.ID), WorkspaceID: workspaceID, Name: surface.Title})
+				}
+			}
+			return inspection, nil
+		}
+	}
+	return WorkspaceInspection{WorkspaceID: workspaceID}, nil
 }
 
 // run executes one cmux command through the injected or production runner.
@@ -665,3 +710,4 @@ func (r *CmuxRuntime) topology(ctx context.Context, args []string) (topologyResp
 }
 
 var _ TerminalRuntime = (*CmuxRuntime)(nil)
+var _ WorkspaceInspector = (*CmuxRuntime)(nil)

@@ -41,8 +41,14 @@ _Avoid_: Dependency cache key, mutable latest state
 A read-only comparison of one persisted non-terminal run with its registered repository, worktree, Git projection, and GitHub projections.
 _Avoid_: Reconciliation, recovery
 
+**Reconciliation**:
+The coordinator's restart pass that consumes one durable pending effect when
+safe, repairs the projections that effect owns, and otherwise pauses the run
+with a typed discrepancy.
+_Avoid_: Diagnosis, automatic retry
+
 **Recovery-required result**:
-A typed fail-closed refusal that reports the agreement state and discovered discrepancies without claiming that the run was recovered; issue #21 supersedes it with complete reconciliation.
+A typed discrepancy result that reports the agreement state and discovered discrepancies; journaled runs reconcile safe effects automatically and pause unresolved disagreements for a human, while legacy stores retain the fail-closed refusal.
 _Avoid_: Recovered run, automatic continuation
 
 **Startup diagnosis**:
