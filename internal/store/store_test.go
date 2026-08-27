@@ -515,6 +515,75 @@ func TestRunPersistsTheProtectedTestHandoffProjection(t *testing.T) {
 	}
 }
 
+// TestRunPersistsImplementationAndSpecificationReviewProjections verifies the
+// reviewer packet's durable handoffs survive the schema-20 restart boundary.
+func TestRunPersistsImplementationAndSpecificationReviewProjections(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	checkpoint := strings.Repeat("b", 64)
+	want := store.Run{
+		ID:             "run-review-projection",
+		RepositoryPath: "/work/repository",
+		Stage:          store.StageReview,
+		Status:         store.StatusWaitingForHuman,
+		CheckpointSHA:  checkpoint,
+		ImplementationHandoff: &store.ImplementationHandoff{
+			ChangeSummary:          "implemented the requested review behavior",
+			AcceptanceMapping:      []store.HandoffAcceptance{{Criterion: "criterion", Evidence: "focused test"}},
+			ProductionFilesChanged: []string{"internal/factory/review.go"},
+			FocusedCommands:        []string{"go test ./internal/factory"},
+			KnownLimitations:       []string{"advisory naming note"},
+		},
+		SpecificationReview: &store.SpecificationReview{
+			CheckpointSHA: checkpoint,
+			Findings: []store.ReviewFinding{{
+				Location: "internal/factory/review.go:1", Claim: "claim", Evidence: "evidence", Severity: "advisory", Category: "scope",
+				SuggestedResolution: "resolution", SuggestedOwner: "implementation",
+			}},
+		},
+	}
+	if err := opened.SaveRun(context.Background(), want); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ImplementationHandoff == nil || got.SpecificationReview == nil || got.SpecificationReview.CheckpointSHA != checkpoint || got.SpecificationReview.Findings[0].SuggestedOwner != "implementation" {
+		t.Fatalf("CurrentRun() = %#v, want implementation and review projections", got)
+	}
+}
+
+// TestRunRejectsAReviewProjectionForAnOlderCheckpoint verifies stale findings
+// cannot be persisted or reused after a new immutable checkpoint is selected.
+func TestRunRejectsAReviewProjectionForAnOlderCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	run := store.Run{
+		ID:             "run-stale-review",
+		RepositoryPath: "/work/repository",
+		Stage:          store.StageReview,
+		Status:         store.StatusWaitingForHuman,
+		CheckpointSHA:  strings.Repeat("b", 64),
+		SpecificationReview: &store.SpecificationReview{
+			CheckpointSHA: strings.Repeat("a", 64),
+		},
+	}
+	if err := opened.SaveRun(context.Background(), run); err == nil || !strings.Contains(err.Error(), "match the run checkpoint") {
+		t.Fatalf("SaveRun() error = %v, want stale-review rejection", err)
+	}
+}
+
 // TestStorePersistsCheckRepairBudget verifies the retry ceiling, consumed
 // attempt count, and in-flight reservation survive the restart boundary.
 func TestStorePersistsCheckRepairBudget(t *testing.T) {

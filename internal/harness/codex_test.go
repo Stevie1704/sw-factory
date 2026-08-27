@@ -57,6 +57,29 @@ func TestCodexStartsAnInteractiveSessionThroughThePortableSeams(t *testing.T) {
 	}
 }
 
+// TestCodexPassesTheReviewCheckpointToTheWorker verifies the exact SHA is
+// available to the review report command without using terminal text.
+func TestCodexPassesTheReviewCheckpointToTheWorker(t *testing.T) {
+	workerRuntime := &fakeWorker{}
+	terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-review", WorkspaceID: "workspace-run", Name: "spec-review"}}
+	_, err := harness.NewCodex(workerRuntime, terminalRuntime).Start(context.Background(), harness.StartRequest{
+		InvocationID:  "inv-review",
+		RunID:         "run-review",
+		Role:          "spec_review",
+		Stage:         "review",
+		CheckpointSHA: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		WorkspaceID:   "workspace-run",
+		Surface:       terminalRuntime.surface,
+		Prompt:        "Review the immutable checkpoint.",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if got := workerRuntime.requests[0].Environment["FACTORY_CHECKPOINT_SHA"]; got != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+		t.Fatalf("checkpoint environment = %q, want exact review SHA", got)
+	}
+}
+
 // TestCodexResumesWithNativeSessionIdentifier verifies the resume command's
 // global flags precede the resume subcommand as required by the spike.
 func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
