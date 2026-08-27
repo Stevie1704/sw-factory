@@ -18,6 +18,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
+// journalRecoveryImageDigest is the frozen worker image identity used by the
+// journaled restart fixture.
 const journalRecoveryImageDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart verifies the

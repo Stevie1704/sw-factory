@@ -4,6 +4,8 @@ import (
 	"testing"
 )
 
+// internalWorkerDigest is the immutable worker image identity used by runtime
+// inspection contract tests.
 const internalWorkerDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // TestDockerInspectionRejectsAStaleInvocationSource verifies an existing
