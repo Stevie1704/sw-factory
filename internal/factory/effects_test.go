@@ -602,14 +602,19 @@ func TestResultAcceptanceEffectReplaysTheActualFinish(t *testing.T) {
 	next.Revision++
 	githubRuntime.statusComment.Body = statusCommentBody(next)
 	session := harness.Session{InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID, Surface: terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)}}
+	testReport := report.Report{
+		SchemaVersion: 1, InvocationID: invocation.ID, RunID: run.ID,
+		Harness: invocation.Harness, Role: invocation.Role, Stage: string(invocation.Stage),
+		Outcome: report.OutcomeCompleted, Summary: "test acceptance",
+	}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if _, _, err := service.acceptResultWithEffect(ctx, blocked, blocked, effectMatrixRegistration(), harnessRuntime, session, accepted, run, next, false); err == nil {
+	if _, _, err := service.acceptResultWithEffect(ctx, blocked, blocked, effectMatrixRegistration(), harnessRuntime, session, accepted, run, next, false, testReport); err == nil {
 		t.Fatal("acceptResultWithEffect() before reservation = nil, want reservation failure")
 	}
 	if harnessRuntime.finishMutations != 0 {
 		t.Fatalf("harness finishes before result-acceptance reservation = %d, want zero", harnessRuntime.finishMutations)
 	}
-	if _, _, err := service.acceptResultWithEffect(ctx, opened, opened, effectMatrixRegistration(), harnessRuntime, session, accepted, run, next, false); err == nil {
+	if _, _, err := service.acceptResultWithEffect(ctx, opened, opened, effectMatrixRegistration(), harnessRuntime, session, accepted, run, next, false, testReport); err == nil {
 		t.Fatal("acceptResultWithEffect() = nil, want response-loss error")
 	}
 	if harnessRuntime.finishMutations != 1 {
@@ -710,7 +715,12 @@ func TestResultAcceptanceReplayRejectsNewerPersistedRevisionBeforeSideEffects(t 
 	next := run
 	next.Revision++
 	session := harness.Session{InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID}
-	if _, _, err := service.acceptResultWithEffect(ctx, opened, opened, effectMatrixRegistration(), harnessRuntime, session, accepted, previous, next, true); err == nil {
+	testReport := report.Report{
+		SchemaVersion: 1, InvocationID: invocation.ID, RunID: run.ID,
+		Harness: invocation.Harness, Role: invocation.Role, Stage: string(invocation.Stage),
+		Outcome: report.OutcomeCompleted, Summary: "test stale acceptance",
+	}
+	if _, _, err := service.acceptResultWithEffect(ctx, opened, opened, effectMatrixRegistration(), harnessRuntime, session, accepted, previous, next, true, testReport); err == nil {
 		t.Fatal("acceptResultWithEffect() = nil, want response-loss error")
 	}
 	if harnessRuntime.finishCalls != 1 || harnessRuntime.finishMutations != 1 || workerRuntime.stopCalls != 0 {

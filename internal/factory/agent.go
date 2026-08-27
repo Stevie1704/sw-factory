@@ -185,6 +185,15 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			if pendingErr != nil {
 				return AgentResult{}, fmt.Errorf("read pending effect for repeated report acceptance: %w", pendingErr)
 			}
+			// Capture the accepted report from the pending effect before replay clears it
+			var acceptedReport report.Report
+			var haveAcceptedReport bool
+			if pending != nil && pending.Kind == store.PendingEffectKindResultAcceptance {
+				if extractedReport, extractErr := readAcceptedReportFromEffect(*pending); extractErr == nil {
+					acceptedReport = extractedReport
+					haveAcceptedReport = true
+				}
+			}
 			if pending != nil {
 				updatedRun, replayErr := s.replayPendingEffect(ctx, runStore, *pending)
 				if replayErr != nil {
@@ -199,8 +208,14 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			if refreshed != nil {
 				invocation = refreshed
 			}
-			value, readErr := readAcceptedAgentReport(*invocation)
-			if readErr == nil {
+			// Use the accepted report from the pending effect if available, otherwise
+			// fall back to reading from the filesystem for backward compatibility
+			value := acceptedReport
+			var readErr error
+			if !haveAcceptedReport {
+				value, readErr = readAcceptedAgentReport(*invocation)
+			}
+			if haveAcceptedReport || readErr == nil {
 				resumed, projected, projectionErr := s.resumeAcceptedStageProjection(ctx, registration, runStore, run, invocation, value)
 				if projected {
 					return resumed, projectionErr
@@ -373,7 +388,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 				WorkspaceID: terminal.WorkspaceID(acceptedInvocation.WorkspaceID),
 				Name:        acceptedInvocation.Role,
 			},
-		}, acceptedInvocation, previousRun, nextRun, value.Outcome == report.OutcomeNeedsClarification)
+		}, acceptedInvocation, previousRun, nextRun, value.Outcome == report.OutcomeNeedsClarification, value)
 		if err != nil {
 			return AgentResult{}, err
 		}
@@ -499,13 +514,38 @@ func agentReportRunProjection(previous store.Run, value report.Report) store.Run
 
 // readAcceptedAgentReport returns the immutable report belonging to a terminal
 // invocation. It makes repeated acceptance a read-only idempotent operation for
-// the durable journal store without re-finishing its harness session.
+// the durable journal store without re-finishing its harness session. This
+// function reads from the filesystem and should only be used as a fallback when
+// the pending effect payload is unavailable.
 func readAcceptedAgentReport(invocation store.Invocation) (report.Report, error) {
 	path := filepath.Join(invocation.ResultDirectory, report.ReportFileName)
 	if invocation.Stage == store.StageTest {
 		return report.ReadEnvelope(path)
 	}
 	return report.Read(path)
+}
+
+// readAcceptedReportFromEffect extracts the accepted report from a result
+// acceptance pending effect payload. This provides the immutable snapshot that
+// was validated during acceptance, avoiding re-reading mutable report.json.
+func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, error) {
+	if pending.Kind != store.PendingEffectKindResultAcceptance {
+		return report.Report{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
+	}
+	var payload struct {
+		AcceptedReport string `json:"accepted_report"`
+	}
+	if err := json.Unmarshal([]byte(pending.Payload), &payload); err != nil {
+		return report.Report{}, fmt.Errorf("decode result acceptance payload: %w", err)
+	}
+	if strings.TrimSpace(payload.AcceptedReport) == "" {
+		return report.Report{}, errors.New("result acceptance payload has no accepted report")
+	}
+	var value report.Report
+	if err := json.Unmarshal([]byte(payload.AcceptedReport), &value); err != nil {
+		return report.Report{}, fmt.Errorf("decode accepted report from effect: %w", err)
+	}
+	return value, nil
 }
 
 // RunAgent launches the visible agent and accepts a report when one is already

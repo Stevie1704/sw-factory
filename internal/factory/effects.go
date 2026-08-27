@@ -13,6 +13,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -133,14 +134,15 @@ type harnessResumeEffectPayload struct {
 // resultAcceptanceEffectPayload is the complete durable intent for accepting
 // a validated visible report.
 type resultAcceptanceEffectPayload struct {
-	Repository github.Repository
-	SocketPath string
-	Issue      github.Issue
-	Session    harness.Session
-	Invocation store.Invocation
-	Previous   store.Run
-	Next       store.Run
-	StopWorker bool
+	Repository     github.Repository
+	SocketPath     string
+	Issue          github.Issue
+	Session        harness.Session
+	Invocation     store.Invocation
+	Previous       store.Run
+	Next           store.Run
+	StopWorker     bool
+	AcceptedReport string // JSON-encoded report.Report snapshot for deterministic replay
 }
 
 // workflowProjectionError marks a deterministic conflict between a replay
@@ -872,16 +874,22 @@ func (s *Service) replayPendingCommitStatus(ctx context.Context, runStore RunSto
 
 // acceptResultWithEffect journals harness finalization, invocation state, and
 // the resulting workflow projection as one replayable acceptance operation.
-func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore, invocationStore InvocationStore, registration config.RepositoryRegistration, harnessRuntime harness.Runtime, session harness.Session, invocation store.Invocation, previous, next store.Run, stopWorker bool) (store.Invocation, store.Run, error) {
+func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore, invocationStore InvocationStore, registration config.RepositoryRegistration, harnessRuntime harness.Runtime, session harness.Session, invocation store.Invocation, previous, next store.Run, stopWorker bool, acceptedReport report.Report) (store.Invocation, store.Run, error) {
+	// Encode the accepted report once for durable replay
+	acceptedReportJSON, err := json.Marshal(acceptedReport)
+	if err != nil {
+		return invocation, next, fmt.Errorf("encode accepted report for effect: %w", err)
+	}
 	payload := resultAcceptanceEffectPayload{
-		Repository: github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
-		SocketPath: registration.Cmux.SocketPath,
-		Issue:      github.Issue{Number: next.IssueNumber},
-		Session:    session,
-		Invocation: invocation,
-		Previous:   previous,
-		Next:       next,
-		StopWorker: stopWorker,
+		Repository:     github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
+		SocketPath:     registration.Cmux.SocketPath,
+		Issue:          github.Issue{Number: next.IssueNumber},
+		Session:        session,
+		Invocation:     invocation,
+		Previous:       previous,
+		Next:           next,
+		StopWorker:     stopWorker,
+		AcceptedReport: string(acceptedReportJSON),
 	}
 	// Keep the issue snapshot in the payload so replay does not have to infer
 	// it from the mutable repository configuration.
@@ -916,6 +924,10 @@ func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore,
 			return errors.New("harness runtime is required to accept result")
 		}
 		if err := harnessRuntime.Finish(ctx, session); err != nil {
+			// Fail-closed: return immediately without clearing the pending effect.
+			// Worker shutdown and workflow projection will not advance while native
+			// exit delivery remains unconfirmed. The pending effect remains until
+			// completion is observable or explicit abandonment is requested.
 			return fmt.Errorf("finish accepted harness session: %w", err)
 		}
 		if stopWorker {
@@ -997,6 +1009,10 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 			return store.Run{}, fmt.Errorf("ensure harness for result acceptance replay: %w", runtimeErr)
 		}
 		if err := harnessRuntime.Finish(ctx, payload.Session); err != nil {
+			// Fail-closed: do not advance worker shutdown or workflow projection
+			// while native exit delivery remains unconfirmed. Retain the pending
+			// effect so a subsequent reconciliation can retry or require explicit
+			// abandonment before allowing projection advancement.
 			return store.Run{}, fmt.Errorf("finish replayed harness session: %w", err)
 		}
 	}
