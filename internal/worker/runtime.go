@@ -584,7 +584,7 @@ func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSess
 	case "codex":
 		command = `find "$HOME/.codex/sessions" -type f -name 'rollout-*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`
 	case "claude":
-		command = `find "$HOME/.claude/projects" -type f -name '*.jsonl' -print 2>/dev/null | sort | sed -n -E 's#^.*/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`
+		command = `find "$HOME/.claude/projects" -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -n | sed -n -E 's#^[0-9.]+ .*/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$#\1#p'`
 	default:
 		return nil, fmt.Errorf("native session lookup does not support harness %q", request.Harness)
 	}

@@ -369,7 +369,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 				WorkspaceID: terminal.WorkspaceID(acceptedInvocation.WorkspaceID),
 				Name:        acceptedInvocation.Role,
 			},
-		}, acceptedInvocation, previousRun, nextRun, !isTestReport && !isReviewReport && value.Outcome == report.OutcomeNeedsClarification)
+		}, acceptedInvocation, previousRun, nextRun, value.Outcome == report.OutcomeNeedsClarification)
 		if err != nil {
 			return AgentResult{}, err
 		}
