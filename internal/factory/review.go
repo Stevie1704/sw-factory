@@ -141,3 +141,22 @@ func renderSpecificationReview(review *store.SpecificationReview) string {
 	}
 	return fmt.Sprintf("\n### Specification review\n\n- reviewed checkpoint: `%s`\n%s\n", review.CheckpointSHA, strings.Join(lines, "\n"))
 }
+
+// renderSpecificationReviewStatus projects findings into the editable status
+// comment while keeping every untrusted field on one safe Markdown line.
+func renderSpecificationReviewStatus(review *store.SpecificationReview) string {
+	if review == nil {
+		return ""
+	}
+	lines := []string{"\n### Specification review", "", "- reviewed checkpoint: `" + safeStatusCommentValue(review.CheckpointSHA) + "`"}
+	if len(review.Findings) == 0 {
+		lines = append(lines, "- no findings")
+	} else {
+		for _, finding := range review.Findings {
+			lines = append(lines, fmt.Sprintf("- `%s` `%s` at `%s`: %s — evidence: %s; suggested resolution: %s; suggested owner: %s",
+				safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category), safeStatusCommentValue(finding.Location),
+				safeStatusCommentValue(finding.Claim), safeStatusCommentValue(finding.Evidence), safeStatusCommentValue(finding.SuggestedResolution), safeStatusCommentValue(finding.SuggestedOwner)))
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
