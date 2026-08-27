@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,6 +139,81 @@ func TestHarnessAdaptersSatisfyTheSameContract(t *testing.T) {
 			}
 			if len(fixture.terminal.inputs) != 1 || string(fixture.terminal.inputs[0]) != "/exit\n" {
 				t.Fatalf("surface inputs = %q, want one graceful exit request", fixture.terminal.inputs)
+			}
+		})
+	}
+}
+
+// TestHarnessInterruptionSignalsAreAContract verifies the adapter-facing
+// interruption signals that the coordinator uses for its one-shot recovery,
+// capacity wait, authentication pause, and manual-attach policies. The
+// coordinator's state transitions and resume ceiling are covered by the
+// factory integration tests.
+func TestHarnessInterruptionSignalsAreAContract(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		harness  string
+		marker   string
+		failures []struct {
+			name string
+			raw  string
+			want error
+		}
+	}{
+		{
+			name: "codex", harness: harness.NameCodex, marker: "[c]odex",
+			failures: []struct {
+				name string
+				raw  string
+				want error
+			}{
+				{name: "unexpected exit", raw: "process exited unexpectedly", want: harness.ErrUnexpectedExit},
+				{name: "rate limit", raw: "HTTP 429: capacity", want: harness.ErrRateLimited},
+				{name: "authentication", raw: "HTTP 401: token=hidden", want: harness.ErrAuthenticationExpired},
+			},
+		},
+		{
+			name: "claude", harness: harness.NameClaude, marker: "[c]laude",
+			failures: []struct {
+				name string
+				raw  string
+				want error
+			}{
+				{name: "unexpected exit", raw: "process exited unexpectedly", want: harness.ErrUnexpectedExit},
+				{name: "rate limit", raw: "HTTP 429: capacity", want: harness.ErrRateLimited},
+				{name: "authentication", raw: "HTTP 401: token=hidden", want: harness.ErrAuthenticationExpired},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workerRuntime := &livenessWorker{result: worker.CommandResult{ExitCode: 0}}
+			runtime, err := harness.New(test.harness, workerRuntime, nil)
+			if err != nil {
+				t.Fatalf("harness.New() error = %v", err)
+			}
+			inspector, ok := runtime.(harness.NativeSessionLivenessInspector)
+			if !ok {
+				t.Fatalf("runtime %T does not implement NativeSessionLivenessInspector", runtime)
+			}
+			running, err := inspector.NativeSessionRunning(context.Background(), harness.NativeSessionRequest{RunID: "run-contract", Harness: test.harness})
+			if err != nil || !running || !strings.Contains(workerRuntime.lastRequest.Command, test.marker) {
+				t.Fatalf("running liveness = %v, error = %v, request = %#v", running, err, workerRuntime.lastRequest)
+			}
+			workerRuntime.result.ExitCode = 1
+			exited, err := inspector.NativeSessionRunning(context.Background(), harness.NativeSessionRequest{RunID: "run-contract", Harness: test.harness})
+			if err != nil || exited {
+				t.Fatalf("exited liveness = %v, error = %v, want false", exited, err)
+			}
+			for _, failure := range test.failures {
+				t.Run(failure.name, func(t *testing.T) {
+					classified := harness.ClassifyError(errors.New(failure.raw), test.harness)
+					if !errors.Is(classified, failure.want) {
+						t.Fatalf("ClassifyError(%q) = %v, want %v", failure.raw, classified, failure.want)
+					}
+					if strings.Contains(classified.Error(), "hidden") || strings.Contains(classified.Error(), "token=") {
+						t.Fatalf("classified failure leaked adapter detail: %v", classified)
+					}
+				})
 			}
 		})
 	}
