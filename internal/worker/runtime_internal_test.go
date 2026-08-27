@@ -29,6 +29,7 @@ func TestDockerInspectionRejectsAStaleInvocationSource(t *testing.T) {
 		Running:         true,
 		Image:           imageReference(request.Image, request.ImageDigest),
 		mountIdentities: identities,
+		mountReadOnly:   expectedWorkerMountReadOnly(request),
 	}
 	matchingInvocation := wanted[InvocationPath]
 	inspection.mountIdentities[InvocationPath] = "bind:/host/old-packet"
@@ -39,23 +40,35 @@ func TestDockerInspectionRejectsAStaleInvocationSource(t *testing.T) {
 	if !workerMountsPresent(request, inspection) {
 		t.Fatal("workerMountsPresent() rejected matching worker sources")
 	}
+	known, matches := inspection.MountContractStatus(request)
+	if !known || !matches {
+		t.Fatalf("MountContractStatus() = known %t, matches %t; want true, true", known, matches)
+	}
+	unknown, matches := (Inspection{Exists: true}).MountContractStatus(request)
+	if unknown || matches {
+		t.Fatalf("unknown MountContractStatus() = known %t, matches %t; want false, false", unknown, matches)
+	}
 }
 
 // TestParseDockerInspectionJSONKeepsMountSourcesAdapterPrivate verifies the
 // structured Docker response is reduced to source identities in the adapter.
 func TestParseDockerInspectionJSONKeepsMountSourcesAdapterPrivate(t *testing.T) {
 	inspection, err := parseDockerInspectionJSON([]byte(`{
-      "State": {"Running": true},
-      "Config": {"Image": "ghcr.io/example/factory-worker@` + internalWorkerDigest + `"},
-      "Mounts": [
-        {"Type": "bind", "Source": "/host/worktree", "Destination": "/work"},
-        {"Type": "volume", "Name": "factory-role-implementation-abc", "Destination": "/home/factory"}
-      ]
-    }`))
+	      "State": {"Running": true},
+	      "Config": {"Image": "ghcr.io/example/factory-worker@` + internalWorkerDigest + `"},
+	      "Mounts": [
+	        {"Type": "bind", "Source": "/host/worktree", "Destination": "/work", "RW": true},
+	        {"Type": "bind", "Source": "/host/git", "Destination": "/git", "RW": false},
+	        {"Type": "volume", "Name": "` + roleVolumeName("run-inspection", "implementation") + `", "Destination": "/home/factory", "RW": true}
+	      ]
+	    }`))
 	if err != nil {
 		t.Fatalf("parseDockerInspectionJSON() error = %v", err)
 	}
-	if !inspection.Running || inspection.Image == "" || inspection.mountIdentities[WorktreePath] != "bind:/host/worktree" || inspection.mountIdentities["/home/factory"] != "volume:factory-role-implementation-abc" {
+	if !inspection.Running || inspection.Image == "" || inspection.mountIdentities[WorktreePath] != "bind:/host/worktree" || inspection.mountIdentities["/home/factory"] != "volume:"+roleVolumeName("run-inspection", "implementation") {
 		t.Fatalf("inspection = %#v, want reduced lifecycle and mount identities", inspection)
+	}
+	if inspection.MountFingerprint != MountContractFingerprint(StartRequest{RunID: "run-inspection", WorktreePath: "/host/worktree", GitMetadataPath: "/host/git", Role: "implementation"}) {
+		t.Fatalf("MountFingerprint = %q, want the matching contract fingerprint", inspection.MountFingerprint)
 	}
 }

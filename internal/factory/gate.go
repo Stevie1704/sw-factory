@@ -547,8 +547,8 @@ func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (s
 		return "", errors.New("repository git metadata must be a directory")
 	}
 
-	projectionParent := filepath.Join(filepath.Dir(worktreePath), ".factory-git")
-	projection := filepath.Join(projectionParent, runID)
+	projection := gitMetadataProjectionPath(runID, worktreePath)
+	projectionParent := filepath.Dir(projection)
 	if projectionInfo, statErr := os.Stat(projection); statErr == nil {
 		if !projectionInfo.IsDir() {
 			return "", fmt.Errorf("git metadata projection %q is not a directory", projection)
@@ -592,6 +592,12 @@ func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (s
 		return "", fmt.Errorf("publish git metadata projection: %w", err)
 	}
 	return projection, nil
+}
+
+// gitMetadataProjectionPath returns the stable read-only Git metadata path for
+// a run without inspecting or mutating the repository.
+func gitMetadataProjectionPath(runID, worktreePath string) string {
+	return filepath.Join(filepath.Dir(worktreePath), ".factory-git", runID)
 }
 
 // copyGitMetadata copies permitted regular Git metadata from source to

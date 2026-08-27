@@ -140,6 +140,34 @@ type resultAcceptanceEffectPayload struct {
 	StopWorker bool
 }
 
+// workflowProjectionError marks a deterministic conflict between a replay
+// payload and the newer persisted workflow projection. It lets reconciliation
+// distinguish workflow ownership from external infrastructure uncertainty.
+type workflowProjectionError struct {
+	cause error
+}
+
+// Error returns the deterministic workflow conflict.
+func (e *workflowProjectionError) Error() string {
+	if e == nil || e.cause == nil {
+		return "deterministic workflow projection conflict"
+	}
+	return e.cause.Error()
+}
+
+// Unwrap exposes the underlying bounded workflow conflict.
+func (e *workflowProjectionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// workflowProjectionFailuref creates a typed deterministic replay conflict.
+func workflowProjectionFailuref(format string, arguments ...any) error {
+	return &workflowProjectionError{cause: fmt.Errorf(format, arguments...)}
+}
+
 // pendingEffectID derives a stable, bounded identity from the semantic effect
 // rather than from a process-generated UUID. The same operation can therefore
 // be recognized after a restart.
@@ -476,17 +504,17 @@ func (s *Service) replayPendingStatusComment(ctx context.Context, runStore RunSt
 	next := payload.Next
 	if current.Revision < next.Revision {
 		if current.Revision != payload.Previous.Revision {
-			return store.Run{}, fmt.Errorf("status-comment replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
+			return store.Run{}, workflowProjectionFailuref("status-comment replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
 		}
 		if err := saveCommandRun(ctx, runStore, payload.Previous.Revision, next); err != nil {
 			return store.Run{}, fmt.Errorf("persist replayed command watermark: %w", err)
 		}
 	} else if current.Revision == next.Revision {
 		if current.ProcessedCommentID != next.ProcessedCommentID || current.LastCommandName != next.LastCommandName {
-			return store.Run{}, fmt.Errorf("status-comment replay revision %d belongs to another command", current.Revision)
+			return store.Run{}, workflowProjectionFailuref("status-comment replay revision %d belongs to another command", current.Revision)
 		}
 	} else if current.ProcessedCommentID != next.ProcessedCommentID {
-		return store.Run{}, fmt.Errorf("status-comment replay was superseded at revision %d", current.Revision)
+		return store.Run{}, workflowProjectionFailuref("status-comment replay was superseded at revision %d", current.Revision)
 	}
 	if err := s.applyStatusCommentEffect(ctx, payload); err != nil {
 		return store.Run{}, fmt.Errorf("replay status comment: %w", err)
@@ -936,7 +964,7 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 			return store.Run{}, fmt.Errorf("reserve replayed accepted invocation: %w", err)
 		}
 	} else if currentInvocation.Status != payload.Invocation.Status || currentInvocation.NativeSessionID != payload.Invocation.NativeSessionID {
-		return store.Run{}, fmt.Errorf("invocation %q changed during result acceptance replay", payload.Invocation.ID)
+		return store.Run{}, workflowProjectionFailuref("invocation %q changed during result acceptance replay", payload.Invocation.ID)
 	}
 	_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
 	if runtimeErr != nil {
@@ -960,13 +988,13 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 	}
 	next := payload.Next
 	if currentRun != nil && currentRun.ID != effect.RunID {
-		return store.Run{}, fmt.Errorf("result acceptance replay belongs to run %q, current run is %q", effect.RunID, currentRun.ID)
+		return store.Run{}, workflowProjectionFailuref("result acceptance replay belongs to run %q, current run is %q", effect.RunID, currentRun.ID)
 	}
 	if currentRun != nil && currentRun.Revision > next.Revision {
-		return store.Run{}, fmt.Errorf("result acceptance revision %d is older than current revision %d", next.Revision, currentRun.Revision)
+		return store.Run{}, workflowProjectionFailuref("result acceptance revision %d is older than current revision %d", next.Revision, currentRun.Revision)
 	}
 	if currentRun != nil && currentRun.Revision < next.Revision && currentRun.Revision != payload.Previous.Revision {
-		return store.Run{}, fmt.Errorf("result acceptance replay expected revision %d, found %d", payload.Previous.Revision, currentRun.Revision)
+		return store.Run{}, workflowProjectionFailuref("result acceptance replay expected revision %d, found %d", payload.Previous.Revision, currentRun.Revision)
 	}
 	if currentRun != nil && currentRun.Revision == next.Revision && currentRun.StatusCommentID != "" {
 		next.StatusCommentID = currentRun.StatusCommentID
@@ -1132,13 +1160,13 @@ func (s *Service) replayPendingPullRequest(ctx context.Context, runStore RunStor
 	}
 	if current != nil {
 		if current.ID != effect.RunID {
-			return store.Run{}, fmt.Errorf("pull-request replay belongs to run %q, current run is %q", effect.RunID, current.ID)
+			return store.Run{}, workflowProjectionFailuref("pull-request replay belongs to run %q, current run is %q", effect.RunID, current.ID)
 		}
 		if current.Revision > payload.Next.Revision {
-			return store.Run{}, fmt.Errorf("pull-request replay revision %d is older than current revision %d", payload.Next.Revision, current.Revision)
+			return store.Run{}, workflowProjectionFailuref("pull-request replay revision %d is older than current revision %d", payload.Next.Revision, current.Revision)
 		}
 		if current.Revision < payload.Next.Revision && current.Revision != payload.Previous.Revision {
-			return store.Run{}, fmt.Errorf("pull-request replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
+			return store.Run{}, workflowProjectionFailuref("pull-request replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
 		}
 	}
 	next := payload.Next
@@ -1267,13 +1295,13 @@ func (s *Service) replayPendingCheckpoint(ctx context.Context, runStore RunStore
 	}
 	if current != nil {
 		if current.ID != effect.RunID {
-			return store.Run{}, fmt.Errorf("checkpoint replay belongs to run %q, current run is %q", effect.RunID, current.ID)
+			return store.Run{}, workflowProjectionFailuref("checkpoint replay belongs to run %q, current run is %q", effect.RunID, current.ID)
 		}
 		if current.Revision > payload.Next.Revision {
-			return store.Run{}, fmt.Errorf("checkpoint replay revision %d is older than current revision %d", payload.Next.Revision, current.Revision)
+			return store.Run{}, workflowProjectionFailuref("checkpoint replay revision %d is older than current revision %d", payload.Next.Revision, current.Revision)
 		}
 		if current.Revision < payload.Next.Revision && current.Revision != payload.Previous.Revision {
-			return store.Run{}, fmt.Errorf("checkpoint replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
+			return store.Run{}, workflowProjectionFailuref("checkpoint replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
 		}
 	}
 	request := checkpointRequest(payload.Request)
@@ -1328,10 +1356,10 @@ func (s *Service) replayPendingStateTransition(ctx context.Context, runStore Run
 	next := payload.Next
 	if current != nil {
 		if current.ID != next.ID {
-			return store.Run{}, fmt.Errorf("pending state transition belongs to run %q, current run is %q", next.ID, current.ID)
+			return store.Run{}, workflowProjectionFailuref("pending state transition belongs to run %q, current run is %q", next.ID, current.ID)
 		}
 		if current.Revision > next.Revision {
-			return store.Run{}, fmt.Errorf("pending state transition revision %d is older than current revision %d", next.Revision, current.Revision)
+			return store.Run{}, workflowProjectionFailuref("pending state transition revision %d is older than current revision %d", next.Revision, current.Revision)
 		}
 		if current.Revision == next.Revision {
 			// The run may already be persisted while the final comment identity was
@@ -1342,7 +1370,7 @@ func (s *Service) replayPendingStateTransition(ctx context.Context, runStore Run
 			}
 		}
 		if current.Revision < next.Revision && current.Revision != payload.Previous.Revision {
-			return store.Run{}, fmt.Errorf("pending state transition expected revision %d, found %d", payload.Previous.Revision, current.Revision)
+			return store.Run{}, workflowProjectionFailuref("pending state transition expected revision %d, found %d", payload.Previous.Revision, current.Revision)
 		}
 	}
 	if payload.StopWorker {

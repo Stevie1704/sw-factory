@@ -403,6 +403,15 @@ func (s *Service) resumePersistedInvocation(ctx context.Context, registration co
 		if !workerImageMatches(inspection.Image, workerRequest.Image, workerRequest.ImageDigest) {
 			return invocation, fmt.Errorf("persisted worker image %q does not match frozen image %q@%s", inspection.Image, workerRequest.Image, workerRequest.ImageDigest)
 		}
+		if inspection.Running {
+			known, matches := inspection.MountContractStatus(workerRequest)
+			if !known {
+				return invocation, errors.New("persisted running worker does not expose mount contract identity")
+			}
+			if !matches {
+				return invocation, errors.New("persisted running worker mount contract does not match the invocation")
+			}
+		}
 	}
 	if !inspection.Exists || !inspection.Running {
 		if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {

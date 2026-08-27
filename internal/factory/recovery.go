@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
 // RecoveryRequiredCode is the stable code for the pre-reconciliation safety
@@ -391,22 +392,57 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 				Expected: "running",
 				Observed: "stopped",
 			})
-		} else if packet, packetErr := decodeSpecificationPacket(run.SpecificationPacket); packetErr != nil {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyWorkflow,
-				Source:   "run",
-				Field:    "specification packet",
-				Expected: "decodable packet for active worker",
-				Observed: packetErr.Error(),
-			})
-		} else if !workerImageMatches(workerInspection.Image, packet.RepositoryConfig.WorkerBuild.Image, run.ImageDigest) {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyInfrastructure,
-				Source:   "worker",
-				Field:    "image",
-				Expected: packet.RepositoryConfig.WorkerBuild.Image + "@" + run.ImageDigest,
-				Observed: workerInspection.Image,
-			})
+		} else {
+			packet, packetErr := decodeSpecificationPacket(run.SpecificationPacket)
+			if packetErr != nil {
+				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyWorkflow,
+					Source:   "run",
+					Field:    "specification packet",
+					Expected: "decodable packet for active worker",
+					Observed: packetErr.Error(),
+				})
+			} else {
+				if !workerImageMatches(workerInspection.Image, packet.RepositoryConfig.WorkerBuild.Image, run.ImageDigest) {
+					addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+						Kind:     RecoveryDiscrepancyInfrastructure,
+						Source:   "worker",
+						Field:    "image",
+						Expected: packet.RepositoryConfig.WorkerBuild.Image + "@" + run.ImageDigest,
+						Observed: workerInspection.Image,
+					})
+				}
+				workerRequest := worker.StartRequest{
+					RunID:             run.ID,
+					WorktreePath:      run.Worktree,
+					GitMetadataPath:   gitMetadataProjectionPath(run.ID, run.Worktree),
+					Image:             packet.RepositoryConfig.WorkerBuild.Image,
+					ImageDigest:       run.ImageDigest,
+					Caches:            workerCaches(packet.RepositoryConfig.Caches),
+					InvocationPath:    active.InvocationDirectory,
+					ResultPath:        active.ResultDirectory,
+					CredentialStoreID: active.CredentialStoreID,
+					Role:              active.Role,
+				}
+				known, matches := workerInspection.MountContractStatus(workerRequest)
+				if !known {
+					addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+						Kind:     RecoveryDiscrepancyInfrastructure,
+						Source:   "worker",
+						Field:    "mount contract inspection",
+						Expected: "adapter-owned worker mount identities",
+						Observed: "unavailable",
+					})
+				} else if !matches {
+					addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+						Kind:     RecoveryDiscrepancyInfrastructure,
+						Source:   "worker",
+						Field:    "mount contract",
+						Expected: "persisted worktree, Git, cache, invocation, result, and role identities",
+						Observed: "worker mount identity mismatch",
+					})
+				}
+			}
 		}
 	}
 
@@ -667,8 +703,13 @@ func (s *Service) reconcileInterruptedRun(ctx context.Context, registration conf
 		if replayErr != nil {
 			diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
 			diagnosis.PendingEffect = pending
+			replayKind := RecoveryDiscrepancyInfrastructure
+			var workflowErr *workflowProjectionError
+			if errors.As(replayErr, &workflowErr) {
+				replayKind = RecoveryDiscrepancyWorkflow
+			}
 			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyInfrastructure,
+				Kind:     replayKind,
 				Source:   "pending effect",
 				Field:    string(pending.Kind),
 				Expected: "complete or recognize the recorded effect",
@@ -678,11 +719,11 @@ func (s *Service) reconcileInterruptedRun(ctx context.Context, registration conf
 			if !store.IsTerminalStatus(run.Status) {
 				paused, pauseErr := s.pauseRunLocally(ctx, runStore, run, diagnosis)
 				if pauseErr != nil {
-					return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(&InfrastructureDiscrepancyError{Diagnosis: diagnosis}, pauseErr)
+					return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(recoveryErrorWithCause(diagnosis, replayErr), pauseErr)
 				}
-				return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
+				return paused, diagnosis, RecoveryOutcomeWaitingForHuman, recoveryErrorWithCause(diagnosis, replayErr)
 			}
-			return run, diagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
+			return run, diagnosis, RecoveryOutcomeWaitingForHuman, recoveryErrorWithCause(diagnosis, replayErr)
 		}
 		run = updated
 		if resumeWasAlreadyReserved {
@@ -1154,8 +1195,17 @@ func recoveryRequiredError(diagnosis RecoveryDiagnosis) error {
 // recoveryDiscrepancyError classifies a legacy-store startup refusal while
 // retaining RecoveryRequiredError through the typed error's unwrap chain.
 func recoveryDiscrepancyError(diagnosis RecoveryDiagnosis) error {
+	return recoveryErrorWithCause(diagnosis, nil)
+}
+
+// recoveryErrorWithCause returns the typed category for a diagnosis and keeps
+// the compatibility recovery error discoverable through the unwrap chain.
+func recoveryErrorWithCause(diagnosis RecoveryDiagnosis, cause error) error {
 	if hasWorkflowDiscrepancy(diagnosis) {
-		return &WorkflowFailureError{RunID: diagnosis.RunID, Cause: recoveryRequiredError(diagnosis)}
+		if cause == nil {
+			cause = errors.New(recoveryDiscrepancyReason(diagnosis))
+		}
+		return &WorkflowFailureError{RunID: diagnosis.RunID, Cause: errors.Join(cause, recoveryRequiredError(diagnosis))}
 	}
 	return &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
 }
