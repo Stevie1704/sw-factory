@@ -69,9 +69,9 @@ type AcceptanceMapping struct {
 	Evidence string `json:"evidence"`
 }
 
-// Handoff contains the implementation information accepted after completion.
+// Handoff contains the role-owned information accepted after completion.
 type Handoff struct {
-	// ChangeSummary describes the implementation in ordinary engineering terms.
+	// ChangeSummary describes the role's result in ordinary engineering terms.
 	ChangeSummary string `json:"change_summary"`
 	// AcceptanceMapping maps requirements to observable evidence.
 	AcceptanceMapping []AcceptanceMapping `json:"acceptance_mapping"`
@@ -317,6 +317,9 @@ type ValidationContext struct {
 	Role string
 	// Stage is the expected workflow stage.
 	Stage string
+	// RoleKind is the factory-resolved report contract. Empty preserves the
+	// legacy role-name fallback for callers that validate standalone reports.
+	RoleKind string
 	// WorktreePath is the host checkout root, when filesystem containment is checked.
 	WorktreePath string
 	// PermittedPaths contains repository-relative prefixes the role may report.
@@ -530,8 +533,8 @@ func Validate(value Report, context ValidationContext) error {
 	}
 	switch value.Outcome {
 	case OutcomeCompleted:
-		if isTestReport(value) {
-			if value.Handoff != nil {
+		if isTestReportForContext(value, context) {
+			if value.Handoff != nil || value.ReviewHandoff != nil {
 				return errors.New("test completed report must contain only a test handoff")
 			}
 			if value.TestHandoff == nil {
@@ -541,7 +544,7 @@ func Validate(value Report, context ValidationContext) error {
 			} else if err := validateTestHandoff(*value.TestHandoff, context); err != nil {
 				return err
 			}
-		} else if isReviewReport(value) {
+		} else if isReviewReportForContext(value, context) {
 			if value.Handoff != nil || value.TestHandoff != nil {
 				return errors.New("review completed report must contain only a review handoff")
 			}
@@ -758,6 +761,25 @@ func isTestReport(value Report) bool {
 // envelope.
 func isReviewReport(value Report) bool {
 	return value.Role == "spec_review" && value.Stage == "review"
+}
+
+// isTestReportForContext selects the coordinator-resolved test contract when
+// available and retains the historical identity fallback for standalone users.
+func isTestReportForContext(value Report, context ValidationContext) bool {
+	if context.RoleKind != "" {
+		return context.RoleKind == "test"
+	}
+	return isTestReport(value)
+}
+
+// isReviewReportForContext selects the coordinator-resolved review contract
+// when available and retains the historical identity fallback for callers that
+// validate reports without a registry projection.
+func isReviewReportForContext(value Report, context ValidationContext) bool {
+	if context.RoleKind != "" {
+		return context.RoleKind == "review"
+	}
+	return isReviewReport(value)
 }
 
 // hasExemption reports whether one fixed exemption category is present.

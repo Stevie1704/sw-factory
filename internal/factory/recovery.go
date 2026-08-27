@@ -636,7 +636,7 @@ func inspectTerminalProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 		id   string
 	}{
 		{name: "status", id: invocation.StatusSurfaceID},
-		{name: "implementation", id: invocation.ImplementationSurfaceID},
+		{name: "role", id: string(invocationSurface(invocation).ID)},
 		{name: "checks", id: invocation.ChecksSurfaceID},
 	}
 	observedIDs := make(map[string]struct{}, len(observed.Surfaces))

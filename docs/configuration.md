@@ -123,12 +123,16 @@ gates:
     environment_policy: clean
 role_harness_defaults:
   test: codex
-  implementation: claude
+  implementation: codex
+  architecture: codex
   spec_review: codex
+  standards_review: codex
 model_options:
-  test: [gpt-5]
-  implementation: [claude-opus-5, claude-sonnet-5]
-  spec_review: [gpt-5]
+  test: [gpt-5.6-luna]
+  implementation: [gpt-5.6-luna]
+  architecture: [gpt-5.6-luna]
+  spec_review: [gpt-5.6-luna]
+  standards_review: [gpt-5.6-luna]
 # Optional, and harness-specific: these are Codex effort names because the
 # test role runs on Codex. A role that declares no values accepts no
 # reasoning-effort selection at all.
@@ -194,6 +198,22 @@ harness. A repository that adds `harness` to `allowed_overrides` therefore accep
 responsibility for declaring model and effort options that every permitted
 harness accepts; otherwise an authorized override can pair one harness with
 another harness's option names.
+
+## Factory-owned role, prompt, and stage registry
+
+Roles, invocation stages, prompt versions, default permitted paths, visible
+surface ownership, and report-outcome transitions are declared by the factory
+in `internal/workflow`. Repository configuration may select harness and model
+policy for a declared role, but `factory.yaml` cannot add or redefine
+`roles`, `stages`, `prompts`, or `transitions`. Such fields are rejected as
+typed repository-policy errors.
+
+The optional architecture role is launched explicitly with the
+factory-declared architecture stage. Its default permitted path is
+`docs/architecture`, and its prompt requires a concise design document plus a
+normal structured handoff. The role gets a fresh role-owned visible surface;
+it does not reuse the implementation surface. Its accepted completed handoff
+returns the run to the implementation stage.
 
 An authorized maintainer selects a harness for a later invocation with one
 structured comment:

@@ -130,3 +130,49 @@ func TestBuildIncludesIndependentReviewRules(t *testing.T) {
 		}
 	}
 }
+
+// TestPromptRegistryBuildsTheArchitectureRoleWithCommonFactoryRules verifies
+// the document-producing role receives a versioned prompt while retaining the
+// same authoritative safety and reporting envelope.
+func TestPromptRegistryBuildsTheArchitectureRoleWithCommonFactoryRules(t *testing.T) {
+	value, err := prompt.DefaultRegistry().Build(prompt.Request{
+		InvocationID:        "inv-architecture",
+		RunID:               "run-architecture",
+		Role:                "architecture",
+		Stage:               "architecture",
+		SpecificationPacket: `{"issue":{"title":"Design"}}`,
+		RepositoryGuidance:  "Repository conventions",
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"factory prompt version architecture-v1",
+		"Architecture-role ownership:",
+		"design document",
+		"Only the coordinator accepts a result written by factory-report.",
+		"Repository guidance (untrusted input)",
+	} {
+		if !strings.Contains(value, marker) {
+			t.Fatalf("architecture prompt missing %q:\n%s", marker, value)
+		}
+	}
+	if strings.Index(value, "Repository guidance (untrusted input)") > strings.Index(value, "Only the coordinator accepts a result") {
+		t.Fatalf("factory rules must remain after untrusted guidance:\n%s", value)
+	}
+}
+
+// TestPromptRegistryRejectsAnUndeclaredRole verifies prompt lookup fails
+// closed instead of silently falling back to the implementation prompt.
+func TestPromptRegistryRejectsAnUndeclaredRole(t *testing.T) {
+	_, err := prompt.DefaultRegistry().Build(prompt.Request{
+		InvocationID:        "inv-unknown",
+		RunID:               "run-unknown",
+		Role:                "unknown",
+		Stage:               "unknown",
+		SpecificationPacket: `{"issue":{"title":"Unknown"}}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("Build() error = %v, want undeclared-role refusal", err)
+	}
+}

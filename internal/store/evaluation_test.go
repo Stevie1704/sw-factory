@@ -124,6 +124,33 @@ func TestEvaluationSummaryRecordsContentFreeRunAndAggregates(t *testing.T) {
 	}
 }
 
+// TestEvaluationStageTransitionsAcceptOpenFactoryStageIdentities verifies the
+// operational evaluation projection does not reject a newly registered stage.
+func TestEvaluationStageTransitionsAcceptOpenFactoryStageIdentities(t *testing.T) {
+	ctx := context.Background()
+	opened, err := store.Open(ctx, filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	started := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
+	run := store.Run{ID: "run-open-stage", RepositoryPath: "/repo", Stage: store.StageArchitecture, Status: store.StatusActive, CreatedAt: started, UpdatedAt: started}
+	if err := opened.EnsureEvaluationSummary(ctx, run); err != nil {
+		t.Fatalf("EnsureEvaluationSummary() error = %v", err)
+	}
+	if err := opened.RecordEvaluationStageTransition(ctx, run.ID, store.StageArchitecture, store.Stage("future-role-stage"), started.Add(time.Minute)); err != nil {
+		t.Fatalf("RecordEvaluationStageTransition() error = %v, want open stage identity", err)
+	}
+	summary, err := opened.EvaluationSummary(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("EvaluationSummary() error = %v", err)
+	}
+	if summary == nil || len(summary.StageDurations) != 1 || summary.StageDurations[0].Stage != store.StageArchitecture {
+		t.Fatalf("stage durations = %#v, want architecture duration", summary)
+	}
+}
+
 // TestEvaluationSummaryCountsRepeatedGateRuns verifies retries against one
 // exact checkpoint increase execution evidence even when result storage is an
 // idempotent upsert.

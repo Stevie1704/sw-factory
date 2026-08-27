@@ -31,6 +31,7 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 		NativeSessionID:         "session-1",
 		WorkspaceID:             "workspace-run",
 		StatusSurfaceID:         "surface-status",
+		RoleSurfaceID:           "surface-implementation",
 		ImplementationSurfaceID: "surface-implementation",
 		ChecksSurfaceID:         "surface-checks",
 		InvocationDirectory:     "/tmp/invocation",
@@ -56,11 +57,35 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invocation() error = %v", err)
 	}
-	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
+	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.RoleSurfaceID != want.RoleSurfaceID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
 		t.Fatalf("Invocation() = %#v, want %#v", got, want)
 	}
 	if got.UpdatedAt.UTC() != created {
 		t.Fatalf("Invocation().UpdatedAt = %s, want %s", got.UpdatedAt.UTC(), created)
+	}
+}
+
+// TestStoreRejectsConflictingRoleSurfaceIdentities verifies legacy and
+// role-neutral surface columns cannot persist contradictory handles.
+func TestStoreRejectsConflictingRoleSurfaceIdentities(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	err = opened.SaveInvocation(context.Background(), store.Invocation{
+		ID:                      "inv-conflicting-surface",
+		RunID:                   "run-conflicting-surface",
+		Harness:                 "codex",
+		Role:                    "architecture",
+		Stage:                   store.StageArchitecture,
+		RoleSurfaceID:           "surface-role",
+		ImplementationSurfaceID: "surface-implementation",
+		Status:                  store.InvocationStatusActive,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("SaveInvocation() error = %v, want conflicting-surface rejection", err)
 	}
 }
 

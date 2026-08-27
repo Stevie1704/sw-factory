@@ -11,6 +11,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // ResumeRequest selects the active run whose persisted worker and native
@@ -241,7 +242,7 @@ func (s *Service) Attach(ctx context.Context, request AttachRequest) (AttachResu
 	}
 	updated := *active
 	updated.WorkspaceID = string(workspaceID)
-	updated.ImplementationSurfaceID = string(implementationSurface.ID)
+	setInvocationSurface(&updated, implementationSurface)
 	updated.StatusSurfaceID = string(statusSurface.ID)
 	updated.ChecksSurfaceID = string(checksSurface.ID)
 	if restored || updated.AttachRequired {
@@ -637,15 +638,20 @@ func (s *Service) ensureWorkerForInvocation(ctx context.Context, registration co
 // and recreates the run workspace when cmux lost the workspace or a role
 // surface. It never reads terminal screen contents.
 func (s *Service) restoreInvocationTerminal(ctx context.Context, terminalRuntime terminal.TerminalRuntime, run store.Run, invocation store.Invocation) (terminal.WorkspaceID, terminal.Surface, terminal.Surface, terminal.Surface, bool, error) {
+	roleDefinition, err := roleDefinitionForInvocation(invocation)
+	if err != nil {
+		return "", terminal.Surface{}, terminal.Surface{}, terminal.Surface{}, false, err
+	}
 	workspaceID := terminal.WorkspaceID(invocation.WorkspaceID)
-	implementation := terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: workspaceID, Name: invocation.Role}
+	roleSurface := invocationSurface(invocation)
+	roleSurface.WorkspaceID = workspaceID
 	status := terminal.Surface{ID: terminal.SurfaceID(invocation.StatusSurfaceID), WorkspaceID: workspaceID, Name: "status"}
 	checks := terminal.Surface{ID: terminal.SurfaceID(invocation.ChecksSurfaceID), WorkspaceID: workspaceID, Name: "checks"}
-	restore := workspaceID == "" || implementation.ID == ""
+	restore := workspaceID == "" || roleSurface.ID == ""
 	if inspector, ok := terminalRuntime.(terminal.WorkspaceInspector); ok && !restore {
 		observed, err := inspector.InspectWorkspace(ctx, workspaceID)
 		if err != nil {
-			return workspaceID, implementation, status, checks, false, fmt.Errorf("inspect terminal workspace for recovery: %w", err)
+			return workspaceID, roleSurface, status, checks, false, fmt.Errorf("inspect terminal workspace for recovery: %w", err)
 		}
 		if !observed.Exists {
 			restore = true
@@ -654,7 +660,7 @@ func (s *Service) restoreInvocationTerminal(ctx context.Context, terminalRuntime
 			for _, surface := range observed.Surfaces {
 				ids[surface.ID] = struct{}{}
 			}
-			for _, surface := range []terminal.Surface{implementation, status, checks} {
+			for _, surface := range []terminal.Surface{roleSurface, status, checks} {
 				if surface.ID != "" {
 					if _, exists := ids[surface.ID]; !exists {
 						restore = true
@@ -664,7 +670,7 @@ func (s *Service) restoreInvocationTerminal(ctx context.Context, terminalRuntime
 		}
 	}
 	if !restore {
-		return workspaceID, implementation, status, checks, false, nil
+		return workspaceID, roleSurface, status, checks, false, nil
 	}
 	runWorkspace, err := terminalRuntime.EnsureRunWorkspace(ctx, terminal.RunWorkspaceRequest{
 		RunID:            run.ID,
@@ -673,18 +679,20 @@ func (s *Service) restoreInvocationTerminal(ctx context.Context, terminalRuntime
 		WorkingDirectory: run.Worktree,
 	})
 	if err != nil {
-		return workspaceID, implementation, status, checks, false, fmt.Errorf("restore run terminal workspace: %w", err)
+		return workspaceID, roleSurface, status, checks, false, fmt.Errorf("restore run terminal workspace: %w", err)
 	}
 	workspaceID = runWorkspace.ID
 	status = runWorkspace.Status
 	checks = runWorkspace.Checks
-	implementation = runWorkspace.Implementation
-	if invocation.Role == "test" {
-		implementation = runWorkspace.Checks
-	} else if invocation.Role == "spec_review" {
-		implementation = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: "spec-review"}
+	switch roleDefinition.Surface {
+	case workflow.SurfaceChecks:
+		roleSurface = runWorkspace.Checks
+	case workflow.SurfaceRole:
+		roleSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: invocation.Role}
+	default:
+		roleSurface = runWorkspace.Implementation
 	}
-	return workspaceID, implementation, status, checks, true, nil
+	return workspaceID, roleSurface, status, checks, true, nil
 }
 
 // latestInvocationForAuthRefresh selects the active invocation or the latest

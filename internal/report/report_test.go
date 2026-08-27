@@ -299,6 +299,23 @@ func TestValidateRequiresTheTestHandoffForTestCompletion(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsAReviewHandoffForTestCompletion verifies a test role
+// cannot combine its test handoff with a review envelope.
+func TestValidateRejectsAReviewHandoffForTestCompletion(t *testing.T) {
+	value := testStageReport()
+	value.ReviewHandoff = &report.ReviewHandoff{}
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID: "inv-test",
+		RunID:        "run-test",
+		Harness:      "codex",
+		Role:         "test",
+		Stage:        "test",
+	})
+	if err == nil || !strings.Contains(err.Error(), "only a test handoff") {
+		t.Fatalf("Validate() error = %v, want mixed-review-handoff rejection", err)
+	}
+}
+
 // TestValidateAcceptsACompleteSpecificationReview verifies a review binds its
 // findings to the exact immutable checkpoint and preserves advisory findings.
 func TestValidateAcceptsACompleteSpecificationReview(t *testing.T) {

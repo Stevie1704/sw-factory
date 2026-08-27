@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // CommandOutcome describes what happened to one recognized comment.
@@ -68,6 +69,12 @@ const (
 	PolicyRejectionAnswerQuestion PolicyRejectionCode = "answer_question"
 	// PolicyRejectionRefreshState means refresh is not legal for the run.
 	PolicyRejectionRefreshState PolicyRejectionCode = "refresh_state"
+	// PolicyRejectionRoleUnavailable means the requested role is not factory-declared.
+	PolicyRejectionRoleUnavailable PolicyRejectionCode = "role_unavailable"
+	// PolicyRejectionStageUnavailable means the requested stage is not factory-declared.
+	PolicyRejectionStageUnavailable PolicyRejectionCode = "stage_unavailable"
+	// PolicyRejectionRoleStageMismatch means a role/stage pair is not declared.
+	PolicyRejectionRoleStageMismatch PolicyRejectionCode = "role_stage_mismatch"
 )
 
 // PolicyRejection is returned after a recognized command is visibly recorded
@@ -377,6 +384,7 @@ func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store
 // produced for an older specification packet before a new role starts.
 func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPacket) {
 	run.TestHandoff = nil
+	run.RoleHandoff = nil
 	run.ImplementationHandoff = nil
 	run.SpecificationReview = nil
 	run.ProtectedTestPaths = nil
@@ -401,13 +409,10 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 
 // agentRequestForRun selects the role that owns the current packet boundary.
 func agentRequestForRun(run store.Run) AgentRequest {
-	if run.Stage == store.StageTest {
-		return AgentRequest{RunID: run.ID, Role: "test", Stage: store.StageTest}
+	if definition, exists := workflow.DefaultRegistry().RoleForRunStage(run.Stage); exists {
+		return AgentRequest{RunID: run.ID, Role: definition.Name, Stage: definition.Stage}
 	}
-	if run.Stage == store.StageDraftPR {
-		return AgentRequest{RunID: run.ID, Role: "spec_review", Stage: store.StageReview}
-	}
-	return AgentRequest{RunID: run.ID, Role: "implementation", Stage: store.StageImplementation}
+	return AgentRequest{RunID: run.ID}
 }
 
 // stopRunWorkerIfActive stops only a currently active invocation so an answer
@@ -703,7 +708,7 @@ func (s *Service) handleHarnessConfiguration(ctx context.Context, registration c
 		rejection := &PolicyRejection{Code: PolicyRejectionHarnessUnavailable, Problem: fmt.Sprintf("harness %q is not available for the current implementation role", wanted)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
-	defaultHarness := packet.RepositoryConfig.RoleHarnessDefaults["implementation"]
+	defaultHarness := packet.RepositoryConfig.RoleHarnessDefaults[workflow.RoleImplementation]
 	if wanted != defaultHarness && !hasOverride(packet.RepositoryConfig.AllowedOverrides, config.OverrideHarness) {
 		rejection := &PolicyRejection{Code: PolicyRejectionHarnessOverride, Problem: fmt.Sprintf("repository configuration does not allow harness override from %q to %q", defaultHarness, wanted)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)

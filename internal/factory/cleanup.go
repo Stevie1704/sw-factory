@@ -14,6 +14,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 const (
@@ -22,9 +23,19 @@ const (
 	CleanupRetention = 7 * 24 * time.Hour
 )
 
-// cleanupWorkerRoles covers every coordinator-owned role that can create a
+// cleanupWorkerRoles covers every factory-declared role that can create a
 // run-scoped worker home, including deterministic gate execution.
-var cleanupWorkerRoles = []string{"gate", "implementation", "spec_review", "test"}
+var cleanupWorkerRoles = factoryWorkerRoles()
+
+// factoryWorkerRoles derives cleanup identities from the factory registry so a
+// newly declared visible role cannot leave its worker home behind.
+func factoryWorkerRoles() []string {
+	roles := []string{"gate"}
+	for _, definition := range workflow.DefaultRegistry().Roles() {
+		roles = append(roles, definition.Name)
+	}
+	return roles
+}
 
 // CleanupStore is the operational-store seam needed to list and delete local
 // run artifacts while keeping evaluation-summary deletion separate.

@@ -19,6 +19,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // TestStartAgentPersistsAReadOnlyPacketAndRecoverableSurfaceState verifies the
@@ -51,6 +52,83 @@ func TestStartAgentPersistsAReadOnlyPacketAndRecoverableSurfaceState(t *testing.
 	}
 	if len(runStore.invocations) != 1 || runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusActive {
 		t.Fatalf("stored invocations = %#v, want active invocation", runStore.invocations)
+	}
+}
+
+// TestArchitectureRoleUsesItsDeclaredPromptSurfaceAndHandoff verifies the
+// non-implementation role seam end to end without granting it implementation
+// paths or making the coordinator special-case its report projection.
+func TestArchitectureRoleUsesItsDeclaredPromptSurfaceAndHandoff(t *testing.T) {
+	service, runStore, _, _, harnessRuntime := newAgentService(t)
+	run := *runStore.current
+	run.Stage = store.StageImplementation
+	run.TestStageSkipped = true
+	runStore.worktree.state.ChangedPaths = []string{"docs/architecture/issue-34.md"}
+	if err := runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("persist architecture fixture: %v", err)
+	}
+
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{
+		Role:  workflow.RoleArchitecture,
+		Stage: workflow.StageArchitecture,
+	})
+	if err != nil {
+		t.Fatalf("StartAgent(architecture) error = %v", err)
+	}
+	if launch.Invocation.PromptVersion != workflow.PromptVersionArchitecture || len(launch.Invocation.PermittedPaths) != 1 || launch.Invocation.PermittedPaths[0] != "docs/architecture" {
+		t.Fatalf("architecture invocation = %#v, want declared prompt and path policy", launch.Invocation)
+	}
+	if len(harnessRuntime.starts) != 1 || harnessRuntime.starts[0].Surface.Name != workflow.RoleArchitecture || harnessRuntime.starts[0].Surface.ID != "" {
+		t.Fatalf("architecture harness surface = %#v, want a fresh role-owned surface", harnessRuntime.starts[0].Surface)
+	}
+
+	value := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  launch.Invocation.ID,
+		RunID:         launch.Invocation.RunID,
+		Harness:       launch.Invocation.Harness,
+		Role:          workflow.RoleArchitecture,
+		Stage:         string(workflow.StageArchitecture),
+		Outcome:       report.OutcomeCompleted,
+		Summary:       "architecture design recorded",
+		Handoff: &report.Handoff{
+			ChangeSummary: "recorded the architecture design",
+			AcceptanceMapping: []report.AcceptanceMapping{{
+				Criterion: "architecture role produces a design document",
+				Evidence:  "docs/architecture/issue-34.md",
+			}},
+			ProductionFilesChanged: []string{"docs/architecture/issue-34.md"},
+			FocusedCommands:        []string{"test -f docs/architecture/issue-34.md"},
+		},
+		NativeSessionID: "session-architecture",
+		ReportedAt:      time.Now().UTC(),
+	}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write architecture report: %v", err)
+	}
+	accepted, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID})
+	if err != nil {
+		t.Fatalf("AcceptAgentReport(architecture) error = %v", err)
+	}
+	if accepted.Invocation.Status != store.InvocationStatusCompleted || accepted.Invocation.Role != workflow.RoleArchitecture {
+		t.Fatalf("accepted architecture invocation = %#v, want completed architecture role", accepted.Invocation)
+	}
+	if runStore.current.Stage != store.StageImplementation || runStore.current.Status != store.StatusActive {
+		t.Fatalf("run after architecture handoff = stage %q/status %q, want implementation/active", runStore.current.Stage, runStore.current.Status)
+	}
+}
+
+// TestStartAgentRejectsAnUndeclaredRoleWithAStablePolicyCode verifies the
+// coordinator refuses role identities before opening a run or creating effects.
+func TestStartAgentRejectsAnUndeclaredRoleWithAStablePolicyCode(t *testing.T) {
+	service, _, _, _, _ := newAgentService(t)
+	_, err := service.StartAgent(context.Background(), factory.AgentRequest{Role: "custom", Stage: store.StageImplementation})
+	var rejection *factory.PolicyRejection
+	if !errors.As(err, &rejection) {
+		t.Fatalf("StartAgent() error = %v, want PolicyRejection", err)
+	}
+	if rejection.Code != factory.PolicyRejectionRoleUnavailable {
+		t.Fatalf("policy rejection code = %q, want %q", rejection.Code, factory.PolicyRejectionRoleUnavailable)
 	}
 }
 

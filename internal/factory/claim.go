@@ -13,6 +13,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // specificationPacketVersion is the first instance version assigned at claim.
@@ -80,12 +81,6 @@ var factoryLabelByStatus = map[store.Status]string{
 	store.StatusFailed:            github.LabelAgentFailed,
 	store.StatusCancelled:         github.LabelAgentCancelled,
 	store.StatusComplete:          github.LabelAgentComplete,
-}
-
-// validStages contains the fixed workflow stages accepted by transitions.
-var validStages = map[store.Stage]struct{}{
-	store.StageClaim: {}, store.StagePreflight: {}, store.StageTest: {}, store.StageImplementation: {},
-	store.StageCheck: {}, store.StageDraftPR: {}, store.StageReview: {}, store.StageReady: {},
 }
 
 // validStatuses contains the independent statuses accepted by transitions.
@@ -712,7 +707,11 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		run.LastCommandOutcome == string(CommandAccepted) {
 		return nil
 	}
-	reviewStart := request.Role == "spec_review" || (request.Role == "" && run.Stage == store.StageDraftPR)
+	reviewStart := run.Stage == store.StageDraftPR
+	if request.Role != "" {
+		definition, declared := workflow.DefaultRegistry().Role(request.Role)
+		reviewStart = declared && definition.Kind == workflow.RoleKindReview
+	}
 	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && run.TestStageSkipped)
 	if reviewStart && run.Stage == store.StageDraftPR {
 		return nil
@@ -836,7 +835,11 @@ func (s *Service) ensureLegacyAgentStartup(ctx context.Context, registration con
 		run.LastCommandOutcome == string(CommandAccepted) {
 		return nil
 	}
-	reviewStart := request.Role == "spec_review" || (request.Role == "" && run.Stage == store.StageDraftPR)
+	reviewStart := run.Stage == store.StageDraftPR
+	if request.Role != "" {
+		definition, declared := workflow.DefaultRegistry().Role(request.Role)
+		reviewStart = declared && definition.Kind == workflow.RoleKindReview
+	}
 	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && run.TestStageSkipped)
 	if reviewStart && run.Stage == store.StageDraftPR {
 		return nil
@@ -1034,9 +1037,9 @@ func factoryLabelForStatus(status store.Status) string {
 	return github.LabelAgentRunning
 }
 
-// validateStage rejects values outside the fixed workflow stages.
+// validateStage rejects values outside the factory-owned workflow registry.
 func validateStage(stage store.Stage) error {
-	if _, ok := validStages[stage]; ok {
+	if _, ok := workflow.DefaultRegistry().Stage(stage); ok {
 		return nil
 	}
 	return fmt.Errorf("unknown run stage %q", stage)

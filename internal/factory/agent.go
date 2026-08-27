@@ -15,7 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // InvocationStore is the operational-store seam required by visible agent
@@ -129,8 +129,8 @@ const (
 )
 
 // StartAgent prepares the frozen invocation packet, starts the pinned worker,
-// creates the visible run surfaces, and launches the selected visible Codex
-// role for testing, implementation, or immutable specification review.
+// creates the visible run surfaces, and launches the selected factory role
+// for testing, implementation, architecture, or immutable review work.
 func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result AgentLaunchResult, returnErr error) {
 	request = normalizeAgentRequest(request)
 	if err := validateAgentRequest(request); err != nil {
@@ -179,6 +179,12 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if invocation == nil {
 		return AgentResult{}, fmt.Errorf("invocation %q does not belong to run %q", request.InvocationID, run.ID)
 	}
+	roleDefinition, roleDeclared := workflow.DefaultRegistry().Role(invocation.Role)
+	if !roleDeclared || roleDefinition.Stage != invocation.Stage {
+		return AgentResult{}, fmt.Errorf("invocation role %q does not own stage %q", invocation.Role, invocation.Stage)
+	}
+	isTestInvocation := roleDefinition.Kind == workflow.RoleKindTest
+	isReviewInvocation := roleDefinition.Kind == workflow.RoleKindReview
 	if invocation.AttachRequired {
 		return AgentResult{}, fmt.Errorf("invocation %q requires `factory attach` before report acceptance", invocation.ID)
 	}
@@ -244,7 +250,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	path := filepath.Join(invocation.ResultDirectory, report.ReportFileName)
 	var value report.Report
-	if invocation.Stage == store.StageTest {
+	if isTestInvocation {
 		value, err = report.ReadEnvelope(path)
 	} else {
 		value, err = report.Read(path)
@@ -258,6 +264,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		Harness:        invocation.Harness,
 		Role:           invocation.Role,
 		Stage:          string(invocation.Stage),
+		RoleKind:       string(roleDefinition.Kind),
 		WorktreePath:   run.Worktree,
 		PermittedPaths: invocation.PermittedPaths,
 		CheckpointSHA:  run.CheckpointSHA,
@@ -275,7 +282,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if run.CheckpointSHA != "" && state.HeadSHA != run.CheckpointSHA {
 		return AgentResult{}, fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", state.HeadSHA, run.CheckpointSHA)
 	}
-	if invocation.Role == "spec_review" && len(state.ChangedPaths) != 0 {
+	if isReviewInvocation && len(state.ChangedPaths) != 0 {
 		return AgentResult{}, errors.New("specification reviewer changed the immutable checkpoint worktree")
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
@@ -290,7 +297,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		}
 		return AgentResult{}, err
 	}
-	if invocation.Stage == store.StageTest {
+	if isTestInvocation {
 		if err := validateTestStageReportPolicy(value, packet.RepositoryConfig.TestPolicy); err != nil {
 			return AgentResult{}, err
 		}
@@ -373,10 +380,10 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		acceptedInvocation.UpdatedAt = s.deps.Now().UTC()
 		previousRun := *run
 		nextRun := previousRun
-		isTestReport := invocation.Stage == store.StageTest
-		isReviewReport := invocation.Role == "spec_review" && invocation.Stage == store.StageReview
+		isTestReport := isTestInvocation
+		isReviewReport := isReviewInvocation
 		if !isTestReport && !isReviewReport {
-			nextRun = agentReportRunProjection(previousRun, value)
+			nextRun = agentReportRunProjection(previousRun, invocation.Stage, value)
 		}
 		nextRun.Revision = previousRun.Revision + 1
 		if isTestReport || isReviewReport {
@@ -387,11 +394,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		acceptedInvocation, nextRun, err = s.acceptResultWithEffect(ctx, runStore, invocationStore, registration, harnessRuntime, harness.Session{
 			InvocationID:    acceptedInvocation.ID,
 			NativeSessionID: nativeSessionID,
-			Surface: terminal.Surface{
-				ID:          terminal.SurfaceID(acceptedInvocation.ImplementationSurfaceID),
-				WorkspaceID: terminal.WorkspaceID(acceptedInvocation.WorkspaceID),
-				Name:        acceptedInvocation.Role,
-			},
+			Surface:         invocationSurface(acceptedInvocation),
 		}, acceptedInvocation, previousRun, nextRun, stopWorkerAfterReport, value)
 		if err != nil {
 			return AgentResult{}, err
@@ -413,7 +416,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		}
 		return AgentResult{Invocation: *invocation, Report: value}, nil
 	}
-	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: nativeSessionID, Surface: terminal.Surface{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID), Name: invocation.Role}}); err != nil {
+	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: nativeSessionID, Surface: invocationSurface(*invocation)}); err != nil {
 		return AgentResult{}, fmt.Errorf("finish accepted harness session: %w", err)
 	}
 	if value.Outcome == report.OutcomeNeedsClarification {
@@ -428,13 +431,13 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		return AgentResult{}, fmt.Errorf("persist accepted invocation: %w", err)
 	}
 	previousRun := *run
-	if invocation.Stage == store.StageTest {
+	if isTestInvocation {
 		return s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
 	}
-	if invocation.Role == "spec_review" && invocation.Stage == store.StageReview {
+	if roleIsKind(*invocation, workflow.RoleKindReview) {
 		return s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
 	}
-	*run = agentReportRunProjection(previousRun, value)
+	*run = agentReportRunProjection(previousRun, invocation.Stage, value)
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist accepted agent state: %w", err)
@@ -457,7 +460,7 @@ func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registratio
 	if run == nil || run.Status != store.StatusActive || run.Stage != invocation.Stage {
 		return AgentResult{}, false, nil
 	}
-	if invocation.Stage == store.StageTest {
+	if roleIsKind(*invocation, workflow.RoleKindTest) {
 		inspector := s.worktreeInspector()
 		if inspector == nil {
 			return AgentResult{}, true, errors.New("worktree inspector is required to resume accepted test projection")
@@ -469,7 +472,7 @@ func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registratio
 		result, err := s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
 		return result, true, err
 	}
-	if invocation.Role == "spec_review" && invocation.Stage == store.StageReview {
+	if roleIsKind(*invocation, workflow.RoleKindReview) {
 		result, err := s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
 		return result, true, err
 	}
@@ -492,22 +495,28 @@ func acceptedInvocationStatus(outcome report.Outcome) store.InvocationStatus {
 	}
 }
 
-// agentReportRunProjection applies the shared workflow projection for a
-// validated non-test, non-review report in both journaled and legacy paths.
-func agentReportRunProjection(previous store.Run, value report.Report) store.Run {
+// agentReportRunProjection applies the declared workflow transition for a
+// validated generic handoff in both journaled and legacy paths.
+func agentReportRunProjection(previous store.Run, invocationStage store.Stage, value report.Report) store.Run {
 	next := previous
-	next.Stage = store.StageImplementation
-	switch value.Outcome {
-	case report.OutcomeNeedsClarification:
-		next.Status = store.StatusWaitingForHuman
-		next.PendingQuestions = pendingQuestionsFromReport(value.Questions)
-	case report.OutcomeCannotProceed:
+	transition, err := workflow.DefaultRegistry().ResolveReportTransition(invocationStage, value.Outcome)
+	if err != nil {
+		next.Stage = invocationStage
 		next.Status = store.StatusFailed
 		next.PendingQuestions = nil
+		return next
+	}
+	next.Stage = transition.Stage
+	next.Status = transition.Status
+	switch value.Outcome {
+	case report.OutcomeNeedsClarification:
+		next.PendingQuestions = pendingQuestionsFromReport(value.Questions)
+	case report.OutcomeCannotProceed:
+		next.PendingQuestions = nil
 	default:
-		next.Status = store.StatusActive
 		if value.Handoff != nil {
-			next.ImplementationHandoff = implementationHandoffFromReport(*value.Handoff)
+			next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
+			next.ImplementationHandoff = next.RoleHandoff
 		}
 		next.PendingQuestions = nil
 	}
@@ -523,7 +532,7 @@ func agentReportRunProjection(previous store.Run, value report.Report) store.Run
 // the pending effect payload is unavailable.
 func readAcceptedAgentReport(invocation store.Invocation) (report.Report, error) {
 	path := filepath.Join(invocation.ResultDirectory, report.ReportFileName)
-	if invocation.Stage == store.StageTest {
+	if roleIsKind(invocation, workflow.RoleKindTest) {
 		return report.ReadEnvelope(path)
 	}
 	return report.Read(path)
@@ -565,27 +574,27 @@ func (s *Service) RunAgent(ctx context.Context, request AgentRequest) (AgentResu
 // normalizeAgentRequest fills the path default shared by automatic role
 // selection without choosing a role before the active run is loaded.
 func normalizeAgentRequest(request AgentRequest) AgentRequest {
-	if len(request.PermittedPaths) == 0 {
-		request.PermittedPaths = []string{"."}
-	}
 	return request
 }
 
-// validateAgentRequest rejects roles and stages outside the supported visible
-// role seams before external side effects occur.
+// validateAgentRequest rejects roles and stages outside the factory-owned
+// registry before external side effects occur.
 func validateAgentRequest(request AgentRequest) error {
-	if request.Role != "" && request.Role != "implementation" && request.Role != "test" && request.Role != "spec_review" {
-		return fmt.Errorf("agent role %q is not supported", request.Role)
+	registry := workflow.DefaultRegistry()
+	if request.Role != "" {
+		if _, exists := registry.Role(request.Role); !exists {
+			return &PolicyRejection{Code: PolicyRejectionRoleUnavailable, Problem: fmt.Sprintf("agent role %q is not declared by the factory-owned workflow registry", request.Role)}
+		}
 	}
-	if request.Stage != "" && request.Stage != store.StageTest && request.Stage != store.StageImplementation && request.Stage != store.StageReview {
-		return fmt.Errorf("agent stage %q is not supported", request.Stage)
+	if request.Stage != "" {
+		if _, exists := registry.RoleForInvocationStage(request.Stage); !exists {
+			return &PolicyRejection{Code: PolicyRejectionStageUnavailable, Problem: fmt.Sprintf("agent stage %q is not declared by the factory-owned workflow registry", request.Stage)}
+		}
 	}
 	if request.Role != "" && request.Stage != "" {
-		validPair := (request.Role == "test" && request.Stage == store.StageTest) ||
-			(request.Role == "implementation" && request.Stage == store.StageImplementation) ||
-			(request.Role == "spec_review" && request.Stage == store.StageReview)
-		if !validPair {
-			return errors.New("agent role and stage must be a supported pair")
+		definition, _ := registry.Role(request.Role)
+		if definition.Stage != request.Stage {
+			return &PolicyRejection{Code: PolicyRejectionRoleStageMismatch, Problem: fmt.Sprintf("agent role %q belongs to stage %q, not %q", request.Role, definition.Stage, request.Stage)}
 		}
 	}
 	if request.Model != "" && strings.ContainsAny(request.Model, "\x00\r\n ") {
@@ -742,60 +751,50 @@ func validateAgentRunState(run store.Run) error {
 	if run.Status != store.StatusActive {
 		return fmt.Errorf("cannot start visible agent from run status %q", run.Status)
 	}
-	switch run.Stage {
-	case store.StageClaim, store.StageTest, store.StageImplementation, store.StageDraftPR, store.StageReview:
-		return nil
-	default:
+	registry := workflow.DefaultRegistry()
+	if _, exists := registry.RoleForRunStage(run.Stage); !exists {
+		if _, invocationStage := registry.RoleForInvocationStage(run.Stage); invocationStage {
+			return nil
+		}
 		return fmt.Errorf("cannot start visible agent from run stage %q", run.Stage)
 	}
+	return nil
 }
 
 // selectAgentRole resolves an automatic request against the frozen run stage.
 func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) {
+	registry := workflow.DefaultRegistry()
 	if request.Role == "" && request.Stage == "" {
-		if run.Stage == store.StageTest {
-			request.Role = "test"
-			request.Stage = store.StageTest
-		} else if run.Stage == store.StageDraftPR {
-			request.Role = "spec_review"
-			request.Stage = store.StageReview
-		} else {
-			request.Role = "implementation"
-			request.Stage = store.StageImplementation
+		definition, exists := registry.RoleForRunStage(run.Stage)
+		if !exists {
+			return AgentRequest{}, fmt.Errorf("no factory-owned agent role is declared for run stage %q", run.Stage)
 		}
+		request.Role = definition.Name
+		request.Stage = definition.Stage
 	}
 	if request.Role == "" {
-		if request.Stage == store.StageTest {
-			request.Role = "test"
-		} else if request.Stage == store.StageReview {
-			request.Role = "spec_review"
-		} else {
-			request.Role = "implementation"
+		definition, exists := registry.RoleForInvocationStage(request.Stage)
+		if !exists {
+			return AgentRequest{}, fmt.Errorf("no factory-owned role owns invocation stage %q", request.Stage)
 		}
+		request.Role = definition.Name
 	}
 	if request.Stage == "" {
-		if request.Role == "test" {
-			request.Stage = store.StageTest
-		} else if request.Role == "spec_review" {
-			request.Stage = store.StageReview
-		} else {
-			request.Stage = store.StageImplementation
+		definition, exists := registry.Role(request.Role)
+		if !exists {
+			return AgentRequest{}, &PolicyRejection{Code: PolicyRejectionRoleUnavailable, Problem: fmt.Sprintf("agent role %q is not declared by the factory-owned workflow registry", request.Role)}
 		}
+		request.Stage = definition.Stage
 	}
-	if request.Stage == store.StageTest && run.Stage != store.StageTest {
-		return AgentRequest{}, fmt.Errorf("test agent requires active test stage, not %q", run.Stage)
+	definition, exists := registry.Role(request.Role)
+	if !exists {
+		return AgentRequest{}, &PolicyRejection{Code: PolicyRejectionRoleUnavailable, Problem: fmt.Sprintf("agent role %q is not declared by the factory-owned workflow registry", request.Role)}
 	}
-	if request.Role == "test" && run.Stage != store.StageTest {
-		return AgentRequest{}, fmt.Errorf("test agent requires active test stage, not %q", run.Stage)
+	if definition.Stage != request.Stage {
+		return AgentRequest{}, &PolicyRejection{Code: PolicyRejectionRoleStageMismatch, Problem: fmt.Sprintf("agent role %q belongs to stage %q, not %q", request.Role, definition.Stage, request.Stage)}
 	}
-	if request.Role == "implementation" && run.Stage == store.StageTest {
-		return AgentRequest{}, errors.New("implementation agent cannot bypass the test stage")
-	}
-	if request.Role == "spec_review" && run.Stage != store.StageDraftPR {
-		return AgentRequest{}, fmt.Errorf("specification reviewer requires draft_pr stage, not %q", run.Stage)
-	}
-	if request.Role == "implementation" && run.Stage != store.StageClaim && run.Stage != store.StageImplementation {
-		return AgentRequest{}, fmt.Errorf("implementation agent requires claim or implementation stage, not %q", run.Stage)
+	if !registry.CanStartFrom(request.Role, run.Stage) {
+		return AgentRequest{}, fmt.Errorf("agent role %q cannot start from active run stage %q", request.Role, run.Stage)
 	}
 	return request, nil
 }

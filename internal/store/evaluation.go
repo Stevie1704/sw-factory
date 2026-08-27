@@ -718,14 +718,13 @@ func validateEvaluationOutcome(value EvaluationOutcome) error {
 	}
 }
 
-// validateEvaluationStage validates the fixed coordinator stage vocabulary.
+// validateEvaluationStage validates a bounded persisted stage identity without
+// closing the store over factory-owned stages added in later registry versions.
 func validateEvaluationStage(value Stage) error {
-	switch value {
-	case StageClaim, StagePreflight, StageTest, StageImplementation, StageCheck, StageDraftPR, StageReview, StageReady:
-		return nil
-	default:
+	if !safeEvaluationValue(string(value)) {
 		return fmt.Errorf("unsupported evaluation stage %q", value)
 	}
+	return nil
 }
 
 // validEvaluationExemption reports whether an exemption category is known.
@@ -824,14 +823,23 @@ func appendUniqueEvaluationString[T comparable](values []T, value T) []T {
 	return append(values, value)
 }
 
-// sortEvaluationStageDurations orders durations by the fixed workflow order.
+// sortEvaluationStageDurations orders known stages first and leaves newly
+// declared stage identities in stable lexical order after them.
 func sortEvaluationStageDurations(values []EvaluationStageDuration) {
-	order := map[Stage]int{StageClaim: 0, StagePreflight: 1, StageTest: 2, StageImplementation: 3, StageCheck: 4, StageDraftPR: 5, StageReview: 6, StageReady: 7}
+	order := map[Stage]int{StageClaim: 0, StagePreflight: 1, StageTest: 2, StageArchitecture: 3, StageImplementation: 4, StageCheck: 5, StageDraftPR: 6, StageReview: 7, StageReady: 8}
 	sort.Slice(values, func(i, j int) bool {
-		if order[values[i].Stage] == order[values[j].Stage] {
+		leftOrder, leftKnown := order[values[i].Stage]
+		rightOrder, rightKnown := order[values[j].Stage]
+		if !leftKnown {
+			leftOrder = len(order)
+		}
+		if !rightKnown {
+			rightOrder = len(order)
+		}
+		if leftOrder == rightOrder {
 			return values[i].Stage < values[j].Stage
 		}
-		return order[values[i].Stage] < order[values[j].Stage]
+		return leftOrder < rightOrder
 	})
 }
 

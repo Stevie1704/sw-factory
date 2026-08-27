@@ -18,6 +18,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 const (
@@ -479,10 +480,14 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("read implementation session for check repair: %w", err)
 	}
-	if previous == nil || previous.Role != "implementation" || previous.Stage != store.StageImplementation || strings.TrimSpace(previous.NativeSessionID) == "" {
+	if previous == nil || previous.Stage != store.StageImplementation || strings.TrimSpace(previous.NativeSessionID) == "" {
 		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no resumable native session", ErrCheckRepairSessionUnavailable)
 	}
-	if previous.WorkspaceID == "" || previous.ImplementationSurfaceID == "" {
+	roleDefinition, roleErr := roleDefinitionForInvocation(*previous)
+	if roleErr != nil || roleDefinition.Name != workflow.RoleImplementation {
+		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no resumable role identity", ErrCheckRepairSessionUnavailable)
+	}
+	if previous.WorkspaceID == "" || invocationSurface(*previous).ID == "" {
 		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no recoverable surface", ErrCheckRepairSessionUnavailable)
 	}
 	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(previous.Harness))
@@ -553,6 +558,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		NativeSessionID:         previous.NativeSessionID,
 		WorkspaceID:             previous.WorkspaceID,
 		StatusSurfaceID:         previous.StatusSurfaceID,
+		RoleSurfaceID:           string(invocationSurface(*previous).ID),
 		ImplementationSurfaceID: previous.ImplementationSurfaceID,
 		ChecksSurfaceID:         previous.ChecksSurfaceID,
 		InvocationDirectory:     packetDirectory,
@@ -678,7 +684,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		Role:            previous.Role,
 		Stage:           string(store.StageImplementation),
 		WorkspaceID:     terminal.WorkspaceID(previous.WorkspaceID),
-		Surface:         terminal.Surface{ID: terminal.SurfaceID(previous.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(previous.WorkspaceID), Name: previous.Role},
+		Surface:         invocationSurface(*previous),
 		Prompt:          promptText,
 		Model:           previous.Model,
 		ReasoningEffort: previous.ReasoningEffort,
