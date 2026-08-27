@@ -313,7 +313,7 @@ pull-request identity when present. A missing or mismatched projection is
 reported alongside every other discovered discrepancy and pauses the run for
 human disposition. A remote run branch whose head is an ancestor of the
 persisted checkpoint is not a discrepancy: a checkpoint is committed before the
-gate suite runs and pushed only afterwards, so an unpushed commit is an
+gate suite runs and pushed only afterward, so an unpushed commit is an
 ordinary in-flight state rather than a diverged branch. A journaled effect is
 replayed only when its exact intent can be recognized or completed
 idempotently; otherwise the run remains waiting with the pending effect visible

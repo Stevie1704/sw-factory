@@ -558,6 +558,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		if !writeOutput(output, errorsOutput, "recovery: %s (run=%s sources=%s)\n", result.Recovery.Code, result.Recovery.RunID, agreement) {
 			return 1
 		}
+		if pending := result.Recovery.PendingEffect; pending != nil {
+			if !writeOutput(output, errorsOutput, "recovery pending effect: id=%s kind=%s\n", pending.ID, pending.Kind) {
+				return 1
+			}
+		}
 		for _, discrepancy := range result.Recovery.Discrepancies {
 			if !writeOutput(output, errorsOutput, "recovery discrepancy: %s.%s expected=%q observed=%q\n", discrepancy.Source, discrepancy.Field, discrepancy.Expected, discrepancy.Observed) {
 				return 1
@@ -590,6 +595,10 @@ func runReconcile(ctx context.Context, args []string, defaultConfigPath string, 
 	}
 	if *effectID == "" && *reason != "" {
 		writeError(errorsOutput, errors.New("--reason applies only to --abandon-effect"))
+		return 2
+	}
+	if *effectID == "" && *runID != "" {
+		writeError(errorsOutput, errors.New("--run-id applies only to --abandon-effect"))
 		return 2
 	}
 	service := factory.New(*configPath)
