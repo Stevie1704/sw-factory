@@ -883,6 +883,60 @@ func TestHarnessResumeAuthenticationFailureIsTypedAndRedacted(t *testing.T) {
 	}
 }
 
+// TestPendingHarnessResumeReplayPreservesAuthenticationClassification verifies
+// a restart-time replay that reaches the adapter before its reservation is
+// persisted still rolls back cleanly and retains the typed auth failure.
+func TestPendingHarnessResumeReplayPreservesAuthenticationClassification(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	invocation := store.Invocation{
+		ID: "inv-pending-auth-expired", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-pending-auth-expired", Status: store.InvocationStatusActive,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	service := newEffectMatrixService(nil, nil, nil, nil)
+	payload := harnessResumeEffectPayload{
+		SocketPath: "",
+		Request: harness.StartRequest{
+			InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
+			Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
+		},
+		Invocation: invocation, TargetResumeCount: 1,
+	}
+	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindHarnessResume, "pending-auth", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SavePendingEffect(ctx, effect); err != nil {
+		t.Fatal(err)
+	}
+	secret := "token=super-secret"
+	runtime := &effectMatrixHarness{resumeErr: errors.New("HTTP 401: " + secret)}
+	service.deps.Harness = runtime
+	_, err = service.replayPendingHarnessResume(ctx, opened, effect)
+	if !harness.IsAuthenticationExpired(err) {
+		t.Fatalf("replayPendingHarnessResume() error = %v, want typed authentication failure", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("replay authentication error leaked credential: %v", err)
+	}
+	persisted, lookupErr := opened.Invocation(ctx, run.ID, invocation.ID)
+	if lookupErr != nil || persisted == nil {
+		t.Fatalf("persisted invocation = %#v, error = %v", persisted, lookupErr)
+	}
+	if persisted.RecoveryResumeCount != 0 {
+		t.Fatalf("persisted replay authentication reservation = %#v, want count zero", persisted)
+	}
+	if pending, pendingErr := opened.PendingEffect(ctx, run.ID); pendingErr != nil || pending != nil {
+		t.Fatalf("pending replay authentication effect = %#v, error = %v; want cleared", pending, pendingErr)
+	}
+}
+
 // TestManualHarnessResumeSetsAnAttachGateWithoutConsumingAutomaticBudget
 // verifies explicit recovery is durable and cannot be mistaken for an
 // automatically authorized continuation.

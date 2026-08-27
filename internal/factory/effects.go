@@ -837,7 +837,11 @@ func (s *Service) replayPendingHarnessResume(ctx context.Context, runStore RunSt
 			}
 			session, resumeErr := harnessRuntime.Resume(ctx, payload.Request)
 			if resumeErr != nil {
-				return store.Run{}, fmt.Errorf("resume native harness session during manual replay: %w", classifyHarnessRuntimeError(harnessRuntime, resumeErr))
+				classified := classifyHarnessRuntimeError(harnessRuntime, resumeErr)
+				if harness.IsRateLimited(classified) || harness.IsAuthenticationExpired(classified) {
+					return store.Run{}, rollbackPendingHarnessResume(ctx, runStore, effect, *invocation, classified, "manual")
+				}
+				return store.Run{}, fmt.Errorf("resume native harness session during manual replay: %w", classified)
 			}
 			if session.NativeSessionID != "" {
 				reserved.NativeSessionID = session.NativeSessionID
@@ -860,7 +864,11 @@ func (s *Service) replayPendingHarnessResume(ctx context.Context, runStore RunSt
 		}
 		session, resumeErr := harnessRuntime.Resume(ctx, payload.Request)
 		if resumeErr != nil {
-			return store.Run{}, fmt.Errorf("resume native harness session during replay: %w", classifyHarnessRuntimeError(harnessRuntime, resumeErr))
+			classified := classifyHarnessRuntimeError(harnessRuntime, resumeErr)
+			if harness.IsRateLimited(classified) || harness.IsAuthenticationExpired(classified) {
+				return store.Run{}, rollbackPendingHarnessResume(ctx, runStore, effect, *invocation, classified, "automatic")
+			}
+			return store.Run{}, fmt.Errorf("resume native harness session during replay: %w", classified)
 		}
 		if session.NativeSessionID != "" {
 			reserved.NativeSessionID = session.NativeSessionID
@@ -883,6 +891,29 @@ func (s *Service) replayPendingHarnessResume(ctx context.Context, runStore RunSt
 		return store.Run{}, fmt.Errorf("run %q disappeared during harness resume replay", effect.RunID)
 	}
 	return *run, nil
+}
+
+// rollbackPendingHarnessResume restores the invocation and clears a replay
+// reservation when the adapter rejects the native resume before its boundary.
+// Rate and authentication failures are retryable classifications, so replay
+// must leave the automatic ceiling untouched and let the coordinator publish
+// the appropriate waiting state.
+func rollbackPendingHarnessResume(ctx context.Context, runStore RunStore, effect store.PendingEffect, original store.Invocation, classified error, mode string) error {
+	invocationStore, ok := runStore.(InvocationStore)
+	if !ok {
+		return errors.Join(classified, fmt.Errorf("rollback %s harness resume: invocation store unavailable", mode))
+	}
+	if err := invocationStore.SaveInvocation(ctx, original); err != nil {
+		return errors.Join(classified, fmt.Errorf("rollback %s harness resume: %w", mode, err))
+	}
+	journal, ok := runStore.(PendingEffectStore)
+	if !ok {
+		return classified
+	}
+	if err := journal.ClearPendingEffect(ctx, effect.RunID, effect.ID); err != nil {
+		return errors.Join(classified, fmt.Errorf("clear %s harness resume after rollback: %w", mode, err))
+	}
+	return classified
 }
 
 // pushWithEffect publishes one run branch while recognizing an already

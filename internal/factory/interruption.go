@@ -363,8 +363,11 @@ func (s *Service) retryWaitingForHarness(ctx context.Context, registration confi
 	if err != nil {
 		return fmt.Errorf("read run for harness retry: %w", err)
 	}
-	if run == nil || run.Status != store.StatusWaitingForHarness {
+	if run == nil {
 		return nil
+	}
+	if run.Status != store.StatusWaitingForHarness {
+		return s.reconcileActiveHarnessLiveness(ctx, registration, runStore, *run)
 	}
 	activeStore, ok := runStore.(ActiveInvocationStore)
 	if !ok {
@@ -431,13 +434,50 @@ func (s *Service) retryWaitingForHarness(ctx context.Context, registration confi
 	return nil
 }
 
+// reconcileActiveHarnessLiveness observes an active native session on every
+// supervised polling pass. A process exit is handed to the same reconciliation
+// state machine used at startup, with same-process recovery enabled because
+// this observer has directly established the interruption boundary.
+func (s *Service) reconcileActiveHarnessLiveness(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) error {
+	if run.Status != store.StatusActive {
+		return nil
+	}
+	activeStore, ok := runStore.(ActiveInvocationStore)
+	if !ok {
+		return nil
+	}
+	active, err := activeStore.ActiveInvocation(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("read active invocation for liveness monitoring: %w", err)
+	}
+	if active == nil || active.AttachRequired || strings.TrimSpace(active.NativeSessionID) == "" {
+		return nil
+	}
+	_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
+	if runtimeErr != nil {
+		return fmt.Errorf("ensure harness for liveness monitoring: %w", runtimeErr)
+	}
+	livenessInspector, ok := harnessRuntime.(harness.NativeSessionLivenessInspector)
+	if !ok {
+		return nil
+	}
+	running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, Harness: active.Harness})
+	if livenessErr == nil && running {
+		return nil
+	}
+	_, _, _, reconcileErr := s.reconcileInterruptedRunWithMode(ctx, registration, runStore, run, true)
+	if reconcileErr != nil {
+		return reconcileErr
+	}
+	return nil
+}
+
 // pauseForHarnessCapacity changes an active run to the non-budgeted harness
 // waiting state, stops its worker, and sends one operator notification for the
 // transition.
-func (s *Service) pauseForHarnessCapacity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessNames ...string) (store.Run, error) {
-	harnessName := "harness"
-	if len(harnessNames) != 0 && strings.TrimSpace(harnessNames[0]) != "" {
-		harnessName = harnessNames[0]
+func (s *Service) pauseForHarnessCapacity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
+	if strings.TrimSpace(harnessName) == "" {
+		harnessName = "harness"
 	}
 	changed := run.Status != store.StatusWaitingForHarness || !strings.HasPrefix(run.LifecycleReason, "harness capacity unavailable")
 	if err := s.stopRunWorker(ctx, run.ID); err != nil {

@@ -270,6 +270,34 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	if err != nil || repairedRun == nil || repairedRun.Status != store.StatusWaitingForHuman {
 		t.Fatalf("run after post-resume worker loss = %#v, error = %v; want human recovery", repairedRun, err)
 	}
+
+	// A live polling pass must detect a harness that exits after launch and
+	// route it through the same one-shot automatic native resume policy.
+	persisted.RecoveryResumeCount = 0
+	persisted.UpdatedAt = now.Add(3 * time.Minute)
+	if err := opened.SaveInvocation(ctx, *persisted); err != nil {
+		t.Fatal(err)
+	}
+	activeRun = *repairedRun
+	activeRun.Status = store.StatusActive
+	activeRun.LifecycleReason = "harness resumed after live interruption"
+	activeRun.UpdatedAt = now.Add(3 * time.Minute)
+	if err := opened.SaveRun(ctx, activeRun); err != nil {
+		t.Fatal(err)
+	}
+	githubRuntime.issue.Labels = []string{factoryLabelForStatus(activeRun.Status)}
+	githubRuntime.statusComment.Body = statusCommentBody(activeRun)
+	harnessRuntime.nativeSessionExited = true
+	if err := lossService.retryWaitingForHarness(ctx, registration); err != nil {
+		t.Fatalf("live harness interruption recovery = %v", err)
+	}
+	if harnessRuntime.resumeCalls != 3 {
+		t.Fatalf("native resumes after live harness exit = %d, want one recovery resume", harnessRuntime.resumeCalls)
+	}
+	liveRecovered, err := opened.CurrentRun(ctx)
+	if err != nil || liveRecovered == nil || liveRecovered.Status != store.StatusActive {
+		t.Fatalf("run after live harness recovery = %#v, error = %v; want active run", liveRecovered, err)
+	}
 }
 
 // TestRecoveryInspectsTheLatestTerminalInvocation verifies a stage boundary
@@ -497,10 +525,11 @@ var _ terminal.WorkspaceInspector = (*journalRecoveryTerminal)(nil)
 // journalRecoveryHarness supplies native-session identity and counts resume
 // calls so the startup test can detect duplicate continuation.
 type journalRecoveryHarness struct {
-	nativeSessionID string
-	resumeCalls     int
-	failResumeOnce  bool
-	resumeErr       error
+	nativeSessionID     string
+	resumeCalls         int
+	failResumeOnce      bool
+	resumeErr           error
+	nativeSessionExited bool
 }
 
 // Capabilities reports Codex's native continuation support.
@@ -535,8 +564,15 @@ func (h *journalRecoveryHarness) NativeSessionID(context.Context, harness.Native
 	return h.nativeSessionID, nil
 }
 
+// NativeSessionRunning returns the controlled native process projection used
+// to exercise live interruption detection.
+func (h *journalRecoveryHarness) NativeSessionRunning(context.Context, harness.NativeSessionRequest) (bool, error) {
+	return !h.nativeSessionExited, nil
+}
+
 var _ harness.Runtime = (*journalRecoveryHarness)(nil)
 var _ harness.NativeSessionInspector = (*journalRecoveryHarness)(nil)
+var _ harness.NativeSessionLivenessInspector = (*journalRecoveryHarness)(nil)
 
 // ancestryGitWorkspace reports a remote head plus a fixed ancestry answer so a
 // reconciliation test can distinguish an unpushed checkpoint from a diverged

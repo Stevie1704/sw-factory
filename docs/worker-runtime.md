@@ -103,6 +103,11 @@ invocation mounts are stale, the adapter recreates it from the persisted
 factory-managed credential volume survive that recreation; the invocation and
 result directories are mounted again from their persisted paths.
 
+The harness adapters inspect the worker process table through the same command
+seam used by gates. If the persisted native session process exits after launch,
+the coordinator records that interruption and applies its bounded resume policy
+without using terminal text as a correctness signal.
+
 When harness capacity is unavailable, the coordinator stops the worker and
 records `waiting_for_harness`; the polling supervisor retries after capacity
 returns. An expired credential stops the worker and waits for an explicit

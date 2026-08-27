@@ -85,8 +85,9 @@ with a complete native-session identity is resumed once against its persisted
 worker and terminal handles. If the worker is missing or stopped, the
 coordinator recreates it from the frozen image digest and invocation mount
 identity while preserving the worktree and role volume. An unexpected native
-harness exit receives exactly one automatic resume attempt; a second unexpected
-failure pauses the run for manual recovery. Rate limits enter a
+harness exit, including one observed after launch by the supervisor's worker-side
+process check, receives exactly one automatic resume attempt; a second
+unexpected failure pauses the run for manual recovery. Rate limits enter a
 `waiting_for_harness` state, stop the worker, notify the operator, and are
 retried by the supervisor without consuming workflow or check-repair budget.
 Expired authentication enters `waiting_for_human` with a typed, redacted
