@@ -305,11 +305,10 @@ func inspectRemoteBranchProjection(ctx context.Context, diagnosis *RecoveryDiagn
 	})
 }
 
-// inspectInvocationProjection verifies the active invocation's durable
-// external identities without launching or mutating anything. A missing native
-// session is left for the progression seam to reject as an incomplete launch;
-// treating it as a state mutation here would make concurrent first launches
-// indistinguishable from restart recovery.
+// inspectInvocationProjection verifies the newest invocation's durable
+// external identities without launching or mutating anything. The active
+// invocation is preferred, while the latest terminal invocation keeps stages
+// between visible agents from bypassing worker, cmux, or native-session checks.
 func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, registration config.RepositoryRegistration, runStore OperationalStore, run store.Run) {
 	if runStore == nil {
 		return
@@ -354,7 +353,33 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 		return
 	}
 	if active == nil {
-		return
+		latestStore, exposesLatest := runStore.(LatestInvocationStore)
+		if !exposesLatest {
+			if _, journaled := runStore.(PendingEffectStore); journaled {
+				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyInfrastructure,
+					Source:   "operational store",
+					Field:    "latest invocation",
+					Expected: "latest invocation lookup",
+					Observed: "store does not expose latest invocation projection",
+				})
+			}
+			return
+		}
+		active, err = latestStore.LatestInvocation(ctx, run.ID)
+		if err != nil {
+			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyInfrastructure,
+				Source:   "operational store",
+				Field:    "latest invocation",
+				Expected: "read latest invocation",
+				Observed: err.Error(),
+			})
+			return
+		}
+		if active == nil {
+			return
+		}
 	}
 	diagnosis.InvocationExists = true
 	hasNativeSession := strings.TrimSpace(active.NativeSessionID) != ""

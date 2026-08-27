@@ -201,6 +201,10 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			}
 			value, readErr := readAcceptedAgentReport(*invocation)
 			if readErr == nil {
+				resumed, projected, projectionErr := s.resumeAcceptedStageProjection(ctx, registration, runStore, run, invocation, value)
+				if projected {
+					return resumed, projectionErr
+				}
 				return AgentResult{Invocation: *invocation, Report: value}, nil
 			}
 		}
@@ -424,6 +428,33 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		*run = published
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
+}
+
+// resumeAcceptedStageProjection completes the test- or review-specific run
+// transition when result acceptance made the invocation terminal but a crash
+// left the durable run active at the same stage. A run that already moved away
+// from the invocation stage is the durable proof that no continuation remains.
+func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, bool, error) {
+	if run == nil || run.Status != store.StatusActive || run.Stage != invocation.Stage {
+		return AgentResult{}, false, nil
+	}
+	if invocation.Stage == store.StageTest {
+		inspector := s.worktreeInspector()
+		if inspector == nil {
+			return AgentResult{}, true, errors.New("worktree inspector is required to resume accepted test projection")
+		}
+		state, err := inspector.Inspect(ctx, run.Worktree)
+		if err != nil {
+			return AgentResult{}, true, fmt.Errorf("inspect worktree to resume accepted test projection: %w", err)
+		}
+		result, err := s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
+		return result, true, err
+	}
+	if invocation.Role == "spec_review" && invocation.Stage == store.StageReview {
+		result, err := s.acceptSpecificationReviewReport(ctx, registration, runStore, run, invocation, value)
+		return result, true, err
+	}
+	return AgentResult{}, false, nil
 }
 
 // acceptedInvocationStatus maps a validated report outcome to its durable

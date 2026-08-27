@@ -72,10 +72,11 @@ func (e *StartupBlockedError) Error() string {
 }
 
 // Start runs the supervised polling loop until its context is cancelled. It
-// diagnoses the full host before taking the lock, renews a visible GitHub
-// lease, and backs off read-only queue or lease transport failures without
-// changing run state or retry budgets. Claim failures are returned because the
-// claim state machine may already have performed compensating effects.
+// diagnoses the full host before taking the lock, acquires exclusive ownership
+// before reconciliation, renews a visible GitHub lease, and backs off read-only
+// queue or lease transport failures without changing run state or retry
+// budgets. Claim failures are returned because the claim state machine may
+// already have performed compensating effects.
 func (s *Service) Start(ctx context.Context) error {
 	diagnosis, err := s.startupDiagnosis(ctx)
 	if err != nil {
@@ -87,9 +88,6 @@ func (s *Service) Start(ctx context.Context) error {
 	registration, repositoryConfig, err := s.pollConfiguration()
 	if err != nil {
 		return err
-	}
-	if err := s.reconcileRegisteredRun(ctx, registration); err != nil {
-		return fmt.Errorf("reconcile persisted run at startup: %w", err)
 	}
 	if s.issuePoller() == nil {
 		return errors.New("GitHub issue poller is required to start the coordinator")
@@ -106,6 +104,9 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = lock.release() }()
+	if err := s.reconcileRegisteredRun(ctx, registration); err != nil {
+		return fmt.Errorf("reconcile persisted run at startup: %w", err)
+	}
 
 	pollContext, cancel := context.WithCancel(ctx)
 	if !s.setPollCancel(cancel) {
@@ -169,9 +170,9 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 }
 
-// reconcileRegisteredRun opens the operational store once before the polling
-// loop acquires its host lock. This makes a process restart converge an active
-// run before queue work is considered.
+// reconcileRegisteredRun opens the operational store once after the polling
+// loop owns its host lock. This makes a process restart converge and resume an
+// active run before queue work is considered.
 func (s *Service) reconcileRegisteredRun(ctx context.Context, registration config.RepositoryRegistration) error {
 	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
 	if err != nil {
@@ -187,7 +188,7 @@ func (s *Service) reconcileRegisteredRun(ctx context.Context, registration confi
 	if err != nil {
 		return fmt.Errorf("read persisted run for startup reconciliation: %w", err)
 	}
-	return s.ensureProgressionStartup(ctx, registration, runStore, run)
+	return s.ensureAgentStartup(ctx, registration, runStore, run, AgentRequest{})
 }
 
 // Stop asks the current coordinator process to stop polling. A same-process

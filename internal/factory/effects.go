@@ -781,6 +781,13 @@ func (s *Service) pushOnce(ctx context.Context, workspace gitadapter.GitWorkspac
 			return nil
 		}
 	}
+	state, err := workspace.Inspect(ctx, request.WorktreePath)
+	if err != nil {
+		return fmt.Errorf("inspect local worktree before push: %w", err)
+	}
+	if strings.TrimSpace(expectedSHA) != "" && state.HeadSHA != expectedSHA {
+		return fmt.Errorf("local worktree HEAD %q does not match pending push checkpoint %q", state.HeadSHA, expectedSHA)
+	}
 	if err := workspace.Push(ctx, request); err != nil {
 		return err
 	}
@@ -897,8 +904,8 @@ func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore,
 		}
 		if currentInvocation.Status == store.InvocationStatusActive {
 			// Mark the invocation terminal before Finish crosses the external
-			// boundary. A restart after this reservation can safely replay the
-			// idempotent Finish operation when its response was lost.
+			// boundary. A restart after this reservation safely abandons Finish
+			// because the native exit command has no observable idempotency key.
 			if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 				return fmt.Errorf("reserve accepted invocation: %w", err)
 			}
@@ -941,9 +948,10 @@ func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore,
 	return invocation, next, nil
 }
 
-// replayPendingResultAcceptance completes a report acceptance and retries the
-// idempotent harness finalization when the prior process stopped before its
-// response was observed.
+// replayPendingResultAcceptance completes a report acceptance without
+// repeating harness finalization after its terminal invocation reservation.
+// The external exit command has no observable idempotency key, so an ambiguous
+// prior attempt is safely abandoned while the durable projections converge.
 func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore RunStore, effect store.PendingEffect) (store.Run, error) {
 	var payload resultAcceptanceEffectPayload
 	if err := decodePendingEffect(effect, &payload); err != nil {
@@ -974,7 +982,8 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 	if currentInvocation == nil {
 		return store.Run{}, fmt.Errorf("invocation %q disappeared during result acceptance replay", payload.Invocation.ID)
 	}
-	if currentInvocation.Status == store.InvocationStatusActive {
+	finishNeeded := currentInvocation.Status == store.InvocationStatusActive
+	if finishNeeded {
 		// Reserve the terminal invocation projection before replaying Finish.
 		if err := invocationStore.SaveInvocation(ctx, payload.Invocation); err != nil {
 			return store.Run{}, fmt.Errorf("reserve replayed accepted invocation: %w", err)
@@ -982,12 +991,14 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 	} else if currentInvocation.Status != payload.Invocation.Status || currentInvocation.NativeSessionID != payload.Invocation.NativeSessionID {
 		return store.Run{}, workflowProjectionFailuref("invocation %q changed during result acceptance replay", payload.Invocation.ID)
 	}
-	_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
-	if runtimeErr != nil {
-		return store.Run{}, fmt.Errorf("ensure harness for result acceptance replay: %w", runtimeErr)
-	}
-	if err := harnessRuntime.Finish(ctx, payload.Session); err != nil {
-		return store.Run{}, fmt.Errorf("finish replayed harness session: %w", err)
+	if finishNeeded {
+		_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
+		if runtimeErr != nil {
+			return store.Run{}, fmt.Errorf("ensure harness for result acceptance replay: %w", runtimeErr)
+		}
+		if err := harnessRuntime.Finish(ctx, payload.Session); err != nil {
+			return store.Run{}, fmt.Errorf("finish replayed harness session: %w", err)
+		}
 	}
 	if payload.StopWorker {
 		// Stopping is idempotent for the run-scoped worker. Repeat it even when

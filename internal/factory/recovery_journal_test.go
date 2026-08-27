@@ -118,9 +118,11 @@ func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T)
 		t.Fatal(err)
 	}
 
+	databasePath := filepath.Join(root, "state", "factory.db")
 	registration := config.RepositoryRegistration{
-		Path:   root,
-		GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		Path:                root,
+		OperationalDataPath: databasePath,
+		GitHub:              config.GitHubConfig{Owner: "example", Repository: "project"},
 	}
 	githubRuntime := &effectMatrixGitHub{
 		issue:         github.Issue{Number: run.IssueNumber, Labels: []string{factoryLabelForStatus(run.Status)}},
@@ -163,11 +165,13 @@ func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T)
 		Worker:       workerRuntime,
 		Terminal:     terminalRuntime,
 		Harness:      harnessRuntime,
-		Now:          func() time.Time { return now },
+		OpenStore: func(ctx context.Context, path string) (OperationalStore, error) {
+			return store.Open(ctx, path)
+		},
+		Now: func() time.Time { return now },
 	}}
 
-	updatedRun := run
-	if err := service.ensureAgentStartup(ctx, registration, opened, &updatedRun, AgentRequest{}); err != nil {
+	if err := service.reconcileRegisteredRun(ctx, registration); err != nil {
 		t.Fatalf("first journaled startup = %v", err)
 	}
 	if harnessRuntime.resumeCalls != 1 {
@@ -196,12 +200,69 @@ func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T)
 	if freshRun == nil {
 		t.Fatal("fresh coordinator fixture lost its run")
 	}
-	if err := fresh.ensureAgentStartup(ctx, registration, opened, freshRun, AgentRequest{}); err != nil {
+	if err := fresh.reconcileRegisteredRun(ctx, registration); err != nil {
 		t.Fatalf("second journaled startup = %v", err)
 	}
 	if harnessRuntime.resumeCalls != 1 {
 		t.Fatalf("native resumes after second startup = %d, want no duplicate", harnessRuntime.resumeCalls)
 	}
+}
+
+// TestRecoveryInspectsTheLatestTerminalInvocation verifies a stage boundary
+// cannot bypass Docker, cmux, and native-session reconciliation merely because
+// its newest persisted invocation is already terminal.
+func TestRecoveryInspectsTheLatestTerminalInvocation(t *testing.T) {
+	now := time.Unix(1, 0).UTC()
+	run := store.Run{ID: "run-terminal-projection", Stage: store.StageDraftPR, Status: store.StatusActive}
+	invocation := store.Invocation{
+		ID: "inv-terminal-projection", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-terminal-projection", WorkspaceID: "workspace-terminal-projection",
+		ImplementationSurfaceID: "surface-terminal-projection",
+		Status:                  store.InvocationStatusCompleted, CreatedAt: now, UpdatedAt: now,
+	}
+	workerRuntime := &journalRecoveryWorker{inspectErr: errors.New("worker projection unavailable")}
+	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
+		Exists: true, WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
+		Surfaces: []terminal.Surface{{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)}},
+	}}
+	service := &Service{deps: Dependencies{
+		Worker: workerRuntime, Terminal: terminalRuntime,
+		Harness: &journalRecoveryHarness{nativeSessionID: invocation.NativeSessionID},
+	}}
+	baseStore := &repairLaunchStore{run: run, invocations: map[string]store.Invocation{invocation.ID: invocation}}
+	runStore := &terminalProjectionStore{repairLaunchStore: baseStore}
+	diagnosis := newRecoveryDiagnosis(run.ID)
+
+	service.inspectInvocationProjection(context.Background(), &diagnosis, config.RepositoryRegistration{}, runStore, run)
+	if workerRuntime.inspectCalls != 1 {
+		t.Fatalf("worker inspections = %d, want one for latest terminal invocation", workerRuntime.inspectCalls)
+	}
+	found := false
+	for _, discrepancy := range diagnosis.Discrepancies {
+		if discrepancy.Source == "worker" && discrepancy.Field == "inspection" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("recovery discrepancies = %#v, want terminal worker inspection failure", diagnosis.Discrepancies)
+	}
+}
+
+// terminalProjectionStore exposes a latest terminal invocation while reporting
+// that no active invocation exists at the stage boundary.
+type terminalProjectionStore struct {
+	*repairLaunchStore
+}
+
+// ActiveInvocation reports the expected absence of an active invocation.
+func (*terminalProjectionStore) ActiveInvocation(context.Context, string) (*store.Invocation, error) {
+	return nil, nil
+}
+
+// HasInvocation reports the terminal invocation history.
+func (*terminalProjectionStore) HasInvocation(context.Context, string) (bool, error) {
+	return true, nil
 }
 
 // journalRecoveryWorkspace supplies the read-only Git projection and no-op
@@ -243,7 +304,9 @@ var _ gitadapter.GitWorkspace = (*journalRecoveryWorkspace)(nil)
 // journalRecoveryWorker supplies a matching active worker projection without
 // exposing the worker's private runtime identity to the factory test.
 type journalRecoveryWorker struct {
-	inspection worker.Inspection
+	inspection   worker.Inspection
+	inspectErr   error
+	inspectCalls int
 }
 
 // Start satisfies WorkerRuntime for the no-launch recovery fixture.
@@ -262,7 +325,8 @@ func (*journalRecoveryWorker) Stop(context.Context, string) error { return nil }
 
 // Inspect returns the matching active worker projection.
 func (w *journalRecoveryWorker) Inspect(context.Context, string) (worker.Inspection, error) {
-	return w.inspection, nil
+	w.inspectCalls++
+	return w.inspection, w.inspectErr
 }
 
 var _ worker.WorkerRuntime = (*journalRecoveryWorker)(nil)

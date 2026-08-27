@@ -15,6 +15,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -317,7 +318,7 @@ func TestCommitStatusEffectReplaysTheActualStatusMutation(t *testing.T) {
 func TestPushEffectReplaysTheActualRemoteMutation(t *testing.T) {
 	ctx := context.Background()
 	opened, databasePath, run := openEffectMatrixStore(t, ctx)
-	workspace := &effectMatrixGitWorkspace{expectedRemoteHead: "checkpoint", failPushOnce: true}
+	workspace := &effectMatrixGitWorkspace{expectedRemoteHead: "checkpoint", checkpointSHA: "checkpoint", failPushOnce: true}
 	service := newEffectMatrixService(nil, nil, workspace, nil)
 	request := gitadapter.PushRequest{WorktreePath: "/worktree", Branch: run.Branch}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
@@ -351,6 +352,25 @@ func TestPushEffectReplaysTheActualRemoteMutation(t *testing.T) {
 	}
 	if workspace.pushMutations != 1 {
 		t.Fatalf("push mutations after replay = %d, want one", workspace.pushMutations)
+	}
+}
+
+// TestPushEffectRejectsAChangedLocalHead verifies a replay cannot publish a
+// different local commit under the durable effect's original checkpoint ID.
+func TestPushEffectRejectsAChangedLocalHead(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	workspace := &effectMatrixGitWorkspace{expectedRemoteHead: "checkpoint", checkpointSHA: "new-local-head"}
+	service := newEffectMatrixService(nil, nil, workspace, nil)
+	request := gitadapter.PushRequest{WorktreePath: run.Worktree, Branch: run.Branch}
+
+	err := service.pushWithEffect(ctx, opened, run.ID, workspace, request, workspace.expectedRemoteHead)
+	if err == nil || !strings.Contains(err.Error(), "local worktree HEAD") {
+		t.Fatalf("pushWithEffect() error = %v, want changed-local-HEAD refusal", err)
+	}
+	if workspace.pushMutations != 0 {
+		t.Fatalf("push mutations = %d, want zero for changed local HEAD", workspace.pushMutations)
 	}
 }
 
@@ -556,7 +576,8 @@ func TestWorkerLaunchEffectReplaysTheActualWorkerStart(t *testing.T) {
 }
 
 // TestResultAcceptanceEffectReplaysTheActualFinish verifies a lost harness
-// finalization response is retried idempotently before the run is projected.
+// finalization response is safely abandoned rather than issued a second time
+// before the remaining durable projections are completed.
 func TestResultAcceptanceEffectReplaysTheActualFinish(t *testing.T) {
 	ctx := context.Background()
 	opened, databasePath, run := openEffectMatrixStore(t, ctx)
@@ -611,8 +632,56 @@ func TestResultAcceptanceEffectReplaysTheActualFinish(t *testing.T) {
 	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
-	if harnessRuntime.finishMutations != 1 || harnessRuntime.finishCalls != 2 {
-		t.Fatalf("harness finish calls/mutations after replay = %d/%d, want 2/1", harnessRuntime.finishCalls, harnessRuntime.finishMutations)
+	if harnessRuntime.finishMutations != 1 || harnessRuntime.finishCalls != 1 {
+		t.Fatalf("harness finish calls/mutations after replay = %d/%d, want 1/1", harnessRuntime.finishCalls, harnessRuntime.finishMutations)
+	}
+}
+
+// TestRepeatedTestAcceptanceResumesAnUnfinishedStageProjection verifies a
+// terminal invocation is not mistaken for a fully projected test-stage result
+// when the durable run still points at that stage.
+func TestRepeatedTestAcceptanceResumesAnUnfinishedStageProjection(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	run.Stage = store.StageTest
+	run.SpecificationPacket = "{}"
+	if err := opened.SaveRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	resultDirectory := t.TempDir()
+	invocation := store.Invocation{
+		ID: "inv-test-projection", RunID: run.ID, Harness: harness.NameCodex, Role: "test", Stage: store.StageTest,
+		NativeSessionID: "session-test-projection", ResultDirectory: resultDirectory,
+		Status: store.InvocationStatusCompleted, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	value := report.Report{
+		SchemaVersion: report.SchemaVersion, InvocationID: invocation.ID, RunID: run.ID,
+		Harness: invocation.Harness, Role: invocation.Role, Stage: string(invocation.Stage),
+		Outcome: report.OutcomeCompleted, Summary: "red test is ready",
+		TestHandoff: &report.TestHandoff{FocusedTestCommand: "go test ./...", ExpectedFailureReason: "wanted failure"},
+		ReportedAt:  time.Unix(2, 0).UTC(),
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resultDirectory, report.ReportFileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registration := config.RepositoryRegistration{Path: run.RepositoryPath, OperationalDataPath: "effects.db", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}}
+	workspace := &effectMatrixGitWorkspace{checkpointSHA: run.CheckpointSHA}
+	service := newEffectMatrixService(nil, nil, workspace, nil)
+	service.configPath = "/host/config.yaml"
+	service.deps.Config = effectMatrixConfig{host: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}}
+	service.deps.OpenStore = func(context.Context, string) (OperationalStore, error) { return opened, nil }
+	service.startupChecked = true
+
+	_, err = service.AcceptAgentReport(ctx, AgentReportRequest{RunID: run.ID, InvocationID: invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "worker runtime is required for red-test verification") {
+		t.Fatalf("AcceptAgentReport() error = %v, want unfinished test projection to resume", err)
 	}
 }
 
@@ -871,6 +940,21 @@ func newEffectMatrixService(githubRuntime github.Client, statuses github.CommitS
 func effectMatrixRegistration() config.RepositoryRegistration {
 	return config.RepositoryRegistration{GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}}
 }
+
+// effectMatrixConfig supplies one host registration to public-seam effect
+// tests without involving the filesystem-backed configuration repository.
+type effectMatrixConfig struct {
+	host config.HostConfig
+}
+
+// Load returns the configured host registration.
+func (c effectMatrixConfig) Load(string) (config.HostConfig, error) { return c.host, nil }
+
+// Save satisfies ConfigRepository for the read-only fixture.
+func (effectMatrixConfig) Save(string, config.HostConfig) error { return nil }
+
+// Create returns the configured host registration.
+func (c effectMatrixConfig) Create(string) (config.HostConfig, error) { return c.host, nil }
 
 // effectMatrixGitHub is a stateful GitHub fake that mutates its projection
 // before optionally returning a lost-response error.
