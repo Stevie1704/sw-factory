@@ -125,3 +125,10 @@ The versioned, host-local SQLite store for current run state. Its current-state
 tables are separate from repository configuration, disposable run artifacts,
 and the isolated local evaluation-summary projection.
 _Avoid_: Event journal, telemetry, transcript archive
+
+**Cleanup**:
+The explicit, seven-day retention operation that previews and removes one or
+more terminal runs' local worktrees, local branches, workers, role sessions,
+generated outputs, and operational rows while retaining remote branches,
+credential stores, and local evaluation summaries.
+_Avoid_: Remote branch deletion, automatic summary deletion

@@ -47,6 +47,7 @@ var commandTable = []commandDefinition{
 	{name: "evaluation", handler: runEvaluation},
 	{name: "evaluation-delete", handler: runEvaluationDelete},
 	{name: "evaluation-disposition", handler: runEvaluationDisposition},
+	{name: "cleanup", handler: runCleanup},
 }
 
 // Run dispatches the requested CLI command and returns its exit status.
@@ -887,6 +888,84 @@ func runEvaluationDisposition(ctx context.Context, args []string, defaultConfigP
 		return 1
 	}
 	return 0
+}
+
+// runCleanup displays the exact local cleanup plan and requires --confirm
+// before asking the Factory service to remove any run resources.
+func runCleanup(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	runID := flags.String("run-id", "", "terminal factory run identifier")
+	confirm := flags.Bool("confirm", false, "confirm cleanup of the displayed local targets")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("cleanup does not accept positional arguments"))
+		return 2
+	}
+
+	service := factory.New(*configPath)
+	preview, err := service.Cleanup(ctx, factory.CleanupRequest{RunID: *runID})
+	var confirmationErr *factory.CleanupConfirmationRequiredError
+	if err != nil && !errors.As(err, &confirmationErr) {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeCleanupPlan(output, errorsOutput, preview.Plan) {
+		return 1
+	}
+	if !*confirm {
+		if !writeOutput(output, errorsOutput, "cleanup requires --confirm; no resources removed\n") {
+			return 1
+		}
+		return 2
+	}
+
+	result, err := service.Cleanup(ctx, factory.CleanupRequest{
+		RunID:        *runID,
+		Confirm:      true,
+		Before:       preview.Plan.Before,
+		ExpectedPlan: &preview.Plan,
+	})
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "cleanup complete: runs=%d\n", len(result.Deleted)) {
+		return 1
+	}
+	return 0
+}
+
+// writeCleanupPlan renders every exact target before any confirmed mutation.
+func writeCleanupPlan(output, errorsOutput io.Writer, plan factory.CleanupPlan) bool {
+	if !writeOutput(output, errorsOutput, "cleanup cutoff: %s\ncleanup runs: %d\n", plan.Before.Format(time.RFC3339Nano), len(plan.Runs)) {
+		return false
+	}
+	for _, run := range plan.Runs {
+		if !writeOutput(output, errorsOutput, "cleanup run: %s status=%s eligible_at=%s\ncleanup worktree: %s\ncleanup branch: %s (local only; remote retained)\ncleanup container: run=%s\n", run.RunID, run.Status, run.EligibleAt.Format(time.RFC3339Nano), run.Worktree, run.Branch, run.WorkerRunID) {
+			return false
+		}
+		if len(run.Roles) > 0 && !writeOutput(output, errorsOutput, "cleanup worker roles: %s\n", strings.Join(run.Roles, ", ")) {
+			return false
+		}
+		for _, outputPath := range run.StoredOutputs {
+			if !writeOutput(output, errorsOutput, "cleanup stored output: %s\n", outputPath) {
+				return false
+			}
+		}
+		if len(run.StoredOutputs) == 0 && !writeOutput(output, errorsOutput, "cleanup stored output: none\n") {
+			return false
+		}
+	}
+	for _, skipped := range plan.Skipped {
+		if !writeOutput(output, errorsOutput, "cleanup skipped run: %s reason=%s\n", skipped.RunID, skipped.Reason) {
+			return false
+		}
+	}
+	return true
 }
 
 // writeOutput writes one successful command response and reports writer errors

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	commandlanguage "github.com/Stevie1704/sw-factory/internal/command"
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -675,6 +676,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 	next.MergeCommitSHA = ""
 	next.LifecycleReason = ""
 	next.LifecycleNotificationSent = false
+	next.TerminalAt = time.Time{}
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository:           repository,
 		Issue:                issue,

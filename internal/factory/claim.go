@@ -332,6 +332,15 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 	if next.Revision <= transition.Previous.Revision {
 		next.Revision = transition.Previous.Revision + 1
 	}
+	if store.IsTerminalStatus(next.Status) && !store.IsTerminalStatus(transition.Previous.Status) && next.TerminalAt.IsZero() {
+		next.TerminalAt = next.UpdatedAt
+		if next.TerminalAt.IsZero() {
+			next.TerminalAt = s.deps.Now().UTC()
+		}
+	}
+	if !store.IsTerminalStatus(next.Status) {
+		next.TerminalAt = time.Time{}
+	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		return s.applyJournaledStateTransition(ctx, runStore, transition, next)
 	}

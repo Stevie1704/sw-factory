@@ -184,6 +184,55 @@ func TestDockerRuntimeResumesThePinnedWorker(t *testing.T) {
 	}
 }
 
+// TestDockerRuntimeCleansRunResourcesWithoutCredentialStorage verifies that
+// destructive worker cleanup targets only the container and role-home volumes.
+func TestDockerRuntimeCleansRunResourcesWithoutCredentialStorage(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	root := t.TempDir()
+	invocationRoot := filepath.Join(root, ".factory-agents", "run-cleanup-contract", "invocation-1")
+	packetPath := filepath.Join(invocationRoot, "packet")
+	resultPath := filepath.Join(invocationRoot, "results")
+	for _, path := range []string{packetPath, resultPath} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runtime.Cleanup(context.Background(), worker.CleanupRequest{
+		RunID:         "run-cleanup-contract",
+		Roles:         []string{"implementation", "spec_review"},
+		StoredOutputs: []string{packetPath, resultPath},
+	}); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	for _, path := range []string{packetPath, resultPath, invocationRoot, filepath.Dir(invocationRoot)} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("cleanup path %q still exists after Cleanup(): err = %v", path, err)
+		}
+	}
+	lines := readStubLog(t, logPath)
+	if len(lines) != 3 {
+		t.Fatalf("Docker cleanup calls = %d, want container plus two role volumes; calls = %#v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "rm --force factory-worker-") {
+		t.Fatalf("container cleanup call = %q, want private worker removal", lines[0])
+	}
+	if !strings.Contains(lines[1], "volume rm factory-role-implementation-") || !strings.Contains(lines[2], "volume rm factory-role-spec_review-") {
+		t.Fatalf("role cleanup calls = %#v, want implementation and spec_review role volumes", lines[1:])
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "factory-auth") {
+			t.Fatalf("cleanup touched credential storage: %q", line)
+		}
+	}
+	if err := runtime.Cleanup(context.Background(), worker.CleanupRequest{RunID: "../unsafe"}); err == nil {
+		t.Fatal("Cleanup() accepted an unsafe run identifier")
+	}
+	if got := len(readStubLog(t, logPath)); got != len(lines) {
+		t.Fatalf("Docker calls after unsafe cleanup request = %d, want %d", got, len(lines))
+	}
+}
+
 // TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment verifies the
 // worker cannot start from a mutable image or execute with a host credential.
 func TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment(t *testing.T) {
@@ -379,6 +428,14 @@ case "$command_name" in
   rm)
     rm -f "$WORKER_DOCKER_STATE"
     printf 'stub-container\n'
+    ;;
+  volume)
+    if [ "${2:-}" = "rm" ]; then
+      printf 'stub-volume\n'
+    else
+      echo "unsupported docker volume command: $*" >&2
+      exit 2
+    fi
     ;;
   exec)
     case "$*" in
