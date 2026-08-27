@@ -38,6 +38,7 @@ func TestExternalEffectsReserveBeforeAndClearAfterFailure(t *testing.T) {
 		{name: "pull request creation", kind: store.PendingEffectKindPullRequest},
 		{name: "checkpoint commit", kind: store.PendingEffectKindCheckpoint},
 		{name: "worker launch", kind: store.PendingEffectKindWorkerLaunch},
+		{name: "harness resume", kind: store.PendingEffectKindHarnessResume},
 		{name: "result acceptance", kind: store.PendingEffectKindResultAcceptance},
 		{name: "clarification comment", kind: store.PendingEffectKindClarificationComment},
 	}
@@ -576,6 +577,117 @@ func TestResultAcceptanceEffectReplaysTheActualFinish(t *testing.T) {
 	}
 }
 
+// TestHarnessResumeEffectDoesNotDuplicateAfterResponseLoss verifies the
+// persisted resume reservation prevents a second native command after the
+// first native response is lost.
+func TestHarnessResumeEffectDoesNotDuplicateAfterResponseLoss(t *testing.T) {
+	ctx := context.Background()
+	opened, databasePath, run := openEffectMatrixStore(t, ctx)
+	invocation := store.Invocation{
+		ID: "inv-resume-effects", RunID: run.ID, Harness: harness.NameCodex, Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-resume-effects", Status: store.InvocationStatusActive, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &journalRecoveryHarness{nativeSessionID: invocation.NativeSessionID, failResumeOnce: true}
+	service := newEffectMatrixService(nil, nil, nil, nil)
+	request := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role, Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID}
+	if _, err := service.resumeHarnessWithEffect(ctx, opened, opened, "", runtime, invocation, request); err == nil {
+		t.Fatal("resumeHarnessWithEffect() = nil, want response-loss error")
+	}
+	if runtime.resumeCalls != 1 {
+		t.Fatalf("native resumes after first attempt = %d, want one", runtime.resumeCalls)
+	}
+	persisted, err := opened.Invocation(ctx, run.ID, invocation.ID)
+	if err != nil || persisted == nil || persisted.RecoveryResumeCount != 1 {
+		t.Fatalf("reserved invocation = %#v, error = %v; want resume count one", persisted, err)
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil || pending == nil || pending.Kind != store.PendingEffectKindHarnessResume {
+		t.Fatalf("pending harness resume = %#v, error = %v", pending, err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	restarted := newEffectMatrixService(nil, nil, nil, nil)
+	restarted.deps.Harness = runtime
+	if _, err := restarted.replayPendingHarnessResume(ctx, reopened, *pending); err != nil {
+		t.Fatalf("replayPendingHarnessResume() = %v", err)
+	}
+	if runtime.resumeCalls != 1 {
+		t.Fatalf("native resumes after replay = %d, want no duplicate", runtime.resumeCalls)
+	}
+	pending, err = reopened.PendingEffect(ctx, run.ID)
+	if err != nil || pending != nil {
+		t.Fatalf("pending harness resume after replay = %#v, error = %v; want cleared", pending, err)
+	}
+}
+
+// TestCommandProjectionEffectReplaysTheWatermarkAndComment verifies a
+// response lost after the command comment edit leaves a replayable watermark
+// and does not edit the same comment twice after restart.
+func TestCommandProjectionEffectReplaysTheWatermarkAndComment(t *testing.T) {
+	ctx := context.Background()
+	opened, databasePath, run := openEffectMatrixStore(t, ctx)
+	githubRuntime := &effectMatrixGitHub{
+		issue:         github.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+		failEditOnce:  true,
+	}
+	service := newEffectMatrixService(githubRuntime, nil, nil, nil)
+	repository := github.Repository{Owner: "example", Name: "project"}
+	previous := run
+	next := run
+	next.Revision++
+	next.ProcessedCommentID = "comment-command-effects"
+	next.ProcessedCommentRevision = next.Revision
+	next.LastCommandName = "answer"
+	next.LastCommandOutcome = string(CommandAccepted)
+	next.LastCommandMessage = "clarification accepted"
+	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
+	if _, err := service.persistCommandProjectionWithEffect(ctx, blocked, repository, previous, next); err == nil {
+		t.Fatal("persistCommandProjectionWithEffect() before reservation = nil, want reservation failure")
+	}
+	if githubRuntime.editCommentCalls != 0 {
+		t.Fatalf("comment edits before command reservation = %d, want zero", githubRuntime.editCommentCalls)
+	}
+	if _, err := service.persistCommandProjectionWithEffect(ctx, opened, repository, previous, next); err == nil {
+		t.Fatal("persistCommandProjectionWithEffect() = nil, want response-loss error")
+	}
+	if githubRuntime.editCommentCalls != 1 {
+		t.Fatalf("comment edits after first command attempt = %d, want one", githubRuntime.editCommentCalls)
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil || pending == nil || pending.Kind != store.PendingEffectKindStatusComment {
+		t.Fatalf("pending command projection = %#v, error = %v", pending, err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	restarted := newEffectMatrixService(githubRuntime, nil, nil, nil)
+	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+		t.Fatalf("replayPendingEffect() = %v", err)
+	}
+	if githubRuntime.editCommentCalls != 1 {
+		t.Fatalf("comment edits after command replay = %d, want no duplicate", githubRuntime.editCommentCalls)
+	}
+	current, err := reopened.CurrentRun(ctx)
+	if err != nil || current == nil || current.ProcessedCommentID != next.ProcessedCommentID || current.Revision != next.Revision {
+		t.Fatalf("persisted command projection = %#v, error = %v; want watermark revision %d", current, err, next.Revision)
+	}
+}
+
 // TestClarificationPublicationRecoversACommentAfterResponseLoss verifies the
 // marker lookup closes the create-to-persist gap without a second comment.
 func TestClarificationPublicationRecoversACommentAfterResponseLoss(t *testing.T) {
@@ -675,8 +787,10 @@ type effectMatrixGitHub struct {
 	statusComment      github.Comment
 	failLabelOnce      bool
 	failCommentOnce    bool
+	failEditOnce       bool
 	replaceLabelCalls  int
 	createCommentCalls int
+	editCommentCalls   int
 }
 
 // Issue returns the mutable issue projection used by effect replay.
@@ -721,8 +835,13 @@ func (g *effectMatrixGitHub) FindStatusComment(context.Context, github.Repositor
 
 // EditIssueComment updates the existing coordinator-owned comment.
 func (g *effectMatrixGitHub) EditIssueComment(_ context.Context, _ github.Repository, id, body string) error {
+	g.editCommentCalls++
 	g.statusComment.ID = id
 	g.statusComment.Body = body
+	if g.failEditOnce {
+		g.failEditOnce = false
+		return errors.New("GitHub comment edit response lost")
+	}
 	return nil
 }
 

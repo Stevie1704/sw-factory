@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -319,6 +320,7 @@ var _ terminal.WorkspaceInspector = (*journalRecoveryTerminal)(nil)
 type journalRecoveryHarness struct {
 	nativeSessionID string
 	resumeCalls     int
+	failResumeOnce  bool
 }
 
 // Capabilities reports Codex's native continuation support.
@@ -334,7 +336,12 @@ func (*journalRecoveryHarness) Start(context.Context, harness.StartRequest) (har
 // Resume counts one native continuation and returns its stable identity.
 func (h *journalRecoveryHarness) Resume(_ context.Context, request harness.StartRequest) (harness.Session, error) {
 	h.resumeCalls++
-	return harness.Session{InvocationID: request.InvocationID, NativeSessionID: h.nativeSessionID, Surface: request.Surface}, nil
+	session := harness.Session{InvocationID: request.InvocationID, NativeSessionID: h.nativeSessionID, Surface: request.Surface}
+	if h.failResumeOnce {
+		h.failResumeOnce = false
+		return session, errors.New("native resume response lost")
+	}
+	return session, nil
 }
 
 // Finish satisfies Runtime for the restart-only fixture.
