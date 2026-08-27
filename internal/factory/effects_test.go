@@ -406,6 +406,44 @@ func TestPullRequestEffectReplaysTheActualCreation(t *testing.T) {
 	}
 }
 
+// TestPullRequestReplayRejectsNewerPersistedRevisionBeforeMutation verifies a
+// response-loss replay refuses a stale run before inspecting or updating its PR.
+func TestPullRequestReplayRejectsNewerPersistedRevisionBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	pullRequests := &effectMatrixPullRequests{failCreateOnce: true}
+	service := newEffectMatrixService(nil, nil, nil, pullRequests)
+	repository := github.Repository{Owner: "example", Name: "project"}
+	previous := run
+	next := run
+	next.Revision++
+	request := github.PullRequestRequest{Title: "Factory PR", Body: "body", HeadBranch: run.Branch, BaseBranch: "main", Draft: true}
+	if _, _, err := service.upsertPullRequestAndPersistWithEffect(ctx, opened, pullRequests, repository, github.Issue{Number: run.IssueNumber}, previous, next, request, 0); err == nil {
+		t.Fatal("upsertPullRequestAndPersistWithEffect() = nil, want response-loss error")
+	}
+	if pullRequests.createCalls != 1 {
+		t.Fatalf("pull-request creations after first attempt = %d, want one", pullRequests.createCalls)
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil || pending == nil {
+		t.Fatalf("pending pull request = %#v, error = %v", pending, err)
+	}
+
+	newer := run
+	newer.Revision = next.Revision + 1
+	if err := opened.SaveRun(ctx, newer); err != nil {
+		t.Fatalf("persist newer run revision: %v", err)
+	}
+	pullRequests.existing.Body = "operator changed body"
+	if _, err := service.replayPendingEffect(ctx, opened, *pending); err == nil || !strings.Contains(err.Error(), "older than current revision") {
+		t.Fatalf("replayPendingEffect() error = %v, want newer-revision refusal", err)
+	}
+	if pullRequests.findCalls != 1 || pullRequests.updateCalls != 0 || pullRequests.createCalls != 1 {
+		t.Fatalf("pull-request effects after stale replay = finds=%d updates=%d creates=%d, want 1/0/1", pullRequests.findCalls, pullRequests.updateCalls, pullRequests.createCalls)
+	}
+}
+
 // TestCheckpointEffectReplaysTheActualCommit verifies the Git checkpoint
 // marker adapter returns the existing commit after a lost commit response.
 func TestCheckpointEffectReplaysTheActualCommit(t *testing.T) {
@@ -574,6 +612,59 @@ func TestResultAcceptanceEffectReplaysTheActualFinish(t *testing.T) {
 	}
 	if harnessRuntime.finishMutations != 1 || harnessRuntime.finishCalls != 2 {
 		t.Fatalf("harness finish calls/mutations after replay = %d/%d, want 2/1", harnessRuntime.finishCalls, harnessRuntime.finishMutations)
+	}
+}
+
+// TestResultAcceptanceReplayRejectsNewerPersistedRevisionBeforeSideEffects
+// verifies a response-loss replay refuses a stale run before reserving or
+// repeating harness finalization and worker shutdown.
+func TestResultAcceptanceReplayRejectsNewerPersistedRevisionBeforeSideEffects(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	harnessRuntime := &effectMatrixHarness{failFinishOnce: true}
+	workerRuntime := &effectMatrixWorker{started: true}
+	service := newEffectMatrixService(nil, nil, nil, nil)
+	service.deps.Harness = harnessRuntime
+	service.deps.Worker = workerRuntime
+	invocation := store.Invocation{
+		ID: "inv-stale-acceptance", RunID: run.ID, Harness: harness.NameCodex, Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-stale-acceptance", Status: store.InvocationStatusActive, CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	accepted := invocation
+	accepted.Status = store.InvocationStatusCompleted
+	previous := run
+	next := run
+	next.Revision++
+	session := harness.Session{InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID}
+	if _, _, err := service.acceptResultWithEffect(ctx, opened, opened, effectMatrixRegistration(), harnessRuntime, session, accepted, previous, next, true); err == nil {
+		t.Fatal("acceptResultWithEffect() = nil, want response-loss error")
+	}
+	if harnessRuntime.finishCalls != 1 || harnessRuntime.finishMutations != 1 || workerRuntime.stopCalls != 0 {
+		t.Fatalf("first result acceptance effects = finishes=%d/%d stops=%d, want 1/1/0", harnessRuntime.finishCalls, harnessRuntime.finishMutations, workerRuntime.stopCalls)
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil || pending == nil {
+		t.Fatalf("pending result acceptance = %#v, error = %v", pending, err)
+	}
+
+	newer := run
+	newer.Revision = next.Revision + 1
+	if err := opened.SaveRun(ctx, newer); err != nil {
+		t.Fatalf("persist newer run revision: %v", err)
+	}
+	if _, err := service.replayPendingEffect(ctx, opened, *pending); err == nil || !strings.Contains(err.Error(), "older than current revision") {
+		t.Fatalf("replayPendingEffect() error = %v, want newer-revision refusal", err)
+	}
+	if harnessRuntime.finishCalls != 1 || harnessRuntime.finishMutations != 1 || workerRuntime.stopCalls != 0 {
+		t.Fatalf("stale result acceptance effects = finishes=%d/%d stops=%d, want unchanged 1/1/0", harnessRuntime.finishCalls, harnessRuntime.finishMutations, workerRuntime.stopCalls)
+	}
+	persisted, err := opened.Invocation(ctx, run.ID, invocation.ID)
+	if err != nil || persisted == nil || persisted.Status != store.InvocationStatusCompleted {
+		t.Fatalf("persisted invocation after stale replay = %#v, error = %v; want original terminal reservation", persisted, err)
 	}
 }
 
@@ -878,11 +969,14 @@ var _ github.CommitStatusReader = (*effectMatrixCommitStatus)(nil)
 type effectMatrixPullRequests struct {
 	existing       github.PullRequest
 	failCreateOnce bool
+	findCalls      int
 	createCalls    int
+	updateCalls    int
 }
 
 // FindPullRequest returns the PR created by the first attempt, if any.
 func (p *effectMatrixPullRequests) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
+	p.findCalls++
 	return p.existing, nil
 }
 
@@ -899,6 +993,7 @@ func (p *effectMatrixPullRequests) CreatePullRequest(_ context.Context, _ github
 
 // UpdatePullRequest satisfies the pull-request seam for this creation test.
 func (p *effectMatrixPullRequests) UpdatePullRequest(_ context.Context, _ github.Repository, _ int, request github.PullRequestRequest) (github.PullRequest, error) {
+	p.updateCalls++
 	p.existing.Title = request.Title
 	p.existing.Body = request.Body
 	p.existing.Draft = request.Draft
@@ -979,6 +1074,7 @@ type effectMatrixWorker struct {
 	started        bool
 	failStartOnce  bool
 	startMutations int
+	stopCalls      int
 }
 
 // Start creates one worker and reuses it on replay.
@@ -1004,7 +1100,10 @@ func (*effectMatrixWorker) RunCommand(context.Context, worker.CommandRequest) (w
 }
 
 // Stop satisfies the worker seam for effect tests.
-func (*effectMatrixWorker) Stop(context.Context, string) error { return nil }
+func (w *effectMatrixWorker) Stop(context.Context, string) error {
+	w.stopCalls++
+	return nil
+}
 
 // Inspect returns the current worker projection.
 func (w *effectMatrixWorker) Inspect(context.Context, string) (worker.Inspection, error) {

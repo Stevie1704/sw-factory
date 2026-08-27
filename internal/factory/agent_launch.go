@@ -480,6 +480,9 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		return "", fmt.Errorf("decode persisted invocation packet: %w", err)
 	}
+	if persisted.SchemaVersion != invocationPacketVersion {
+		return "", fmt.Errorf("unsupported persisted invocation packet schema version %d", persisted.SchemaVersion)
+	}
 	if persisted.InvocationID != invocation.ID || persisted.RunID != run.ID {
 		return "", errors.New("persisted invocation packet identity does not match the run")
 	}

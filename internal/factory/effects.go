@@ -947,6 +947,20 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
+	currentRun, err := readReconciliationRun(ctx, runStore)
+	if err != nil {
+		return store.Run{}, fmt.Errorf("read run during result acceptance replay: %w", err)
+	}
+	next := payload.Next
+	if currentRun != nil && currentRun.ID != effect.RunID {
+		return store.Run{}, workflowProjectionFailuref("result acceptance replay belongs to run %q, current run is %q", effect.RunID, currentRun.ID)
+	}
+	if currentRun != nil && currentRun.Revision > next.Revision {
+		return store.Run{}, workflowProjectionFailuref("result acceptance revision %d is older than current revision %d", next.Revision, currentRun.Revision)
+	}
+	if currentRun != nil && currentRun.Revision < next.Revision && currentRun.Revision != payload.Previous.Revision {
+		return store.Run{}, workflowProjectionFailuref("result acceptance replay expected revision %d, found %d", payload.Previous.Revision, currentRun.Revision)
+	}
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
 		return store.Run{}, errors.New("operational store does not support result acceptance replay")
@@ -981,20 +995,6 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 		if err := s.stopRunWorker(ctx, effect.RunID); err != nil {
 			return store.Run{}, err
 		}
-	}
-	currentRun, err := readReconciliationRun(ctx, runStore)
-	if err != nil {
-		return store.Run{}, fmt.Errorf("read run during result acceptance replay: %w", err)
-	}
-	next := payload.Next
-	if currentRun != nil && currentRun.ID != effect.RunID {
-		return store.Run{}, workflowProjectionFailuref("result acceptance replay belongs to run %q, current run is %q", effect.RunID, currentRun.ID)
-	}
-	if currentRun != nil && currentRun.Revision > next.Revision {
-		return store.Run{}, workflowProjectionFailuref("result acceptance revision %d is older than current revision %d", next.Revision, currentRun.Revision)
-	}
-	if currentRun != nil && currentRun.Revision < next.Revision && currentRun.Revision != payload.Previous.Revision {
-		return store.Run{}, workflowProjectionFailuref("result acceptance replay expected revision %d, found %d", payload.Previous.Revision, currentRun.Revision)
 	}
 	if currentRun != nil && currentRun.Revision == next.Revision && currentRun.StatusCommentID != "" {
 		next.StatusCommentID = currentRun.StatusCommentID
@@ -1135,6 +1135,25 @@ func (s *Service) replayPendingPullRequest(ctx context.Context, runStore RunStor
 	if client == nil {
 		return store.Run{}, errors.New("pull-request client is required to replay draft pull request")
 	}
+	var current *store.Run
+	if payload.PersistRun {
+		var currentErr error
+		current, currentErr = readReconciliationRun(ctx, runStore)
+		if currentErr != nil {
+			return store.Run{}, fmt.Errorf("read run during pull-request replay: %w", currentErr)
+		}
+		if current != nil {
+			if current.ID != effect.RunID {
+				return store.Run{}, workflowProjectionFailuref("pull-request replay belongs to run %q, current run is %q", effect.RunID, current.ID)
+			}
+			if current.Revision > payload.Next.Revision {
+				return store.Run{}, workflowProjectionFailuref("pull-request replay revision %d is older than current revision %d", payload.Next.Revision, current.Revision)
+			}
+			if current.Revision < payload.Next.Revision && current.Revision != payload.Previous.Revision {
+				return store.Run{}, workflowProjectionFailuref("pull-request replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
+			}
+		}
+	}
 	pullRequest, err := s.upsertPullRequestRequest(ctx, client, payload.Repository, payload.Number, payload.Request)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("replay draft pull request: %w", err)
@@ -1153,21 +1172,6 @@ func (s *Service) replayPendingPullRequest(ctx context.Context, runStore RunStor
 			return store.Run{}, fmt.Errorf("run %q disappeared during draft pull-request update replay", effect.RunID)
 		}
 		return *run, nil
-	}
-	current, currentErr := readReconciliationRun(ctx, runStore)
-	if currentErr != nil {
-		return store.Run{}, fmt.Errorf("read run during pull-request replay: %w", currentErr)
-	}
-	if current != nil {
-		if current.ID != effect.RunID {
-			return store.Run{}, workflowProjectionFailuref("pull-request replay belongs to run %q, current run is %q", effect.RunID, current.ID)
-		}
-		if current.Revision > payload.Next.Revision {
-			return store.Run{}, workflowProjectionFailuref("pull-request replay revision %d is older than current revision %d", payload.Next.Revision, current.Revision)
-		}
-		if current.Revision < payload.Next.Revision && current.Revision != payload.Previous.Revision {
-			return store.Run{}, workflowProjectionFailuref("pull-request replay expected revision %d, found %d", payload.Previous.Revision, current.Revision)
-		}
 	}
 	next := payload.Next
 	next.PullRequestNumber = pullRequest.Number
