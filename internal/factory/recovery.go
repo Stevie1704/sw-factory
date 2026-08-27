@@ -45,6 +45,9 @@ const (
 	// RecoveryOutcomeWaitingForHuman means reconciliation paused the run because
 	// a disagreement could not be resolved safely.
 	RecoveryOutcomeWaitingForHuman RecoveryOutcome = "waiting_for_human"
+	// RecoveryOutcomeWaitingForHarness means the harness reported temporary
+	// capacity pressure and the run remains eligible for an automatic retry.
+	RecoveryOutcomeWaitingForHarness RecoveryOutcome = "waiting_for_harness"
 )
 
 // RecoveryDiscrepancy describes one observed disagreement between persisted
@@ -60,6 +63,9 @@ type RecoveryDiscrepancy struct {
 	Expected string
 	// Observed is the value read from the external projection.
 	Observed string
+	// Recoverable marks an infrastructure loss that the coordinator may repair
+	// from the persisted run identity, such as a stopped or missing worker.
+	Recoverable bool
 }
 
 // RecoveryDiagnosis is the result of a read-only comparison of an interrupted
@@ -80,6 +86,9 @@ type RecoveryDiagnosis struct {
 	SafeActions []string
 	// PendingEffect is the effect that was present when diagnosis ran, if any.
 	PendingEffect *store.PendingEffect
+	// Recoverable reports that all discrepancies are coordinator-repairable.
+	// It is informational; reconciliation still records every discrepancy.
+	Recoverable bool
 }
 
 // RecoveryResult contains the durable run after an explicit reconciliation
@@ -240,7 +249,8 @@ func (s *Service) diagnoseInterruptedRunWithStore(ctx context.Context, registrat
 	inspectGitHubProjection(ctx, &diagnosis, s.deps.GitHub, s.pullRequestClient(), repository, run)
 	inspectRemoteBranchProjection(ctx, &diagnosis, s.gitWorkspace(), run)
 	s.inspectInvocationProjection(ctx, &diagnosis, registration, runStore, run)
-	diagnosis.SourcesAgree = len(diagnosis.Discrepancies) == 0
+	diagnosis.SourcesAgree = recoverySourcesAgree(diagnosis)
+	diagnosis.Recoverable = len(diagnosis.Discrepancies) > 0 && diagnosis.SourcesAgree
 	return diagnosis
 }
 
@@ -402,6 +412,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 		})
 		return
 	}
+	workerProjectionLost := false
 	workerInspection, inspectErr := s.deps.Worker.Inspect(ctx, run.ID)
 	if inspectErr != nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
@@ -413,21 +424,29 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 		})
 	} else {
 		if !workerInspection.Exists {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyInfrastructure,
-				Source:   "worker",
-				Field:    "existence",
-				Expected: "persisted worker",
-				Observed: "missing",
-			})
+			workerProjectionLost = hasNativeSession && active.Status == store.InvocationStatusActive
+			if !workerProjectionExpectedStopped(run, *active) {
+				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+					Kind:        RecoveryDiscrepancyInfrastructure,
+					Source:      "worker",
+					Field:       "existence",
+					Expected:    "persisted worker",
+					Observed:    "missing",
+					Recoverable: workerProjectionLost,
+				})
+			}
 		} else if !workerInspection.Running {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyInfrastructure,
-				Source:   "worker",
-				Field:    "lifecycle",
-				Expected: "running",
-				Observed: "stopped",
-			})
+			workerProjectionLost = hasNativeSession && active.Status == store.InvocationStatusActive
+			if !workerProjectionExpectedStopped(run, *active) {
+				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+					Kind:        RecoveryDiscrepancyInfrastructure,
+					Source:      "worker",
+					Field:       "lifecycle",
+					Expected:    "running",
+					Observed:    "stopped",
+					Recoverable: workerProjectionLost,
+				})
+			}
 		} else {
 			packet, packetErr := decodeSpecificationPacket(run.SpecificationPacket)
 			if packetErr != nil {
@@ -517,11 +536,12 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 		observed, providerErr := inspector.NativeSessionID(ctx, harness.NativeSessionRequest{RunID: run.ID, Harness: active.Harness})
 		if providerErr != nil {
 			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyInfrastructure,
-				Source:   "native session",
-				Field:    "identity",
-				Expected: active.NativeSessionID,
-				Observed: providerErr.Error(),
+				Kind:        RecoveryDiscrepancyInfrastructure,
+				Source:      "native session",
+				Field:       "identity",
+				Expected:    active.NativeSessionID,
+				Observed:    providerErr.Error(),
+				Recoverable: workerProjectionLost,
 			})
 		} else if observed != active.NativeSessionID {
 			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
@@ -543,12 +563,35 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 	}
 }
 
+// workerProjectionExpectedStopped reports the workflow states whose terminal
+// invocation intentionally leaves the worker stopped, such as readiness or a
+// human-waiting review/clarification boundary.
+func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation) bool {
+	if invocation.Status == store.InvocationStatusActive {
+		return false
+	}
+	return run.Stage == store.StageReady || run.Status == store.StatusWaitingForHuman
+}
+
+// hasRecoverableInvocationLoss reports whether a previously consumed automatic
+// resume now has a worker or terminal projection that can be rebuilt from the
+// durable invocation identity, but must still be escalated before resuming.
+func hasRecoverableInvocationLoss(diagnosis RecoveryDiagnosis) bool {
+	for _, discrepancy := range diagnosis.Discrepancies {
+		if discrepancy.Recoverable && (discrepancy.Source == "worker" || discrepancy.Source == "cmux") {
+			return true
+		}
+	}
+	return false
+}
+
 // inspectTerminalProjection compares every persisted non-empty cmux handle
 // with the current read-only topology.
 func inspectTerminalProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, inspector terminal.WorkspaceInspector, invocation store.Invocation) {
+	recoverable := invocation.Status == store.InvocationStatusActive && strings.TrimSpace(invocation.NativeSessionID) != ""
 	workspaceID := terminal.WorkspaceID(invocation.WorkspaceID)
 	if workspaceID == "" {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "workspace", Expected: "persisted workspace identity", Observed: "empty"})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "workspace", Expected: "persisted workspace identity", Observed: "empty", Recoverable: recoverable})
 		return
 	}
 	observed, err := inspector.InspectWorkspace(ctx, workspaceID)
@@ -557,7 +600,7 @@ func inspectTerminalProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 		return
 	}
 	if !observed.Exists {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "workspace", Expected: string(workspaceID), Observed: "missing"})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "workspace", Expected: string(workspaceID), Observed: "missing", Recoverable: recoverable})
 		return
 	}
 	if observed.WorkspaceID != "" && observed.WorkspaceID != workspaceID {
@@ -582,7 +625,7 @@ func inspectTerminalProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 			continue
 		}
 		if _, exists := observedIDs[expected.id]; !exists {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: expected.name + " surface", Expected: expected.id, Observed: "missing"})
+			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: expected.name + " surface", Expected: expected.id, Observed: "missing", Recoverable: recoverable})
 			continue
 		}
 		if surface := observedSurfaces[expected.id]; surface.WorkspaceID != "" && surface.WorkspaceID != workspaceID {
@@ -783,12 +826,95 @@ func (s *Service) reconcileInterruptedRun(ctx context.Context, registration conf
 			return paused, resumeDiagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: resumeDiagnosis}
 		}
 	}
+	if run.Status == store.StatusWaitingForHarness {
+		// Capacity waiting is an intentional coordinator state. Its active
+		// invocation may have no native identity yet, so ordinary interrupted
+		// projection checks would incorrectly turn a retryable wait into a human
+		// discrepancy.
+		return run, waitingForHarnessDiagnosis(run.ID), RecoveryOutcomeWaitingForHarness, nil
+	}
 	if store.IsTerminalStatus(run.Status) {
 		return run, reconciledRecoveryDiagnosis(run.ID), RecoveryOutcomeReconciled, nil
 	}
 	diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
 	if pending, err := journal.PendingEffect(ctx, run.ID); err == nil {
 		diagnosis.PendingEffect = pending
+	}
+	if diagnosis.SourcesAgree && run.Status == store.StatusActive {
+		activeStore, activeStoreOK := runStore.(ActiveInvocationStore)
+		if activeStoreOK {
+			active, activeErr := activeStore.ActiveInvocation(ctx, run.ID)
+			if activeErr != nil {
+				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyInfrastructure,
+					Source:   "operational store",
+					Field:    "active invocation",
+					Expected: "read active invocation before automatic recovery",
+					Observed: activeErr.Error(),
+				})
+				diagnosis.SourcesAgree = false
+			} else if active != nil && !s.invocationStartedHere(active.ID) && active.Status == store.InvocationStatusActive && !active.AttachRequired && strings.TrimSpace(active.NativeSessionID) != "" {
+				if active.RecoveryResumeCount > 0 && hasRecoverableInvocationLoss(diagnosis) {
+					if _, repairErr := s.ensureWorkerForInvocation(ctx, registration, runStore, run, *active); repairErr != nil {
+						addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+							Kind:     RecoveryDiscrepancyInfrastructure,
+							Source:   "worker",
+							Field:    "recreation after automatic recovery",
+							Expected: "worker recreated from the frozen invocation request",
+							Observed: repairErr.Error(),
+						})
+						diagnosis.SourcesAgree = false
+					} else {
+						paused, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
+						if pauseErr != nil {
+							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, pauseErr
+						}
+						return paused, diagnosis, RecoveryOutcomeWaitingForHuman, harness.NewUnexpectedExitError(active.Harness)
+					}
+				}
+				if diagnosis.SourcesAgree && active.RecoveryResumeCount == 0 {
+					_, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, run, *active)
+					if resumeErr != nil {
+						classified := harness.ClassifyError(resumeErr, active.Harness)
+						if harness.IsRateLimited(classified) {
+							paused, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
+							if waitErr != nil {
+								return paused, diagnosis, RecoveryOutcomeWaitingForHarness, errors.Join(classified, waitErr)
+							}
+							return paused, diagnosis, RecoveryOutcomeWaitingForHarness, nil
+						}
+						if harness.IsAuthenticationExpired(classified) {
+							paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
+							if pauseErr != nil {
+								return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
+							}
+							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, classified
+						}
+						if harness.IsUnexpectedExit(classified) {
+							paused, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, classified)
+							if pauseErr != nil {
+								return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
+							}
+							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, classified
+						}
+						observed := resumeErr.Error()
+						addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+							Kind:     RecoveryDiscrepancyInfrastructure,
+							Source:   "harness",
+							Field:    "native session resume",
+							Expected: "resume persisted session exactly once",
+							Observed: observed,
+						})
+						diagnosis.SourcesAgree = false
+						paused, pauseErr := s.pauseForRecovery(ctx, registration, runStore, run, diagnosis)
+						if pauseErr != nil {
+							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
+						}
+						return paused, diagnosis, RecoveryOutcomeWaitingForHuman, classified
+					}
+				}
+			}
+		}
 	}
 	if diagnosis.SourcesAgree {
 		updated, repairErr := s.completePendingCheckRepair(ctx, registration, runStore, run)
@@ -837,7 +963,21 @@ func harnessResumeWasAlreadyReserved(ctx context.Context, runStore RunStore, eff
 		return false
 	}
 	invocation, err := invocationStore.Invocation(ctx, effect.RunID, payload.Invocation.ID)
-	return err == nil && invocation != nil && invocation.RecoveryResumeCount >= payload.TargetResumeCount
+	if err != nil || invocation == nil {
+		return false
+	}
+	if payload.Manual {
+		return invocation.AttachRequired
+	}
+	return invocation.RecoveryResumeCount >= payload.TargetResumeCount
+}
+
+// waitingForHarnessDiagnosis describes an intentional capacity wait without
+// manufacturing an infrastructure discrepancy from an absent native session.
+func waitingForHarnessDiagnosis(runID string) RecoveryDiagnosis {
+	diagnosis := newRecoveryDiagnosis(runID)
+	diagnosis.SourcesAgree = true
+	return diagnosis
 }
 
 // completePendingCheckRepair closes the durable check-repair reservation once
@@ -1210,6 +1350,18 @@ func addRecoveryDiscrepancy(diagnosis *RecoveryDiagnosis, discrepancy RecoveryDi
 		}
 	}
 	diagnosis.Discrepancies = append(diagnosis.Discrepancies, discrepancy)
+}
+
+// recoverySourcesAgree reports whether every observed discrepancy is within
+// the coordinator's deterministic repair boundary. Recoverable losses remain
+// visible in the diagnosis but do not force an operator pause.
+func recoverySourcesAgree(diagnosis RecoveryDiagnosis) bool {
+	for _, discrepancy := range diagnosis.Discrepancies {
+		if !discrepancy.Recoverable {
+			return false
+		}
+	}
+	return true
 }
 
 // hasWorkflowDiscrepancy reports whether reconciliation found deterministic

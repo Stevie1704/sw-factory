@@ -66,6 +66,9 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if request.RunID != "" && request.RunID != run.ID {
 		return DraftPullRequestResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
+	if err := s.ensureInvocationAttached(ctx, runStore, *run); err != nil {
+		return DraftPullRequestResult{}, err
+	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
 		return DraftPullRequestResult{}, err

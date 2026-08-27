@@ -49,6 +49,9 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, fmt.Errorf("look up active visible invocation: %w", lookupErr)
 		}
 		if active != nil {
+			if active.AttachRequired {
+				return AgentLaunchResult{}, fmt.Errorf("run %q has a manually resumed invocation that requires `factory attach`", run.ID)
+			}
 			if !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount > 0 {
 				s.markInvocationStarted(active.ID)
 				return AgentLaunchResult{Invocation: *active}, nil
@@ -187,9 +190,10 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	invocationPersisted := false
 	workerStarted := false
+	preserveInvocation := false
 	cleanupSurface := terminal.Surface{}
 	defer func() {
-		if returnErr == nil || !invocationPersisted {
+		if returnErr == nil || !invocationPersisted || preserveInvocation {
 			return
 		}
 		if journal, journaled := runStore.(PendingEffectStore); journaled {
@@ -314,7 +318,85 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		ReasoningEffort: policy.ReasoningEffort,
 	})
 	if err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("launch %s %s agent: %w", policy.Harness, role, err)
+		classified := harness.ClassifyError(err, string(policy.Harness))
+		if harness.IsRateLimited(classified) {
+			preserveInvocation = true
+			invocation.Status = store.InvocationStatusSuperseded
+			invocation.UpdatedAt = s.deps.Now().UTC()
+			if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
+				return AgentLaunchResult{}, fmt.Errorf("persist rate-limited invocation: %w", saveErr)
+			}
+			if _, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, *run, string(policy.Harness)); waitErr != nil {
+				return AgentLaunchResult{Invocation: invocation}, errors.Join(classified, waitErr)
+			}
+			return AgentLaunchResult{Invocation: invocation}, classified
+		}
+		if harness.IsAuthenticationExpired(classified) {
+			preserveInvocation = true
+			if session.NativeSessionID == "" {
+				invocation.Status = store.InvocationStatusSuperseded
+			} else {
+				invocation.NativeSessionID = session.NativeSessionID
+			}
+			invocation.UpdatedAt = s.deps.Now().UTC()
+			if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
+				return AgentLaunchResult{}, fmt.Errorf("persist authentication failure state: %w", saveErr)
+			}
+			if _, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, string(policy.Harness)); pauseErr != nil {
+				return AgentLaunchResult{Invocation: invocation}, errors.Join(classified, pauseErr)
+			}
+			return AgentLaunchResult{Invocation: invocation}, classified
+		}
+		if harness.IsUnexpectedExit(classified) && session.NativeSessionID != "" {
+			preserveInvocation = true
+			invocation.NativeSessionID = session.NativeSessionID
+			invocation.UpdatedAt = s.deps.Now().UTC()
+			if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
+				return AgentLaunchResult{}, fmt.Errorf("persist unexpected harness exit state: %w", saveErr)
+			}
+			resumed, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, *run, invocation)
+			if resumeErr == nil {
+				previousRun := *run
+				run.Stage = stage
+				run.Status = store.StatusActive
+				run.UpdatedAt = s.deps.Now().UTC()
+				if stateErr := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); stateErr != nil {
+					return AgentLaunchResult{Invocation: resumed}, stateErr
+				}
+				s.markInvocationStarted(resumed.ID)
+				return AgentLaunchResult{Invocation: resumed, Prompt: promptText}, nil
+			}
+			resumeClassified := classifyHarnessRuntimeErrorForInvocation(invocation, resumeErr)
+			if harness.IsRateLimited(resumeClassified) {
+				if _, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, *run, string(policy.Harness)); waitErr != nil {
+					return AgentLaunchResult{Invocation: resumed}, errors.Join(resumeClassified, waitErr)
+				}
+				return AgentLaunchResult{Invocation: resumed}, resumeClassified
+			}
+			if harness.IsAuthenticationExpired(resumeClassified) {
+				if _, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, string(policy.Harness)); pauseErr != nil {
+					return AgentLaunchResult{Invocation: resumed}, errors.Join(resumeClassified, pauseErr)
+				}
+				return AgentLaunchResult{Invocation: resumed}, resumeClassified
+			}
+			if _, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, *run, string(policy.Harness), classified); pauseErr != nil {
+				return AgentLaunchResult{Invocation: resumed}, errors.Join(classified, pauseErr)
+			}
+			return AgentLaunchResult{Invocation: resumed}, classified
+		}
+		if harness.IsUnexpectedExit(classified) {
+			preserveInvocation = true
+			invocation.Status = store.InvocationStatusSuperseded
+			invocation.UpdatedAt = s.deps.Now().UTC()
+			if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
+				return AgentLaunchResult{}, fmt.Errorf("persist unresumable harness exit state: %w", saveErr)
+			}
+			if _, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, *run, string(policy.Harness), classified); pauseErr != nil {
+				return AgentLaunchResult{Invocation: invocation}, errors.Join(classified, pauseErr)
+			}
+			return AgentLaunchResult{Invocation: invocation}, classified
+		}
+		return AgentLaunchResult{}, fmt.Errorf("launch %s %s agent: %w", policy.Harness, role, classified)
 	}
 	if session.NativeSessionID != "" {
 		invocation.NativeSessionID = session.NativeSessionID
@@ -346,8 +428,24 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 // resumePersistedInvocation restores one active invocation after a coordinator
 // restart. It reuses the persisted worker, workspace, surface, harness, and
 // native session identity; it never creates a second invocation for the run.
+// The worker is stopped before reattachment so a cmux restart cannot leave an
+// orphaned harness process alongside the resumed native session; its worktree
+// and role volumes remain intact.
 func (s *Service) resumePersistedInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (store.Invocation, error) {
-	if invocation.RecoveryResumeCount > 0 {
+	return s.resumePersistedInvocationWithMode(ctx, registration, runStore, run, invocation, true)
+}
+
+// resumePersistedInvocationManually performs an operator-requested native
+// resume. Manual recovery is allowed after the one automatic attempt, but it
+// records that the resulting session must be attached before progression.
+func (s *Service) resumePersistedInvocationManually(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (store.Invocation, error) {
+	return s.resumePersistedInvocationWithMode(ctx, registration, runStore, run, invocation, false)
+}
+
+// resumePersistedInvocationWithMode restores one invocation through either the
+// bounded automatic recovery path or the explicit operator path.
+func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation, automatic bool) (store.Invocation, error) {
+	if automatic && invocation.RecoveryResumeCount > 0 {
 		return invocation, nil
 	}
 	invocationStore, ok := runStore.(InvocationStore)
@@ -356,6 +454,9 @@ func (s *Service) resumePersistedInvocation(ctx context.Context, registration co
 	}
 	if strings.TrimSpace(invocation.NativeSessionID) == "" {
 		return invocation, errors.New("active invocation has no persisted native session identifier")
+	}
+	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		return invocation, err
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
@@ -376,75 +477,18 @@ func (s *Service) resumePersistedInvocation(ctx context.Context, registration co
 	if err != nil {
 		return invocation, err
 	}
-	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
+	if _, err := s.ensureWorkerForInvocation(ctx, registration, runStore, run, invocation); err != nil {
+		return invocation, err
+	}
+	workspaceID, implementationSurface, statusSurface, checksSurface, restored, err := s.restoreInvocationTerminal(ctx, terminalRuntime, run, invocation)
 	if err != nil {
-		return invocation, fmt.Errorf("prepare recovery Git metadata: %w", err)
+		return invocation, err
 	}
-	workerRequest := worker.StartRequest{
-		RunID:             run.ID,
-		WorktreePath:      run.Worktree,
-		GitMetadataPath:   gitMetadataPath,
-		Image:             packet.RepositoryConfig.WorkerBuild.Image,
-		ImageDigest:       run.ImageDigest,
-		Caches:            workerCaches(packet.RepositoryConfig.Caches),
-		InvocationPath:    invocation.InvocationDirectory,
-		ResultPath:        invocation.ResultDirectory,
-		CredentialStoreID: invocation.CredentialStoreID,
-		Role:              invocation.Role,
-	}
-	if s.deps.Worker == nil {
-		return invocation, errors.New("worker runtime is required for invocation recovery")
-	}
-	inspection, err := s.deps.Worker.Inspect(ctx, run.ID)
-	if err != nil {
-		return invocation, fmt.Errorf("inspect worker for invocation recovery: %w", err)
-	}
-	if inspection.Exists {
-		if !workerImageMatches(inspection.Image, workerRequest.Image, workerRequest.ImageDigest) {
-			return invocation, fmt.Errorf("persisted worker image %q does not match frozen image %q@%s", inspection.Image, workerRequest.Image, workerRequest.ImageDigest)
-		}
-		if inspection.Running {
-			known, matches := inspection.MountContractStatus(workerRequest)
-			if !known {
-				return invocation, errors.New("persisted running worker does not expose mount contract identity")
-			}
-			if !matches {
-				return invocation, errors.New("persisted running worker mount contract does not match the invocation")
-			}
-		}
-	}
-	if !inspection.Exists || !inspection.Running {
-		if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {
-			return invocation, fmt.Errorf("start missing worker during invocation recovery: %w", err)
-		}
-	}
-	workspaceID := terminal.WorkspaceID(invocation.WorkspaceID)
-	implementationSurface := terminal.Surface{
-		ID:          terminal.SurfaceID(invocation.ImplementationSurfaceID),
-		WorkspaceID: workspaceID,
-		Name:        invocation.Role,
-	}
-	if workspaceID == "" || implementationSurface.ID == "" {
-		runWorkspace, workspaceErr := terminalRuntime.EnsureRunWorkspace(ctx, terminal.RunWorkspaceRequest{
-			RunID:            run.ID,
-			Name:             "factory-" + run.ID,
-			Description:      fmt.Sprintf("factory run for issue #%d", run.IssueNumber),
-			WorkingDirectory: run.Worktree,
-		})
-		if workspaceErr != nil {
-			return invocation, fmt.Errorf("restore run terminal workspace: %w", workspaceErr)
-		}
-		workspaceID = runWorkspace.ID
-		implementationSurface = runWorkspace.Implementation
-		if invocation.Role == "test" {
-			implementationSurface = runWorkspace.Checks
-		} else if invocation.Role == "spec_review" {
-			implementationSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: "spec-review"}
-		}
-		invocation.WorkspaceID = string(runWorkspace.ID)
-		invocation.StatusSurfaceID = string(runWorkspace.Status.ID)
+	if restored {
+		invocation.WorkspaceID = string(workspaceID)
+		invocation.StatusSurfaceID = string(statusSurface.ID)
 		invocation.ImplementationSurfaceID = string(implementationSurface.ID)
-		invocation.ChecksSurfaceID = string(runWorkspace.Checks.ID)
+		invocation.ChecksSurfaceID = string(checksSurface.ID)
 		if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 			return invocation, fmt.Errorf("persist restored terminal handles: %w", err)
 		}
@@ -462,7 +506,12 @@ func (s *Service) resumePersistedInvocation(ctx context.Context, registration co
 		ReasoningEffort: invocation.ReasoningEffort,
 		ResumeSessionID: invocation.NativeSessionID,
 	}
-	updated, err := s.resumeHarnessWithEffect(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	var updated store.Invocation
+	if automatic {
+		updated, err = s.resumeHarnessWithEffect(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	} else {
+		updated, err = s.resumeHarnessManuallyWithEffect(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	}
 	if err != nil {
 		return updated, err
 	}

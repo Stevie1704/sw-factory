@@ -129,6 +129,9 @@ type harnessResumeEffectPayload struct {
 	Request           harness.StartRequest
 	Invocation        store.Invocation
 	TargetResumeCount int
+	// Manual marks an operator-requested resume. It does not consume the
+	// automatic recovery ceiling and requires a later explicit attach.
+	Manual bool
 }
 
 // resultAcceptanceEffectPayload is the complete durable intent for accepting
@@ -645,7 +648,7 @@ func (s *Service) resumeHarnessWithEffect(ctx context.Context, runStore RunStore
 		// the native command followed by invocation persistence.
 		session, err := runtime.Resume(ctx, request)
 		if err != nil {
-			return invocation, fmt.Errorf("resume native harness session: %w", err)
+			return invocation, fmt.Errorf("resume native harness session: %w", classifyHarnessRuntimeError(runtime, err))
 		}
 		updated := reserved
 		if session.NativeSessionID != "" {
@@ -666,6 +669,7 @@ func (s *Service) resumeHarnessWithEffect(ctx context.Context, runStore RunStore
 		return invocation, err
 	}
 	updated := invocation
+	var waitingFailure error
 	apply := func() error {
 		if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
 			return fmt.Errorf("reserve native session resume: %w", err)
@@ -673,7 +677,19 @@ func (s *Service) resumeHarnessWithEffect(ctx context.Context, runStore RunStore
 		updated = reserved
 		session, err := runtime.Resume(ctx, request)
 		if err != nil {
-			return fmt.Errorf("resume native harness session: %w", err)
+			classified := classifyHarnessRuntimeError(runtime, err)
+			if harness.IsRateLimited(classified) || harness.IsAuthenticationExpired(classified) {
+				// Capacity and expired-auth failures happen before a native
+				// continuation boundary. Roll the reservation back and clear the
+				// effect so the same invocation remains retryable.
+				if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
+					return fmt.Errorf("rollback native session resume after %s: %w", classified, saveErr)
+				}
+				updated = invocation
+				waitingFailure = classified
+				return nil
+			}
+			return fmt.Errorf("resume native harness session: %w", classified)
 		}
 		if session.NativeSessionID != "" {
 			updated.NativeSessionID = session.NativeSessionID
@@ -690,7 +706,101 @@ func (s *Service) resumeHarnessWithEffect(ctx context.Context, runStore RunStore
 		// the one-resume ceiling even when the journal or native adapter fails.
 		return reserved, err
 	}
+	if waitingFailure != nil {
+		return invocation, waitingFailure
+	}
 	return updated, nil
+}
+
+// resumeHarnessManuallyWithEffect performs an explicit operator resume. The
+// native command is journaled, but the automatic recovery counter is left
+// unchanged because manual intervention is outside that bounded policy.
+func (s *Service) resumeHarnessManuallyWithEffect(ctx context.Context, runStore RunStore, invocationStore InvocationStore, socketPath string, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
+	if runtime == nil {
+		return invocation, errors.New("harness runtime is required for manual native resume")
+	}
+	if _, journaled := runStore.(PendingEffectStore); !journaled {
+		return s.resumeHarnessManually(ctx, invocationStore, runtime, invocation, request)
+	}
+	payload := harnessResumeEffectPayload{
+		SocketPath: socketPath, Request: request, Invocation: invocation,
+		TargetResumeCount: invocation.RecoveryResumeCount, Manual: true,
+	}
+	effect, err := s.newPendingEffect(invocation.RunID, store.PendingEffectKindHarnessResume, invocation.ID+"\x00manual", payload)
+	if err != nil {
+		return invocation, err
+	}
+	updated := invocation
+	reserved := invocation
+	reserved.AttachRequired = true
+	reserved.UpdatedAt = s.deps.Now().UTC()
+	var waitingFailure error
+	apply := func() error {
+		if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
+			return fmt.Errorf("reserve manual native session resume: %w", err)
+		}
+		updated = reserved
+		session, resumeErr := runtime.Resume(ctx, request)
+		if resumeErr != nil {
+			classified := classifyHarnessRuntimeError(runtime, resumeErr)
+			if harness.IsRateLimited(classified) || harness.IsAuthenticationExpired(classified) {
+				// A capacity or credential rejection happens before the
+				// operator can attach a resumed session. Restore the original
+				// invocation so the explicit command remains retryable.
+				if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
+					return fmt.Errorf("rollback manual native session resume after %s: %w", classified, saveErr)
+				}
+				updated = invocation
+				waitingFailure = classified
+				return nil
+			}
+			return fmt.Errorf("resume native harness session manually: %w", classified)
+		}
+		if session.NativeSessionID != "" {
+			updated.NativeSessionID = session.NativeSessionID
+		}
+		updated.UpdatedAt = s.deps.Now().UTC()
+		if err := invocationStore.SaveInvocation(ctx, updated); err != nil {
+			return fmt.Errorf("persist manually resumed native session: %w", err)
+		}
+		return nil
+	}
+	if err := s.withPendingEffect(ctx, runStore, effect, apply); err != nil {
+		return updated, err
+	}
+	if waitingFailure != nil {
+		return invocation, waitingFailure
+	}
+	return updated, nil
+}
+
+// resumeHarnessManually executes the compatibility path for stores without a
+// pending-effect journal.
+func (s *Service) resumeHarnessManually(ctx context.Context, invocationStore InvocationStore, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
+	session, err := runtime.Resume(ctx, request)
+	if err != nil {
+		return invocation, fmt.Errorf("resume native harness session manually: %w", classifyHarnessRuntimeError(runtime, err))
+	}
+	updated := invocation
+	updated.AttachRequired = true
+	if session.NativeSessionID != "" {
+		updated.NativeSessionID = session.NativeSessionID
+	}
+	updated.UpdatedAt = s.deps.Now().UTC()
+	if err := invocationStore.SaveInvocation(ctx, updated); err != nil {
+		return updated, fmt.Errorf("persist manually resumed native session: %w", err)
+	}
+	return updated, nil
+}
+
+// classifyHarnessRuntimeError turns adapter status text into a redacted typed
+// failure while preserving unrelated infrastructure errors.
+func classifyHarnessRuntimeError(runtime harness.Runtime, err error) error {
+	name := ""
+	if runtime != nil {
+		name = runtime.Capabilities().Name
+	}
+	return harness.ClassifyError(err, name)
 }
 
 // replayPendingHarnessResume completes a native-resume reservation. A durable
@@ -713,7 +823,31 @@ func (s *Service) replayPendingHarnessResume(ctx context.Context, runStore RunSt
 	if invocation == nil {
 		return store.Run{}, fmt.Errorf("invocation %q disappeared during harness resume replay", payload.Invocation.ID)
 	}
-	if invocation.RecoveryResumeCount < payload.TargetResumeCount {
+	if payload.Manual {
+		if !invocation.AttachRequired {
+			reserved := *invocation
+			reserved.AttachRequired = true
+			reserved.UpdatedAt = s.deps.Now().UTC()
+			if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
+				return store.Run{}, fmt.Errorf("reserve replayed manual native session resume: %w", err)
+			}
+			_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
+			if runtimeErr != nil {
+				return store.Run{}, fmt.Errorf("ensure harness for manual native resume replay: %w", runtimeErr)
+			}
+			session, resumeErr := harnessRuntime.Resume(ctx, payload.Request)
+			if resumeErr != nil {
+				return store.Run{}, fmt.Errorf("resume native harness session during manual replay: %w", classifyHarnessRuntimeError(harnessRuntime, resumeErr))
+			}
+			if session.NativeSessionID != "" {
+				reserved.NativeSessionID = session.NativeSessionID
+			}
+			reserved.UpdatedAt = s.deps.Now().UTC()
+			if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
+				return store.Run{}, fmt.Errorf("persist replayed manual native session: %w", err)
+			}
+		}
+	} else if invocation.RecoveryResumeCount < payload.TargetResumeCount {
 		reserved := *invocation
 		reserved.RecoveryResumeCount = payload.TargetResumeCount
 		reserved.UpdatedAt = s.deps.Now().UTC()
@@ -726,7 +860,7 @@ func (s *Service) replayPendingHarnessResume(ctx context.Context, runStore RunSt
 		}
 		session, resumeErr := harnessRuntime.Resume(ctx, payload.Request)
 		if resumeErr != nil {
-			return store.Run{}, fmt.Errorf("resume native harness session during replay: %w", resumeErr)
+			return store.Run{}, fmt.Errorf("resume native harness session during replay: %w", classifyHarnessRuntimeError(harnessRuntime, resumeErr))
 		}
 		if session.NativeSessionID != "" {
 			reserved.NativeSessionID = session.NativeSessionID

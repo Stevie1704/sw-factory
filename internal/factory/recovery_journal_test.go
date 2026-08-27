@@ -24,11 +24,11 @@ import (
 // journaled restart fixture.
 const journalRecoveryImageDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-// TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart verifies the
-// real startup reconciliation path accepts matching projections, resumes the
-// native session once, persists the resume ceiling, and performs no second
-// resume when a fresh coordinator starts again.
-func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T) {
+// TestJournaledStartupRecreatesALostWorkerAndResumesOnce verifies the real
+// startup reconciliation path recreates a missing worker from the persisted
+// start request, resumes the native session once, persists the resume ceiling,
+// and performs no second resume when a fresh coordinator starts again.
+func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	worktreePath := filepath.Join(root, "worktree")
@@ -36,6 +36,9 @@ func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/factory/run-journaled-recovery\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,22 +136,7 @@ func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T)
 		Branch:         run.Branch,
 		HeadSHA:        run.CheckpointSHA,
 	}}
-	workerRequest := worker.StartRequest{
-		RunID:           run.ID,
-		WorktreePath:    run.Worktree,
-		GitMetadataPath: gitMetadataProjectionPath(run.ID, run.Worktree),
-		Image:           packet.RepositoryConfig.WorkerBuild.Image,
-		ImageDigest:     run.ImageDigest,
-		InvocationPath:  invocation.InvocationDirectory,
-		ResultPath:      invocation.ResultDirectory,
-		Role:            invocation.Role,
-	}
-	workerRuntime := &journalRecoveryWorker{inspection: worker.Inspection{
-		Exists:           true,
-		Running:          true,
-		Image:            workerRequest.Image + "@" + workerRequest.ImageDigest,
-		MountFingerprint: worker.MountContractFingerprint(workerRequest),
-	}}
+	workerRuntime := &journalRecoveryWorker{inspection: worker.Inspection{}}
 	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
 		Exists:      true,
 		WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
@@ -173,6 +161,12 @@ func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T)
 
 	if err := service.reconcileRegisteredRun(ctx, registration); err != nil {
 		t.Fatalf("first journaled startup = %v", err)
+	}
+	if workerRuntime.startCalls != 1 || len(workerRuntime.startRequests) != 1 {
+		t.Fatalf("worker recreation = calls %d requests %d, want one pinned recreation", workerRuntime.startCalls, len(workerRuntime.startRequests))
+	}
+	if workerRuntime.startRequests[0].ImageDigest != run.ImageDigest || workerRuntime.startRequests[0].InvocationPath != invocation.InvocationDirectory || workerRuntime.startRequests[0].ResultPath != invocation.ResultDirectory {
+		t.Fatalf("recreated worker request = %#v, want frozen image and invocation mounts", workerRuntime.startRequests[0])
 	}
 	if harnessRuntime.resumeCalls != 1 {
 		t.Fatalf("native resumes after first startup = %d, want one", harnessRuntime.resumeCalls)
@@ -205,6 +199,76 @@ func TestJournaledStartupResumesOneAgreeingInvocationAcrossRestart(t *testing.T)
 	}
 	if harnessRuntime.resumeCalls != 1 {
 		t.Fatalf("native resumes after second startup = %d, want no duplicate", harnessRuntime.resumeCalls)
+	}
+
+	// Reuse the persisted identity to model a later unexpected exit. The
+	// first automatic failure must escalate, and the next coordinator must
+	// consume the ambiguous reservation without issuing a second resume.
+	persisted.RecoveryResumeCount = 0
+	persisted.UpdatedAt = now.Add(time.Minute)
+	if err := opened.SaveInvocation(ctx, *persisted); err != nil {
+		t.Fatal(err)
+	}
+	activeRun := *freshRun
+	activeRun.Status = store.StatusActive
+	activeRun.UpdatedAt = now.Add(time.Minute)
+	if err := opened.SaveRun(ctx, activeRun); err != nil {
+		t.Fatal(err)
+	}
+	harnessRuntime.resumeErr = harness.NewUnexpectedExitError(harness.NameCodex)
+	failureService := &Service{deps: service.deps}
+	failureErr := failureService.reconcileRegisteredRun(ctx, registration)
+	if !harness.IsUnexpectedExit(failureErr) {
+		t.Fatalf("unexpected exit recovery error = %v, want typed unexpected exit", failureErr)
+	}
+	if harnessRuntime.resumeCalls != 2 {
+		t.Fatalf("automatic resume calls after unexpected exit = %d, want one additional attempt", harnessRuntime.resumeCalls)
+	}
+	persisted, err = opened.Invocation(ctx, run.ID, invocation.ID)
+	if err != nil || persisted == nil || persisted.RecoveryResumeCount != 1 {
+		t.Fatalf("invocation after unexpected exit = %#v, error = %v; want consumed automatic attempt", persisted, err)
+	}
+	escalated, err := opened.CurrentRun(ctx)
+	if err != nil || escalated == nil || escalated.Status != store.StatusWaitingForHuman || !strings.HasPrefix(escalated.LifecycleReason, "automatic harness recovery exhausted") {
+		t.Fatalf("run after unexpected exit = %#v, error = %v; want manual recovery escalation", escalated, err)
+	}
+	lastService := &Service{deps: service.deps}
+	_ = lastService.reconcileRegisteredRun(ctx, registration)
+	if harnessRuntime.resumeCalls != 2 {
+		t.Fatalf("automatic resume calls after escalation restart = %d, want no duplicate", harnessRuntime.resumeCalls)
+	}
+	if pending, err := opened.PendingEffect(ctx, run.ID); err != nil || pending != nil {
+		t.Fatalf("pending effect after escalation restart = %#v, error = %v; want cleared", pending, err)
+	}
+
+	// A later worker loss must be repaired, but the already-consumed automatic
+	// slot must still force a human before another native resume.
+	persisted.RecoveryResumeCount = 1
+	persisted.UpdatedAt = now.Add(2 * time.Minute)
+	if err := opened.SaveInvocation(ctx, *persisted); err != nil {
+		t.Fatal(err)
+	}
+	activeRun = *escalated
+	activeRun.Status = store.StatusActive
+	activeRun.UpdatedAt = now.Add(2 * time.Minute)
+	if err := opened.SaveRun(ctx, activeRun); err != nil {
+		t.Fatal(err)
+	}
+	githubRuntime.issue.Labels = []string{factoryLabelForStatus(activeRun.Status)}
+	githubRuntime.statusComment.Body = statusCommentBody(activeRun)
+	workerRuntime.inspection = worker.Inspection{}
+	harnessRuntime.resumeErr = nil
+	lossService := &Service{deps: service.deps}
+	lossErr := lossService.reconcileRegisteredRun(ctx, registration)
+	if !harness.IsUnexpectedExit(lossErr) {
+		t.Fatalf("post-resume worker loss error = %v, want typed manual-recovery error", lossErr)
+	}
+	if harnessRuntime.resumeCalls != 2 || workerRuntime.startCalls != 2 {
+		t.Fatalf("post-resume worker loss effects = resumes %d, worker recreations %d; want no resume and one recreation", harnessRuntime.resumeCalls, workerRuntime.startCalls)
+	}
+	repairedRun, err := opened.CurrentRun(ctx)
+	if err != nil || repairedRun == nil || repairedRun.Status != store.StatusWaitingForHuman {
+		t.Fatalf("run after post-resume worker loss = %#v, error = %v; want human recovery", repairedRun, err)
 	}
 }
 
@@ -246,6 +310,43 @@ func TestRecoveryInspectsTheLatestTerminalInvocation(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("recovery discrepancies = %#v, want terminal worker inspection failure", diagnosis.Discrepancies)
+	}
+}
+
+// TestRecoveryAcceptsAStoppedWorkerAfterReadiness verifies that a worker
+// stopped by the readiness transition is not mistaken for an interrupted
+// active invocation.
+func TestRecoveryAcceptsAStoppedWorkerAfterReadiness(t *testing.T) {
+	now := time.Unix(2, 0).UTC()
+	run := store.Run{ID: "run-ready-stopped-worker", Stage: store.StageReady, Status: store.StatusActive}
+	invocation := store.Invocation{
+		ID: "inv-ready-stopped-worker", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "spec_review", Stage: store.StageReview,
+		NativeSessionID: "session-ready-stopped-worker", WorkspaceID: "workspace-ready-stopped-worker",
+		StatusSurfaceID: "surface-status-ready-stopped-worker", ImplementationSurfaceID: "surface-ready-stopped-worker",
+		ChecksSurfaceID: "surface-checks-ready-stopped-worker", Status: store.InvocationStatusCompleted,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	workerRuntime := &journalRecoveryWorker{inspection: worker.Inspection{}}
+	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
+		Exists: true, WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
+		Surfaces: []terminal.Surface{
+			{ID: terminal.SurfaceID(invocation.StatusSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+			{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+			{ID: terminal.SurfaceID(invocation.ChecksSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+		},
+	}}
+	service := &Service{deps: Dependencies{
+		Worker: workerRuntime, Terminal: terminalRuntime,
+		Harness: &journalRecoveryHarness{nativeSessionID: invocation.NativeSessionID},
+	}}
+	baseStore := &repairLaunchStore{run: run, invocations: map[string]store.Invocation{invocation.ID: invocation}}
+	runStore := &terminalProjectionStore{repairLaunchStore: baseStore}
+	diagnosis := newRecoveryDiagnosis(run.ID)
+
+	service.inspectInvocationProjection(context.Background(), &diagnosis, config.RepositoryRegistration{}, runStore, run)
+	if len(diagnosis.Discrepancies) != 0 {
+		t.Fatalf("recovery discrepancies = %#v, want stopped worker accepted after readiness", diagnosis.Discrepancies)
 	}
 }
 
@@ -304,13 +405,26 @@ var _ gitadapter.GitWorkspace = (*journalRecoveryWorkspace)(nil)
 // journalRecoveryWorker supplies a matching active worker projection without
 // exposing the worker's private runtime identity to the factory test.
 type journalRecoveryWorker struct {
-	inspection   worker.Inspection
-	inspectErr   error
-	inspectCalls int
+	inspection    worker.Inspection
+	inspectErr    error
+	inspectCalls  int
+	startCalls    int
+	startRequests []worker.StartRequest
 }
 
-// Start satisfies WorkerRuntime for the no-launch recovery fixture.
-func (*journalRecoveryWorker) Start(context.Context, worker.StartRequest) error { return nil }
+// Start recreates the worker from the coordinator's frozen request and updates
+// the fixture projection so the next restart observes the repaired worker.
+func (w *journalRecoveryWorker) Start(_ context.Context, request worker.StartRequest) error {
+	w.startCalls++
+	w.startRequests = append(w.startRequests, request)
+	w.inspection = worker.Inspection{
+		Exists:           true,
+		Running:          true,
+		Image:            request.Image + "@" + request.ImageDigest,
+		MountFingerprint: worker.MountContractFingerprint(request),
+	}
+	return nil
+}
 
 // Resume satisfies WorkerRuntime for the no-launch recovery fixture.
 func (*journalRecoveryWorker) Resume(context.Context, worker.ResumeRequest) error { return nil }
@@ -386,6 +500,7 @@ type journalRecoveryHarness struct {
 	nativeSessionID string
 	resumeCalls     int
 	failResumeOnce  bool
+	resumeErr       error
 }
 
 // Capabilities reports Codex's native continuation support.
@@ -402,6 +517,9 @@ func (*journalRecoveryHarness) Start(context.Context, harness.StartRequest) (har
 func (h *journalRecoveryHarness) Resume(_ context.Context, request harness.StartRequest) (harness.Session, error) {
 	h.resumeCalls++
 	session := harness.Session{InvocationID: request.InvocationID, NativeSessionID: h.nativeSessionID, Surface: request.Surface}
+	if h.resumeErr != nil {
+		return session, h.resumeErr
+	}
 	if h.failResumeOnce {
 		h.failResumeOnce = false
 		return session, errors.New("native resume response lost")

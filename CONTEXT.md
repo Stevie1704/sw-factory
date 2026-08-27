@@ -11,7 +11,7 @@ _Avoid_: Job, task, workflow instance
 **GitHub lifecycle observation**:
 One coordinator read of the tracked issue and pull request that can identify
 successful merge completion or an unmerged closure requiring cancellation.
-_Avoid_: Screen scrape, automatic resume
+_Avoid_: Screen scrape, hidden workflow transition
 
 **Specification packet**:
 The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot and accepted clarifications or revisions.
@@ -44,12 +44,13 @@ _Avoid_: Reconciliation, recovery
 **Reconciliation**:
 The coordinator's restart pass that consumes one durable pending effect when
 safe, repairs the projections that effect owns, and otherwise pauses the run
-with a typed discrepancy.
-_Avoid_: Diagnosis, automatic retry
+with a typed discrepancy. It may recreate a missing worker from the frozen
+invocation identity and permits one coordinator-owned native harness resume.
+_Avoid_: Diagnosis, unbounded retry
 
 **Recovery-required result**:
 A typed discrepancy result that reports the agreement state and discovered discrepancies; journaled runs reconcile safe effects automatically and pause unresolved disagreements for a human, while legacy stores retain the fail-closed refusal.
-_Avoid_: Recovered run, automatic continuation
+_Avoid_: Recovered run, implicit operator approval
 
 **Startup diagnosis**:
 A complete pre-claim report of host configuration, external access, repository, terminal, worker, harness, authentication, and operational-store readiness. Every subsystem contributes its own bounded check, and the doctor reports all failures before a run can start.
