@@ -65,6 +65,30 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	}
 }
 
+// TestStoreRejectsConflictingRoleSurfaceIdentities verifies legacy and
+// role-neutral surface columns cannot persist contradictory handles.
+func TestStoreRejectsConflictingRoleSurfaceIdentities(t *testing.T) {
+	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	err = opened.SaveInvocation(context.Background(), store.Invocation{
+		ID:                      "inv-conflicting-surface",
+		RunID:                   "run-conflicting-surface",
+		Harness:                 "codex",
+		Role:                    "architecture",
+		Stage:                   store.StageArchitecture,
+		RoleSurfaceID:           "surface-role",
+		ImplementationSurfaceID: "surface-implementation",
+		Status:                  store.InvocationStatusActive,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("SaveInvocation() error = %v, want conflicting-surface rejection", err)
+	}
+}
+
 // TestStoreRejectsAnInvocationForTheWrongRun verifies that invocation lookup
 // cannot accidentally attach stale state to another active run.
 func TestStoreRejectsAnInvocationForTheWrongRun(t *testing.T) {

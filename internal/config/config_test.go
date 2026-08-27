@@ -837,8 +837,8 @@ func TestValidateRepositoryAcceptsDeclaredReasoningEffortOptions(t *testing.T) {
 	}
 }
 
-// TestValidateRepositoryRejectsReasoningEffortOptionsForAnUndeclaredRole
-// verifies reasoning effort cannot be declared for a role that has no harness.
+// TestValidateRepositoryRejectsReasoningEffortOptionsForAnUndeclaredRole verifies
+// reasoning effort cannot be declared for a role that has no harness.
 func TestValidateRepositoryRejectsReasoningEffortOptionsForAnUndeclaredRole(t *testing.T) {
 	value := validRepositoryConfig()
 	value.ReasoningEffortOptions = map[string][]string{"custom_review": {"high"}}

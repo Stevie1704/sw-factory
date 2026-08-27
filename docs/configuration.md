@@ -123,14 +123,16 @@ gates:
     environment_policy: clean
 role_harness_defaults:
   test: codex
-  implementation: claude
+  implementation: codex
   architecture: codex
   spec_review: codex
+  standards_review: codex
 model_options:
-  test: [gpt-5]
-  implementation: [claude-opus-5, claude-sonnet-5]
-  architecture: [gpt-5]
-  spec_review: [gpt-5]
+  test: [gpt-5.6-luna]
+  implementation: [gpt-5.6-luna]
+  architecture: [gpt-5.6-luna]
+  spec_review: [gpt-5.6-luna]
+  standards_review: [gpt-5.6-luna]
 # Optional, and harness-specific: these are Codex effort names because the
 # test role runs on Codex. A role that declares no values accepts no
 # reasoning-effort selection at all.

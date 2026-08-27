@@ -44,5 +44,5 @@ Adding a role is a factory code change with an explicit prompt/report/surface
 contract and tests. A repository can opt into the role by selecting its
 harness and model in `factory.yaml`, but cannot alter its safety fence,
 permitted-path default, or stage graph. Existing implementation, test, and
-review invocations retain their persisted identities, while new non-
-implementation roles can use their own visible surfaces and handoffs.
+review invocations retain their persisted identities, while new
+non-implementation roles can use their own visible surfaces and handoffs.

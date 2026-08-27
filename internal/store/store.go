@@ -18,8 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// CurrentSchemaVersion is the latest operational-store schema understood by
-// this binary.
+// CurrentSchemaVersion is the supported operational-store schema version.
 const CurrentSchemaVersion = 25
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
@@ -1443,6 +1442,9 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	}
 	if invocation.UpdatedAt.IsZero() {
 		invocation.UpdatedAt = invocation.CreatedAt
+	}
+	if invocation.RoleSurfaceID != "" && invocation.ImplementationSurfaceID != "" && invocation.RoleSurfaceID != invocation.ImplementationSurfaceID {
+		return errors.New("invocation role surface id conflicts with legacy implementation surface id")
 	}
 	roleSurfaceID := invocation.RoleSurfaceID
 	if roleSurfaceID == "" {

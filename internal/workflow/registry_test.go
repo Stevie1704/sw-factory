@@ -113,3 +113,86 @@ func TestRegistryAcceptsAFactoryOwnedCustomRole(t *testing.T) {
 		t.Fatalf("custom transition = %#v, want ready stage", transition)
 	}
 }
+
+// TestNewRegistryRejectsInvalidDeclarations verifies malformed factory-owned
+// role and stage declarations fail before they can enter the registry.
+func TestNewRegistryRejectsInvalidDeclarations(t *testing.T) {
+	const stage store.Stage = "stage"
+
+	validRole := func() workflow.RoleDefinition {
+		return workflow.RoleDefinition{
+			Name:                  "role",
+			Stage:                 stage,
+			PromptVersion:         "role-v1",
+			DefaultPermittedPaths: []string{"docs"},
+			Kind:                  workflow.RoleKindHandoff,
+			Surface:               workflow.SurfaceRole,
+			StartStages:           []store.Stage{stage},
+			RunStages:             []store.Stage{stage},
+		}
+	}
+	validStage := func(owner string) workflow.StageDefinition {
+		return workflow.StageDefinition{Name: stage, AgentRole: owner}
+	}
+
+	tests := []struct {
+		name   string
+		roles  []workflow.RoleDefinition
+		stages []workflow.StageDefinition
+	}{
+		{
+			name:   "duplicate role names",
+			roles:  []workflow.RoleDefinition{validRole(), validRole()},
+			stages: []workflow.StageDefinition{validStage("role")},
+		},
+		{
+			name: "undeclared stage reference",
+			roles: []workflow.RoleDefinition{func() workflow.RoleDefinition {
+				role := validRole()
+				role.Stage = "missing"
+				return role
+			}()},
+			stages: []workflow.StageDefinition{validStage("role")},
+		},
+		{
+			name: "unsupported report kind",
+			roles: []workflow.RoleDefinition{func() workflow.RoleDefinition {
+				role := validRole()
+				role.Kind = "unsupported"
+				return role
+			}()},
+			stages: []workflow.StageDefinition{validStage("role")},
+		},
+		{
+			name: "unsupported surface",
+			roles: []workflow.RoleDefinition{func() workflow.RoleDefinition {
+				role := validRole()
+				role.Surface = "unsupported"
+				return role
+			}()},
+			stages: []workflow.StageDefinition{validStage("role")},
+		},
+		{
+			name: "empty default permitted paths",
+			roles: []workflow.RoleDefinition{func() workflow.RoleDefinition {
+				role := validRole()
+				role.DefaultPermittedPaths = nil
+				return role
+			}()},
+			stages: []workflow.StageDefinition{validStage("role")},
+		},
+		{
+			name:   "mismatched stage owner",
+			roles:  []workflow.RoleDefinition{validRole()},
+			stages: []workflow.StageDefinition{validStage("other")},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := workflow.NewRegistry(test.roles, test.stages); err == nil {
+				t.Fatal("NewRegistry() error = nil, want invalid-declaration error")
+			}
+		})
+	}
+}
