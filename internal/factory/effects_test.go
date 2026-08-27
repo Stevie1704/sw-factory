@@ -1099,7 +1099,7 @@ func (*effectMatrixWorker) RunCommand(context.Context, worker.CommandRequest) (w
 	return worker.CommandResult{}, nil
 }
 
-// Stop satisfies the worker seam for effect tests.
+// Stop records the stop call and returns nil.
 func (w *effectMatrixWorker) Stop(context.Context, string) error {
 	w.stopCalls++
 	return nil
