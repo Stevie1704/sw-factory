@@ -82,18 +82,6 @@ func (e *FailureError) Unwrap() error {
 	}
 }
 
-// UnexpectedExitError names the typed unexpected-exit failure for callers
-// that prefer a semantic type assertion.
-type UnexpectedExitError = FailureError
-
-// RateLimitError names the typed rate-limit failure for callers that prefer a
-// semantic type assertion.
-type RateLimitError = FailureError
-
-// AuthenticationExpiredError names the typed authentication failure for
-// callers that prefer a semantic type assertion.
-type AuthenticationExpiredError = FailureError
-
 // NewUnexpectedExitError creates a redacted unexpected-exit failure.
 func NewUnexpectedExitError(harnessName string) error {
 	return &FailureError{Kind: FailureUnexpectedExit, Harness: safeHarnessName(harnessName)}

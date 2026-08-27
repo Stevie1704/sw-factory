@@ -333,11 +333,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		}
 		if harness.IsAuthenticationExpired(classified) {
 			preserveInvocation = true
-			if session.NativeSessionID == "" {
-				invocation.Status = store.InvocationStatusSuperseded
-			} else {
-				invocation.NativeSessionID = session.NativeSessionID
-			}
+			invocation.Status = store.InvocationStatusSuperseded
 			invocation.UpdatedAt = s.deps.Now().UTC()
 			if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
 				return AgentLaunchResult{}, fmt.Errorf("persist authentication failure state: %w", saveErr)
@@ -347,49 +343,12 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			}
 			return AgentLaunchResult{Invocation: invocation}, classified
 		}
-		if harness.IsUnexpectedExit(classified) && session.NativeSessionID != "" {
-			preserveInvocation = true
-			invocation.NativeSessionID = session.NativeSessionID
-			invocation.UpdatedAt = s.deps.Now().UTC()
-			if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
-				return AgentLaunchResult{}, fmt.Errorf("persist unexpected harness exit state: %w", saveErr)
-			}
-			resumed, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, *run, invocation)
-			if resumeErr == nil {
-				previousRun := *run
-				run.Stage = stage
-				run.Status = store.StatusActive
-				run.UpdatedAt = s.deps.Now().UTC()
-				if stateErr := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); stateErr != nil {
-					return AgentLaunchResult{Invocation: resumed}, stateErr
-				}
-				s.markInvocationStarted(resumed.ID)
-				return AgentLaunchResult{Invocation: resumed, Prompt: promptText}, nil
-			}
-			resumeClassified := classifyHarnessRuntimeErrorForInvocation(invocation, resumeErr)
-			if harness.IsRateLimited(resumeClassified) {
-				if _, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, *run, string(policy.Harness)); waitErr != nil {
-					return AgentLaunchResult{Invocation: resumed}, errors.Join(resumeClassified, waitErr)
-				}
-				return AgentLaunchResult{Invocation: resumed}, resumeClassified
-			}
-			if harness.IsAuthenticationExpired(resumeClassified) {
-				if _, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, string(policy.Harness)); pauseErr != nil {
-					return AgentLaunchResult{Invocation: resumed}, errors.Join(resumeClassified, pauseErr)
-				}
-				return AgentLaunchResult{Invocation: resumed}, resumeClassified
-			}
-			if _, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, *run, string(policy.Harness), classified); pauseErr != nil {
-				return AgentLaunchResult{Invocation: resumed}, errors.Join(classified, pauseErr)
-			}
-			return AgentLaunchResult{Invocation: resumed}, classified
-		}
 		if harness.IsUnexpectedExit(classified) {
 			preserveInvocation = true
 			invocation.Status = store.InvocationStatusSuperseded
 			invocation.UpdatedAt = s.deps.Now().UTC()
 			if saveErr := invocationStore.SaveInvocation(ctx, invocation); saveErr != nil {
-				return AgentLaunchResult{}, fmt.Errorf("persist unresumable harness exit state: %w", saveErr)
+				return AgentLaunchResult{}, fmt.Errorf("persist unexpected harness exit state: %w", saveErr)
 			}
 			if _, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, *run, string(policy.Harness), classified); pauseErr != nil {
 				return AgentLaunchResult{Invocation: invocation}, errors.Join(classified, pauseErr)

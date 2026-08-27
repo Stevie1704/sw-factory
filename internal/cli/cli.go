@@ -236,7 +236,7 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 		case result.Run.Status == store.StatusWaitingForHuman:
 			status = "waiting for human"
 		}
-		if !writeOutput(output, errorsOutput, "agent %s\nrun: %s\ninvocation: %s\nstatus: %s\n", status, result.Run.ID, result.Invocation.ID, result.Run.Status) {
+		if !writeOutput(output, errorsOutput, "agent %s\nrun: %s\ninvocation: %s\nstatus: %s\n", status, result.Run.ID, result.Invocation.ID, status) {
 			return 1
 		}
 	}

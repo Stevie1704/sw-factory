@@ -257,7 +257,11 @@ func (s *Service) Attach(ctx context.Context, request AttachRequest) (AttachResu
 		}
 		updated.AttachRequired = false
 		updated.UpdatedAt = s.deps.Now().UTC()
-		if err := runStore.(InvocationStore).SaveInvocation(ctx, updated); err != nil {
+		invocationStore, ok := runStore.(InvocationStore)
+		if !ok {
+			return AttachResult{Invocation: updated}, errors.New("operational store does not support invocation persistence")
+		}
+		if err := invocationStore.SaveInvocation(ctx, updated); err != nil {
 			return AttachResult{Invocation: updated}, fmt.Errorf("persist attached invocation: %w", err)
 		}
 	}
@@ -385,22 +389,34 @@ func (s *Service) retryWaitingForHarness(ctx context.Context, registration confi
 			// A consumed automatic slot is a hard boundary. A capacity wait must
 			// never turn a later polling tick into a second native resume.
 			_, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, *run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
-			return pauseErr
+			if pauseErr != nil {
+				return pauseErr
+			}
+			return nil
 		}
 		updated, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, *run, *active)
 		if resumeErr != nil {
 			classified := classifyHarnessRuntimeErrorForInvocation(*active, resumeErr)
 			if harness.IsRateLimited(classified) {
 				_, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, *run, active.Harness)
-				return waitErr
+				if waitErr != nil {
+					return waitErr
+				}
+				return nil
 			}
 			if harness.IsAuthenticationExpired(classified) {
 				_, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, active.Harness)
-				return errors.Join(classified, pauseErr)
+				if pauseErr != nil {
+					return pauseErr
+				}
+				return nil
 			}
 			if harness.IsUnexpectedExit(classified) {
 				_, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, *run, active.Harness, classified)
-				return errors.Join(classified, pauseErr)
+				if pauseErr != nil {
+					return pauseErr
+				}
+				return nil
 			}
 			return resumeErr
 		}
@@ -462,7 +478,10 @@ func (s *Service) reconcileActiveHarnessLiveness(ctx context.Context, registrati
 		return nil
 	}
 	running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, Harness: active.Harness})
-	if livenessErr == nil && running {
+	if livenessErr != nil {
+		return fmt.Errorf("check native session liveness: %w", livenessErr)
+	}
+	if running {
 		return nil
 	}
 	_, _, _, reconcileErr := s.reconcileInterruptedRunWithMode(ctx, registration, runStore, run, true)

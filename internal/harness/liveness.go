@@ -26,7 +26,7 @@ func nativeSessionRunning(ctx context.Context, runtime worker.WorkerRuntime, req
 		Role:              "coordinator",
 	})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("run native session liveness command: %w", err)
 	}
 	switch result.ExitCode {
 	case 0:
