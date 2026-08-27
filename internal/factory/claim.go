@@ -543,6 +543,10 @@ func (s *Service) openActiveRunStore(ctx context.Context) (config.RepositoryRegi
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
+	if err := s.drainPendingEffect(ctx, registration, runStore, run); err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
 	return registration, runStore, run, nil
 }
 
@@ -561,6 +565,10 @@ func (s *Service) openReportRunStore(ctx context.Context) (config.RepositoryRegi
 	}
 	if run != nil {
 		if err := s.ensureProgressionStartup(ctx, registration, runStore, run); err != nil {
+			_ = runStore.Close()
+			return config.RepositoryRegistration{}, nil, nil, err
+		}
+		if err := s.drainPendingEffect(ctx, registration, runStore, run); err != nil {
 			_ = runStore.Close()
 			return config.RepositoryRegistration{}, nil, nil, err
 		}
@@ -585,6 +593,31 @@ func (s *Service) openAgentStartRunStore(ctx context.Context, request AgentReque
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
 	return registration, runStore, run, nil
+}
+
+// drainPendingEffect consumes a durable effect left behind by an earlier
+// failed attempt in this same process. The one-time startup reconciliation
+// cannot cover it, because a reservation may outlive any operation that failed
+// after startup. Without this drain the next reservation would collide with the
+// stale one and block every later progression until the process restarts.
+func (s *Service) drainPendingEffect(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) error {
+	if run == nil {
+		return nil
+	}
+	journal, journaled := runStore.(PendingEffectStore)
+	if !journaled {
+		return nil
+	}
+	pending, err := journal.PendingEffect(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("read pending effect before progression: %w", err)
+	}
+	if pending == nil {
+		return nil
+	}
+	updated, _, _, reconcileErr := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
+	*run = updated
+	return reconcileErr
 }
 
 // ensureProgressionStartup performs the restart reconciliation shared by all

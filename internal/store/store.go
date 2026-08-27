@@ -792,9 +792,10 @@ func (s *Store) PendingEffect(ctx context.Context, runID string) (*PendingEffect
 	return scanPendingEffect(row)
 }
 
-// SavePendingEffect reserves one external mutation. Re-saving the same
-// run/effect identity and payload is a no-op; a different effect is rejected
-// until the existing reservation is completed or abandoned.
+// SavePendingEffect reserves one external mutation. The effect identity is the
+// reservation; re-saving the same run/effect identity refreshes the replay
+// payload so a retried attempt can carry a newer external snapshot. A different
+// effect is rejected until the existing reservation is completed or abandoned.
 func (s *Store) SavePendingEffect(ctx context.Context, effect PendingEffect) error {
 	effect, err := normalizePendingEffect(effect)
 	if err != nil {
@@ -803,7 +804,11 @@ func (s *Store) SavePendingEffect(ctx context.Context, effect PendingEffect) err
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO pending_effects (run_id, effect_id, kind, payload, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(run_id) DO NOTHING`,
+		ON CONFLICT(run_id) DO UPDATE SET
+			payload = excluded.payload,
+			updated_at = excluded.updated_at
+		WHERE pending_effects.effect_id = excluded.effect_id
+		  AND pending_effects.kind = excluded.kind`,
 		effect.RunID, effect.ID, effect.Kind, effect.Payload,
 		effect.CreatedAt.UTC().Format(runTimestampLayout),
 		effect.UpdatedAt.UTC().Format(runTimestampLayout)); err != nil {
@@ -813,7 +818,7 @@ func (s *Store) SavePendingEffect(ctx context.Context, effect PendingEffect) err
 	if err != nil {
 		return err
 	}
-	if current == nil || current.ID != effect.ID || current.Kind != effect.Kind || current.Payload != effect.Payload {
+	if current == nil || current.ID != effect.ID || current.Kind != effect.Kind {
 		return fmt.Errorf("%w: run %q already has effect %q", ErrPendingEffectConflict, effect.RunID, pendingEffectIdentity(current))
 	}
 	return nil

@@ -1151,3 +1151,61 @@ func (h *effectMatrixHarness) Finish(context.Context, harness.Session) error {
 }
 
 var _ harness.Runtime = (*effectMatrixHarness)(nil)
+
+// TestStateTransitionRetryAfterTransientFailureIsNotBlocked verifies that a
+// retried transition is not refused by its own leftover reservation. Every
+// production caller stamps a fresh UpdatedAt and reads the issue again before
+// retrying, so the second attempt's payload always differs from the first even
+// though the effect identity is unchanged. Treating that as a conflict blocked
+// all further progression for the run until the coordinator process restarted.
+func TestStateTransitionRetryAfterTransientFailureIsNotBlocked(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+
+	githubRuntime := &effectMatrixGitHub{
+		issue:           github.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentRunning}},
+		failCommentOnce: true,
+	}
+	service := newEffectMatrixService(githubRuntime, nil, nil, nil)
+	repository := github.Repository{Owner: "example", Name: "project"}
+
+	next := run
+	next.Status = store.StatusWaitingForHuman
+	next.Revision++
+	next.UpdatedAt = time.Unix(100, 0).UTC()
+	if _, err := service.applyStateTransition(ctx, opened, stateTransition{
+		Repository: repository, Issue: githubRuntime.issue,
+		Previous: run, Next: next, CreateComment: true,
+	}); err == nil {
+		t.Fatal("applyStateTransition() first attempt = nil, want the injected response loss")
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil || pending == nil {
+		t.Fatalf("pending effect after response loss = %#v, error = %v; want a durable reservation", pending, err)
+	}
+
+	// The caller retries the same logical transition. Only the wall clock and
+	// the freshly read issue snapshot moved.
+	retry := next
+	retry.UpdatedAt = time.Unix(101, 0).UTC()
+	updated, err := service.applyStateTransition(ctx, opened, stateTransition{
+		Repository: repository, Issue: githubRuntime.issue,
+		Previous: run, Next: retry, CreateComment: true,
+	})
+	if err != nil {
+		t.Fatalf("applyStateTransition() retry = %v, want the reservation to be reused", err)
+	}
+	if errors.Is(err, store.ErrPendingEffectConflict) {
+		t.Fatal("retry was refused by its own leftover reservation")
+	}
+	if updated.Status != store.StatusWaitingForHuman {
+		t.Fatalf("retried transition status = %q, want %q", updated.Status, store.StatusWaitingForHuman)
+	}
+	if githubRuntime.createCommentCalls != 1 {
+		t.Fatalf("status comment creations = %d, want exactly one across both attempts", githubRuntime.createCommentCalls)
+	}
+	if pending, err := opened.PendingEffect(ctx, run.ID); err != nil || pending != nil {
+		t.Fatalf("pending effect after successful retry = %#v, error = %v; want cleared", pending, err)
+	}
+}

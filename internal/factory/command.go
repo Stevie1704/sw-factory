@@ -251,7 +251,7 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for answer: %w", err)
 	}
-	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next, processedCommentID)
+	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -319,7 +319,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
 	processedCommentID := next.ProcessedCommentID
 	next.ProcessedCommentID = run.ProcessedCommentID
-	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next, processedCommentID)
+	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -431,7 +431,7 @@ func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, 
 // invalidation commit or roll back together. The command watermark (ProcessedCommentID)
 // is intentionally not set here; it is deferred until after successful resumption
 // to keep packet-change resumption retryable when startAgentWithStore fails.
-func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run, _ string) (store.Run, error) {
+func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run) (store.Run, error) {
 	repository := commandRepository(registration)
 	next.UpdatedAt = s.deps.Now().UTC()
 	if next.Revision <= previous.Revision {
@@ -831,16 +831,9 @@ func (s *Service) openCommandRunStore(ctx context.Context) (config.RepositoryReg
 		// The process may have created a pending effect after its one-time
 		// startup check. Commands must still drain that effect before checking
 		// the processed-comment watermark.
-		if pending, pendingErr := runStore.(PendingEffectStore).PendingEffect(ctx, run.ID); pendingErr != nil {
+		if err := s.drainPendingEffect(ctx, registration, runStore, run); err != nil {
 			_ = runStore.Close()
-			return config.RepositoryRegistration{}, nil, nil, pendingErr
-		} else if pending != nil {
-			updated, _, _, reconcileErr := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
-			*run = updated
-			if reconcileErr != nil {
-				_ = runStore.Close()
-				return config.RepositoryRegistration{}, nil, nil, reconcileErr
-			}
+			return config.RepositoryRegistration{}, nil, nil, err
 		}
 	}
 	return registration, runStore, run, nil
