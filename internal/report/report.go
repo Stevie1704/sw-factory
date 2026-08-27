@@ -98,13 +98,13 @@ const (
 type ReviewCategory string
 
 const (
-	ReviewCategoryCorrectness   ReviewCategory = "correctness"
-	ReviewCategorySecurity      ReviewCategory = "security"
-	ReviewCategorySpecification ReviewCategory = "specification"
-	ReviewCategoryStandards     ReviewCategory = "standards"
+	ReviewCategoryCorrectness         ReviewCategory = "correctness"
+	ReviewCategorySecurity            ReviewCategory = "security"
+	ReviewCategorySpecification       ReviewCategory = "specification"
+	ReviewCategoryStandards           ReviewCategory = "standards"
 	ReviewCategoryDocumentedStandards ReviewCategory = "documented_standards"
-	ReviewCategoryTaste         ReviewCategory = "taste"
-	ReviewCategoryScope         ReviewCategory = "scope"
+	ReviewCategoryTaste               ReviewCategory = "taste"
+	ReviewCategoryScope               ReviewCategory = "scope"
 )
 
 // ReviewFinding is a complete, content-limited observation from the independent reviewer.
