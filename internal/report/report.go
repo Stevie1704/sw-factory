@@ -534,7 +534,7 @@ func Validate(value Report, context ValidationContext) error {
 	switch value.Outcome {
 	case OutcomeCompleted:
 		if isTestReportForContext(value, context) {
-			if value.Handoff != nil {
+			if value.Handoff != nil || value.ReviewHandoff != nil {
 				return errors.New("test completed report must contain only a test handoff")
 			}
 			if value.TestHandoff == nil {
