@@ -77,19 +77,19 @@ mutable worker image at run time, or delete remote branches during cleanup.
 The project uses a small vocabulary consistently across the CLI, the
 operational store, GitHub comments, and the documentation.
 
-| Term | Meaning |
-| --- | --- |
-| **Run** | One supervised execution for one issue. It owns the frozen packet, branch, worktree, invocations, checkpoints, gates, and pull request. |
-| **Specification packet** | The immutable snapshot of the issue, resolved repository policy, and packet version used by an invocation. A clarification or refresh creates a new version. |
-| **Invocation** | One visible role-agent execution against a run. It has a role, stage, harness, model, prompt version, worker identity, terminal surface, and result directory. |
-| **Worker** | The pinned Docker execution boundary. It contains the repository worktree and approved tools, but no host GitHub credentials or Git remote. |
-| **Surface** | A visible cmux terminal workspace or role surface used by an invocation. |
-| **Checkpoint** | An immutable commit used as a stage boundary. Test and implementation checkpoints are separate. |
-| **Gate** | A deterministic repository command, such as formatting, vetting, testing, or building, run in the policy-defined environment. |
-| **Operational store** | A private SQLite database that records run state, identities, effects, reports, gate results, and content-free evaluation summaries. |
-| **Baseline** | The pre-edit setup and gate result for the frozen packet. It proves what the repository looked like before agent edits. |
-| **Recovery diagnosis** | A read-only comparison of durable state against Git, GitHub, the worktree, worker, terminal, harness, and operational store. |
-| **Reconciliation** | A deliberate restart pass that replays an exact pending effect or pauses for human inspection when external state is ambiguous. |
+| Term                     | Meaning                                                                                                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Run**                  | One supervised execution for one issue. It owns the frozen packet, branch, worktree, invocations, checkpoints, gates, and pull request.                        |
+| **Specification packet** | The immutable snapshot of the issue, resolved repository policy, and packet version used by an invocation. A clarification or refresh creates a new version.   |
+| **Invocation**           | One visible role-agent execution against a run. It has a role, stage, harness, model, prompt version, worker identity, terminal surface, and result directory. |
+| **Worker**               | The pinned Docker execution boundary. It contains the repository worktree and approved tools, but no host GitHub credentials or Git remote.                    |
+| **Surface**              | A visible cmux terminal workspace or role surface used by an invocation.                                                                                       |
+| **Checkpoint**           | An immutable commit used as a stage boundary. Test and implementation checkpoints are separate.                                                                |
+| **Gate**                 | A deterministic repository command, such as formatting, vetting, testing, or building, run in the policy-defined environment.                                  |
+| **Operational store**    | A private SQLite database that records run state, identities, effects, reports, gate results, and content-free evaluation summaries.                           |
+| **Baseline**             | The pre-edit setup and gate result for the frozen packet. It proves what the repository looked like before agent edits.                                        |
+| **Recovery diagnosis**   | A read-only comparison of durable state against Git, GitHub, the worktree, worker, terminal, harness, and operational store.                                   |
+| **Reconciliation**       | A deliberate restart pass that replays an exact pending effect or pauses for human inspection when external state is ambiguous.                                |
 
 There is only one active non-terminal run per registered repository. Stage and
 status are separate values. In required mode, <code>test/active</code> means the
@@ -105,17 +105,17 @@ repository may select the harness and model policy for those roles, but it
 cannot add arbitrary roles or redefine the transition graph in
 <code>factory.yaml</code>.
 
-| Stage | Role or owner | What happens |
-| --- | --- | --- |
-| <code>claim</code> | Coordinator | The issue, repository policy, target branch, run branch, worktree, and status projection are frozen. |
-| <code>preflight</code> | Coordinator | Setup and baseline gates run before an agent edits anything. |
-| <code>test</code> (required mode) | <code>test</code> role | The independent agent adds a focused test or test infrastructure change. The coordinator reruns the focused command and accepts only verified red evidence. |
-| <code>architecture</code> | <code>architecture</code> role, optional | The agent writes a design document under the permitted architecture path, then hands off to implementation. |
-| <code>implementation</code> | <code>implementation</code> role | The agent edits production code and submits a structured implementation handoff. |
-| <code>check</code> | Coordinator | The accepted implementation is checkpointed and every configured gate runs against that exact checkpoint. |
-| <code>draft_pr</code> | Coordinator | The host pushes the run branch before the gate statuses, then creates or updates one draft pull request after successful gates. |
-| <code>review</code> | <code>spec_review</code> role | An independent reviewer receives the exact checkpoint and reports blocking findings or advisories. |
-| <code>ready</code> | Coordinator | The run is ready for a human to review and merge. Factory leaves the pull request as a draft and does not merge it. |
+| Stage                             | Role or owner                            | What happens                                                                                                                                                |
+| --------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <code>claim</code>                | Coordinator                              | The issue, repository policy, target branch, run branch, worktree, and status projection are frozen.                                                        |
+| <code>preflight</code>            | Coordinator                              | Setup and baseline gates run before an agent edits anything.                                                                                                |
+| <code>test</code> (required mode) | <code>test</code> role                   | The independent agent adds a focused test or test infrastructure change. The coordinator reruns the focused command and accepts only verified red evidence. |
+| <code>architecture</code>         | <code>architecture</code> role, optional | The agent writes a design document under the permitted architecture path, then hands off to implementation.                                                 |
+| <code>implementation</code>       | <code>implementation</code> role         | The agent edits production code and submits a structured implementation handoff.                                                                            |
+| <code>check</code>                | Coordinator                              | The accepted implementation is checkpointed and every configured gate runs against that exact checkpoint.                                                   |
+| <code>draft_pr</code>             | Coordinator                              | The host pushes the run branch before the gate statuses, then creates or updates one draft pull request after successful gates.                             |
+| <code>review</code>               | <code>spec_review</code> role            | An independent reviewer receives the exact checkpoint and reports blocking findings or advisories.                                                          |
+| <code>ready</code>                | Coordinator                              | The run is ready for a human to review and merge. Factory leaves the pull request as a draft and does not merge it.                                         |
 
 The checked-in policy uses advisory mode: after a healthy baseline, the
 implementation role owns the complete red/green/refactor loop. It may add or
@@ -189,10 +189,10 @@ make build
 
 <code>make build</code> writes these binaries to <code>bin/</code>:
 
-| Binary | Purpose |
-| --- | --- |
-| <code>factory</code> | Host coordinator CLI. |
-| <code>factory-report</code> | Worker-facing command that writes one structured report. |
+| Binary                             | Purpose                                                     |
+| ---------------------------------- | ----------------------------------------------------------- |
+| <code>factory</code>               | Host coordinator CLI.                                       |
+| <code>factory-report</code>        | Worker-facing command that writes one structured report.    |
 | <code>factory-worker-attach</code> | Internal worker attachment helper used by visible surfaces. |
 
 To install the commands into Go's configured binary directory:
@@ -874,14 +874,14 @@ Only usernames registered in the host configuration may issue these commands.
 The command parser rejects malformed or unauthorized comments without changing
 workflow state. Comments are processed once using a persisted watermark.
 
-| Comment | Effect |
-| --- | --- |
-| <code>/factory status</code> | Re-renders the current status projection. |
-| <code>/factory refresh</code> | Re-reads the issue into a new packet version, preserves resolved answers, and invalidates downstream work that no longer matches. |
+| Comment                                                         | Effect                                                                                                                                                                             |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <code>/factory status</code>                                    | Re-renders the current status projection.                                                                                                                                          |
+| <code>/factory refresh</code>                                   | Re-reads the issue into a new packet version, preserves resolved answers, and invalidates downstream work that no longer matches.                                                  |
 | <code>/factory answer &lt;question-id&gt; &lt;answer&gt;</code> | Answers one pending question and starts a fresh invocation against the new packet. <code>question=</code>, <code>question-id=</code>, or <code>id=</code> forms are also accepted. |
-| <code>/factory retry</code> | Reopens the current failed or explicitly cancelled stage when policy permits. |
-| <code>/factory cancel</code> | Stops the worker and cancels the run while retaining artifacts. |
-| <code>/factory config harness=codex</code> | Selects a permitted harness for a later invocation only. |
+| <code>/factory retry</code>                                     | Reopens the current failed or explicitly cancelled stage when policy permits.                                                                                                      |
+| <code>/factory cancel</code>                                    | Stops the worker and cancels the run while retaining artifacts.                                                                                                                    |
+| <code>/factory config harness=codex</code>                      | Selects a permitted harness for a later invocation only.                                                                                                                           |
 
 Run the one-shot comment/lifecycle poll when operating without the persistent
 coordinator:
@@ -1098,14 +1098,14 @@ boundary.
 
 Workers use stable paths:
 
-| Path | Access | Contents |
-| --- | --- | --- |
-| <code>/work</code> | read/write | The isolated run worktree. |
-| <code>/git</code> | read-only | A credential-free Git projection used by repository commands. |
-| <code>/cache/&lt;name&gt;</code> | policy-defined | Only explicitly declared caches. |
-| <code>/invocation</code> | read-only | The frozen invocation packet. |
-| <code>/results</code> | read/write | The current invocation's structured report directory. |
-| <code>/run/factory-auth</code> | read-only | A managed credential volume for the selected harness role. |
+| Path                             | Access         | Contents                                                      |
+| -------------------------------- | -------------- | ------------------------------------------------------------- |
+| <code>/work</code>               | read/write     | The isolated run worktree.                                    |
+| <code>/git</code>                | read-only      | A credential-free Git projection used by repository commands. |
+| <code>/cache/&lt;name&gt;</code> | policy-defined | Only explicitly declared caches.                              |
+| <code>/invocation</code>         | read-only      | The frozen invocation packet.                                 |
+| <code>/results</code>            | read/write     | The current invocation's structured report directory.         |
+| <code>/run/factory-auth</code>   | read-only      | A managed credential volume for the selected harness role.    |
 
 The worker runs as non-root UID <code>10001</code>, drops all capabilities,
 enables <code>no-new-privileges</code>, and does not receive:
@@ -1140,28 +1140,28 @@ All host commands accept <code>--config &lt;path&gt;</code> after the command
 name. Use <code>factory &lt;command&gt; --help</code> for the exact flags
 supported by the installed binary.
 
-| Command | Purpose |
-| --- | --- |
-| <code>factory init</code> | Create an empty host configuration. |
-| <code>factory register</code> | Register the one repository, GitHub identity, authorized users, polling settings, cmux settings, auth sources, repository policy path, and SQLite path. |
-| <code>factory bootstrap-labels</code> | Create the six factory-owned GitHub labels explicitly and idempotently. |
-| <code>factory doctor</code> | Run the complete startup diagnosis and print every problem/action. |
-| <code>factory start</code> | Run the persistent queue/lease supervisor. |
-| <code>factory stop</code> | Stop a running supervisor without cancelling the active run. |
-| <code>factory issue [--issue N] N</code> | Claim one issue and run its baseline. The number may be positional or supplied with <code>--issue</code>, but not both. |
-| <code>factory agent</code> | Start the active stage's visible role, or select a validated role/stage/harness/model/reasoning override. |
-| <code>factory agent-report</code> | Validate and accept a report already written by one invocation. Requires <code>--run-id</code> and <code>--invocation-id</code>. |
-| <code>factory draft-pr</code> | Create the implementation checkpoint, push the branch, run gates, and create/update the draft PR. <code>--intervention</code> records a one-line operator marker. |
-| <code>factory poll</code> | Process one lifecycle and structured-command observation for the current run. |
-| <code>factory status</code> | Show the selected host configuration, repository, latest run, and recovery diagnosis. |
-| <code>factory resume</code> | Perform explicit native-session or harness-capacity recovery, or re-enter a recovery-paused check stage. |
-| <code>factory attach</code> | Restore worker/terminal topology after a manual resume and clear the attach gate. |
-| <code>factory auth refresh</code> | Reseed a managed worker credential for the active invocation harness. |
-| <code>factory reconcile</code> | Run restart reconciliation, or abandon one inspected pending effect with <code>--abandon-effect</code> and <code>--reason</code>. |
-| <code>factory evaluation</code> | Read local content-free run summaries and aggregates. |
-| <code>factory evaluation-disposition</code> | Record a human disposition for a <code>test_dispute</code> or <code>review_finding</code> event. |
-| <code>factory evaluation-delete</code> | Explicitly delete terminal evaluation summaries before an RFC3339 cutoff with <code>--confirm</code>. |
-| <code>factory cleanup</code> | Preview or, with <code>--confirm</code>, remove eligible local run artifacts. |
+| Command                                     | Purpose                                                                                                                                                           |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <code>factory init</code>                   | Create an empty host configuration.                                                                                                                               |
+| <code>factory register</code>               | Register the one repository, GitHub identity, authorized users, polling settings, cmux settings, auth sources, repository policy path, and SQLite path.           |
+| <code>factory bootstrap-labels</code>       | Create the six factory-owned GitHub labels explicitly and idempotently.                                                                                           |
+| <code>factory doctor</code>                 | Run the complete startup diagnosis and print every problem/action.                                                                                                |
+| <code>factory start</code>                  | Run the persistent queue/lease supervisor.                                                                                                                        |
+| <code>factory stop</code>                   | Stop a running supervisor without cancelling the active run.                                                                                                      |
+| <code>factory issue [--issue N] N</code>    | Claim one issue and run its baseline. The number may be positional or supplied with <code>--issue</code>, but not both.                                           |
+| <code>factory agent</code>                  | Start the active stage's visible role, or select a validated role/stage/harness/model/reasoning override.                                                         |
+| <code>factory agent-report</code>           | Validate and accept a report already written by one invocation. Requires <code>--run-id</code> and <code>--invocation-id</code>.                                  |
+| <code>factory draft-pr</code>               | Create the implementation checkpoint, push the branch, run gates, and create/update the draft PR. <code>--intervention</code> records a one-line operator marker. |
+| <code>factory poll</code>                   | Process one lifecycle and structured-command observation for the current run.                                                                                     |
+| <code>factory status</code>                 | Show the selected host configuration, repository, latest run, and recovery diagnosis.                                                                             |
+| <code>factory resume</code>                 | Perform explicit native-session or harness-capacity recovery, or re-enter a recovery-paused check stage.                                                          |
+| <code>factory attach</code>                 | Restore worker/terminal topology after a manual resume and clear the attach gate.                                                                                 |
+| <code>factory auth refresh</code>           | Reseed a managed worker credential for the active invocation harness.                                                                                             |
+| <code>factory reconcile</code>              | Run restart reconciliation, or abandon one inspected pending effect with <code>--abandon-effect</code> and <code>--reason</code>.                                 |
+| <code>factory evaluation</code>             | Read local content-free run summaries and aggregates.                                                                                                             |
+| <code>factory evaluation-disposition</code> | Record a human disposition for a <code>test_dispute</code> or <code>review_finding</code> event.                                                                  |
+| <code>factory evaluation-delete</code>      | Explicitly delete terminal evaluation summaries before an RFC3339 cutoff with <code>--confirm</code>.                                                             |
+| <code>factory cleanup</code>                | Preview or, with <code>--confirm</code>, remove eligible local run artifacts.                                                                                     |
 
 ### Useful factory agent flags
 
@@ -1322,7 +1322,7 @@ wait. A <code>check/waiting_for_human</code> run may continue only when its
 lifecycle reason begins with <code>restart reconciliation paused:</code>; use
 <code>factory reconcile</code> first, then <code>factory resume</code> or
 <code>factory draft-pr</code>. The worktree must be clean at the recorded
-checkpoint, and required-mode protected test paths must still match. Submit or
+checkpoint, and protected test paths in required mode must still match. Submit or
 correct the report first; do not create a manual checkpoint on the run branch.
 
 ### The worker image does not match
