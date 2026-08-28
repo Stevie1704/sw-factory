@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,10 +360,10 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 // its newest persisted invocation is already terminal.
 func TestRecoveryInspectsTheLatestTerminalInvocation(t *testing.T) {
 	now := time.Unix(1, 0).UTC()
-	run := store.Run{ID: "run-terminal-projection", Stage: store.StageDraftPR, Status: store.StatusActive}
+	run := store.Run{ID: "run-terminal-projection", Stage: store.StageReview, Status: store.StatusActive}
 	invocation := store.Invocation{
 		ID: "inv-terminal-projection", RunID: run.ID, Harness: harness.NameCodex,
-		Role: "implementation", Stage: store.StageImplementation,
+		Role: "spec_review", Stage: store.StageReview,
 		NativeSessionID: "session-terminal-projection", WorkspaceID: "workspace-terminal-projection",
 		ImplementationSurfaceID: "surface-terminal-projection",
 		Status:                  store.InvocationStatusCompleted, CreatedAt: now, UpdatedAt: now,
@@ -430,6 +431,308 @@ func TestRecoveryAcceptsAStoppedWorkerAfterReadiness(t *testing.T) {
 	if len(diagnosis.Discrepancies) != 0 {
 		t.Fatalf("recovery discrepancies = %#v, want stopped worker accepted after readiness", diagnosis.Discrepancies)
 	}
+}
+
+// TestPollLifecycleCompletesAMergedRunBeforeRecovery verifies that a deleted
+// remote branch and historical worker projection cannot block the public
+// lifecycle seam from recording an already-merged pull request.
+func TestPollLifecycleCompletesAMergedRunBeforeRecovery(t *testing.T) {
+	fixture := newDraftPRRecoveryFixture(t, "run-poll-merged-before-recovery", 17, true, "")
+
+	result, err := fixture.lifecycleService().PollLifecycle(context.Background(), LifecycleRequest{RunID: fixture.run.ID})
+	if err != nil {
+		t.Fatalf("PollLifecycle() error = %v, want merged completion before recovery", err)
+	}
+	if result.Outcome != LifecycleCompleted || result.Run.Status != store.StatusComplete || result.Run.MergeCommitSHA != fixture.mergedSHA {
+		t.Fatalf("PollLifecycle() result = %#v, want completed run at merge %s", result, fixture.mergedSHA)
+	}
+	if fixture.worker.inspectCalls != 0 {
+		t.Fatalf("worker recovery inspections = %d, want lifecycle observation first", fixture.worker.inspectCalls)
+	}
+}
+
+// TestStartCompletesAMergedRunBeforeRecovery verifies the persistent
+// supervisor records an already-merged pull request before startup
+// reconciliation can reject its deleted remote branch.
+func TestStartCompletesAMergedRunBeforeRecovery(t *testing.T) {
+	fixture := newDraftPRRecoveryFixture(t, "run-start-merged-before-recovery", 18, true, "")
+	pollContext, cancel := context.WithCancel(context.Background())
+
+	if err := fixture.supervisorService(cancel).Start(pollContext); err != nil {
+		t.Fatalf("Start() error = %v, want merged completion before recovery", err)
+	}
+	latest := fixture.latestRun(t)
+	if latest.Status != store.StatusComplete || latest.MergeCommitSHA != fixture.mergedSHA {
+		t.Fatalf("latest run = %#v, want completed run at merge %s", latest, fixture.mergedSHA)
+	}
+	if fixture.workspace.remoteInspections != 0 {
+		t.Fatalf("remote recovery inspections = %d, want lifecycle observation first", fixture.workspace.remoteInspections)
+	}
+}
+
+// TestStartTreatsACompletedImplementationAsHistoricalAtDraftPR verifies an
+// open pull request can survive coordinator restart after its gate worker has
+// replaced the completed implementation worker projection.
+func TestStartTreatsACompletedImplementationAsHistoricalAtDraftPR(t *testing.T) {
+	fixture := newDraftPRRecoveryFixture(
+		t,
+		"run-start-open-draft-pr",
+		19,
+		false,
+		strings.Repeat("c", 40),
+	)
+	pollContext, cancel := context.WithCancel(context.Background())
+
+	if err := fixture.supervisorService(cancel).Start(pollContext); err != nil {
+		t.Fatalf("Start() error = %v, want open draft PR supervision", err)
+	}
+	if fixture.worker.inspectCalls != 0 {
+		t.Fatalf("historical implementation inspections = %d, want none at draft PR", fixture.worker.inspectCalls)
+	}
+}
+
+// draftPRRecoveryFixture contains one journaled draft-PR run and its external
+// projections for lifecycle-before-recovery tests.
+type draftPRRecoveryFixture struct {
+	databasePath string
+	run          store.Run
+	mergedSHA    string
+	github       *mergedRecoveryGitHub
+	workspace    *mergedRecoveryWorkspace
+	worker       *journalRecoveryWorker
+	host         config.HostConfig
+	now          time.Time
+}
+
+// newDraftPRRecoveryFixture persists one draft-PR run whose current worker has
+// gate mounts while its latest invocation is the completed implementation.
+func newDraftPRRecoveryFixture(t *testing.T, runID string, pullRequestNumber int, merged bool, remoteHead string) *draftPRRecoveryFixture {
+	t.Helper()
+	ctx := context.Background()
+	root := t.TempDir()
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(worktreePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		Issue:   github.Issue{Number: 42, Title: "Draft PR recovery", Body: "observe lifecycle before recovery"},
+		RepositoryConfig: config.RepositoryConfig{
+			TargetBranch: "main",
+			WorkerBuild:  config.WorkerBuildConfig{Image: "ghcr.io/example/factory-worker"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 28, 13, pullRequestNumber, 0, 0, time.UTC)
+	checkpointSHA := strings.Repeat("c", 40)
+	run := store.Run{
+		ID: runID, RepositoryPath: root, IssueNumber: 42,
+		Stage: store.StageDraftPR, Status: store.StatusActive,
+		Branch: "factory/" + runID, Worktree: worktreePath,
+		CheckpointSHA: checkpointSHA, ImageDigest: journalRecoveryImageDigest,
+		StatusCommentID: "status-" + runID, PullRequestNumber: pullRequestNumber,
+		PullRequestURL:      fmt.Sprintf("https://github.com/example/project/pull/%d", pullRequestNumber),
+		SpecificationPacket: string(packetData), CreatedAt: now, UpdatedAt: now,
+	}
+	invocation := store.Invocation{
+		ID: "inv-" + runID, RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-" + runID, WorkspaceID: "workspace-" + runID,
+		StatusSurfaceID: "surface-status-" + runID, ImplementationSurfaceID: "surface-implementation-" + runID,
+		ChecksSurfaceID: "surface-checks-" + runID, Status: store.InvocationStatusCompleted,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	databasePath := filepath.Join(root, "state", "factory.db")
+	opened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveRun(ctx, run); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mergedSHA := ""
+	pullRequestState := "open"
+	if merged {
+		mergedSHA = strings.Repeat("d", 40)
+		pullRequestState = "closed"
+	}
+	githubRuntime := &mergedRecoveryGitHub{
+		effectMatrixGitHub: &effectMatrixGitHub{
+			issue:         github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+			statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+		},
+		pullRequest: github.PullRequest{
+			Number: run.PullRequestNumber, URL: run.PullRequestURL, State: pullRequestState, Merged: merged,
+			MergeCommitSHA: mergedSHA, HeadBranch: run.Branch, BaseBranch: "main",
+		},
+	}
+	workspace := &mergedRecoveryWorkspace{
+		state:      gitadapter.WorktreeState{RepositoryPath: root, Branch: run.Branch, HeadSHA: checkpointSHA},
+		remoteHead: remoteHead,
+	}
+	workerRuntime := &journalRecoveryWorker{inspection: worker.Inspection{
+		Exists: true, Running: true, MountFingerprint: "gate-worker-mounts",
+	}}
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path: root, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		Polling:             config.PollingConfig{Interval: "1ms", Backoff: "1ms"},
+		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
+	}}}
+	return &draftPRRecoveryFixture{
+		databasePath: databasePath, run: run, mergedSHA: mergedSHA,
+		github: githubRuntime, workspace: workspace, worker: workerRuntime,
+		host: host, now: now,
+	}
+}
+
+// lifecycleService constructs the public lifecycle seam for the fixture.
+func (f *draftPRRecoveryFixture) lifecycleService() *Service {
+	return NewWithDependencies("/host/config.yaml", f.dependencies())
+}
+
+// supervisorService constructs the persistent supervisor seam and cancels it
+// after the first lease renewal.
+func (f *draftPRRecoveryFixture) supervisorService(cancel context.CancelFunc) *Service {
+	dependencies := f.dependencies()
+	dependencies.LoadRepository = func(string) (config.RepositoryConfig, error) {
+		return config.RepositoryConfig{TargetBranch: "main"}, nil
+	}
+	dependencies.IssuePoller = &mergedRecoveryIssuePoller{}
+	dependencies.Lease = &mergedRecoveryLease{onRenew: cancel}
+	dependencies.StartupDiagnosis = func(context.Context) (DoctorResult, error) { return DoctorResult{}, nil }
+	return NewWithDependencies("/host/config.yaml", dependencies)
+}
+
+// dependencies returns the common real-store and external-boundary adapters.
+func (f *draftPRRecoveryFixture) dependencies() Dependencies {
+	return Dependencies{
+		Config: effectMatrixConfig{host: f.host},
+		OpenStore: func(ctx context.Context, path string) (OperationalStore, error) {
+			return store.Open(ctx, path)
+		},
+		GitHub: f.github, PullRequests: f.github,
+		GitWorkspace: f.workspace, Worktree: f.workspace,
+		Worker: f.worker, Terminal: &journalRecoveryTerminal{},
+		Harness: &journalRecoveryHarness{}, Now: func() time.Time { return f.now.Add(time.Minute) },
+	}
+}
+
+// latestRun reads the public persisted run projection after supervisor exit.
+func (f *draftPRRecoveryFixture) latestRun(t *testing.T) store.Run {
+	t.Helper()
+	opened, err := store.Open(context.Background(), f.databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	latest, err := opened.LatestRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil {
+		t.Fatal("LatestRun() = nil, want persisted run")
+	}
+	return *latest
+}
+
+// mergedRecoveryGitHub combines exact persisted issue state with a merged pull
+// request so public lifecycle tests exercise only external system boundaries.
+type mergedRecoveryGitHub struct {
+	*effectMatrixGitHub
+	pullRequest github.PullRequest
+}
+
+// FindPullRequest returns the tracked merged pull request.
+func (g *mergedRecoveryGitHub) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
+	return g.pullRequest, nil
+}
+
+// CreatePullRequest satisfies the lifecycle pull-request boundary.
+func (g *mergedRecoveryGitHub) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
+	return g.pullRequest, nil
+}
+
+// UpdatePullRequest satisfies the lifecycle pull-request boundary.
+func (g *mergedRecoveryGitHub) UpdatePullRequest(context.Context, github.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
+	return g.pullRequest, nil
+}
+
+// mergedRecoveryWorkspace exposes a valid local worktree and a deleted remote
+// run branch, matching GitHub's post-merge branch cleanup.
+type mergedRecoveryWorkspace struct {
+	state             gitadapter.WorktreeState
+	remoteHead        string
+	remoteInspections int
+}
+
+// Create satisfies the Git workspace seam.
+func (*mergedRecoveryWorkspace) Create(context.Context, string, string, string) (gitadapter.Workspace, error) {
+	return gitadapter.Workspace{}, nil
+}
+
+// Remove satisfies the Git workspace seam.
+func (*mergedRecoveryWorkspace) Remove(context.Context, string, gitadapter.Workspace) error {
+	return nil
+}
+
+// Inspect returns the persisted local worktree projection.
+func (w *mergedRecoveryWorkspace) Inspect(context.Context, string) (gitadapter.WorktreeState, error) {
+	return w.state, nil
+}
+
+// CreateCheckpoint satisfies the Git workspace seam.
+func (*mergedRecoveryWorkspace) CreateCheckpoint(context.Context, gitadapter.CheckpointRequest) (gitadapter.CheckpointResult, error) {
+	return gitadapter.CheckpointResult{}, nil
+}
+
+// Push satisfies the Git workspace seam.
+func (*mergedRecoveryWorkspace) Push(context.Context, gitadapter.PushRequest) error { return nil }
+
+// SynchronizeBase satisfies the Git workspace seam.
+func (*mergedRecoveryWorkspace) SynchronizeBase(context.Context, gitadapter.BaseSyncRequest) error {
+	return nil
+}
+
+// RemoteBranchHead reports a deleted remote run branch.
+func (w *mergedRecoveryWorkspace) RemoteBranchHead(context.Context, gitadapter.PushRequest) (string, error) {
+	w.remoteInspections++
+	return w.remoteHead, nil
+}
+
+var _ gitadapter.GitWorkspace = (*mergedRecoveryWorkspace)(nil)
+var _ gitadapter.RemoteBranchInspector = (*mergedRecoveryWorkspace)(nil)
+
+// mergedRecoveryIssuePoller returns an empty eligible queue after terminal
+// lifecycle observation releases the completed run's active slot.
+type mergedRecoveryIssuePoller struct{}
+
+// ListEligibleIssues reports no queued work.
+func (*mergedRecoveryIssuePoller) ListEligibleIssues(context.Context, github.Repository) ([]github.Issue, error) {
+	return nil, nil
+}
+
+// mergedRecoveryLease cancels the supervisor after its first visible renewal.
+type mergedRecoveryLease struct {
+	onRenew context.CancelFunc
+}
+
+// RenewLease records no external state and stops the focused supervisor test.
+func (l *mergedRecoveryLease) RenewLease(context.Context, github.Repository, github.Lease) error {
+	if l.onRenew != nil {
+		l.onRenew()
+	}
+	return nil
 }
 
 // terminalProjectionStore exposes a latest terminal invocation while reporting

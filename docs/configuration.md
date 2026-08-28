@@ -325,13 +325,17 @@ The coordinator then fetches `origin/<target_branch>`, records that fetched comm
 
 The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
 
-Before any later coordinator command can progress a persisted non-terminal run,
-the new process reconciles the durable effect journal and compares the run
-identifier, registered repository, worktree, branch, checkpoint SHA, issue
-number and factory state label, marked status-comment identity, and persisted
-pull-request identity when present. A missing or mismatched projection is
-reported alongside every other discovered discrepancy and pauses the run for
-human disposition. A remote run branch whose head is an ancestor of the
+When no effect is pending, the lifecycle and supervisor entry points first
+observe a tracked issue or pull request, so an already-merged or closed target
+can enter its terminal state even when GitHub has deleted the run branch or
+only historical invocation infrastructure remains. Before an unchanged
+non-terminal run or any other coordinator command can progress, the new process
+reconciles the durable effect journal and compares the run identifier,
+registered repository, worktree, branch, checkpoint SHA, issue number and
+factory state label, marked status-comment identity, and persisted pull-request
+identity when present. A missing or mismatched projection is reported alongside
+every other discovered discrepancy and pauses the run for human disposition. A
+remote run branch whose head is an ancestor of the
 persisted checkpoint is not a discrepancy: a checkpoint is committed before the
 gate suite runs and pushed only afterward, so an unpushed commit is an
 ordinary in-flight state rather than a diverged branch. A journaled effect is

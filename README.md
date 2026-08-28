@@ -976,8 +976,10 @@ command for that newly claimed state. Use the one-shot
 <code>factory issue</code> path for a complete manually driven run, and treat
 new claims made by <code>factory start</code> as an operational limitation that
 requires inspection rather than as unattended end-to-end execution. The
-supervisor does recover an existing persisted run on startup when its restart
-diagnosis is clean.
+supervisor observes a tracked issue or pull request before restart
+reconciliation when no effect is pending. This lets an already-merged or closed
+target enter its terminal state even after GitHub deletes the run branch. An
+unchanged non-terminal run still requires a clean restart diagnosis.
 
 Likewise, <code>factory poll</code> is the explicit one-shot command for
 issue/PR lifecycle observation and structured GitHub command handling. This
