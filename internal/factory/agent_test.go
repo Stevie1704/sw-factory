@@ -1088,6 +1088,7 @@ type agentWorker struct {
 	claudeSeeds   []worker.CredentialSeedRequest
 	inspectResult *worker.Inspection
 	inspectErr    error
+	seedErr       error
 }
 
 // Start records one worker start.

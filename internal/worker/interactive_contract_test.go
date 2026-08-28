@@ -87,12 +87,13 @@ func TestDockerRuntimeRecreatesAnExistingWorkerForInvocationMounts(t *testing.T)
 	gitMetadata := makeDirectory(t, "git-metadata")
 	runtime := &worker.DockerRuntime{DockerBinary: stub}
 	base := worker.StartRequest{
-		RunID:           "run-reconfigure",
-		WorktreePath:    worktree,
-		GitMetadataPath: gitMetadata,
-		Role:            "gate",
-		Image:           "ghcr.io/example/factory-worker",
-		ImageDigest:     interactiveWorkerDigest,
+		RunID:             "run-reconfigure",
+		WorktreePath:      worktree,
+		GitMetadataPath:   gitMetadata,
+		CredentialStoreID: "registration",
+		Role:              "gate",
+		Image:             "ghcr.io/example/factory-worker",
+		ImageDigest:       interactiveWorkerDigest,
 	}
 	if err := runtime.Start(context.Background(), base); err != nil {
 		t.Fatalf("base Start() error = %v", err)
@@ -115,20 +116,30 @@ func TestDockerRuntimeRecreatesAnExistingWorkerForInvocationMounts(t *testing.T)
 	}
 	t.Setenv("WORKER_DOCKER_INSPECT_JSON_FILE", inspectionPath)
 	if err := runtime.Start(context.Background(), worker.StartRequest{
-		RunID:           base.RunID,
-		WorktreePath:    worktree,
-		GitMetadataPath: gitMetadata,
-		InvocationPath:  makeDirectory(t, "invocation"),
-		ResultPath:      makeDirectory(t, "results"),
-		Role:            "implementation",
-		Image:           base.Image,
-		ImageDigest:     base.ImageDigest,
+		RunID:             base.RunID,
+		WorktreePath:      worktree,
+		GitMetadataPath:   gitMetadata,
+		InvocationPath:    makeDirectory(t, "invocation"),
+		ResultPath:        makeDirectory(t, "results"),
+		CredentialStoreID: base.CredentialStoreID,
+		Role:              "implementation",
+		Image:             base.Image,
+		ImageDigest:       base.ImageDigest,
 	}); err != nil {
 		t.Fatalf("visible Start() error = %v", err)
 	}
 	lines := readStubLog(t, logPath)
 	if countLogLines(lines, " run ") != 2 || countLogLines(lines, " rm ") != 1 {
 		t.Fatalf("Docker reconfiguration calls = %#v, want stop/rm and replacement run", lines)
+	}
+	for _, line := range findLogLines(lines, " rm ") {
+		if strings.Contains(line, " -v ") {
+			t.Fatalf("worker recreation removed named volumes: %q", line)
+		}
+	}
+	replacement := findLogLines(lines, " run ")[1]
+	if !strings.Contains(replacement, "dst="+worker.CredentialPath) {
+		t.Fatalf("replacement worker mounts = %q, want the factory credential projection", replacement)
 	}
 }
 
@@ -325,5 +336,40 @@ func TestDockerRuntimeRefusesAnUnsafeClaudeCredentialSource(t *testing.T) {
 				t.Fatalf("SeedClaudeCredentials() error = %v, want %q refusal", err, test.problem)
 			}
 		})
+	}
+}
+
+// TestDockerRuntimeRedactsCredentialSourceAndDockerErrors verifies that a
+// missing source or Docker-side failure cannot expose the host auth path or
+// credential bytes through the worker seam.
+func TestDockerRuntimeRedactsCredentialSourceAndDockerErrors(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	authRoot := t.TempDir()
+	authPath := filepath.Join(authRoot, "auth.json")
+	missingErr := runtime.SeedCodexCredentials(context.Background(), worker.CredentialSeedRequest{
+		RunID:    "run-redacted-source",
+		AuthPath: authPath,
+	})
+	if missingErr == nil {
+		t.Fatal("SeedCodexCredentials() accepted a missing credential source")
+	}
+	if strings.Contains(missingErr.Error(), authPath) {
+		t.Fatalf("missing-source error leaked host credential path: %v", missingErr)
+	}
+
+	if err := os.WriteFile(authPath, []byte("credential-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKER_DOCKER_EXEC_ERROR", authPath+": credential-secret")
+	dockerErr := runtime.SeedCodexCredentials(context.Background(), worker.CredentialSeedRequest{
+		RunID:    "run-redacted-docker",
+		AuthPath: authPath,
+	})
+	if dockerErr == nil {
+		t.Fatal("SeedCodexCredentials() accepted a Docker projection failure")
+	}
+	if strings.Contains(dockerErr.Error(), authPath) || strings.Contains(dockerErr.Error(), "credential-secret") {
+		t.Fatalf("Docker projection error leaked credential details: %v", dockerErr)
 	}
 }

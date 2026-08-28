@@ -438,6 +438,10 @@ case "$command_name" in
     fi
     ;;
   exec)
+    if [ -n "${WORKER_DOCKER_EXEC_ERROR:-}" ]; then
+      printf '%s\n' "$WORKER_DOCKER_EXEC_ERROR" >&2
+      exit "${WORKER_DOCKER_EXEC_EXIT:-1}"
+    fi
     case "$*" in
       *fail-126*)
         printf 'command-failed-126\n' >&2

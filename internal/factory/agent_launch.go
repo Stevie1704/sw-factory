@@ -277,7 +277,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	if seedCredentials != nil {
 		if err := seedCredentials(ctx, run.ID); err != nil {
-			return AgentLaunchResult{}, err
+			return AgentLaunchResult{}, newCredentialProjectionError(string(policy.Harness))
 		}
 	}
 	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
@@ -454,7 +454,11 @@ func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registr
 	if err != nil {
 		return invocation, err
 	}
-	if _, err := s.ensureWorkerForInvocation(ctx, registration, runStore, run, invocation); err != nil {
+	_, invocation, err = s.ensureWorkerForInvocation(ctx, registration, runStore, run, invocation)
+	if err != nil {
+		return invocation, err
+	}
+	if err := s.restoreCredentialProjection(ctx, registration, run, invocation); err != nil {
 		return invocation, err
 	}
 	workspaceID, roleSurface, statusSurface, checksSurface, restored, err := s.restoreInvocationTerminal(ctx, terminalRuntime, run, invocation)
@@ -633,20 +637,26 @@ func reviewCheckpointSHA(review bool, checkpoint string) string {
 // no source is registered, leaving the credential the worker itself persisted
 // in its role volume in place.
 func (s *Service) credentialSeeding(registration config.RepositoryRegistration, request AgentRequest, harnessName config.Harness) (func(context.Context, string) error, string, error) {
-	var authPath string
+	var authPath, registeredAuthPath, overrideAuthPath string
 	var seed func(context.Context, worker.CredentialSeedRequest) error
 	switch harnessName {
 	case config.HarnessCodex:
-		authPath = defaultString(request.CodexAuthPath, registration.Authentication.CodexAuthPath)
+		registeredAuthPath = registration.Authentication.CodexAuthPath
+		overrideAuthPath = request.CodexAuthPath
 		if seeder, ok := s.deps.Worker.(worker.CredentialSeeder); ok {
 			seed = seeder.SeedCodexCredentials
 		}
 	case config.HarnessClaude:
-		authPath = defaultString(request.ClaudeAuthPath, registration.Authentication.ClaudeAuthPath)
+		registeredAuthPath = registration.Authentication.ClaudeAuthPath
+		overrideAuthPath = request.ClaudeAuthPath
 		if seeder, ok := s.deps.Worker.(worker.ClaudeCredentialSeeder); ok {
 			seed = seeder.SeedClaudeCredentials
 		}
 	}
+	if overrideAuthPath != "" && (registeredAuthPath == "" || filepath.Clean(overrideAuthPath) != filepath.Clean(registeredAuthPath)) {
+		return nil, "", fmt.Errorf("%s auth source override is not restart-safe; configure the source on the registered repository", harnessName)
+	}
+	authPath = defaultString(overrideAuthPath, registeredAuthPath)
 	if authPath == "" {
 		return nil, "", nil
 	}
@@ -656,4 +666,86 @@ func (s *Service) credentialSeeding(registration config.RepositoryRegistration, 
 	return func(ctx context.Context, runID string) error {
 		return seed(ctx, worker.CredentialSeedRequest{RunID: runID, AuthPath: authPath})
 	}, registration.Path, nil
+}
+
+// ensureCredentialStoreIdentity records the factory-managed credential store
+// identity when recovery discovers that a currently configured source belongs
+// to an older invocation that predates the persisted identity.
+func (s *Service) ensureCredentialStoreIdentity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, invocation store.Invocation) (store.Invocation, error) {
+	_, credentialStoreID, err := s.credentialSeeding(registration, AgentRequest{}, config.Harness(invocation.Harness))
+	if err != nil {
+		return invocation, newCredentialProjectionError(invocation.Harness)
+	}
+	if strings.TrimSpace(credentialStoreID) == "" || strings.TrimSpace(invocation.CredentialStoreID) != "" {
+		return invocation, nil
+	}
+	invocationStore, ok := runStore.(InvocationStore)
+	if !ok {
+		return invocation, errors.New("operational store does not support credential store persistence")
+	}
+	invocation.CredentialStoreID = credentialStoreID
+	invocation.UpdatedAt = s.deps.Now().UTC()
+	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
+		return invocation, fmt.Errorf("persist credential store identity during recovery: %w", err)
+	}
+	return invocation, nil
+}
+
+// restoreCredentialProjection reseeds the configured host source into the
+// already-mounted factory-managed volume. An absent source is intentionally a
+// no-op so harness-managed credentials in the role volume remain usable.
+func (s *Service) restoreCredentialProjection(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) error {
+	seed, _, err := s.credentialSeeding(registration, AgentRequest{}, config.Harness(invocation.Harness))
+	if err != nil || seed == nil {
+		if err == nil {
+			return nil
+		}
+		return newCredentialProjectionError(invocation.Harness)
+	}
+	if err := seed(ctx, run.ID); err != nil {
+		return newCredentialProjectionError(invocation.Harness)
+	}
+	return nil
+}
+
+// credentialProjectionError reports a credential restoration refusal without
+// retaining a host path, credential contents, or adapter output.
+type credentialProjectionError struct {
+	// Harness identifies the non-secret adapter whose projection is unavailable.
+	Harness string
+}
+
+// Error returns bounded operator guidance for restoring the managed projection.
+func (e *credentialProjectionError) Error() string {
+	if e == nil {
+		return "credential projection could not be restored; retry `factory auth refresh`"
+	}
+	return fmt.Sprintf("%s credential projection could not be restored; restore the configured source and retry `factory auth refresh`", credentialHarnessLabel(e.Harness))
+}
+
+// Unwrap lets the normal recovery policy pause the run in the auth state.
+func (e *credentialProjectionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return harness.NewAuthenticationExpiredError(credentialHarnessLabel(e.Harness))
+}
+
+// newCredentialProjectionError constructs the redacted credential recovery
+// error used at every host-source and worker-projection boundary.
+func newCredentialProjectionError(harnessName string) error {
+	return &credentialProjectionError{Harness: credentialHarnessLabel(harnessName)}
+}
+
+// credentialHarnessLabel bounds the adapter identity included in recovery
+// guidance so malformed persisted data cannot become an output channel.
+func credentialHarnessLabel(harnessName string) string {
+	switch config.Harness(harnessName) {
+	case config.HarnessCodex:
+		return string(config.HarnessCodex)
+	case config.HarnessClaude:
+		return string(config.HarnessClaude)
+	default:
+		return "harness"
+	}
 }

@@ -906,8 +906,17 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 				})
 				diagnosis.SourcesAgree = false
 			} else if active != nil && (allowSameProcessRecovery || !s.invocationStartedHere(active.ID)) && active.Status == store.InvocationStatusActive && !active.AttachRequired && strings.TrimSpace(active.NativeSessionID) != "" {
+				if diagnosis.SourcesAgree && active.RecoveryResumeCount > 0 && !hasRecoverableInvocationLoss(diagnosis) {
+					if credentialErr := s.restoreCredentialProjection(ctx, registration, run, *active); credentialErr != nil {
+						return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
+					}
+				}
 				if active.RecoveryResumeCount > 0 && hasRecoverableInvocationLoss(diagnosis) {
-					if _, repairErr := s.ensureWorkerForInvocation(ctx, registration, runStore, run, *active); repairErr != nil {
+					_, repairedInvocation, repairErr := s.ensureWorkerForInvocation(ctx, registration, runStore, run, *active)
+					if repairErr != nil {
+						if paused, pausedDiagnosis, outcome, credentialPauseErr, handled := s.pauseForCredentialProjectionError(ctx, registration, runStore, run, &diagnosis, active.Harness, repairErr); handled {
+							return paused, pausedDiagnosis, outcome, credentialPauseErr
+						}
 						addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
 							Kind:     RecoveryDiscrepancyInfrastructure,
 							Source:   "worker",
@@ -917,6 +926,9 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 						})
 						diagnosis.SourcesAgree = false
 					} else {
+						if credentialErr := s.restoreCredentialProjection(ctx, registration, run, repairedInvocation); credentialErr != nil {
+							return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
+						}
 						paused, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
 						if pauseErr != nil {
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, pauseErr
@@ -927,6 +939,9 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 				if diagnosis.SourcesAgree && active.RecoveryResumeCount == 0 {
 					_, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, run, *active)
 					if resumeErr != nil {
+						if paused, pausedDiagnosis, outcome, credentialPauseErr, handled := s.pauseForCredentialProjectionError(ctx, registration, runStore, run, &diagnosis, active.Harness, resumeErr); handled {
+							return paused, pausedDiagnosis, outcome, credentialPauseErr
+						}
 						classified := harness.ClassifyError(resumeErr, active.Harness)
 						if harness.IsRateLimited(classified) {
 							paused, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
@@ -997,6 +1012,50 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 		return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
 	}
 	return run, diagnosis, RecoveryOutcomeReconciled, nil
+}
+
+// pauseForCredentialProjection records a bounded credential discrepancy and
+// transitions the run through the same stopped-worker authentication boundary
+// used for an expired harness credential.
+func (s *Service) pauseForCredentialProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis *RecoveryDiagnosis, harnessName string, cause error) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error) {
+	recordCredentialProjectionDiscrepancy(diagnosis)
+	paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, run, harnessName)
+	if diagnosis == nil {
+		return paused, RecoveryDiagnosis{}, RecoveryOutcomeWaitingForHuman, errors.Join(cause, pauseErr)
+	}
+	return paused, *diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(cause, pauseErr)
+}
+
+// pauseForCredentialProjectionError handles a credential failure from either
+// worker preparation or native resume and reports whether it recognized one.
+func (s *Service) pauseForCredentialProjectionError(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis *RecoveryDiagnosis, harnessName string, cause error) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error, bool) {
+	var credentialErr *credentialProjectionError
+	if !errors.As(cause, &credentialErr) {
+		if diagnosis == nil {
+			return run, RecoveryDiagnosis{}, "", nil, false
+		}
+		return run, *diagnosis, "", nil, false
+	}
+	paused, pausedDiagnosis, outcome, pauseErr := s.pauseForCredentialProjection(ctx, registration, runStore, run, diagnosis, harnessName, credentialErr)
+	return paused, pausedDiagnosis, outcome, pauseErr, true
+}
+
+// recordCredentialProjectionDiscrepancy adds only a bounded credential-store
+// observation to recovery diagnosis; source paths and adapter output stay out
+// of persisted or operator-visible recovery metadata.
+func recordCredentialProjectionDiscrepancy(diagnosis *RecoveryDiagnosis) {
+	if diagnosis == nil {
+		return
+	}
+	addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+		Kind:        RecoveryDiscrepancyInfrastructure,
+		Source:      "credential store",
+		Field:       "projection",
+		Expected:    "configured credentials projected into the factory-managed store",
+		Observed:    "credential projection unavailable",
+		Recoverable: false,
+	})
+	diagnosis.SourcesAgree = false
 }
 
 // harnessResumeWasAlreadyReserved reports whether a pending native-resume

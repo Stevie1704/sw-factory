@@ -501,6 +501,10 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if capabilities.Name != previous.Harness {
 		return store.Invocation{}, run, fmt.Errorf("%w: harness %q cannot resume a %q session", ErrCheckRepairSessionUnavailable, capabilities.Name, previous.Harness)
 	}
+	seedCredentials, configuredCredentialStoreID, credentialErr := s.credentialSeeding(registration, AgentRequest{}, config.Harness(previous.Harness))
+	if credentialErr != nil {
+		return store.Invocation{}, run, newCredentialProjectionError(previous.Harness)
+	}
 	identifier, err := s.deps.NewRunID()
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("generate check-repair invocation identifier: %w", err)
@@ -543,8 +547,8 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		return store.Invocation{}, run, err
 	}
 	credentialStoreID := previous.CredentialStoreID
-	if credentialStoreID == "" && registration.Authentication.CodexAuthPath != "" {
-		credentialStoreID = registration.Path
+	if credentialStoreID == "" {
+		credentialStoreID = configuredCredentialStoreID
 	}
 	invocation = store.Invocation{
 		ID:                      invocationID,
@@ -665,6 +669,11 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		return store.Invocation{}, run, fmt.Errorf("start worker for check repair: %w", err)
 	}
 	workerStarted = true
+	if seedCredentials != nil {
+		if err := seedCredentials(ctx, run.ID); err != nil {
+			return store.Invocation{}, run, newCredentialProjectionError(previous.Harness)
+		}
+	}
 	next := run
 	next.Stage = store.StageImplementation
 	next.Status = store.StatusActive

@@ -543,7 +543,7 @@ func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request Credenti
 	}
 	info, err := os.Lstat(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("inspect %s auth file: %w", credential.Harness, err)
+		return fmt.Errorf("inspect %s auth file: credential source is unavailable", credential.Harness)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s auth path must not be a symbolic link", credential.Harness)
@@ -553,7 +553,7 @@ func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request Credenti
 	}
 	data, err := os.ReadFile(request.AuthPath)
 	if err != nil {
-		return fmt.Errorf("read %s auth file: %w", credential.Harness, err)
+		return fmt.Errorf("read %s auth file: credential source is unavailable", credential.Harness)
 	}
 	if len(data) == 0 {
 		return fmt.Errorf("%s auth file is empty", credential.Harness)
@@ -570,14 +570,14 @@ func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request Credenti
 		name, "/bin/sh", "-c",
 		"umask 077; rm -f \"" + credentialPath + "\"; cat > \"" + credentialPath + "\"; chmod 0444 \"" + credentialPath + "\"",
 	}, data); err != nil {
-		return fmt.Errorf("seed %s credentials: %w", credential.Harness, dockerStderrDetail(err))
+		return fmt.Errorf("seed %s credentials: credential projection failed", credential.Harness)
 	}
 	if _, err := r.runDocker(ctx, []string{
 		"exec", "--user", WorkerUser, "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
 		"mkdir -p \"" + credential.RoleHome + "\"; rm -f \"" + linkPath + "\"; ln -s \"" + credentialPath + "\" \"" + linkPath + "\"",
 	}); err != nil {
-		return fmt.Errorf("link %s credentials into the role home: %w", credential.Harness, dockerStderrDetail(err))
+		return fmt.Errorf("link %s credentials into the role home: credential projection failed", credential.Harness)
 	}
 	return nil
 }
@@ -1249,10 +1249,14 @@ func workerMountsPresent(request StartRequest, inspection Inspection) bool {
 	return true
 }
 
-// requiredInvocationMounts returns the mounts introduced by the visible
-// invocation seam; older adapters cannot safely compare the base mount sources.
+// requiredInvocationMounts returns the mounts that older inspections can
+// safely compare by destination, including the managed credential projection
+// when the invocation requires one.
 func requiredInvocationMounts(request StartRequest) []string {
-	required := make([]string, 0, 2)
+	required := make([]string, 0, 3)
+	if request.CredentialStoreID != "" {
+		required = append(required, CredentialPath)
+	}
 	if request.InvocationPath != "" {
 		required = append(required, InvocationPath)
 	}
