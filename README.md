@@ -645,9 +645,10 @@ With this repository's advisory policy and no route marker, the first
 invocation is the <code>implementation</code> role. On the
 <code>acceptance</code> route it is the <code>test</code> role; on the
 <code>design-acceptance</code> route it is the <code>architecture</code> role,
-whose accepted design is then handed to the test role. Use the visible implementation surface to own
-the complete red/green/refactor loop, including a focused behavioral test when
-practical, then submit the common implementation report from inside that worker
+whose accepted design is then handed to the test role. For an advisory run with
+no route marker, use the visible implementation surface to own the complete
+red/green/refactor loop, including a focused behavioral test when practical,
+then submit the common implementation report from inside that worker
 (see [Structured agent reports](#structured-agent-reports)). Accept it from the
 host:
 

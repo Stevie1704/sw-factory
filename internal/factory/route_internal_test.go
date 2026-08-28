@@ -137,6 +137,9 @@ func TestRouteProjectionsReportAnUnreadablePacket(t *testing.T) {
 	if got := routeDescriptionForRun(run); got != "unknown" {
 		t.Fatalf("routeDescriptionForRun() = %q, want unknown", got)
 	}
+	if got := statusRouteForRun(run); got == workflow.RouteDefault || got.Description() != "unknown" {
+		t.Fatalf("statusRouteForRun() = %q (%s), want an explicit unknown route", got, got.Description())
+	}
 	if isCleanStartStage(run) {
 		t.Fatal("isCleanStartStage() = true for an unreadable packet, want a fail-closed refusal")
 	}

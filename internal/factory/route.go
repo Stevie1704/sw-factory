@@ -14,6 +14,10 @@ import (
 // route, and the coordinator never infers one from changed files.
 const routeMarkerPrefix = "<!-- factory-route:"
 
+// unreadableRunRoute keeps status projections from presenting a corrupt
+// specification packet as the default workflow route.
+const unreadableRunRoute workflow.Route = "unknown"
+
 // parseIssueRoute reads the bounded route marker from a frozen issue body. An
 // absent marker selects the default route. A duplicate, unterminated, or
 // undeclared marker is a typed policy rejection rather than a silent default.
@@ -91,15 +95,21 @@ func routeForRun(run store.Run) (workflow.Route, bool) {
 	return packet.Route, true
 }
 
+// statusRouteForRun preserves an unreadable packet as an explicit unknown
+// route in the existing status result field.
+func statusRouteForRun(run store.Run) workflow.Route {
+	route, readable := routeForRun(run)
+	if !readable {
+		return unreadableRunRoute
+	}
+	return route
+}
+
 // routeDescriptionForRun renders the stable user-facing meaning of a run's
 // frozen route. An unreadable packet reports an unknown route rather than
 // presenting the default route as authoritative.
 func routeDescriptionForRun(run store.Run) string {
-	route, readable := routeForRun(run)
-	if !readable {
-		return "unknown"
-	}
-	return route.Description()
+	return statusRouteForRun(run).Description()
 }
 
 // designHandoffForInvocation returns the accepted architecture design that the

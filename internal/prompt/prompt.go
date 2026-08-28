@@ -182,11 +182,11 @@ Test-stage ownership:
 `
 		testContext += fmt.Sprintf("- Frozen additional test scope: %s\n", string(scope))
 		if request.DesignHandoff != nil {
-			design, err := json.Marshal(request.DesignHandoff)
+			design, err := marshalHandoff(request.DesignHandoff)
 			if err != nil {
 				return "", fmt.Errorf("encode accepted design handoff: %w", err)
 			}
-			testContext += fmt.Sprintf("\nAccepted architecture design (coordinator-owned):\n%s\n", string(design))
+			testContext += fmt.Sprintf("\nAccepted architecture design (coordinator-owned):\n%s\n", design)
 			for _, artifact := range request.DesignHandoff.ProductionFilesChanged {
 				testContext += fmt.Sprintf("- Design artifact to read in the mounted worktree: %s\n", sanitizeFenced(strings.TrimSpace(artifact)))
 			}
@@ -201,7 +201,7 @@ Implementation-owned TDD:
 - Include the focused test commands and behavioral evidence in the structured implementation handoff.
 `
 	} else if request.TestHandoff != nil || len(request.ProtectedTestPaths) > 0 || request.TestExemption != nil {
-		data, err := json.Marshal(struct {
+		data, err := marshalHandoff(struct {
 			Handoff   *store.TestHandoff        `json:"test_handoff,omitempty"`
 			Protected []store.ProtectedTestPath `json:"protected_test_paths,omitempty"`
 			Exemption *store.TestExemption      `json:"test_exemption,omitempty"`
@@ -209,7 +209,7 @@ Implementation-owned TDD:
 		if err != nil {
 			return "", fmt.Errorf("encode test handoff context: %w", err)
 		}
-		testContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n- Do not edit any protected test path or change its recorded content.\n", string(data))
+		testContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n- Do not edit any protected test path or change its recorded content.\n", data)
 	}
 	reviewContext := ""
 	if definition.Kind == workflow.RoleKindReview {
@@ -298,4 +298,14 @@ func sanitizeFenced(value string) string {
 		value = strings.ReplaceAll(value, marker, "[redacted delimiter]")
 	}
 	return value
+}
+
+// marshalHandoff serializes coordinator-owned handoff data and neutralizes any
+// prompt delimiter text carried in its untrusted string fields.
+func marshalHandoff(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return sanitizeFenced(string(data)), nil
 }
