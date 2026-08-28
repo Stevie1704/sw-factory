@@ -75,6 +75,15 @@ const (
 	PolicyRejectionStageUnavailable PolicyRejectionCode = "stage_unavailable"
 	// PolicyRejectionRoleStageMismatch means a role/stage pair is not declared.
 	PolicyRejectionRoleStageMismatch PolicyRejectionCode = "role_stage_mismatch"
+	// PolicyRejectionRouteInvalid means the frozen issue route marker is
+	// unterminated or names a route the factory does not declare.
+	PolicyRejectionRouteInvalid PolicyRejectionCode = "route_invalid"
+	// PolicyRejectionRouteDuplicate means the frozen issue declares more than
+	// one factory route marker.
+	PolicyRejectionRouteDuplicate PolicyRejectionCode = "route_duplicate"
+	// PolicyRejectionRouteUnavailable means repository policy declares no
+	// harness or model for a role the selected route runs.
+	PolicyRejectionRouteUnavailable PolicyRejectionCode = "route_unavailable"
 )
 
 // PolicyRejection is returned after a recognized command is visibly recorded
@@ -371,10 +380,10 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 // stage receives a new specification packet, including refreshes initiated
 // after implementation has already started.
 func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store.Stage {
-	if packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
-		return store.StageImplementation
+	if entry := postBaselineStage(packet); entry != store.StageTest {
+		return entry
 	}
-	if !testStageConfigured(packet.RepositoryConfig) {
+	if !testRolePolicySatisfied(packet) {
 		return store.StageTest
 	}
 	if testStageShouldRun(packet) && (run.Stage == store.StageTest || !run.TestStageSkipped) {
@@ -394,13 +403,13 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
 	run.TestStageSkipped = false
-	if packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
-		run.Stage = store.StageImplementation
+	if entry := postBaselineStage(packet); entry != store.StageTest {
+		run.Stage = entry
 		run.Status = store.StatusActive
-		run.LifecycleReason = "specification packet changed; implementation-owned TDD ready"
+		run.LifecycleReason = "specification packet changed; " + postBaselineReason(entry)
 		return
 	}
-	if !testStageConfigured(packet.RepositoryConfig) {
+	if !testRolePolicySatisfied(packet) {
 		run.Stage = store.StageTest
 		run.Status = store.StatusWaitingForHuman
 		run.LifecycleReason = "frozen repository packet lacks the mandatory test-stage role policy"

@@ -244,6 +244,14 @@ including focused behavioral tests and essential test infrastructure within its
 permitted scope. Deterministic gates and exact-checkpoint specification review
 remain unchanged in both modes.
 
+Repository configuration cannot declare a workflow route. A route is selected
+per issue with a frozen `factory-route` marker before claim, and it needs the
+roles it runs to be declared in `role_harness_defaults` and `model_options`:
+the `acceptance` route needs `test`, and the `design-acceptance` route needs
+`architecture` and `test`. A claim whose route names an undeclared role is
+refused with the `route_unavailable` policy code. Required test policy cannot
+be downgraded by a route. See the README section on workflow routes.
+
 ## Worker image build and digest pinning
 
 This repository owns a two-layer worker image definition:

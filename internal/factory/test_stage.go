@@ -56,36 +56,59 @@ func TestPolicyDescription(mode config.TestMode) string { return testPolicyDescr
 
 // implementationStartIsClean reports whether an implementation invocation may
 // begin without a separate test handoff. Required-mode skips retain their
-// recorded exemption, while advisory mode has no skip marker at all.
+// recorded exemption, while the implementation-owned path has no skip marker
+// at all.
 func implementationStartIsClean(run store.Run) bool {
 	if run.TestStageSkipped {
 		return true
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
-	return err == nil && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory
+	return err == nil && !independentTestStageDeclared(packet)
 }
 
-// testStageConfigured reports whether the frozen repository policy declares a
-// usable independent test role. Advisory mode intentionally has no required
-// test-role configuration because implementation owns its own TDD loop.
-func testStageConfigured(repository config.RepositoryConfig) bool {
-	if repository.TestPolicy.Mode == config.TestModeAdvisory {
+// independentTestStageDeclared reports whether the frozen packet places a
+// factory-owned test role before implementation. Required repository policy
+// always declares one, and a selected contract-first route declares one even
+// under advisory policy.
+func independentTestStageDeclared(packet SpecificationPacket) bool {
+	return packet.Route.RequiresIndependentTestStage() || packet.RepositoryConfig.TestPolicy.Mode == config.TestModeRequired
+}
+
+// testRolePolicySatisfied reports whether the frozen packet declares the
+// test-role harness and model policy it needs. A packet with no independent
+// test stage needs none, because implementation owns its own TDD loop.
+func testRolePolicySatisfied(packet SpecificationPacket) bool {
+	mode := packet.RepositoryConfig.TestPolicy.Mode
+	if mode != config.TestModeAdvisory && mode != config.TestModeRequired {
+		return false
+	}
+	if !independentTestStageDeclared(packet) {
 		return true
 	}
-	if repository.TestPolicy.Mode != config.TestModeRequired {
-		return false
+	return roleConfigured(packet.RepositoryConfig, workflow.RoleTest)
+}
+
+// postBaselineStage returns the stage a healthy baseline enters: the selected
+// route's entry stage when the issue chose one, and otherwise the stage the
+// frozen repository test policy selects.
+func postBaselineStage(packet SpecificationPacket) store.Stage {
+	if entry, ok := packet.Route.EntryStage(); ok {
+		return entry
 	}
-	if repository.RoleHarnessDefaults == nil || repository.ModelOptions == nil {
-		return false
+	if independentTestStageDeclared(packet) {
+		return store.StageTest
 	}
-	_, hasHarness := repository.RoleHarnessDefaults[workflow.RoleTest]
-	models, hasModels := repository.ModelOptions[workflow.RoleTest]
-	return hasHarness && hasModels && len(models) > 0
+	return store.StageImplementation
 }
 
 // testStageHumanExemption returns the frozen human exemption projection when
-// the issue marker and repository policy authorize it.
+// the issue marker and repository policy authorize it. A selected
+// contract-first route is a deliberate request for independently authored
+// acceptance evidence, so it overrides the skip marker.
 func testStageHumanExemption(packet SpecificationPacket) (*store.TestExemption, bool) {
+	if packet.Route.RequiresIndependentTestStage() {
+		return nil, false
+	}
 	if packet.RepositoryConfig.TestPolicy.Mode != config.TestModeRequired {
 		return nil, false
 	}
@@ -102,7 +125,7 @@ func testStageHumanExemption(packet SpecificationPacket) (*store.TestExemption, 
 // testStageShouldRun reports whether the frozen packet requires a visible test
 // role before implementation.
 func testStageShouldRun(packet SpecificationPacket) bool {
-	if packet.RepositoryConfig.TestPolicy.Mode != config.TestModeRequired {
+	if !independentTestStageDeclared(packet) {
 		return false
 	}
 	_, exempted := testStageHumanExemption(packet)
@@ -113,17 +136,21 @@ func testStageShouldRun(packet SpecificationPacket) bool {
 // bypassing the configured test handoff or inventing an unconfigured test role.
 func validateTestStageTransition(run store.Run, packet SpecificationPacket, requested store.Stage) error {
 	switch packet.RepositoryConfig.TestPolicy.Mode {
-	case config.TestModeAdvisory:
-		if requested == store.StageTest {
-			return errors.New("test stage is unavailable in advisory mode; implementation owns TDD")
-		}
-		return nil
-	case config.TestModeRequired:
-		// Continue with the independent test-stage checks below.
+	case config.TestModeAdvisory, config.TestModeRequired:
+		// Continue with the route- and policy-aware checks below.
 	default:
 		return errors.New("frozen repository packet has an unsupported test policy mode")
 	}
-	configured := testStageConfigured(packet.RepositoryConfig)
+	if !independentTestStageDeclared(packet) {
+		if requested == store.StageTest {
+			return errors.New("test stage is unavailable in advisory mode without a selected route; implementation owns TDD")
+		}
+		return nil
+	}
+	if packet.Route == workflow.RouteDesignAcceptance && run.Stage == store.StageClaim {
+		return fmt.Errorf("route %q requires the architecture stage before %q", packet.Route, requested)
+	}
+	configured := testRolePolicySatisfied(packet)
 	if !configured {
 		return errors.New("frozen repository packet lacks the mandatory test-stage role policy")
 	}
@@ -148,26 +175,28 @@ func validateTestStageTransition(run store.Run, packet SpecificationPacket, requ
 	return nil
 }
 
-// advanceAfterBaseline moves a required run to test stage, or moves an
-// advisory run directly to implementation. The transition is persisted through
-// the same status-comment boundary as every other visible run transition.
+// advanceAfterBaseline moves a run to the stage its frozen route and test
+// policy select: architecture for the design-acceptance route, the independent
+// test stage for the acceptance route or required policy, and
+// implementation-owned TDD otherwise. The transition is persisted through the
+// same status-comment boundary as every other visible run transition.
 func (s *Service) advanceAfterBaseline(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket) (store.Run, error) {
-	if !testStageConfigured(packet.RepositoryConfig) {
+	if !testRolePolicySatisfied(packet) {
 		return run, errors.New("frozen repository packet lacks the mandatory test-stage role policy")
 	}
 	next := run
-	if packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
-		next.Stage = store.StageImplementation
+	if entry := postBaselineStage(packet); entry != store.StageTest {
+		next.Stage = entry
 		next.Status = store.StatusActive
 		next.TestHandoff = nil
 		next.TestCheckpointSHA = ""
 		next.ProtectedTestPaths = nil
 		next.TestExemption = nil
 		next.TestStageSkipped = false
-		next.LifecycleReason = "baseline passed; implementation-owned TDD ready"
+		next.LifecycleReason = "baseline passed; " + postBaselineReason(entry)
 		next.UpdatedAt = s.deps.Now().UTC()
 		if err := s.persistAgentRunState(ctx, registration, runStore, run, next); err != nil {
-			return run, fmt.Errorf("persist post-baseline implementation transition: %w", err)
+			return run, fmt.Errorf("persist post-baseline %q transition: %w", entry, err)
 		}
 		return next, nil
 	}
@@ -206,6 +235,15 @@ func (s *Service) advanceAfterBaseline(ctx context.Context, registration config.
 		}
 	}
 	return updated, nil
+}
+
+// postBaselineReason renders the visible lifecycle reason for the stage a
+// healthy baseline entered.
+func postBaselineReason(stage store.Stage) string {
+	if stage == store.StageArchitecture {
+		return "architecture stage ready"
+	}
+	return "implementation-owned TDD ready"
 }
 
 // parseHumanTestExemption recognizes the exact frozen issue marker used to
@@ -287,10 +325,11 @@ func containsReportExemption(values []report.Exemption, wanted report.Exemption)
 	return false
 }
 
-// validateAdvisoryImplementationSignals rejects test-stage-only dispositions
-// from the implementation contract when advisory mode owns the TDD loop.
-func validateAdvisoryImplementationSignals(value report.Report, invocation store.Invocation, packet SpecificationPacket) error {
-	if invocation.Role != workflow.RoleImplementation || packet.RepositoryConfig.TestPolicy.Mode != config.TestModeAdvisory {
+// validateImplementationOwnedSignals rejects test-stage-only dispositions from
+// the implementation contract when no independent test stage exists and
+// implementation owns the TDD loop.
+func validateImplementationOwnedSignals(value report.Report, invocation store.Invocation, packet SpecificationPacket) error {
+	if invocation.Role != workflow.RoleImplementation || independentTestStageDeclared(packet) {
 		return nil
 	}
 	for _, exemption := range value.Exemptions {

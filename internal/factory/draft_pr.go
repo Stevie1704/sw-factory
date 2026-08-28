@@ -445,11 +445,12 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 		gateLines = append(gateLines, "- (none)")
 	}
 	policyMode := packet.RepositoryConfig.TestPolicy.Mode
-	testStageDisposition := fmt.Sprintf("- test policy: `%s`", safeStatusCommentValue(testPolicyDescription(policyMode)))
-	if policyMode == config.TestModeRequired {
-		testStageDisposition += "\n- test-stage disposition: none"
-		if run.TestExemption != nil {
-			testStageDisposition = fmt.Sprintf("- test policy: `%s`\n- test-stage disposition: `%s` (provisional): %s", safeStatusCommentValue(testPolicyDescription(policyMode)), safeStatusCommentValue(run.TestExemption.Kind), safeStatusCommentValue(run.TestExemption.Justification))
+	testStageDisposition := fmt.Sprintf("- test policy: `%s`\n- route: `%s`", safeStatusCommentValue(testPolicyDescription(policyMode)), safeStatusCommentValue(packet.Route.Description()))
+	if independentTestStageDeclared(packet) {
+		if run.TestExemption == nil {
+			testStageDisposition += "\n- test-stage disposition: none"
+		} else {
+			testStageDisposition += fmt.Sprintf("\n- test-stage disposition: `%s` (provisional): %s", safeStatusCommentValue(run.TestExemption.Kind), safeStatusCommentValue(run.TestExemption.Justification))
 		}
 	}
 	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s\n\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, generatedReviewSection(run), issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)

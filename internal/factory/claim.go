@@ -41,6 +41,10 @@ type SpecificationPacket struct {
 	RepositoryConfig config.RepositoryConfig `json:"repository_config"`
 	// Clarifications contains the authorized answers resolved after claim.
 	Clarifications []Clarification `json:"clarifications,omitempty"`
+	// Route is the factory-owned contract-first workflow route selected by the
+	// issue author before claim. It is frozen here and never recomputed from a
+	// later issue read, repository guidance, or agent report.
+	Route workflow.Route `json:"route,omitempty"`
 }
 
 // BootstrapLabelsResult reports the labels explicitly created for a repository.
@@ -176,6 +180,11 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return IssueResult{}, fmt.Errorf("issue #%d has another factory state label", issueNumber)
 	}
 
+	route, err := resolveClaimRoute(issue.Body, repositoryConfig)
+	if err != nil {
+		return IssueResult{}, fmt.Errorf("validate frozen issue route for #%d: %w", issueNumber, err)
+	}
+
 	runID, err := s.deps.NewRunID()
 	if err != nil {
 		return IssueResult{}, fmt.Errorf("generate run identifier: %w", err)
@@ -188,6 +197,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		Version:          specificationPacketVersion,
 		Issue:            cloneIssue(issue),
 		RepositoryConfig: repositoryConfig,
+		Route:            route,
 	}
 	packetData, err := json.Marshal(packet)
 	if err != nil {
@@ -712,7 +722,7 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		definition, declared := workflow.DefaultRegistry().Role(request.Role)
 		reviewStart = declared && definition.Kind == workflow.RoleKindReview
 	}
-	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && implementationStartIsClean(*run))
+	cleanStart := isCleanStartStage(*run)
 	if reviewStart && run.Stage == store.StageDraftPR {
 		return nil
 	}
@@ -840,7 +850,7 @@ func (s *Service) ensureLegacyAgentStartup(ctx context.Context, registration con
 		definition, declared := workflow.DefaultRegistry().Role(request.Role)
 		reviewStart = declared && definition.Kind == workflow.RoleKindReview
 	}
-	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && implementationStartIsClean(*run))
+	cleanStart := isCleanStartStage(*run)
 	if reviewStart && run.Stage == store.StageDraftPR {
 		return nil
 	}
@@ -953,6 +963,23 @@ func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Ru
 	return IssueResult{}, cause
 }
 
+// isCleanStartStage reports whether a run sits at a stage whose first
+// invocation has produced no accepted work yet. Such a stage is a completed
+// claim or handoff awaiting its first agent, not an interrupted run.
+func isCleanStartStage(run store.Run) bool {
+	switch run.Stage {
+	case store.StageClaim, store.StageTest:
+		return true
+	case store.StageArchitecture:
+		route, readable := routeForRun(run)
+		return readable && route == workflow.RouteDesignAcceptance
+	case store.StageImplementation:
+		return implementationStartIsClean(run)
+	default:
+		return false
+	}
+}
+
 // statusCommentBody renders the single editable supervision comment.
 func statusCommentBody(run store.Run) string {
 	started := run.CreatedAt.UTC().Format(time.RFC3339)
@@ -991,7 +1018,7 @@ func statusCommentBody(run store.Run) string {
 		}
 	}
 	review := specificationReviewStatusComment(run)
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n- test policy: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, testPolicyDescription(testPolicyModeForRun(run)), checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
 }
 
 // StatusCommentBody renders the coordinator-owned status projection for one

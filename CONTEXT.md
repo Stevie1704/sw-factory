@@ -14,7 +14,7 @@ successful merge completion or an unmerged closure requiring cancellation.
 _Avoid_: Screen scrape, hidden workflow transition
 
 **Specification packet**:
-The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot and accepted clarifications or revisions.
+The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot, the selected workflow route, and accepted clarifications or revisions.
 _Avoid_: Live issue, prompt
 
 **Checkpoint**:
@@ -29,8 +29,12 @@ _Avoid_: Agent claim, transcript, implementation handoff
 A repository-relative test or authorized test-infrastructure path recorded at the test checkpoint with its SHA-256 content identity; implementation cannot edit it directly.
 _Avoid_: Mutable test file, permitted production path
 
+**Workflow route**:
+The factory-owned stage sequence an authorized issue author selects with one bounded frozen issue marker before claim. `acceptance` runs the independent test role before implementation; `design-acceptance` runs architecture, then the test role, then implementation. An absent marker follows the repository test policy. The route is recorded in the specification packet and is immutable for the run; it is never inferred from changed files, issue prose, or model judgment.
+_Avoid_: Inferred workflow, repository-declared route, mode
+
 **Baseline**:
-The repository-declared setup and gate suite evaluated against the claimed run's base checkpoint before any agent edit; a blocking failure moves the run to failed preflight unless the frozen issue explicitly targets it. A healthy required-mode run enters the independent test stage; a healthy advisory run enters implementation-owned TDD directly.
+The repository-declared setup and gate suite evaluated against the claimed run's base checkpoint before any agent edit; a blocking failure moves the run to failed preflight unless the frozen issue explicitly targets it. A healthy required-mode run enters the independent test stage; a healthy advisory run enters implementation-owned TDD directly unless the frozen issue selected a workflow route.
 _Avoid_: Preflight assumption, agent diagnosis
 
 **Setup fingerprint**:

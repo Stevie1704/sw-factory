@@ -18,6 +18,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"github.com/google/uuid"
 )
 
@@ -245,6 +246,8 @@ type StatusResult struct {
 	LatestRun      *store.Run
 	// TestPolicyMode identifies the frozen TDD ownership mode of LatestRun.
 	TestPolicyMode config.TestMode
+	// Route identifies the frozen contract-first workflow route of LatestRun.
+	Route workflow.Route
 	// Recovery contains the read-only diagnosis for an interrupted run.
 	Recovery *RecoveryDiagnosis
 	// Deprecated: use LatestRun.
@@ -509,6 +512,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	}
 	if result.LatestRun != nil {
 		result.TestPolicyMode = testPolicyModeForRun(*result.LatestRun)
+		result.Route, _ = routeForRun(*result.LatestRun)
 		var pending *store.PendingEffect
 		if journal, ok := opened.(PendingEffectStore); ok {
 			pending, err = journal.PendingEffect(ctx, result.LatestRun.ID)

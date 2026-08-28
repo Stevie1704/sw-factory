@@ -72,6 +72,8 @@ type AgentLaunchResult struct {
 	// TestPolicyMode identifies whether this invocation belongs to an
 	// implementation-owned or independently staged TDD workflow.
 	TestPolicyMode config.TestMode
+	// Route identifies the frozen contract-first workflow route of the run.
+	Route workflow.Route
 }
 
 // AgentReportRequest selects a previously launched invocation for acceptance.
@@ -111,6 +113,11 @@ type InvocationPacket struct {
 	PromptVersion string `json:"prompt_version"`
 	// TestPolicyMode identifies the frozen TDD ownership mode for this invocation.
 	TestPolicyMode config.TestMode `json:"test_policy_mode"`
+	// Route identifies the frozen contract-first workflow route of the run.
+	Route workflow.Route `json:"route,omitempty"`
+	// DesignHandoff carries the accepted architecture design to the test role
+	// on the design-acceptance route.
+	DesignHandoff *store.RoleHandoff `json:"design_handoff,omitempty"`
 	// PermittedPaths lists repository-relative prefixes the coordinator will
 	// accept in the completed handoff.
 	PermittedPaths []string `json:"permitted_paths"`
@@ -133,8 +140,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version five adds the frozen TDD ownership projection.
-	invocationPacketVersion = 5
+	// Version six adds the frozen contract-first route and its design handoff.
+	invocationPacketVersion = 6
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
@@ -300,10 +307,10 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("decode specification packet for agent report: %w", err)
 	}
-	if isTestInvocation && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
-		return AgentResult{}, errors.New("test-stage reports are unavailable in advisory mode; implementation owns TDD")
+	if isTestInvocation && !independentTestStageDeclared(packet) {
+		return AgentResult{}, errors.New("test-stage reports are unavailable in advisory mode without a selected route; implementation owns TDD")
 	}
-	if err := validateAdvisoryImplementationSignals(value, *invocation, packet); err != nil {
+	if err := validateImplementationOwnedSignals(value, *invocation, packet); err != nil {
 		return AgentResult{}, err
 	}
 	validationContext.TestPaths = packet.RepositoryConfig.TestPolicy.TestPaths
@@ -513,10 +520,19 @@ func acceptedInvocationStatus(outcome report.Outcome) store.InvocationStatus {
 }
 
 // agentReportRunProjection applies the declared workflow transition for a
-// validated generic handoff in both journaled and legacy paths.
+// validated generic handoff in both journaled and legacy paths. An unreadable
+// frozen packet or an undeclared transition fails the run at its invocation
+// stage instead of guessing a route that could skip a selected stage.
 func agentReportRunProjection(previous store.Run, invocationStage store.Stage, value report.Report) store.Run {
 	next := previous
-	transition, err := workflow.DefaultRegistry().ResolveReportTransition(invocationStage, value.Outcome)
+	route, readable := routeForRun(previous)
+	if !readable {
+		next.Stage = invocationStage
+		next.Status = store.StatusFailed
+		next.PendingQuestions = nil
+		return next
+	}
+	transition, err := workflow.DefaultRegistry().ResolveRouteReportTransition(route, invocationStage, value.Outcome)
 	if err != nil {
 		next.Stage = invocationStage
 		next.Status = store.StatusFailed
@@ -827,7 +843,7 @@ func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStor
 	if err != nil {
 		return fmt.Errorf("validate baseline before %q transition: %w", request.Stage, err)
 	}
-	if run.Stage == store.StageClaim && request.Stage == store.StageImplementation && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
+	if run.Stage == store.StageClaim && request.Stage == store.StageImplementation && !independentTestStageDeclared(packet) {
 		if err := s.ensureBaselineReady(ctx, runStore, run, packet); err != nil {
 			return fmt.Errorf("cannot transition from claim to implementation without complete baseline results: %w", err)
 		}
