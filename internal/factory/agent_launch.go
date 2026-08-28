@@ -498,19 +498,16 @@ func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registr
 // promptForPersistedInvocation rebuilds the same role prompt from the frozen
 // packet and invocation packet after a process restart.
 func promptForPersistedInvocation(run store.Run, invocation store.Invocation, packet SpecificationPacket) (string, error) {
-	var persisted InvocationPacket
 	data, err := os.ReadFile(filepath.Join(invocation.InvocationDirectory, invocationPacketFileName))
 	if err != nil {
 		return "", fmt.Errorf("read persisted invocation packet: %w", err)
 	}
-	if err := json.Unmarshal(data, &persisted); err != nil {
+	persisted, err := decodePersistedInvocationPacket(data)
+	if err != nil {
 		return "", fmt.Errorf("decode persisted invocation packet: %w", err)
 	}
-	if persisted.SchemaVersion != invocationPacketVersion {
-		return "", fmt.Errorf("unsupported persisted invocation packet schema version %d", persisted.SchemaVersion)
-	}
-	if persisted.InvocationID != invocation.ID || persisted.RunID != run.ID {
-		return "", errors.New("persisted invocation packet identity does not match the run")
+	if err := validatePersistedInvocationPacket(run, invocation, persisted); err != nil {
+		return "", err
 	}
 	return prompt.Build(prompt.Request{
 		InvocationID:            invocation.ID,
@@ -528,6 +525,65 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 		CheckRepairBudget:       checkRepairBudget(persisted.CheckRepair),
 		ReviewContext:           persisted.ReviewContext,
 	})
+}
+
+// decodePersistedInvocationPacket accepts the current and retained historical
+// append-only packet shapes. Fields introduced after an older version remain at
+// their zero value, while missing, future, and unsupported versions fail closed.
+func decodePersistedInvocationPacket(data []byte) (InvocationPacket, error) {
+	var persisted InvocationPacket
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		return InvocationPacket{}, err
+	}
+	if !supportedInvocationPacketVersion(persisted.SchemaVersion) {
+		return InvocationPacket{}, fmt.Errorf("unsupported persisted invocation packet schema version %d", persisted.SchemaVersion)
+	}
+	return persisted, nil
+}
+
+// supportedInvocationPacketVersion reports whether a packet belongs to the
+// contiguous compatibility range maintained by the current factory.
+func supportedInvocationPacketVersion(version int) bool {
+	return version >= invocationPacketMinimumSupportedVersion && version <= invocationPacketVersion
+}
+
+// validatePersistedInvocationPacket verifies that a decoded packet still
+// describes the durable invocation and frozen run being resumed. Review
+// invocations additionally require their exact review context to be present.
+func validatePersistedInvocationPacket(run store.Run, invocation store.Invocation, persisted InvocationPacket) error {
+	if persisted.InvocationID != invocation.ID || persisted.RunID != run.ID {
+		return errors.New("persisted invocation packet identity does not match the run")
+	}
+	if strings.TrimSpace(persisted.Role) == "" || strings.TrimSpace(string(persisted.Stage)) == "" {
+		return errors.New("persisted invocation packet role and stage are required")
+	}
+	if persisted.Role != invocation.Role || persisted.Stage != invocation.Stage {
+		return errors.New("persisted invocation packet role and stage do not match the invocation")
+	}
+	if strings.TrimSpace(persisted.SpecificationPacket) == "" {
+		return errors.New("persisted invocation packet specification is required")
+	}
+	if persisted.SpecificationPacket != run.SpecificationPacket {
+		return errors.New("persisted invocation packet specification does not match the run")
+	}
+	if strings.TrimSpace(persisted.PromptVersion) == "" {
+		return errors.New("persisted invocation packet prompt version is required")
+	}
+	if invocation.PromptVersion != "" && persisted.PromptVersion != invocation.PromptVersion {
+		return errors.New("persisted invocation packet prompt version does not match the invocation")
+	}
+	if invocation.Role == workflow.RoleSpecificationReview {
+		if persisted.ReviewContext == nil {
+			return errors.New("persisted specification-review invocation packet has no review context")
+		}
+		if strings.TrimSpace(persisted.ReviewContext.CheckpointSHA) == "" {
+			return errors.New("persisted specification-review invocation packet has no review checkpoint")
+		}
+		if persisted.ReviewContext.CheckpointSHA != run.CheckpointSHA {
+			return errors.New("persisted specification-review invocation packet review checkpoint does not match the run")
+		}
+	}
+	return nil
 }
 
 // checkRepairAttempt extracts the bounded repair attempt from a persisted

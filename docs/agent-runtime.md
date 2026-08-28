@@ -98,6 +98,11 @@ same invocation twice. Gates, reports, transitions, draft pull requests, and
 other progression paths reconcile the durable effect journal and external
 identities before they resume an interrupted run.
 
+Invocation packets use append-only schemas. Restart recovery accepts the current
+and retained historical packet versions when their required identities and
+role-specific context are present; missing optional fields remain absent. Future
+or unsupported versions pause recovery rather than guessing at their semantics.
+
 When automatic recovery is exhausted, an operator can use the explicit
 recovery commands:
 
