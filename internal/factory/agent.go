@@ -121,6 +121,9 @@ type InvocationPacket struct {
 }
 
 const (
+	// invocationPacketMinimumSupportedVersion identifies the oldest append-only
+	// packet shape retained for restart recovery.
+	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
 	// Version four adds the independent-review context projection.
 	invocationPacketVersion = 4
