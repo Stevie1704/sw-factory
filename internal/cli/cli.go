@@ -241,7 +241,7 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 		if !writeOutput(output, errorsOutput, "agent %s\nrun: %s\ninvocation: %s\nstatus: %s\n", status, result.Run.ID, result.Invocation.ID, status) {
 			return 1
 		}
-	} else if result.Run.ID != "" {
+	} else if err == nil && result.Run.ID != "" {
 		if !writeOutput(output, errorsOutput, "check evaluation resumed\nrun: %s\nstage: %s\nstatus: %s\n", result.Run.ID, result.Run.Stage, result.Run.Status) {
 			return 1
 		}

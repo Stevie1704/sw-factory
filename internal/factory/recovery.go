@@ -407,6 +407,14 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 			Observed: "empty",
 		})
 	}
+	if terminalInvocationProjectionExpectedStopped(run, *active) {
+		// A completed implementation invocation intentionally leaves its worker
+		// and native process stopped while the coordinator evaluates the check
+		// stage (and readiness similarly has no live agent). The worker adapter
+		// may be unable to inspect a stopped process, so its historical terminal
+		// identities are not a live projection here.
+		return
+	}
 	if s.deps.Worker == nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 			Kind:     RecoveryDiscrepancyInfrastructure,
@@ -514,15 +522,6 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 			}
 		}
 	}
-	if terminalInvocationProjectionExpectedStopped(run, *active) {
-		// A completed implementation invocation intentionally leaves its worker
-		// and native process stopped while the coordinator evaluates the check
-		// stage (and readiness similarly has no live agent). The worker adapter
-		// may be unable to inspect a stopped process, so its historical terminal
-		// identities are not a live projection here.
-		return
-	}
-
 	terminalRuntime := s.deps.Terminal
 	if terminalRuntime == nil {
 		terminalRuntime = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)

@@ -788,7 +788,7 @@ func TestReconcileRepairsStaleProjectionAfterInterruptedCheck(t *testing.T) {
 	workspace := &journalRecoveryWorkspace{state: gitadapter.WorktreeState{
 		RepositoryPath: root, Branch: run.Branch, HeadSHA: run.CheckpointSHA,
 	}}
-	workerRuntime := &journalRecoveryWorker{inspection: worker.Inspection{Exists: true, Running: false}}
+	workerRuntime := &journalRecoveryWorker{inspectErr: errors.New("stopped worker cannot be inspected")}
 	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
 		Exists: true, WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
 		Surfaces: []terminal.Surface{
@@ -819,6 +819,9 @@ func TestReconcileRepairsStaleProjectionAfterInterruptedCheck(t *testing.T) {
 	}
 	if result.Outcome != RecoveryOutcomeReconciled || !result.Diagnosis.SourcesAgree || len(result.Diagnosis.Discrepancies) != 0 {
 		t.Fatalf("Reconcile() result = %#v, want reconciled projections", result)
+	}
+	if workerRuntime.inspectCalls != 0 {
+		t.Fatalf("worker inspections = %d, want none for completed implementation at check boundary", workerRuntime.inspectCalls)
 	}
 	if got := githubRuntime.issue.Labels; len(got) != 1 || got[0] != github.LabelAgentNeedsInput {
 		t.Fatalf("repaired issue labels = %#v, want agent-needs-input", got)
