@@ -905,6 +905,9 @@ factory auth refresh \
 
 - <code>resume</code> retries harness capacity or performs an explicit
   native-session recovery. It does not change the frozen packet.
+- When restart reconciliation has paused a coordinator-owned <code>check</code>
+  stage, <code>resume</code> re-enters check evaluation without launching a new
+  implementation agent; run <code>factory draft-pr</code> afterward.
 - A manually resumed native session sets an attach gate. <code>attach</code>
   restores the worker and visible terminal topology and clears that gate before
   report acceptance or workflow progression can continue.
@@ -1130,7 +1133,7 @@ supported by the installed binary.
 | <code>factory draft-pr</code> | Create the implementation checkpoint, push the branch, run gates, and create/update the draft PR. <code>--intervention</code> records a one-line operator marker. |
 | <code>factory poll</code> | Process one lifecycle and structured-command observation for the current run. |
 | <code>factory status</code> | Show the selected host configuration, repository, latest run, and recovery diagnosis. |
-| <code>factory resume</code> | Perform explicit native-session or harness-capacity recovery. |
+| <code>factory resume</code> | Perform explicit native-session or harness-capacity recovery, or re-enter a recovery-paused check stage. |
 | <code>factory attach</code> | Restore worker/terminal topology after a manual resume and clear the attach gate. |
 | <code>factory auth refresh</code> | Reseed a managed worker credential for the active invocation harness. |
 | <code>factory reconcile</code> | Run restart reconciliation, or abandon one inspected pending effect with <code>--abandon-effect</code> and <code>--reason</code>. |
@@ -1294,9 +1297,12 @@ terminal topology.
 
 The implementation invocation must have a terminal accepted report, the run
 must be <code>implementation/active</code> or in an allowed <code>check</code>
-wait, the worktree must be clean at the recorded checkpoint, and protected test
-paths must still match. Submit or correct the report first; do not create a
-manual checkpoint on the run branch.
+wait. A <code>check/waiting_for_human</code> run may continue only when its
+lifecycle reason begins with <code>restart reconciliation paused:</code>; use
+<code>factory reconcile</code> first, then <code>factory resume</code> or
+<code>factory draft-pr</code>. The worktree must be clean at the recorded
+checkpoint, and protected test paths must still match. Submit or correct the
+report first; do not create a manual checkpoint on the run branch.
 
 ### The worker image does not match
 

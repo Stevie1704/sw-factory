@@ -45,7 +45,8 @@ type Factory interface {
 	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
 	// RunAgent launches a visible agent and accepts its already-written report.
 	RunAgent(context.Context, AgentRequest) (AgentResult, error)
-	// Resume performs an explicit native-session or harness-capacity recovery.
+	// Resume performs an explicit native-session or harness-capacity recovery,
+	// or re-enters a coordinator-owned check paused by restart reconciliation.
 	Resume(context.Context, ResumeRequest) (ResumeResult, error)
 	// Attach acknowledges and reattaches a manually resumed visible session.
 	Attach(context.Context, AttachRequest) (AttachResult, error)

@@ -81,9 +81,10 @@ func (e *ManualResumeRequiredError) Error() string {
 	return fmt.Sprintf("manual harness resume for run %q requires `factory attach` before progression", e.RunID)
 }
 
-// Resume explicitly restores one persisted native session or retries a run
-// that is waiting for harness capacity. It never consumes the automatic
-// recovery ceiling.
+// Resume explicitly restores one persisted native session, retries a run that
+// is waiting for harness capacity, or re-enters a coordinator-owned check
+// paused by restart reconciliation. It never consumes the automatic recovery
+// ceiling.
 func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResult, error) {
 	if err := validateOptionalRunID(request.RunID); err != nil {
 		return ResumeResult{}, err
@@ -142,6 +143,13 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 		}
 	}
 	if active == nil {
+		if run.Stage == store.StageCheck && isRestartReconciliationPause(*run) {
+			resumed, resumeErr := s.resumeRecoveredCheck(ctx, registration, runStore, *run)
+			if resumeErr != nil {
+				return ResumeResult{Run: resumed}, resumeErr
+			}
+			return ResumeResult{Run: resumed}, nil
+		}
 		requestForRun := normalizeAgentRequest(agentRequestForRun(*run))
 		launchRun := *run
 		if launchRun.Status != store.StatusActive {

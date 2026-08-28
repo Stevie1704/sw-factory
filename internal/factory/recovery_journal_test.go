@@ -721,3 +721,212 @@ func TestRemoteBranchBehindCheckpointIsNotADiscrepancy(t *testing.T) {
 		t.Fatalf("diverged discrepancy field = %q, want %q", divergedDiagnosis.Discrepancies[0].Field, "head")
 	}
 }
+
+// TestReconcileRepairsStaleProjectionAfterInterruptedCheck verifies that a
+// status-effect recovery can repair the GitHub projection after an earlier
+// local pause, while treating the completed implementation runtime as stopped
+// during the coordinator-owned check stage.
+func TestReconcileRepairsStaleProjectionAfterInterruptedCheck(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(worktreePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(root, "state", "factory.db")
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		Issue:   github.Issue{Number: 42, Title: "Recover check", Body: "recover the check stage"},
+		RepositoryConfig: config.RepositoryConfig{
+			TargetBranch: "main",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := store.Run{
+		ID: "run-stale-check-projection", RepositoryPath: root, IssueNumber: 42,
+		Stage: store.StageCheck, Status: store.StatusWaitingForHuman,
+		Branch: "factory/run-stale-check-projection", Worktree: worktreePath,
+		CheckpointSHA: strings.Repeat("a", 40), StatusCommentID: "status-stale-check-projection",
+		LifecycleReason:     "restart reconciliation paused: pending commit status could not be published",
+		SpecificationPacket: string(packetData), CreatedAt: now, UpdatedAt: now,
+	}
+	activeProjection := run
+	activeProjection.Status = store.StatusActive
+	activeProjection.LifecycleReason = "evaluating implementation checkpoint"
+	invocation := store.Invocation{
+		ID: "inv-stale-check-projection", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-stale-check-projection", WorkspaceID: "workspace-stale-check-projection",
+		StatusSurfaceID:         "surface-status-stale-check-projection",
+		ImplementationSurfaceID: "surface-implementation-stale-check-projection",
+		ChecksSurfaceID:         "surface-checks-stale-check-projection",
+		Status:                  store.InvocationStatusCompleted, CreatedAt: now, UpdatedAt: now,
+	}
+	opened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveRun(ctx, run); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	githubRuntime := &effectMatrixGitHub{
+		issue:         github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(activeProjection)},
+	}
+	workspace := &journalRecoveryWorkspace{state: gitadapter.WorktreeState{
+		RepositoryPath: root, Branch: run.Branch, HeadSHA: run.CheckpointSHA,
+	}}
+	workerRuntime := &journalRecoveryWorker{inspectErr: errors.New("stopped worker cannot be inspected")}
+	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
+		Exists: true, WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
+		Surfaces: []terminal.Surface{
+			{ID: terminal.SurfaceID(invocation.StatusSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+			{ID: terminal.SurfaceID(invocation.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+			{ID: terminal.SurfaceID(invocation.ChecksSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+		},
+	}}
+	// An implementation session cannot be inspected through Docker after its
+	// worker has been stopped. Check-stage recovery must not turn that expected
+	// condition into a second discrepancy.
+	harnessRuntime := &journalRecoveryHarness{}
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path: root, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
+	}}}
+	service := &Service{configPath: "/host/config.yaml", deps: Dependencies{
+		Config:    effectMatrixConfig{host: host},
+		OpenStore: func(ctx context.Context, path string) (OperationalStore, error) { return store.Open(ctx, path) },
+		GitHub:    githubRuntime, GitWorkspace: workspace, Worktree: workspace,
+		Worker: workerRuntime, Terminal: terminalRuntime, Harness: harnessRuntime,
+		Now: func() time.Time { return now },
+	}}
+
+	result, err := service.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v, want stale projection repair", err)
+	}
+	if result.Outcome != RecoveryOutcomeReconciled || !result.Diagnosis.SourcesAgree || len(result.Diagnosis.Discrepancies) != 0 {
+		t.Fatalf("Reconcile() result = %#v, want reconciled projections", result)
+	}
+	if workerRuntime.inspectCalls != 0 {
+		t.Fatalf("worker inspections = %d, want none for completed implementation at check boundary", workerRuntime.inspectCalls)
+	}
+	if got := githubRuntime.issue.Labels; len(got) != 1 || got[0] != github.LabelAgentNeedsInput {
+		t.Fatalf("repaired issue labels = %#v, want agent-needs-input", got)
+	}
+	reopened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	persisted, err := reopened.CurrentRun(ctx)
+	if err != nil || persisted == nil {
+		t.Fatalf("persisted recovered run = %#v, error = %v", persisted, err)
+	}
+	if persisted.Status != store.StatusWaitingForHuman || persisted.Revision <= run.Revision {
+		t.Fatalf("persisted recovered run = %#v, want waiting state with repaired revision", persisted)
+	}
+	if githubRuntime.statusComment.Body != statusCommentBody(*persisted) {
+		t.Fatalf("repaired status comment = %q, want %q", githubRuntime.statusComment.Body, statusCommentBody(*persisted))
+	}
+}
+
+// TestResumeReentersARecoveryPausedCheck verifies that explicit resume clears
+// only the restart-reconciliation pause and does not launch a new agent for a
+// coordinator-owned check stage.
+func TestResumeReentersARecoveryPausedCheck(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 28, 12, 30, 0, 0, time.UTC)
+	run := store.Run{
+		ID: "run-resume-check", RepositoryPath: "/repo", IssueNumber: 42,
+		Stage: store.StageCheck, Status: store.StatusWaitingForHuman,
+		Branch: "factory/run-resume-check", Worktree: "/worktree/run-resume-check",
+		CheckpointSHA: strings.Repeat("b", 40), StatusCommentID: "status-resume-check",
+		LifecycleReason: "restart reconciliation paused: stale GitHub projection",
+		CreatedAt:       now, UpdatedAt: now,
+	}
+	runStore := &recoveryResumeStore{run: run}
+	githubRuntime := &effectMatrixGitHub{
+		issue:         github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+	}
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path: run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		OperationalDataPath: "/state/factory.db", RepositoryConfigPath: "/repo/factory.yaml",
+	}}}
+	service := &Service{configPath: "/host/config.yaml", deps: Dependencies{
+		Config:    effectMatrixConfig{host: host},
+		OpenStore: func(context.Context, string) (OperationalStore, error) { return runStore, nil },
+		GitHub:    githubRuntime, Now: func() time.Time { return now },
+	}}
+
+	result, err := service.Resume(ctx, ResumeRequest{RunID: run.ID})
+	if err != nil {
+		t.Fatalf("Resume() error = %v, want check re-entry", err)
+	}
+	if result.Run.Status != store.StatusActive || runStore.run.Status != store.StatusActive {
+		t.Fatalf("resumed run = %#v, want active check", result.Run)
+	}
+	if len(runStore.saved) != 1 {
+		t.Fatalf("resume persistence count = %d, want one state transition", len(runStore.saved))
+	}
+	if got := githubRuntime.issue.Labels; len(got) != 1 || got[0] != github.LabelAgentRunning {
+		t.Fatalf("resumed issue labels = %#v, want agent-running", got)
+	}
+	if githubRuntime.statusComment.Body != statusCommentBody(runStore.run) {
+		t.Fatalf("resumed status comment = %q, want %q", githubRuntime.statusComment.Body, statusCommentBody(runStore.run))
+	}
+}
+
+// recoveryResumeStore supplies the small public resume seam without exposing
+// a visible invocation, allowing the test to detect an accidental fresh launch.
+type recoveryResumeStore struct {
+	run   store.Run
+	saved []store.Run
+}
+
+// CurrentRun returns the one recovery-paused run.
+func (s *recoveryResumeStore) CurrentRun(context.Context) (*store.Run, error) {
+	run := s.run
+	return &run, nil
+}
+
+// SaveRun records and persists the resumed run projection.
+func (s *recoveryResumeStore) SaveRun(_ context.Context, run store.Run) error {
+	s.run = run
+	s.saved = append(s.saved, run)
+	return nil
+}
+
+// ClaimLifecycleNotification satisfies the run-store notification seam.
+func (*recoveryResumeStore) ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error) {
+	return true, nil
+}
+
+// ReleaseLifecycleNotification satisfies the run-store notification seam.
+func (*recoveryResumeStore) ReleaseLifecycleNotification(context.Context, string, store.Status) error {
+	return nil
+}
+
+// ActiveInvocation reports that check re-entry has no visible agent to launch.
+func (*recoveryResumeStore) ActiveInvocation(context.Context, string) (*store.Invocation, error) {
+	return nil, nil
+}
+
+// Close satisfies the operational-store seam.
+func (*recoveryResumeStore) Close() error { return nil }
+
+var _ RunStore = (*recoveryResumeStore)(nil)
+var _ ActiveInvocationStore = (*recoveryResumeStore)(nil)

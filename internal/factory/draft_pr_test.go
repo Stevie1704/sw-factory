@@ -206,6 +206,89 @@ func TestCreateDraftPullRequestPublishesGateStatusesForAPushedCheckpoint(t *test
 	}
 }
 
+// TestCreateDraftPullRequestReentersRecoveryPausedCheck verifies that a
+// reconciled check-stage pause can continue through the normal draft-PR
+// command without starting a replacement implementation agent.
+func TestCreateDraftPullRequestReentersRecoveryPausedCheck(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repo")
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(filepath.Join(repositoryPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repositoryPath, ".git", "HEAD"), []byte("ref: refs/heads/factory/run-recovered-check\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := validRepositoryConfig()
+	policy.Gates = []config.GateConfig{{Name: "format", Command: "format", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
+	runStore := &fakeRunStore{}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{
+		Number: 42, Title: "Recover the check stage", Body: "Continue gate evaluation after recovery.", State: "open",
+		Labels: []string{github.LabelAgentReady},
+	}}
+	workspace := &draftGitWorkspace{
+		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-recovered-check", Worktree: worktreePath},
+		state:     gitadapter.WorktreeState{Branch: "factory/run-recovered-check", HeadSHA: factoryGateCheckpoint},
+	}
+	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}}}
+	statuses := &gateStatuses{}
+	pullRequests := &fakePullRequests{created: github.PullRequest{
+		Number: 20, URL: "https://github.com/example/project/pull/20", State: "open", Draft: true,
+		HeadBranch: "factory/run-recovered-check", BaseBranch: "main",
+	}}
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+	}}}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:         &fakeConfig{value: host},
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:         &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		PullRequests:   pullRequests,
+		Worktree:       workspace,
+		GitWorkspace:   workspace,
+		Worker:         workerRuntime,
+		CommitStatuses: statuses,
+		Now:            func() time.Time { return time.Date(2026, 8, 28, 13, 0, 0, 0, time.UTC) },
+		NewRunID:       func() (string, error) { return "run-recovered-check", nil },
+	})
+	claimed, err := service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	claimed.Run.Stage = store.StageCheck
+	claimed.Run.Status = store.StatusWaitingForHuman
+	claimed.Run.LifecycleReason = "restart reconciliation paused: stale GitHub projection"
+	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
+		t.Fatalf("SaveRun() fixture setup error = %v", err)
+	}
+	githubAdapter.issueValue.Labels = []string{github.LabelAgentNeedsInput}
+	githubAdapter.statusComment = github.Comment{ID: claimed.Run.StatusCommentID, Body: factory.StatusCommentBody(claimed.Run)}
+
+	result, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("CreateDraftPullRequest() error = %v", err)
+	}
+	if result.Run.Stage != store.StageDraftPR || result.PullRequest.Number != 20 {
+		t.Fatalf("result = %#v, want draft PR after recovered check", result)
+	}
+	if len(workspace.checkpoints) != 0 || len(workspace.pushes) != 1 || len(statuses.values) != 1 || statuses.values[0].SHA != factoryGateCheckpoint {
+		t.Fatalf("check effects = pushes %#v statuses %#v, want one evaluated checkpoint", workspace.pushes, statuses.values)
+	}
+	if len(workerRuntime.commands) != 2 || workerRuntime.commands[0].Command != policy.Setup || workerRuntime.commands[1].Command != "format" {
+		t.Fatalf("check commands = %#v, want setup and format only", workerRuntime.commands)
+	}
+	if got := githubAdapter.issueValue.Labels; len(got) != 1 || got[0] != github.LabelAgentRunning {
+		t.Fatalf("final issue labels = %#v, want agent-running", got)
+	}
+}
+
 // unpushedCheckpointStatuses answers a status for an unpushed commit the way
 // GitHub does, so a test proves the checkpoint reaches the remote first.
 type unpushedCheckpointStatuses struct {
