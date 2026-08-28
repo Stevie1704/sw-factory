@@ -50,7 +50,7 @@ func (s *Service) PollLifecycle(ctx context.Context, request LifecycleRequest) (
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 
-	registration, runStore, run, err := s.openCommandRunStore(ctx)
+	registration, runStore, run, err := s.openLifecycleRunStore(ctx)
 	if err != nil {
 		return LifecycleResult{}, err
 	}
@@ -61,7 +61,53 @@ func (s *Service) PollLifecycle(ctx context.Context, request LifecycleRequest) (
 	if request.RunID != "" && request.RunID != run.ID {
 		return LifecycleResult{}, fmt.Errorf("latest run is %s, not %s", run.ID, request.RunID)
 	}
-	return s.observeLifecycle(ctx, registration, runStore, run)
+	result, err := s.observeLifecycle(ctx, registration, runStore, run)
+	if err != nil || result.Outcome != LifecycleUnchanged || store.IsTerminalStatus(result.Run.Status) {
+		return result, err
+	}
+	if err := s.ensureProgressionStartup(ctx, registration, runStore, run); err != nil {
+		return LifecycleResult{}, err
+	}
+	result.Run = *run
+	return result, nil
+}
+
+// openLifecycleRunStore opens the active run first, falling back to the latest
+// terminal projection only when no run is active. A pending effect still crosses
+// the ordinary reconciliation boundary first, because lifecycle terminalization
+// must not replace an unresolved mutation.
+func (s *Service) openLifecycleRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
+	registration, runStore, err := s.openRunStore(ctx)
+	if err != nil {
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	run, err := runStore.CurrentRun(ctx)
+	if err == nil && run == nil {
+		if latestStore, ok := runStore.(LatestRunStore); ok {
+			run, err = latestStore.LatestRun(ctx)
+		}
+	}
+	if err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	journal, journaled := runStore.(PendingEffectStore)
+	if !journaled || run == nil {
+		return registration, runStore, run, nil
+	}
+	pending, err := journal.PendingEffect(ctx, run.ID)
+	if err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, fmt.Errorf("read pending effect before lifecycle observation: %w", err)
+	}
+	if pending == nil {
+		return registration, runStore, run, nil
+	}
+	if err := s.ensureProgressionStartup(ctx, registration, runStore, run); err != nil {
+		_ = runStore.Close()
+		return config.RepositoryRegistration{}, nil, nil, err
+	}
+	return registration, runStore, run, nil
 }
 
 // observeLifecycle applies one lifecycle decision against an already-open

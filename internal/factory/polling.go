@@ -194,6 +194,21 @@ func (s *Service) reconcileRegisteredRun(ctx context.Context, registration confi
 	if err != nil {
 		return fmt.Errorf("read persisted run for startup reconciliation: %w", err)
 	}
+	if journal, journaled := runStore.(PendingEffectStore); journaled && run != nil {
+		pending, pendingErr := journal.PendingEffect(ctx, run.ID)
+		if pendingErr != nil {
+			return fmt.Errorf("read pending effect before startup lifecycle observation: %w", pendingErr)
+		}
+		if pending == nil {
+			lifecycle, lifecycleErr := s.observeLifecycle(ctx, registration, runStore, run)
+			if lifecycleErr != nil {
+				return fmt.Errorf("observe lifecycle before startup reconciliation: %w", lifecycleErr)
+			}
+			if lifecycle.Outcome != LifecycleUnchanged || store.IsTerminalStatus(lifecycle.Run.Status) {
+				return nil
+			}
+		}
+	}
 	return s.ensureAgentStartup(ctx, registration, runStore, run, AgentRequest{})
 }
 

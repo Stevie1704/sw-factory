@@ -620,12 +620,13 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 
 // terminalInvocationProjectionExpectedStopped reports the coordinator-owned
 // boundaries where a completed invocation is historical rather than live. A
-// human pause in another stage still inspects its terminal runtime identities.
+// draft pull request may retain a gate worker whose contract deliberately
+// differs from the earlier implementation invocation.
 func terminalInvocationProjectionExpectedStopped(run store.Run, invocation store.Invocation) bool {
 	if invocation.Status == store.InvocationStatusActive {
 		return false
 	}
-	if run.Stage == store.StageCheck && invocation.Stage == store.StageImplementation {
+	if (run.Stage == store.StageCheck || run.Stage == store.StageDraftPR) && invocation.Stage == store.StageImplementation {
 		return true
 	}
 	return run.Stage == store.StageReady
