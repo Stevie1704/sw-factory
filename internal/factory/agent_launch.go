@@ -55,7 +55,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			}
 			if !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount > 0 {
 				s.markInvocationStarted(active.ID)
-				return AgentLaunchResult{Invocation: *active}, nil
+				return AgentLaunchResult{Invocation: *active, TestPolicyMode: testPolicyModeForRun(*run)}, nil
 			}
 			return AgentLaunchResult{}, fmt.Errorf("run %q already has active invocation %q", run.ID, active.ID)
 		}
@@ -115,7 +115,10 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, fmt.Errorf("publish pending specification review status: %w", err)
 		}
 	}
-	if roleDefinition.RequiresTestHandoff && run.Stage == store.StageClaim && !run.TestStageSkipped {
+	if roleDefinition.Kind == workflow.RoleKindTest && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
+		return AgentLaunchResult{}, errors.New("test role is unavailable in advisory mode; implementation owns TDD")
+	}
+	if roleDefinition.RequiresTestHandoff && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeRequired && run.Stage == store.StageClaim && !run.TestStageSkipped {
 		return AgentLaunchResult{}, errors.New("implementation agent cannot bypass the configured test stage")
 	}
 	policy, err := resolveAgentPolicy(packet.RepositoryConfig, request)
@@ -155,6 +158,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Stage:               stage,
 		SpecificationPacket: run.SpecificationPacket,
 		PromptVersion:       roleDefinition.PromptVersion,
+		TestPolicyMode:      packet.RepositoryConfig.TestPolicy.Mode,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
 		TestHandoff:         run.TestHandoff,
 		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
@@ -168,6 +172,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Stage:                   string(stage),
 		SpecificationPacket:     run.SpecificationPacket,
 		RepositoryGuidance:      packet.Issue.Body,
+		TestPolicyMode:          string(packet.RepositoryConfig.TestPolicy.Mode),
 		TestHandoff:             run.TestHandoff,
 		ProtectedTestPaths:      run.ProtectedTestPaths,
 		TestExemption:           run.TestExemption,
@@ -395,7 +400,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		}
 	}
 	s.markInvocationStarted(invocation.ID)
-	return AgentLaunchResult{Invocation: invocation, Prompt: promptText}, nil
+	return AgentLaunchResult{Invocation: invocation, Prompt: promptText, TestPolicyMode: packet.RepositoryConfig.TestPolicy.Mode}, nil
 }
 
 // resumePersistedInvocation restores one active invocation after a coordinator
@@ -520,6 +525,7 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 		Stage:                   string(invocation.Stage),
 		SpecificationPacket:     run.SpecificationPacket,
 		RepositoryGuidance:      packet.Issue.Body,
+		TestPolicyMode:          string(packet.RepositoryConfig.TestPolicy.Mode),
 		TestHandoff:             persisted.TestHandoff,
 		ProtectedTestPaths:      persisted.ProtectedTestPaths,
 		TestExemption:           persisted.TestExemption,
@@ -575,6 +581,15 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 	}
 	if invocation.PromptVersion != "" && persisted.PromptVersion != invocation.PromptVersion {
 		return errors.New("persisted invocation packet prompt version does not match the invocation")
+	}
+	if persisted.TestPolicyMode != "" {
+		packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+		if err != nil {
+			return fmt.Errorf("decode persisted invocation test policy: %w", err)
+		}
+		if persisted.TestPolicyMode != packet.RepositoryConfig.TestPolicy.Mode {
+			return errors.New("persisted invocation packet test policy does not match the frozen repository policy")
+		}
 	}
 	if invocation.Role == workflow.RoleSpecificationReview {
 		if persisted.ReviewContext == nil {

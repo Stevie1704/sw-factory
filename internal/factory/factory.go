@@ -243,6 +243,8 @@ type StatusResult struct {
 	ConfigPath     string
 	RepositoryPath string
 	LatestRun      *store.Run
+	// TestPolicyMode identifies the frozen TDD ownership mode of LatestRun.
+	TestPolicyMode config.TestMode
 	// Recovery contains the read-only diagnosis for an interrupted run.
 	Recovery *RecoveryDiagnosis
 	// Deprecated: use LatestRun.
@@ -506,6 +508,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 		return StatusResult{}, err
 	}
 	if result.LatestRun != nil {
+		result.TestPolicyMode = testPolicyModeForRun(*result.LatestRun)
 		var pending *store.PendingEffect
 		if journal, ok := opened.(PendingEffectStore); ok {
 			pending, err = journal.PendingEffect(ctx, result.LatestRun.ID)

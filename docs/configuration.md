@@ -170,7 +170,7 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies (including the mandatory `test` role), optional `reasoning_effort_options` for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 ## Per-role harness, model, and reasoning effort
 
@@ -228,11 +228,21 @@ rejection, so a comment cannot inject a process argument into a launched
 harness. The recorded choice is still validated against the frozen repository
 policy when the next invocation starts.
 
-The test stage is default-on for both supported `test_policy.mode` values.
-A human skip requires `allow_human_exemption: true` and the frozen issue marker
-`<!-- factory-test-exemption: human | justification -->`. The test checkpoint
-and implementation checkpoint are separate commits; the operational store
-retains the test handoff and protected-path hashes between them.
+`test_policy.mode: required` enables the independent test role. A required-mode
+run enters `test/active`, verifies coordinator-rerun red evidence, creates a
+separate test checkpoint, and protects the accepted test paths before
+implementation. A human skip additionally requires
+`allow_human_exemption: true` and the frozen issue marker
+`<!-- factory-test-exemption: human | justification -->`; technical skips are
+still provisional and policy-controlled.
+
+`test_policy.mode: advisory` is the implementation-owned TDD path. A healthy
+baseline moves directly to `implementation/active`; there is no separate test
+invocation, handoff, checkpoint, protected-test path, exemption, or test-stage
+dispute. The implementation prompt owns the complete red/green/refactor loop,
+including focused behavioral tests and essential test infrastructure within its
+permitted scope. Deterministic gates and exact-checkpoint specification review
+remain unchanged in both modes.
 
 ## Worker image build and digest pinning
 

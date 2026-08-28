@@ -69,6 +69,9 @@ type AgentLaunchResult struct {
 	Invocation store.Invocation
 	// Prompt is returned for operator diagnostics and is not persisted as a transcript.
 	Prompt string
+	// TestPolicyMode identifies whether this invocation belongs to an
+	// implementation-owned or independently staged TDD workflow.
+	TestPolicyMode config.TestMode
 }
 
 // AgentReportRequest selects a previously launched invocation for acceptance.
@@ -106,6 +109,8 @@ type InvocationPacket struct {
 	SpecificationPacket string `json:"specification_packet"`
 	// PromptVersion identifies the versioned core prompt.
 	PromptVersion string `json:"prompt_version"`
+	// TestPolicyMode identifies the frozen TDD ownership mode for this invocation.
+	TestPolicyMode config.TestMode `json:"test_policy_mode"`
 	// PermittedPaths lists repository-relative prefixes the coordinator will
 	// accept in the completed handoff.
 	PermittedPaths []string `json:"permitted_paths"`
@@ -128,8 +133,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version four adds the independent-review context projection.
-	invocationPacketVersion = 4
+	// Version five adds the frozen TDD ownership projection.
+	invocationPacketVersion = 5
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
@@ -294,6 +299,12 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("decode specification packet for agent report: %w", err)
+	}
+	if isTestInvocation && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
+		return AgentResult{}, errors.New("test-stage reports are unavailable in advisory mode; implementation owns TDD")
+	}
+	if err := validateAdvisoryImplementationSignals(value, *invocation, packet); err != nil {
+		return AgentResult{}, err
 	}
 	validationContext.TestPaths = packet.RepositoryConfig.TestPolicy.TestPaths
 	validationContext.TestInfrastructurePaths = packet.RepositoryConfig.TestPolicy.InfrastructurePaths
@@ -809,12 +820,21 @@ func selectAgentRole(run store.Run, request AgentRequest) (AgentRequest, error) 
 // stage from re-entering test or implementation without a matching baseline
 // projection for that exact checkpoint.
 func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStore, run store.Run, request TransitionRequest) error {
-	if run.Stage != store.StageCheck || (request.Stage != store.StageTest && request.Stage != store.StageImplementation) {
+	if request.Stage != store.StageTest && request.Stage != store.StageImplementation {
 		return nil
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
 		return fmt.Errorf("validate baseline before %q transition: %w", request.Stage, err)
+	}
+	if run.Stage == store.StageClaim && request.Stage == store.StageImplementation && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
+		if err := s.ensureBaselineReady(ctx, runStore, run, packet); err != nil {
+			return fmt.Errorf("cannot transition from claim to implementation without complete baseline results: %w", err)
+		}
+		return nil
+	}
+	if run.Stage != store.StageCheck {
+		return nil
 	}
 	if err := s.ensureBaselineReadyAtCheckpoint(ctx, runStore, run, packet, run.CheckpointSHA); err != nil {
 		return fmt.Errorf("cannot transition from check to %q at checkpoint %q without complete baseline results: %w", request.Stage, run.CheckpointSHA, err)

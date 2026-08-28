@@ -22,7 +22,7 @@ An immutable commit representing accepted work at a stage boundary and identifyi
 _Avoid_: Snapshot, latest code
 
 **Test-stage handoff**:
-The bounded acceptance coverage, changed test paths, focused red-test command, expected failure reason, observed failure evidence, infrastructure changes, uncovered criteria, and exemption state transferred from test to implementation.
+The required-mode transfer of bounded acceptance coverage, changed test paths, focused red-test command, expected failure reason, observed failure evidence, infrastructure changes, uncovered criteria, and exemption state from the independent test role to implementation. Advisory mode has no test-stage handoff.
 _Avoid_: Agent claim, transcript, implementation handoff
 
 **Protected test path**:
@@ -30,7 +30,7 @@ A repository-relative test or authorized test-infrastructure path recorded at th
 _Avoid_: Mutable test file, permitted production path
 
 **Baseline**:
-The repository-declared setup and gate suite evaluated against the claimed run's base checkpoint before any agent edit; a blocking failure moves the run to failed preflight unless the frozen issue explicitly targets it. A healthy configured run enters test stage before implementation.
+The repository-declared setup and gate suite evaluated against the claimed run's base checkpoint before any agent edit; a blocking failure moves the run to failed preflight unless the frozen issue explicitly targets it. A healthy required-mode run enters the independent test stage; a healthy advisory run enters implementation-owned TDD directly.
 _Avoid_: Preflight assumption, agent diagnosis
 
 **Setup fingerprint**:
@@ -117,7 +117,7 @@ An evidence-gathering delivery phase that compares the supervised factory with a
 _Avoid_: Production readiness, tracer bullet
 
 **Host configuration**:
-Host-local YAML that registers the one repository, its GitHub identity, authorized users, polling and cmux settings, and the external operational-data location.
+Host-local YAML that registers the one repository, its GitHub identity, authorized users, polling and terminal settings, and the external operational-data location.
 _Avoid_: Repository policy
 
 **Repository configuration**:

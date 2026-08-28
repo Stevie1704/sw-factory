@@ -353,14 +353,15 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 		writeError(errorsOutput, err)
 		return 1
 	}
-	if !writeOutput(output, errorsOutput, "claimed issue #%d\nrun: %s\nbranch: %s\nworktree: %s\nstage: %s\nstatus: %s\nbaseline gates: %d\n", baseline.Run.IssueNumber, baseline.Run.ID, baseline.Run.Branch, baseline.Run.Worktree, baseline.Run.Stage, baseline.Run.Status, len(baseline.Gates)) {
+	policyMode := result.Packet.RepositoryConfig.TestPolicy.Mode
+	if !writeOutput(output, errorsOutput, "claimed issue #%d\nrun: %s\nbranch: %s\nworktree: %s\nstage: %s\nstatus: %s\ntest policy: %s\nbaseline gates: %d\n", baseline.Run.IssueNumber, baseline.Run.ID, baseline.Run.Branch, baseline.Run.Worktree, baseline.Run.Stage, baseline.Run.Status, factory.TestPolicyDescription(policyMode), len(baseline.Gates)) {
 		return 1
 	}
 	return 0
 }
 
-// runAgent starts the visible agent for the active run, selecting the required
-// test stage automatically when the frozen repository policy declares it.
+// runAgent starts the visible agent for the active run, selecting the frozen
+// policy's independent test stage or implementation-owned TDD path.
 func runAgent(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -401,7 +402,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 	if agentSurfaceID == "" {
 		agentSurfaceID = launch.Invocation.ImplementationSurfaceID
 	}
-	message := fmt.Sprintf("agent started\nrun: %s\nrole: %s\nstage: %s\ninvocation: %s\nworkspace: %s\nagent surface: %s\n", launch.Invocation.RunID, launch.Invocation.Role, launch.Invocation.Stage, launch.Invocation.ID, launch.Invocation.WorkspaceID, agentSurfaceID)
+	message := fmt.Sprintf("agent started\nrun: %s\nrole: %s\nstage: %s\ntest policy: %s\ninvocation: %s\nworkspace: %s\nagent surface: %s\n", launch.Invocation.RunID, launch.Invocation.Role, launch.Invocation.Stage, factory.TestPolicyDescription(launch.TestPolicyMode), launch.Invocation.ID, launch.Invocation.WorkspaceID, agentSurfaceID)
 	if launch.Invocation.ChecksSurfaceID != "" {
 		message += fmt.Sprintf("checks surface: %s\n", launch.Invocation.ChecksSurfaceID)
 	}
@@ -655,7 +656,7 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		if store.IsTerminalStatus(result.LatestRun.Status) {
 			label = "last run"
 		}
-		if !writeOutput(output, errorsOutput, "%s: %s (stage=%s status=%s branch=%s worktree=%s)\n", label, result.LatestRun.ID, result.LatestRun.Stage, result.LatestRun.Status, result.LatestRun.Branch, result.LatestRun.Worktree) {
+		if !writeOutput(output, errorsOutput, "%s: %s (stage=%s status=%s test_policy=%s branch=%s worktree=%s)\n", label, result.LatestRun.ID, result.LatestRun.Stage, result.LatestRun.Status, factory.TestPolicyDescription(result.TestPolicyMode), result.LatestRun.Branch, result.LatestRun.Worktree) {
 			return 1
 		}
 	}

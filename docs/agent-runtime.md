@@ -59,11 +59,14 @@ factory agent \
 
 The command selects the active role automatically, together with the harness,
 model, and reasoning effort declared for that role. Only the credential source
-of the selected harness is used. For a repository with a
-configured `test` role, `factory issue` leaves a healthy run in `test/active`,
-and this command starts the test agent. An implementation agent is started only
-after the test handoff is accepted, or after an authorized exemption. The
-agent auth flags must name the same sources registered for the repository;
+of the selected harness is used. In `test_policy.mode: required`,
+`factory issue` leaves a healthy run in `test/active`, and this command starts
+the independent test agent; implementation starts only after its handoff is
+accepted or after an authorized exemption. In `test_policy.mode: advisory`,
+the healthy baseline leaves the run in `implementation/active` and this command
+starts implementation directly. The implementation prompt owns the complete
+red/green/refactor loop in advisory mode, including focused behavioral tests.
+The agent auth flags must name the same sources registered for the repository;
 distinct one-off sources are refused because recovery never persists host
 credential paths. Change the registered source with `factory register` instead.
 The command creates or reuses the control workspace and creates one run workspace
@@ -77,8 +80,9 @@ handles. It does not print the role prompt or terminal contents.
 
 `factory issue` completes a claim, runs the frozen baseline suite, and persists
 the worktree, branch, checkpoint, issue projection, and status-comment identity.
-A validated repository advances to `test/active`. A separate coordinator process may
-start the first test or implementation invocation when its
+A required-mode repository advances to `test/active`; an advisory repository
+advances to `implementation/active`. A separate coordinator process may start
+the first test or implementation invocation when its
 read-only recovery diagnosis finds that every checked projection agrees and
 the operational store contains no invocation history. This is a completed
 claim or test handoff awaiting its first invocation, not an interrupted run.
@@ -134,10 +138,12 @@ adapter.
 
 Each invocation receives a read-only `specification.json` packet under the
 worker path `/invocation`. It contains the frozen claim packet, invocation
-identity, role, stage, and prompt version. An implementation packet also carries
-the accepted test handoff and content hashes of protected test paths. The worker
-receives a separate writable `/results` mount containing only that invocation's
-result directory.
+identity, role, stage, prompt version, and `test_policy_mode`. A required-mode
+implementation packet also carries the accepted test handoff and content hashes
+of protected test paths. An advisory implementation packet carries no test-stage
+disposition; its normal implementation handoff may include behavioral tests and
+test infrastructure. The worker receives a separate writable `/results` mount
+containing only that invocation's result directory.
 
 The harness reports through the worker-image command:
 
@@ -171,8 +177,8 @@ The three valid proposals are:
 - `needs_clarification`, with one or more uniquely identified questions;
 - `cannot_proceed`, with concise observable evidence.
 
-Test-stage completion uses a separate handoff and never accepts production
-paths. For example:
+In required mode, test-stage completion uses a separate handoff and never
+accepts production paths. For example:
 
 ```sh
 factory-report \
@@ -192,10 +198,10 @@ command, worker failure, missing expected reason, or path-ownership dispute move
 the coordinator records only the content-free `test_dispute` evaluation
 category and does not revise the test automatically.
 
-On verified red evidence, the coordinator creates a distinct test checkpoint,
-records every changed test/infrastructure path and its SHA-256 content hash,
-then launches implementation. Implementation report acceptance rechecks those
-hashes and rejects any direct edit to a protected test path.
+On verified red evidence in required mode, the coordinator creates a distinct
+test checkpoint, records every changed test/infrastructure path and its SHA-256
+content hash, then launches implementation. Implementation report acceptance
+rechecks those hashes and rejects any direct edit to a protected test path.
 
 ## Specification review
 
@@ -223,8 +229,8 @@ readiness. Taste and scope findings remain visible advisories. The coordinator
 attaches the stable `factory/review/specification` Commit Status to the exact
 reviewed SHA and invalidates the durable review projection when the checkpoint
 changes. Accepted findings appear in both the editable issue status comment and
-the generated pull-request review section. A technical test exemption remains
-marked provisional in the review packet and projections.
+the generated pull-request review section. A technical test exemption in
+required mode remains marked provisional in the review packet and projections.
 
 Human skips must be frozen in the issue before claim with an exact marker:
 
@@ -232,9 +238,10 @@ Human skips must be frozen in the issue before claim with an exact marker:
 <!-- factory-test-exemption: human | documentation-only change -->
 ```
 
-The repository must allow human exemptions. Technical exemptions may be
-reported by the test agent only when policy allows them; they are provisional
-and are carried to later review.
+The repository must allow human exemptions for required-mode skips. Technical
+exemptions may be reported by the required-mode test agent only when policy
+allows them; they are provisional and are carried to later review. Advisory
+implementation reports do not use test-stage exemptions or disputes.
 
 When the harness has reliable measurements or content-free policy signals, it
 may also pass `--input-tokens`, `--output-tokens`, `--total-tokens`,

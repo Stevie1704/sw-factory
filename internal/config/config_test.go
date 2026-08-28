@@ -128,8 +128,8 @@ func TestValidateRepositoryRequiresMatchingHarnessAndModelRoles(t *testing.T) {
 	}
 }
 
-// TestValidateRepositoryRequiresTheMandatoryTestRole verifies a repository
-// cannot silently opt out of the default test-stage boundary.
+// TestValidateRepositoryRequiresTheMandatoryTestRole verifies required mode
+// cannot silently opt out of the independent test-stage boundary.
 func TestValidateRepositoryRequiresTheMandatoryTestRole(t *testing.T) {
 	t.Parallel()
 
@@ -143,6 +143,20 @@ func TestValidateRepositoryRequiresTheMandatoryTestRole(t *testing.T) {
 	}
 	if validationErr.Field != "role_harness_defaults.test" {
 		t.Fatalf("field = %q, want role_harness_defaults.test", validationErr.Field)
+	}
+}
+
+// TestValidateRepositoryAllowsAdvisoryModeWithoutAnIndependentTestRole
+// verifies implementation-owned TDD does not require an unused test role.
+func TestValidateRepositoryAllowsAdvisoryModeWithoutAnIndependentTestRole(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.TestPolicy.Mode = config.TestModeAdvisory
+	delete(policy.RoleHarnessDefaults, "test")
+	delete(policy.ModelOptions, "test")
+	if err := config.ValidateRepository(policy); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want advisory policy without test role to be valid", err)
 	}
 }
 

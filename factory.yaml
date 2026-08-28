@@ -49,7 +49,7 @@ retry_limits:
   review_repair: 2
   test_revision: 2
 test_policy:
-  mode: required
+  mode: advisory
   allow_human_exemption: true
   allow_technical_exemption: true
 allowed_overrides: [model, reasoning_effort]

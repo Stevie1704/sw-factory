@@ -371,6 +371,9 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 // stage receives a new specification packet, including refreshes initiated
 // after implementation has already started.
 func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store.Stage {
+	if packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
+		return store.StageImplementation
+	}
 	if !testStageConfigured(packet.RepositoryConfig) {
 		return store.StageTest
 	}
@@ -391,6 +394,12 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
 	run.TestStageSkipped = false
+	if packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
+		run.Stage = store.StageImplementation
+		run.Status = store.StatusActive
+		run.LifecycleReason = "specification packet changed; implementation-owned TDD ready"
+		return
+	}
 	if !testStageConfigured(packet.RepositoryConfig) {
 		run.Stage = store.StageTest
 		run.Status = store.StatusWaitingForHuman
