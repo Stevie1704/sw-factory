@@ -670,12 +670,13 @@ Human-authored text outside those markers is preserved. The PR body includes
 the issue, packet version, checkpoint, gate results, test disposition, review
 projection, intervention marker, and control commands.
 
-If a gate fails, <code>draft-pr</code> returns the bounded check-repair
-decision instead of pushing the branch. The next implementation invocation
-reuses the worker role volume and implementation surface, subject to the frozen
-repair budget. After an accepted repair report, run <code>factory draft-pr</code>
-again. Infrastructure waits do not spend the check-repair budget; the hard
-ceiling is three attempts.
+If a gate fails, the checkpoint remains pushed on the run branch and
+<code>draft-pr</code> returns the bounded check-repair decision without creating
+or updating the draft pull request. The next implementation invocation reuses
+the worker role volume and implementation surface, subject to the frozen repair
+budget. After an accepted repair report, run <code>factory draft-pr</code> again.
+Infrastructure waits do not spend the check-repair budget; the hard ceiling is
+three attempts.
 
 ### 6. Run the independent specification review
 
