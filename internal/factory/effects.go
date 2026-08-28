@@ -1006,6 +1006,16 @@ func (s *Service) replayPendingCommitStatus(ctx context.Context, runStore RunSto
 	if !ok {
 		return store.Run{}, errors.New("commit-status reader is required to replay status safely")
 	}
+	run, err := readReconciliationRun(ctx, runStore)
+	if err != nil {
+		return store.Run{}, fmt.Errorf("read run during commit status replay: %w", err)
+	}
+	if run == nil {
+		return store.Run{}, fmt.Errorf("run %q disappeared during commit status replay", effect.RunID)
+	}
+	if err := s.publishStatusCheckpoint(ctx, *run, payload.Status.SHA); err != nil {
+		return store.Run{}, err
+	}
 	statuses, err := reader.ListCommitStatuses(ctx, payload.Repository, payload.Status.SHA)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("inspect commit status during replay: %w", err)
@@ -1027,14 +1037,33 @@ func (s *Service) replayPendingCommitStatus(ctx context.Context, runStore RunSto
 			return store.Run{}, fmt.Errorf("clear replayed commit status: %w", err)
 		}
 	}
-	run, err := readReconciliationRun(ctx, runStore)
+	current, err := readReconciliationRun(ctx, runStore)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("read run after commit status replay: %w", err)
 	}
-	if run == nil {
+	if current == nil {
 		return store.Run{}, fmt.Errorf("run %q disappeared during commit status replay", effect.RunID)
 	}
-	return *run, nil
+	return *current, nil
+}
+
+// publishStatusCheckpoint makes the remote resolve the commit a journaled
+// status names before the status is inspected or republished. An interrupted
+// attempt can journal a status for a checkpoint that never reached GitHub, and
+// GitHub answers every later attempt with an unknown-SHA rejection, so the
+// reservation could otherwise never be completed. Only the run's own
+// checkpoint is published this way, and the push observes the remote head
+// first, so it adds no unobserved second mutation.
+func (s *Service) publishStatusCheckpoint(ctx context.Context, run store.Run, sha string) error {
+	workspace := s.gitWorkspace()
+	if workspace == nil || sha == "" || sha != run.CheckpointSHA || strings.TrimSpace(run.Branch) == "" {
+		return nil
+	}
+	request := gitadapter.PushRequest{WorktreePath: run.Worktree, Branch: run.Branch}
+	if err := s.pushOnce(ctx, workspace, request, sha); err != nil {
+		return fmt.Errorf("publish checkpoint %s before commit status replay: %w", sha, err)
+	}
+	return nil
 }
 
 // acceptResultWithEffect journals harness finalization, invocation state, and

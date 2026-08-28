@@ -109,7 +109,7 @@ cannot add arbitrary roles or redefine the transition graph in
 | <code>architecture</code> | <code>architecture</code> role, optional | The agent writes a design document under the permitted architecture path, then hands off to implementation. |
 | <code>implementation</code> | <code>implementation</code> role | The agent edits production code and submits a structured implementation handoff. |
 | <code>check</code> | Coordinator | The accepted implementation is checkpointed and every configured gate runs against that exact checkpoint. |
-| <code>draft_pr</code> | Coordinator | After successful gates, the host pushes the run branch and creates or updates one draft pull request. |
+| <code>draft_pr</code> | Coordinator | The host pushes the run branch before the gate statuses, then creates or updates one draft pull request after successful gates. |
 | <code>review</code> | <code>spec_review</code> role | An independent reviewer receives the exact checkpoint and reports blocking findings or advisories. |
 | <code>ready</code> | Coordinator | The run is ready for a human to review and merge. Factory leaves the pull request as a draft and does not merge it. |
 
@@ -651,10 +651,11 @@ The host coordinator:
    that protected test paths are unchanged;
 2. creates an implementation checkpoint commit with a message containing
    <code>factory: implementation checkpoint &lt;run-id&gt;</code>;
-3. runs every configured gate against that exact checkpoint;
-4. pushes <code>factory/&lt;run-id&gt;</code> only if the required gates pass; and
+3. pushes <code>factory/&lt;run-id&gt;</code> so GitHub can resolve the checkpoint
+   commit named by every gate status;
+4. runs every configured gate against that exact checkpoint; and
 5. creates or updates one draft pull request targeting the configured base
-   branch.
+   branch only if the required gates pass.
 
 Workers never commit, push, access a GitHub API, or receive a GitHub token.
 Repeating <code>factory draft-pr</code> after the first PR exists regenerates
@@ -1125,7 +1126,7 @@ supported by the installed binary.
 | <code>factory issue [--issue N] N</code> | Claim one issue and run its baseline. The number may be positional or supplied with <code>--issue</code>, but not both. |
 | <code>factory agent</code> | Start the active stage's visible role, or select a validated role/stage/harness/model/reasoning override. |
 | <code>factory agent-report</code> | Validate and accept a report already written by one invocation. Requires <code>--run-id</code> and <code>--invocation-id</code>. |
-| <code>factory draft-pr</code> | Create the implementation checkpoint, run gates, push the branch, and create/update the draft PR. <code>--intervention</code> records a one-line operator marker. |
+| <code>factory draft-pr</code> | Create the implementation checkpoint, push the branch, run gates, and create/update the draft PR. <code>--intervention</code> records a one-line operator marker. |
 | <code>factory poll</code> | Process one lifecycle and structured-command observation for the current run. |
 | <code>factory status</code> | Show the selected host configuration, repository, latest run, and recovery diagnosis. |
 | <code>factory resume</code> | Perform explicit native-session or harness-capacity recovery. |
