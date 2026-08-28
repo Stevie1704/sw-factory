@@ -527,6 +527,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		Stage:               string(store.StageImplementation),
 		SpecificationPacket: run.SpecificationPacket,
 		RepositoryGuidance:  packet.Issue.Body,
+		TestPolicyMode:      string(packet.RepositoryConfig.TestPolicy.Mode),
 		CheckRepairAttempt:  repairPacket.Attempt,
 		CheckRepairBudget:   repairPacket.Budget,
 	})
@@ -541,6 +542,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		Stage:               store.StageImplementation,
 		SpecificationPacket: run.SpecificationPacket,
 		PromptVersion:       prompt.Version,
+		TestPolicyMode:      packet.RepositoryConfig.TestPolicy.Mode,
 		PermittedPaths:      append([]string(nil), previous.PermittedPaths...),
 		CheckRepair:         &repairPacket,
 	}); err != nil {

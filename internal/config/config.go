@@ -493,11 +493,16 @@ func ValidateRepository(config RepositoryConfig) error {
 			}
 		}
 	}
-	if _, exists := config.RoleHarnessDefaults["test"]; !exists {
-		return validation("role_harness_defaults.test", "must declare the mandatory test role")
+	if config.TestPolicy.Mode != TestModeRequired && config.TestPolicy.Mode != TestModeAdvisory {
+		return validation("test_policy.mode", "must be required or advisory")
 	}
-	if _, exists := config.ModelOptions["test"]; !exists {
-		return validation("model_options.test", "must declare a model for the mandatory test role")
+	if config.TestPolicy.Mode == TestModeRequired {
+		if _, exists := config.RoleHarnessDefaults["test"]; !exists {
+			return validation("role_harness_defaults.test", "must declare the mandatory test role in required mode")
+		}
+		if _, exists := config.ModelOptions["test"]; !exists {
+			return validation("model_options.test", "must declare a model for the mandatory test role in required mode")
+		}
 	}
 	for field, value := range map[string]string{
 		"timeouts.setup":  config.Timeouts.Setup,
@@ -520,9 +525,6 @@ func ValidateRepository(config RepositoryConfig) error {
 		if field == "retry_limits.check_repair" && value > MaxCheckRepairAttempts {
 			return validation(field, fmt.Sprintf("must not exceed %d", MaxCheckRepairAttempts))
 		}
-	}
-	if config.TestPolicy.Mode != TestModeRequired && config.TestPolicy.Mode != TestModeAdvisory {
-		return validation("test_policy.mode", "must be required or advisory")
 	}
 	if err := validateTestPolicyPaths("test_policy.test_paths", config.TestPolicy.TestPaths); err != nil {
 		return err

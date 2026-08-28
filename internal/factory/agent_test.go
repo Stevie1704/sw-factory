@@ -44,7 +44,7 @@ func TestStartAgentPersistsAReadOnlyPacketAndRecoverableSurfaceState(t *testing.
 	if err := json.Unmarshal(packetData, &packet); err != nil {
 		t.Fatalf("decode invocation packet: %v", err)
 	}
-	if packet.InvocationID != launch.Invocation.ID || packet.SpecificationPacket == "" || packet.PromptVersion != "implementation-v1" {
+	if packet.InvocationID != launch.Invocation.ID || packet.SpecificationPacket == "" || packet.PromptVersion != "implementation-v1" || packet.TestPolicyMode != config.TestModeRequired {
 		t.Fatalf("invocation packet = %#v, want frozen identity and prompt version", packet)
 	}
 	if len(terminalRuntime.notifications) != 1 || len(harnessRuntime.starts) != 1 {
@@ -52,6 +52,105 @@ func TestStartAgentPersistsAReadOnlyPacketAndRecoverableSurfaceState(t *testing.
 	}
 	if len(runStore.invocations) != 1 || runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusActive {
 		t.Fatalf("stored invocations = %#v, want active invocation", runStore.invocations)
+	}
+}
+
+// TestAdvisoryImplementationOwnsTDDAndAcceptsTestEdits verifies advisory mode
+// launches implementation directly and accepts behavioral tests as part of the
+// implementation handoff without test-stage evidence or an exemption.
+func TestAdvisoryImplementationOwnsTDDAndAcceptsTestEdits(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	run := *runStore.current
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode specification packet: %v", err)
+	}
+	packet.RepositoryConfig.TestPolicy.Mode = config.TestModeAdvisory
+	delete(packet.RepositoryConfig.RoleHarnessDefaults, "test")
+	delete(packet.RepositoryConfig.ModelOptions, "test")
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("encode advisory specification packet: %v", err)
+	}
+	run.SpecificationPacket = string(packetData)
+	run.Stage = store.StageImplementation
+	run.TestStageSkipped = false
+	run.TestExemption = nil
+	run.TestHandoff = nil
+	run.TestCheckpointSHA = ""
+	run.ProtectedTestPaths = nil
+	runStore.worktree.state.ChangedPaths = []string{"internal/factory/agent_test.go", "test-support/factory-fixture.go", "internal/factory/agent.go"}
+	if err := runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("persist advisory implementation fixture: %v", err)
+	}
+
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() advisory error = %v", err)
+	}
+	if launch.Invocation.Role != "implementation" || launch.Invocation.Stage != store.StageImplementation || launch.TestPolicyMode != config.TestModeAdvisory || len(runStore.invocations) != 1 {
+		t.Fatalf("advisory launch = %#v, invocations=%d, want one implementation invocation", launch, len(runStore.invocations))
+	}
+	packetData, err = os.ReadFile(filepath.Join(launch.Invocation.InvocationDirectory, "specification.json"))
+	if err != nil {
+		t.Fatalf("read advisory invocation packet: %v", err)
+	}
+	var invocationPacket factory.InvocationPacket
+	if err := json.Unmarshal(packetData, &invocationPacket); err != nil {
+		t.Fatalf("decode advisory invocation packet: %v", err)
+	}
+	if invocationPacket.TestPolicyMode != config.TestModeAdvisory || invocationPacket.TestHandoff != nil || invocationPacket.TestExemption != nil || len(invocationPacket.ProtectedTestPaths) != 0 {
+		t.Fatalf("advisory invocation packet = %#v, want implementation-owned policy without test disposition", invocationPacket)
+	}
+	for _, marker := range []string{"Implementation-owned TDD:", "red/green/refactor", "focused behavioral test"} {
+		if !strings.Contains(launch.Prompt, marker) {
+			t.Fatalf("advisory implementation prompt missing %q:\n%s", marker, launch.Prompt)
+		}
+	}
+
+	value := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  launch.Invocation.ID,
+		RunID:         launch.Invocation.RunID,
+		Harness:       launch.Invocation.Harness,
+		Role:          launch.Invocation.Role,
+		Stage:         string(launch.Invocation.Stage),
+		Outcome:       report.OutcomeCompleted,
+		Summary:       "implementation complete with focused behavior test",
+		Handoff: &report.Handoff{
+			ChangeSummary:          "implemented behavior and its focused test",
+			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "behavior", Evidence: "focused test"}},
+			ProductionFilesChanged: []string{"internal/factory/agent_test.go", "test-support/factory-fixture.go", "internal/factory/agent.go"},
+			FocusedCommands:        []string{"go test ./internal/factory -run TestBehavior"},
+		},
+		NativeSessionID: "advisory-session",
+		ReportedAt:      time.Now().UTC(),
+	}
+	invalid := value
+	invalid.Exemptions = []report.Exemption{report.ExemptionTechnical}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, invalid); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() invalid advisory error = %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "test-stage exemptions") {
+		t.Fatalf("AcceptAgentReport() invalid advisory error = %v, want test-stage exemption rejection", err)
+	}
+	invalid.Exemptions = nil
+	invalid.Escalations = []report.EscalationCategory{report.EscalationTestDispute}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, invalid); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() invalid advisory dispute error = %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "test-stage disputes") {
+		t.Fatalf("AcceptAgentReport() invalid advisory dispute error = %v, want test-stage dispute rejection", err)
+	}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() advisory error = %v", err)
+	}
+	accepted, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID})
+	if err != nil {
+		t.Fatalf("AcceptAgentReport() advisory error = %v", err)
+	}
+	if accepted.Invocation.Status != store.InvocationStatusCompleted || runStore.current.TestStageSkipped || runStore.current.TestExemption != nil || runStore.current.TestHandoff != nil {
+		t.Fatalf("advisory accepted projection = invocation %#v run %#v, want completed implementation without test disposition", accepted.Invocation, runStore.current)
 	}
 }
 

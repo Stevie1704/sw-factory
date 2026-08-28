@@ -712,7 +712,7 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		definition, declared := workflow.DefaultRegistry().Role(request.Role)
 		reviewStart = declared && definition.Kind == workflow.RoleKindReview
 	}
-	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && run.TestStageSkipped)
+	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && implementationStartIsClean(*run))
 	if reviewStart && run.Stage == store.StageDraftPR {
 		return nil
 	}
@@ -840,7 +840,7 @@ func (s *Service) ensureLegacyAgentStartup(ctx context.Context, registration con
 		definition, declared := workflow.DefaultRegistry().Role(request.Role)
 		reviewStart = declared && definition.Kind == workflow.RoleKindReview
 	}
-	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && run.TestStageSkipped)
+	cleanStart := run.Stage == store.StageClaim || run.Stage == store.StageTest || (run.Stage == store.StageImplementation && implementationStartIsClean(*run))
 	if reviewStart && run.Stage == store.StageDraftPR {
 		return nil
 	}
@@ -991,7 +991,7 @@ func statusCommentBody(run store.Run) string {
 		}
 	}
 	review := specificationReviewStatusComment(run)
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n- test policy: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, testPolicyDescription(testPolicyModeForRun(run)), checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
 }
 
 // StatusCommentBody renders the coordinator-owned status projection for one

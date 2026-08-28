@@ -39,6 +39,61 @@ func TestBuildImplementationPromptKeepsFactoryRulesAuthoritative(t *testing.T) {
 	}
 }
 
+// TestBuildAdvisoryImplementationPromptAssignsTheCompleteTDDLoop verifies the
+// implementation role receives explicit red/green/refactor ownership in the
+// advisory path without an independent test handoff.
+func TestBuildAdvisoryImplementationPromptAssignsTheCompleteTDDLoop(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-advisory",
+		RunID:               "run-advisory",
+		Role:                "implementation",
+		Stage:               "implementation",
+		TestPolicyMode:      "advisory",
+		SpecificationPacket: `{"issue":{"title":"Add behavior"}}`,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"Implementation-owned TDD:",
+		"complete red/green/refactor loop",
+		"Write or update a focused behavioral test before production behavior when practical",
+		"Revise the initial test design when implementation evidence requires it",
+	} {
+		if !strings.Contains(value, marker) {
+			t.Fatalf("advisory prompt missing %q:\n%s", marker, value)
+		}
+	}
+	if strings.Contains(value, "Protected test-stage handoff") || strings.Contains(value, "test-stage exemption") {
+		t.Fatalf("advisory prompt contains independent-test disposition:\n%s", value)
+	}
+}
+
+// TestBuildAdvisoryCheckRepairPromptKeepsTestRevisionWithinImplementationScope
+// verifies deterministic repair does not silently restore the independent-test
+// restriction for an advisory implementation invocation.
+func TestBuildAdvisoryCheckRepairPromptKeepsTestRevisionWithinImplementationScope(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-advisory-repair",
+		RunID:               "run-advisory",
+		Role:                "implementation",
+		Stage:               "implementation",
+		TestPolicyMode:      "advisory",
+		SpecificationPacket: `{"issue":{"title":"Repair behavior"}}`,
+		CheckRepairAttempt:  1,
+		CheckRepairBudget:   3,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(value, "revise behavioral tests or essential test infrastructure when needed") {
+		t.Fatalf("advisory repair prompt missing test revision guidance:\n%s", value)
+	}
+	if strings.Contains(value, "do not edit tests or gates merely to make them pass") {
+		t.Fatalf("advisory repair prompt retained required-mode test restriction:\n%s", value)
+	}
+}
+
 // TestBuildRejectsMissingInvocationIdentity verifies that prompts cannot be
 // launched without the identity required by the report validator.
 func TestBuildRejectsMissingInvocationIdentity(t *testing.T) {

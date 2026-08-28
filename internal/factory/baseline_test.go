@@ -66,6 +66,57 @@ func TestRunBaselineAdvancesToTheConfiguredTestStage(t *testing.T) {
 	}
 }
 
+// TestRunBaselineStartsImplementationOwnedTDDInAdvisoryMode verifies advisory
+// mode advances directly to implementation without creating test-stage state.
+func TestRunBaselineStartsImplementationOwnedTDDInAdvisoryMode(t *testing.T) {
+	fixture := newBaselineFixture(t, "<!-- factory-test-exemption: human | documentation-only change -->", []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}})
+	fixture.policy.TestPolicy.Mode = config.TestModeAdvisory
+	fixture.policy.TestPolicy.AllowHumanExemption = true
+	delete(fixture.policy.RoleHarnessDefaults, "test")
+	delete(fixture.policy.ModelOptions, "test")
+	claimed, err := fixture.service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+
+	baseline, err := fixture.service.RunBaseline(context.Background(), factory.BaselineRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("RunBaseline() error = %v", err)
+	}
+	if baseline.Run.Stage != store.StageImplementation || baseline.Run.Status != store.StatusActive {
+		t.Fatalf("baseline run = %#v, want active implementation stage", baseline.Run)
+	}
+	if baseline.Run.TestStageSkipped || baseline.Run.TestHandoff != nil || baseline.Run.TestExemption != nil || baseline.Run.TestCheckpointSHA != "" || len(baseline.Run.ProtectedTestPaths) != 0 {
+		t.Fatalf("advisory test projection = %#v, want no independent test-stage state", baseline.Run)
+	}
+	if !strings.Contains(factory.StatusCommentBody(baseline.Run), "advisory") || !strings.Contains(factory.StatusCommentBody(baseline.Run), "implementation-owned TDD") {
+		t.Fatalf("advisory status projection = %q, want explicit implementation-owned policy", factory.StatusCommentBody(baseline.Run))
+	}
+	status, err := fixture.service.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.TestPolicyMode != config.TestModeAdvisory {
+		t.Fatalf("status test policy = %q, want advisory", status.TestPolicyMode)
+	}
+}
+
+// TestAdvisoryTransitionStillRequiresTheHealthyBaseline verifies advisory mode
+// removes only the independent test gate, not the deterministic pre-edit gate.
+func TestAdvisoryTransitionStillRequiresTheHealthyBaseline(t *testing.T) {
+	fixture := newBaselineFixture(t, "", []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}})
+	fixture.policy.TestPolicy.Mode = config.TestModeAdvisory
+	delete(fixture.policy.RoleHarnessDefaults, "test")
+	delete(fixture.policy.ModelOptions, "test")
+	claimed, err := fixture.service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+	if _, err := fixture.service.Transition(context.Background(), factory.TransitionRequest{RunID: claimed.Run.ID, Stage: store.StageImplementation, Status: store.StatusActive}); err == nil || !strings.Contains(err.Error(), "baseline") {
+		t.Fatalf("Transition() error = %v, want advisory transition to require baseline", err)
+	}
+}
+
 // TestRunBaselineRecordsTheFrozenHumanTestExemption verifies an exact issue
 // marker can skip the default test stage only when repository policy allows it.
 func TestRunBaselineRecordsTheFrozenHumanTestExemption(t *testing.T) {

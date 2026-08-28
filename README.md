@@ -52,13 +52,15 @@ frozen specification packet
         |
         | isolated branch/worktree + baseline gates
         v
-test -> implementation -> checkpoint gates -> draft PR -> specification review
-  |          |                 |                  |                |
-  |          |                 |                  |                +--> ready
-  |          |                 |                  +--> human review/merge
-  |          |                 +--> bounded check repair loop
-  |          +--> clarification, retry, or failure
-  +--> verified red-test handoff or authorized exemption
+required: test -> implementation -> checkpoint gates -> draft PR -> review
+             |          |                 |                  |          |
+             |          |                 |                  |          +--> ready
+             |          |                 |                  +--> human review/merge
+             |          |                 +--> bounded check repair loop
+             |          +--> clarification, retry, or failure
+             +--> verified red-test handoff or authorized exemption
+
+advisory: implementation-owned red/green/refactor -> checkpoint gates -> ...
 ~~~
 
 The coordinator owns workflow state, GitHub projections, worktrees, worker
@@ -90,9 +92,11 @@ operational store, GitHub comments, and the documentation.
 | **Reconciliation** | A deliberate restart pass that replays an exact pending effect or pauses for human inspection when external state is ambiguous. |
 
 There is only one active non-terminal run per registered repository. Stage and
-status are separate values. For example, <code>test/active</code> means the
-test stage is running, while <code>implementation/waiting_for_human</code>
-means implementation is paused for an operator.
+status are separate values. In required mode, <code>test/active</code> means the
+independent test stage is running; in advisory mode a healthy baseline enters
+<code>implementation/active</code> directly. In either mode,
+<code>implementation/waiting_for_human</code> means implementation is paused for
+an operator.
 
 ## Run lifecycle
 
@@ -105,7 +109,7 @@ cannot add arbitrary roles or redefine the transition graph in
 | --- | --- | --- |
 | <code>claim</code> | Coordinator | The issue, repository policy, target branch, run branch, worktree, and status projection are frozen. |
 | <code>preflight</code> | Coordinator | Setup and baseline gates run before an agent edits anything. |
-| <code>test</code> | <code>test</code> role | The agent adds a focused test or test infrastructure change. The coordinator reruns the focused command and accepts only verified red evidence. |
+| <code>test</code> (required mode) | <code>test</code> role | The independent agent adds a focused test or test infrastructure change. The coordinator reruns the focused command and accepts only verified red evidence. |
 | <code>architecture</code> | <code>architecture</code> role, optional | The agent writes a design document under the permitted architecture path, then hands off to implementation. |
 | <code>implementation</code> | <code>implementation</code> role | The agent edits production code and submits a structured implementation handoff. |
 | <code>check</code> | Coordinator | The accepted implementation is checkpointed and every configured gate runs against that exact checkpoint. |
@@ -113,18 +117,25 @@ cannot add arbitrary roles or redefine the transition graph in
 | <code>review</code> | <code>spec_review</code> role | An independent reviewer receives the exact checkpoint and reports blocking findings or advisories. |
 | <code>ready</code> | Coordinator | The run is ready for a human to review and merge. Factory leaves the pull request as a draft and does not merge it. |
 
-The test stage is required by the checked-in policy in this repository. It can
-be skipped only through an explicitly permitted human or technical exemption.
-The human exemption marker must be present in the frozen issue before claim:
+The checked-in policy uses advisory mode: after a healthy baseline, the
+implementation role owns the complete red/green/refactor loop. It may add or
+revise focused behavioral tests and essential test infrastructure within its
+permitted scope. There is no separate test invocation, handoff, checkpoint,
+protected-test path, exemption, or test-stage dispute in advisory mode.
+
+Repositories using required mode enter the independent test stage. That stage
+can be skipped only through an explicitly permitted human or technical
+exemption. The human exemption marker must be present in the frozen issue before
+claim:
 
 ~~~text
 <!-- factory-test-exemption: human | documentation-only change -->
 ~~~
 
-The test policy must allow that exemption. A test handoff never owns
-production files. Once accepted, its test checkpoint and protected test paths
-are carried into implementation, and an implementation report that changes a
-protected test path is rejected.
+The test policy must allow that exemption. In required mode, a test handoff never
+owns production files. Once accepted, its test checkpoint and protected test
+paths are carried into implementation, and an implementation report that changes
+a protected test path is rejected.
 
 Every stage also has an orthogonal status:
 
@@ -346,10 +357,13 @@ Its important current characteristics are:
 - blocking gates in dependency order: <code>format</code>,
   <code>vet</code>, <code>test</code>, <code>build</code>;
 - <code>clean</code> environment policy for setup and gates;
+- advisory <code>test_policy.mode</code>, so <code>implementation</code> owns
+  TDD by default (the independent <code>test</code> role remains available when
+  policy is switched to required);
 - configured <code>test</code>, <code>implementation</code>,
   <code>architecture</code>, <code>spec_review</code>, and
   <code>standards_review</code> role policy;
-- required test stage with human and technical exemptions enabled;
+- human and technical exemption settings retained for required-mode repositories;
 - a pinned worker image and digest; and
 - no automatic base synchronization
   (<code>base_synchronization.mode: never</code>).
@@ -455,8 +469,10 @@ Important policy rules:
   Claude Code use different native argument names and accepted effort values,
   so declare the values intended for the selected harness.
 - <code>test_policy.mode</code> is <code>required</code> or
-  <code>advisory</code>; the test role is still factory-owned and the
-  coordinator independently verifies a required red test before implementation.
+  <code>advisory</code>. Required mode uses the factory-owned test role and
+  independently verifies red evidence before implementation. Advisory mode
+  starts implementation after baseline and makes its complete TDD loop part of
+  the implementation handoff; it is not an exemption.
 - <code>allowed_overrides</code> can contain <code>model</code>,
   <code>reasoning_effort</code>, and <code>harness</code>. Keep this list narrow
   because it widens the frozen run policy at invocation time.
@@ -526,11 +542,12 @@ The command:
 6. creates one editable factory status comment; and
 7. runs the baseline setup and gates automatically.
 
-The output includes the run ID, branch, worktree, stage, status, and baseline
-gate count. Save the <code>run</code> value. A healthy run using this
-repository's policy normally becomes <code>test/active</code>. If a human
-exemption was frozen in the issue, it can become
-<code>implementation/active</code> instead.
+The output includes the run ID, branch, worktree, stage, status, test policy,
+and baseline gate count. Save the <code>run</code> value. With this repository's
+advisory policy, a healthy run normally becomes
+<code>implementation/active</code>. A required-mode repository normally becomes
+<code>test/active</code>; an authorized human exemption can move that run
+directly to <code>implementation/active</code>.
 
 The claim refuses closed issues, pull requests, issues without the exact
 <code>agent-ready</code> label, conflicting factory state, and a repository that
@@ -563,27 +580,29 @@ The invocation receives a read-only specification packet at
 at <code>/results</code>. The prompt and terminal content are not printed by
 the coordinator.
 
-With the current repository policy, the first invocation is the
-<code>test</code> role. Use the visible checks surface to add the focused test
-or test infrastructure, then submit a test report from inside that worker (see
-[Structured agent reports](#structured-agent-reports)). Accept it from the
+With this repository's advisory policy, the first invocation is the
+<code>implementation</code> role. Use the visible implementation surface to own
+the complete red/green/refactor loop, including a focused behavioral test when
+practical, then submit the common implementation report from inside that worker
+(see [Structured agent reports](#structured-agent-reports)). Accept it from the
 host:
 
 ~~~sh
 factory agent-report \
   --config /Users/me/.config/factory/config.yaml \
   --run-id <run-id> \
-  --invocation-id <test-invocation-id>
+  --invocation-id <implementation-invocation-id>
 ~~~
 
-For a completed test handoff, the coordinator independently reruns the focused
-test command. It requires a nonzero result and the expected failure reason in
-the command output. Once verified, it creates the test checkpoint, protects the
-reported test paths, and automatically starts a fresh implementation
-invocation. The accepted command output identifies the test invocation that was
-submitted; record the new implementation invocation ID from the newly created
-visible surface or its coordinator output before accepting the implementation
-report. Do not submit an implementation report using the test invocation ID.
+For a required-mode completed test handoff, the coordinator independently reruns
+the focused test command. It requires a nonzero result and the expected failure
+reason in the command output. Once verified, it creates the test checkpoint,
+protects the reported test paths, and automatically starts a fresh
+implementation invocation. The accepted command output identifies the test
+invocation that was submitted; record the new implementation invocation ID from
+the newly created visible surface or its coordinator output before accepting the
+implementation report. Do not submit an implementation report using the test
+invocation ID.
 
 If the test report requests clarification or cannot be verified, the run is
 paused for a human. Factory does not silently turn an unverifiable red test
@@ -647,8 +666,8 @@ factory draft-pr \
 
 The host coordinator:
 
-1. verifies that the worktree is still at the expected parent checkpoint and
-   that protected test paths are unchanged;
+1. verifies that the worktree is still at the expected parent checkpoint and,
+   for required-mode runs, that protected test paths are unchanged;
 2. creates an implementation checkpoint commit with a message containing
    <code>factory: implementation checkpoint &lt;run-id&gt;</code>;
 3. pushes <code>factory/&lt;run-id&gt;</code> so GitHub can resolve the checkpoint
@@ -773,7 +792,7 @@ Repeat <code>--acceptance</code>, <code>--production-file</code>,
 Keep evidence observable and concise. Do not put a transcript, chain of
 thought, or credentials in a report.
 
-### Test handoff
+### Required-mode test handoff
 
 Test reports use test-specific fields and must not report production paths:
 
@@ -1282,10 +1301,10 @@ baseline target is appropriate.
 
 Inspect the issue or PR status comment and run <code>factory status</code>. For
 a pending question, answer with the authorized
-<code>/factory answer ...</code> command. For a test dispute or review blocker,
-inspect the evidence and record an evaluation disposition if appropriate. For a
-recovery discrepancy, use <code>factory reconcile</code> and resolve the
-external state before continuing.
+<code>/factory answer ...</code> command. For a required-mode test dispute or
+review blocker, inspect the evidence and record an evaluation disposition if
+appropriate. For a recovery discrepancy, use <code>factory reconcile</code> and
+resolve the external state before continuing.
 
 ### The run is waiting for harness capacity or authentication
 
@@ -1303,8 +1322,8 @@ wait. A <code>check/waiting_for_human</code> run may continue only when its
 lifecycle reason begins with <code>restart reconciliation paused:</code>; use
 <code>factory reconcile</code> first, then <code>factory resume</code> or
 <code>factory draft-pr</code>. The worktree must be clean at the recorded
-checkpoint, and protected test paths must still match. Submit or correct the
-report first; do not create a manual checkpoint on the run branch.
+checkpoint, and required-mode protected test paths must still match. Submit or
+correct the report first; do not create a manual checkpoint on the run branch.
 
 ### The worker image does not match
 

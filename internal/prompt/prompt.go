@@ -62,6 +62,9 @@ type Request struct {
 	TestPaths []string
 	// TestInfrastructurePaths lists frozen essential test-infrastructure prefixes.
 	TestInfrastructurePaths []string
+	// TestPolicyMode identifies whether implementation owns TDD or consumes an
+	// independently verified test-stage handoff.
+	TestPolicyMode string
 	// ReviewContext is the frozen, content-limited packet supplied to the
 	// independent reviewer. It is omitted for non-review roles.
 	ReviewContext *ReviewContext
@@ -138,12 +141,16 @@ func (r Registry) Build(request Request) (string, error) {
 	}
 	repairContext := ""
 	if request.CheckRepairAttempt > 0 {
+		repairInstruction := "- Repair the implementation in the mounted worktree; do not edit tests or gates merely to make them pass."
+		if request.TestPolicyMode == "advisory" {
+			repairInstruction = "- Repair the implementation in the mounted worktree and revise behavioral tests or essential test infrastructure when needed; do not weaken deterministic gates merely to make them pass."
+		}
 		repairContext = fmt.Sprintf(`
 Check-repair context:
 - This is repair attempt %d of %d for a failed deterministic checkpoint.
 - Read the coordinator-supplied check-repair packet in /invocation/specification.json.
-- Repair the implementation in the mounted worktree; do not edit tests or gates merely to make them pass.
-`, request.CheckRepairAttempt, request.CheckRepairBudget)
+%s
+`, request.CheckRepairAttempt, request.CheckRepairBudget, repairInstruction)
 	}
 	version := definition.PromptVersion
 	testContext := ""
@@ -164,6 +171,14 @@ Test-stage ownership:
 - A technical exemption is provisional and must include a bounded reason for later review.
 `
 		testContext += fmt.Sprintf("- Frozen additional test scope: %s\n", string(scope))
+	} else if request.TestPolicyMode == "advisory" && definition.Kind == workflow.RoleKindHandoff && request.Role == workflow.RoleImplementation {
+		testContext = `
+Implementation-owned TDD:
+- Own the complete red/green/refactor loop for the frozen specification.
+- Write or update a focused behavioral test before production behavior when practical, then run the focused command.
+- Revise the initial test design when implementation evidence requires it; tests and production behavior are both within your implementation scope.
+- Include the focused test commands and behavioral evidence in the structured implementation handoff.
+`
 	} else if request.TestHandoff != nil || len(request.ProtectedTestPaths) > 0 || request.TestExemption != nil {
 		data, err := json.Marshal(struct {
 			Handoff   *store.TestHandoff        `json:"test_handoff,omitempty"`
