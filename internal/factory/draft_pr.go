@@ -179,6 +179,10 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		}
 	}
 
+	if err := s.publishCheckpointBranch(ctx, runStore, workspace, next); err != nil {
+		return DraftPullRequestResult{Run: next}, err
+	}
+
 	gates, gateErr := s.runConfiguredGates(ctx, registration, runStore, next, packet)
 	result := DraftPullRequestResult{Run: next, Gates: gates}
 	if gateErr != nil {
@@ -196,16 +200,6 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	}
 	if len(state.ChangedPaths) != 0 {
 		return result, errors.New("worktree has uncommitted changes after deterministic gates")
-	}
-	pushRequest := gitadapter.PushRequest{WorktreePath: next.Worktree, Branch: next.Branch}
-	var pushErr error
-	if _, journaled := runStore.(PendingEffectStore); journaled {
-		pushErr = s.pushWithEffect(ctx, runStore, next.ID, workspace, pushRequest, next.CheckpointSHA)
-	} else {
-		pushErr = workspace.Push(ctx, pushRequest)
-	}
-	if pushErr != nil {
-		return result, pushErr
 	}
 	draftTransition, transitionErr := workflow.DefaultRegistry().ResolveEventTransition(next.Stage, workflow.StageEventDraftPullRequest)
 	if transitionErr != nil {
@@ -245,6 +239,19 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		return DraftPullRequestResult{Run: next, Gates: gates, PullRequest: pullRequest}, err
 	}
 	return DraftPullRequestResult{Run: next, Gates: gates, PullRequest: pullRequest}, nil
+}
+
+// publishCheckpointBranch pushes the run branch so GitHub can resolve the
+// checkpoint commit. Every gate status names that exact SHA, and GitHub
+// rejects a status for a commit it has never seen, so the branch must reach
+// the remote before the first status is published. The push observes the
+// remote head first and is therefore safe to repeat.
+func (s *Service) publishCheckpointBranch(ctx context.Context, runStore RunStore, workspace gitadapter.GitWorkspace, run store.Run) error {
+	request := gitadapter.PushRequest{WorktreePath: run.Worktree, Branch: run.Branch}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		return s.pushWithEffect(ctx, runStore, run.ID, workspace, request, run.CheckpointSHA)
+	}
+	return workspace.Push(ctx, request)
 }
 
 // runConfiguredGates executes the frozen gate suite once and joins blocking

@@ -3,6 +3,7 @@ package factory_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,10 +21,10 @@ import (
 const implementationCheckpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
 const repairedImplementationCheckpoint = "1234561234561234561234561234561234561234561234561234561234561234"
 
-// TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft
+// TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft
 // verifies the complete host-owned implementation boundary at the Factory
 // seam.
-func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *testing.T) {
+func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -127,6 +128,104 @@ func TestCreateDraftPullRequestRunsGatesBeforeTheFirstPushAndCreatesOneDraft(t *
 		t.Fatalf("updated PR body = %q, want preserved human text and one regenerated section", updatedBody)
 	}
 }
+
+// TestCreateDraftPullRequestPublishesGateStatusesForAPushedCheckpoint
+// verifies the coordinator never asks GitHub for a status on a commit the
+// remote cannot resolve. GitHub rejects such a status with an unknown-SHA
+// error, which previously left the run's journaled status effect pending and
+// the run stuck in recovery.
+func TestCreateDraftPullRequestPublishesGateStatusesForAPushedCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repo")
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(filepath.Join(repositoryPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repositoryPath, ".git", "HEAD"), []byte("ref: refs/heads/factory/run-unpushed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := validRepositoryConfig()
+	policy.Gates = []config.GateConfig{{Name: "format", Command: "format", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
+	runStore := &fakeRunStore{}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Publish the checkpoint first", Body: "Attach gate statuses to a resolvable commit.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	workspace := &draftGitWorkspace{
+		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-unpushed", Worktree: worktreePath},
+		state:     gitadapter.WorktreeState{Branch: "factory/run-unpushed", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory.go"}},
+	}
+	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}}}
+	statuses := &unpushedCheckpointStatuses{workspace: workspace}
+	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 19, URL: "https://github.com/example/project/pull/19", State: "open", Draft: true, HeadBranch: "factory/run-unpushed", BaseBranch: "main"}}
+
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+	}}}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:         &fakeConfig{value: host},
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:         &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		PullRequests:   pullRequests,
+		Worktree:       workspace,
+		GitWorkspace:   workspace,
+		Worker:         workerRuntime,
+		CommitStatuses: statuses,
+		Now:            func() time.Time { return time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC) },
+		NewRunID:       func() (string, error) { return "run-unpushed", nil },
+	})
+	claimed, err := service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	claimed.Run.Stage = store.StageImplementation
+	claimed.Run.Status = store.StatusActive
+	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
+		t.Fatalf("SaveRun() fixture setup error = %v", err)
+	}
+
+	result, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("CreateDraftPullRequest() error = %v", err)
+	}
+	if result.Run.Stage != store.StageDraftPR || result.PullRequest.Number != 19 {
+		t.Fatalf("result = %#v, want a draft PR at the published checkpoint", result)
+	}
+	if len(workspace.pushedSHAs) != 1 || workspace.pushedSHAs[0] != implementationCheckpoint {
+		t.Fatalf("pushed checkpoints = %#v, want the evaluated checkpoint", workspace.pushedSHAs)
+	}
+	if len(statuses.values) != 1 || statuses.values[0].SHA != implementationCheckpoint {
+		t.Fatalf("published gate statuses = %#v, want one status on the pushed checkpoint", statuses.values)
+	}
+	if statuses.rejected != 0 {
+		t.Fatalf("statuses published for an unresolvable commit = %d, want zero", statuses.rejected)
+	}
+}
+
+// unpushedCheckpointStatuses answers a status for an unpushed commit the way
+// GitHub does, so a test proves the checkpoint reaches the remote first.
+type unpushedCheckpointStatuses struct {
+	workspace *draftGitWorkspace
+	values    []github.CommitStatus
+	rejected  int
+}
+
+// CreateCommitStatus records one status and rejects any SHA the remote cannot
+// resolve yet.
+func (s *unpushedCheckpointStatuses) CreateCommitStatus(_ context.Context, _ github.Repository, status github.CommitStatus) error {
+	if !s.workspace.remoteHasCheckpoint(status.SHA) {
+		s.rejected++
+		return fmt.Errorf("No commit found for SHA: %s (HTTP 422)", status.SHA)
+	}
+	s.values = append(s.values, status)
+	return nil
+}
+
+var _ github.CommitStatusPublisher = (*unpushedCheckpointStatuses)(nil)
 
 // TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair
 // verifies the full failed-check to resumed-session to fresh-checkpoint loop.
@@ -242,8 +341,11 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	if second.Repair != nil || second.Run.Stage != store.StageDraftPR || second.Run.CheckpointSHA != repairedImplementationCheckpoint || second.PullRequest.Number != 18 {
 		t.Fatalf("second result = %#v, want a draft PR at a fresh checkpoint", second)
 	}
-	if len(workspace.checkpoints) != 2 || workspace.checkpoints[1].ParentSHA != implementationCheckpoint || len(workspace.pushes) != 1 {
-		t.Fatalf("checkpoint/push effects = %#v/%#v, want repair checkpoint parent and one push", workspace.checkpoints, workspace.pushes)
+	if len(workspace.checkpoints) != 2 || workspace.checkpoints[1].ParentSHA != implementationCheckpoint || len(workspace.pushedSHAs) != 2 {
+		t.Fatalf("checkpoint/push effects = %#v/%#v, want repair checkpoint parent and one push per evaluated checkpoint", workspace.checkpoints, workspace.pushedSHAs)
+	}
+	if workspace.pushedSHAs[0] != implementationCheckpoint || workspace.pushedSHAs[1] != repairedImplementationCheckpoint {
+		t.Fatalf("pushed checkpoints = %#v, want each evaluated checkpoint published before its statuses", workspace.pushedSHAs)
 	}
 	if len(statuses.values) != 2 || statuses.values[0].SHA != implementationCheckpoint || statuses.values[1].SHA != repairedImplementationCheckpoint {
 		t.Fatalf("published gate statuses = %#v, want one status per exact checkpoint", statuses.values)
@@ -292,6 +394,7 @@ type draftGitWorkspace struct {
 	checkpoints    []gitadapter.CheckpointRequest
 	checkpointSHAs []string
 	pushes         []gitadapter.PushRequest
+	pushedSHAs     []string
 }
 
 // activeInvocationRunStore adds the real-store invocation guard to the small
@@ -335,10 +438,23 @@ func (w *draftGitWorkspace) CreateCheckpoint(_ context.Context, request gitadapt
 	return gitadapter.CheckpointResult{SHA: checkpoint, Created: true}, nil
 }
 
-// Push records the host-side branch push.
+// Push records the host-side branch push and the checkpoint it publishes.
 func (w *draftGitWorkspace) Push(_ context.Context, request gitadapter.PushRequest) error {
 	w.pushes = append(w.pushes, request)
+	w.pushedSHAs = append(w.pushedSHAs, w.state.HeadSHA)
 	return nil
+}
+
+// remoteHasCheckpoint reports whether the branch push already published one
+// exact commit, so a status publisher fake can reject an unknown SHA the way
+// GitHub does.
+func (w *draftGitWorkspace) remoteHasCheckpoint(sha string) bool {
+	for _, pushed := range w.pushedSHAs {
+		if pushed == sha {
+			return true
+		}
+	}
+	return false
 }
 
 // SynchronizeBase implements GitWorkspace for the coordinator test.

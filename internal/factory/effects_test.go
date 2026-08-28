@@ -313,6 +313,88 @@ func TestCommitStatusEffectReplaysTheActualStatusMutation(t *testing.T) {
 	}
 }
 
+// TestCommitStatusEffectReplayPublishesAnUnpushedCheckpoint verifies a status
+// journaled for a commit GitHub cannot resolve is completed by publishing the
+// checkpoint branch first. Without that repair the reservation never clears
+// and the run stays in recovery with a stale GitHub projection.
+func TestCommitStatusEffectReplayPublishesAnUnpushedCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	opened, databasePath, run := openEffectMatrixStore(t, ctx)
+	checkpoint := strings.Repeat("b", 40)
+	run.CheckpointSHA = checkpoint
+	if err := opened.SaveRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	workspace := &effectMatrixGitWorkspace{expectedRemoteHead: checkpoint, checkpointSHA: checkpoint}
+	statusRuntime := &unresolvableCommitStatus{workspace: workspace}
+	service := newEffectMatrixService(nil, statusRuntime, workspace, nil)
+	publisher := commitStatusPublisher{service: service, runStore: opened, runID: run.ID, delegate: statusRuntime}
+	status := github.CommitStatus{SHA: checkpoint, State: github.CommitStatusSuccess, Context: "factory/gate/format", Description: "factory gate passed"}
+	if err := publisher.CreateCommitStatus(ctx, github.Repository{Owner: "example", Name: "project"}, status); err == nil {
+		t.Fatal("CreateCommitStatus() = nil, want an unresolved-commit rejection")
+	}
+	if len(statusRuntime.statuses) != 0 {
+		t.Fatalf("published statuses = %#v, want none before the checkpoint is pushed", statusRuntime.statuses)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	pending, err := reopened.PendingEffect(ctx, run.ID)
+	if err != nil || pending == nil {
+		t.Fatalf("pending commit status = %#v, error = %v", pending, err)
+	}
+	restarted := newEffectMatrixService(nil, statusRuntime, workspace, nil)
+	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+		t.Fatalf("replayPendingEffect() = %v", err)
+	}
+	if workspace.pushMutations != 1 {
+		t.Fatalf("push mutations during replay = %d, want the checkpoint published once", workspace.pushMutations)
+	}
+	if len(statusRuntime.statuses) != 1 || statusRuntime.statuses[0].SHA != checkpoint {
+		t.Fatalf("published statuses = %#v, want one status on the published checkpoint", statusRuntime.statuses)
+	}
+	cleared, err := reopened.PendingEffect(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared != nil {
+		t.Fatalf("pending effect after replay = %#v, want a cleared reservation", cleared)
+	}
+}
+
+// unresolvableCommitStatus answers every request for a commit the remote does
+// not have the way GitHub does, so a test can prove the replay publishes the
+// checkpoint before it inspects or attaches a status.
+type unresolvableCommitStatus struct {
+	workspace *effectMatrixGitWorkspace
+	statuses  []github.CommitStatus
+}
+
+// ListCommitStatuses rejects a SHA the remote cannot resolve.
+func (s *unresolvableCommitStatus) ListCommitStatuses(_ context.Context, _ github.Repository, sha string) ([]github.CommitStatus, error) {
+	if s.workspace.remoteHead != sha {
+		return nil, fmt.Errorf("No commit found for SHA: %s (HTTP 422)", sha)
+	}
+	return append([]github.CommitStatus(nil), s.statuses...), nil
+}
+
+// CreateCommitStatus rejects a SHA the remote cannot resolve.
+func (s *unresolvableCommitStatus) CreateCommitStatus(_ context.Context, _ github.Repository, status github.CommitStatus) error {
+	if s.workspace.remoteHead != status.SHA {
+		return fmt.Errorf("No commit found for SHA: %s (HTTP 422)", status.SHA)
+	}
+	s.statuses = append(s.statuses, status)
+	return nil
+}
+
+var _ github.CommitStatusPublisher = (*unresolvableCommitStatus)(nil)
+var _ github.CommitStatusReader = (*unresolvableCommitStatus)(nil)
+
 // TestPushEffectReplaysTheActualRemoteMutation verifies remote-head
 // observation suppresses a second push after a transport response is lost.
 func TestPushEffectReplaysTheActualRemoteMutation(t *testing.T) {
