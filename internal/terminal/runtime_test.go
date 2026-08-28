@@ -2,6 +2,7 @@ package terminal_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -125,14 +126,65 @@ func TestCmuxRuntimeRejectsMalformedRunWorkspace(t *testing.T) {
 	}
 }
 
+// TestCmuxRuntimeReportsDeletedWorkspaceAsMissing verifies that cmux's
+// specific missing-workspace response becomes a successful negative
+// inspection so recovery can recreate the workspace.
+func TestCmuxRuntimeReportsDeletedWorkspaceAsMissing(t *testing.T) {
+	workspaceID := terminal.WorkspaceID(runWorkspaceID)
+	runner := &fakeRunner{treeErr: errors.New("not_found: Workspace not found")}
+
+	inspection, err := terminal.NewCmuxRuntime(runner).InspectWorkspace(context.Background(), workspaceID)
+	if err != nil {
+		t.Fatalf("InspectWorkspace() error = %v, want missing workspace inspection", err)
+	}
+	if inspection.Exists {
+		t.Fatalf("InspectWorkspace() = %#v, want missing workspace", inspection)
+	}
+	if inspection.WorkspaceID != workspaceID {
+		t.Fatalf("InspectWorkspace() workspace ID = %q, want %q", inspection.WorkspaceID, workspaceID)
+	}
+}
+
+// TestCmuxRuntimePreservesOtherInspectionErrors verifies that only the
+// specific missing-workspace response is converted into a negative inspection.
+func TestCmuxRuntimePreservesOtherInspectionErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		runner *fakeRunner
+		want   string
+	}{
+		{
+			name:   "cmux unreachable",
+			runner: &fakeRunner{treeErr: errors.New("cmux socket unreachable")},
+			want:   "cmux socket unreachable",
+		},
+		{
+			name:   "malformed response",
+			runner: &fakeRunner{tree: "{malformed"},
+			want:   "decode terminal topology",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := terminal.NewCmuxRuntime(test.runner).InspectWorkspace(context.Background(), terminal.WorkspaceID(runWorkspaceID))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("InspectWorkspace() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 // fakeRunner answers adapter commands the way the terminal does: structured
 // JSON for creation and topology queries, and a plain acknowledgement line for
 // every lifecycle command.
 type fakeRunner struct {
 	workspaceIDs []string
 	tree         string
-	newSurface   string
-	calls        []string
+	// treeErr is returned when the fixture handles a topology query.
+	treeErr    error
+	newSurface string
+	calls      []string
 }
 
 // Run records one host terminal command and returns its fixture.
@@ -147,6 +199,9 @@ func (r *fakeRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, er
 		}
 		return []byte(`{"group_id":null,"surface_id":"` + implementationSurface + `","window_id":"BE1B197B-CC74-4061-BD7D-E24C82705E08","workspace_id":"` + identifier + `"}`), nil
 	case args[0] == "tree":
+		if r.treeErr != nil {
+			return nil, r.treeErr
+		}
 		return []byte(r.tree), nil
 	case args[0] == "new-surface":
 		return []byte(r.newSurface), nil
