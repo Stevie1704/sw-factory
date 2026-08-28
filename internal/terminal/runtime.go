@@ -378,13 +378,18 @@ func (r *CmuxRuntime) CloseWorkspace(ctx context.Context, workspaceID WorkspaceI
 }
 
 // InspectWorkspace reads one workspace and its surface identities without
-// mutating cmux or interpreting terminal output.
+// mutating cmux or interpreting terminal output. A cmux response identifying
+// the requested workspace as missing is reported as a successful negative
+// inspection so recovery can recreate it.
 func (r *CmuxRuntime) InspectWorkspace(ctx context.Context, workspaceID WorkspaceID) (WorkspaceInspection, error) {
 	if strings.TrimSpace(string(workspaceID)) == "" {
 		return WorkspaceInspection{}, errors.New("workspace id is required")
 	}
 	topology, err := r.topology(ctx, []string{"tree", "--workspace", string(workspaceID), "--json", "--id-format", "uuids"})
 	if err != nil {
+		if strings.Contains(err.Error(), "not_found: Workspace not found") {
+			return WorkspaceInspection{WorkspaceID: workspaceID}, nil
+		}
 		return WorkspaceInspection{}, err
 	}
 	for _, window := range topology.Windows {
