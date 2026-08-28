@@ -120,6 +120,39 @@ func TestPollLifecycleRetriesAFailedTerminalNotification(t *testing.T) {
 	}
 }
 
+// TestPollLifecyclePrefersAnActiveRunAfterTerminalNotificationRetry verifies
+// that a terminal notification retry cannot make its older run supersede an
+// active run selected by an explicit ID.
+func TestPollLifecyclePrefersAnActiveRunAfterTerminalNotificationRetry(t *testing.T) {
+	t.Parallel()
+
+	active := commandRun(t, store.StatusActive)
+	active.ID = "run-active"
+	terminal := commandRun(t, store.StatusComplete)
+	terminal.ID = "run-terminal"
+	terminal.LifecycleReason = "pull request #17 merged"
+	terminal.LifecycleNotificationSent = true
+	// A notification retry persists the older terminal run after the active run,
+	// so it is the latest projection while the active run remains current.
+	runStore := &commandRunStore{current: &active, latest: &terminal}
+	githubAdapter := &lifecycleGitHub{
+		commandGitHub: commandGitHub{issue: github.Issue{Number: active.IssueNumber, State: "closed", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: active.StatusCommentID}},
+	}
+	terminalRuntime := &lifecycleTerminal{}
+	service := newLifecycleService(runStore, githubAdapter, &lifecycleWorker{}, terminalRuntime)
+
+	result, err := service.PollLifecycle(context.Background(), factoryLifecycleRequest(active.ID))
+	if err != nil {
+		t.Fatalf("PollLifecycle() error = %v", err)
+	}
+	if result.Outcome != factory.LifecycleCancelled || result.Run.ID != active.ID || result.Run.Status != store.StatusCancelled {
+		t.Fatalf("lifecycle result = %#v, want cancelled active run %q", result, active.ID)
+	}
+	if len(terminalRuntime.notifications) != 1 || !strings.Contains(terminalRuntime.notifications[0].Body, active.ID) {
+		t.Fatalf("notifications = %#v, want one notification for active run %q", terminalRuntime.notifications, active.ID)
+	}
+}
+
 // TestPollLifecycleDoesNotResendAfterNotifySucceedsPersistFails verifies that
 // when notification delivery succeeds but the subsequent run save fails, a retry
 // does not send the notification again (the durable claim prevents duplicate delivery).

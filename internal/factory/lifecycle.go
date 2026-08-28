@@ -72,20 +72,20 @@ func (s *Service) PollLifecycle(ctx context.Context, request LifecycleRequest) (
 	return result, nil
 }
 
-// openLifecycleRunStore opens the latest run without requiring non-terminal
-// projections to agree before GitHub can report an already-terminal outcome.
-// A pending effect still crosses the ordinary reconciliation boundary first,
-// because lifecycle terminalization must not replace an unresolved mutation.
+// openLifecycleRunStore opens the active run first, falling back to the latest
+// terminal projection only when no run is active. A pending effect still crosses
+// the ordinary reconciliation boundary first, because lifecycle terminalization
+// must not replace an unresolved mutation.
 func (s *Service) openLifecycleRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
 	registration, runStore, err := s.openRunStore(ctx)
 	if err != nil {
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
-	var run *store.Run
-	if latestStore, ok := runStore.(LatestRunStore); ok {
-		run, err = latestStore.LatestRun(ctx)
-	} else {
-		run, err = runStore.CurrentRun(ctx)
+	run, err := runStore.CurrentRun(ctx)
+	if err == nil && run == nil {
+		if latestStore, ok := runStore.(LatestRunStore); ok {
+			run, err = latestStore.LatestRun(ctx)
+		}
 	}
 	if err != nil {
 		_ = runStore.Close()
