@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -153,29 +154,41 @@ func TestPromptForPersistedInvocationRejectsUnsupportedSchemaVersion(t *testing.
 	}
 }
 
-// TestPromptForPersistedInvocationRejectsReviewWithoutContext verifies an old
-// or incomplete reviewer packet cannot resume without the exact checkpoint
-// review input required by the role contract.
-func TestPromptForPersistedInvocationRejectsReviewWithoutContext(t *testing.T) {
-	directory := t.TempDir()
-	run := store.Run{ID: "run-review", SpecificationPacket: "{}"}
-	invocation := store.Invocation{
-		ID: "inv-review", RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview,
-		InvocationDirectory: directory, PromptVersion: workflow.PromptVersionSpecificationReview,
-	}
-	if err := writeInvocationPacket(directory, InvocationPacket{
-		SchemaVersion:       invocationPacketVersion,
-		InvocationID:        invocation.ID,
-		RunID:               run.ID,
-		Role:                invocation.Role,
-		Stage:               invocation.Stage,
-		SpecificationPacket: run.SpecificationPacket,
-		PromptVersion:       invocation.PromptVersion,
-		PermittedPaths:      []string{"."},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := promptForPersistedInvocation(run, invocation, SpecificationPacket{}); err == nil || !strings.Contains(err.Error(), "has no review context") {
-		t.Fatalf("promptForPersistedInvocation() error = %v, want missing-review-context refusal", err)
+// TestPromptForPersistedInvocationRejectsInvalidReviewContext verifies recovery
+// cannot resume a reviewer without a context tied to the run's checkpoint.
+func TestPromptForPersistedInvocationRejectsInvalidReviewContext(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		context *prompt.ReviewContext
+		want    string
+	}{
+		{name: "missing context", want: "has no review context"},
+		{name: "empty checkpoint", context: &prompt.ReviewContext{}, want: "has no review checkpoint"},
+		{name: "mismatched checkpoint", context: &prompt.ReviewContext{CheckpointSHA: "different-checkpoint"}, want: "review checkpoint does not match the run"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			run := store.Run{ID: "run-review", CheckpointSHA: "review-checkpoint", SpecificationPacket: "{}"}
+			invocation := store.Invocation{
+				ID: "inv-review", RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview,
+				InvocationDirectory: directory, PromptVersion: workflow.PromptVersionSpecificationReview,
+			}
+			if err := writeInvocationPacket(directory, InvocationPacket{
+				SchemaVersion:       invocationPacketVersion,
+				InvocationID:        invocation.ID,
+				RunID:               run.ID,
+				Role:                invocation.Role,
+				Stage:               invocation.Stage,
+				SpecificationPacket: run.SpecificationPacket,
+				PromptVersion:       invocation.PromptVersion,
+				PermittedPaths:      []string{"."},
+				ReviewContext:       test.context,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := promptForPersistedInvocation(run, invocation, SpecificationPacket{}); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("promptForPersistedInvocation() error = %v, want %q refusal", err, test.want)
+			}
+		})
 	}
 }

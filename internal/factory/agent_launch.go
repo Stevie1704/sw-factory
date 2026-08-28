@@ -572,8 +572,16 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 	if invocation.PromptVersion != "" && persisted.PromptVersion != invocation.PromptVersion {
 		return errors.New("persisted invocation packet prompt version does not match the invocation")
 	}
-	if invocation.Role == workflow.RoleSpecificationReview && persisted.ReviewContext == nil {
-		return errors.New("persisted specification-review invocation packet has no review context")
+	if invocation.Role == workflow.RoleSpecificationReview {
+		if persisted.ReviewContext == nil {
+			return errors.New("persisted specification-review invocation packet has no review context")
+		}
+		if strings.TrimSpace(persisted.ReviewContext.CheckpointSHA) == "" {
+			return errors.New("persisted specification-review invocation packet has no review checkpoint")
+		}
+		if persisted.ReviewContext.CheckpointSHA != run.CheckpointSHA {
+			return errors.New("persisted specification-review invocation packet review checkpoint does not match the run")
+		}
 	}
 	return nil
 }
