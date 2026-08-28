@@ -41,6 +41,10 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/factory/run-journaled-recovery\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	authPath := filepath.Join(root, "codex-auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"journaled-recovery-secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	packet := SpecificationPacket{
 		Version: specificationPacketVersion,
@@ -86,6 +90,7 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 		Role:                    "implementation",
 		Stage:                   store.StageImplementation,
 		Model:                   "gpt-5",
+		CredentialStoreID:       root,
 		NativeSessionID:         "session-journaled-recovery",
 		WorkspaceID:             "workspace-journaled-recovery",
 		StatusSurfaceID:         "surface-status-journaled-recovery",
@@ -126,6 +131,7 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 		Path:                root,
 		OperationalDataPath: databasePath,
 		GitHub:              config.GitHubConfig{Owner: "example", Repository: "project"},
+		Authentication:      config.AuthenticationConfig{CodexAuthPath: authPath},
 	}
 	githubRuntime := &effectMatrixGitHub{
 		issue:         github.Issue{Number: run.IssueNumber, Labels: []string{factoryLabelForStatus(run.Status)}},
@@ -168,6 +174,9 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	if workerRuntime.startRequests[0].ImageDigest != run.ImageDigest || workerRuntime.startRequests[0].InvocationPath != invocation.InvocationDirectory || workerRuntime.startRequests[0].ResultPath != invocation.ResultDirectory {
 		t.Fatalf("recreated worker request = %#v, want frozen image and invocation mounts", workerRuntime.startRequests[0])
 	}
+	if len(workerRuntime.codexSeeds) != 1 || workerRuntime.codexSeeds[0].AuthPath != authPath {
+		t.Fatalf("recovery credential seeds = %#v, want one seed from the registered source", workerRuntime.codexSeeds)
+	}
 	if harnessRuntime.resumeCalls != 1 {
 		t.Fatalf("native resumes after first startup = %d, want one", harnessRuntime.resumeCalls)
 	}
@@ -194,8 +203,14 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	if freshRun == nil {
 		t.Fatal("fresh coordinator fixture lost its run")
 	}
+	// Model a restart after the managed volume contents were lost while its
+	// mount identity still matched the persisted worker contract.
+	workerRuntime.codexSeeds = nil
 	if err := fresh.reconcileRegisteredRun(ctx, registration); err != nil {
 		t.Fatalf("second journaled startup = %v", err)
+	}
+	if len(workerRuntime.codexSeeds) != 1 || workerRuntime.codexSeeds[0].AuthPath != authPath {
+		t.Fatalf("credential restoration after matching-worker restart = %#v, want one registered-source seed", workerRuntime.codexSeeds)
 	}
 	if harnessRuntime.resumeCalls != 1 {
 		t.Fatalf("native resumes after second startup = %d, want no duplicate", harnessRuntime.resumeCalls)
@@ -297,6 +312,45 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	liveRecovered, err := opened.CurrentRun(ctx)
 	if err != nil || liveRecovered == nil || liveRecovered.Status != store.StatusActive {
 		t.Fatalf("run after live harness recovery = %#v, error = %v; want active run", liveRecovered, err)
+	}
+
+	// A configured source that disappears before the next restart must pause
+	// before native resume and keep its path and contents out of the error.
+	if err := os.Remove(authPath); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err = opened.Invocation(ctx, run.ID, invocation.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("read invocation before missing-source recovery = %#v, error = %v", persisted, err)
+	}
+	persisted.RecoveryResumeCount = 0
+	persisted.UpdatedAt = now.Add(4 * time.Minute)
+	if err := opened.SaveInvocation(ctx, *persisted); err != nil {
+		t.Fatal(err)
+	}
+	activeRun = *liveRecovered
+	activeRun.Status = store.StatusActive
+	activeRun.LifecycleReason = "worker recovered with a missing credential source"
+	activeRun.UpdatedAt = now.Add(4 * time.Minute)
+	if err := opened.SaveRun(ctx, activeRun); err != nil {
+		t.Fatal(err)
+	}
+	githubRuntime.issue.Labels = []string{factoryLabelForStatus(activeRun.Status)}
+	githubRuntime.statusComment.Body = statusCommentBody(activeRun)
+	workerRuntime.inspection = worker.Inspection{}
+	workerRuntime.seedErr = errors.New(authPath + ": journaled-recovery-secret")
+	harnessRuntime.nativeSessionExited = false
+	missingSourceService := &Service{deps: service.deps}
+	missingSourceErr := missingSourceService.reconcileRegisteredRun(ctx, registration)
+	if missingSourceErr == nil || !strings.Contains(missingSourceErr.Error(), "factory auth refresh") {
+		t.Fatalf("missing-source recovery error = %v, want actionable auth refresh guidance", missingSourceErr)
+	}
+	if strings.Contains(missingSourceErr.Error(), authPath) || strings.Contains(missingSourceErr.Error(), "journaled-recovery-secret") {
+		t.Fatalf("missing-source recovery leaked credential details: %v", missingSourceErr)
+	}
+	paused, err := opened.CurrentRun(ctx)
+	if err != nil || paused == nil || paused.Status != store.StatusWaitingForHuman || !strings.HasPrefix(paused.LifecycleReason, "harness authentication expired") {
+		t.Fatalf("run after missing-source recovery = %#v, error = %v; want authentication pause", paused, err)
 	}
 }
 
@@ -438,6 +492,8 @@ type journalRecoveryWorker struct {
 	inspectCalls  int
 	startCalls    int
 	startRequests []worker.StartRequest
+	codexSeeds    []worker.CredentialSeedRequest
+	seedErr       error
 }
 
 // Start recreates the worker from the coordinator's frozen request and updates
@@ -471,7 +527,14 @@ func (w *journalRecoveryWorker) Inspect(context.Context, string) (worker.Inspect
 	return w.inspection, w.inspectErr
 }
 
+// SeedCodexCredentials records restoration of the configured factory source.
+func (w *journalRecoveryWorker) SeedCodexCredentials(_ context.Context, request worker.CredentialSeedRequest) error {
+	w.codexSeeds = append(w.codexSeeds, request)
+	return w.seedErr
+}
+
 var _ worker.WorkerRuntime = (*journalRecoveryWorker)(nil)
+var _ worker.CredentialSeeder = (*journalRecoveryWorker)(nil)
 
 // journalRecoveryTerminal supplies the persisted cmux workspace projection.
 type journalRecoveryTerminal struct {

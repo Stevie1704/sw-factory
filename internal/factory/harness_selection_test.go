@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -22,15 +24,22 @@ func (w *agentWorker) InteractiveCommand(_ context.Context, request worker.Inter
 	return worker.InteractiveCommand{Executable: "factory-worker-attach", Args: []string{"--run-id", request.RunID}}, nil
 }
 
-// SeedCodexCredentials records one narrowly scoped Codex credential seed.
+// SeedCodexCredentials records the requested Codex credential seed and returns
+// seedErr when configured.
 func (w *agentWorker) SeedCodexCredentials(_ context.Context, request worker.CredentialSeedRequest) error {
 	w.codexSeeds = append(w.codexSeeds, request)
+	if w.seedErr != nil {
+		return w.seedErr
+	}
 	return nil
 }
 
 // SeedClaudeCredentials records one narrowly scoped Claude credential seed.
 func (w *agentWorker) SeedClaudeCredentials(_ context.Context, request worker.CredentialSeedRequest) error {
 	w.claudeSeeds = append(w.claudeSeeds, request)
+	if w.seedErr != nil {
+		return w.seedErr
+	}
 	return nil
 }
 
@@ -108,6 +117,258 @@ func TestRefreshAuthReseedsTheRegisteredSourceWithoutChangingIt(t *testing.T) {
 	if string(unchanged) != string(source) {
 		t.Fatalf("registered auth source changed to %q", unchanged)
 	}
+}
+
+// TestResumeRestoresConfiguredCodexCredentialsAfterWorkerRecovery verifies a
+// recreated worker receives the same configured Codex projection before its
+// persisted native session is resumed.
+func TestResumeRestoresConfiguredCodexCredentialsAfterWorkerRecovery(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"recovery-secret"}`), 0o600); err != nil {
+		t.Fatalf("write credential source: %v", err)
+	}
+
+	service, runStore, runtime, _, launch := prepareAgentForWorkerRecovery(t, config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	if got := len(runtime.codexSeeds); got != 1 {
+		t.Fatalf("initial launch seeded Codex credentials %d times, want 1", got)
+	}
+
+	_, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+	var manualResumeErr *factory.ManualResumeRequiredError
+	if !errors.As(err, &manualResumeErr) {
+		t.Fatalf("Resume() error = %v, want manual resume handoff", err)
+	}
+	if got := len(runtime.codexSeeds); got != 2 {
+		t.Fatalf("recovery seeded Codex credentials %d times, want 2", got)
+	}
+	if got := runtime.codexSeeds[1].AuthPath; got != authPath {
+		t.Fatalf("recovery credential source = %q, want %q", got, authPath)
+	}
+	if got := runStore.invocations[launch.Invocation.ID].CredentialStoreID; got == "" {
+		t.Fatal("recovery removed the persisted credential store identity")
+	}
+	if len(runtime.starts) != 2 || runtime.starts[1].CredentialStoreID != launch.Invocation.CredentialStoreID {
+		t.Fatalf("recovery worker credential store = %#v, want persisted identity %q", runtime.starts, launch.Invocation.CredentialStoreID)
+	}
+	if got := len(runtime.interactive); got != 2 {
+		t.Fatalf("recovery launched the native harness %d times, want 2 total launches", got)
+	}
+	if !containsAdjacentArguments(runtime.interactive[1].Command, "resume", "native-session-recovery") {
+		t.Fatalf("recovery harness command = %#v, want the persisted native session", runtime.interactive[1].Command)
+	}
+}
+
+// TestAttachRestoresCredentialsOnceWhenItRecreatesTheTerminal verifies the
+// nested native resume owns credential restoration after topology recovery.
+func TestAttachRestoresCredentialsOnceWhenItRecreatesTheTerminal(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"attach-secret"}`), 0o600); err != nil {
+		t.Fatalf("write credential source: %v", err)
+	}
+
+	service, runStore, runtime, _, launch := prepareAgentForWorkerRecovery(t, config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.WorkspaceID = ""
+	persisted.StatusSurfaceID = ""
+	persisted.RoleSurfaceID = ""
+	persisted.ImplementationSurfaceID = ""
+	persisted.ChecksSurfaceID = ""
+	if err := runStore.SaveInvocation(context.Background(), persisted); err != nil {
+		t.Fatalf("clear persisted terminal topology: %v", err)
+	}
+
+	attached, err := service.Attach(context.Background(), factory.AttachRequest{RunID: launch.Invocation.RunID})
+	if err != nil {
+		t.Fatalf("Attach() error = %v", err)
+	}
+	if attached.Run.Status != store.StatusActive {
+		t.Fatalf("Attach() run status = %q, want %q", attached.Run.Status, store.StatusActive)
+	}
+	if got := len(runtime.codexSeeds); got != 2 {
+		t.Fatalf("attach seeded Codex credentials %d times, want initial launch and one nested restore", got)
+	}
+	if got := len(runtime.interactive); got != 2 {
+		t.Fatalf("attach launched the native harness %d times, want initial launch and one nested resume", got)
+	}
+}
+
+// TestAttachPausesWhenNestedCredentialRestorationFails verifies a failed
+// projection after topology recovery stops the recreated worker.
+func TestAttachPausesWhenNestedCredentialRestorationFails(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"attach-secret"}`), 0o600); err != nil {
+		t.Fatalf("write credential source: %v", err)
+	}
+
+	service, runStore, runtime, _, launch := prepareAgentForWorkerRecovery(t, config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.WorkspaceID = ""
+	persisted.StatusSurfaceID = ""
+	persisted.RoleSurfaceID = ""
+	persisted.ImplementationSurfaceID = ""
+	persisted.ChecksSurfaceID = ""
+	if err := runStore.SaveInvocation(context.Background(), persisted); err != nil {
+		t.Fatalf("clear persisted terminal topology: %v", err)
+	}
+	runtime.seedErr = errors.New("credential source unavailable")
+
+	attached, err := service.Attach(context.Background(), factory.AttachRequest{RunID: launch.Invocation.RunID})
+	if err == nil || !strings.Contains(err.Error(), "factory auth refresh") {
+		t.Fatalf("Attach() error = %v, want actionable auth refresh guidance", err)
+	}
+	if attached.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("Attach() run status = %q, want %q", attached.Run.Status, store.StatusWaitingForHuman)
+	}
+	if len(runtime.starts) != 3 || runtime.stops != 2 {
+		t.Fatalf("attach worker lifecycle = %d starts/%d stops, want nested recreation followed by cleanup", len(runtime.starts), runtime.stops)
+	}
+	if got := len(runtime.codexSeeds); got != 2 {
+		t.Fatalf("failed attach seeded Codex credentials %d times, want initial launch and one nested restore", got)
+	}
+}
+
+// TestResumeAllowsRecoveryWithoutConfiguredCredentialSource verifies that an
+// optional host source is not required when the role-owned state is recoverable.
+func TestResumeAllowsRecoveryWithoutConfiguredCredentialSource(t *testing.T) {
+	service, runStore, runtime, _, launch := prepareAgentForWorkerRecovery(t, config.AuthenticationConfig{})
+
+	_, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+	var manualResumeErr *factory.ManualResumeRequiredError
+	if !errors.As(err, &manualResumeErr) {
+		t.Fatalf("Resume() error = %v, want manual resume handoff", err)
+	}
+	if got := len(runtime.codexSeeds); got != 0 {
+		t.Fatalf("recovery without a credential source seeded Codex credentials %d times, want 0", got)
+	}
+	if got := runStore.invocations[launch.Invocation.ID].CredentialStoreID; got != "" {
+		t.Fatalf("recovery without a credential source persisted credential store %q, want empty", got)
+	}
+}
+
+// TestResumeFailsClosedWhenPersistedCredentialSourceIsNotConfigured verifies
+// a managed store cannot silently fall back to stale role-volume credentials.
+func TestResumeFailsClosedWhenPersistedCredentialSourceIsNotConfigured(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	launchService := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	launch, err := launchService.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.NativeSessionID = "native-session-with-managed-credentials"
+	if err := runStore.SaveInvocation(context.Background(), persisted); err != nil {
+		t.Fatalf("persist native session: %v", err)
+	}
+	runtime.inspectResult = &worker.Inspection{}
+	recoveredService := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), config.AuthenticationConfig{})
+
+	resumed, err := recoveredService.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+	if err == nil || !strings.Contains(err.Error(), "factory auth refresh") {
+		t.Fatalf("Resume() error = %v, want actionable auth refresh guidance", err)
+	}
+	if resumed.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("Resume() run status = %q, want %q", resumed.Run.Status, store.StatusWaitingForHuman)
+	}
+	if got := len(runtime.codexSeeds); got != 1 {
+		t.Fatalf("resume without configured source seeded Codex credentials %d times, want only initial launch", got)
+	}
+	if got := len(harnessRuntime.resumes); got != 0 {
+		t.Fatalf("resume without configured source resumed the native session %d times, want 0", got)
+	}
+}
+
+// TestResumeFailsClosedWhenConfiguredCodexCredentialsCannotBeRestored verifies
+// missing projection input pauses recovery with bounded operator guidance.
+func TestResumeFailsClosedWhenConfiguredCodexCredentialsCannotBeRestored(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"recovery-secret"}`), 0o600); err != nil {
+		t.Fatalf("write credential source: %v", err)
+	}
+
+	service, runStore, runtime, _, launch := prepareAgentForWorkerRecovery(t, config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	if err := os.Remove(authPath); err != nil {
+		t.Fatalf("remove credential source: %v", err)
+	}
+	runtime.seedErr = errors.New(authPath + ": recovery-secret credential source disappeared")
+
+	_, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+	if err == nil {
+		t.Fatal("Resume() succeeded without a restorable configured credential source")
+	}
+	if !strings.Contains(err.Error(), "factory auth refresh") {
+		t.Fatalf("Resume() error = %v, want actionable auth refresh guidance", err)
+	}
+	if strings.Contains(err.Error(), authPath) || strings.Contains(err.Error(), "recovery-secret") {
+		t.Fatalf("Resume() error leaked credential source details: %v", err)
+	}
+	if got := len(runtime.codexSeeds); got != 2 {
+		t.Fatalf("failed recovery attempted credential seed %d times, want the initial and failed restore", got)
+	}
+	if got := runStore.current.Status; got != store.StatusWaitingForHuman {
+		t.Fatalf("run status after failed credential recovery = %q, want %q", got, store.StatusWaitingForHuman)
+	}
+	// Attach follows the same boundary if an operator retries after the pause;
+	// a failed projection must not leave the newly started worker running.
+	_, attachErr := service.Attach(context.Background(), factory.AttachRequest{RunID: launch.Invocation.RunID})
+	if attachErr == nil || !strings.Contains(attachErr.Error(), "factory auth refresh") {
+		t.Fatalf("Attach() error = %v, want actionable auth refresh guidance", attachErr)
+	}
+	if got := runStore.current.Status; got != store.StatusWaitingForHuman {
+		t.Fatalf("run status after failed attach recovery = %q, want %q", got, store.StatusWaitingForHuman)
+	}
+}
+
+// TestStartAgentRefusesANonRestartSafeCredentialOverride verifies a one-off
+// host source cannot create an invocation that recovery could not restore.
+func TestStartAgentRefusesANonRestartSafeCredentialOverride(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, _ := newAgentService(t)
+	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), config.AuthenticationConfig{})
+	overridePath := filepath.Join(t.TempDir(), "auth.json")
+
+	_, err := service.StartAgent(context.Background(), factory.AgentRequest{CodexAuthPath: overridePath})
+	if err == nil || !strings.Contains(err.Error(), "not restart-safe") {
+		t.Fatalf("StartAgent() error = %v, want non-restart-safe override refusal", err)
+	}
+	if strings.Contains(err.Error(), overridePath) {
+		t.Fatalf("override refusal leaked host credential path: %v", err)
+	}
+	if len(runtime.starts) != 0 || len(runtime.codexSeeds) != 0 {
+		t.Fatal("non-restart-safe credential override started a worker or seeded credentials")
+	}
+}
+
+// prepareAgentForWorkerRecovery launches an invocation, persists its native
+// session identity, and makes the worker appear missing to the next resume.
+func prepareAgentForWorkerRecovery(t *testing.T, authentication config.AuthenticationConfig) (*factory.Service, *agentRunStore, *agentWorker, *agentHarness, factory.AgentLaunchResult) {
+	t.Helper()
+
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	service := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), authentication)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.NativeSessionID = "native-session-recovery"
+	if err := runStore.SaveInvocation(context.Background(), persisted); err != nil {
+		t.Fatalf("persist native session: %v", err)
+	}
+	runtime.inspectResult = &worker.Inspection{}
+
+	recoveredService := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), authentication)
+	return recoveredService, runStore, runtime, harnessRuntime, launch
 }
 
 // TestStartAgentRefusesAnIssueHarnessOverrideOutsidePolicy verifies an

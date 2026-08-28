@@ -63,7 +63,10 @@ of the selected harness is used. For a repository with a
 configured `test` role, `factory issue` leaves a healthy run in `test/active`,
 and this command starts the test agent. An implementation agent is started only
 after the test handoff is accepted, or after an authorized exemption. The
-command creates or reuses the control workspace and creates one run workspace
+agent auth flags must name the same sources registered for the repository;
+distinct one-off sources are refused because recovery never persists host
+credential paths. Change the registered source with `factory register` instead.
+The command creates or reuses the control workspace and creates one run workspace
 with role surfaces. Dormant status and checks layout
 definitions remain in the terminal adapter so they can return when they display
 live coordinator and gate output rather than duplicate the one-shot

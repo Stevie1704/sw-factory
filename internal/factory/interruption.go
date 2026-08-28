@@ -156,6 +156,11 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 
 	updatedInvocation, resumeErr := s.resumePersistedInvocationManually(ctx, registration, runStore, *run, *active)
 	if resumeErr != nil {
+		var credentialErr *credentialProjectionError
+		if errors.As(resumeErr, &credentialErr) {
+			paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, active.Harness)
+			return ResumeResult{Run: paused, Invocation: updatedInvocation}, errors.Join(credentialErr, pauseErr)
+		}
 		classified := classifyHarnessRuntimeErrorForInvocation(*active, resumeErr)
 		if harness.IsRateLimited(classified) {
 			paused, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, *run, active.Harness)
@@ -233,9 +238,11 @@ func (s *Service) Attach(ctx context.Context, request AttachRequest) (AttachResu
 	if err != nil {
 		return AttachResult{}, fmt.Errorf("ensure agent runtime for attach: %w", err)
 	}
-	if _, err := s.ensureWorkerForInvocation(ctx, registration, runStore, *run, *active); err != nil {
+	_, recoveredInvocation, err := s.ensureWorkerForInvocation(ctx, registration, runStore, *run, *active)
+	if err != nil {
 		return AttachResult{}, err
 	}
+	active = &recoveredInvocation
 	workspaceID, implementationSurface, statusSurface, checksSurface, restored, err := s.restoreInvocationTerminal(ctx, terminalRuntime, *run, *active)
 	if err != nil {
 		return AttachResult{}, err
@@ -245,17 +252,25 @@ func (s *Service) Attach(ctx context.Context, request AttachRequest) (AttachResu
 	setInvocationSurface(&updated, implementationSurface)
 	updated.StatusSurfaceID = string(statusSurface.ID)
 	updated.ChecksSurfaceID = string(checksSurface.ID)
-	if restored || updated.AttachRequired {
-		if restored {
-			// A recreated cmux topology needs a native resume to place the
-			// process into the newly created surface before the attach gate is
-			// cleared.
-			resumed, resumeErr := s.resumePersistedInvocationManually(ctx, registration, runStore, *run, updated)
-			if resumeErr != nil {
-				return AttachResult{Invocation: resumed}, resumeErr
+	if restored {
+		// A recreated cmux topology needs a native resume to place the process
+		// into the newly created surface. The nested resume restores credentials
+		// itself.
+		resumed, resumeErr := s.resumePersistedInvocationManually(ctx, registration, runStore, *run, updated)
+		if resumeErr != nil {
+			var credentialErr *credentialProjectionError
+			if errors.As(resumeErr, &credentialErr) {
+				paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, active.Harness)
+				return AttachResult{Run: paused, Invocation: resumed}, errors.Join(credentialErr, pauseErr)
 			}
-			updated = resumed
+			return AttachResult{Invocation: resumed}, resumeErr
 		}
+		updated = resumed
+	} else if err := s.restoreCredentialProjection(ctx, registration, *run, updated); err != nil {
+		paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, active.Harness)
+		return AttachResult{Run: paused, Invocation: updated}, errors.Join(err, pauseErr)
+	}
+	if restored || updated.AttachRequired {
 		updated.AttachRequired = false
 		updated.UpdatedAt = s.deps.Now().UTC()
 		invocationStore, ok := runStore.(InvocationStore)
@@ -340,11 +355,13 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 			return AuthRefreshResult{}, fmt.Errorf("persist credential store identity: %w", err)
 		}
 	}
-	if _, err := s.ensureWorkerForInvocation(ctx, registration, runStore, *run, *invocation); err != nil {
+	_, recoveredInvocation, err := s.ensureWorkerForInvocation(ctx, registration, runStore, *run, *invocation)
+	if err != nil {
 		return AuthRefreshResult{}, err
 	}
+	*invocation = recoveredInvocation
 	if err := seed(ctx, run.ID); err != nil {
-		return AuthRefreshResult{}, fmt.Errorf("refresh %s credentials: %w", harnessName, classifyHarnessRuntimeError(nil, err))
+		return AuthRefreshResult{}, newCredentialProjectionError(string(harnessName))
 	}
 	return AuthRefreshResult{Run: *run, Invocation: *invocation, Harness: harnessName}, nil
 }
@@ -588,15 +605,20 @@ func (s *Service) pauseForManualRecovery(ctx context.Context, registration confi
 }
 
 // ensureWorkerForInvocation validates or recreates the pinned worker for an
-// invocation and returns the exact start request used for credential refresh.
-func (s *Service) ensureWorkerForInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (worker.StartRequest, error) {
+// invocation and returns the exact start request plus any persisted credential
+// store identity added from the current registered source.
+func (s *Service) ensureWorkerForInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (worker.StartRequest, store.Invocation, error) {
+	invocation, err := s.ensureCredentialStoreIdentity(ctx, registration, runStore, invocation)
+	if err != nil {
+		return worker.StartRequest{}, invocation, err
+	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
-		return worker.StartRequest{}, fmt.Errorf("decode specification packet for worker recovery: %w", err)
+		return worker.StartRequest{}, invocation, fmt.Errorf("decode specification packet for worker recovery: %w", err)
 	}
 	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
 	if err != nil {
-		return worker.StartRequest{}, fmt.Errorf("prepare recovery Git metadata: %w", err)
+		return worker.StartRequest{}, invocation, fmt.Errorf("prepare recovery Git metadata: %w", err)
 	}
 	request := worker.StartRequest{
 		RunID:             run.ID,
@@ -611,27 +633,27 @@ func (s *Service) ensureWorkerForInvocation(ctx context.Context, registration co
 		Role:              invocation.Role,
 	}
 	if s.deps.Worker == nil {
-		return worker.StartRequest{}, errors.New("worker runtime is required for invocation recovery")
+		return worker.StartRequest{}, invocation, errors.New("worker runtime is required for invocation recovery")
 	}
 	inspection, err := s.deps.Worker.Inspect(ctx, run.ID)
 	if err != nil {
-		return worker.StartRequest{}, fmt.Errorf("inspect worker for invocation recovery: %w", err)
+		return worker.StartRequest{}, invocation, fmt.Errorf("inspect worker for invocation recovery: %w", err)
 	}
 	if inspection.Exists {
 		if !workerImageMatches(inspection.Image, request.Image, request.ImageDigest) {
-			return worker.StartRequest{}, fmt.Errorf("persisted worker image %q does not match frozen image %q@%s", inspection.Image, request.Image, request.ImageDigest)
+			return worker.StartRequest{}, invocation, fmt.Errorf("persisted worker image %q does not match frozen image %q@%s", inspection.Image, request.Image, request.ImageDigest)
 		}
 		if inspection.Running {
 			known, matches := inspection.MountContractStatus(request)
 			if known && matches {
-				return request, nil
+				return request, invocation, nil
 			}
 		}
 	}
 	if err := s.startWorkerWithEffect(ctx, runStore, request); err != nil {
-		return worker.StartRequest{}, fmt.Errorf("start or recreate worker during invocation recovery: %w", err)
+		return worker.StartRequest{}, invocation, fmt.Errorf("start or recreate worker during invocation recovery: %w", err)
 	}
-	return request, nil
+	return request, invocation, nil
 }
 
 // restoreInvocationTerminal returns persisted handles when they still exist

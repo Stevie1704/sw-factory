@@ -52,9 +52,12 @@ type AgentRequest struct {
 	Model string
 	// ReasoningEffort is an optional policy-validated setting.
 	ReasoningEffort string
-	// CodexAuthPath overrides the registered narrow Codex auth source when set.
+	// CodexAuthPath selects the registered narrow Codex auth source when set;
+	// a distinct one-off source is refused because it cannot be restored after
+	// a coordinator restart without persisting the host path.
 	CodexAuthPath string
-	// ClaudeAuthPath overrides the registered narrow Claude auth source when set.
+	// ClaudeAuthPath selects the registered narrow Claude auth source when set;
+	// a distinct one-off source is refused for the same restart-safety reason.
 	ClaudeAuthPath string
 	// PermittedPaths constrains production paths in the accepted handoff.
 	PermittedPaths []string
