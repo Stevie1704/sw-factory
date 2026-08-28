@@ -212,8 +212,9 @@ func runStop(ctx context.Context, args []string, defaultConfigPath string, outpu
 }
 
 // runResume performs one explicit native-session or harness-capacity recovery
-// for the active run. A successful native resume remains behind the attach
-// gate until the operator acknowledges the visible terminal session.
+// for the active run, or re-enters a coordinator-owned check after restart
+// reconciliation. A successful native resume remains behind the attach gate
+// until the operator acknowledges the visible terminal session.
 func runResume(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -238,6 +239,10 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 			status = "waiting for human"
 		}
 		if !writeOutput(output, errorsOutput, "agent %s\nrun: %s\ninvocation: %s\nstatus: %s\n", status, result.Run.ID, result.Invocation.ID, status) {
+			return 1
+		}
+	} else if result.Run.ID != "" {
+		if !writeOutput(output, errorsOutput, "check evaluation resumed\nrun: %s\nstage: %s\nstatus: %s\n", result.Run.ID, result.Run.Stage, result.Run.Status) {
 			return 1
 		}
 	}

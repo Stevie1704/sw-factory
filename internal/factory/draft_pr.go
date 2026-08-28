@@ -87,7 +87,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if run.Stage == store.StageImplementation && run.Status != store.StatusActive {
 		return DraftPullRequestResult{}, fmt.Errorf("run %q is %s; implementation must be active", run.ID, run.Status)
 	}
-	if run.Stage == store.StageCheck && run.Status != store.StatusActive && run.Status != store.StatusWaitingForHarness {
+	if run.Stage == store.StageCheck && run.Status != store.StatusActive && run.Status != store.StatusWaitingForHarness && !isRestartReconciliationPause(*run) {
 		return DraftPullRequestResult{}, fmt.Errorf("run %q is %s; check evaluation must be active or waiting for harness", run.ID, run.Status)
 	}
 	if run.CheckRepairPendingAttempt != 0 {
@@ -101,6 +101,13 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		if active != nil {
 			return DraftPullRequestResult{}, fmt.Errorf("run %q still has active implementation invocation %q", run.ID, active.ID)
 		}
+	}
+	if run.Stage == store.StageCheck && isRestartReconciliationPause(*run) {
+		resumed, resumeErr := s.resumeRecoveredCheck(ctx, registration, runStore, *run)
+		if resumeErr != nil {
+			return DraftPullRequestResult{Run: resumed}, resumeErr
+		}
+		*run = resumed
 	}
 	workspace := s.gitWorkspace()
 	if workspace == nil {

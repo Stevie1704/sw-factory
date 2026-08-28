@@ -22,6 +22,11 @@ import (
 // boundary. Issue #21 supersedes this refusal with complete reconciliation.
 const RecoveryRequiredCode = "recovery-required"
 
+// restartReconciliationPausePrefix identifies a pause created by recovery
+// itself, which is the only waiting-for-human state eligible for check-stage
+// re-entry without a new agent invocation.
+const restartReconciliationPausePrefix = "restart reconciliation paused:"
+
 // RecoveryDiscrepancyKind identifies whether a restart disagreement is an
 // infrastructure observation or a workflow-owned failure.
 type RecoveryDiscrepancyKind string
@@ -412,6 +417,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 		})
 		return
 	}
+	expectedStopped := workerProjectionExpectedStopped(run, *active)
 	workerProjectionLost := false
 	workerInspection, inspectErr := s.deps.Worker.Inspect(ctx, run.ID)
 	if inspectErr != nil {
@@ -447,6 +453,14 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 					Recoverable: workerProjectionLost,
 				})
 			}
+		} else if expectedStopped {
+			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyInfrastructure,
+				Source:   "worker",
+				Field:    "lifecycle",
+				Expected: "stopped",
+				Observed: "running",
+			})
 		} else {
 			packet, packetErr := decodeSpecificationPacket(run.SpecificationPacket)
 			if packetErr != nil {
@@ -499,6 +513,14 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 				}
 			}
 		}
+	}
+	if terminalInvocationProjectionExpectedStopped(run, *active) {
+		// A completed implementation invocation intentionally leaves its worker
+		// and native process stopped while the coordinator evaluates the check
+		// stage (and readiness similarly has no live agent). The worker adapter
+		// may be unable to inspect a stopped process, so its historical terminal
+		// identities are not a live projection here.
+		return
 	}
 
 	terminalRuntime := s.deps.Terminal
@@ -594,7 +616,20 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 	if invocation.Status == store.InvocationStatusActive {
 		return false
 	}
-	return run.Stage == store.StageReady || run.Status == store.StatusWaitingForHuman
+	return run.Stage == store.StageReady || run.Stage == store.StageCheck || run.Status == store.StatusWaitingForHuman
+}
+
+// terminalInvocationProjectionExpectedStopped reports the coordinator-owned
+// boundaries where a completed invocation is historical rather than live. A
+// human pause in another stage still inspects its terminal runtime identities.
+func terminalInvocationProjectionExpectedStopped(run store.Run, invocation store.Invocation) bool {
+	if invocation.Status == store.InvocationStatusActive {
+		return false
+	}
+	if run.Stage == store.StageCheck && invocation.Stage == store.StageImplementation {
+		return true
+	}
+	return run.Stage == store.StageReady
 }
 
 // hasRecoverableInvocationLoss reports whether a previously consumed automatic
@@ -1006,6 +1041,33 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			}
 			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(&InfrastructureDiscrepancyError{Diagnosis: diagnosis}, pauseErr)
 		}
+		if recoveryProjectionOnly(diagnosis) {
+			finalDiagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, paused)
+			if pending, pendingErr := journal.PendingEffect(ctx, paused.ID); pendingErr != nil {
+				addRecoveryDiscrepancy(&finalDiagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyInfrastructure,
+					Source:   "operational store",
+					Field:    "pending effect",
+					Expected: "no pending effect after recovery pause",
+					Observed: pendingErr.Error(),
+				})
+				finalDiagnosis.SourcesAgree = false
+			} else if pending != nil {
+				finalDiagnosis.PendingEffect = pending
+				addRecoveryDiscrepancy(&finalDiagnosis, RecoveryDiscrepancy{
+					Kind:     RecoveryDiscrepancyInfrastructure,
+					Source:   "pending effect",
+					Field:    string(pending.Kind),
+					Expected: "no pending effect after recovery pause",
+					Observed: "still pending",
+				})
+				finalDiagnosis.SourcesAgree = false
+			}
+			if finalDiagnosis.SourcesAgree {
+				return paused, finalDiagnosis, RecoveryOutcomeReconciled, nil
+			}
+			diagnosis = finalDiagnosis
+		}
 		if hasWorkflowDiscrepancy(diagnosis) {
 			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &WorkflowFailureError{RunID: run.ID, Cause: errors.New(recoveryDiscrepancyReason(diagnosis))}
 		}
@@ -1163,7 +1225,7 @@ func (s *Service) pauseRunLocally(ctx context.Context, runStore RunStore, run st
 	if err := s.stopRunWorker(ctx, run.ID); err != nil {
 		return run, err
 	}
-	if run.Status == store.StatusWaitingForHuman && strings.HasPrefix(run.LifecycleReason, "restart reconciliation paused:") {
+	if isRestartReconciliationPause(run) {
 		return run, nil
 	}
 	next := run
@@ -1178,11 +1240,11 @@ func (s *Service) pauseRunLocally(ctx context.Context, runStore RunStore, run st
 }
 
 // pauseForRecovery records a discrepancy in the durable workflow projection
-// and uses the ordinary state-transition effect journal to publish the waiting
-// label and status comment when those projections are available.
+// and uses the ordinary state-transition effect journal to publish or repair
+// the waiting label and status comment when those projections are available.
 func (s *Service) pauseForRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis RecoveryDiagnosis) (store.Run, error) {
 	reason := recoveryDiscrepancyReason(diagnosis)
-	if run.Status == store.StatusWaitingForHuman && strings.HasPrefix(run.LifecycleReason, "restart reconciliation paused:") {
+	if isRestartReconciliationPause(run) && !hasGitHubStateProjectionDiscrepancy(diagnosis) {
 		if err := s.stopRunWorker(ctx, run.ID); err != nil {
 			return run, err
 		}
@@ -1231,6 +1293,79 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 		return updated, fmt.Errorf("publish restart reconciliation pause: %w", err)
 	}
 	return updated, nil
+}
+
+// isRestartReconciliationPause reports whether recovery, rather than a human
+// command or harness policy, created the current waiting state.
+func isRestartReconciliationPause(run store.Run) bool {
+	return run.Status == store.StatusWaitingForHuman && strings.HasPrefix(run.LifecycleReason, restartReconciliationPausePrefix)
+}
+
+// hasGitHubStateProjectionDiscrepancy identifies label or status-comment drift
+// that the ordinary state-transition effect can repair idempotently.
+func hasGitHubStateProjectionDiscrepancy(diagnosis RecoveryDiagnosis) bool {
+	for _, discrepancy := range diagnosis.Discrepancies {
+		if discrepancy.Source != "github" {
+			continue
+		}
+		switch discrepancy.Field {
+		case "state label", "status comment", "status comment marker":
+			return true
+		}
+	}
+	return false
+}
+
+// recoveryProjectionOnly reports the bounded stale-projection case that can
+// be rechecked after pausing. Other discrepancies remain human-owned even if
+// the label or status comment was also stale.
+func recoveryProjectionOnly(diagnosis RecoveryDiagnosis) bool {
+	if len(diagnosis.Discrepancies) == 0 {
+		return false
+	}
+	for _, discrepancy := range diagnosis.Discrepancies {
+		if discrepancy.Source != "github" {
+			return false
+		}
+		switch discrepancy.Field {
+		case "state label", "status comment", "status comment marker":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// resumeRecoveredCheck re-enters a coordinator-owned check after recovery has
+// repaired its projections. It never starts an implementation agent and keeps
+// ordinary human, clarification, and check-repair pauses fail-closed.
+func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
+	if !isRestartReconciliationPause(run) || run.Stage != store.StageCheck {
+		return run, nil
+	}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		updated, _, _, reconcileErr := s.reconcileInterruptedRun(ctx, registration, runStore, run)
+		if reconcileErr != nil {
+			return updated, reconcileErr
+		}
+		run = updated
+	}
+	if len(run.PendingQuestions) != 0 {
+		return run, errors.New("recovery-paused check has pending clarification questions")
+	}
+	if run.CheckRepairPendingAttempt != 0 {
+		return run, fmt.Errorf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)
+	}
+	next := run
+	next.Status = store.StatusActive
+	next.LifecycleReason = "resuming check evaluation after restart reconciliation"
+	next.Revision = run.Revision + 1
+	next.UpdatedAt = s.deps.Now().UTC()
+	if err := s.persistAgentRunState(ctx, registration, runStore, run, next); err != nil {
+		return run, fmt.Errorf("resume check evaluation after restart reconciliation: %w", err)
+	}
+	s.resetStartupState()
+	return next, nil
 }
 
 // recoveryDiscrepancyReason renders a bounded single-line workflow reason so
