@@ -243,10 +243,6 @@ func (s *Service) Attach(ctx context.Context, request AttachRequest) (AttachResu
 		return AttachResult{}, err
 	}
 	active = &recoveredInvocation
-	if err := s.restoreCredentialProjection(ctx, registration, *run, *active); err != nil {
-		paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, active.Harness)
-		return AttachResult{Run: paused, Invocation: *active}, errors.Join(err, pauseErr)
-	}
 	workspaceID, implementationSurface, statusSurface, checksSurface, restored, err := s.restoreInvocationTerminal(ctx, terminalRuntime, *run, *active)
 	if err != nil {
 		return AttachResult{}, err
@@ -256,17 +252,25 @@ func (s *Service) Attach(ctx context.Context, request AttachRequest) (AttachResu
 	setInvocationSurface(&updated, implementationSurface)
 	updated.StatusSurfaceID = string(statusSurface.ID)
 	updated.ChecksSurfaceID = string(checksSurface.ID)
-	if restored || updated.AttachRequired {
-		if restored {
-			// A recreated cmux topology needs a native resume to place the
-			// process into the newly created surface before the attach gate is
-			// cleared.
-			resumed, resumeErr := s.resumePersistedInvocationManually(ctx, registration, runStore, *run, updated)
-			if resumeErr != nil {
-				return AttachResult{Invocation: resumed}, resumeErr
+	if restored {
+		// A recreated cmux topology needs a native resume to place the process
+		// into the newly created surface. The nested resume restores credentials
+		// itself.
+		resumed, resumeErr := s.resumePersistedInvocationManually(ctx, registration, runStore, *run, updated)
+		if resumeErr != nil {
+			var credentialErr *credentialProjectionError
+			if errors.As(resumeErr, &credentialErr) {
+				paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, active.Harness)
+				return AttachResult{Run: paused, Invocation: resumed}, errors.Join(credentialErr, pauseErr)
 			}
-			updated = resumed
+			return AttachResult{Invocation: resumed}, resumeErr
 		}
+		updated = resumed
+	} else if err := s.restoreCredentialProjection(ctx, registration, *run, updated); err != nil {
+		paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, *run, active.Harness)
+		return AttachResult{Run: paused, Invocation: updated}, errors.Join(err, pauseErr)
+	}
+	if restored || updated.AttachRequired {
 		updated.AttachRequired = false
 		updated.UpdatedAt = s.deps.Now().UTC()
 		invocationStore, ok := runStore.(InvocationStore)

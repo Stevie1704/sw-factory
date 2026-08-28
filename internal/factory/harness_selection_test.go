@@ -24,7 +24,8 @@ func (w *agentWorker) InteractiveCommand(_ context.Context, request worker.Inter
 	return worker.InteractiveCommand{Executable: "factory-worker-attach", Args: []string{"--run-id", request.RunID}}, nil
 }
 
-// SeedCodexCredentials records one narrowly scoped Codex credential seed.
+// SeedCodexCredentials records the requested Codex credential seed and returns
+// seedErr when configured.
 func (w *agentWorker) SeedCodexCredentials(_ context.Context, request worker.CredentialSeedRequest) error {
 	w.codexSeeds = append(w.codexSeeds, request)
 	if w.seedErr != nil {
@@ -159,6 +160,79 @@ func TestResumeRestoresConfiguredCodexCredentialsAfterWorkerRecovery(t *testing.
 	}
 }
 
+// TestAttachRestoresCredentialsOnceWhenItRecreatesTheTerminal verifies the
+// nested native resume owns credential restoration after topology recovery.
+func TestAttachRestoresCredentialsOnceWhenItRecreatesTheTerminal(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"attach-secret"}`), 0o600); err != nil {
+		t.Fatalf("write credential source: %v", err)
+	}
+
+	service, runStore, runtime, _, launch := prepareAgentForWorkerRecovery(t, config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.WorkspaceID = ""
+	persisted.StatusSurfaceID = ""
+	persisted.RoleSurfaceID = ""
+	persisted.ImplementationSurfaceID = ""
+	persisted.ChecksSurfaceID = ""
+	if err := runStore.SaveInvocation(context.Background(), persisted); err != nil {
+		t.Fatalf("clear persisted terminal topology: %v", err)
+	}
+
+	attached, err := service.Attach(context.Background(), factory.AttachRequest{RunID: launch.Invocation.RunID})
+	if err != nil {
+		t.Fatalf("Attach() error = %v", err)
+	}
+	if attached.Run.Status != store.StatusActive {
+		t.Fatalf("Attach() run status = %q, want %q", attached.Run.Status, store.StatusActive)
+	}
+	if got := len(runtime.codexSeeds); got != 2 {
+		t.Fatalf("attach seeded Codex credentials %d times, want initial launch and one nested restore", got)
+	}
+	if got := len(runtime.interactive); got != 2 {
+		t.Fatalf("attach launched the native harness %d times, want initial launch and one nested resume", got)
+	}
+}
+
+// TestAttachPausesWhenNestedCredentialRestorationFails verifies a failed
+// projection after topology recovery stops the recreated worker.
+func TestAttachPausesWhenNestedCredentialRestorationFails(t *testing.T) {
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"attach-secret"}`), 0o600); err != nil {
+		t.Fatalf("write credential source: %v", err)
+	}
+
+	service, runStore, runtime, _, launch := prepareAgentForWorkerRecovery(t, config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.WorkspaceID = ""
+	persisted.StatusSurfaceID = ""
+	persisted.RoleSurfaceID = ""
+	persisted.ImplementationSurfaceID = ""
+	persisted.ChecksSurfaceID = ""
+	if err := runStore.SaveInvocation(context.Background(), persisted); err != nil {
+		t.Fatalf("clear persisted terminal topology: %v", err)
+	}
+	runtime.seedErr = errors.New("credential source unavailable")
+
+	attached, err := service.Attach(context.Background(), factory.AttachRequest{RunID: launch.Invocation.RunID})
+	if err == nil || !strings.Contains(err.Error(), "factory auth refresh") {
+		t.Fatalf("Attach() error = %v, want actionable auth refresh guidance", err)
+	}
+	if attached.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("Attach() run status = %q, want %q", attached.Run.Status, store.StatusWaitingForHuman)
+	}
+	if len(runtime.starts) != 3 || runtime.stops != 2 {
+		t.Fatalf("attach worker lifecycle = %d starts/%d stops, want nested recreation followed by cleanup", len(runtime.starts), runtime.stops)
+	}
+	if got := len(runtime.codexSeeds); got != 2 {
+		t.Fatalf("failed attach seeded Codex credentials %d times, want initial launch and one nested restore", got)
+	}
+}
+
 // TestResumeAllowsRecoveryWithoutConfiguredCredentialSource verifies that an
 // optional host source is not required when the role-owned state is recoverable.
 func TestResumeAllowsRecoveryWithoutConfiguredCredentialSource(t *testing.T) {
@@ -174,6 +248,41 @@ func TestResumeAllowsRecoveryWithoutConfiguredCredentialSource(t *testing.T) {
 	}
 	if got := runStore.invocations[launch.Invocation.ID].CredentialStoreID; got != "" {
 		t.Fatalf("recovery without a credential source persisted credential store %q, want empty", got)
+	}
+}
+
+// TestResumeFailsClosedWhenPersistedCredentialSourceIsNotConfigured verifies
+// a managed store cannot silently fall back to stale role-volume credentials.
+func TestResumeFailsClosedWhenPersistedCredentialSourceIsNotConfigured(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	launchService := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), config.AuthenticationConfig{
+		CodexAuthPath: authPath,
+	})
+	launch, err := launchService.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	persisted := runStore.invocations[launch.Invocation.ID]
+	persisted.NativeSessionID = "native-session-with-managed-credentials"
+	if err := runStore.SaveInvocation(context.Background(), persisted); err != nil {
+		t.Fatalf("persist native session: %v", err)
+	}
+	runtime.inspectResult = &worker.Inspection{}
+	recoveredService := newDispatchingAgentService(t, runStore, runtime, terminalRuntime, validRepositoryConfig(), config.AuthenticationConfig{})
+
+	resumed, err := recoveredService.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+	if err == nil || !strings.Contains(err.Error(), "factory auth refresh") {
+		t.Fatalf("Resume() error = %v, want actionable auth refresh guidance", err)
+	}
+	if resumed.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("Resume() run status = %q, want %q", resumed.Run.Status, store.StatusWaitingForHuman)
+	}
+	if got := len(runtime.codexSeeds); got != 1 {
+		t.Fatalf("resume without configured source seeded Codex credentials %d times, want only initial launch", got)
+	}
+	if got := len(harnessRuntime.resumes); got != 0 {
+		t.Fatalf("resume without configured source resumed the native session %d times, want 0", got)
 	}
 }
 

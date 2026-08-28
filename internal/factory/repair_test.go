@@ -704,3 +704,30 @@ func TestCheckRepairRefusesMidSessionHarnessMigration(t *testing.T) {
 		t.Fatalf("resume calls = %d, want no cross-harness resume attempt", harnessRuntime.resumes)
 	}
 }
+
+// TestCheckRepairFailsClosedWithoutThePersistedCredentialSource verifies a
+// repair cannot resume a managed credential store after its source is removed.
+func TestCheckRepairFailsClosedWithoutThePersistedCredentialSource(t *testing.T) {
+	service, registration, runStore, harnessRuntime := newRepairLaunchService(t, nil, 0, 0)
+	previous := runStore.invocations["inv-initial"]
+	previous.CredentialStoreID = registration.Path
+	runStore.invocations["inv-initial"] = previous
+	run := runStore.run
+
+	_, _, err := service.startCheckRepair(context.Background(), registration, runStore, run, SpecificationPacket{
+		Issue: github.Issue{Body: "repair guidance"},
+	}, CheckRepairPacket{
+		Version:       checkRepairPacketVersion,
+		RunID:         run.ID,
+		CheckpointSHA: run.CheckpointSHA,
+		Attempt:       1,
+		Budget:        3,
+	})
+	var credentialErr *credentialProjectionError
+	if !errors.As(err, &credentialErr) {
+		t.Fatalf("startCheckRepair() error = %v, want credential projection failure", err)
+	}
+	if harnessRuntime.resumes != 0 || len(runStore.invocations) != 1 {
+		t.Fatalf("check repair effects = %d resumes/%d invocations, want no launch side effects", harnessRuntime.resumes, len(runStore.invocations))
+	}
+}

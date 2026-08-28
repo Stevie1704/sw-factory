@@ -692,12 +692,12 @@ func (s *Service) ensureCredentialStoreIdentity(ctx context.Context, registratio
 }
 
 // restoreCredentialProjection reseeds the configured host source into the
-// already-mounted factory-managed volume. An absent source is intentionally a
-// no-op so harness-managed credentials in the role volume remain usable.
+// already-mounted factory-managed volume. An absent source is a no-op only
+// when the invocation has no persisted factory-managed credential store.
 func (s *Service) restoreCredentialProjection(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) error {
 	seed, _, err := s.credentialSeeding(registration, AgentRequest{}, config.Harness(invocation.Harness))
 	if err != nil || seed == nil {
-		if err == nil {
+		if err == nil && strings.TrimSpace(invocation.CredentialStoreID) == "" {
 			return nil
 		}
 		return newCredentialProjectionError(invocation.Harness)
