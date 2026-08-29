@@ -191,8 +191,11 @@ persisted and the run waits for a human. When enabled, the coordinator resumes
 the original test session, permits at most two revision attempts, and reruns the
 revised focused command independently before implementation can continue.
 The coordinator also verifies the latest decision comment on #26 from an
-authorized maintainer (`Decision: proceed` or the equivalent machine-readable
-pilot marker); a later `revise and repeat` or `stop` decision closes the gate.
+authorized maintainer. Use either `Decision: proceed` or
+`<!-- factory-pilot-decision: proceed -->` to open the gate. Use either
+`Decision: revise and repeat` or
+`<!-- factory-pilot-decision: revise and repeat -->`, or either `Decision:
+stop` or `<!-- factory-pilot-decision: stop -->`, to close it.
 
 ## Per-role harness, model, and reasoning effort
 

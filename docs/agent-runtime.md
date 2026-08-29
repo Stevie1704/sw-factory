@@ -153,19 +153,19 @@ on the `design-acceptance` route also receives `design_handoff`, the accepted
 architecture design it must exercise. The worker receives a separate writable `/results` mount
 containing only that invocation's result directory.
 
-An implementation report may include one or more structured `test_objection`
-entries. Each entry identifies the protected test, the claim under dispute, and
-observable evidence; it does not authorize an implementation edit to the
-protected path. When `test_policy.allow_automated_objections` is disabled, the
-coordinator records the objection and pauses for a human. After the measured
-pilot authorizes automation and an authorized maintainer's latest #26 decision
-comment says `Decision: proceed`, the coordinator resumes the original test
-session with the current implementation context. A later `revise and repeat`
-or `stop` decision closes the gate. The test role returns an accepted or
-rejected response; an accepted revision must produce new test content and pass
-an independently rerun focused command with the expected red failure before the
-implementation role resumes. A rejection, verification failure, or an objection
-after the second attempt pauses for human disposition.
+Only a required-mode implementation report may include one structured
+`test_objection` entry. It identifies the protected test, the claim under
+dispute, and observable evidence; it does not authorize an implementation edit
+to the protected path. When `test_policy.allow_automated_objections` is
+disabled, the coordinator records the objection and pauses for a human. After
+the measured pilot authorizes automation and an authorized maintainer's latest
+#26 decision comment says `Decision: proceed`, the coordinator resumes the
+original test session with the current implementation context. A later `revise
+and repeat` or `stop` decision closes the gate. The test role returns an
+accepted or rejected response; an accepted revision must produce new test
+content and pass an independently rerun focused command with the expected red
+failure before the implementation role resumes. A rejection, verification
+failure, or an objection after the second attempt pauses for human disposition.
 
 The harness reports through the worker-image command:
 
