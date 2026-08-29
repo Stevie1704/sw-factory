@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 25
+const CurrentSchemaVersion = 26
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -337,9 +337,14 @@ type Run struct {
 	ProtectedTestPaths []ProtectedTestPath
 	// TestStageSkipped records an authorized skip before implementation.
 	TestStageSkipped bool
-	ImageDigest      string
-	Coordinator      string
-	StatusCommentID  string
+	// ActiveInvocationID identifies the harness invocation the run currently
+	// delegates to. It is empty whenever no harness is executing for the run,
+	// which lets a status projection separate an active run from an active
+	// invocation without reading the invocation table.
+	ActiveInvocationID string
+	ImageDigest        string
+	Coordinator        string
+	StatusCommentID    string
 	// PullRequestNumber is the persisted idempotency identity of the draft PR.
 	PullRequestNumber int
 	// PullRequestURL is the operator-facing URL of the draft PR.
@@ -643,6 +648,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, implementation_handoff, specification_review,
 		       test_exemption, protected_test_paths, test_stage_skipped,
+		       active_invocation_id,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -667,6 +673,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, implementation_handoff, specification_review,
 		       test_exemption, protected_test_paths, test_stage_skipped,
+		       active_invocation_id,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -708,6 +715,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&testExemptionJSON,
 		&protectedTestPathsJSON,
 		&run.TestStageSkipped,
+		&run.ActiveInvocationID,
 		&run.ImageDigest,
 		&run.Coordinator,
 		&run.StatusCommentID,
@@ -1295,6 +1303,7 @@ func runValues(run Run) []any {
 		testExemptionJSON(run.TestExemption),
 		protectedTestPathsJSON(run.ProtectedTestPaths),
 		run.TestStageSkipped,
+		run.ActiveInvocationID,
 		run.ImageDigest,
 		run.Coordinator,
 		run.StatusCommentID,
@@ -1338,6 +1347,7 @@ const saveRunStatement = `
 			checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
 			test_handoff, implementation_handoff, specification_review,
 			test_exemption, protected_test_paths, test_stage_skipped,
+			active_invocation_id,
 			image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
 			lifecycle_notification_sent,
@@ -1351,7 +1361,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -1369,6 +1379,7 @@ const saveRunStatement = `
 			test_exemption = excluded.test_exemption,
 			protected_test_paths = excluded.protected_test_paths,
 			test_stage_skipped = excluded.test_stage_skipped,
+			active_invocation_id = excluded.active_invocation_id,
 			image_digest = excluded.image_digest,
 			coordinator = excluded.coordinator,
 			status_comment_id = excluded.status_comment_id,
@@ -1400,6 +1411,7 @@ const saveRunIfRevisionStatement = `
 			checkpoint_sha = ?, base_checkpoint_sha = ?, test_checkpoint_sha = ?,
 			test_handoff = ?, implementation_handoff = ?, specification_review = ?,
 			test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
+			active_invocation_id = ?,
 			image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
 			lifecycle_notification_sent = ?,
@@ -2390,6 +2402,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 25: %w", err)
 				}
+			}
+		case 26:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN active_invocation_id TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("apply store migration 26: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

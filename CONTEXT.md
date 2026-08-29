@@ -72,6 +72,20 @@ _Avoid_: Container in workflow decisions
 The portable seam that starts, resumes, commands, stops, and inspects a worker while hiding runtime identifiers, container paths, role homes, invocation packets, result files, and process tracking.
 _Avoid_: Docker API
 
+**Unattended progression**:
+The persistent coordinator's bounded pass that drives one claimed run through
+baseline, its route-selected stages, result acceptance, the exact-checkpoint
+gates, the bounded check-repair loop, the push, and one draft pull request
+without an operator running a stage-driving command. It stops at the first
+human or infrastructure waiting state.
+_Avoid_: Autonomous agent, agent-driven workflow, auto-merge
+
+**Run activity**:
+The published distinction between an active run whose next transition the
+coordinator owns, an active invocation whose harness is executing, and a
+waiting state. The `agent-running` label alone cannot express it.
+_Avoid_: Agent-running label, run status
+
 **Invocation**:
 One immutable harness attempt within a run, with its own invocation packet, role-owned visible surface handles, factory prompt version, and native session identifier when known.
 _Avoid_: Terminal transcript

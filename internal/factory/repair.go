@@ -681,6 +681,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	next := run
 	next.Stage = store.StageImplementation
 	next.Status = store.StatusActive
+	next.ActiveInvocationID = invocation.ID
 	next.CheckRepairBudget = repairPacket.Budget
 	next.CheckRepairPendingAttempt = repairPacket.Attempt
 	next.LifecycleReason = fmt.Sprintf("check-repair attempt %d active", repairPacket.Attempt)

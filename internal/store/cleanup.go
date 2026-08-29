@@ -255,6 +255,7 @@ func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, implementation_handoff, specification_review,
 		       test_exemption, protected_test_paths, test_stage_skipped,
+		       active_invocation_id,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,

@@ -404,6 +404,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		acceptedInvocation.UpdatedAt = s.deps.Now().UTC()
 		previousRun := *run
 		nextRun := previousRun
+		releaseActiveInvocation(&nextRun, invocation.ID)
 		isTestReport := isTestInvocation
 		isReviewReport := isReviewInvocation
 		if !isTestReport && !isReviewReport {
@@ -455,6 +456,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		return AgentResult{}, fmt.Errorf("persist accepted invocation: %w", err)
 	}
 	previousRun := *run
+	releaseActiveInvocation(run, invocation.ID)
 	if isTestInvocation {
 		return s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
 	}
@@ -503,6 +505,16 @@ func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registratio
 	return AgentResult{}, false, nil
 }
 
+// releaseActiveInvocation clears the run's delegation marker when the named
+// invocation is the one the run currently waits on. A run that already
+// delegates elsewhere keeps its marker, so a repeated acceptance of an older
+// invocation cannot hide a live harness session.
+func releaseActiveInvocation(run *store.Run, invocationID string) {
+	if run != nil && run.ActiveInvocationID == invocationID {
+		run.ActiveInvocationID = ""
+	}
+}
+
 // acceptedInvocationStatus maps a validated report outcome to its durable
 // invocation lifecycle state, keeping result acceptance consistent across all
 // visible roles.
@@ -525,6 +537,9 @@ func acceptedInvocationStatus(outcome report.Outcome) store.InvocationStatus {
 // stage instead of guessing a route that could skip a selected stage.
 func agentReportRunProjection(previous store.Run, invocationStage store.Stage, value report.Report) store.Run {
 	next := previous
+	// An accepted report ends the run's delegation to its invocation, so the
+	// status projection stops implying that a harness is executing.
+	next.ActiveInvocationID = ""
 	route, readable := routeForRun(previous)
 	if !readable {
 		next.Stage = invocationStage

@@ -75,8 +75,10 @@ func (e *StartupBlockedError) Error() string {
 // diagnoses the full host before taking the lock, acquires exclusive ownership
 // before reconciliation, renews a visible GitHub lease, and backs off read-only
 // queue or lease transport failures without changing run state or retry
-// budgets. Claim failures are returned because the claim state machine may
-// already have performed compensating effects.
+// budgets. After every observation that found or claimed a run it drives that
+// run toward its draft pull request, so the routine path needs no
+// stage-driving CLI command. Claim failures are returned because the claim
+// state machine may already have performed compensating effects.
 func (s *Service) Start(ctx context.Context) error {
 	diagnosis, err := s.startupDiagnosis(ctx)
 	if err != nil {
@@ -172,6 +174,14 @@ func (s *Service) Start(ctx context.Context) error {
 			return err
 		}
 		leaseRunID = result.Run.ID
+		if result.Outcome == PollClaimed || result.Outcome == PollActiveRun {
+			if _, err := s.driveRun(pollContext, registration); err != nil {
+				if pollingContextDone(err) {
+					return nil
+				}
+				return fmt.Errorf("drive run %s: %w", result.Run.ID, err)
+			}
+		}
 		delay = interval
 	}
 }
