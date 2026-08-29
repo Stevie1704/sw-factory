@@ -1,6 +1,7 @@
 // Package worker contains the portable worker-execution seam and its Docker
-// adapter. Workflow code addresses workers by run identity only; Docker
-// names, paths, and process details remain private to this package.
+// adapter. Workflow code addresses workers by logical run and invocation
+// identity; Docker names, paths, and process details remain private to this
+// package.
 package worker
 
 import (
@@ -80,10 +81,15 @@ type CacheMount struct {
 // StartRequest contains the host-side inputs needed to create one worker.
 // ImageDigest is mandatory so the worker cannot start from a mutable tag.
 type StartRequest struct {
-	// RunID identifies the workflow run and is the only worker identity exposed
-	// to callers.
+	// RunID identifies the logical workflow run.
 	RunID string
-	// WorktreePath is the host path mounted read-write at /work.
+	// WorkerID optionally selects an isolated worker for one invocation. Empty
+	// preserves the historical run-scoped worker identity.
+	WorkerID string
+	// WorktreeReadOnly prevents worker processes from changing the mounted run
+	// checkout. Review invocations set it to preserve the immutable checkpoint.
+	WorktreeReadOnly bool
+	// WorktreePath is the host path mounted at /work.
 	WorktreePath string
 	// GitMetadataPath is the host Git metadata path mounted read-only at /git.
 	GitMetadataPath string
@@ -112,6 +118,8 @@ type StartRequest struct {
 type ResumeRequest struct {
 	// RunID selects the worker to resume without exposing its Docker name.
 	RunID string
+	// WorkerID optionally selects the isolated worker being resumed.
+	WorkerID string
 	// Image is the image name recorded for the run.
 	Image string
 	// ImageDigest is the digest that must match the existing worker.
@@ -122,6 +130,8 @@ type ResumeRequest struct {
 type CommandRequest struct {
 	// RunID selects the worker that receives the command.
 	RunID string
+	// WorkerID optionally selects the isolated worker receiving the command.
+	WorkerID string
 	// Command is interpreted by the worker's POSIX shell at the fixed /work path.
 	Command string
 	// EnvironmentPolicy selects clean or role execution.
@@ -148,6 +158,8 @@ type CommandResult struct {
 type InteractiveRequest struct {
 	// RunID selects the worker receiving the interactive command.
 	RunID string
+	// WorkerID optionally selects the isolated worker receiving the command.
+	WorkerID string
 	// Command is the harness executable and its arguments inside the worker.
 	Command []string
 	// EnvironmentPolicy selects clean or role execution.
@@ -172,6 +184,8 @@ type InteractiveCommand struct {
 type CredentialSeedRequest struct {
 	// RunID selects the worker receiving the credential copy.
 	RunID string
+	// WorkerID optionally selects the worker whose credential volume is seeded.
+	WorkerID string
 	// AuthPath is the explicit host path to one Codex auth.json file.
 	AuthPath string
 }
@@ -180,6 +194,8 @@ type CredentialSeedRequest struct {
 type NativeSessionRequest struct {
 	// RunID selects the worker whose role home is inspected.
 	RunID string
+	// WorkerID optionally selects the worker whose role home is inspected.
+	WorkerID string
 	// Harness identifies the session format being inspected.
 	Harness string
 }
@@ -290,8 +306,12 @@ type WorkerRuntime interface {
 // CleanupRequest selects the run-scoped worker resources that may be removed
 // after the coordinator has confirmed the run is no longer recoverable.
 type CleanupRequest struct {
-	// RunID identifies the worker container and role volumes.
+	// RunID identifies the logical run whose resources are being removed.
 	RunID string
+	// WorkerIDs identifies the exact worker containers and role-home volume
+	// namespaces to remove. An empty list retains the legacy single-worker
+	// behavior and uses RunID.
+	WorkerIDs []string
 	// Roles identifies the role-home volumes to remove. Credential storage is
 	// deliberately not addressable through this request.
 	Roles []string
@@ -334,7 +354,8 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 	if err := validateStartRequest(request); err != nil {
 		return err
 	}
-	name := containerName(request.RunID)
+	workerID := workerResourceID(request.RunID, request.WorkerID)
+	name := containerName(workerID)
 	inspection, err := r.inspectContainer(ctx, name)
 	if err == nil {
 		if inspection.Image != imageReference(request.Image, request.ImageDigest) {
@@ -374,7 +395,7 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		"--security-opt", "no-new-privileges",
 		"--network", "bridge",
 		"--workdir", WorktreePath,
-		"--mount", bindMount(request.WorktreePath, WorktreePath, false),
+		"--mount", bindMount(request.WorktreePath, WorktreePath, request.WorktreeReadOnly),
 		"--mount", bindMount(request.GitMetadataPath, GitMetadataPath, true),
 	}
 	if request.InvocationPath != "" {
@@ -390,7 +411,7 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 	if strings.TrimSpace(role) == "" {
 		role = "implementation"
 	}
-	args = append(args, "--mount", "type=volume,src="+roleVolumeName(request.RunID, role)+",dst=/home/factory")
+	args = append(args, "--mount", "type=volume,src="+roleVolumeName(workerID, role)+",dst=/home/factory")
 	for _, groupID := range groupIDs {
 		args = append(args, "--group-add", strconv.Itoa(groupID))
 	}
@@ -414,7 +435,7 @@ func (r *DockerRuntime) Resume(ctx context.Context, request ResumeRequest) error
 	if err := validateResumeRequest(request); err != nil {
 		return err
 	}
-	name := containerName(request.RunID)
+	name := containerName(workerResourceID(request.RunID, request.WorkerID))
 	inspection, err := r.inspectContainer(ctx, name)
 	if err != nil {
 		if isContainerNotFound(err) {
@@ -439,7 +460,8 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	if err := validateCommandRequest(request); err != nil {
 		return CommandResult{}, err
 	}
-	inspection, err := r.inspectContainer(ctx, containerName(request.RunID))
+	workerID := workerResourceID(request.RunID, request.WorkerID)
+	inspection, err := r.inspectContainer(ctx, containerName(workerID))
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("inspect worker %q before command: %w", request.RunID, err)
 	}
@@ -452,7 +474,7 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	for _, value := range environment {
 		args = append(args, "--env", value)
 	}
-	args = append(args, containerName(request.RunID), "/usr/bin/env", "-i")
+	args = append(args, containerName(workerID), "/usr/bin/env", "-i")
 	args = append(args, environment...)
 	args = append(args, "/bin/sh", "-c", request.Command)
 	result, err := r.runDocker(ctx, args)
@@ -482,6 +504,9 @@ func (r *DockerRuntime) InteractiveCommand(_ context.Context, request Interactiv
 		binary = "factory-worker-attach"
 	}
 	args := []string{"--run-id", request.RunID, "--role", request.Role}
+	if request.WorkerID != "" {
+		args = append(args, "--worker-id", request.WorkerID)
+	}
 	entries := explicitEnvironment(request.Environment)
 	for _, entry := range entries {
 		args = append(args, "--env", entry)
@@ -538,6 +563,9 @@ func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request Credenti
 	if err := validateRunID(request.RunID); err != nil {
 		return err
 	}
+	if err := validateOptionalWorkerID(request.WorkerID); err != nil {
+		return err
+	}
 	if !filepath.IsAbs(request.AuthPath) || strings.ContainsAny(request.AuthPath, "\x00\r\n") {
 		return fmt.Errorf("%s auth path must be an absolute safe path", credential.Harness)
 	}
@@ -562,7 +590,7 @@ func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request Credenti
 	// CAP_DAC_OVERRIDE and is less able to write the factory-owned role home
 	// than the worker user itself. Each step therefore runs as the owner of the
 	// directory it writes, and no step changes ownership.
-	name := containerName(request.RunID)
+	name := containerName(workerResourceID(request.RunID, request.WorkerID))
 	credentialPath := CredentialPath + "/" + credential.CredentialFile
 	linkPath := credential.RoleHome + "/" + credential.LinkName
 	if _, err := r.runDockerWithInput(ctx, []string{
@@ -602,6 +630,9 @@ func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSess
 	if err := validateRunID(request.RunID); err != nil {
 		return nil, err
 	}
+	if err := validateOptionalWorkerID(request.WorkerID); err != nil {
+		return nil, err
+	}
 	var command string
 	switch request.Harness {
 	case "codex":
@@ -613,6 +644,7 @@ func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSess
 	}
 	result, err := r.RunCommand(ctx, CommandRequest{
 		RunID:             request.RunID,
+		WorkerID:          request.WorkerID,
 		Command:           command,
 		EnvironmentPolicy: EnvironmentPolicyClean,
 		Role:              "coordinator",
@@ -662,7 +694,7 @@ func (r *DockerRuntime) Attach(ctx context.Context, request InteractiveRequest) 
 	if err := validateInteractiveRequest(request); err != nil {
 		return err
 	}
-	inspection, err := r.inspectContainer(ctx, containerName(request.RunID))
+	inspection, err := r.inspectContainer(ctx, containerName(workerResourceID(request.RunID, request.WorkerID)))
 	if err != nil {
 		return fmt.Errorf("inspect worker before interactive attach: %w", err)
 	}
@@ -670,10 +702,10 @@ func (r *DockerRuntime) Attach(ctx context.Context, request InteractiveRequest) 
 		return fmt.Errorf("worker %q is not running", request.RunID)
 	}
 	args := []string{"exec", "-it", "--workdir", WorktreePath}
-	for _, value := range commandEnvironment(CommandRequest{RunID: request.RunID, EnvironmentPolicy: request.EnvironmentPolicy, Role: request.Role, Environment: request.Environment}) {
+	for _, value := range commandEnvironment(CommandRequest{RunID: request.RunID, WorkerID: request.WorkerID, EnvironmentPolicy: request.EnvironmentPolicy, Role: request.Role, Environment: request.Environment}) {
 		args = append(args, "--env", value)
 	}
-	args = append(args, containerName(request.RunID))
+	args = append(args, containerName(workerResourceID(request.RunID, request.WorkerID)))
 	args = append(args, request.Command...)
 	binary := r.DockerBinary
 	if strings.TrimSpace(binary) == "" {
@@ -720,6 +752,20 @@ func (r *DockerRuntime) Cleanup(ctx context.Context, request CleanupRequest) err
 	if err := ValidateCleanupStoredOutputs(request.RunID, request.StoredOutputs); err != nil {
 		return err
 	}
+	workerIDs := append([]string(nil), request.WorkerIDs...)
+	if len(workerIDs) == 0 {
+		workerIDs = []string{request.RunID}
+	}
+	seenWorkers := make(map[string]struct{}, len(workerIDs))
+	for _, workerID := range workerIDs {
+		if err := validateRunID(workerID); err != nil {
+			return fmt.Errorf("worker cleanup id %q: %w", workerID, err)
+		}
+		if _, exists := seenWorkers[workerID]; exists {
+			return fmt.Errorf("worker cleanup id %q is duplicated", workerID)
+		}
+		seenWorkers[workerID] = struct{}{}
+	}
 	seenRoles := make(map[string]struct{}, len(request.Roles))
 	for _, role := range request.Roles {
 		if !validName(role) {
@@ -731,14 +777,16 @@ func (r *DockerRuntime) Cleanup(ctx context.Context, request CleanupRequest) err
 		seenRoles[role] = struct{}{}
 	}
 
-	name := containerName(request.RunID)
-	if _, err := r.runDocker(ctx, []string{"rm", "--force", name}); err != nil && !isDockerResourceNotFound(err) {
-		return fmt.Errorf("remove worker %q: %w", request.RunID, dockerStderrDetail(err))
-	}
-	for _, role := range request.Roles {
-		volume := roleVolumeName(request.RunID, role)
-		if _, err := r.runDocker(ctx, []string{"volume", "rm", volume}); err != nil && !isDockerResourceNotFound(err) {
-			return fmt.Errorf("remove worker role storage for %q: %w", role, dockerStderrDetail(err))
+	for _, workerID := range workerIDs {
+		name := containerName(workerID)
+		if _, err := r.runDocker(ctx, []string{"rm", "--force", name}); err != nil && !isDockerResourceNotFound(err) {
+			return fmt.Errorf("remove worker %q: %w", workerID, dockerStderrDetail(err))
+		}
+		for _, role := range request.Roles {
+			volume := roleVolumeName(workerID, role)
+			if _, err := r.runDocker(ctx, []string{"volume", "rm", volume}); err != nil && !isDockerResourceNotFound(err) {
+				return fmt.Errorf("remove worker role storage for %q: %w", role, dockerStderrDetail(err))
+			}
 		}
 	}
 	if err := removeCleanupStoredOutputs(request.StoredOutputs); err != nil {
@@ -1180,6 +1228,9 @@ func validateStartRequest(request StartRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
 	}
+	if err := validateOptionalWorkerID(request.WorkerID); err != nil {
+		return err
+	}
 	if err := validateDirectory(request.WorktreePath, "worktree path"); err != nil {
 		return err
 	}
@@ -1241,6 +1292,12 @@ func workerMountsPresent(request StartRequest, inspection Inspection) bool {
 		}
 		return true
 	}
+	if request.WorktreeReadOnly {
+		// A destination-only legacy inspection cannot prove that the review
+		// checkout is mounted read-only. Recreate it so the safety property is
+		// established by Docker rather than inferred from incomplete evidence.
+		return false
+	}
 	for _, destination := range requiredInvocationMounts(request) {
 		if _, found := inspection.mountDestinations[destination]; !found {
 			return false
@@ -1276,7 +1333,7 @@ func expectedWorkerMounts(request StartRequest) map[string]string {
 	wanted := map[string]string{
 		WorktreePath:    "bind:" + filepath.Clean(request.WorktreePath),
 		GitMetadataPath: "bind:" + filepath.Clean(request.GitMetadataPath),
-		"/home/factory": "volume:" + roleVolumeName(request.RunID, role),
+		"/home/factory": "volume:" + roleVolumeName(workerResourceID(request.RunID, request.WorkerID), role),
 	}
 	if request.CredentialStoreID != "" {
 		wanted[CredentialPath] = "volume:" + credentialVolumeName(request.RunID, request.CredentialStoreID)
@@ -1297,7 +1354,7 @@ func expectedWorkerMounts(request StartRequest) map[string]string {
 // that must be present before a worker can be reused.
 func expectedWorkerMountReadOnly(request StartRequest) map[string]bool {
 	wanted := map[string]bool{
-		WorktreePath:    false,
+		WorktreePath:    request.WorktreeReadOnly,
 		GitMetadataPath: true,
 		"/home/factory": false,
 	}
@@ -1322,6 +1379,9 @@ func validateResumeRequest(request ResumeRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
 	}
+	if err := validateOptionalWorkerID(request.WorkerID); err != nil {
+		return err
+	}
 	if err := validateImageName(request.Image); err != nil {
 		return err
 	}
@@ -1335,6 +1395,9 @@ func validateResumeRequest(request ResumeRequest) error {
 // environment entries.
 func validateCommandRequest(request CommandRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if err := validateOptionalWorkerID(request.WorkerID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(request.Command) == "" {
@@ -1664,6 +1727,27 @@ func validateRunID(runID string) error {
 	return nil
 }
 
+// validateOptionalWorkerID validates an invocation-scoped worker identity
+// while allowing empty values to retain the legacy run-scoped worker.
+func validateOptionalWorkerID(workerID string) error {
+	if workerID == "" {
+		return nil
+	}
+	if !validName(workerID) {
+		return fmt.Errorf("worker id %q contains unsafe characters", workerID)
+	}
+	return nil
+}
+
+// workerResourceID resolves the private resource identity used for container
+// names and per-invocation role homes.
+func workerResourceID(runID, workerID string) string {
+	if workerID == "" {
+		return runID
+	}
+	return workerID
+}
+
 // validName reports whether value contains at least one permitted character and
 // is not "." or "..".
 func validName(value string) bool {
@@ -1850,6 +1934,9 @@ func credentialVolumeName(runID, storeID string) string {
 // that could terminate or rewrite the transport record.
 func validateInteractiveRequest(request InteractiveRequest) error {
 	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if err := validateOptionalWorkerID(request.WorkerID); err != nil {
 		return err
 	}
 	if len(request.Command) == 0 || strings.TrimSpace(request.Command[0]) == "" {

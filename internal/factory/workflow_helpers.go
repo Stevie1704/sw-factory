@@ -59,3 +59,14 @@ func setInvocationSurface(invocation *store.Invocation, surface terminal.Surface
 	invocation.RoleSurfaceID = string(surface.ID)
 	invocation.ImplementationSurfaceID = string(surface.ID)
 }
+
+// workerIDForInvocation gives each review invocation its own worker,
+// role-home volume, and temporary filesystem while retaining the historical
+// run-scoped worker for ordinary roles.
+func workerIDForInvocation(invocation store.Invocation) string {
+	definition, err := roleDefinitionForInvocation(invocation)
+	if err == nil && definition.Kind == workflow.RoleKindReview {
+		return invocation.RunID + "-" + invocation.ID
+	}
+	return invocation.RunID
+}

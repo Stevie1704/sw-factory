@@ -131,7 +131,7 @@ func Run(request Request) int {
 		NativeSessionID: *nativeSessionID,
 		ReportedAt:      request.Now().UTC(),
 	}
-	if identity["role"] == "spec_review" && identity["stage"] == "review" && value.Outcome == report.OutcomeCompleted {
+	if isReviewIdentity(identity["role"], identity["stage"]) && value.Outcome == report.OutcomeCompleted {
 		value.ReviewHandoff = &report.ReviewHandoff{
 			ReviewedSHA: lookup("FACTORY_CHECKPOINT_SHA"),
 			Findings:    append([]report.ReviewFinding(nil), findings...),
@@ -218,6 +218,13 @@ func Run(request Request) int {
 		return 1
 	}
 	return 0
+}
+
+// isReviewIdentity identifies every factory-owned review role that uses the
+// shared structured finding contract.
+func isReviewIdentity(role, stage string) bool {
+	return (role == "spec_review" && stage == "review") ||
+		(role == "standards_review" && stage == "standards_review")
 }
 
 // ensureHandoff returns a mutable handoff value for repeated completion flags.

@@ -44,23 +44,6 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err := validateAgentRunState(*run); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	if activeStore, ok := invocationStore.(ActiveInvocationStore); ok {
-		active, lookupErr := activeStore.ActiveInvocation(ctx, run.ID)
-		if lookupErr != nil {
-			return AgentLaunchResult{}, fmt.Errorf("look up active visible invocation: %w", lookupErr)
-		}
-		if active != nil {
-			if active.AttachRequired {
-				return AgentLaunchResult{}, fmt.Errorf("run %q has a manually resumed invocation that requires `factory attach`", run.ID)
-			}
-			if !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount > 0 {
-				s.markInvocationStarted(active.ID)
-				resumedRoute, _ := routeForRun(*run)
-				return AgentLaunchResult{Invocation: *active, TestPolicyMode: testPolicyModeForRun(*run), Route: resumedRoute}, nil
-			}
-			return AgentLaunchResult{}, fmt.Errorf("run %q already has active invocation %q", run.ID, active.ID)
-		}
-	}
 	if !filepath.IsAbs(run.Worktree) {
 		return AgentLaunchResult{}, errors.New("active run worktree must be absolute")
 	}
@@ -131,12 +114,32 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		}
 	}
 	isReview := roleDefinition.Kind == workflow.RoleKindReview
+	activeInvocations, activeSupported, activeErr := activeInvocationsForRun(ctx, invocationStore, run.ID)
+	if activeErr != nil {
+		return AgentLaunchResult{}, fmt.Errorf("look up active visible invocations: %w", activeErr)
+	}
+	if activeSupported {
+		for _, active := range activeInvocations {
+			if active.AttachRequired {
+				return AgentLaunchResult{}, fmt.Errorf("run %q has a manually resumed invocation that requires `factory attach`", run.ID)
+			}
+			if isReview && roleIsKind(active, workflow.RoleKindReview) && active.Role != request.Role {
+				continue
+			}
+			if !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount > 0 && active.Role == request.Role {
+				s.markInvocationStarted(active.ID)
+				resumedRoute, _ := routeForRun(*run)
+				return AgentLaunchResult{Invocation: active, TestPolicyMode: testPolicyModeForRun(*run), Route: resumedRoute}, nil
+			}
+			return AgentLaunchResult{}, fmt.Errorf("run %q already has active invocation %q", run.ID, active.ID)
+		}
+	}
 	var reviewContext *prompt.ReviewContext
 	if isReview {
-		if err := s.ensureReviewStart(ctx, *run); err != nil {
+		if err := s.ensureReviewStartForRole(ctx, *run, request.Role); err != nil {
 			return AgentLaunchResult{}, err
 		}
-		reviewContext, err = reviewContextForRun(ctx, *run, runStore)
+		reviewContext, err = reviewContextForRole(ctx, *run, runStore, request.Role)
 		if err != nil {
 			return AgentLaunchResult{}, err
 		}
@@ -145,8 +148,8 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, err
 	}
 	if isReview {
-		if err := s.publishSpecificationReviewStatus(ctx, registration, runStore, *run, github.CommitStatusPending, "specification review in progress"); err != nil {
-			return AgentLaunchResult{}, fmt.Errorf("publish pending specification review status: %w", err)
+		if err := s.publishReviewStatus(ctx, registration, runStore, *run, request.Role, github.CommitStatusPending, fmt.Sprintf("%s in progress", request.Role)); err != nil {
+			return AgentLaunchResult{}, fmt.Errorf("publish pending %s status: %w", request.Role, err)
 		}
 	}
 	if roleDefinition.Kind == workflow.RoleKindTest && !independentTestStageDeclared(packet) {
@@ -194,6 +197,24 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err := os.MkdirAll(resultDirectory, 0o700); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("create invocation result directory: %w", err)
 	}
+	testHandoff := run.TestHandoff
+	testObjection := run.TestObjection
+	testRevisionAttempt := run.TestRevisionAttempts
+	testRevisionBudget := run.TestRevisionBudget
+	protectedTestPaths := append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...)
+	testExemption := run.TestExemption
+	if isReview {
+		// Reviewers start from the immutable checkpoint and their role-specific
+		// review context. Do not carry implementation/test session state across
+		// the isolation boundary; the standards exemption is supplied only as a
+		// deliberate review input inside ReviewContext.
+		testHandoff = nil
+		testObjection = nil
+		testRevisionAttempt = 0
+		testRevisionBudget = 0
+		protectedTestPaths = nil
+		testExemption = nil
+	}
 	role := request.Role
 	stage := request.Stage
 	invocationPacket := InvocationPacket{
@@ -208,12 +229,12 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Route:               packet.Route,
 		DesignHandoff:       designHandoff,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
-		TestHandoff:         run.TestHandoff,
-		TestObjection:       run.TestObjection,
-		TestRevisionAttempt: run.TestRevisionAttempts,
-		TestRevisionBudget:  run.TestRevisionBudget,
-		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
-		TestExemption:       run.TestExemption,
+		TestHandoff:         testHandoff,
+		TestObjection:       testObjection,
+		TestRevisionAttempt: testRevisionAttempt,
+		TestRevisionBudget:  testRevisionBudget,
+		ProtectedTestPaths:  protectedTestPaths,
+		TestExemption:       testExemption,
 		ReviewContext:       reviewContext,
 	}
 	promptRequest := prompt.Request{
@@ -226,12 +247,12 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		TestPolicyMode:          string(packet.RepositoryConfig.TestPolicy.Mode),
 		Route:                   packet.Route,
 		DesignHandoff:           designHandoff,
-		TestHandoff:             run.TestHandoff,
-		TestObjection:           run.TestObjection,
-		TestRevisionAttempt:     run.TestRevisionAttempts,
-		TestRevisionBudget:      run.TestRevisionBudget,
-		ProtectedTestPaths:      run.ProtectedTestPaths,
-		TestExemption:           run.TestExemption,
+		TestHandoff:             testHandoff,
+		TestObjection:           testObjection,
+		TestRevisionAttempt:     testRevisionAttempt,
+		TestRevisionBudget:      testRevisionBudget,
+		ProtectedTestPaths:      protectedTestPaths,
+		TestExemption:           testExemption,
 		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
 		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
 		ReviewContext:           reviewContext,
@@ -263,6 +284,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if resumeSource != nil {
 		invocation.NativeSessionID = resumeSource.NativeSessionID
 	}
+	workerID := workerIDForInvocation(invocation)
 	invocationPersisted := false
 	workerStarted := false
 	preserveInvocation := false
@@ -286,7 +308,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		invocation.UpdatedAt = s.deps.Now().UTC()
 		_ = invocationStore.SaveInvocation(rollbackContext, invocation)
 		if workerStarted {
-			_ = s.deps.Worker.Stop(rollbackContext, run.ID)
+			_ = s.deps.Worker.Stop(rollbackContext, workerID)
 		}
 		if cleanupSurface.ID != "" {
 			_ = terminalRuntime.CloseSurface(rollbackContext, cleanupSurface.ID)
@@ -310,6 +332,8 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	workerRequest := worker.StartRequest{
 		RunID:             run.ID,
+		WorkerID:          workerID,
+		WorktreeReadOnly:  isReview,
 		WorktreePath:      run.Worktree,
 		GitMetadataPath:   gitMetadataPath,
 		Image:             packet.RepositoryConfig.WorkerBuild.Image,
@@ -325,7 +349,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	workerStarted = true
 	if isReview {
-		reviewContext.CurrentDiff, err = s.captureReviewDiff(ctx, *run, role)
+		reviewContext.CurrentDiff, err = s.captureReviewDiff(ctx, *run, invocation)
 		if err != nil {
 			return AgentLaunchResult{}, err
 		}
@@ -340,7 +364,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		}
 	}
 	if seedCredentials != nil {
-		if err := seedCredentials(ctx, run.ID); err != nil {
+		if err := seedCredentials(ctx, run.ID, workerID); err != nil {
 			return AgentLaunchResult{}, newCredentialProjectionError(string(policy.Harness))
 		}
 	}
@@ -386,6 +410,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	startRequest := harness.StartRequest{
 		InvocationID:    invocationID,
 		RunID:           run.ID,
+		WorkerID:        workerID,
 		Role:            role,
 		Stage:           string(stage),
 		CheckpointSHA:   reviewCheckpointSHA(isReview, run.CheckpointSHA),
@@ -454,9 +479,13 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, fmt.Errorf("persist harness session identity: %w", err)
 	}
 	previousRun := *run
-	run.Stage = stage
+	if isReview {
+		run.Stage = store.StageReview
+	} else {
+		run.Stage = stage
+	}
 	run.Status = store.StatusActive
-	run.ActiveInvocationID = invocation.ID
+	addActiveInvocation(run, invocation.ID)
 	if roleDefinition.Kind == workflow.RoleKindTest {
 		run.TestInvocationID = invocation.ID
 		if run.TestRevisionBudget == 0 {
@@ -510,7 +539,7 @@ func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registr
 	if err != nil {
 		return invocation, err
 	}
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.stopRunWorker(ctx, workerIDForInvocation(invocation)); err != nil {
 		return invocation, err
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
@@ -555,6 +584,7 @@ func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registr
 	resumeRequest := harness.StartRequest{
 		InvocationID:    invocation.ID,
 		RunID:           run.ID,
+		WorkerID:        workerIDForInvocation(invocation),
 		Role:            invocation.Role,
 		Stage:           string(invocation.Stage),
 		CheckpointSHA:   reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA),
@@ -680,15 +710,15 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 			return errors.New("persisted invocation packet test revision state does not match the run")
 		}
 	}
-	if invocation.Role == workflow.RoleSpecificationReview {
+	if roleDefinition, ok := workflow.DefaultRegistry().Role(invocation.Role); ok && roleDefinition.Kind == workflow.RoleKindReview {
 		if persisted.ReviewContext == nil {
-			return errors.New("persisted specification-review invocation packet has no review context")
+			return fmt.Errorf("persisted %s invocation packet has no review context", invocation.Role)
 		}
 		if strings.TrimSpace(persisted.ReviewContext.CheckpointSHA) == "" {
-			return errors.New("persisted specification-review invocation packet has no review checkpoint")
+			return fmt.Errorf("persisted %s invocation packet has no review checkpoint", invocation.Role)
 		}
 		if persisted.ReviewContext.CheckpointSHA != run.CheckpointSHA {
-			return errors.New("persisted specification-review invocation packet review checkpoint does not match the run")
+			return fmt.Errorf("persisted %s invocation packet review checkpoint does not match the run", invocation.Role)
 		}
 	}
 	return nil
@@ -749,7 +779,7 @@ func reviewCheckpointSHA(review bool, checkpoint string) string {
 // credential as a file without holding the other. It returns a nil step when
 // no source is registered, leaving the credential the worker itself persisted
 // in its role volume in place.
-func (s *Service) credentialSeeding(registration config.RepositoryRegistration, request AgentRequest, harnessName config.Harness) (func(context.Context, string) error, string, error) {
+func (s *Service) credentialSeeding(registration config.RepositoryRegistration, request AgentRequest, harnessName config.Harness) (func(context.Context, string, string) error, string, error) {
 	var authPath, registeredAuthPath, overrideAuthPath string
 	var seed func(context.Context, worker.CredentialSeedRequest) error
 	switch harnessName {
@@ -776,8 +806,8 @@ func (s *Service) credentialSeeding(registration config.RepositoryRegistration, 
 	if seed == nil {
 		return nil, "", fmt.Errorf("worker runtime does not support %s credential seeding", harnessName)
 	}
-	return func(ctx context.Context, runID string) error {
-		return seed(ctx, worker.CredentialSeedRequest{RunID: runID, AuthPath: authPath})
+	return func(ctx context.Context, runID, workerID string) error {
+		return seed(ctx, worker.CredentialSeedRequest{RunID: runID, WorkerID: workerID, AuthPath: authPath})
 	}, registration.Path, nil
 }
 
@@ -815,7 +845,7 @@ func (s *Service) restoreCredentialProjection(ctx context.Context, registration 
 		}
 		return newCredentialProjectionError(invocation.Harness)
 	}
-	if err := seed(ctx, run.ID); err != nil {
+	if err := seed(ctx, run.ID, workerIDForInvocation(invocation)); err != nil {
 		return newCredentialProjectionError(invocation.Harness)
 	}
 	return nil

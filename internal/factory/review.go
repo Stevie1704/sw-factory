@@ -19,6 +19,9 @@ const (
 	// SpecificationReviewStatusContext is the stable exact-SHA status context
 	// used by every specification-review invocation.
 	SpecificationReviewStatusContext = "factory/review/specification"
+	// StandardsReviewStatusContext is the stable exact-SHA status context used
+	// by every documented-standards review invocation.
+	StandardsReviewStatusContext = "factory/review/standards"
 	// maxReviewDiffBytes bounds the immutable diff copied into a review packet.
 	maxReviewDiffBytes = 512 << 10
 )
@@ -54,15 +57,24 @@ func roleHandoffFromReport(value report.Handoff) *store.RoleHandoff {
 // Gate results are reduced to outcome metadata; command transcripts never enter
 // the packet.
 func reviewContextForRun(ctx context.Context, run store.Run, runStore RunStore) (*prompt.ReviewContext, error) {
+	return reviewContextForRole(ctx, run, runStore, workflow.RoleSpecificationReview)
+}
+
+// reviewContextForRole assembles one isolated review input. It includes prior
+// findings from the same role only; a concurrent reviewer never receives the
+// other reviewer's conclusions.
+func reviewContextForRole(ctx context.Context, run store.Run, runStore RunStore, role string) (*prompt.ReviewContext, error) {
 	contextValue := &prompt.ReviewContext{
-		CheckpointSHA:         run.CheckpointSHA,
-		TestHandoff:           run.TestHandoff,
-		ImplementationHandoff: roleHandoffForRun(run),
-		ProtectedTestPaths:    append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
-		TestExemption:         run.TestExemption,
+		CheckpointSHA: run.CheckpointSHA,
 	}
-	if run.SpecificationReview != nil && run.SpecificationReview.CheckpointSHA == run.CheckpointSHA {
-		contextValue.PriorFindings = append([]store.ReviewFinding(nil), run.SpecificationReview.Findings...)
+	if role == workflow.RoleStandardsReview {
+		// The exemption is a deliberate standards-review input, not inherited
+		// test-session context. No test or implementation handoff crosses the
+		// reviewer boundary.
+		contextValue.TestExemption = run.TestExemption
+	}
+	if review := reviewResultForRole(run, role); review != nil && review.CheckpointSHA == run.CheckpointSHA {
+		contextValue.PriorFindings = append([]store.ReviewFinding(nil), review.Findings...)
 	}
 	if resultStore, ok := runStore.(GateResultStore); ok {
 		results, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseCheckpoint, run.CheckpointSHA)
@@ -86,45 +98,93 @@ func reviewContextForRun(ctx context.Context, run store.Run, runStore RunStore) 
 // ensureReviewStart verifies the reviewer receives a clean, immutable draft
 // pull-request checkpoint before any worker or harness side effect occurs.
 func (s *Service) ensureReviewStart(ctx context.Context, run store.Run) error {
-	if run.Stage != store.StageDraftPR {
-		return fmt.Errorf("specification review requires draft_pr stage, not %q", run.Stage)
+	return s.ensureReviewStartForRole(ctx, run, workflow.RoleSpecificationReview)
+}
+
+// ensureReviewStartForRole verifies one reviewer receives a clean immutable
+// checkpoint. A second reviewer may join an already active review round.
+func (s *Service) ensureReviewStartForRole(ctx context.Context, run store.Run, role string) error {
+	if run.Stage != store.StageDraftPR && run.Stage != store.StageReview {
+		return fmt.Errorf("%s requires draft_pr or review stage, not %q", role, run.Stage)
 	}
 	if run.PullRequestNumber <= 0 {
-		return errors.New("specification review requires a tracked pull request")
+		return fmt.Errorf("%s requires a tracked pull request", role)
 	}
 	if !github.ValidCommitSHA(run.CheckpointSHA) {
-		return errors.New("specification review requires a valid checkpoint SHA")
+		return fmt.Errorf("%s requires a valid checkpoint SHA", role)
 	}
 	base := run.BaseCheckpointSHA
 	if base == "" {
 		base = run.CheckpointSHA
 	}
 	if !github.ValidCommitSHA(base) {
-		return errors.New("specification review requires a valid base checkpoint SHA")
+		return fmt.Errorf("%s requires a valid base checkpoint SHA", role)
 	}
-	if run.SpecificationReview != nil && run.SpecificationReview.CheckpointSHA == run.CheckpointSHA {
-		return errors.New("specification review already has a result for this checkpoint")
+	if review := reviewResultForRole(run, role); review != nil && review.CheckpointSHA == run.CheckpointSHA {
+		return fmt.Errorf("%s already has a result for this checkpoint", role)
 	}
 	inspector := s.worktreeInspector()
 	if inspector == nil {
-		return errors.New("worktree runtime is required for immutable specification review")
+		return fmt.Errorf("worktree runtime is required for immutable %s", role)
 	}
 	state, err := inspector.Inspect(ctx, run.Worktree)
 	if err != nil {
-		return fmt.Errorf("inspect worktree before specification review: %w", err)
+		return fmt.Errorf("inspect worktree before %s: %w", role, err)
 	}
 	if state.HeadSHA != run.CheckpointSHA {
-		return fmt.Errorf("review worktree HEAD %q does not match checkpoint %q", state.HeadSHA, run.CheckpointSHA)
+		return fmt.Errorf("%s worktree HEAD %q does not match checkpoint %q", role, state.HeadSHA, run.CheckpointSHA)
 	}
 	if len(state.ChangedPaths) != 0 {
-		return errors.New("specification review requires a clean checkpoint worktree")
+		return fmt.Errorf("%s requires a clean checkpoint worktree", role)
 	}
 	return nil
 }
 
+// reviewRoleConfigured reports whether a frozen packet declares a complete
+// harness and non-empty model policy for one review role.
+func reviewRoleConfigured(run store.Run, role string) bool {
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return false
+	}
+	harnessName, hasHarness := packet.RepositoryConfig.RoleHarnessDefaults[role]
+	models, hasModel := packet.RepositoryConfig.ModelOptions[role]
+	return hasHarness && strings.TrimSpace(string(harnessName)) != "" && hasModel && len(models) > 0
+}
+
+// standardsReviewConfigured reports whether the frozen packet declares the
+// standards reviewer as a runnable role. Older packets may predate the second
+// reviewer; those packets retain the single-review compatibility path.
+func standardsReviewConfigured(run store.Run) bool {
+	return reviewRoleConfigured(run, workflow.RoleStandardsReview)
+}
+
+// concurrentReviewsConfigured reports whether both isolated review roles can
+// be launched automatically from the frozen packet.
+func concurrentReviewsConfigured(run store.Run) bool {
+	return reviewRoleConfigured(run, workflow.RoleSpecificationReview) && standardsReviewConfigured(run)
+}
+
+// reviewRoundComplete reports whether every reviewer configured for the frozen
+// packet has produced an exact-checkpoint result. A result from another
+// checkpoint never completes the round.
+func reviewRoundComplete(run store.Run) bool {
+	if reviewRoleConfigured(run, workflow.RoleSpecificationReview) {
+		specification := reviewResultForRole(run, workflow.RoleSpecificationReview)
+		if specification == nil || specification.CheckpointSHA != run.CheckpointSHA {
+			return false
+		}
+	}
+	if !standardsReviewConfigured(run) {
+		return true
+	}
+	standards := reviewResultForRole(run, workflow.RoleStandardsReview)
+	return standards != nil && standards.CheckpointSHA == run.CheckpointSHA
+}
+
 // captureReviewDiff obtains the exact base-to-checkpoint diff inside the
 // pinned worker after its review role mount has been established.
-func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, role string) (string, error) {
+func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, invocation store.Invocation) (string, error) {
 	if s.deps.Worker == nil {
 		return "", errors.New("worker runtime is required to capture the review diff")
 	}
@@ -137,9 +197,10 @@ func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, role str
 	}
 	result, err := s.deps.Worker.RunCommand(ctx, worker.CommandRequest{
 		RunID:             run.ID,
+		WorkerID:          workerIDForInvocation(invocation),
 		Command:           fmt.Sprintf("git diff --no-ext-diff --binary --unified=80 %s %s -- .", base, run.CheckpointSHA),
 		EnvironmentPolicy: worker.EnvironmentPolicyClean,
-		Role:              role,
+		Role:              invocation.Role,
 	})
 	if err != nil {
 		return "", fmt.Errorf("capture exact review diff: %w", err)
@@ -158,11 +219,22 @@ func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, role str
 // later review replaces the status for the same checkpoint rather than adding
 // an unrelated status stream.
 func (s *Service) publishSpecificationReviewStatus(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, state github.CommitStatusState, description string) error {
+	return s.publishReviewStatus(ctx, registration, runStore, run, workflow.RoleSpecificationReview, state, description)
+}
+
+// publishReviewStatus publishes one role-owned exact-SHA review status. The
+// context is stable per reviewer role so the two results never overwrite each
+// other on GitHub.
+func (s *Service) publishReviewStatus(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, role string, state github.CommitStatusState, description string) error {
 	if s.deps.CommitStatuses == nil {
-		return errors.New("commit-status publisher is required for specification review")
+		return fmt.Errorf("commit-status publisher is required for %s", role)
 	}
 	if !github.ValidCommitSHA(run.CheckpointSHA) {
-		return errors.New("specification review requires a valid checkpoint SHA")
+		return fmt.Errorf("%s requires a valid checkpoint SHA", role)
+	}
+	statusContext := reviewStatusContext(role)
+	if statusContext == "" {
+		return fmt.Errorf("unsupported review role %q", role)
 	}
 	description = reviewStatusDescription(description)
 	statuses := github.CommitStatusPublisher(s.deps.CommitStatuses)
@@ -173,10 +245,23 @@ func (s *Service) publishSpecificationReviewStatus(ctx context.Context, registra
 	}, github.CommitStatus{
 		SHA:         run.CheckpointSHA,
 		State:       state,
-		Context:     SpecificationReviewStatusContext,
+		Context:     statusContext,
 		Description: description,
 		TargetURL:   run.PullRequestURL,
 	})
+}
+
+// reviewStatusContext maps a declared review role to its stable GitHub status
+// context.
+func reviewStatusContext(role string) string {
+	switch role {
+	case workflow.RoleSpecificationReview:
+		return SpecificationReviewStatusContext
+	case workflow.RoleStandardsReview:
+		return StandardsReviewStatusContext
+	default:
+		return ""
+	}
 }
 
 // reviewStatusDescription keeps status text bounded and free of formatting
@@ -231,7 +316,13 @@ func reviewHasBlockingFinding(findings []store.ReviewFinding) bool {
 // specificationReviewFromReport converts a validated completed review into a
 // durable exact-checkpoint projection.
 func specificationReviewFromReport(value report.ReviewHandoff) *store.SpecificationReview {
-	result := &store.SpecificationReview{
+	return reviewResultFromReport(value)
+}
+
+// reviewResultFromReport converts a validated review handoff into a durable
+// exact-checkpoint result shared by both reviewer roles.
+func reviewResultFromReport(value report.ReviewHandoff) *store.ReviewResult {
+	result := &store.ReviewResult{
 		CheckpointSHA: value.ReviewedSHA,
 		Findings:      make([]store.ReviewFinding, 0, len(value.Findings)),
 	}
@@ -249,9 +340,45 @@ func specificationReviewFromReport(value report.ReviewHandoff) *store.Specificat
 	return result
 }
 
-// acceptSpecificationReviewReport applies the review gate, publishes the
-// exact-checkpoint status, and projects every finding to supervision surfaces.
+// reviewResultForRole returns the durable result owned by one reviewer role.
+func reviewResultForRole(run store.Run, role string) *store.ReviewResult {
+	switch role {
+	case workflow.RoleSpecificationReview:
+		return run.SpecificationReview
+	case workflow.RoleStandardsReview:
+		return run.StandardsReview
+	default:
+		return nil
+	}
+}
+
+// setReviewResultForRole stores a review result in the role-specific durable
+// projection without allowing one reviewer to overwrite the other.
+func setReviewResultForRole(run *store.Run, role string, result *store.ReviewResult) error {
+	if run == nil {
+		return errors.New("review result run is required")
+	}
+	switch role {
+	case workflow.RoleSpecificationReview:
+		run.SpecificationReview = result
+	case workflow.RoleStandardsReview:
+		run.StandardsReview = result
+	default:
+		return fmt.Errorf("unsupported review role %q", role)
+	}
+	return nil
+}
+
+// acceptSpecificationReviewReport preserves the original specification-review
+// seam while routing through the concurrent review-round implementation.
 func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
+	return s.acceptReviewReport(ctx, registration, runStore, run, invocation, value)
+}
+
+// acceptReviewReport applies one reviewer result to the serialized review
+// round. A successful first result leaves the run in review until every
+// configured reviewer has produced a result for the same checkpoint.
+func (s *Service) acceptReviewReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
 	if run.CheckpointSHA == "" || !github.ValidCommitSHA(run.CheckpointSHA) {
 		return AgentResult{}, errors.New("cannot accept review without a valid immutable checkpoint")
 	}
@@ -260,69 +387,85 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 		return AgentResult{}, err
 	}
 	previous := *run
+	humanReviewWaiting := run.Stage == store.StageReview && run.Status == store.StatusWaitingForHuman && (len(run.PendingQuestions) > 0 || strings.Contains(run.LifecycleReason, "requested clarification") || strings.Contains(run.LifecycleReason, "cannot proceed"))
 	statusState := github.CommitStatusError
-	statusDescription := "specification review requires human disposition"
+	statusDescription := fmt.Sprintf("%s requires human disposition", invocation.Role)
 	switch value.Outcome {
 	case report.OutcomeCompleted:
-		review := specificationReviewFromReport(*value.ReviewHandoff)
-		run.SpecificationReview = review
-		if reviewHasBlockingFinding(review.Findings) {
-			run.Stage = invocation.Stage
+		review := reviewResultFromReport(*value.ReviewHandoff)
+		if err := setReviewResultForRole(run, invocation.Role, review); err != nil {
+			return AgentResult{}, err
+		}
+		if reviewHasBlockingResult(*run) {
+			run.Stage = store.StageReview
 			run.Status = store.StatusWaitingForHuman
-			run.LifecycleReason = "specification review found blocking violations"
+			run.LifecycleReason = fmt.Sprintf("review round has blocking violations (%s)", invocation.Role)
 			statusState = github.CommitStatusFailure
-			statusDescription = "specification review found blocking findings"
-		} else {
+			if !reviewHasBlockingFinding(review.Findings) {
+				statusState = github.CommitStatusSuccess
+				statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
+			} else {
+				statusDescription = fmt.Sprintf("%s found blocking findings", invocation.Role)
+			}
+		} else if humanReviewWaiting {
+			run.Stage = store.StageReview
+			run.Status = store.StatusWaitingForHuman
+			run.LifecycleReason = fmt.Sprintf("review round remains waiting for human disposition after %s", invocation.Role)
+			statusState = github.CommitStatusSuccess
+			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
+		} else if reviewRoundComplete(*run) {
 			transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
 			if transitionErr != nil {
 				return AgentResult{}, transitionErr
 			}
 			run.Stage = transition.Stage
 			run.Status = transition.Status
-			run.LifecycleReason = "specification review accepted; ready for merge"
+			run.LifecycleReason = "all configured reviews passed; ready for merge"
 			statusState = github.CommitStatusSuccess
-			statusDescription = fmt.Sprintf("specification review passed; %d advisory findings", len(review.Findings))
+			statusDescription = fmt.Sprintf("%s passed; review round complete", invocation.Role)
+		} else {
+			run.Stage = store.StageReview
+			run.Status = store.StatusActive
+			run.LifecycleReason = fmt.Sprintf("%s passed; waiting for the other review", invocation.Role)
+			statusState = github.CommitStatusSuccess
+			statusDescription = fmt.Sprintf("%s passed; %d advisory findings", invocation.Role, len(review.Findings))
 		}
 		run.PendingQuestions = nil
 		run.ClarificationCommentID = ""
 		run.ClarificationNotificationSent = false
 	case report.OutcomeNeedsClarification:
-		run.SpecificationReview = nil
-		transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
-		if transitionErr != nil {
-			return AgentResult{}, transitionErr
+		if err := setReviewResultForRole(run, invocation.Role, nil); err != nil {
+			return AgentResult{}, err
 		}
-		run.Stage = transition.Stage
-		run.Status = transition.Status
-		run.LifecycleReason = "specification reviewer requested clarification"
+		run.Stage = store.StageReview
+		run.Status = store.StatusWaitingForHuman
+		run.LifecycleReason = fmt.Sprintf("%s requested clarification", invocation.Role)
 		run.PendingQuestions = pendingQuestionsFromReport(value.Questions)
 		run.ClarificationCommentID = ""
 		run.ClarificationNotificationSent = false
 	case report.OutcomeCannotProceed:
-		run.SpecificationReview = nil
-		transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
-		if transitionErr != nil {
-			return AgentResult{}, transitionErr
+		if err := setReviewResultForRole(run, invocation.Role, nil); err != nil {
+			return AgentResult{}, err
 		}
-		run.Stage = transition.Stage
-		run.Status = transition.Status
-		run.LifecycleReason = "specification reviewer cannot proceed"
+		run.Stage = store.StageReview
+		run.Status = store.StatusWaitingForHuman
+		run.LifecycleReason = fmt.Sprintf("%s cannot proceed", invocation.Role)
 		run.PendingQuestions = nil
 		run.ClarificationCommentID = ""
 		run.ClarificationNotificationSent = false
 	default:
-		return AgentResult{}, fmt.Errorf("unsupported specification review outcome %q", value.Outcome)
+		return AgentResult{}, fmt.Errorf("unsupported %s outcome %q", invocation.Role, value.Outcome)
 	}
 	run.UpdatedAt = s.deps.Now().UTC()
-	if err := s.publishSpecificationReviewStatus(ctx, registration, runStore, *run, statusState, statusDescription); err != nil {
-		return AgentResult{}, fmt.Errorf("publish specification review status: %w", err)
+	if err := s.publishReviewStatus(ctx, registration, runStore, *run, invocation.Role, statusState, statusDescription); err != nil {
+		return AgentResult{}, fmt.Errorf("publish %s status: %w", invocation.Role, err)
 	}
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
-		return AgentResult{}, fmt.Errorf("persist specification review state: %w", err)
+		return AgentResult{}, fmt.Errorf("persist %s state: %w", invocation.Role, err)
 	}
 	if value.Outcome == report.OutcomeCompleted && roleDefinition.Kind == workflow.RoleKindReview {
 		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
-			return AgentResult{}, err
+			return AgentResult{}, fmt.Errorf("refresh pull request after %s: %w", invocation.Role, err)
 		}
 	}
 	if value.Outcome == report.OutcomeNeedsClarification {

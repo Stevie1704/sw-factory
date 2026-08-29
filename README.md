@@ -117,7 +117,7 @@ cannot add arbitrary roles or redefine the transition graph in
 | <code>implementation</code>       | <code>implementation</code> role         | The agent edits production code and submits a structured implementation handoff.                                                                            |
 | <code>check</code>                | Coordinator                              | The accepted implementation is checkpointed and every configured gate runs against that exact checkpoint.                                                   |
 | <code>draft_pr</code>             | Coordinator                              | The host pushes the run branch before the gate statuses, then creates or updates one draft pull request after successful gates.                             |
-| <code>review</code>               | <code>spec_review</code> role            | An independent reviewer receives the exact checkpoint and reports blocking findings or advisories.                                                          |
+| <code>review</code>               | <code>spec_review</code> + <code>standards_review</code> | Isolated reviewers concurrently inspect the same exact checkpoint and report role-scoped blocking findings or advisories.                         |
 | <code>ready</code>                | Coordinator                              | The run is ready for a human to review and merge. Factory leaves the pull request as a draft and does not merge it.                                         |
 
 The checked-in policy uses advisory mode: after a healthy baseline, the
@@ -194,8 +194,9 @@ route from changed files, issue prose, or model judgment. These rules hold:
 - The test role must prove acceptance through the highest practical observable
   interface and must not prescribe private implementation structure the frozen
   criteria do not require.
-- Gates and the independent specification review keep their exact-checkpoint
-  behavior on every route.
+- Gates and the configured independent reviews keep their exact-checkpoint
+  behavior on every route. Specification and documented-standards reviews use
+  separate status contexts and do not share reviewer state.
 
 The frozen route and current stage appear in <code>factory status</code>, in the
 <code>factory agent</code> launch output, and in the single editable GitHub
@@ -801,9 +802,9 @@ budget. After an accepted repair report, run <code>factory draft-pr</code> again
 Infrastructure waits do not spend the check-repair budget; the hard ceiling is
 three attempts.
 
-### 6. Run the independent specification review
+### 6. Run the concurrent isolated reviews
 
-After the draft PR is created, start the active review role:
+After the draft PR is created, the coordinator starts both active review roles:
 
 ~~~sh
 factory agent \
@@ -811,9 +812,13 @@ factory agent \
   --run-id <run-id>
 ~~~
 
-The current automatic role for <code>draft_pr</code> is
-<code>spec_review</code>. It receives the exact immutable base-to-checkpoint
-diff and content-free gate metadata. A review finding has seven fields:
+The automatic roles for <code>draft_pr</code> are <code>spec_review</code> and
+<code>standards_review</code>. Their external sessions run concurrently, but
+report acceptance is serialized by the coordinator. Each receives the exact
+immutable base-to-checkpoint diff and content-free gate metadata in a fresh,
+read-only worker surface with private home and temporary storage. Reviewers do
+not receive implementation/test handoffs, upstream transcripts, or the other
+reviewer's conclusions. A review finding has seven fields:
 
 ~~~text
 location|claim|evidence|severity|category|resolution|owner
@@ -838,10 +843,12 @@ factory agent-report \
 ~~~
 
 Correctness, security, specification, and documented-standards blockers keep
-the run waiting for human action. Taste and scope findings are advisory. A
-successful review moves the run to <code>ready</code>, updates the
-exact-checkpoint review status, and updates the generated review subsection of
-the draft PR. The pull request remains a draft for a human to inspect and merge.
+the run waiting for human action. Taste and scope findings are advisory. The
+run moves to <code>ready</code> only after both configured reviews succeed,
+updates <code>factory/review/specification</code> and
+<code>factory/review/standards</code> for the exact checkpoint, and updates the
+generated review subsection of the draft PR. The pull request remains a draft
+for a human to inspect and merge.
 
 ### 7. Observe and finish the run
 
@@ -1144,8 +1151,9 @@ Progression stops in its defined waiting state, and publishes the reason in the
 editable status comment, for a clarification request, a policy rejection, an
 exhausted retry budget, a harness rate limit, an authentication failure, an
 invocation that requires <code>factory attach</code>, or an ambiguous recovery.
-The independent specification review remains a deliberate step; unattended
-progression ends at the draft pull request.
+The concurrent isolated reviews remain a deliberate step; unattended
+progression ends at the draft pull request or while either review awaits human
+action.
 
 Repeated polling and a coordinator restart are safe. Every transition runs
 through the same durable effect journal as the one-shot commands, so a second

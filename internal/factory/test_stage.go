@@ -510,7 +510,7 @@ func projectImplementationTestObjection(previous store.Run, value report.Report,
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
-	next.ActiveInvocationID = ""
+	clearActiveInvocations(&next)
 	next.TestStageSkipped = false
 	if !automated {
 		next.Stage = store.StageTest
@@ -908,6 +908,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	next := *run
 	next.TestCheckpointSHA = ""
 	next.SpecificationReview = nil
+	next.StandardsReview = nil
 	next.TestHandoff = &handoff
 	next.ProtectedTestPaths = protected
 	transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(store.StageTest, report.OutcomeCompleted)
@@ -1098,6 +1099,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 	next.TestInvocationID = invocation.ID
 	next.ProtectedTestPaths = protected
 	next.SpecificationReview = nil
+	next.StandardsReview = nil
 	transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(store.StageTest, report.OutcomeCompleted)
 	if transitionErr != nil {
 		return AgentResult{}, transitionErr
@@ -1155,7 +1157,7 @@ func (s *Service) pauseTestRevisionForHuman(ctx context.Context, registration co
 	previous := *run
 	run.Stage = store.StageTest
 	run.Status = store.StatusWaitingForHuman
-	run.ActiveInvocationID = ""
+	clearActiveInvocations(run)
 	run.PendingQuestions = nil
 	run.TestRevisionHistory = setTestRevisionOutcome(run.TestRevisionHistory, run.TestRevisionAttempts, outcome)
 	run.LifecycleReason = reason

@@ -16,6 +16,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // RecoveryRequiredCode is the stable code for the pre-reconciliation safety
@@ -58,6 +59,9 @@ const (
 // RecoveryDiscrepancy describes one observed disagreement between persisted
 // run identity and an external projection.
 type RecoveryDiscrepancy struct {
+	// InvocationID identifies the active or historical invocation whose
+	// external projection disagrees, when the discrepancy is invocation-scoped.
+	InvocationID string
 	// Kind distinguishes infrastructure uncertainty from workflow failure.
 	Kind RecoveryDiscrepancyKind
 	// Source identifies the projection that disagrees with persisted state.
@@ -320,11 +324,89 @@ func inspectRemoteBranchProjection(ctx context.Context, diagnosis *RecoveryDiagn
 	})
 }
 
-// inspectInvocationProjection verifies the newest invocation's durable
-// external identities without launching or mutating anything. The active
-// invocation is preferred, while the latest terminal invocation keeps stages
-// between visible agents from bypassing worker, cmux, or native-session checks.
+// inspectInvocationProjection verifies every active invocation's durable
+// external identity without launching or mutating anything. A latest terminal
+// invocation is used only when no active invocation exists.
 func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, registration config.RepositoryRegistration, runStore OperationalStore, run store.Run) {
+	if activeStore, ok := runStore.(ActiveInvocationsStore); ok {
+		active, err := activeStore.ActiveInvocations(ctx, run.ID)
+		if err != nil {
+			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyInfrastructure,
+				Source:   "operational store",
+				Field:    "active invocations",
+				Expected: "read active invocations",
+				Observed: err.Error(),
+			})
+			return
+		}
+		if len(active) > 0 {
+			for index := range active {
+				selected := selectedActiveInvocationStore{OperationalStore: runStore, active: active[index]}
+				s.inspectInvocationProjectionSingle(ctx, diagnosis, registration, selected, run)
+			}
+			return
+		}
+		inactive := inactiveInvocationStore{OperationalStore: runStore}
+		if latestStore, exposesLatest := runStore.(LatestInvocationStore); exposesLatest {
+			s.inspectInvocationProjectionSingle(ctx, diagnosis, registration, latestInactiveInvocationStore{
+				inactiveInvocationStore: inactive,
+				LatestInvocationStore:   latestStore,
+			}, run)
+			return
+		}
+		s.inspectInvocationProjectionSingle(ctx, diagnosis, registration, inactive, run)
+		return
+	}
+	s.inspectInvocationProjectionSingle(ctx, diagnosis, registration, runStore, run)
+}
+
+// inactiveInvocationStore adapts an empty plural active projection to the
+// legacy single-invocation inspection implementation.
+type inactiveInvocationStore struct {
+	OperationalStore
+}
+
+// ActiveInvocation reports that the plural projection contains no invocation.
+func (inactiveInvocationStore) ActiveInvocation(context.Context, string) (*store.Invocation, error) {
+	return nil, nil
+}
+
+// latestInactiveInvocationStore preserves the optional latest-invocation
+// projection while adapting an empty plural active projection.
+type latestInactiveInvocationStore struct {
+	inactiveInvocationStore
+	LatestInvocationStore
+}
+
+// selectedActiveInvocationStore supplies one member of a plural active
+// projection to the legacy single-invocation inspection implementation.
+type selectedActiveInvocationStore struct {
+	OperationalStore
+	active store.Invocation
+}
+
+// ActiveInvocation returns the selected active invocation.
+func (s selectedActiveInvocationStore) ActiveInvocation(context.Context, string) (*store.Invocation, error) {
+	active := s.active
+	return &active, nil
+}
+
+// inspectInvocationProjectionSingle verifies one invocation's durable external
+// identities without launching or mutating anything.
+func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnosis *RecoveryDiagnosis, registration config.RepositoryRegistration, runStore OperationalStore, run store.Run) {
+	discrepancyStart := len(diagnosis.Discrepancies)
+	invocationID := ""
+	defer func() {
+		if invocationID == "" {
+			return
+		}
+		for index := discrepancyStart; index < len(diagnosis.Discrepancies); index++ {
+			if diagnosis.Discrepancies[index].InvocationID == "" {
+				diagnosis.Discrepancies[index].InvocationID = invocationID
+			}
+		}
+	}()
 	if runStore == nil {
 		return
 	}
@@ -396,6 +478,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 			return
 		}
 	}
+	invocationID = active.ID
 	diagnosis.InvocationExists = true
 	hasNativeSession := strings.TrimSpace(active.NativeSessionID) != ""
 	if !hasNativeSession {
@@ -427,7 +510,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 	}
 	expectedStopped := workerProjectionExpectedStopped(run, *active)
 	workerProjectionLost := false
-	workerInspection, inspectErr := s.deps.Worker.Inspect(ctx, run.ID)
+	workerInspection, inspectErr := s.deps.Worker.Inspect(ctx, workerIDForInvocation(*active))
 	if inspectErr != nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 			Kind:     RecoveryDiscrepancyInfrastructure,
@@ -491,6 +574,8 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 				}
 				workerRequest := worker.StartRequest{
 					RunID:             run.ID,
+					WorkerID:          workerIDForInvocation(*active),
+					WorktreeReadOnly:  roleIsKind(*active, workflow.RoleKindReview),
 					WorktreePath:      run.Worktree,
 					GitMetadataPath:   gitMetadataProjectionPath(run.ID, run.Worktree),
 					Image:             packet.RepositoryConfig.WorkerBuild.Image,
@@ -554,7 +639,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 		return
 	}
 	if inspector, ok := harnessRuntime.(harness.NativeSessionInspector); ok {
-		observed, providerErr := inspector.NativeSessionID(ctx, harness.NativeSessionRequest{RunID: run.ID, Harness: active.Harness})
+		observed, providerErr := inspector.NativeSessionID(ctx, harness.NativeSessionRequest{RunID: run.ID, WorkerID: workerIDForInvocation(*active), Harness: active.Harness})
 		if providerErr != nil {
 			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 				Kind:        RecoveryDiscrepancyInfrastructure,
@@ -584,7 +669,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 	}
 	if active.Status == store.InvocationStatusActive {
 		if livenessInspector, ok := harnessRuntime.(harness.NativeSessionLivenessInspector); ok {
-			running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, Harness: active.Harness})
+			running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, WorkerID: workerIDForInvocation(*active), Harness: active.Harness})
 			if livenessErr != nil {
 				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 					Kind:        RecoveryDiscrepancyInfrastructure,
@@ -639,6 +724,38 @@ func terminalInvocationProjectionExpectedStopped(run store.Run, invocation store
 func hasRecoverableInvocationLoss(diagnosis RecoveryDiagnosis) bool {
 	for _, discrepancy := range diagnosis.Discrepancies {
 		if discrepancy.Recoverable && (discrepancy.Source == "worker" || discrepancy.Source == "cmux" || discrepancy.Source == "harness") {
+			return true
+		}
+	}
+	return false
+}
+
+// recoveryTargetActiveInvocation selects the active invocation whose own
+// projection needs recovery. With multiple reviewers, a discrepancy for one
+// worker must never cause the coordinator to resume a healthy other worker.
+func recoveryTargetActiveInvocation(diagnosis RecoveryDiagnosis, activeValues []store.Invocation) *store.Invocation {
+	if len(activeValues) == 0 {
+		return nil
+	}
+	if len(activeValues) == 1 || len(diagnosis.Discrepancies) == 0 {
+		return &activeValues[0]
+	}
+	for index := range activeValues {
+		if hasRecoverableInvocationLossFor(diagnosis, activeValues[index].ID) {
+			return &activeValues[index]
+		}
+	}
+	return nil
+}
+
+// hasRecoverableInvocationLossFor reports whether one invocation owns a
+// recoverable external discrepancy in the read-only recovery diagnosis.
+func hasRecoverableInvocationLossFor(diagnosis RecoveryDiagnosis, invocationID string) bool {
+	if strings.TrimSpace(invocationID) == "" {
+		return false
+	}
+	for _, discrepancy := range diagnosis.Discrepancies {
+		if discrepancy.InvocationID == invocationID && discrepancy.Recoverable {
 			return true
 		}
 	}
@@ -928,9 +1045,8 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 		diagnosis.PendingEffect = pending
 	}
 	if diagnosis.SourcesAgree && run.Status == store.StatusActive {
-		activeStore, activeStoreOK := runStore.(ActiveInvocationStore)
-		if activeStoreOK {
-			active, activeErr := activeStore.ActiveInvocation(ctx, run.ID)
+		activeValues, activeSupported, activeErr := activeInvocationsForRun(ctx, runStore, run.ID)
+		if activeSupported {
 			if activeErr != nil {
 				addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
 					Kind:     RecoveryDiscrepancyInfrastructure,
@@ -940,7 +1056,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 					Observed: activeErr.Error(),
 				})
 				diagnosis.SourcesAgree = false
-			} else if active != nil && (allowSameProcessRecovery || !s.invocationStartedHere(active.ID)) && active.Status == store.InvocationStatusActive && !active.AttachRequired && strings.TrimSpace(active.NativeSessionID) != "" {
+			} else if active := recoveryTargetActiveInvocation(diagnosis, activeValues); active != nil && (allowSameProcessRecovery || !s.invocationStartedHere(active.ID)) && active.Status == store.InvocationStatusActive && !active.AttachRequired && strings.TrimSpace(active.NativeSessionID) != "" {
 				if diagnosis.SourcesAgree && active.RecoveryResumeCount > 0 && !hasRecoverableInvocationLoss(diagnosis) {
 					if credentialErr := s.restoreCredentialProjection(ctx, registration, run, *active); credentialErr != nil {
 						return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
@@ -1222,7 +1338,7 @@ func reconciledRecoveryDiagnosis(runID string) RecoveryDiagnosis {
 // journal cannot be replayed safely, so that the one-effect invariant remains
 // intact for an operator to resolve.
 func (s *Service) pauseRunLocally(ctx context.Context, runStore RunStore, run store.Run, diagnosis RecoveryDiagnosis) (store.Run, error) {
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	if isRestartReconciliationPause(run) {
@@ -1245,7 +1361,7 @@ func (s *Service) pauseRunLocally(ctx context.Context, runStore RunStore, run st
 func (s *Service) pauseForRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis RecoveryDiagnosis) (store.Run, error) {
 	reason := recoveryDiscrepancyReason(diagnosis)
 	if isRestartReconciliationPause(run) && !hasGitHubStateProjectionDiscrepancy(diagnosis) {
-		if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 			return run, err
 		}
 		return run, nil
@@ -1267,7 +1383,7 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 			return s.pauseRunLocally(ctx, runStore, run, diagnosis)
 		}
 	}
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	if s.deps.GitHub == nil || strings.TrimSpace(next.StatusCommentID) == "" {

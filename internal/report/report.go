@@ -321,7 +321,7 @@ type Report struct {
 	// TestHandoff is required for a completed test-stage outcome unless a
 	// technical exemption is explicitly reported.
 	TestHandoff *TestHandoff `json:"test_handoff,omitempty"`
-	// ReviewHandoff is required for a completed specification-review outcome.
+	// ReviewHandoff is required for a completed review-role outcome.
 	ReviewHandoff *ReviewHandoff `json:"review_handoff,omitempty"`
 	// TestObjectionResponse is required when a test-stage invocation is
 	// reviewing an active implementation objection. A rejected response need
@@ -854,10 +854,11 @@ func isTestReport(value Report) bool {
 	return value.Role == "test" && value.Stage == "test"
 }
 
-// isReviewReport identifies the coordinator-owned specification-review
-// envelope.
+// isReviewReport identifies the coordinator-owned review envelopes when no
+// registry projection is available to distinguish their shared contract.
 func isReviewReport(value Report) bool {
-	return value.Role == "spec_review" && value.Stage == "review"
+	return (value.Role == "spec_review" && value.Stage == "review") ||
+		(value.Role == "standards_review" && value.Stage == "standards_review")
 }
 
 // isTestReportForContext selects the coordinator-resolved test contract when

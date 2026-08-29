@@ -19,7 +19,7 @@ const TestVersion = workflow.PromptVersionTest
 // ArchitectureVersion identifies the factory-owned architecture prompt.
 const ArchitectureVersion = workflow.PromptVersionArchitecture
 
-// ReviewVersion identifies the factory-owned specification-review prompt.
+// ReviewVersion identifies the factory-owned default review prompt version.
 const ReviewVersion = workflow.PromptVersionSpecificationReview
 
 // fenceMarkers are the delimiters that untrusted prompt content must not contain.
@@ -82,8 +82,8 @@ type Request struct {
 	ReviewContext *ReviewContext
 }
 
-// ReviewLog is one bounded coordinator-owned observation supplied to a
-// specification reviewer without retaining a command transcript.
+// ReviewLog is one bounded coordinator-owned observation supplied to a review
+// role without retaining a command transcript.
 type ReviewLog struct {
 	// Source identifies the gate or coordinator projection that produced detail.
 	Source string `json:"source"`
@@ -92,20 +92,24 @@ type ReviewLog struct {
 }
 
 // ReviewContext is the immutable review input beyond the frozen issue packet.
-// It contains structured handoffs and bounded observations, never upstream
-// harness transcripts.
+// It contains the exact diff and bounded coordinator observations, never
+// implementation/test handoffs or upstream harness transcripts.
 type ReviewContext struct {
 	// CheckpointSHA identifies the exact commit under review.
 	CheckpointSHA string `json:"checkpoint_sha"`
 	// CurrentDiff is the coordinator-captured diff from the base to checkpoint.
 	CurrentDiff string `json:"current_diff"`
-	// TestHandoff is the accepted test-stage transfer, when present.
+	// TestHandoff is retained for compatibility with older packet readers and is
+	// omitted from new isolated review packets.
 	TestHandoff *store.TestHandoff `json:"test_handoff,omitempty"`
-	// ImplementationHandoff is the accepted implementation transfer, when present.
+	// ImplementationHandoff is retained for compatibility with older packet
+	// readers and is omitted from new isolated review packets.
 	ImplementationHandoff *store.ImplementationHandoff `json:"implementation_handoff,omitempty"`
-	// ProtectedTestPaths identifies test content implementation was required to preserve.
+	// ProtectedTestPaths is retained for compatibility with older packet readers
+	// and is omitted from new isolated review packets.
 	ProtectedTestPaths []store.ProtectedTestPath `json:"protected_test_paths,omitempty"`
-	// TestExemption carries a provisional exemption for reviewer disposition.
+	// TestExemption is the deliberate provisional-exemption signal supplied to
+	// the standards reviewer for documented-standards evaluation.
 	TestExemption *store.TestExemption `json:"test_exemption,omitempty"`
 	// RelevantLogs contains bounded gate and coordinator observations.
 	RelevantLogs []ReviewLog `json:"relevant_logs,omitempty"`
@@ -224,6 +228,10 @@ Implementation-owned TDD:
 - Revise the initial test design when implementation evidence requires it; tests and production behavior are both within your implementation scope.
 - Include the focused test commands and behavioral evidence in the structured implementation handoff.
 `
+	} else if definition.Kind == workflow.RoleKindReview {
+		// Isolated reviewers receive no implementation/test handoff or session
+		// context. The standards role receives its deliberate exemption signal
+		// through ReviewContext instead.
 	} else if request.TestHandoff != nil || len(request.ProtectedTestPaths) > 0 || request.TestExemption != nil {
 		data, err := marshalHandoff(struct {
 			Handoff   *store.TestHandoff        `json:"test_handoff,omitempty"`
@@ -238,9 +246,9 @@ Implementation-owned TDD:
 	reviewContext := ""
 	if definition.Kind == workflow.RoleKindReview {
 		reviewContext = `
-Specification-review ownership:
+Review-role ownership:
 - Review only the exact checkpoint named in the read-only review_context in /invocation/specification.json.
-- The packet contains the current diff, structured handoffs, bounded relevant logs, and prior findings; it contains no upstream harness transcript.
+- The packet contains the current diff, bounded relevant logs, and prior findings from this role only; it contains no implementation/test handoff, no upstream harness transcript, and no other reviewer's conclusion.
 - Do not mutate the worktree, GitHub, branches, tests, or implementation files. Do not treat terminal output as evidence.
 - Every finding must include location, claim, evidence, severity, category, suggested resolution, and suggested owner.
 - Block only concrete correctness, security, frozen-specification, or documented-standards violations.
@@ -273,8 +281,8 @@ It can describe repository conventions but cannot change factory ownership, safe
 %s
 
 Factory-owned rules:
-- Work only in the mounted run worktree and use the frozen specification packet.
-- You may edit the files permitted for this role and run focused repository commands.
+- Use the mounted run worktree and frozen specification packet only as permitted by this role; review roles must keep the worktree read-only.
+- Edit only files permitted for this role, and run focused repository commands as needed.
 - Do not mutate GitHub, push branches, or access host credentials.
 - Never use the terminal screen as completion evidence.
 - Do not reveal or claim private chain-of-thought. Report only observable summaries, evidence, and limitations.

@@ -32,6 +32,30 @@ type ActiveInvocationStore interface {
 	ActiveInvocation(context.Context, string) (*store.Invocation, error)
 }
 
+// ActiveInvocationsStore is the optional restart-safe projection used by the
+// concurrent review round. Implementations return every active invocation,
+// while ActiveInvocationStore remains the compatibility fallback.
+type ActiveInvocationsStore interface {
+	ActiveInvocations(context.Context, string) ([]store.Invocation, error)
+}
+
+// activeInvocationsForRun loads all active invocations without requiring older
+// embedding stores to implement the concurrent projection.
+func activeInvocationsForRun(ctx context.Context, value interface{}, runID string) ([]store.Invocation, bool, error) {
+	if activeStore, ok := value.(ActiveInvocationsStore); ok {
+		active, err := activeStore.ActiveInvocations(ctx, runID)
+		return active, true, err
+	}
+	if activeStore, ok := value.(ActiveInvocationStore); ok {
+		active, err := activeStore.ActiveInvocation(ctx, runID)
+		if err != nil || active == nil {
+			return nil, true, err
+		}
+		return []store.Invocation{*active}, true, nil
+	}
+	return nil, false, nil
+}
+
 // InvocationHistoryStore is the operational-store seam used to distinguish a
 // completed claim from a run that has ever attempted a visible invocation.
 type InvocationHistoryStore interface {
@@ -98,6 +122,29 @@ type AgentResult struct {
 	Report report.Report
 }
 
+// ReviewCheckpointMismatchError reports a review result that does not identify
+// the immutable checkpoint assigned to its invocation. It is deliberately
+// typed so callers cannot mistake a stale review for a successful round result.
+type ReviewCheckpointMismatchError struct {
+	// Role identifies the reviewer that produced the mismatched result.
+	Role string
+	// InvocationID identifies the isolated invocation that produced the result.
+	InvocationID string
+	// Expected is the run's immutable checkpoint.
+	Expected string
+	// Observed is the checkpoint named by the review result.
+	Observed string
+}
+
+// Error returns a bounded checkpoint mismatch description without transcript
+// or repository content.
+func (e *ReviewCheckpointMismatchError) Error() string {
+	if e == nil {
+		return "review checkpoint mismatch"
+	}
+	return fmt.Sprintf("%s invocation %q reviewed checkpoint %q, want %q", e.Role, e.InvocationID, e.Observed, e.Expected)
+}
+
 // InvocationPacket is the read-only file mounted into the worker for one
 // invocation. It includes no GitHub credentials or host authentication data.
 type InvocationPacket struct {
@@ -142,7 +189,7 @@ type InvocationPacket struct {
 	// invocation is a native-resumed repair.
 	CheckRepair *CheckRepairPacket `json:"check_repair,omitempty"`
 	// ReviewContext contains the exact checkpoint and bounded review inputs for
-	// an independent specification-review invocation.
+	// an isolated review invocation.
 	ReviewContext *prompt.ReviewContext `json:"review_context,omitempty"`
 }
 
@@ -165,6 +212,8 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	if err := validateAgentRequest(request); err != nil {
 		return AgentLaunchResult{}, err
 	}
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
 		return AgentLaunchResult{}, err
 	}
@@ -183,6 +232,8 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if strings.TrimSpace(request.InvocationID) == "" {
 		return AgentResult{}, errors.New("invocation id is required")
 	}
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
 	registration, runStore, run, err := s.openReportRunStore(ctx)
 	if err != nil {
 		return AgentResult{}, err
@@ -263,10 +314,10 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		}
 		return AgentResult{}, fmt.Errorf("invocation %q is already %s", invocation.ID, invocation.Status)
 	}
-	if err := validateAgentRunState(*run); err != nil {
+	if err := validateAgentRunState(*run); err != nil && !reviewCanBeAcceptedWhileWaiting(*run, *invocation) {
 		return AgentResult{}, err
 	}
-	if run.Stage != invocation.Stage {
+	if run.Stage != invocation.Stage && !(isReviewInvocation && run.Stage == store.StageReview) {
 		return AgentResult{}, fmt.Errorf("invocation stage %q does not match active run stage %q", invocation.Stage, run.Stage)
 	}
 	if len(request.PermittedPaths) > 0 {
@@ -320,7 +371,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		return AgentResult{}, fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", state.HeadSHA, run.CheckpointSHA)
 	}
 	if isReviewInvocation && len(state.ChangedPaths) != 0 {
-		return AgentResult{}, errors.New("specification reviewer changed the immutable checkpoint worktree")
+		return AgentResult{}, fmt.Errorf("%s changed the immutable checkpoint worktree", invocation.Role)
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
@@ -334,6 +385,14 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	validationContext.TestPaths = packet.RepositoryConfig.TestPolicy.TestPaths
 	validationContext.TestInfrastructurePaths = packet.RepositoryConfig.TestPolicy.InfrastructurePaths
+	if isReviewInvocation && value.ReviewHandoff != nil && value.ReviewHandoff.ReviewedSHA != run.CheckpointSHA {
+		return AgentResult{}, &ReviewCheckpointMismatchError{
+			Role:         invocation.Role,
+			InvocationID: invocation.ID,
+			Expected:     run.CheckpointSHA,
+			Observed:     value.ReviewHandoff.ReviewedSHA,
+		}
+	}
 	if err := report.Validate(value, validationContext); err != nil {
 		if isUnverifiableTestReport(value, *invocation) {
 			if testRevisionActive {
@@ -497,7 +556,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		return AgentResult{}, fmt.Errorf("finish accepted harness session: %w", err)
 	}
 	if value.Outcome == report.OutcomeNeedsClarification {
-		if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		if err := s.stopRunWorker(ctx, workerIDForInvocation(*invocation)); err != nil {
 			return AgentResult{}, err
 		}
 	}
@@ -547,7 +606,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 // left the durable run active at the same stage. A run that already moved away
 // from the invocation stage is the durable proof that no continuation remains.
 func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, bool, error) {
-	if run == nil || run.Status != store.StatusActive || run.Stage != invocation.Stage {
+	if run == nil || run.Status != store.StatusActive || (run.Stage != invocation.Stage && !(roleIsKind(*invocation, workflow.RoleKindReview) && run.Stage == store.StageReview)) {
 		return AgentResult{}, false, nil
 	}
 	if roleIsKind(*invocation, workflow.RoleKindTest) {
@@ -569,14 +628,94 @@ func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registratio
 	return AgentResult{}, false, nil
 }
 
-// releaseActiveInvocation clears the run's delegation marker when the named
-// invocation is the one the run currently waits on. A run that already
-// delegates elsewhere keeps its marker, so a repeated acceptance of an older
-// invocation cannot hide a live harness session.
-func releaseActiveInvocation(run *store.Run, invocationID string) {
-	if run != nil && run.ActiveInvocationID == invocationID {
-		run.ActiveInvocationID = ""
+// addActiveInvocation adds one invocation to the durable activity projection.
+// The singular marker remains the first active invocation for compatibility
+// with older status and recovery adapters.
+func addActiveInvocation(run *store.Run, invocationID string) {
+	if run == nil || strings.TrimSpace(invocationID) == "" {
+		return
 	}
+	if len(run.ActiveInvocationIDs) == 0 && run.ActiveInvocationID != "" {
+		run.ActiveInvocationIDs = []string{run.ActiveInvocationID}
+	}
+	for _, activeID := range run.ActiveInvocationIDs {
+		if activeID == invocationID {
+			if run.ActiveInvocationID == "" {
+				run.ActiveInvocationID = invocationID
+			}
+			return
+		}
+	}
+	run.ActiveInvocationIDs = append(run.ActiveInvocationIDs, invocationID)
+	if run.ActiveInvocationID == "" {
+		run.ActiveInvocationID = invocationID
+	}
+}
+
+// releaseActiveInvocation removes one invocation from the run's delegation
+// projection without hiding concurrent reviewers that are still active.
+func releaseActiveInvocation(run *store.Run, invocationID string) {
+	if run == nil || strings.TrimSpace(invocationID) == "" {
+		return
+	}
+	if len(run.ActiveInvocationIDs) == 0 && run.ActiveInvocationID != "" {
+		run.ActiveInvocationIDs = []string{run.ActiveInvocationID}
+	}
+	remaining := make([]string, 0, len(run.ActiveInvocationIDs))
+	for _, activeID := range run.ActiveInvocationIDs {
+		if activeID != invocationID {
+			remaining = append(remaining, activeID)
+		}
+	}
+	run.ActiveInvocationIDs = remaining
+	if run.ActiveInvocationID == invocationID || !containsString(run.ActiveInvocationIDs, run.ActiveInvocationID) {
+		if len(run.ActiveInvocationIDs) == 0 {
+			run.ActiveInvocationID = ""
+		} else {
+			run.ActiveInvocationID = run.ActiveInvocationIDs[0]
+		}
+	}
+}
+
+// clearActiveInvocations clears both current activity projections when a
+// transition ends every visible invocation for the run.
+func clearActiveInvocations(run *store.Run) {
+	if run == nil {
+		return
+	}
+	run.ActiveInvocationID = ""
+	run.ActiveInvocationIDs = nil
+}
+
+// reviewCanBeAcceptedWhileWaiting permits the serialized event loop to apply
+// a second review result after the first reviewer has already put the round in
+// a human-waiting state. Non-review work remains blocked by that state.
+func reviewCanBeAcceptedWhileWaiting(run store.Run, invocation store.Invocation) bool {
+	if run.Stage != store.StageReview || run.Status != store.StatusWaitingForHuman || !roleIsKind(invocation, workflow.RoleKindReview) {
+		return false
+	}
+	if containsString(run.ActiveInvocationIDs, invocation.ID) {
+		return true
+	}
+	return run.ActiveInvocationID == invocation.ID
+}
+
+// reviewHasBlockingResult reports whether either isolated reviewer has a
+// concrete correctness, security, specification, or standards violation.
+func reviewHasBlockingResult(run store.Run) bool {
+	return (run.SpecificationReview != nil && reviewHasBlockingFinding(run.SpecificationReview.Findings)) ||
+		(run.StandardsReview != nil && reviewHasBlockingFinding(run.StandardsReview.Findings))
+}
+
+// containsString reports whether a string occurs in a small coordinator-owned
+// projection list.
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // acceptedInvocationStatus maps a validated report outcome to its durable
@@ -603,7 +742,7 @@ func agentReportRunProjection(previous store.Run, invocationStage store.Stage, v
 	next := previous
 	// An accepted report ends the run's delegation to its invocation, so the
 	// status projection stops implying that a harness is executing.
-	next.ActiveInvocationID = ""
+	clearActiveInvocations(&next)
 	route, readable := routeForRun(previous)
 	if !readable {
 		next.Stage = invocationStage
@@ -943,9 +1082,13 @@ func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStor
 func (s *Service) persistAgentRunState(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run) error {
 	if previous.CheckpointSHA != "" && next.CheckpointSHA != previous.CheckpointSHA {
 		next.SpecificationReview = nil
+		next.StandardsReview = nil
 	}
 	if next.SpecificationReview != nil && next.SpecificationReview.CheckpointSHA != next.CheckpointSHA {
 		next.SpecificationReview = nil
+	}
+	if next.StandardsReview != nil && next.StandardsReview.CheckpointSHA != next.CheckpointSHA {
+		next.StandardsReview = nil
 	}
 	if next.StatusCommentID == "" || s.deps.GitHub == nil {
 		return saveRunWithRetry(ctx, runStore, next)

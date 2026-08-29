@@ -19,6 +19,7 @@ func main() {
 	flags := flag.NewFlagSet("factory-worker-attach", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	runID := flags.String("run-id", "", "factory run identifier")
+	workerID := flags.String("worker-id", "", "isolated worker identifier")
 	role := flags.String("role", "implementation", "factory workflow role")
 	environment := stringList{}
 	flags.Var(&environment, "env", "explicit worker environment; may be repeated")
@@ -48,6 +49,7 @@ func main() {
 	}
 	err := (&worker.DockerRuntime{}).Attach(context.Background(), worker.InteractiveRequest{
 		RunID:             *runID,
+		WorkerID:          *workerID,
 		Command:           command,
 		EnvironmentPolicy: worker.EnvironmentPolicyRole,
 		Role:              *role,

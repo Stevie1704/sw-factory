@@ -2,6 +2,7 @@ package factory
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
@@ -42,7 +43,7 @@ func RunActivityFor(run store.Run) RunActivity {
 	case store.StatusWaitingForHarness:
 		return ActivityWaitingForHarness
 	}
-	if run.ActiveInvocationID != "" {
+	if run.ActiveInvocationID != "" || len(run.ActiveInvocationIDs) > 0 {
 		return ActivityInvocationActive
 	}
 	return ActivityRunActive
@@ -56,5 +57,16 @@ func activityStatusComment(run store.Run) string {
 	if activity != ActivityInvocationActive {
 		return fmt.Sprintf("- activity: `%s`\n", activity)
 	}
-	return fmt.Sprintf("- activity: `%s`\n- active invocation: `%s`\n", activity, safeStatusCommentValue(run.ActiveInvocationID))
+	ids := append([]string(nil), run.ActiveInvocationIDs...)
+	if len(ids) == 0 && run.ActiveInvocationID != "" {
+		ids = []string{run.ActiveInvocationID}
+	}
+	if len(ids) == 1 {
+		return fmt.Sprintf("- activity: `%s`\n- active invocation: `%s`\n", activity, safeStatusCommentValue(ids[0]))
+	}
+	safeIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		safeIDs = append(safeIDs, "`"+safeStatusCommentValue(id)+"`")
+	}
+	return fmt.Sprintf("- activity: `%s`\n- active invocations: %s\n", activity, strings.Join(safeIDs, ", "))
 }
