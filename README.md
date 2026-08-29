@@ -33,6 +33,7 @@ repository. The deeper contracts live in
 - [GitHub commands and human intervention](#github-commands-and-human-intervention)
 - [Recovery and authentication](#recovery-and-authentication)
 - [Persistent polling](#persistent-polling)
+  - [Unattended claim-to-draft-PR progression](#unattended-claim-to-draft-pr-progression)
 - [Evaluation and cleanup](#evaluation-and-cleanup)
 - [Security and data boundaries](#security-and-data-boundaries)
 - [Command reference](#command-reference)
@@ -546,8 +547,13 @@ model.
 
 ## Run an issue from start to draft PR
 
-For a manually supervised run, use the one-shot claim path. It is the clearest
-way to see each boundary in the current implementation.
+Routine operation needs one command: <code>factory start</code> claims the
+oldest eligible issue and drives it to a draft pull request without any further
+CLI step. See [Persistent polling](#persistent-polling).
+
+The one-shot commands below perform the same boundaries one at a time. Use them
+for diagnosis or a deliberately manual run; they are the clearest way to see
+each boundary.
 
 ### 1. Bootstrap the factory labels once
 
@@ -1033,11 +1039,12 @@ to preserve idempotence.
 
 ## Persistent polling
 
-<code>factory start</code> is the long-lived queue and lease supervisor. It
-performs the full startup diagnosis, takes a private host lock, renews a visible
-<code>factory/lease</code> commit status, backs off transient queue/lease
-transport failures, suppresses new claims while a run is active, and claims
-the oldest eligible open issue by issue number.
+<code>factory start</code> is the long-lived queue supervisor and the
+unattended driver of the routine path. It performs the full startup diagnosis,
+takes a private host lock, renews a visible <code>factory/lease</code> commit
+status, backs off transient queue/lease transport failures, suppresses new
+claims while a run is active, and claims the oldest eligible open issue by
+issue number.
 
 Start and stop it with:
 
@@ -1051,25 +1058,68 @@ factory stop --config /Users/me/.config/factory/config.yaml
 <code>stop</code> stops polling and leaves the active run, branch, worktree,
 worker artifacts, and workflow status intact. It is not a cancellation command.
 
-### Current polling boundary
+### Unattended claim-to-draft-PR progression
 
-In the current implementation, a new issue claimed by the persistent polling
-loop is only claimed: that polling pass does not run the baseline or launch the
-first role. The public CLI does not currently expose a follow-up baseline
-command for that newly claimed state. Use the one-shot
-<code>factory issue</code> path for a complete manually driven run, and treat
-new claims made by <code>factory start</code> as an operational limitation that
-requires inspection rather than as unattended end-to-end execution. The
-supervisor observes a tracked issue or pull request before restart
-reconciliation when no effect is pending. This lets an already-merged or closed
-target enter its terminal state even after GitHub deletes the run branch. An
-unchanged non-terminal run still requires a clean restart diagnosis.
+After every polling observation that claimed or found a run, the coordinator
+drives that run as far as the frozen packet allows. It owns every transition;
+no agent may choose, skip, or redefine one.
 
-Likewise, <code>factory poll</code> is the explicit one-shot command for
-issue/PR lifecycle observation and structured GitHub command handling. This
-distinction keeps the documented behavior aligned with the current CLI while
-the persistent queue driver remains useful for exclusive claiming, lease
-publication, and restart supervision.
+1. A newly claimed run evaluates the frozen baseline against its immutable base
+   checkpoint.
+2. A healthy baseline enters the stage the frozen route and repository test
+   policy select. With advisory policy and no route, that is
+   implementation-owned TDD: no test invocation, test handoff, protected test
+   path, or test checkpoint is created. The <code>acceptance</code> and
+   <code>design-acceptance</code> routes and required policy enter their own
+   declared stages instead.
+3. The coordinator launches the role the workflow registry declares for that
+   stage, then waits while the invocation runs.
+4. When the invocation writes its structured report, the coordinator validates
+   and accepts it through the same boundary as <code>factory agent-report</code>
+   and advances to the next legal stage.
+5. An accepted implementation is checkpointed, every configured gate runs
+   against that exact checkpoint, and a failed gate enters the bounded
+   check-repair loop.
+6. A coherent checkpoint that passes every gate is pushed and receives one
+   draft pull request.
+
+Progression stops in its defined waiting state, and publishes the reason in the
+editable status comment, for a clarification request, a policy rejection, an
+exhausted retry budget, a harness rate limit, an authentication failure, an
+invocation that requires <code>factory attach</code>, or an ambiguous recovery.
+The independent specification review remains a deliberate step; unattended
+progression ends at the draft pull request.
+
+Repeated polling and a coordinator restart are safe. Every transition runs
+through the same durable effect journal as the one-shot commands, so a second
+pass reconciles pending effects instead of creating a second invocation,
+checkpoint, push, comment, status, or pull request. The supervisor also
+observes a tracked issue or pull request before restart reconciliation when no
+effect is pending, which lets an already-merged or closed target enter its
+terminal state even after GitHub deletes the run branch.
+
+### Activity in status output
+
+The <code>agent-running</code> issue label covers every active run, so it
+cannot say whether a harness is executing. <code>factory status</code> and the
+editable status comment publish a separate activity value:
+
+| Activity                          | Meaning                                                             |
+| --------------------------------- | ------------------------------------------------------------------- |
+| <code>invocation-active</code>    | One harness invocation is executing; its identity is published too. |
+| <code>run-active</code>           | The run is active and the coordinator owns the next transition.     |
+| <code>waiting-for-human</code>    | Progression stopped until a person answers or disposes.             |
+| <code>waiting-for-harness</code>  | Progression stopped until harness infrastructure recovers.          |
+| <code>terminal</code>             | The run is complete, cancelled, or failed.                          |
+
+### One-shot commands
+
+<code>factory issue</code>, <code>factory agent</code>,
+<code>factory agent-report</code>, and <code>factory draft-pr</code> remain
+available for diagnosis and deliberate manual operation. They are not part of
+routine unattended progression. Likewise, <code>factory poll</code> is the
+explicit one-shot command for issue/PR lifecycle observation and structured
+GitHub command handling.
 
 ## Evaluation and cleanup
 
@@ -1211,14 +1261,14 @@ supported by the installed binary.
 | <code>factory register</code>               | Register the one repository, GitHub identity, authorized users, polling settings, cmux settings, auth sources, repository policy path, and SQLite path.           |
 | <code>factory bootstrap-labels</code>       | Create the six factory-owned GitHub labels explicitly and idempotently.                                                                                           |
 | <code>factory doctor</code>                 | Run the complete startup diagnosis and print every problem/action.                                                                                                |
-| <code>factory start</code>                  | Run the persistent queue/lease supervisor.                                                                                                                        |
+| <code>factory start</code>                  | Run the persistent queue/lease supervisor and drive each claimed run to its draft pull request.                                                                    |
 | <code>factory stop</code>                   | Stop a running supervisor without cancelling the active run.                                                                                                      |
-| <code>factory issue [--issue N] N</code>    | Claim one issue and run its baseline. The number may be positional or supplied with <code>--issue</code>, but not both.                                           |
-| <code>factory agent</code>                  | Start the active stage's visible role, or select a validated role/stage/harness/model/reasoning override.                                                         |
-| <code>factory agent-report</code>           | Validate and accept a report already written by one invocation. Requires <code>--run-id</code> and <code>--invocation-id</code>.                                  |
-| <code>factory draft-pr</code>               | Create the implementation checkpoint, push the branch, run gates, and create/update the draft PR. <code>--intervention</code> records a one-line operator marker. |
+| <code>factory issue [--issue N] N</code>    | Diagnostic: claim one issue and run its baseline. The number may be positional or supplied with <code>--issue</code>, but not both.                               |
+| <code>factory agent</code>                  | Diagnostic: start the active stage's visible role, or select a validated role/stage/harness/model/reasoning override.                                             |
+| <code>factory agent-report</code>           | Diagnostic: validate and accept a report already written by one invocation. Requires <code>--run-id</code> and <code>--invocation-id</code>.                      |
+| <code>factory draft-pr</code>               | Diagnostic: checkpoint the implementation, push the branch, run gates, and create/update the draft PR. <code>--intervention</code> records a one-line marker.     |
 | <code>factory poll</code>                   | Process one lifecycle and structured-command observation for the current run.                                                                                     |
-| <code>factory status</code>                 | Show the selected host configuration, repository, latest run, and recovery diagnosis.                                                                             |
+| <code>factory status</code>                 | Show the selected host configuration, repository, latest run, its activity, and recovery diagnosis.                                                                |
 | <code>factory resume</code>                 | Perform explicit native-session or harness-capacity recovery, or re-enter a recovery-paused check stage.                                                          |
 | <code>factory attach</code>                 | Restore worker/terminal topology after a manual resume and clear the attach gate.                                                                                 |
 | <code>factory auth refresh</code>           | Reseed a managed worker credential for the active invocation harness.                                                                                             |

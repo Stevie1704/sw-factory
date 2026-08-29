@@ -136,7 +136,7 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 			return ResumeResult{Run: *run, Invocation: *active, WaitingForAttach: true}, &ManualResumeRequiredError{RunID: run.ID}
 		}
 		if strings.TrimSpace(active.NativeSessionID) == "" {
-			if err := s.supersedeInvocation(ctx, runStore, *active); err != nil {
+			if err := s.supersedeInvocation(ctx, registration, runStore, *active); err != nil {
 				return ResumeResult{}, err
 			}
 			active = nil
@@ -456,7 +456,7 @@ func (s *Service) retryWaitingForHarness(ctx context.Context, registration confi
 		return stateErr
 	}
 	if active != nil {
-		if err := s.supersedeInvocation(ctx, runStore, *active); err != nil {
+		if err := s.supersedeInvocation(ctx, registration, runStore, *active); err != nil {
 			return err
 		}
 	}
@@ -752,8 +752,10 @@ func latestInvocationForAuthRefresh(ctx context.Context, runStore RunStore, run 
 }
 
 // supersedeInvocation closes an incomplete launch before a fresh capacity or
-// authentication retry creates the next immutable invocation identity.
-func (s *Service) supersedeInvocation(ctx context.Context, runStore RunStore, invocation store.Invocation) error {
+// authentication retry creates the next immutable invocation identity. It also
+// releases the run's delegation marker, so a published activity can never name
+// an invocation that will never produce a result.
+func (s *Service) supersedeInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, invocation store.Invocation) error {
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
 		return errors.New("operational store does not support invocation recovery")
@@ -762,6 +764,20 @@ func (s *Service) supersedeInvocation(ctx context.Context, runStore RunStore, in
 	invocation.UpdatedAt = s.deps.Now().UTC()
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return fmt.Errorf("supersede interrupted invocation: %w", err)
+	}
+	current, err := runStore.CurrentRun(ctx)
+	if err != nil {
+		return fmt.Errorf("read run to release superseded invocation: %w", err)
+	}
+	if current == nil || current.ActiveInvocationID != invocation.ID {
+		return nil
+	}
+	previous := *current
+	next := previous
+	next.ActiveInvocationID = ""
+	next.UpdatedAt = s.deps.Now().UTC()
+	if err := s.persistAgentRunState(ctx, registration, runStore, previous, next); err != nil {
+		return fmt.Errorf("release superseded invocation delegation: %w", err)
 	}
 	return nil
 }

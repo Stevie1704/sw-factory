@@ -396,6 +396,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	previousRun := *run
 	run.Stage = stage
 	run.Status = store.StatusActive
+	run.ActiveInvocationID = invocation.ID
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist %s stage: %w", role, err)

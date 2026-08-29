@@ -249,6 +249,9 @@ type StatusResult struct {
 	// Route identifies the frozen contract-first workflow route of LatestRun,
 	// or an explicit unknown value when its specification packet is unreadable.
 	Route workflow.Route
+	// Activity distinguishes an active run, an active harness invocation, and
+	// a waiting state for LatestRun. It is empty when no run exists.
+	Activity RunActivity
 	// Recovery contains the read-only diagnosis for an interrupted run.
 	Recovery *RecoveryDiagnosis
 	// Deprecated: use LatestRun.
@@ -514,6 +517,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	if result.LatestRun != nil {
 		result.TestPolicyMode = testPolicyModeForRun(*result.LatestRun)
 		result.Route = statusRouteForRun(*result.LatestRun)
+		result.Activity = RunActivityFor(*result.LatestRun)
 		var pending *store.PendingEffect
 		if journal, ok := opened.(PendingEffectStore); ok {
 			pending, err = journal.PendingEffect(ctx, result.LatestRun.ID)

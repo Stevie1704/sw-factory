@@ -55,6 +55,16 @@ coordinator and leaves any active run, branch, worktree, worker, and session
 artifacts in place. Polling never creates factory labels; use
 `factory bootstrap-labels` explicitly.
 
+After each observation that claimed or found a run, the coordinator drives that
+run through baseline, the stages its frozen route and test policy select, the
+checkpoint gate suite, the bounded check-repair loop, the branch push, and one
+draft pull request. It stops in a defined waiting state for clarification, a
+policy rejection, an exhausted budget, a harness limit, an authentication
+failure, or an ambiguous recovery, and publishes the reason in the editable
+status comment. `factory issue`, `factory agent`, `factory agent-report`, and
+`factory draft-pr` stay available for diagnosis and deliberate manual
+operation; they are not part of routine unattended progression.
+
 ## Host configuration
 
 The generated host file contains the repository path, GitHub identity, authorized maintainers, polling settings, cmux settings, the checked-in repository configuration path, and the operational-data path.

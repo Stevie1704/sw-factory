@@ -30,6 +30,10 @@ const (
 	// maxConsecutiveLeaseFailures limits lease-renewal retry attempts before
 	// returning a persistent error to the caller.
 	maxConsecutiveLeaseFailures = 5
+	// maxConsecutiveProgressionFailures limits how long the supervisor backs
+	// off an unattended progression pass whose durable state it cannot read
+	// before it reports a persistent coordinator failure.
+	maxConsecutiveProgressionFailures = 5
 )
 
 // PollResult reports one deterministic polling observation and any run it
@@ -75,8 +79,10 @@ func (e *StartupBlockedError) Error() string {
 // diagnoses the full host before taking the lock, acquires exclusive ownership
 // before reconciliation, renews a visible GitHub lease, and backs off read-only
 // queue or lease transport failures without changing run state or retry
-// budgets. Claim failures are returned because the claim state machine may
-// already have performed compensating effects.
+// budgets. After every observation that found or claimed a run it drives that
+// run toward its draft pull request, so the routine path needs no
+// stage-driving CLI command. Claim failures are returned because the claim
+// state machine may already have performed compensating effects.
 func (s *Service) Start(ctx context.Context) error {
 	diagnosis, err := s.startupDiagnosis(ctx)
 	if err != nil {
@@ -120,6 +126,7 @@ func (s *Service) Start(ctx context.Context) error {
 	leaseRunID := ""
 	delay := time.Duration(0)
 	consecutiveLeaseFailures := 0
+	consecutiveProgressionFailures := 0
 	for {
 		if err := waitPolling(pollContext, delay); err != nil {
 			if pollingContextDone(err) {
@@ -172,6 +179,20 @@ func (s *Service) Start(ctx context.Context) error {
 			return err
 		}
 		leaseRunID = result.Run.ID
+		if result.Outcome == PollClaimed || result.Outcome == PollActiveRun {
+			if _, err := s.driveRun(pollContext, registration); err != nil {
+				if pollingContextDone(err) {
+					return nil
+				}
+				consecutiveProgressionFailures++
+				if consecutiveProgressionFailures > maxConsecutiveProgressionFailures {
+					return fmt.Errorf("drive run %s after %d consecutive attempts: %w", result.Run.ID, maxConsecutiveProgressionFailures, err)
+				}
+				delay = backoff
+				continue
+			}
+			consecutiveProgressionFailures = 0
+		}
 		delay = interval
 	}
 }

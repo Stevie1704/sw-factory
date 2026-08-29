@@ -1018,7 +1018,8 @@ func statusCommentBody(run store.Run) string {
 		}
 	}
 	review := specificationReviewStatusComment(run)
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
+	activity := activityStatusComment(run)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
 }
 
 // StatusCommentBody renders the coordinator-owned status projection for one

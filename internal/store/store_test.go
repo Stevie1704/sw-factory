@@ -625,6 +625,58 @@ func TestStorePersistsCheckRepairBudget(t *testing.T) {
 	}
 }
 
+// TestStorePersistsTheActiveInvocationDelegation verifies the durable marker
+// that lets a status projection separate an active run from an active harness
+// invocation without reading the invocation table.
+func TestStorePersistsTheActiveInvocationDelegation(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	run := store.Run{
+		ID:                 "run-delegation",
+		RepositoryPath:     "/work/repository",
+		Stage:              store.StageImplementation,
+		Status:             store.StatusActive,
+		ActiveInvocationID: "inv-delegation",
+		CreatedAt:          time.Unix(100, 0).UTC(),
+		UpdatedAt:          time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ActiveInvocationID != "inv-delegation" {
+		t.Fatalf("CurrentRun() = %#v, want the persisted active invocation identity", got)
+	}
+	run.ActiveInvocationID = ""
+	run.UpdatedAt = time.Unix(300, 0).UTC()
+	if err := reopened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() clearing error = %v", err)
+	}
+	cleared, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() after clearing error = %v", err)
+	}
+	if cleared == nil || cleared.ActiveInvocationID != "" {
+		t.Fatalf("CurrentRun() = %#v, want the delegation cleared", cleared)
+	}
+}
+
 func TestSaveRunUpsertsAnExistingRunByID(t *testing.T) {
 	t.Parallel()
 
