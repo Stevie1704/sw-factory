@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -218,6 +219,13 @@ type PullRequestClient interface {
 	UpdatePullRequest(context.Context, Repository, int, PullRequestRequest) (PullRequest, error)
 }
 
+// PullRequestDraftClient owns the explicit draft/readiness mutation for an
+// existing pull request. Keeping it separate prevents body updates from
+// accidentally changing merge readiness.
+type PullRequestDraftClient interface {
+	SetPullRequestDraft(context.Context, Repository, int, bool) (PullRequest, error)
+}
+
 // CommandRunner is the executable seam for the local GitHub CLI adapter.
 type CommandRunner interface {
 	Run(context.Context, []string, []byte) ([]byte, error)
@@ -254,6 +262,7 @@ var _ CommentReader = (*GhClient)(nil)
 var _ IssuePoller = (*GhClient)(nil)
 var _ LeaseClient = (*GhClient)(nil)
 var _ CommitStatusReader = (*GhClient)(nil)
+var _ PullRequestDraftClient = (*GhClient)(nil)
 
 // NewClient returns a GitHub CLI-backed client.
 func NewClient() *GhClient { return &GhClient{Runner: commandRunner{}} }
@@ -527,6 +536,26 @@ func (c *GhClient) UpdatePullRequest(ctx context.Context, repository Repository,
 	}
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number), "--method", "PATCH"}, payload, &response); err != nil {
 		return PullRequest{}, fmt.Errorf("update draft pull request #%d: %w", number, err)
+	}
+	return response.pullRequest(), nil
+}
+
+// SetPullRequestDraft explicitly toggles GitHub readiness through the host CLI
+// and then reads the resulting pull-request projection.
+func (c *GhClient) SetPullRequestDraft(ctx context.Context, repository Repository, number int, draft bool) (PullRequest, error) {
+	if number <= 0 {
+		return PullRequest{}, errors.New("pull request number must be positive")
+	}
+	args := []string{"pr", "ready", strconv.Itoa(number), "--repo", repository.String()}
+	if draft {
+		args = append(args, "--undo")
+	}
+	if _, err := c.runner().Run(ctx, args, nil); err != nil {
+		return PullRequest{}, fmt.Errorf("set pull request #%d draft=%t: %w", number, draft, err)
+	}
+	var response pullRequestResponse
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number)}, nil, &response); err != nil {
+		return PullRequest{}, fmt.Errorf("read pull request #%d after readiness change: %w", number, err)
 	}
 	return response.pullRequest(), nil
 }

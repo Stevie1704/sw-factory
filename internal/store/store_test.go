@@ -670,6 +670,56 @@ func TestStorePersistsCheckRepairBudget(t *testing.T) {
 	}
 }
 
+// TestStorePersistsReviewRepairState verifies the bounded review-repair
+// packet, attempt history, and current reservation survive a restart.
+func TestStorePersistsReviewRepairState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	run := store.Run{
+		ID:                         "run-review-repair",
+		RepositoryPath:             "/work/repository",
+		Stage:                      store.StageImplementation,
+		Status:                     store.StatusActive,
+		ReviewRepairAttempts:       1,
+		ReviewRepairBudget:         2,
+		ReviewRepairPendingAttempt: 2,
+		ReviewRepairHistory: []store.ReviewRepairAttempt{{
+			Attempt: 1, Outcome: store.ReviewRepairStarted,
+			BlockerKeys: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		}},
+		ReviewRepairPacket: &store.ReviewRepairPacket{
+			Version: 1, RunID: "run-review-repair", CheckpointSHA: strings.Repeat("b", 64), Attempt: 2, Budget: 2,
+			Findings: []store.ReviewRepairFinding{{ReviewerRole: "spec_review", Finding: store.ReviewFinding{Location: "internal/factory/review.go:1", Claim: "behavior is incomplete", Severity: "blocker", Category: "correctness", SuggestedOwner: "implementation"}}},
+		},
+		CheckpointSHA:     strings.Repeat("b", 64),
+		BaseCheckpointSHA: strings.Repeat("c", 64),
+		CreatedAt:         time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ReviewRepairAttempts != 1 || got.ReviewRepairBudget != 2 || got.ReviewRepairPendingAttempt != 2 || len(got.ReviewRepairHistory) != 1 || got.ReviewRepairPacket == nil || got.ReviewRepairPacket.Findings[0].ReviewerRole != "spec_review" {
+		t.Fatalf("CurrentRun() = %#v, want review-repair state preserved", got)
+	}
+}
+
 // TestStorePersistsTheActiveInvocationDelegation verifies the durable marker
 // that lets a status projection separate an active run from an active harness
 // invocation without reading the invocation table.

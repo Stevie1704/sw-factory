@@ -69,6 +69,9 @@ const (
 	PolicyRejectionAnswerQuestion PolicyRejectionCode = "answer_question"
 	// PolicyRejectionRefreshState means refresh is not legal for the run.
 	PolicyRejectionRefreshState PolicyRejectionCode = "refresh_state"
+	// PolicyRejectionRevisionState means a specification amendment is not legal
+	// for the current ready pull-request state.
+	PolicyRejectionRevisionState PolicyRejectionCode = "revision_state"
 	// PolicyRejectionRoleUnavailable means the requested role is not factory-declared.
 	PolicyRejectionRoleUnavailable PolicyRejectionCode = "role_unavailable"
 	// PolicyRejectionStageUnavailable means the requested stage is not factory-declared.
@@ -200,6 +203,8 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		return CommandResult{Outcome: CommandAccepted, Command: parsed.Command, Run: updated}, persistErr
 	case commandlanguage.Refresh:
 		return s.handleRefreshCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
+	case commandlanguage.Revision:
+		return s.handleRevisionCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Answer:
 		return s.handleAnswerCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Cancel:
@@ -225,6 +230,13 @@ type runResultInvalidator interface {
 // command watermark updates, and result invalidation commit or roll back together.
 type atomicPacketTransitionStore interface {
 	SaveRunAndInvalidateResults(context.Context, int64, store.Run) error
+}
+
+// atomicAllPacketTransitionStore is the stronger persistence seam used by an
+// authorized specification amendment. It invalidates the superseded packet's
+// baseline as well as its downstream results in the same compare-and-set.
+type atomicAllPacketTransitionStore interface {
+	SaveRunAndInvalidateAllResults(context.Context, int64, store.Run) error
 }
 
 // handleAnswerCommand applies one authorized answer, versions the packet, and
@@ -353,6 +365,149 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
 }
 
+// handleRevisionCommand applies an authorized specification amendment to a
+// ready pull request. It preserves the existing branch, worktree, checkpoint,
+// pull-request identity, and invocation artifacts while invalidating every
+// result for the superseded packet and restarting implementation.
+func (s *Service) handleRevisionCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+	if run.Stage != store.StageReady || run.Status != store.StatusActive {
+		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("revision is only allowed for an active ready run, not stage %q/status %q", run.Stage, run.Status)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if run.PullRequestNumber <= 0 {
+		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: "revision requires a tracked pull request"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if run.ActiveInvocationID != "" || len(run.ActiveInvocationIDs) != 0 {
+		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: "revision requires a ready run with no active invocation"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("decode specification packet for revision: %w", err)
+	}
+	repository := commandRepository(registration)
+	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read issue for revision: %w", err)
+	}
+	if issue.Number == 0 {
+		issue.Number = run.IssueNumber
+	}
+	if issue.Number != run.IssueNumber || issue.IsPullRequest {
+		return CommandResult{}, fmt.Errorf("revision returned an invalid issue identity for #%d", run.IssueNumber)
+	}
+	if !strings.EqualFold(strings.TrimSpace(issue.State), "open") {
+		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("cannot revise a %s issue", defaultString(issue.State, "non-open"))}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	client := s.pullRequestClient()
+	if client == nil {
+		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: "revision requires pull-request operations"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("find pull request for revision: %w", err)
+	}
+	if existing.Number == 0 || existing.Number != run.PullRequestNumber {
+		return CommandResult{}, fmt.Errorf("tracked pull request #%d was not found for revision", run.PullRequestNumber)
+	}
+	if existing.Merged || !strings.EqualFold(strings.TrimSpace(existing.State), "open") {
+		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("pull request #%d is not open", existing.Number)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if _, err := s.setPullRequestDraft(ctx, repository, existing, true); err != nil {
+		return CommandResult{}, err
+	}
+
+	packet.Version++
+	packet.Issue = cloneIssue(issue)
+	encodedPacket, err := json.Marshal(packet)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("encode specification amendment: %w", err)
+	}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; specification amendment created")
+	next.Status = store.StatusActive
+	next.Stage = store.StageImplementation
+	next.SpecificationPacket = string(encodedPacket)
+	resetRevisionProjection(&next, packet)
+	next.PendingQuestions = nil
+	next.ClarificationCommentID = ""
+	next.ClarificationNotificationSent = false
+	next.ReadyNotificationSent = false
+	next.LifecycleNotificationSent = false
+	next.LifecycleReason = fmt.Sprintf("authorized specification amendment v%d; implementation restarted at checkpoint", packet.Version)
+	next.UpdatedAt = s.deps.Now().UTC()
+	// The command watermark is committed only after the implementation restart
+	// succeeds, keeping the amendment retryable across a launch failure.
+	processedCommentID := next.ProcessedCommentID
+	next.ProcessedCommentID = run.ProcessedCommentID
+	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
+		return CommandResult{}, err
+	}
+	updated, err := s.applyPacketChangeTransitionWithInvalidation(ctx, runStore, registration, issue, run, next, true)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	updated, err = s.resumeAfterRevision(ctx, registration, runStore, updated)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("resume implementation after revision: %w", err)
+	}
+	updated, err = s.persistPacketChangeWatermark(ctx, runStore, updated, processedCommentID)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("persist revision command watermark: %w", err)
+	}
+	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
+}
+
+// resetRevisionProjection removes evidence tied to the superseded packet while
+// keeping the existing checkpoint and host-owned workspace resumable. The new
+// packet always restarts at implementation so required test/review evidence is
+// regenerated from the amended intent rather than being reused accidentally.
+func resetRevisionProjection(run *store.Run, packet SpecificationPacket) {
+	if run == nil {
+		return
+	}
+	run.TestHandoff = nil
+	run.TestInvocationID = ""
+	run.TestRevisionAttempts = 0
+	run.TestRevisionBudget = testRevisionBudgetForPacket(packet)
+	run.TestRevisionHistory = nil
+	run.TestObjection = nil
+	run.TestRevisionBaseChangedPaths = nil
+	run.ReviewRepairAttempts = 0
+	run.ReviewRepairBudget = reviewRepairBudgetForPacket(packet)
+	run.ReviewRepairPendingAttempt = 0
+	run.ReviewRepairHistory = nil
+	run.ReviewRepairPacket = nil
+	run.RoleHandoff = nil
+	run.ImplementationHandoff = nil
+	run.SpecificationReview = nil
+	run.StandardsReview = nil
+	run.TestExemption = nil
+	run.ProtectedTestPaths = nil
+	run.TestCheckpointSHA = ""
+	run.TestStageSkipped = false
+	clearActiveInvocations(run)
+}
+
+// resumeAfterRevision launches implementation using the latest persisted
+// implementation session when native harness recovery is available.
+func (s *Service) resumeAfterRevision(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
+	if _, ok := runStore.(InvocationStore); !ok {
+		return run, nil
+	}
+	request := AgentRequest{RunID: run.ID, Role: workflow.RoleImplementation, Stage: store.StageImplementation, resumeImplementation: true}
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, &run, request); err != nil {
+		return run, err
+	}
+	if current, err := runStore.CurrentRun(ctx); err == nil && current != nil {
+		return *current, nil
+	}
+	return run, nil
+}
+
 // resumeAfterPacketChange launches the implementation role when the store has
 // the visible-invocation seam; reduced command-test stores still receive the
 // durable packet/state projection and can resume through StartAgent later.
@@ -400,6 +555,11 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestRevisionAttempts = 0
 	run.TestRevisionBudget = testRevisionBudgetForPacket(packet)
 	run.TestRevisionHistory = nil
+	run.ReviewRepairAttempts = 0
+	run.ReviewRepairBudget = reviewRepairBudgetForPacket(packet)
+	run.ReviewRepairPendingAttempt = 0
+	run.ReviewRepairHistory = nil
+	run.ReviewRepairPacket = nil
 	run.TestObjection = nil
 	run.TestRevisionBaseChangedPaths = nil
 	run.RoleHandoff = nil
@@ -459,6 +619,13 @@ func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, 
 // is intentionally not set here; it is deferred until after successful resumption
 // to keep packet-change resumption retryable when startAgentWithStore fails.
 func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run) (store.Run, error) {
+	return s.applyPacketChangeTransitionWithInvalidation(ctx, runStore, registration, issue, previous, next, false)
+}
+
+// applyPacketChangeTransitionWithInvalidation applies a packet transition and
+// chooses whether ordinary refresh invalidation or complete amendment
+// invalidation is required.
+func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run, invalidateAll bool) (store.Run, error) {
 	repository := commandRepository(registration)
 	next.UpdatedAt = s.deps.Now().UTC()
 	if next.Revision <= previous.Revision {
@@ -466,11 +633,12 @@ func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunS
 	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		return s.applyStateTransition(ctx, runStore, stateTransition{
-			Repository:        repository,
-			Issue:             issue,
-			Previous:          previous,
-			Next:              next,
-			InvalidateResults: true,
+			Repository:           repository,
+			Issue:                issue,
+			Previous:             previous,
+			Next:                 next,
+			InvalidateResults:    true,
+			InvalidateAllResults: invalidateAll,
 		})
 	}
 
@@ -487,16 +655,35 @@ func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunS
 
 	// Atomically persist state and invalidate results, or use fallback
 	if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
-		if err := atomicStore.SaveRunAndInvalidateResults(ctx, previous.Revision, next); err != nil {
-			return next, fmt.Errorf("persist packet transition and invalidate results: %w", err)
+		var persistErr error
+		if invalidateAll {
+			if allStore, supported := runStore.(atomicAllPacketTransitionStore); supported {
+				persistErr = allStore.SaveRunAndInvalidateAllResults(ctx, previous.Revision, next)
+			} else {
+				persistErr = atomicStore.SaveRunAndInvalidateResults(ctx, previous.Revision, next)
+				if persistErr == nil {
+					persistErr = invalidateAllRunResults(ctx, runStore, next.ID)
+				}
+			}
+		} else {
+			persistErr = atomicStore.SaveRunAndInvalidateResults(ctx, previous.Revision, next)
+		}
+		if persistErr != nil {
+			return next, fmt.Errorf("persist packet transition and invalidate results: %w", persistErr)
 		}
 	} else {
 		// Fallback for stores that don't support atomic operation
 		if err := saveCommandRun(ctx, runStore, previous.Revision, next); err != nil {
 			return next, fmt.Errorf("persist packet transition: %w", err)
 		}
-		if err := invalidateRunResults(ctx, runStore, next.ID); err != nil {
-			return next, err
+		var invalidationErr error
+		if invalidateAll {
+			invalidationErr = invalidateAllRunResults(ctx, runStore, next.ID)
+		} else {
+			invalidationErr = invalidateRunResults(ctx, runStore, next.ID)
+		}
+		if invalidationErr != nil {
+			return next, invalidationErr
 		}
 	}
 
@@ -532,6 +719,22 @@ func invalidateRunResults(ctx context.Context, runStore RunStore, runID string) 
 	}
 	if err := invalidator.InvalidateRunResults(ctx, runID); err != nil {
 		return fmt.Errorf("invalidate superseded specification results: %w", err)
+	}
+	return nil
+}
+
+// invalidateAllRunResults removes every gate result for a superseded packet
+// version while retaining the content-free evaluation history and invocation
+// artifacts needed for restart diagnosis.
+func invalidateAllRunResults(ctx context.Context, runStore RunStore, runID string) error {
+	invalidator, ok := runStore.(interface {
+		InvalidateAllRunResults(context.Context, string) error
+	})
+	if !ok {
+		return errors.New("operational store does not support complete specification result invalidation")
+	}
+	if err := invalidator.InvalidateAllRunResults(ctx, runID); err != nil {
+		return fmt.Errorf("invalidate all superseded specification results: %w", err)
 	}
 	return nil
 }

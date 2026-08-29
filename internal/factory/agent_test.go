@@ -1106,6 +1106,22 @@ func (s *agentRunStore) LatestInvocation(_ context.Context, runID string) (*stor
 	return latest, nil
 }
 
+// LatestInvocationByRole returns the newest invocation for one run and role,
+// allowing revision tests to verify native implementation-session recovery.
+func (s *agentRunStore) LatestInvocationByRole(_ context.Context, runID, role string) (*store.Invocation, error) {
+	var latest *store.Invocation
+	for _, value := range s.invocations {
+		if value.RunID != runID || value.Role != role {
+			continue
+		}
+		if latest == nil || value.UpdatedAt.After(latest.UpdatedAt) || (value.UpdatedAt.Equal(latest.UpdatedAt) && value.ID > latest.ID) {
+			copy := value
+			latest = &copy
+		}
+	}
+	return latest, nil
+}
+
 // ActiveInvocation returns the only active invocation for the fake run.
 func (s *agentRunStore) ActiveInvocation(_ context.Context, runID string) (*store.Invocation, error) {
 	for _, value := range s.invocations {
@@ -1134,6 +1150,19 @@ func (s *agentRunStore) InvalidateRunResults(_ context.Context, runID string) er
 		}
 	}
 	s.gateResults[runID] = baseline
+	return nil
+}
+
+// InvalidateAllRunResults supersedes invocation history and removes baseline
+// results as an amended specification requires a fresh baseline.
+func (s *agentRunStore) InvalidateAllRunResults(_ context.Context, runID string) error {
+	for id, invocation := range s.invocations {
+		if invocation.RunID == runID && invocation.Status != store.InvocationStatusSuperseded {
+			invocation.Status = store.InvocationStatusSuperseded
+			s.invocations[id] = invocation
+		}
+	}
+	delete(s.gateResults, runID)
 	return nil
 }
 

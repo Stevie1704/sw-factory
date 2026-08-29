@@ -19,11 +19,15 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 28
+const CurrentSchemaVersion = 30
 
 // MaxTestRevisionAttempts is the hard safety ceiling for automated
 // implementation-versus-test objection cycles.
 const MaxTestRevisionAttempts = 2
+
+// MaxReviewRepairAttempts is the hard safety ceiling for automated review
+// repair rounds.
+const MaxReviewRepairAttempts = 2
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -349,6 +353,59 @@ type ReviewResult struct {
 	Findings []ReviewFinding `json:"findings"`
 }
 
+// ReviewRepairOutcome is the bounded lifecycle of one review-repair round.
+type ReviewRepairOutcome string
+
+const (
+	// ReviewRepairPending means a repair round is reserved but not complete.
+	ReviewRepairPending ReviewRepairOutcome = "pending"
+	// ReviewRepairStarted means implementation repair was launched.
+	ReviewRepairStarted ReviewRepairOutcome = "started"
+	// ReviewRepairRepeated means a materially identical blocker returned.
+	ReviewRepairRepeated ReviewRepairOutcome = "repeated"
+	// ReviewRepairExhausted means the configured review-repair ceiling was used.
+	ReviewRepairExhausted ReviewRepairOutcome = "exhausted"
+	// ReviewRepairWaitingForHuman means the repair could not safely continue.
+	ReviewRepairWaitingForHuman ReviewRepairOutcome = "waiting_for_human"
+)
+
+// ReviewRepairFinding associates one blocking finding with its reviewer so a
+// single implementation packet preserves the independent review provenance.
+type ReviewRepairFinding struct {
+	// ReviewerRole identifies the isolated reviewer that reported the finding.
+	ReviewerRole string `json:"reviewer_role"`
+	// Finding is the validated content-bearing repair instruction.
+	Finding ReviewFinding `json:"finding"`
+}
+
+// ReviewRepairPacket is the coordinator-owned combined blocking-review packet
+// mounted in the implementation repair invocation.
+type ReviewRepairPacket struct {
+	// Version identifies this packet shape.
+	Version int `json:"version"`
+	// RunID identifies the owning factory run.
+	RunID string `json:"run_id"`
+	// CheckpointSHA identifies the exact checkpoint that produced the findings.
+	CheckpointSHA string `json:"checkpoint_sha"`
+	// Attempt is the one-based repair round number.
+	Attempt int `json:"attempt"`
+	// Budget is the frozen maximum number of review-repair rounds.
+	Budget int `json:"budget"`
+	// Findings contains every blocking finding from the completed review round;
+	// implementation routes test-owned findings through the objection protocol.
+	Findings []ReviewRepairFinding `json:"findings"`
+}
+
+// ReviewRepairAttempt records one content-free review-repair lifecycle entry.
+type ReviewRepairAttempt struct {
+	// Attempt is the one-based round number.
+	Attempt int `json:"attempt"`
+	// Outcome identifies the bounded lifecycle result.
+	Outcome ReviewRepairOutcome `json:"outcome"`
+	// BlockerKeys are stable hashes used to recognize repeated blockers.
+	BlockerKeys []string `json:"blocker_keys,omitempty"`
+}
+
 // SpecificationReview is the specification review's exact-checkpoint result.
 type SpecificationReview = ReviewResult
 
@@ -408,6 +465,19 @@ type Run struct {
 	SpecificationReview *SpecificationReview
 	// StandardsReview is the latest exact-checkpoint standards result.
 	StandardsReview *StandardsReview
+	// ReviewRepairAttempts is the number of review-repair rounds started.
+	ReviewRepairAttempts int
+	// ReviewRepairBudget is the frozen maximum number of review-repair rounds.
+	ReviewRepairBudget int
+	// ReviewRepairPendingAttempt is the next reserved round awaiting launch
+	// reconciliation.
+	ReviewRepairPendingAttempt int
+	// ReviewRepairHistory records bounded review-repair outcomes and opaque
+	// blocker identities without replacing the finding packet itself.
+	ReviewRepairHistory []ReviewRepairAttempt
+	// ReviewRepairPacket is the combined blocking-review context for the current
+	// implementation repair, when one is active.
+	ReviewRepairPacket *ReviewRepairPacket
 	// TestExemption records a pre-authorized or technical test-stage exemption.
 	TestExemption *TestExemption
 	// ProtectedTestPaths records every test-stage path and its checkpoint hash.
@@ -440,6 +510,9 @@ type Run struct {
 	TerminalAt time.Time
 	// LifecycleNotificationSent records successful cmux notification delivery.
 	LifecycleNotificationSent bool
+	// ReadyNotificationSent records successful PR-readiness notification
+	// delivery for the current ready transition.
+	ReadyNotificationSent bool
 	// Revision is the monotonic coordinator revision used by command replay
 	// prevention and persisted supervision updates.
 	Revision int64
@@ -730,12 +803,14 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       test_handoff, test_invocation_id, test_revision_attempts,
 		       test_revision_budget, test_revision_history, test_objection,
 		       test_revision_base_changed_paths,
-			implementation_handoff, specification_review, standards_review,
+		       implementation_handoff, specification_review, standards_review,
+		       review_repair_attempts, review_repair_budget,
+		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
 		       test_exemption, protected_test_paths, test_stage_skipped,
 		       active_invocation_id, active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason, lifecycle_notification_sent,
+		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
@@ -758,12 +833,14 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       test_handoff, test_invocation_id, test_revision_attempts,
 		       test_revision_budget, test_revision_history, test_objection,
 		       test_revision_base_changed_paths,
-			implementation_handoff, specification_review, standards_review,
+		       implementation_handoff, specification_review, standards_review,
+		       review_repair_attempts, review_repair_budget,
+		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
 		       test_exemption, protected_test_paths, test_stage_skipped,
 		       active_invocation_id, active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason, lifecycle_notification_sent,
+		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
@@ -781,6 +858,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, testCheckpointSHA string
 	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON, standardsReviewJSON string
+	var reviewRepairHistoryJSON, reviewRepairPacketJSON string
 	var testRevisionHistoryJSON, testObjectionJSON, testRevisionBaseChangedPathsJSON string
 	var testExemptionJSON, protectedTestPathsJSON string
 	var activeInvocationIDsJSON string
@@ -808,6 +886,11 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&roleHandoffJSON,
 		&specificationReviewJSON,
 		&standardsReviewJSON,
+		&run.ReviewRepairAttempts,
+		&run.ReviewRepairBudget,
+		&run.ReviewRepairPendingAttempt,
+		&reviewRepairHistoryJSON,
+		&reviewRepairPacketJSON,
 		&testExemptionJSON,
 		&protectedTestPathsJSON,
 		&run.TestStageSkipped,
@@ -821,6 +904,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.MergeCommitSHA,
 		&run.LifecycleReason,
 		&run.LifecycleNotificationSent,
+		&run.ReadyNotificationSent,
 		&run.Revision,
 		&run.ProcessedCommentID,
 		&run.ProcessedCommentRevision,
@@ -893,6 +977,17 @@ func scanRun(row *sql.Row) (*Run, error) {
 		run.StandardsReview = &StandardsReview{}
 		if err := json.Unmarshal([]byte(standardsReviewJSON), run.StandardsReview); err != nil {
 			return nil, fmt.Errorf("decode standards review: %w", err)
+		}
+	}
+	if reviewRepairHistoryJSON != "" {
+		if err := json.Unmarshal([]byte(reviewRepairHistoryJSON), &run.ReviewRepairHistory); err != nil {
+			return nil, fmt.Errorf("decode review repair history: %w", err)
+		}
+	}
+	if reviewRepairPacketJSON != "" {
+		run.ReviewRepairPacket = &ReviewRepairPacket{}
+		if err := json.Unmarshal([]byte(reviewRepairPacketJSON), run.ReviewRepairPacket); err != nil {
+			return nil, fmt.Errorf("decode review repair packet: %w", err)
 		}
 	}
 	if activeInvocationIDsJSON != "" {
@@ -1154,6 +1249,27 @@ func normalizeRun(run Run) (Run, error) {
 	if run.CheckRepairPendingAttempt != 0 && run.CheckRepairPendingAttempt != run.CheckRepairAttempts+1 {
 		return Run{}, errors.New("run pending check-repair attempt must be the next attempt")
 	}
+	if run.ReviewRepairAttempts < 0 {
+		return Run{}, errors.New("run review-repair attempts must not be negative")
+	}
+	if run.ReviewRepairBudget < 0 {
+		return Run{}, errors.New("run review-repair budget must not be negative")
+	}
+	if run.ReviewRepairBudget > MaxReviewRepairAttempts {
+		return Run{}, fmt.Errorf("run review-repair budget must not exceed %d", MaxReviewRepairAttempts)
+	}
+	if run.ReviewRepairAttempts > run.ReviewRepairBudget {
+		return Run{}, errors.New("run review-repair attempts must not exceed budget")
+	}
+	if run.ReviewRepairPendingAttempt < 0 {
+		return Run{}, errors.New("run pending review-repair attempt must not be negative")
+	}
+	if run.ReviewRepairPendingAttempt > run.ReviewRepairBudget {
+		return Run{}, errors.New("run pending review-repair attempt must not exceed budget")
+	}
+	if run.ReviewRepairPendingAttempt != 0 && run.ReviewRepairPendingAttempt != run.ReviewRepairAttempts+1 {
+		return Run{}, errors.New("run pending review-repair attempt must be the next attempt")
+	}
 	if run.TestRevisionAttempts < 0 {
 		return Run{}, errors.New("run test-revision attempts must not be negative")
 	}
@@ -1165,6 +1281,9 @@ func normalizeRun(run Run) (Run, error) {
 	}
 	if run.TestRevisionAttempts > run.TestRevisionBudget {
 		return Run{}, errors.New("run test-revision attempts must not exceed budget")
+	}
+	if err := validateReviewRepairProjection(run); err != nil {
+		return Run{}, err
 	}
 	if strings.ContainsAny(run.ClarificationCommentID, "\x00\r\n") {
 		return Run{}, errors.New("run clarification comment id contains a control character")
@@ -1379,6 +1498,54 @@ func validateTestProjection(run Run) error {
 	return nil
 }
 
+// validateReviewRepairProjection checks the bounded review-repair state before
+// it is serialized into the operational store.
+func validateReviewRepairProjection(run Run) error {
+	if len(run.ReviewRepairHistory) > MaxReviewRepairAttempts {
+		return fmt.Errorf("run review repair history exceeds %d entries", MaxReviewRepairAttempts)
+	}
+	seenAttempts := make(map[int]struct{}, len(run.ReviewRepairHistory))
+	for index, revision := range run.ReviewRepairHistory {
+		if revision.Attempt < 1 || revision.Attempt > run.ReviewRepairBudget {
+			return fmt.Errorf("run review repair history entry %d has an invalid attempt", index)
+		}
+		if _, exists := seenAttempts[revision.Attempt]; exists {
+			return fmt.Errorf("run review repair history attempt %d is duplicated", revision.Attempt)
+		}
+		seenAttempts[revision.Attempt] = struct{}{}
+		switch revision.Outcome {
+		case ReviewRepairPending, ReviewRepairStarted, ReviewRepairRepeated, ReviewRepairExhausted, ReviewRepairWaitingForHuman:
+		default:
+			return fmt.Errorf("unsupported review repair outcome %q", revision.Outcome)
+		}
+		if len(revision.BlockerKeys) > 256 {
+			return fmt.Errorf("review repair history entry %d has too many blocker keys", index)
+		}
+		for _, key := range revision.BlockerKeys {
+			if len(key) != 64 || !isLowerHex(key) {
+				return fmt.Errorf("review repair history entry %d has an invalid blocker key", index)
+			}
+		}
+	}
+	if packet := run.ReviewRepairPacket; packet != nil {
+		if packet.Version <= 0 || packet.RunID != run.ID || !validGateCheckpointSHA(packet.CheckpointSHA) {
+			return errors.New("review repair packet identity is invalid")
+		}
+		if packet.Attempt < 1 || packet.Attempt > run.ReviewRepairBudget || packet.Budget != run.ReviewRepairBudget {
+			return errors.New("review repair packet budget or attempt is invalid")
+		}
+		if len(packet.Findings) == 0 || len(packet.Findings) > 256 {
+			return errors.New("review repair packet findings must contain one to 256 entries")
+		}
+		for index, finding := range packet.Findings {
+			if !safeQuestionIdentifier(finding.ReviewerRole) {
+				return fmt.Errorf("review repair packet finding %d has an unsafe reviewer role", index)
+			}
+		}
+	}
+	return nil
+}
+
 // validateReviewProjection checks one nullable exact-checkpoint review result
 // before it is serialized into the operational store.
 func validateReviewProjection(label string, review *ReviewResult, checkpoint string) error {
@@ -1587,6 +1754,30 @@ func standardsReviewJSON(value *StandardsReview) string {
 	return string(data)
 }
 
+// reviewRepairHistoryJSON serializes the bounded review-repair history.
+func reviewRepairHistoryJSON(values []ReviewRepairAttempt) string {
+	if values == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// reviewRepairPacketJSON serializes a nullable review-repair packet.
+func reviewRepairPacketJSON(value *ReviewRepairPacket) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 // activeInvocationIDsJSON serializes the concurrent invocation projection as
 // a stable JSON array for restart-safe status rendering.
 func activeInvocationIDsJSON(values []string) string {
@@ -1648,6 +1839,11 @@ func runValues(run Run) []any {
 		roleHandoffJSON(roleHandoffForRun(run)),
 		specificationReviewJSON(run.SpecificationReview),
 		standardsReviewJSON(run.StandardsReview),
+		run.ReviewRepairAttempts,
+		run.ReviewRepairBudget,
+		run.ReviewRepairPendingAttempt,
+		reviewRepairHistoryJSON(run.ReviewRepairHistory),
+		reviewRepairPacketJSON(run.ReviewRepairPacket),
 		testExemptionJSON(run.TestExemption),
 		protectedTestPathsJSON(run.ProtectedTestPaths),
 		run.TestStageSkipped,
@@ -1661,6 +1857,7 @@ func runValues(run Run) []any {
 		run.MergeCommitSHA,
 		run.LifecycleReason,
 		run.LifecycleNotificationSent,
+		run.ReadyNotificationSent,
 		run.Revision,
 		run.ProcessedCommentID,
 		run.ProcessedCommentRevision,
@@ -1698,11 +1895,13 @@ const saveRunStatement = `
 			test_revision_budget, test_revision_history, test_objection,
 			test_revision_base_changed_paths, implementation_handoff,
 			specification_review, standards_review,
+			review_repair_attempts, review_repair_budget,
+			review_repair_pending_attempt, review_repair_history, review_repair_packet,
 			test_exemption, protected_test_paths, test_stage_skipped,
 			active_invocation_id, active_invocation_ids,
 			image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
-			lifecycle_notification_sent,
+			lifecycle_notification_sent, ready_notification_sent,
 			revision, processed_comment_id,
 			processed_comment_revision, last_command_name, last_command_outcome,
 			last_command_message, harness_override, check_repair_attempts,
@@ -1714,7 +1913,8 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -1736,6 +1936,11 @@ const saveRunStatement = `
 			implementation_handoff = excluded.implementation_handoff,
 			specification_review = excluded.specification_review,
 			standards_review = excluded.standards_review,
+			review_repair_attempts = excluded.review_repair_attempts,
+			review_repair_budget = excluded.review_repair_budget,
+			review_repair_pending_attempt = excluded.review_repair_pending_attempt,
+			review_repair_history = excluded.review_repair_history,
+			review_repair_packet = excluded.review_repair_packet,
 			test_exemption = excluded.test_exemption,
 			protected_test_paths = excluded.protected_test_paths,
 			test_stage_skipped = excluded.test_stage_skipped,
@@ -1749,6 +1954,7 @@ const saveRunStatement = `
 			merge_commit_sha = excluded.merge_commit_sha,
 			lifecycle_reason = excluded.lifecycle_reason,
 			lifecycle_notification_sent = excluded.lifecycle_notification_sent,
+			ready_notification_sent = excluded.ready_notification_sent,
 			revision = excluded.revision,
 			processed_comment_id = excluded.processed_comment_id,
 			processed_comment_revision = excluded.processed_comment_revision,
@@ -1774,11 +1980,13 @@ const saveRunIfRevisionStatement = `
 			test_revision_budget = ?, test_revision_history = ?, test_objection = ?,
 			test_revision_base_changed_paths = ?, implementation_handoff = ?,
 			specification_review = ?, standards_review = ?,
+			review_repair_attempts = ?, review_repair_budget = ?,
+			review_repair_pending_attempt = ?, review_repair_history = ?, review_repair_packet = ?,
 			test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
 			active_invocation_id = ?, active_invocation_ids = ?,
 			image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
-			lifecycle_notification_sent = ?,
+			lifecycle_notification_sent = ?, ready_notification_sent = ?,
 			revision = ?, processed_comment_id = ?,
 			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
 			last_command_message = ?, harness_override = ?, check_repair_attempts = ?,
@@ -1902,6 +2110,20 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 // clarifications; the frozen repository configuration and checkpoint remain.
 // The evaluation summary remains intact because it is content-free history.
 func (s *Store) InvalidateRunResults(ctx context.Context, runID string) error {
+	return s.invalidateRunResults(ctx, runID, false)
+}
+
+// InvalidateAllRunResults supersedes every prior invocation and removes every
+// gate result for an authorized specification amendment. Unlike an ordinary
+// refresh, an amendment changes the authoritative issue packet, so even the
+// prior baseline must be re-established.
+func (s *Store) InvalidateAllRunResults(ctx context.Context, runID string) error {
+	return s.invalidateRunResults(ctx, runID, true)
+}
+
+// invalidateRunResults applies one packet-boundary invalidation policy inside a
+// transaction while retaining the separate content-free evaluation summary.
+func (s *Store) invalidateRunResults(ctx context.Context, runID string, includeBaseline bool) error {
 	if strings.TrimSpace(runID) == "" {
 		return errors.New("run id is required for result invalidation")
 	}
@@ -1913,10 +2135,16 @@ func (s *Store) InvalidateRunResults(ctx context.Context, runID string) error {
 	now := time.Now().UTC().Format(runTimestampLayout)
 	if _, err := tx.ExecContext(ctx, `UPDATE invocations
 		SET status = ?, updated_at = ?
-		WHERE run_id = ? AND status IN (?, ?, ?, ?)`, InvocationStatusSuperseded, now, runID, InvocationStatusActive, InvocationStatusCompleted, InvocationStatusWaitingForHuman, InvocationStatusCannotProceed); err != nil {
+		WHERE run_id = ? AND status <> ?`, InvocationStatusSuperseded, now, runID, InvocationStatusSuperseded); err != nil {
 		return fmt.Errorf("supersede invocations for run %q: %w", runID, err)
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM gate_results WHERE run_id = ? AND phase <> ?", runID, GatePhaseBaseline); err != nil {
+	deleteStatement := "DELETE FROM gate_results WHERE run_id = ? AND phase <> ?"
+	deleteArguments := []any{runID, GatePhaseBaseline}
+	if includeBaseline {
+		deleteStatement = "DELETE FROM gate_results WHERE run_id = ?"
+		deleteArguments = []any{runID}
+	}
+	if _, err := tx.ExecContext(ctx, deleteStatement, deleteArguments...); err != nil {
 		return fmt.Errorf("invalidate gate results for run %q: %w", runID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1931,6 +2159,19 @@ func (s *Store) InvalidateRunResults(ctx context.Context, runID string) error {
 // command watermark advances, and result invalidation commit or roll back
 // together, preventing inconsistent persistence when resumption is attempted.
 func (s *Store) SaveRunAndInvalidateResults(ctx context.Context, expectedRevision int64, run Run) error {
+	return s.saveRunAndInvalidateResults(ctx, expectedRevision, run, false)
+}
+
+// SaveRunAndInvalidateAllResults atomically persists an authorized
+// specification amendment and removes all results from the superseded packet,
+// including its baseline gate result.
+func (s *Store) SaveRunAndInvalidateAllResults(ctx context.Context, expectedRevision int64, run Run) error {
+	return s.saveRunAndInvalidateResults(ctx, expectedRevision, run, true)
+}
+
+// saveRunAndInvalidateResults is the compare-and-set implementation shared by
+// ordinary packet refreshes and complete specification amendments.
+func (s *Store) saveRunAndInvalidateResults(ctx context.Context, expectedRevision int64, run Run, includeBaseline bool) error {
 	run, err := normalizeRun(run)
 	if err != nil {
 		return err
@@ -1961,10 +2202,16 @@ func (s *Store) SaveRunAndInvalidateResults(ctx context.Context, expectedRevisio
 	now := time.Now().UTC().Format(runTimestampLayout)
 	if _, err := tx.ExecContext(ctx, `UPDATE invocations
 		SET status = ?, updated_at = ?
-		WHERE run_id = ? AND status IN (?, ?, ?, ?)`, InvocationStatusSuperseded, now, run.ID, InvocationStatusActive, InvocationStatusCompleted, InvocationStatusWaitingForHuman, InvocationStatusCannotProceed); err != nil {
+		WHERE run_id = ? AND status <> ?`, InvocationStatusSuperseded, now, run.ID, InvocationStatusSuperseded); err != nil {
 		return fmt.Errorf("supersede invocations for run %q: %w", run.ID, err)
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM gate_results WHERE run_id = ? AND phase <> ?", run.ID, GatePhaseBaseline); err != nil {
+	deleteStatement := "DELETE FROM gate_results WHERE run_id = ? AND phase <> ?"
+	deleteArguments := []any{run.ID, GatePhaseBaseline}
+	if includeBaseline {
+		deleteStatement = "DELETE FROM gate_results WHERE run_id = ?"
+		deleteArguments = []any{run.ID}
+	}
+	if _, err := tx.ExecContext(ctx, deleteStatement, deleteArguments...); err != nil {
 		return fmt.Errorf("invalidate gate results for run %q: %w", run.ID, err)
 	}
 
@@ -2002,6 +2249,28 @@ func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation
 		WHERE run_id = ?
 		ORDER BY updated_at DESC, id DESC
 		LIMIT 1`, runID)
+	return scanInvocation(row)
+}
+
+// LatestInvocationByRole returns the newest invocation for one run and role,
+// allowing review repair to resume implementation without mistaking a later
+// isolated reviewer for the implementation session.
+func (s *Store) LatestInvocationByRole(ctx context.Context, runID, role string) (*Invocation, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, errors.New("invocation run id is required")
+	}
+	if strings.TrimSpace(role) == "" || strings.ContainsAny(role, "\x00\r\n") {
+		return nil, errors.New("invocation role is required and must be a single line")
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
+		       native_session_id, workspace_id, status_surface_id,
+		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+		FROM invocations
+		WHERE run_id = ? AND role = ?
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1`, runID, role)
 	return scanInvocation(row)
 }
 
@@ -2827,6 +3096,22 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 28: %w", err)
 				}
+			}
+		case 29:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN review_repair_attempts INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN review_repair_budget INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN review_repair_pending_attempt INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN review_repair_history TEXT NOT NULL DEFAULT '[]'",
+				"ALTER TABLE operational_runs ADD COLUMN review_repair_packet TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 29: %w", err)
+				}
+			}
+		case 30:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN ready_notification_sent INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("apply store migration 30: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

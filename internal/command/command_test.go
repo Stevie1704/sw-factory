@@ -138,3 +138,19 @@ func TestParseRecognizesTheAuthorizedCancelCommand(t *testing.T) {
 		t.Fatalf("parsed cancel = %#v, want recognized cancel command", parsed)
 	}
 }
+
+// TestParseRecognizesTheAuthorizedRevisionCommand verifies a ready pull
+// request can receive the explicit specification-amendment command.
+func TestParseRecognizesTheAuthorizedRevisionCommand(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"/factory revision", "/factory revise"} {
+		parsed, err := command.Parse(body)
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v", body, err)
+		}
+		if !parsed.Recognized || parsed.Command.Kind != command.Revision {
+			t.Fatalf("Parse(%q) = %#v, want recognized revision command", body, parsed)
+		}
+	}
+}

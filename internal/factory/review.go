@@ -396,16 +396,29 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		if err := setReviewResultForRole(run, invocation.Role, review); err != nil {
 			return AgentResult{}, err
 		}
-		if reviewHasBlockingResult(*run) {
+		blocking := reviewHasBlockingResult(*run)
+		complete := reviewRoundComplete(*run)
+		if blocking && complete {
 			run.Stage = store.StageReview
-			run.Status = store.StatusWaitingForHuman
-			run.LifecycleReason = fmt.Sprintf("review round has blocking violations (%s)", invocation.Role)
+			run.Status = store.StatusActive
+			run.LifecycleReason = fmt.Sprintf("review round has blocking violations; routing repair (%s)", invocation.Role)
 			statusState = github.CommitStatusFailure
 			if !reviewHasBlockingFinding(review.Findings) {
 				statusState = github.CommitStatusSuccess
 				statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
 			} else {
 				statusDescription = fmt.Sprintf("%s found blocking findings", invocation.Role)
+			}
+		} else if blocking {
+			run.Stage = store.StageReview
+			run.Status = store.StatusActive
+			run.LifecycleReason = fmt.Sprintf("%s found blocking findings; waiting for the other review", invocation.Role)
+			if reviewHasBlockingFinding(review.Findings) {
+				statusState = github.CommitStatusFailure
+				statusDescription = fmt.Sprintf("%s found blocking findings; waiting for the other review", invocation.Role)
+			} else {
+				statusState = github.CommitStatusSuccess
+				statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
 			}
 		} else if humanReviewWaiting {
 			run.Stage = store.StageReview
@@ -466,6 +479,21 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	if value.Outcome == report.OutcomeCompleted && roleDefinition.Kind == workflow.RoleKindReview {
 		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
 			return AgentResult{}, fmt.Errorf("refresh pull request after %s: %w", invocation.Role, err)
+		}
+		if reviewRoundComplete(*run) {
+			if reviewHasBlockingResult(*run) {
+				repair, repairErr := s.routeReviewRepair(ctx, registration, runStore, *run)
+				if repairErr != nil {
+					return AgentResult{}, repairErr
+				}
+				*run = repair.Run
+			} else {
+				ready, readyErr := s.finalizeReviewReadiness(ctx, registration, runStore, *run)
+				if readyErr != nil {
+					return AgentResult{}, readyErr
+				}
+				*run = ready
+			}
 		}
 	}
 	if value.Outcome == report.OutcomeNeedsClarification {

@@ -38,13 +38,14 @@ var _ PendingEffectStore = (*store.Store)(nil)
 // stateTransitionEffectPayload is the serialized intent for one paired issue
 // label and status-comment projection.
 type stateTransitionEffectPayload struct {
-	Repository        github.Repository
-	Issue             github.Issue
-	Previous          store.Run
-	Next              store.Run
-	CreateComment     bool
-	StopWorker        bool
-	InvalidateResults bool
+	Repository           github.Repository
+	Issue                github.Issue
+	Previous             store.Run
+	Next                 store.Run
+	CreateComment        bool
+	StopWorker           bool
+	InvalidateResults    bool
+	InvalidateAllResults bool
 }
 
 // statusCommentEffectPayload is the serialized intent for a command
@@ -1618,20 +1619,34 @@ func (s *Service) replayPendingStateTransition(ctx context.Context, runStore Run
 		}
 	}
 	transition := stateTransition{
-		Repository:        payload.Repository,
-		Issue:             payload.Issue,
-		Previous:          payload.Previous,
-		Next:              next,
-		CreateComment:     payload.CreateComment,
-		StopWorker:        payload.StopWorker,
-		InvalidateResults: payload.InvalidateResults,
+		Repository:           payload.Repository,
+		Issue:                payload.Issue,
+		Previous:             payload.Previous,
+		Next:                 next,
+		CreateComment:        payload.CreateComment,
+		StopWorker:           payload.StopWorker,
+		InvalidateResults:    payload.InvalidateResults,
+		InvalidateAllResults: payload.InvalidateAllResults,
 	}
 	if err := s.applyStateTransitionEffects(ctx, &next, transition); err != nil {
 		return store.Run{}, fmt.Errorf("replay state transition effects: %w", err)
 	}
 	next.UpdatedAt = s.deps.Now().UTC()
 	if current == nil || current.Revision < next.Revision {
-		if payload.InvalidateResults {
+		if payload.InvalidateAllResults {
+			if atomicStore, ok := runStore.(atomicAllPacketTransitionStore); ok {
+				if err := atomicStore.SaveRunAndInvalidateAllResults(ctx, payload.Previous.Revision, next); err != nil {
+					return store.Run{}, fmt.Errorf("persist replayed state transition and invalidate all results: %w", err)
+				}
+			} else {
+				if err := saveCommandRun(ctx, runStore, payload.Previous.Revision, next); err != nil {
+					return store.Run{}, fmt.Errorf("persist replayed state transition: %w", err)
+				}
+				if err := invalidateAllRunResults(ctx, runStore, next.ID); err != nil {
+					return store.Run{}, err
+				}
+			}
+		} else if payload.InvalidateResults {
 			if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
 				if err := atomicStore.SaveRunAndInvalidateResults(ctx, payload.Previous.Revision, next); err != nil {
 					return store.Run{}, fmt.Errorf("persist replayed state transition and invalidate results: %w", err)

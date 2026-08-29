@@ -57,11 +57,14 @@ artifacts in place. Polling never creates factory labels; use
 
 After each observation that claimed or found a run, the coordinator drives that
 run through baseline, the stages its frozen route and test policy select, the
-checkpoint gate suite, the bounded check-repair loop, the branch push, and one
-draft pull request. It stops in a defined waiting state for clarification, a
-policy rejection, an exhausted budget, a harness limit, an authentication
-failure, or an ambiguous recovery, and publishes the reason in the editable
-status comment. `factory issue`, `factory agent`, `factory agent-report`, and
+checkpoint gate suite, the bounded check-repair loop, the branch push, one
+draft pull request, and both independent reviews. Blocking findings are
+combined into one bounded review-repair packet; an accepted repair reruns the
+gates and both reviews against a new checkpoint. It stops in a defined waiting
+state for clarification, a policy rejection, an exhausted budget, a repeated
+review blocker, a harness limit, an authentication failure, or an ambiguous
+recovery, and publishes the reason in the editable status comment.
+`factory issue`, `factory agent`, `factory agent-report`, and
 `factory draft-pr` stay available for diagnosis and deliberate manual
 operation; they are not part of routine unattended progression.
 
@@ -269,6 +272,21 @@ including focused behavioral tests and essential test infrastructure within its
 permitted scope. Deterministic gates and exact-checkpoint specification review
 remain unchanged in both modes.
 
+`retry_limits.review_repair` bounds automatic implementation repairs caused by
+blocking review findings and may not exceed two. Findings from the configured
+specification and standards reviewers are delivered together. If a materially
+same blocker survives an attempted repair, or the ceiling is exhausted, the
+run waits for a human. A successful repair creates a new checkpoint and the
+coordinator reruns the complete configured gate suite and both reviewers in
+fresh sessions.
+
+When `base_synchronization.mode` is `before_ready`, the coordinator fetches the
+configured target branch and merges it into the factory branch immediately
+before readiness. The merge may create a merge commit; it never rebases or
+force-updates the branch. A changed head returns the run to checks and a fresh
+review round. Merge conflicts remain for human disposition. `never` skips this
+boundary synchronization.
+
 Repository configuration cannot declare a workflow route. A route is selected
 per issue with a frozen `factory-route` marker before claim, and it needs the
 roles it runs to be declared in `role_harness_defaults` and `model_options`:
@@ -455,7 +473,11 @@ implementation invocation with that packet. Clarification pauses do not
 consume retry budget. `/factory refresh` re-reads the issue into another packet
 version, preserves resolved answers, invalidates superseded downstream
 invocations and checkpoint results, and resumes implementation against the new
-snapshot.
+snapshot. `/factory revision` is the authorized ready-PR amendment command: it
+creates a new packet version from the current open issue, drafts the tracked PR,
+invalidates all prior gate and review results including baseline, preserves the
+existing branch/worktree, and restarts implementation from the current
+checkpoint. It never merges or force-updates a remote branch.
 
 The poll command also observes the tracked pull request and issue lifecycle.
 A merged pull request completes the run and records its merge commit; closing
@@ -470,7 +492,7 @@ prints the run, invocation, workspace, and surface handles. The role receives a
 read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 24 and persists invocation
+result. The operational store schema is version 30 and persists invocation
 identity, opaque surface handles, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state. It
 also persists the draft pull-request number and URL so a restarted command can

@@ -111,6 +111,10 @@ type stateTransition struct {
 	// InvalidateResults makes a packet revision boundary invalidate prior
 	// invocation and gate projections atomically with the run update.
 	InvalidateResults bool
+	// InvalidateAllResults makes an authorized specification amendment invalidate
+	// every prior gate result, including the baseline result for the superseded
+	// packet version.
+	InvalidateAllResults bool
 }
 
 // BootstrapLabels explicitly creates or updates the factory-owned labels for
@@ -231,6 +235,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		ImageDigest:         repositoryConfig.WorkerBuild.Digest,
 		Coordinator:         s.deps.Coordinator,
 		CheckRepairBudget:   repositoryConfig.RetryLimits.CheckRepair,
+		ReviewRepairBudget:  repositoryConfig.RetryLimits.ReviewRepair,
 		TestRevisionBudget:  testRevisionBudget,
 		SpecificationPacket: string(packetData),
 		CreatedAt:           startedAt,
@@ -267,6 +272,13 @@ func testRevisionBudgetForPacket(packet SpecificationPacket) int {
 		return packet.RepositoryConfig.RetryLimits.TestRevision
 	}
 	return 0
+}
+
+// reviewRepairBudgetForPacket returns the frozen review-repair ceiling for a
+// packet. The repository policy owns the value; the coordinator enforces the
+// hard maximum before persisting or launching a repair.
+func reviewRepairBudgetForPacket(packet SpecificationPacket) int {
+	return packet.RepositoryConfig.RetryLimits.ReviewRepair
 }
 
 // Transition edits the existing status comment and updates the orthogonal
@@ -369,13 +381,14 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 // both the projection and durable run state are complete.
 func (s *Service) applyJournaledStateTransition(ctx context.Context, runStore RunStore, transition stateTransition, next store.Run) (store.Run, error) {
 	payload := stateTransitionEffectPayload{
-		Repository:        transition.Repository,
-		Issue:             transition.Issue,
-		Previous:          transition.Previous,
-		Next:              next,
-		CreateComment:     transition.CreateComment,
-		StopWorker:        transition.StopWorker,
-		InvalidateResults: transition.InvalidateResults,
+		Repository:           transition.Repository,
+		Issue:                transition.Issue,
+		Previous:             transition.Previous,
+		Next:                 next,
+		CreateComment:        transition.CreateComment,
+		StopWorker:           transition.StopWorker,
+		InvalidateResults:    transition.InvalidateResults,
+		InvalidateAllResults: transition.InvalidateAllResults,
 	}
 	effect, err := s.newPendingEffect(next.ID, store.PendingEffectKindStateTransition, fmt.Sprintf("revision=%d", next.Revision), payload)
 	if err != nil {
@@ -406,7 +419,20 @@ func (s *Service) applyJournaledStateTransition(ctx context.Context, runStore Ru
 		}
 		next.UpdatedAt = s.deps.Now().UTC()
 		if !transition.PersistBeforeEffects {
-			if transition.InvalidateResults {
+			if transition.InvalidateAllResults {
+				if atomicStore, ok := runStore.(atomicAllPacketTransitionStore); ok {
+					if err := atomicStore.SaveRunAndInvalidateAllResults(ctx, transition.Previous.Revision, next); err != nil {
+						return fmt.Errorf("persist state transition and invalidate all results: %w", err)
+					}
+				} else {
+					if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
+						return fmt.Errorf("persist state transition: %w", err)
+					}
+					if err := invalidateAllRunResults(ctx, runStore, next.ID); err != nil {
+						return err
+					}
+				}
+			} else if transition.InvalidateResults {
 				if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
 					if err := atomicStore.SaveRunAndInvalidateResults(ctx, transition.Previous.Revision, next); err != nil {
 						return fmt.Errorf("persist state transition and invalidate results: %w", err)
@@ -491,6 +517,15 @@ func (s *Service) applyLegacyStateTransition(ctx context.Context, runStore RunSt
 	if recorder, ok := runStore.(evaluationRecorder); ok {
 		if err := recordEvaluationTransition(ctx, recorder, transition.Previous, next, next.UpdatedAt); err != nil {
 			return next, fmt.Errorf("record evaluation state transition: %w", err)
+		}
+	}
+	if transition.InvalidateAllResults {
+		if err := invalidateAllRunResults(ctx, runStore, next.ID); err != nil {
+			return next, err
+		}
+	} else if transition.InvalidateResults {
+		if err := invalidateRunResults(ctx, runStore, next.ID); err != nil {
+			return next, err
 		}
 	}
 	return next, nil
@@ -1031,8 +1066,9 @@ func statusCommentBody(run store.Run) string {
 		}
 	}
 	review := specificationReviewStatusComment(run)
+	reviewRepair := reviewRepairStatusComment(run)
 	activity := activityStatusComment(run)
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, testRevision, pullRequest, lifecycle, harness, review, questions, commandFeedback)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, testRevision, pullRequest, lifecycle, harness, review, reviewRepair, questions, commandFeedback)
 }
 
 // testRevisionStatusComment renders the bounded objection-cycle projection
@@ -1055,6 +1091,28 @@ func testRevisionStatusComment(run store.Run) string {
 	}
 	if run.TestObjection != nil {
 		result += fmt.Sprintf("- current test: `%s`\n", safeStatusCommentValue(run.TestObjection.Test))
+	}
+	return result
+}
+
+// reviewRepairStatusComment renders only bounded repair accounting and opaque
+// blocker identities. Review prose remains in the reviewer result and packet,
+// while this local supervision projection stays content-free.
+func reviewRepairStatusComment(run store.Run) string {
+	if run.ReviewRepairBudget <= 0 && len(run.ReviewRepairHistory) == 0 && run.ReviewRepairPacket == nil {
+		return ""
+	}
+	remaining := reviewRepairRemaining(run.ReviewRepairBudget, run.ReviewRepairAttempts)
+	result := fmt.Sprintf("\n### Review-repair cycle\n\n- attempts: %d/%d\n- remaining: %d\n", run.ReviewRepairAttempts, run.ReviewRepairBudget, remaining)
+	if run.ReviewRepairPendingAttempt > 0 {
+		result += fmt.Sprintf("- pending: attempt %d\n", run.ReviewRepairPendingAttempt)
+	}
+	if len(run.ReviewRepairHistory) > 0 {
+		outcomes := make([]string, 0, len(run.ReviewRepairHistory))
+		for _, attempt := range run.ReviewRepairHistory {
+			outcomes = append(outcomes, fmt.Sprintf("%d=%s", attempt.Attempt, safeStatusCommentValue(string(attempt.Outcome))))
+		}
+		result += "- outcomes: " + strings.Join(outcomes, ", ") + "\n"
 	}
 	return result
 }

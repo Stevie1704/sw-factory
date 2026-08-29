@@ -21,6 +21,9 @@ const (
 	Cancel Kind = "cancel"
 	// Refresh asks the coordinator to refresh the supervision projection.
 	Refresh Kind = "refresh"
+	// Revision asks the coordinator to amend a ready pull request's frozen
+	// specification and restart implementation on the existing worktree.
+	Revision Kind = "revision"
 	// Answer supplies an authorized answer to one pending clarification question.
 	Answer Kind = "answer"
 	// ConfigureHarness changes the selected harness for a later invocation.
@@ -126,6 +129,8 @@ func Parse(body string) (ParseResult, error) {
 		return parseFixedArity(result, fields, Cancel)
 	case string(Refresh):
 		return parseFixedArity(result, fields, Refresh)
+	case string(Revision), "revise":
+		return parseFixedArity(result, fields, Revision)
 	case string(Answer):
 		return parseAnswer(result, fields[2:])
 	case "config", "configure", "harness":

@@ -89,6 +89,14 @@ type AgentRequest struct {
 	// an automated objection cycle. It is coordinator-internal and never
 	// exposed as a user-selectable authority.
 	testRevision bool
+	// reviewRepair requests a new implementation invocation carrying the
+	// coordinator-owned blocking-review packet. It is coordinator-internal and
+	// never exposed as a user-selectable authority.
+	reviewRepair bool
+	// resumeImplementation requests a fresh implementation invocation that
+	// reuses the latest implementation session when the harness supports native
+	// resume. It is coordinator-internal and never user-selectable.
+	resumeImplementation bool
 }
 
 // AgentLaunchResult reports the persisted invocation and prompt after launch.
@@ -188,6 +196,9 @@ type InvocationPacket struct {
 	// CheckRepair contains the complete failed-check context when this
 	// invocation is a native-resumed repair.
 	CheckRepair *CheckRepairPacket `json:"check_repair,omitempty"`
+	// ReviewRepair contains the complete blocking-review context when this
+	// invocation repairs a reviewed checkpoint.
+	ReviewRepair *store.ReviewRepairPacket `json:"review_repair,omitempty"`
 	// ReviewContext contains the exact checkpoint and bounded review inputs for
 	// an isolated review invocation.
 	ReviewContext *prompt.ReviewContext `json:"review_context,omitempty"`
@@ -198,8 +209,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version seven adds the current test objection and revision budget.
-	invocationPacketVersion = 7
+	// Version eight adds the blocking review-repair packet.
+	invocationPacketVersion = 8
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
@@ -1080,9 +1091,17 @@ func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStor
 // when the claimed run has a status comment, retaining a direct-store fallback
 // for legacy runs that predate that supervision record.
 func (s *Service) persistAgentRunState(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run) error {
-	if previous.CheckpointSHA != "" && next.CheckpointSHA != previous.CheckpointSHA {
+	checkpointChanged := previous.CheckpointSHA != "" && next.CheckpointSHA != previous.CheckpointSHA
+	if checkpointChanged {
+		if next.Revision <= previous.Revision {
+			next.Revision = previous.Revision + 1
+		}
 		next.SpecificationReview = nil
 		next.StandardsReview = nil
+		if next.TestCheckpointSHA == "" || next.TestCheckpointSHA != next.CheckpointSHA {
+			next.ReviewRepairPendingAttempt = 0
+			next.ReviewRepairPacket = nil
+		}
 	}
 	if next.SpecificationReview != nil && next.SpecificationReview.CheckpointSHA != next.CheckpointSHA {
 		next.SpecificationReview = nil
@@ -1090,7 +1109,26 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 	if next.StandardsReview != nil && next.StandardsReview.CheckpointSHA != next.CheckpointSHA {
 		next.StandardsReview = nil
 	}
+	invalidateResults := checkpointChanged
+	if invalidateResults {
+		_, atomicSupported := runStore.(atomicPacketTransitionStore)
+		_, directSupported := runStore.(runResultInvalidator)
+		invalidateResults = atomicSupported || directSupported
+	}
 	if next.StatusCommentID == "" || s.deps.GitHub == nil {
+		if invalidateResults {
+			next.UpdatedAt = s.deps.Now().UTC()
+			if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
+				if err := atomicStore.SaveRunAndInvalidateResults(ctx, previous.Revision, next); err != nil {
+					return fmt.Errorf("persist checkpoint state and invalidate results: %w", err)
+				}
+				return nil
+			}
+			if err := saveRunWithRetry(ctx, runStore, next); err != nil {
+				return err
+			}
+			return invalidateRunResults(ctx, runStore, next.ID)
+		}
 		return saveRunWithRetry(ctx, runStore, next)
 	}
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
@@ -1099,10 +1137,11 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 		return fmt.Errorf("read issue for agent state transition: %w", err)
 	}
 	if _, err := s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository: repository,
-		Issue:      issue,
-		Previous:   previous,
-		Next:       next,
+		Repository:        repository,
+		Issue:             issue,
+		Previous:          previous,
+		Next:              next,
+		InvalidateResults: invalidateResults,
 	}); err != nil {
 		return err
 	}

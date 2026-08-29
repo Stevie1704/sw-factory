@@ -580,8 +580,18 @@ func (f *fakePullRequests) CreatePullRequest(_ context.Context, _ github.Reposit
 func (f *fakePullRequests) UpdatePullRequest(_ context.Context, _ github.Repository, _ int, request github.PullRequestRequest) (github.PullRequest, error) {
 	f.updatedRequests = append(f.updatedRequests, request)
 	updated := f.existing
+	updated.Title = request.Title
 	updated.Body = request.Body
+	updated.Draft = request.Draft
+	f.existing = updated
 	return updated, nil
+}
+
+// SetPullRequestDraft records the explicit readiness transition used after all
+// review gates pass.
+func (f *fakePullRequests) SetPullRequestDraft(_ context.Context, _ github.Repository, _ int, draft bool) (github.PullRequest, error) {
+	f.existing.Draft = draft
+	return f.existing, nil
 }
 
 var _ gitadapter.GitWorkspace = (*draftGitWorkspace)(nil)

@@ -1142,7 +1142,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 	if !nextRoleDeclared {
 		return AgentResult{}, fmt.Errorf("no role is declared for revised test handoff stage %q", next.Stage)
 	}
-	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: nextRole.Name, Stage: nextRole.Stage}); err != nil {
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: nextRole.Name, Stage: nextRole.Stage, reviewRepair: run.ReviewRepairPacket != nil}); err != nil {
 		return AgentResult{}, fmt.Errorf("launch implementation after revised test handoff: %w", err)
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
