@@ -266,7 +266,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			return AgentResult{}, errors.New("agent report permitted paths do not match the invocation policy")
 		}
 	}
-	path := filepath.Join(invocation.ResultDirectory, report.ReportFileName)
+	path := reportPath(*invocation)
 	var value report.Report
 	if isTestInvocation {
 		value, err = report.ReadEnvelope(path)
@@ -579,7 +579,7 @@ func agentReportRunProjection(previous store.Run, invocationStage store.Stage, v
 // function reads from the filesystem and should only be used as a fallback when
 // the pending effect payload is unavailable.
 func readAcceptedAgentReport(invocation store.Invocation) (report.Report, error) {
-	path := filepath.Join(invocation.ResultDirectory, report.ReportFileName)
+	path := reportPath(invocation)
 	if roleIsKind(invocation, workflow.RoleKindTest) {
 		return report.ReadEnvelope(path)
 	}

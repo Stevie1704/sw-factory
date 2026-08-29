@@ -252,9 +252,6 @@ type StatusResult struct {
 	// Activity distinguishes an active run, an active harness invocation, and
 	// a waiting state for LatestRun. It is empty when no run exists.
 	Activity RunActivity
-	// ActiveInvocationID names the invocation LatestRun currently delegates
-	// to, and is empty whenever no harness is executing.
-	ActiveInvocationID string
 	// Recovery contains the read-only diagnosis for an interrupted run.
 	Recovery *RecoveryDiagnosis
 	// Deprecated: use LatestRun.
@@ -521,9 +518,6 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 		result.TestPolicyMode = testPolicyModeForRun(*result.LatestRun)
 		result.Route = statusRouteForRun(*result.LatestRun)
 		result.Activity = RunActivityFor(*result.LatestRun)
-		if result.Activity == ActivityInvocationActive {
-			result.ActiveInvocationID = result.LatestRun.ActiveInvocationID
-		}
 		var pending *store.PendingEffect
 		if journal, ok := opened.(PendingEffectStore); ok {
 			pending, err = journal.PendingEffect(ctx, result.LatestRun.ID)

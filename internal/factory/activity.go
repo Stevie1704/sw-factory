@@ -19,10 +19,10 @@ const (
 	// ActivityRunActive means the run is active and the coordinator owns the
 	// next transition; no harness is executing.
 	ActivityRunActive RunActivity = "run-active"
-	// ActivityWaitingForHuman means automatic progression stopped until a
+	// ActivityWaitingForHuman means unattended progression stopped until a
 	// person answers, disposes, or reconciles the run.
 	ActivityWaitingForHuman RunActivity = "waiting-for-human"
-	// ActivityWaitingForHarness means automatic progression stopped until
+	// ActivityWaitingForHarness means unattended progression stopped until
 	// harness or worker infrastructure recovers.
 	ActivityWaitingForHarness RunActivity = "waiting-for-harness"
 	// ActivityTerminal means the run has no further coordinator progression.

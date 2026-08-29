@@ -19,32 +19,32 @@ import (
 // than ordinary work.
 const maxProgressionSteps = 32
 
-// ProgressionOutcome identifies why one unattended progression pass stopped.
-type ProgressionOutcome string
+// progressionOutcome identifies why one unattended progression pass stopped.
+type progressionOutcome string
 
 const (
-	// ProgressionIdle means no run was available to drive.
-	ProgressionIdle ProgressionOutcome = "idle"
-	// ProgressionInvocationActive means a harness invocation is executing and
+	// progressionIdle means no run was available to drive.
+	progressionIdle progressionOutcome = "idle"
+	// progressionInvocationActive means a harness invocation is executing and
 	// the coordinator is waiting for its structured result.
-	ProgressionInvocationActive ProgressionOutcome = "invocation_active"
-	// ProgressionWaiting means the run reached a human or infrastructure
-	// waiting state that automatic progression must not cross.
-	ProgressionWaiting ProgressionOutcome = "waiting"
-	// ProgressionDraftPullRequest means the run reached its draft pull
+	progressionInvocationActive progressionOutcome = "invocation_active"
+	// progressionWaiting means the run reached a human or infrastructure
+	// waiting state that unattended progression must not cross.
+	progressionWaiting progressionOutcome = "waiting"
+	// progressionDraftPullRequest means the run reached its draft pull
 	// request, which is the end of unattended claim-to-draft-PR progression.
-	ProgressionDraftPullRequest ProgressionOutcome = "draft_pull_request"
-	// ProgressionTerminal means the run has no further progression.
-	ProgressionTerminal ProgressionOutcome = "terminal"
-	// ProgressionUnsupported means the operational store cannot expose the
+	progressionDraftPullRequest progressionOutcome = "draft_pull_request"
+	// progressionTerminal means the run has no further progression.
+	progressionTerminal progressionOutcome = "terminal"
+	// progressionUnsupported means the operational store cannot expose the
 	// durable invocation history that exactly-once progression requires.
-	ProgressionUnsupported ProgressionOutcome = "unsupported"
+	progressionUnsupported progressionOutcome = "unsupported"
 )
 
-// ProgressionResult reports one unattended progression pass.
-type ProgressionResult struct {
+// progressionResult reports one unattended progression pass.
+type progressionResult struct {
 	// Outcome identifies why the pass stopped.
-	Outcome ProgressionOutcome
+	Outcome progressionOutcome
 	// Run is the run projection observed when the pass stopped.
 	Run store.Run
 	// Steps counts the coordinator transitions performed in this pass.
@@ -67,24 +67,15 @@ type progressionState struct {
 	Supported bool
 }
 
-// AdvanceRun drives the current run as far as the frozen route, repository
-// policy, and durable evidence allow, without an operator running a
-// stage-driving command. Every transition is performed through the same
-// coordinator seams the one-shot commands use, so a repeated pass or a
-// coordinator restart reuses their exactly-once effect journal instead of
+// driveRun performs one bounded unattended progression pass for the registered
+// repository. It drives the current run as far as the frozen route, the
+// repository policy, and the durable evidence allow, and stops at the first
+// state a person or infrastructure owns. Every transition runs through the
+// same coordinator seam the matching one-shot command uses, so a repeated pass
+// or a coordinator restart reuses their exactly-once effect journal instead of
 // creating a second invocation, checkpoint, push, comment, or pull request.
-func (s *Service) AdvanceRun(ctx context.Context) (ProgressionResult, error) {
-	registration, err := s.registration()
-	if err != nil {
-		return ProgressionResult{}, err
-	}
-	return s.driveRun(ctx, registration)
-}
-
-// driveRun performs bounded unattended progression for one registered
-// repository. It stops at the first state a person or infrastructure owns.
-func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRegistration) (ProgressionResult, error) {
-	result := ProgressionResult{Outcome: ProgressionIdle}
+func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRegistration) (progressionResult, error) {
+	result := progressionResult{Outcome: progressionIdle}
 	for result.Steps < maxProgressionSteps {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -94,33 +85,19 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			return result, err
 		}
 		if !state.Supported {
-			return ProgressionResult{Outcome: ProgressionUnsupported, Steps: result.Steps, Reason: "operational store has no durable invocation history"}, nil
+			return progressionResult{Outcome: progressionUnsupported, Steps: result.Steps, Reason: "operational store has no durable invocation history"}, nil
 		}
 		if state.Run == nil {
-			return ProgressionResult{Outcome: ProgressionIdle, Steps: result.Steps, Reason: "no run to drive"}, nil
+			return progressionResult{Outcome: progressionIdle, Steps: result.Steps, Reason: "no run to drive"}, nil
 		}
 		result.Run = *state.Run
 		step, stop := s.progressionStep(state)
 		if stop != nil {
 			stop.Steps = result.Steps
-			stop.Run = *state.Run
-			return *stop, nil
+			return s.publishProgressionStop(ctx, registration, *state.Run, *stop)
 		}
 		if err := step.action(ctx); err != nil {
-			paused, pauseErr := s.pauseProgression(ctx, registration, *state.Run, step.name, err)
-			if pauseErr != nil {
-				return result, errors.Join(err, pauseErr)
-			}
-			outcome := ProgressionWaiting
-			if store.IsTerminalStatus(paused.Status) {
-				outcome = ProgressionTerminal
-			}
-			return ProgressionResult{
-				Outcome: outcome,
-				Run:     paused,
-				Steps:   result.Steps,
-				Reason:  waitingReason(paused, err.Error()),
-			}, nil
+			return s.stopProgressionAfterFailure(ctx, registration, *state.Run, step.name, err, result.Steps)
 		}
 		result.Steps++
 		advanced, err := s.readProgressionState(ctx, registration)
@@ -128,21 +105,22 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			return result, err
 		}
 		if advanced.Run == nil {
-			return ProgressionResult{Outcome: ProgressionIdle, Steps: result.Steps, Reason: "run disappeared after " + step.name}, nil
+			return progressionResult{Outcome: progressionIdle, Steps: result.Steps, Reason: "run disappeared after " + step.name}, nil
 		}
 		result.Run = *advanced.Run
 		if !progressionAdvanced(*state.Run, state.Active, *advanced.Run, advanced.Active) {
-			return ProgressionResult{
-				Outcome: ProgressionWaiting,
-				Run:     *advanced.Run,
+			return s.publishProgressionStop(ctx, registration, *advanced.Run, progressionResult{
+				Outcome: progressionWaiting,
 				Steps:   result.Steps,
 				Reason:  fmt.Sprintf("%s did not advance the run", step.name),
-			}, nil
+			})
 		}
 	}
-	result.Outcome = ProgressionWaiting
-	result.Reason = fmt.Sprintf("progression exceeded %d coordinator transitions", maxProgressionSteps)
-	return result, nil
+	return s.publishProgressionStop(ctx, registration, result.Run, progressionResult{
+		Outcome: progressionWaiting,
+		Steps:   result.Steps,
+		Reason:  fmt.Sprintf("progression exceeded %d coordinator transitions", maxProgressionSteps),
+	})
 }
 
 // progressionAction is one coordinator-owned transition selected from durable
@@ -155,28 +133,27 @@ type progressionAction struct {
 }
 
 // progressionStep selects the single legal next transition for a run, or the
-// waiting state that stops automatic progression. Exactly one of the two
+// waiting state that stops unattended progression. Exactly one of the two
 // return values is set.
-func (s *Service) progressionStep(state progressionState) (progressionAction, *ProgressionResult) {
+func (s *Service) progressionStep(state progressionState) (progressionAction, *progressionResult) {
 	run := *state.Run
-	if store.IsTerminalStatus(run.Status) {
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionTerminal, Reason: "run is " + string(run.Status)}
-	}
-	switch run.Status {
-	case store.StatusWaitingForHuman:
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: waitingReason(run, "waiting for human disposition")}
-	case store.StatusWaitingForHarness:
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: waitingReason(run, "waiting for harness capacity")}
+	switch RunActivityFor(run) {
+	case ActivityTerminal:
+		return progressionAction{}, &progressionResult{Outcome: progressionTerminal, Reason: "run is " + string(run.Status)}
+	case ActivityWaitingForHuman:
+		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: waitingReason(run, "waiting for human disposition")}
+	case ActivityWaitingForHarness:
+		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: waitingReason(run, "waiting for harness capacity")}
 	}
 	if run.CheckRepairPendingAttempt != 0 {
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: fmt.Sprintf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)}
+		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)}
 	}
 	if state.Active != nil {
 		if state.Active.AttachRequired {
-			return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: fmt.Sprintf("invocation %q requires `factory attach`", state.Active.ID)}
+			return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("invocation %q requires `factory attach`", state.Active.ID)}
 		}
 		if !agentResultReady(*state.Active) {
-			return progressionAction{}, &ProgressionResult{Outcome: ProgressionInvocationActive, Reason: fmt.Sprintf("invocation %q is executing", state.Active.ID)}
+			return progressionAction{}, &progressionResult{Outcome: progressionInvocationActive, Reason: fmt.Sprintf("invocation %q is executing", state.Active.ID)}
 		}
 		invocationID := state.Active.ID
 		return progressionAction{name: "accept agent report", action: func(ctx context.Context) error {
@@ -187,39 +164,41 @@ func (s *Service) progressionStep(state progressionState) (progressionAction, *P
 	return s.progressionStageStep(state)
 }
 
-// progressionStageStep selects the transition owned by the run stage once no
-// invocation is executing.
-func (s *Service) progressionStageStep(state progressionState) (progressionAction, *ProgressionResult) {
+// progressionStageStep selects the transition the workflow registry declares
+// for the run stage once no invocation is executing. The registry stays the
+// stage authority: a stage that declares a coordinator event is driven by the
+// draft-pull-request seam that owns those events, and a stage that declares a
+// role is driven by launching that role.
+func (s *Service) progressionStageStep(state progressionState) (progressionAction, *progressionResult) {
 	run := *state.Run
+	registry := workflow.DefaultRegistry()
 	switch run.Stage {
 	case store.StageClaim:
+		// Leaving claim is the frozen baseline, whose healthy result selects
+		// the entry stage from the route and the repository test policy.
 		return progressionAction{name: "run baseline", action: func(ctx context.Context) error {
 			_, err := s.RunBaseline(ctx, BaselineRequest{RunID: run.ID})
 			return err
 		}}, nil
-	case store.StagePreflight:
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: waitingReason(run, "baseline preflight needs human attention")}
-	case store.StageCheck:
-		return progressionAction{name: "create draft pull request", action: func(ctx context.Context) error {
-			_, err := s.CreateDraftPullRequest(ctx, DraftPullRequestRequest{RunID: run.ID})
-			return err
-		}}, nil
 	case store.StageDraftPR:
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionDraftPullRequest, Reason: fmt.Sprintf("draft pull request #%d is ready for review", run.PullRequestNumber)}
-	case store.StageReady:
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: waitingReason(run, "run is ready for human review")}
+		// The independent specification review is a deliberate step, so
+		// unattended progression ends at the draft pull request.
+		return progressionAction{}, &progressionResult{Outcome: progressionDraftPullRequest, Reason: fmt.Sprintf("draft pull request #%d is ready for review", run.PullRequestNumber)}
 	}
-	if _, declared := workflow.DefaultRegistry().RoleForRunStage(run.Stage); !declared {
-		return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: fmt.Sprintf("no factory role owns run stage %q", run.Stage)}
+	definition, declared := registry.Stage(run.Stage)
+	if !declared {
+		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("run stage %q is not declared by the workflow registry", run.Stage)}
 	}
-	if state.Latest != nil && state.Latest.Stage == run.Stage && state.Latest.Status == store.InvocationStatusCompleted {
-		if run.Stage != store.StageImplementation {
-			return progressionAction{}, &ProgressionResult{Outcome: ProgressionWaiting, Reason: fmt.Sprintf("stage %q has a completed invocation but no declared coordinator transition", run.Stage)}
-		}
+	_, roleDeclared := registry.RoleForRunStage(run.Stage)
+	stageComplete := state.Latest != nil && state.Latest.Stage == run.Stage && state.Latest.Status == store.InvocationStatusCompleted
+	if len(definition.Events) > 0 && (!roleDeclared || stageComplete) {
 		return progressionAction{name: "create draft pull request", action: func(ctx context.Context) error {
 			_, err := s.CreateDraftPullRequest(ctx, DraftPullRequestRequest{RunID: run.ID})
 			return err
 		}}, nil
+	}
+	if !roleDeclared {
+		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("no coordinator transition is declared for run stage %q", run.Stage)}
 	}
 	return progressionAction{name: "start agent", action: func(ctx context.Context) error {
 		_, err := s.StartAgent(ctx, AgentRequest{RunID: run.ID})
@@ -229,7 +208,8 @@ func (s *Service) progressionStageStep(state progressionState) (progressionActio
 
 // readProgressionState reads the run and its invocation projection once. A
 // store without durable invocation history cannot support exactly-once
-// unattended progression, so it reports no run instead of guessing.
+// unattended progression, so it reports the run as undrivable rather than
+// guessing whether a harness is executing.
 func (s *Service) readProgressionState(ctx context.Context, registration config.RepositoryRegistration) (progressionState, error) {
 	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
 	if err != nil {
@@ -287,8 +267,14 @@ func agentResultReady(invocation store.Invocation) bool {
 	if invocation.ResultDirectory == "" {
 		return false
 	}
-	info, err := os.Stat(filepath.Join(invocation.ResultDirectory, report.ReportFileName))
+	info, err := os.Stat(reportPath(invocation))
 	return err == nil && info.Mode().IsRegular()
+}
+
+// reportPath returns the only accepted structured-report location inside one
+// invocation result directory.
+func reportPath(invocation store.Invocation) string {
+	return filepath.Join(invocation.ResultDirectory, report.ReportFileName)
 }
 
 // waitingReason prefers the coordinator's recorded lifecycle reason so the
@@ -300,9 +286,49 @@ func waitingReason(run store.Run, fallback string) string {
 	return fallback
 }
 
-// pauseProgression stops automatic progression in a visible human waiting
-// state and publishes an actionable status. A run that a seam already moved
-// out of active is left untouched, because that seam owns the more specific
+// publishProgressionStop makes a stall visible. A run that unattended
+// progression refuses to move must never stay active and silent, because the
+// `agent-running` label would then imply work nobody is doing. Waiting states
+// a seam already published, and the legitimate active outcomes, are returned
+// unchanged.
+func (s *Service) publishProgressionStop(ctx context.Context, registration config.RepositoryRegistration, run store.Run, stop progressionResult) (progressionResult, error) {
+	stop.Run = run
+	if stop.Outcome != progressionWaiting || run.Status != store.StatusActive {
+		return stop, nil
+	}
+	paused, err := s.pauseProgression(ctx, registration, run, "stall", errors.New(stop.Reason))
+	if err != nil {
+		return stop, err
+	}
+	stop.Run = paused
+	stop.Reason = waitingReason(paused, stop.Reason)
+	return stop, nil
+}
+
+// stopProgressionAfterFailure parks the run in a visible waiting state,
+// publishes an actionable status, and reports the pass that stopped. A
+// cancelled context is an operator `factory stop`, which must leave the run
+// exactly as it was.
+func (s *Service) stopProgressionAfterFailure(ctx context.Context, registration config.RepositoryRegistration, observed store.Run, step string, cause error, steps int) (progressionResult, error) {
+	if pollingContextDone(cause) || ctx.Err() != nil {
+		return progressionResult{Outcome: progressionWaiting, Run: observed, Steps: steps, Reason: "coordinator stopped"}, nil
+	}
+	paused, err := s.pauseProgression(ctx, registration, observed, step, cause)
+	if err != nil {
+		return progressionResult{Run: observed, Steps: steps}, errors.Join(cause, err)
+	}
+	outcome := progressionWaiting
+	if store.IsTerminalStatus(paused.Status) {
+		outcome = progressionTerminal
+	}
+	return progressionResult{Outcome: outcome, Run: paused, Steps: steps, Reason: waitingReason(paused, cause.Error())}, nil
+}
+
+// pauseProgression stops unattended progression in a visible human waiting
+// state. The coordinator fails closed here: it cannot tell a transient
+// adapter failure from one that already changed external state, so it asks a
+// person rather than retrying an effect. A run that a seam already moved out
+// of active is left untouched, because that seam owns the more specific
 // waiting state it published.
 func (s *Service) pauseProgression(ctx context.Context, registration config.RepositoryRegistration, observed store.Run, step string, cause error) (store.Run, error) {
 	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
@@ -327,10 +353,10 @@ func (s *Service) pauseProgression(ctx context.Context, registration config.Repo
 	previous := *current
 	next := previous
 	next.Status = store.StatusWaitingForHuman
-	next.LifecycleReason = fmt.Sprintf("automatic progression stopped at %s: %s", step, cause)
+	next.LifecycleReason = fmt.Sprintf("unattended progression stopped at %s: %s", step, cause)
 	next.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, next); err != nil {
-		return previous, errors.Join(cause, fmt.Errorf("publish progression waiting state: %w", err))
+		return previous, fmt.Errorf("publish progression waiting state: %w", err)
 	}
 	return next, nil
 }

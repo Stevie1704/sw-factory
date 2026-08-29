@@ -30,6 +30,10 @@ const (
 	// maxConsecutiveLeaseFailures limits lease-renewal retry attempts before
 	// returning a persistent error to the caller.
 	maxConsecutiveLeaseFailures = 5
+	// maxConsecutiveProgressionFailures limits how long the supervisor backs
+	// off an unattended progression pass whose durable state it cannot read
+	// before it reports a persistent coordinator failure.
+	maxConsecutiveProgressionFailures = 5
 )
 
 // PollResult reports one deterministic polling observation and any run it
@@ -122,6 +126,7 @@ func (s *Service) Start(ctx context.Context) error {
 	leaseRunID := ""
 	delay := time.Duration(0)
 	consecutiveLeaseFailures := 0
+	consecutiveProgressionFailures := 0
 	for {
 		if err := waitPolling(pollContext, delay); err != nil {
 			if pollingContextDone(err) {
@@ -179,8 +184,14 @@ func (s *Service) Start(ctx context.Context) error {
 				if pollingContextDone(err) {
 					return nil
 				}
-				return fmt.Errorf("drive run %s: %w", result.Run.ID, err)
+				consecutiveProgressionFailures++
+				if consecutiveProgressionFailures > maxConsecutiveProgressionFailures {
+					return fmt.Errorf("drive run %s after %d consecutive attempts: %w", result.Run.ID, maxConsecutiveProgressionFailures, err)
+				}
+				delay = backoff
+				continue
 			}
+			consecutiveProgressionFailures = 0
 		}
 		delay = interval
 	}

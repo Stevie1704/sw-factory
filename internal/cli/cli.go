@@ -659,8 +659,8 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		if !writeOutput(output, errorsOutput, "%s: %s (stage=%s status=%s activity=%s test_policy=%s route=%s branch=%s worktree=%s)\n", label, result.LatestRun.ID, result.LatestRun.Stage, result.LatestRun.Status, result.Activity, factory.TestPolicyDescription(result.TestPolicyMode), result.Route.Description(), result.LatestRun.Branch, result.LatestRun.Worktree) {
 			return 1
 		}
-		if result.ActiveInvocationID != "" {
-			if !writeOutput(output, errorsOutput, "active invocation: %s\n", result.ActiveInvocationID) {
+		if result.Activity == factory.ActivityInvocationActive {
+			if !writeOutput(output, errorsOutput, "active invocation: %s\n", result.LatestRun.ActiveInvocationID) {
 				return 1
 			}
 		}

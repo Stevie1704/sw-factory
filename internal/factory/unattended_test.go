@@ -2,6 +2,7 @@ package factory_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -69,11 +71,11 @@ func TestStartDrivesAnAdvisoryIssueFromQueueToDraftPullRequest(t *testing.T) {
 	}
 }
 
-// TestAdvanceRunStopsAtAWaitingStateAndPublishesIt verifies that a run parked
-// in a human waiting state stops automatic progression instead of relaunching
-// a role, and that the published status distinguishes it from a run whose
-// harness is executing.
-func TestAdvanceRunStopsAtAWaitingStateAndPublishesIt(t *testing.T) {
+// TestUnattendedProgressionStopsAtAWaitingStateAndPublishesIt verifies that a
+// run parked in a human waiting state stops unattended progression instead of
+// relaunching a role, and that the published status distinguishes it from a
+// run whose harness is executing.
+func TestUnattendedProgressionStopsAtAWaitingStateAndPublishesIt(t *testing.T) {
 	t.Parallel()
 
 	fixture := newUnattendedFixture(t)
@@ -184,6 +186,78 @@ func TestRepeatedPollingAndRestartDoNotDuplicateProgressionEffects(t *testing.T)
 	}
 }
 
+// TestUnattendedProgressionRepairsAFailedGateAndStillReachesTheDraftPR
+// verifies the bounded check-repair loop runs under unattended progression: a
+// failed checkpoint gate resumes the implementation session, and the repaired
+// checkpoint is evaluated, pushed, and published without an operator command.
+func TestUnattendedProgressionRepairsAFailedGateAndStillReachesTheDraftPR(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnattendedFixture(t)
+	fixture.workspace.checkpointSHAs = []string{implementationCheckpoint, repairedImplementationCheckpoint}
+	// Baseline setup and gate pass; the first checkpoint gate fails; every
+	// later command succeeds through the fake's zero-value default.
+	fixture.worker.results = []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}, {ExitCode: 1}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture.stopWhenPullRequestExists(cancel)
+
+	if err := fixture.service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if len(fixture.harness.starts) != 1 || len(fixture.harness.resumes) != 1 {
+		t.Fatalf("harness lifecycle = %d starts %d resumes, want one launch and one repair resume", len(fixture.harness.starts), len(fixture.harness.resumes))
+	}
+	if fixture.harness.resumes[0].ResumeSessionID != "session-unattended" {
+		t.Fatalf("repair resume = %#v, want the accepted native session", fixture.harness.resumes[0])
+	}
+	if len(fixture.workspace.checkpoints) != 2 || fixture.workspace.checkpoints[1].ParentSHA != implementationCheckpoint {
+		t.Fatalf("checkpoints = %#v, want the repair checkpoint on top of the failed one", fixture.workspace.checkpoints)
+	}
+	if len(fixture.pullRequests.createdRequests) != 1 {
+		t.Fatalf("pull request creates = %d, want exactly one after the repair", len(fixture.pullRequests.createdRequests))
+	}
+	final := fixture.currentRun(t)
+	if final.Stage != store.StageDraftPR || final.CheckpointSHA != repairedImplementationCheckpoint {
+		t.Fatalf("final run = stage %q checkpoint %q, want the draft PR at the repaired checkpoint", final.Stage, final.CheckpointSHA)
+	}
+	if final.CheckRepairAttempts != 1 {
+		t.Fatalf("check-repair attempts = %d, want exactly one consumed attempt", final.CheckRepairAttempts)
+	}
+}
+
+// TestUnattendedProgressionPublishesAnUnclassifiedStepFailure verifies a step
+// failure that no seam classified still leaves a visible waiting state and an
+// actionable reason, instead of an `agent-running` run nobody is working on.
+func TestUnattendedProgressionPublishesAnUnclassifiedStepFailure(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnattendedFixture(t)
+	fixture.terminal = &unavailableTerminal{}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture.stopAfterLeaseRenewals(cancel, 3)
+
+	if err := fixture.restart().Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if len(fixture.harness.starts) != 0 {
+		t.Fatalf("harness starts = %d, want none once the terminal is unavailable", len(fixture.harness.starts))
+	}
+	final := fixture.currentRun(t)
+	if final.Status != store.StatusWaitingForHuman {
+		t.Fatalf("final status = %q, want waiting_for_human", final.Status)
+	}
+	if !strings.Contains(final.LifecycleReason, "unattended progression stopped at start agent") {
+		t.Fatalf("lifecycle reason = %q, want the failed transition named", final.LifecycleReason)
+	}
+	if !strings.Contains(factory.StatusCommentBody(final), "- activity: `waiting-for-human`") {
+		t.Fatalf("status comment = %q, want the published waiting activity", factory.StatusCommentBody(final))
+	}
+}
+
 // TestStatusCommentSeparatesAnActiveInvocationFromAnActiveRun verifies the
 // published supervision comment never implies that a harness is executing
 // when the coordinator owns the next transition.
@@ -221,6 +295,7 @@ type unattendedFixture struct {
 	workspace       *unattendedWorkspace
 	pullRequests    *fakePullRequests
 	lease           *pollingLease
+	terminal        terminal.TerminalRuntime
 	operationalPath string
 	configPath      string
 	dependencies    func() factory.Dependencies
@@ -269,6 +344,7 @@ func newUnattendedFixtureWith(t *testing.T, testPolicy config.TestPolicy, issueB
 			HeadBranch: "factory/run-unattended", BaseBranch: "main",
 		}},
 		lease:           &pollingLease{},
+		terminal:        &agentTerminal{},
 		operationalPath: filepath.Join(root, "state", "factory.db"),
 	}
 	fixture.agentReport = fixture.completedReport
@@ -296,7 +372,7 @@ func newUnattendedFixtureWith(t *testing.T, testPolicy config.TestPolicy, issueB
 			Worktree:       fixture.workspace,
 			GitWorkspace:   fixture.workspace,
 			Worker:         fixture.worker,
-			Terminal:       &agentTerminal{},
+			Terminal:       fixture.terminal,
 			Harness:        fixture.harness,
 			Now:            func() time.Time { return time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC) },
 			NewRunID:       newSequentialRunID("run-unattended"),
@@ -494,6 +570,37 @@ func (h *unattendedHarness) Start(ctx context.Context, request harness.StartRequ
 	return session, nil
 }
 
+// Resume applies the repair edits and writes the resumed invocation's report,
+// standing in for an implementation session that fixed a failed gate.
+func (h *unattendedHarness) Resume(ctx context.Context, request harness.StartRequest) (harness.Session, error) {
+	session, err := h.agentHarness.Resume(ctx, request)
+	if err != nil {
+		return session, err
+	}
+	h.fixture.workspace.state.ChangedPaths = []string{"internal/factory.go"}
+	value := h.fixture.agentReport(request)
+	if value.Outcome == "" {
+		return session, nil
+	}
+	value.NativeSessionID = session.NativeSessionID
+	if _, err := report.WriteAtomicForInvocation(h.fixture.worker.resultPath, request.InvocationID, value); err != nil {
+		return session, err
+	}
+	return session, nil
+}
+
+// unavailableTerminal refuses the run workspace, standing in for a terminal
+// failure the coordinator cannot classify into a known waiting state.
+type unavailableTerminal struct {
+	agentTerminal
+}
+
+// EnsureRunWorkspace always fails.
+func (*unavailableTerminal) EnsureRunWorkspace(context.Context, terminal.RunWorkspaceRequest) (terminal.RunWorkspace, error) {
+	return terminal.RunWorkspace{}, errors.New("terminal runtime unavailable")
+}
+
+var _ terminal.TerminalRuntime = (*unavailableTerminal)(nil)
 var _ worker.WorkerRuntime = (*unattendedWorker)(nil)
 var _ harness.Runtime = (*unattendedHarness)(nil)
 var _ github.IssuePoller = (*unattendedGitHub)(nil)
