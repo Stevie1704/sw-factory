@@ -39,6 +39,7 @@ const (
 	maxQuestions          = 32
 	maxEvidenceEntries    = 32
 	maxEvaluationSignals  = 32
+	maxTestObjections     = 8
 	// maxTestFiles bounds changed test and test-infrastructure paths in one handoff.
 	maxTestFiles = 256
 	// maxUncoveredCriteria bounds criteria the test role explicitly leaves open.
@@ -81,6 +82,44 @@ type Handoff struct {
 	FocusedCommands []string `json:"focused_commands"`
 	// KnownLimitations records limitations that remain visible to later stages.
 	KnownLimitations []string `json:"known_limitations,omitempty"`
+	// TestObjections contains structured disputes about protected test-stage
+	// behavior. The coordinator routes these back to the test role instead of
+	// permitting the implementation role to edit protected tests.
+	TestObjections []TestObjection `json:"test_objections,omitempty"`
+}
+
+// TestObjection identifies one protected test claim that the implementation
+// role believes is incorrect, together with bounded observable evidence.
+type TestObjection struct {
+	// Test identifies the disputed test by path, name, or both.
+	Test string `json:"test"`
+	// Claim states the behavioral assertion the test makes.
+	Claim string `json:"claim"`
+	// Evidence identifies observable implementation evidence supporting the
+	// objection.
+	Evidence string `json:"evidence"`
+}
+
+// TestObjectionDecision is the bounded response vocabulary for a test role
+// reviewing an implementation objection.
+type TestObjectionDecision string
+
+const (
+	// TestObjectionAccepted means the test role accepts the objection and has
+	// revised the test-stage evidence.
+	TestObjectionAccepted TestObjectionDecision = "accepted"
+	// TestObjectionRejected means the test role rejects the objection and leaves
+	// the dispute for human disposition.
+	TestObjectionRejected TestObjectionDecision = "rejected"
+)
+
+// TestObjectionResponse records the test role's bounded decision about the
+// current implementation objection.
+type TestObjectionResponse struct {
+	// Decision is accepted or rejected.
+	Decision TestObjectionDecision `json:"decision"`
+	// Reason explains the decision in observable terms.
+	Reason string `json:"reason"`
 }
 
 // TestHandoff contains the bounded evidence needed to transfer a test-stage
@@ -284,6 +323,10 @@ type Report struct {
 	TestHandoff *TestHandoff `json:"test_handoff,omitempty"`
 	// ReviewHandoff is required for a completed specification-review outcome.
 	ReviewHandoff *ReviewHandoff `json:"review_handoff,omitempty"`
+	// TestObjectionResponse is required when a test-stage invocation is
+	// reviewing an active implementation objection. A rejected response need
+	// not contain a revised test handoff.
+	TestObjectionResponse *TestObjectionResponse `json:"test_objection_response,omitempty"`
 	// Questions are required only for a clarification outcome.
 	Questions []Question `json:"questions,omitempty"`
 	// Evidence is required only for a cannot-proceed outcome.
@@ -535,9 +578,23 @@ func Validate(value Report, context ValidationContext) error {
 	case OutcomeCompleted:
 		if isTestReportForContext(value, context) {
 			if value.Handoff != nil || value.ReviewHandoff != nil {
-				return errors.New("test completed report must contain only a test handoff")
+				return errors.New("test completed report must contain only a test handoff or objection response")
 			}
-			if value.TestHandoff == nil {
+			if value.TestObjectionResponse != nil {
+				if err := validateTestObjectionResponse(*value.TestObjectionResponse); err != nil {
+					return err
+				}
+				if value.TestObjectionResponse.Decision == TestObjectionAccepted {
+					if value.TestHandoff == nil {
+						return errors.New("accepted test objection requires a revised test handoff")
+					}
+					if err := validateTestHandoff(*value.TestHandoff, context); err != nil {
+						return err
+					}
+				} else if value.TestHandoff != nil {
+					return errors.New("rejected test objection must not contain a test handoff")
+				}
+			} else if value.TestHandoff == nil {
 				if !hasExemption(value.Exemptions, ExemptionTechnical) {
 					return errors.New("completed test report requires a test handoff")
 				}
@@ -547,6 +604,9 @@ func Validate(value Report, context ValidationContext) error {
 		} else if isReviewReportForContext(value, context) {
 			if value.Handoff != nil || value.TestHandoff != nil {
 				return errors.New("review completed report must contain only a review handoff")
+			}
+			if value.TestObjectionResponse != nil {
+				return errors.New("review completed report must not contain a test objection response")
 			}
 			if value.ReviewHandoff == nil {
 				return errors.New("completed review report requires a review handoff")
@@ -558,7 +618,7 @@ func Validate(value Report, context ValidationContext) error {
 			if value.Handoff == nil {
 				return errors.New("completed report requires a handoff")
 			}
-			if value.TestHandoff != nil || value.ReviewHandoff != nil {
+			if value.TestHandoff != nil || value.ReviewHandoff != nil || value.TestObjectionResponse != nil {
 				return errors.New("implementation completed report must not contain test or review handoff")
 			}
 			if err := validateHandoff(*value.Handoff, context); err != nil {
@@ -572,7 +632,7 @@ func Validate(value Report, context ValidationContext) error {
 		if len(value.Questions) == 0 {
 			return errors.New("needs_clarification report requires at least one question")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || len(value.Evidence) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || value.TestObjectionResponse != nil || len(value.Evidence) != 0 {
 			return errors.New("needs_clarification report must contain only questions")
 		}
 		if err := validateQuestions(value.Questions); err != nil {
@@ -582,7 +642,7 @@ func Validate(value Report, context ValidationContext) error {
 		if len(value.Evidence) == 0 {
 			return errors.New("cannot_proceed report requires evidence")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || len(value.Questions) != 0 {
+		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || value.TestObjectionResponse != nil || len(value.Questions) != 0 {
 			return errors.New("cannot_proceed report must contain only evidence")
 		}
 		if err := validateEvidence(value.Evidence); err != nil {
@@ -748,6 +808,43 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 		if err := validateText(fmt.Sprintf("known_limitations[%d]", index), limitation, maxTextRunes, true); err != nil {
 			return err
 		}
+	}
+	if len(value.TestObjections) > maxTestObjections {
+		return fmt.Errorf("test_objections exceeds %d entries", maxTestObjections)
+	}
+	seenTests := make(map[string]struct{}, len(value.TestObjections))
+	for index, objection := range value.TestObjections {
+		if err := validateText(fmt.Sprintf("test_objections[%d].test", index), objection.Test, maxPathRunes, true); err != nil {
+			return err
+		}
+		if err := validateText(fmt.Sprintf("test_objections[%d].claim", index), objection.Claim, maxTextRunes, true); err != nil {
+			return err
+		}
+		if err := validateText(fmt.Sprintf("test_objections[%d].evidence", index), objection.Evidence, maxTextRunes, true); err != nil {
+			return err
+		}
+		key := strings.TrimSpace(objection.Test)
+		if _, exists := seenTests[key]; exists {
+			return fmt.Errorf("test_objections[%d].test %q is duplicated", index, objection.Test)
+		}
+		seenTests[key] = struct{}{}
+	}
+	return nil
+}
+
+// validateTestObjectionResponse checks the bounded decision returned by the
+// test role without assuming whether the coordinator has an active objection.
+func validateTestObjectionResponse(value TestObjectionResponse) error {
+	switch value.Decision {
+	case TestObjectionAccepted, TestObjectionRejected:
+	default:
+		return fmt.Errorf("unsupported test objection decision %q", value.Decision)
+	}
+	if strings.TrimSpace(value.Reason) == "" {
+		return errors.New("test objection response requires a reason")
+	}
+	if err := validateText("test_objection_response.reason", value.Reason, maxTextRunes, false); err != nil {
+		return err
 	}
 	return nil
 }

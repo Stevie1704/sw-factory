@@ -60,6 +60,8 @@ func Run(request Request) int {
 	flags.Var(&focusedCommands, "focused-command", "focused command run; may be repeated")
 	limitations := stringList{}
 	flags.Var(&limitations, "known-limitation", "known limitation; may be repeated")
+	testObjections := testObjectionList{}
+	flags.Var(&testObjections, "test-objection", "test|claim|evidence; may be repeated")
 	testFiles := stringList{}
 	flags.Var(&testFiles, "test-file", "repository-relative test file; may be repeated")
 	infrastructureFiles := stringList{}
@@ -70,6 +72,8 @@ func Run(request Request) int {
 	flags.Var(&observedFailures, "observed-failure", "red-test evidence kind=detail; may be repeated")
 	uncoveredCriteria := stringList{}
 	flags.Var(&uncoveredCriteria, "uncovered-criterion", "acceptance criterion not covered by this test handoff; may be repeated")
+	objectionDecision := flags.String("objection-decision", "", "accepted or rejected response to the current test objection")
+	objectionReason := flags.String("objection-reason", "", "observable reason for the test objection response")
 	findings := reviewFindingList{}
 	flags.Var(&findings, "finding", "review finding location|claim|evidence|severity|category|resolution|owner; may be repeated")
 	questions := pairList{}
@@ -183,12 +187,19 @@ func Run(request Request) int {
 			value.Handoff = ensureHandoff(value.Handoff)
 			value.Handoff.AcceptanceMapping = append(value.Handoff.AcceptanceMapping, report.AcceptanceMapping{Criterion: pair.Key, Evidence: pair.Value})
 		}
-		if *changeSummary != "" || len(productionFiles) > 0 || len(focusedCommands) > 0 || len(limitations) > 0 {
+		if *changeSummary != "" || len(productionFiles) > 0 || len(focusedCommands) > 0 || len(limitations) > 0 || len(testObjections) > 0 {
 			value.Handoff = ensureHandoff(value.Handoff)
 			value.Handoff.ChangeSummary = *changeSummary
 			value.Handoff.ProductionFilesChanged = append([]string(nil), productionFiles...)
 			value.Handoff.FocusedCommands = append([]string(nil), focusedCommands...)
 			value.Handoff.KnownLimitations = append([]string(nil), limitations...)
+			value.Handoff.TestObjections = append([]report.TestObjection(nil), testObjections...)
+		}
+	}
+	if identity["role"] == "test" && identity["stage"] == "test" && (*objectionDecision != "" || *objectionReason != "") {
+		value.TestObjectionResponse = &report.TestObjectionResponse{
+			Decision: report.TestObjectionDecision(*objectionDecision),
+			Reason:   *objectionReason,
 		}
 	}
 	for _, pair := range questions {
@@ -268,6 +279,34 @@ func (value *stringList) Set(input string) error {
 		return errors.New("value must not be empty")
 	}
 	*value = append(*value, input)
+	return nil
+}
+
+// testObjectionList collects the three bounded fields required to challenge a
+// protected test from the implementation handoff.
+type testObjectionList []report.TestObjection
+
+// String renders the compact test|claim|evidence flag form.
+func (value *testObjectionList) String() string {
+	parts := make([]string, 0, len(*value))
+	for _, objection := range *value {
+		parts = append(parts, strings.Join([]string{objection.Test, objection.Claim, objection.Evidence}, "|"))
+	}
+	return strings.Join(parts, ",")
+}
+
+// Set parses one test|claim|evidence objection without shell interpretation.
+func (value *testObjectionList) Set(input string) error {
+	parts := strings.SplitN(input, "|", 3)
+	if len(parts) != 3 {
+		return errors.New("value must use test|claim|evidence form")
+	}
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			return errors.New("test objection fields must not be empty")
+		}
+	}
+	*value = append(*value, report.TestObjection{Test: parts[0], Claim: parts[1], Evidence: parts[2]})
 	return nil
 }
 

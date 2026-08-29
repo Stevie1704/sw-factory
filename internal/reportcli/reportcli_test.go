@@ -145,6 +145,57 @@ func TestRunWritesTheTestStageHandoff(t *testing.T) {
 	}
 }
 
+// TestRunWritesTestObjectionsAndResponses verifies the worker-facing report
+// command exposes the structured implementation dispute protocol.
+func TestRunWritesTestObjectionsAndResponses(t *testing.T) {
+	implementationDirectory := t.TempDir()
+	var implementationErrors bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{
+			"--outcome", "completed", "--summary", "implementation dispute",
+			"--change-summary", "implemented public behavior", "--acceptance", "behavior=focused test",
+			"--production-file", "internal/factory/agent.go", "--focused-command", "go test ./internal/factory",
+			"--test-objection", "internal/factory/agent_test.go:TestBehavior|the assertion is too narrow|public behavior passes while the assertion fails",
+		},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID": "inv-implementation", "FACTORY_RUN_ID": "run-1", "FACTORY_HARNESS": "codex",
+			"FACTORY_ROLE": "implementation", "FACTORY_STAGE": "implementation", "FACTORY_RESULT_DIR": implementationDirectory,
+		},
+		Output: &bytes.Buffer{}, ErrorsOutput: &implementationErrors,
+	})
+	if status != 0 {
+		t.Fatalf("implementation Run() status = %d, stderr = %s", status, implementationErrors.String())
+	}
+	implementation, err := report.Read(implementationDirectory + "/report.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if implementation.Handoff == nil || len(implementation.Handoff.TestObjections) != 1 || implementation.Handoff.TestObjections[0].Claim == "" {
+		t.Fatalf("implementation handoff = %#v, want one structured objection", implementation.Handoff)
+	}
+
+	testDirectory := t.TempDir()
+	var testErrors bytes.Buffer
+	status = reportcli.Run(reportcli.Request{
+		Args: []string{"--outcome", "completed", "--summary", "objection accepted", "--objection-decision", "accepted", "--objection-reason", "the public contract is correct", "--acceptance", "behavior=revised focused test", "--test-file", "internal/factory/agent_test.go", "--focused-test-command", "go test ./internal/factory -run TestBehavior", "--expected-failure-reason", "expected behavior assertion", "--observed-failure", "exit_code=1"},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID": "inv-test", "FACTORY_RUN_ID": "run-1", "FACTORY_HARNESS": "codex",
+			"FACTORY_ROLE": "test", "FACTORY_STAGE": "test", "FACTORY_RESULT_DIR": testDirectory,
+		},
+		Output: &bytes.Buffer{}, ErrorsOutput: &testErrors,
+	})
+	if status != 0 {
+		t.Fatalf("test Run() status = %d, stderr = %s", status, testErrors.String())
+	}
+	testReport, err := report.Read(testDirectory + "/report.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if testReport.TestObjectionResponse == nil || testReport.TestObjectionResponse.Decision != report.TestObjectionAccepted || testReport.TestHandoff == nil {
+		t.Fatalf("test report = %#v, want accepted objection response and revised handoff", testReport)
+	}
+}
+
 // TestRunWritesTheSpecificationReviewFindingContract verifies repeated review
 // flags bind complete findings to the coordinator-provided checkpoint.
 func TestRunWritesTheSpecificationReviewFindingContract(t *testing.T) {

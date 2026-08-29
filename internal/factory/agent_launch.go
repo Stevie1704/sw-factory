@@ -82,13 +82,46 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if !roleDeclared {
 		return AgentLaunchResult{}, fmt.Errorf("agent role %q is not declared by the workflow registry", request.Role)
 	}
+	testRevision := roleDefinition.Kind == workflow.RoleKindTest && run.Stage == store.StageTest && run.TestObjection != nil
+	if request.testRevision && !testRevision {
+		return AgentLaunchResult{}, errors.New("test revision requires an active test objection")
+	}
+	if roleDefinition.Kind == workflow.RoleKindTest && run.TestRevisionBudget == 0 {
+		run.TestRevisionBudget = packet.RepositoryConfig.RetryLimits.TestRevision
+	}
+	var resumeSource *store.Invocation
+	if testRevision {
+		testInvocationID := run.TestInvocationID
+		if testInvocationID == "" {
+			testInvocationID = run.TestObjection.InvocationID
+		}
+		if testInvocationID == "" {
+			return AgentLaunchResult{}, errors.New("test objection has no original test invocation")
+		}
+		resumeSource, err = invocationStore.Invocation(ctx, run.ID, testInvocationID)
+		if err != nil {
+			return AgentLaunchResult{}, fmt.Errorf("read original test invocation for objection revision: %w", err)
+		}
+		if resumeSource == nil {
+			return AgentLaunchResult{}, fmt.Errorf("original test invocation %q does not belong to run %q", testInvocationID, run.ID)
+		}
+		if resumeSource.Role != workflow.RoleTest || resumeSource.Stage != store.StageTest {
+			return AgentLaunchResult{}, errors.New("test objection original invocation is not a test-stage invocation")
+		}
+		if resumeSource.Status == store.InvocationStatusActive {
+			return AgentLaunchResult{}, fmt.Errorf("original test invocation %q is still active", resumeSource.ID)
+		}
+		if strings.TrimSpace(resumeSource.NativeSessionID) == "" {
+			return AgentLaunchResult{}, errors.New("original test invocation has no native session identifier")
+		}
+	}
 	if len(request.PermittedPaths) == 0 {
 		request.PermittedPaths = append([]string(nil), roleDefinition.DefaultPermittedPaths...)
 	}
 	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	if latestStore, ok := runStore.(LatestInvocationStore); ok {
+	if latestStore, ok := runStore.(LatestInvocationStore); ok && !testRevision {
 		latest, latestErr := latestStore.LatestInvocation(ctx, run.ID)
 		if latestErr != nil {
 			return AgentLaunchResult{}, fmt.Errorf("look up latest invocation before launch: %w", latestErr)
@@ -126,6 +159,17 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	policy, err := resolveAgentPolicy(packet.RepositoryConfig, request)
 	if err != nil {
 		return AgentLaunchResult{}, err
+	}
+	if resumeSource != nil {
+		if resumeSource.Harness != string(policy.Harness) {
+			return AgentLaunchResult{}, fmt.Errorf("test objection must resume the original %s harness, not %s", resumeSource.Harness, policy.Harness)
+		}
+		if resumeSource.Model != "" {
+			policy.Model = resumeSource.Model
+		}
+		if resumeSource.ReasoningEffort != "" {
+			policy.ReasoningEffort = resumeSource.ReasoningEffort
+		}
 	}
 	seedCredentials, credentialStoreID, err := s.credentialSeeding(registration, request, policy.Harness)
 	if err != nil {
@@ -165,6 +209,9 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		DesignHandoff:       designHandoff,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
 		TestHandoff:         run.TestHandoff,
+		TestObjection:       run.TestObjection,
+		TestRevisionAttempt: run.TestRevisionAttempts,
+		TestRevisionBudget:  run.TestRevisionBudget,
 		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
 		TestExemption:       run.TestExemption,
 		ReviewContext:       reviewContext,
@@ -180,6 +227,9 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Route:                   packet.Route,
 		DesignHandoff:           designHandoff,
 		TestHandoff:             run.TestHandoff,
+		TestObjection:           run.TestObjection,
+		TestRevisionAttempt:     run.TestRevisionAttempts,
+		TestRevisionBudget:      run.TestRevisionBudget,
 		ProtectedTestPaths:      run.ProtectedTestPaths,
 		TestExemption:           run.TestExemption,
 		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
@@ -209,6 +259,9 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Status:              store.InvocationStatusActive,
 		CreatedAt:           createdAt,
 		UpdatedAt:           createdAt,
+	}
+	if resumeSource != nil {
+		invocation.NativeSessionID = resumeSource.NativeSessionID
 	}
 	invocationPersisted := false
 	workerStarted := false
@@ -330,7 +383,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: control.ID, Title: "factory run started", Body: fmt.Sprintf("%s %s agent active", run.ID, role)}); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	session, err := harnessRuntime.Start(ctx, harness.StartRequest{
+	startRequest := harness.StartRequest{
 		InvocationID:    invocationID,
 		RunID:           run.ID,
 		Role:            role,
@@ -341,7 +394,14 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Prompt:          promptText,
 		Model:           policy.Model,
 		ReasoningEffort: policy.ReasoningEffort,
-	})
+	}
+	var session harness.Session
+	if resumeSource != nil {
+		startRequest.ResumeSessionID = resumeSource.NativeSessionID
+		session, err = harnessRuntime.Resume(ctx, startRequest)
+	} else {
+		session, err = harnessRuntime.Start(ctx, startRequest)
+	}
 	if err != nil {
 		classified := harness.ClassifyError(err, string(policy.Harness))
 		if harness.IsRateLimited(classified) {
@@ -397,6 +457,12 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	run.Stage = stage
 	run.Status = store.StatusActive
 	run.ActiveInvocationID = invocation.ID
+	if roleDefinition.Kind == workflow.RoleKindTest {
+		run.TestInvocationID = invocation.ID
+		if run.TestRevisionBudget == 0 {
+			run.TestRevisionBudget = packet.RepositoryConfig.RetryLimits.TestRevision
+		}
+	}
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("persist %s stage: %w", role, err)
@@ -536,6 +602,9 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 		Route:                   packet.Route,
 		DesignHandoff:           persisted.DesignHandoff,
 		TestHandoff:             persisted.TestHandoff,
+		TestObjection:           persisted.TestObjection,
+		TestRevisionAttempt:     persisted.TestRevisionAttempt,
+		TestRevisionBudget:      persisted.TestRevisionBudget,
 		ProtectedTestPaths:      persisted.ProtectedTestPaths,
 		TestExemption:           persisted.TestExemption,
 		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
@@ -603,6 +672,14 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 			return errors.New("persisted invocation packet route does not match the frozen specification packet route")
 		}
 	}
+	if persisted.SchemaVersion >= 7 {
+		if !sameTestObjection(persisted.TestObjection, run.TestObjection) {
+			return errors.New("persisted invocation packet test objection does not match the run")
+		}
+		if run.TestObjection != nil && (persisted.TestRevisionAttempt != run.TestRevisionAttempts || persisted.TestRevisionBudget != run.TestRevisionBudget) {
+			return errors.New("persisted invocation packet test revision state does not match the run")
+		}
+	}
 	if invocation.Role == workflow.RoleSpecificationReview {
 		if persisted.ReviewContext == nil {
 			return errors.New("persisted specification-review invocation packet has no review context")
@@ -615,6 +692,15 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 		}
 	}
 	return nil
+}
+
+// sameTestObjection compares the coordinator-owned objection payload without
+// exposing pointer identity as part of restart validation.
+func sameTestObjection(left, right *store.TestObjection) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Test == right.Test && left.Claim == right.Claim && left.Evidence == right.Evidence && left.InvocationID == right.InvocationID
 }
 
 // checkRepairAttempt extracts the bounded repair attempt from a persisted

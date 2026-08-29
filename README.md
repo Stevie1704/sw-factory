@@ -90,6 +90,7 @@ operational store, GitHub comments, and the documentation.
 | **Gate**                 | A deterministic repository command, such as formatting, vetting, testing, or building, run in the policy-defined environment.                                  |
 | **Operational store**    | A private SQLite database that records run state, identities, effects, reports, gate results, and content-free evaluation summaries.                           |
 | **Baseline**             | The pre-edit setup and gate result for the frozen packet. It proves what the repository looked like before agent edits.                                        |
+| **Test objection cycle** | A bounded implementation-to-test dispute: implementation supplies a test claim and evidence, the original test session accepts or rejects it, and an accepted revision must pass independent red verification. Automation is pilot-gated and capped at two attempts. |
 | **Recovery diagnosis**   | A read-only comparison of durable state against Git, GitHub, the worktree, worker, terminal, harness, and operational store.                                   |
 | **Reconciliation**       | A deliberate restart pass that replays an exact pending effect or pauses for human inspection when external state is ambiguous.                                |
 
@@ -124,6 +125,8 @@ implementation role owns the complete red/green/refactor loop. It may add or
 revise focused behavioral tests and essential test infrastructure within its
 permitted scope. There is no separate test invocation, handoff, checkpoint,
 protected-test path, exemption, or test-stage dispute in advisory mode.
+The checked-in policy also keeps automated implementation objections disabled;
+the measured pilot must record `proceed` before that switch is enabled.
 
 Repositories using required mode, and any run whose issue selected a workflow
 route, enter the independent test stage. In required mode that stage can be
@@ -138,7 +141,11 @@ claim:
 The test policy must allow that exemption. In required mode, a test handoff never
 owns production files. Once accepted, its test checkpoint and protected test
 paths are carried into implementation, and an implementation report that changes
-a protected test path is rejected.
+a protected test path is rejected. Instead, implementation can submit a
+structured objection naming the test, disputed claim, and observable evidence.
+Before pilot authorization the objection is preserved for human disposition; an
+authorized run can resume the original test session for at most two independently
+verified revision attempts.
 
 ### Workflow routes
 
@@ -489,6 +496,8 @@ test_policy:
   mode: required
   allow_human_exemption: true
   allow_technical_exemption: true
+  # Enable only after the measured pilot records a proceed decision in #26.
+  allow_automated_objections: false
 
 allowed_overrides: [model, reasoning_effort]
 
@@ -709,6 +718,30 @@ worktree state, and native session identity. Terminal output is never treated
 as a result. An accepted implementation report leaves the run ready for the
 host-owned checkpoint and check sequence.
 
+If implementation finds that a protected test encodes the wrong contract, it
+can add a structured objection instead of editing that test:
+
+~~~sh
+factory-report \
+  --outcome completed \
+  --summary 'implementation found a disputed test claim' \
+  --change-summary 'implemented the observable behavior' \
+  --acceptance 'criterion=focused test' \
+  --production-file internal/example.go \
+  --focused-command 'go test ./internal/...' \
+  --test-objection 'internal/example_test.go:TestBehavior|the assertion is too narrow|public behavior passes while the assertion fails'
+~~~
+
+The coordinator preserves the objection and waits for a human while
+`test_policy.allow_automated_objections` is false. Once the measured pilot has
+authorized automation, and the latest authorized maintainer decision comment
+on issue #26 says `Decision: proceed`, it resumes the original test session
+with the current implementation context. A later `revise and repeat` or `stop`
+decision closes that gate. The test role may accept or reject the objection; an
+accepted revision must pass a new independent red verification before
+implementation resumes, and the cycle stops for human disposition after two
+attempts or any verification failure.
+
 An optional architecture detour can be started when the run has no conflicting
 active invocation:
 
@@ -881,7 +914,27 @@ factory-report \
 The coordinator reruns <code>--focused-test-command</code> inside the worker.
 Passing output, a missing expected failure reason, a command/path dispute, or
 any other unverifiable result becomes a <code>test_dispute</code> escalation
-and pauses for a human; it does not trigger an automatic revision loop.
+and pauses for a human; it does not trigger the implementation objection cycle.
+
+For an implementation objection, repeat `--test-objection` once per disputed
+claim. A resumed test role reports its decision with the test response flags:
+
+~~~sh
+factory-report \
+  --outcome completed \
+  --summary 'test objection accepted' \
+  --objection-decision accepted \
+  --objection-reason 'the public behavior is the stable contract' \
+  --acceptance 'criterion=revised focused test' \
+  --test-file internal/example_test.go \
+  --focused-test-command 'go test ./internal -run TestBehavior' \
+  --expected-failure-reason 'expected behavior assertion' \
+  --observed-failure 'exit_code=1'
+~~~
+
+Use `--objection-decision rejected` with a concise reason when the test claim
+stands. Rejection, direct edits to protected paths, or failed red verification
+pauses the run for human disposition.
 
 ### Clarification and blocked outcomes
 
@@ -1075,8 +1128,12 @@ no agent may choose, skip, or redefine one.
 3. The coordinator launches the role the workflow registry declares for that
    stage, then waits while the invocation runs.
 4. When the invocation writes its structured report, the coordinator validates
-   and accepts it through the same boundary as <code>factory agent-report</code>
-   and advances to the next legal stage.
+   and accepts it through the same boundary as <code>factory agent-report</code>.
+   A structured implementation objection either waits for the measured-pilot
+   gate, or starts the bounded native-resume test cycle; an accepted revision
+   must pass independent red verification before the implementation stage can
+   continue. Rejection, failed verification, or an objection after the second
+   attempt pauses for a human.
 5. An accepted implementation is checkpointed, every configured gate runs
    against that exact checkpoint, and a failed gate enters the bounded
    check-repair loop.
@@ -1312,6 +1369,9 @@ The worker-facing command supports:
 --focused-test-command <command>
 --expected-failure-reason <text>
 --observed-failure kind=detail                            # repeatable
+--test-objection test|claim|evidence                      # repeatable, implementation only
+--objection-decision accepted|rejected                   # test revision only
+--objection-reason <reason>                              # test revision only
 --uncovered-criterion <criterion>                        # repeatable
 --finding location|claim|evidence|severity|category|resolution|owner  # repeatable
 --question id=text                                        # repeatable

@@ -217,6 +217,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		}
 		return cause
 	}
+	testRevisionBudget := testRevisionBudgetForPacket(packet)
 	run := store.Run{
 		ID:                  runID,
 		RepositoryPath:      registration.Path,
@@ -230,6 +231,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		ImageDigest:         repositoryConfig.WorkerBuild.Digest,
 		Coordinator:         s.deps.Coordinator,
 		CheckRepairBudget:   repositoryConfig.RetryLimits.CheckRepair,
+		TestRevisionBudget:  testRevisionBudget,
 		SpecificationPacket: string(packetData),
 		CreatedAt:           startedAt,
 		UpdatedAt:           startedAt,
@@ -255,6 +257,16 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return IssueResult{}, cleanupWorkspace(failureErr)
 	}
 	return IssueResult{Run: run, Packet: packet}, nil
+}
+
+// testRevisionBudgetForPacket returns a revision ceiling only for runs that
+// actually have an independently owned test stage. Advisory implementation
+// runs do not expose the protected-test objection protocol.
+func testRevisionBudgetForPacket(packet SpecificationPacket) int {
+	if packet.Route.RequiresIndependentTestStage() || packet.RepositoryConfig.TestPolicy.Mode == config.TestModeRequired {
+		return packet.RepositoryConfig.RetryLimits.TestRevision
+	}
+	return 0
 }
 
 // Transition edits the existing status comment and updates the orthogonal
@@ -743,7 +755,7 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 			return s.pauseAgentStartup(ctx, registration, runStore, run, diagnosis)
 		}
 		resumedActiveInvocation := latest != nil && latest.Status == store.InvocationStatusActive && latest.RecoveryResumeCount > 0
-		if latest != nil && latest.Status != store.InvocationStatusSuperseded && !resumedActiveInvocation && invocationBlocksCleanStart(*run, *latest) {
+		if latest != nil && latest.Status != store.InvocationStatusSuperseded && !resumedActiveInvocation && invocationBlocksCleanStart(*run, *latest) && !testRevisionPending(*run) {
 			diagnosis.InvocationExists = true
 			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
 				Kind:     RecoveryDiscrepancyWorkflow,
@@ -1010,6 +1022,7 @@ func statusCommentBody(run store.Run) string {
 			checkRepair += fmt.Sprintf("- check-repair pending: attempt %d\n", run.CheckRepairPendingAttempt)
 		}
 	}
+	testRevision := testRevisionStatusComment(run)
 	questions := ""
 	if len(run.PendingQuestions) > 0 {
 		questions = "\n### Pending clarification\n\n"
@@ -1019,7 +1032,31 @@ func statusCommentBody(run store.Run) string {
 	}
 	review := specificationReviewStatusComment(run)
 	activity := activityStatusComment(run)
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, pullRequest, lifecycle, harness, review, questions, commandFeedback)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, testRevision, pullRequest, lifecycle, harness, review, questions, commandFeedback)
+}
+
+// testRevisionStatusComment renders the bounded objection-cycle projection
+// without exposing test claims or implementation transcripts.
+func testRevisionStatusComment(run store.Run) string {
+	if run.TestRevisionBudget <= 0 && len(run.TestRevisionHistory) == 0 && run.TestObjection == nil {
+		return ""
+	}
+	remaining := run.TestRevisionBudget - run.TestRevisionAttempts
+	if remaining < 0 {
+		remaining = 0
+	}
+	result := fmt.Sprintf("\n### Test objection cycle\n\n- attempts: %d/%d\n- remaining: %d\n", run.TestRevisionAttempts, run.TestRevisionBudget, remaining)
+	if len(run.TestRevisionHistory) > 0 {
+		outcomes := make([]string, 0, len(run.TestRevisionHistory))
+		for _, revision := range run.TestRevisionHistory {
+			outcomes = append(outcomes, fmt.Sprintf("%d=%s", revision.Attempt, safeStatusCommentValue(string(revision.Outcome))))
+		}
+		result += "- outcomes: " + strings.Join(outcomes, ", ") + "\n"
+	}
+	if run.TestObjection != nil {
+		result += fmt.Sprintf("- current test: `%s`\n", safeStatusCommentValue(run.TestObjection.Test))
+	}
+	return result
 }
 
 // StatusCommentBody renders the coordinator-owned status projection for one

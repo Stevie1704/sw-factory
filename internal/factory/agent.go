@@ -61,6 +61,10 @@ type AgentRequest struct {
 	ClaudeAuthPath string
 	// PermittedPaths constrains production paths in the accepted handoff.
 	PermittedPaths []string
+	// testRevision requests a native resume of the original test session for
+	// an automated objection cycle. It is coordinator-internal and never
+	// exposed as a user-selectable authority.
+	testRevision bool
 }
 
 // AgentLaunchResult reports the persisted invocation and prompt after launch.
@@ -123,6 +127,13 @@ type InvocationPacket struct {
 	PermittedPaths []string `json:"permitted_paths"`
 	// TestHandoff carries the accepted test-stage evidence to implementation.
 	TestHandoff *store.TestHandoff `json:"test_handoff,omitempty"`
+	// TestObjection carries the current implementation dispute to a resumed
+	// test role.
+	TestObjection *store.TestObjection `json:"test_objection,omitempty"`
+	// TestRevisionAttempt identifies the active objection cycle.
+	TestRevisionAttempt int `json:"test_revision_attempt,omitempty"`
+	// TestRevisionBudget is the frozen objection-cycle ceiling.
+	TestRevisionBudget int `json:"test_revision_budget,omitempty"`
 	// ProtectedTestPaths records test files implementation must not edit.
 	ProtectedTestPaths []store.ProtectedTestPath `json:"protected_test_paths,omitempty"`
 	// TestExemption carries a provisional technical exemption to the reviewer.
@@ -140,8 +151,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version six adds the frozen contract-first route and its design handoff.
-	invocationPacketVersion = 6
+	// Version seven adds the current test objection and revision budget.
+	invocationPacketVersion = 7
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
@@ -295,7 +306,15 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if inspectErr != nil {
 		return AgentResult{}, fmt.Errorf("inspect worktree for agent report: %w", inspectErr)
 	}
-	validationContext.ObservedChanges = state.ChangedPaths
+	testRevisionActive := isTestInvocation && run.TestObjection != nil
+	observedChanges := append([]string(nil), state.ChangedPaths...)
+	if testRevisionActive {
+		observedChanges, err = testRevisionChangedPaths(state, run.TestRevisionBaseChangedPaths)
+		if err != nil {
+			return AgentResult{}, fmt.Errorf("compute test revision worktree changes: %w", err)
+		}
+	}
+	validationContext.ObservedChanges = observedChanges
 	validationContext.WorktreeObserved = true
 	if run.CheckpointSHA != "" && state.HeadSHA != run.CheckpointSHA {
 		return AgentResult{}, fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", state.HeadSHA, run.CheckpointSHA)
@@ -317,6 +336,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	validationContext.TestInfrastructurePaths = packet.RepositoryConfig.TestPolicy.InfrastructurePaths
 	if err := report.Validate(value, validationContext); err != nil {
 		if isUnverifiableTestReport(value, *invocation) {
+			if testRevisionActive {
+				return s.pauseUnverifiableTestRevisionReport(ctx, registration, runStore, run, invocation, value)
+			}
 			return s.pauseUnverifiableTestReport(ctx, registration, runStore, run, invocation, value)
 		}
 		return AgentResult{}, err
@@ -326,7 +348,24 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			return AgentResult{}, err
 		}
 	}
-	if err := validateProtectedTestPaths(run.Worktree, state, run.ProtectedTestPaths); err != nil {
+	implementationObjection := implementationTestObjection(value, *invocation)
+	if value.TestObjectionResponse != nil && !testRevisionActive {
+		return AgentResult{}, errors.New("test objection response requires an active implementation objection")
+	}
+	if implementationObjection {
+		if err := validateImplementationTestObjection(value, *invocation, *run, packet); err != nil {
+			return AgentResult{}, err
+		}
+	}
+	automatedObjection, objectionGateReason := false, ""
+	if implementationObjection {
+		automatedObjection, objectionGateReason = s.automatedTestObjectionGate(ctx, registration, packet)
+	}
+	if testRevisionActive {
+		if err := validateTestChangedPaths(observedChanges, packet.RepositoryConfig.TestPolicy); err != nil {
+			return AgentResult{}, fmt.Errorf("test revision path ownership: %w", err)
+		}
+	} else if err := validateProtectedTestPaths(run.Worktree, state, run.ProtectedTestPaths); err != nil {
 		return AgentResult{}, err
 	}
 	if value.Outcome == report.OutcomeNeedsClarification {
@@ -371,6 +410,11 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 				return AgentResult{}, fmt.Errorf("record local evaluation usage: %w", err)
 			}
 		}
+		if implementationObjection || (testRevisionActive && value.TestObjectionResponse != nil) {
+			if err := recorder.RecordEvaluationEscalation(ctx, run.ID, store.EvaluationEscalationTestDispute); err != nil {
+				return AgentResult{}, fmt.Errorf("record test objection escalation: %w", err)
+			}
+		}
 		switch value.Outcome {
 		case report.OutcomeNeedsClarification:
 			if err := recorder.RecordEvaluationEscalation(ctx, run.ID, store.EvaluationEscalationClarification); err != nil {
@@ -407,7 +451,12 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		releaseActiveInvocation(&nextRun, invocation.ID)
 		isTestReport := isTestInvocation
 		isReviewReport := isReviewInvocation
-		if !isTestReport && !isReviewReport {
+		if implementationObjection {
+			nextRun, err = projectImplementationTestObjection(previousRun, value, *invocation, packet, state, automatedObjection, objectionGateReason)
+			if err != nil {
+				return AgentResult{}, err
+			}
+		} else if !isTestReport && !isReviewReport {
 			nextRun = agentReportRunProjection(previousRun, invocation.Stage, value)
 		}
 		nextRun.Revision = previousRun.Revision + 1
@@ -415,7 +464,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			nextRun.Revision = previousRun.Revision
 		}
 		nextRun.UpdatedAt = s.deps.Now().UTC()
-		stopWorkerAfterReport := value.Outcome == report.OutcomeNeedsClarification || isReviewReport
+		stopWorkerAfterReport := value.Outcome == report.OutcomeNeedsClarification || isReviewReport || implementationObjection
 		acceptedInvocation, nextRun, err = s.acceptResultWithEffect(ctx, runStore, invocationStore, registration, harnessRuntime, harness.Session{
 			InvocationID:    acceptedInvocation.ID,
 			NativeSessionID: nativeSessionID,
@@ -426,6 +475,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		}
 		*invocation = acceptedInvocation
 		*run = nextRun
+		if implementationObjection {
+			return s.finishImplementationTestObjection(ctx, registration, runStore, run, invocation, value)
+		}
 		if isTestReport {
 			return s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
 		}
@@ -457,6 +509,18 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	previousRun := *run
 	releaseActiveInvocation(run, invocation.ID)
+	if implementationObjection {
+		*run, err = projectImplementationTestObjection(previousRun, value, *invocation, packet, state, automatedObjection, objectionGateReason)
+		if err != nil {
+			return AgentResult{}, err
+		}
+		run.Revision = previousRun.Revision + 1
+		run.UpdatedAt = s.deps.Now().UTC()
+		if err := s.persistAgentRunState(ctx, registration, runStore, previousRun, *run); err != nil {
+			return AgentResult{}, fmt.Errorf("persist implementation test objection: %w", err)
+		}
+		return s.finishImplementationTestObjection(ctx, registration, runStore, run, invocation, value)
+	}
 	if isTestInvocation {
 		return s.acceptTestStageReport(ctx, registration, runStore, run, invocation, value, state)
 	}

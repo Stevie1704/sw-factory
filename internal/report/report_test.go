@@ -316,6 +316,52 @@ func TestValidateRejectsAReviewHandoffForTestCompletion(t *testing.T) {
 	}
 }
 
+// TestValidateAcceptsTheStructuredTestObjectionProtocol verifies an
+// implementation objection and both bounded test-role response shapes remain
+// strict report-level contracts.
+func TestValidateAcceptsTheStructuredTestObjectionProtocol(t *testing.T) {
+	implementation := completedReport()
+	implementation.Handoff.TestObjections = []report.TestObjection{{
+		Test:     "internal/factory/agent_test.go:TestBehavior",
+		Claim:    "the assertion over-specifies an implementation detail",
+		Evidence: "the public behavior is correct while the assertion fails",
+	}}
+	if err := report.Validate(implementation, report.ValidationContext{InvocationID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: "implementation"}); err != nil {
+		t.Fatalf("Validate(implementation objection) error = %v", err)
+	}
+
+	accepted := testStageReport()
+	accepted.TestObjectionResponse = &report.TestObjectionResponse{Decision: report.TestObjectionAccepted, Reason: "the public contract is stable"}
+	if err := report.Validate(accepted, report.ValidationContext{InvocationID: "inv-test", RunID: "run-test", Harness: "codex", Role: "test", Stage: "test", WorktreeObserved: true, ObservedChanges: accepted.TestHandoff.ChangedFiles}); err != nil {
+		t.Fatalf("Validate(accepted objection) error = %v", err)
+	}
+
+	rejected := testStageReport()
+	rejected.TestHandoff = nil
+	rejected.TestObjectionResponse = &report.TestObjectionResponse{Decision: report.TestObjectionRejected, Reason: "the frozen specification requires this behavior"}
+	if err := report.Validate(rejected, report.ValidationContext{InvocationID: "inv-test", RunID: "run-test", Harness: "codex", Role: "test", Stage: "test"}); err != nil {
+		t.Fatalf("Validate(rejected objection) error = %v", err)
+	}
+}
+
+// TestValidateRejectsMalformedTestObjectionResponses verifies unknown
+// decisions and unexplained objection responses cannot reach the coordinator.
+func TestValidateRejectsMalformedTestObjectionResponses(t *testing.T) {
+	for name, response := range map[string]report.TestObjectionResponse{
+		"unknown decision":          {Decision: "maybe", Reason: "unclear"},
+		"missing acceptance reason": {Decision: report.TestObjectionAccepted},
+		"missing rejection reason":  {Decision: report.TestObjectionRejected},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := testStageReport()
+			value.TestObjectionResponse = &response
+			if err := report.Validate(value, report.ValidationContext{InvocationID: "inv-test", RunID: "run-test", Harness: "codex", Role: "test", Stage: "test"}); err == nil {
+				t.Fatal("Validate() accepted malformed objection response")
+			}
+		})
+	}
+}
+
 // TestValidateAcceptsACompleteSpecificationReview verifies a review binds its
 // findings to the exact immutable checkpoint and preserves advisory findings.
 func TestValidateAcceptsACompleteSpecificationReview(t *testing.T) {

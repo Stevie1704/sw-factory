@@ -396,6 +396,12 @@ func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store
 // produced for an older specification packet before a new role starts.
 func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPacket) {
 	run.TestHandoff = nil
+	run.TestInvocationID = ""
+	run.TestRevisionAttempts = 0
+	run.TestRevisionBudget = testRevisionBudgetForPacket(packet)
+	run.TestRevisionHistory = nil
+	run.TestObjection = nil
+	run.TestRevisionBaseChangedPaths = nil
 	run.RoleHandoff = nil
 	run.ImplementationHandoff = nil
 	run.SpecificationReview = nil
