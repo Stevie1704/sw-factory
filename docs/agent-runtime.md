@@ -153,6 +153,20 @@ on the `design-acceptance` route also receives `design_handoff`, the accepted
 architecture design it must exercise. The worker receives a separate writable `/results` mount
 containing only that invocation's result directory.
 
+An implementation report may include one or more structured `test_objection`
+entries. Each entry identifies the protected test, the claim under dispute, and
+observable evidence; it does not authorize an implementation edit to the
+protected path. When `test_policy.allow_automated_objections` is disabled, the
+coordinator records the objection and pauses for a human. After the measured
+pilot authorizes automation and an authorized maintainer's latest #26 decision
+comment says `Decision: proceed`, the coordinator resumes the original test
+session with the current implementation context. A later `revise and repeat`
+or `stop` decision closes the gate. The test role returns an accepted or
+rejected response; an accepted revision must produce new test content and pass
+an independently rerun focused command with the expected red failure before the
+implementation role resumes. A rejection, verification failure, or an objection
+after the second attempt pauses for human disposition.
+
 The harness reports through the worker-image command:
 
 ```sh
@@ -204,7 +218,9 @@ and requires the reported `expected_failure_reason` to appear in the captured
 output. Only that matching non-zero exit is verified red evidence. A passing
 command, worker failure, missing expected reason, or path-ownership dispute moves the run to `test/waiting_for_human`;
 the coordinator records only the content-free `test_dispute` evaluation
-category and does not revise the test automatically.
+category. An implementation objection follows the separately gated objection
+cycle described above; ordinary unverifiable test-stage reports never trigger
+that cycle.
 
 On verified red evidence in required mode, the coordinator creates a distinct
 test checkpoint, records every changed test/infrastructure path and its SHA-256
@@ -249,7 +265,9 @@ Human skips must be frozen in the issue before claim with an exact marker:
 The repository must allow human exemptions for required-mode skips. Technical
 exemptions may be reported by the required-mode test agent only when policy
 allows them; they are provisional and are carried to later review. Advisory
-implementation reports do not use test-stage exemptions or disputes.
+implementation reports do not use test-stage exemptions or disputes, but an
+implementation-owned advisory handoff may still include its own behavioral
+tests without invoking the protected-test objection cycle.
 
 When the harness has reliable measurements or content-free policy signals, it
 may also pass `--input-tokens`, `--output-tokens`, `--total-tokens`,

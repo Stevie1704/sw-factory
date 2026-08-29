@@ -52,6 +52,8 @@ test_policy:
   mode: advisory
   allow_human_exemption: true
   allow_technical_exemption: true
+  # Enable only after the measured pilot records a proceed decision in #26.
+  allow_automated_objections: false
 allowed_overrides: [model, reasoning_effort]
 caches:
   - name: go-build

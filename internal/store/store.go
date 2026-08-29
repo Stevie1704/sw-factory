@@ -19,7 +19,11 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 26
+const CurrentSchemaVersion = 27
+
+// MaxTestRevisionAttempts is the hard safety ceiling for automated
+// implementation-versus-test objection cycles.
+const MaxTestRevisionAttempts = 2
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -215,6 +219,49 @@ type TestFailureEvidence struct {
 	Detail string `json:"detail"`
 }
 
+// TestObjection is the durable implementation claim that a protected test is
+// incorrect. InvocationID is coordinator-owned and records which original
+// test session must receive the objection on resume.
+type TestObjection struct {
+	// Test identifies the disputed test by path, name, or both.
+	Test string `json:"test"`
+	// Claim states the behavioral assertion the test makes.
+	Claim string `json:"claim"`
+	// Evidence identifies observable implementation evidence supporting the
+	// objection.
+	Evidence string `json:"evidence"`
+	// InvocationID identifies the original test invocation to resume.
+	InvocationID string `json:"invocation_id,omitempty"`
+}
+
+// TestRevisionOutcome is the bounded status of one objection cycle.
+type TestRevisionOutcome string
+
+const (
+	// TestRevisionPending means the test role has not answered the objection.
+	TestRevisionPending TestRevisionOutcome = "pending"
+	// TestRevisionAccepted means the test role accepted and revised the test.
+	TestRevisionAccepted TestRevisionOutcome = "accepted"
+	// TestRevisionRejected means the test role rejected the objection.
+	TestRevisionRejected TestRevisionOutcome = "rejected"
+	// TestRevisionVerificationFailed means the revised test did not reproduce
+	// the expected red failure under coordinator verification.
+	TestRevisionVerificationFailed TestRevisionOutcome = "verification_failed"
+	// TestRevisionEscalated means the bounded revision budget was exhausted.
+	TestRevisionEscalated TestRevisionOutcome = "escalated"
+)
+
+// TestRevision records one bounded objection cycle and its latest outcome.
+type TestRevision struct {
+	// Attempt is the one-based cycle number.
+	Attempt int `json:"attempt"`
+	// Outcome is pending, accepted, rejected, verification_failed, or escalated.
+	Outcome TestRevisionOutcome `json:"outcome"`
+	// DisputeKey groups revision cycles that address the same test claim while
+	// allowing a later, distinct objection to receive its own two-cycle budget.
+	DisputeKey string `json:"dispute_key,omitempty"`
+}
+
 // TestHandoff is the durable test-stage transfer packet for implementation.
 type TestHandoff struct {
 	// AcceptanceCoverage maps acceptance criteria to test evidence.
@@ -265,6 +312,9 @@ type RoleHandoff struct {
 	FocusedCommands []string `json:"focused_commands"`
 	// KnownLimitations carries bounded visible limitations.
 	KnownLimitations []string `json:"known_limitations,omitempty"`
+	// TestObjections contains structured disputes about protected test-stage
+	// behavior.
+	TestObjections []TestObjection `json:"test_objections,omitempty"`
 }
 
 // ImplementationHandoff is the legacy name retained for callers and persisted
@@ -324,6 +374,23 @@ type Run struct {
 	TestCheckpointSHA string
 	// TestHandoff is the accepted structured test-stage transfer packet.
 	TestHandoff *TestHandoff
+	// TestInvocationID identifies the latest test invocation whose native
+	// session should receive a future implementation objection.
+	TestInvocationID string
+	// TestRevisionAttempts is the number of objection cycles started.
+	TestRevisionAttempts int
+	// TestRevisionBudget is the frozen maximum number of objection cycles.
+	TestRevisionBudget int
+	// TestRevisionHistory records bounded objection outcomes for status and
+	// recovery projection.
+	TestRevisionHistory []TestRevision
+	// TestObjection is the current implementation objection awaiting a test
+	// role response. It is cleared after an accepted revision.
+	TestObjection *TestObjection
+	// TestRevisionBaseChangedPaths records implementation changes already in
+	// the worktree when the current objection was submitted, including their
+	// content identity so a resumed test role cannot alter them silently.
+	TestRevisionBaseChangedPaths []ProtectedTestPath
 	// RoleHandoff is the accepted role transfer packet.
 	RoleHandoff *RoleHandoff
 	// ImplementationHandoff is the legacy compatibility projection of
@@ -646,7 +713,10 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
-		       test_handoff, implementation_handoff, specification_review,
+		       test_handoff, test_invocation_id, test_revision_attempts,
+		       test_revision_budget, test_revision_history, test_objection,
+		       test_revision_base_changed_paths,
+		       implementation_handoff, specification_review,
 		       test_exemption, protected_test_paths, test_stage_skipped,
 		       active_invocation_id,
 		       image_digest, coordinator, status_comment_id,
@@ -671,7 +741,10 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
-		       test_handoff, implementation_handoff, specification_review,
+		       test_handoff, test_invocation_id, test_revision_attempts,
+		       test_revision_budget, test_revision_history, test_objection,
+		       test_revision_base_changed_paths,
+		       implementation_handoff, specification_review,
 		       test_exemption, protected_test_paths, test_stage_skipped,
 		       active_invocation_id,
 		       image_digest, coordinator, status_comment_id,
@@ -694,6 +767,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, testCheckpointSHA string
 	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON string
+	var testRevisionHistoryJSON, testObjectionJSON, testRevisionBaseChangedPathsJSON string
 	var testExemptionJSON, protectedTestPathsJSON string
 	var pendingQuestionsJSON, clarificationCommentID, terminalAt, createdAt, updatedAt string
 	var clarificationNotificationSent bool
@@ -710,6 +784,12 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&baseCheckpointSHA,
 		&testCheckpointSHA,
 		&testHandoffJSON,
+		&run.TestInvocationID,
+		&run.TestRevisionAttempts,
+		&run.TestRevisionBudget,
+		&testRevisionHistoryJSON,
+		&testObjectionJSON,
+		&testRevisionBaseChangedPathsJSON,
 		&roleHandoffJSON,
 		&specificationReviewJSON,
 		&testExemptionJSON,
@@ -761,6 +841,22 @@ func scanRun(row *sql.Row) (*Run, error) {
 		run.TestHandoff = &TestHandoff{}
 		if err := json.Unmarshal([]byte(testHandoffJSON), run.TestHandoff); err != nil {
 			return nil, fmt.Errorf("decode test handoff: %w", err)
+		}
+	}
+	if testRevisionHistoryJSON != "" {
+		if err := json.Unmarshal([]byte(testRevisionHistoryJSON), &run.TestRevisionHistory); err != nil {
+			return nil, fmt.Errorf("decode test revision history: %w", err)
+		}
+	}
+	if testObjectionJSON != "" {
+		run.TestObjection = &TestObjection{}
+		if err := json.Unmarshal([]byte(testObjectionJSON), run.TestObjection); err != nil {
+			return nil, fmt.Errorf("decode test objection: %w", err)
+		}
+	}
+	if testRevisionBaseChangedPathsJSON != "" {
+		if err := json.Unmarshal([]byte(testRevisionBaseChangedPathsJSON), &run.TestRevisionBaseChangedPaths); err != nil {
+			return nil, fmt.Errorf("decode test revision base changed paths: %w", err)
 		}
 	}
 	if roleHandoffJSON != "" {
@@ -1021,6 +1117,18 @@ func normalizeRun(run Run) (Run, error) {
 	if run.CheckRepairPendingAttempt != 0 && run.CheckRepairPendingAttempt != run.CheckRepairAttempts+1 {
 		return Run{}, errors.New("run pending check-repair attempt must be the next attempt")
 	}
+	if run.TestRevisionAttempts < 0 {
+		return Run{}, errors.New("run test-revision attempts must not be negative")
+	}
+	if run.TestRevisionBudget < 0 {
+		return Run{}, errors.New("run test-revision budget must not be negative")
+	}
+	if run.TestRevisionBudget > MaxTestRevisionAttempts {
+		return Run{}, fmt.Errorf("run test-revision budget must not exceed %d", MaxTestRevisionAttempts)
+	}
+	if run.TestRevisionAttempts > run.TestRevisionBudget {
+		return Run{}, errors.New("run test-revision attempts must not exceed budget")
+	}
 	if strings.ContainsAny(run.ClarificationCommentID, "\x00\r\n") {
 		return Run{}, errors.New("run clarification comment id contains a control character")
 	}
@@ -1085,6 +1193,69 @@ func validateTestProjection(run Run) error {
 			}
 		}
 	}
+	if run.TestInvocationID != "" && !safeQuestionIdentifier(run.TestInvocationID) {
+		return errors.New("run test invocation id is unsafe")
+	}
+	if len(run.TestRevisionHistory) > MaxTestRevisionAttempts {
+		return fmt.Errorf("run test revision history exceeds %d entries", MaxTestRevisionAttempts)
+	}
+	seenAttempts := make(map[int]struct{}, len(run.TestRevisionHistory))
+	disputeKey := ""
+	for index, revision := range run.TestRevisionHistory {
+		if revision.Attempt < 1 || revision.Attempt > run.TestRevisionBudget {
+			return fmt.Errorf("run test revision history entry %d has an invalid attempt", index)
+		}
+		if _, exists := seenAttempts[revision.Attempt]; exists {
+			return fmt.Errorf("run test revision history attempt %d is duplicated", revision.Attempt)
+		}
+		seenAttempts[revision.Attempt] = struct{}{}
+		if revision.DisputeKey != "" {
+			if len(revision.DisputeKey) != 64 || !isLowerHex(revision.DisputeKey) {
+				return fmt.Errorf("run test revision history entry %d has an invalid dispute key", index)
+			}
+			if disputeKey == "" {
+				disputeKey = revision.DisputeKey
+			} else if disputeKey != revision.DisputeKey {
+				return errors.New("run test revision history must contain one dispute key")
+			}
+		}
+		switch revision.Outcome {
+		case TestRevisionPending, TestRevisionAccepted, TestRevisionRejected, TestRevisionVerificationFailed, TestRevisionEscalated:
+		default:
+			return fmt.Errorf("unsupported test revision outcome %q", revision.Outcome)
+		}
+	}
+	if len(run.TestRevisionBaseChangedPaths) > 256 {
+		return errors.New("run test revision base changed paths exceed 256 entries")
+	}
+	seenBasePaths := make(map[string]struct{}, len(run.TestRevisionBaseChangedPaths))
+	for index, path := range run.TestRevisionBaseChangedPaths {
+		if err := validateStoreRelativePath(path.Path); err != nil {
+			return fmt.Errorf("run test revision base changed path %d: %w", index, err)
+		}
+		if len(path.SHA256) != 64 || !isLowerHex(path.SHA256) {
+			return fmt.Errorf("run test revision base changed path %q has an invalid SHA256", path.Path)
+		}
+		if _, exists := seenBasePaths[path.Path]; exists {
+			return fmt.Errorf("run test revision base changed path %q is duplicated", path.Path)
+		}
+		seenBasePaths[path.Path] = struct{}{}
+	}
+	if run.TestObjection != nil {
+		for field, value := range map[string]string{
+			"test": run.TestObjection.Test, "claim": run.TestObjection.Claim, "evidence": run.TestObjection.Evidence,
+		} {
+			if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+				return fmt.Errorf("test objection %s is required and must be single-line", field)
+			}
+		}
+		if strings.TrimSpace(run.TestObjection.InvocationID) == "" {
+			return errors.New("test objection invocation id is required")
+		}
+		if !safeQuestionIdentifier(run.TestObjection.InvocationID) {
+			return errors.New("test objection invocation id is unsafe")
+		}
+	}
 	roleHandoff := roleHandoffForRun(run)
 	if roleHandoff != nil {
 		if strings.TrimSpace(roleHandoff.ChangeSummary) == "" || strings.ContainsAny(roleHandoff.ChangeSummary, "\x00\r\n") {
@@ -1101,6 +1272,15 @@ func validateTestProjection(run Run) error {
 		for _, path := range roleHandoff.ProductionFilesChanged {
 			if err := validateStoreRelativePath(path); err != nil {
 				return fmt.Errorf("role handoff changed path: %w", err)
+			}
+		}
+		for index, objection := range roleHandoff.TestObjections {
+			for field, value := range map[string]string{
+				"test": objection.Test, "claim": objection.Claim, "evidence": objection.Evidence,
+			} {
+				if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+					return fmt.Errorf("role handoff test objection %d %s is required and must be single-line", index, field)
+				}
 			}
 		}
 	}
@@ -1226,6 +1406,43 @@ func testHandoffJSON(value *TestHandoff) string {
 	return string(data)
 }
 
+// testRevisionHistoryJSON serializes the bounded objection-cycle history.
+func testRevisionHistoryJSON(values []TestRevision) string {
+	if values == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// testObjectionJSON serializes a nullable current objection.
+func testObjectionJSON(value *TestObjection) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// testRevisionBaseChangedPathsJSON serializes paths and content identities
+// already dirty when an implementation objection was submitted.
+func testRevisionBaseChangedPathsJSON(values []ProtectedTestPath) string {
+	if values == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
 // roleHandoffJSON serializes a nullable role handoff.
 func roleHandoffJSON(value *RoleHandoff) string {
 	if value == nil {
@@ -1298,6 +1515,12 @@ func runValues(run Run) []any {
 		run.BaseCheckpointSHA,
 		run.TestCheckpointSHA,
 		testHandoffJSON(run.TestHandoff),
+		run.TestInvocationID,
+		run.TestRevisionAttempts,
+		run.TestRevisionBudget,
+		testRevisionHistoryJSON(run.TestRevisionHistory),
+		testObjectionJSON(run.TestObjection),
+		testRevisionBaseChangedPathsJSON(run.TestRevisionBaseChangedPaths),
 		roleHandoffJSON(roleHandoffForRun(run)),
 		specificationReviewJSON(run.SpecificationReview),
 		testExemptionJSON(run.TestExemption),
@@ -1345,7 +1568,10 @@ const saveRunStatement = `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
 			checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
-			test_handoff, implementation_handoff, specification_review,
+			test_handoff, test_invocation_id, test_revision_attempts,
+			test_revision_budget, test_revision_history, test_objection,
+			test_revision_base_changed_paths, implementation_handoff,
+			specification_review,
 			test_exemption, protected_test_paths, test_stage_skipped,
 			active_invocation_id,
 			image_digest, coordinator, status_comment_id,
@@ -1361,7 +1587,8 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -1374,6 +1601,12 @@ const saveRunStatement = `
 			base_checkpoint_sha = excluded.base_checkpoint_sha,
 			test_checkpoint_sha = excluded.test_checkpoint_sha,
 			test_handoff = excluded.test_handoff,
+			test_invocation_id = excluded.test_invocation_id,
+			test_revision_attempts = excluded.test_revision_attempts,
+			test_revision_budget = excluded.test_revision_budget,
+			test_revision_history = excluded.test_revision_history,
+			test_objection = excluded.test_objection,
+			test_revision_base_changed_paths = excluded.test_revision_base_changed_paths,
 			implementation_handoff = excluded.implementation_handoff,
 			specification_review = excluded.specification_review,
 			test_exemption = excluded.test_exemption,
@@ -1409,7 +1642,10 @@ const saveRunIfRevisionStatement = `
 		UPDATE operational_runs SET
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
 			checkpoint_sha = ?, base_checkpoint_sha = ?, test_checkpoint_sha = ?,
-			test_handoff = ?, implementation_handoff = ?, specification_review = ?,
+			test_handoff = ?, test_invocation_id = ?, test_revision_attempts = ?,
+			test_revision_budget = ?, test_revision_history = ?, test_objection = ?,
+			test_revision_base_changed_paths = ?, implementation_handoff = ?,
+			specification_review = ?,
 			test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
 			active_invocation_id = ?,
 			image_digest = ?, coordinator = ?, status_comment_id = ?,
@@ -2406,6 +2642,19 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 26:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN active_invocation_id TEXT NOT NULL DEFAULT ''"); err != nil {
 				return fmt.Errorf("apply store migration 26: %w", err)
+			}
+		case 27:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN test_invocation_id TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN test_revision_attempts INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN test_revision_budget INTEGER NOT NULL DEFAULT 0",
+				"ALTER TABLE operational_runs ADD COLUMN test_revision_history TEXT NOT NULL DEFAULT '[]'",
+				"ALTER TABLE operational_runs ADD COLUMN test_objection TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN test_revision_base_changed_paths TEXT NOT NULL DEFAULT '[]'",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 27: %w", err)
+				}
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

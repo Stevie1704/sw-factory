@@ -29,6 +29,14 @@ _Avoid_: Agent claim, transcript, implementation handoff
 A repository-relative test or authorized test-infrastructure path recorded at the test checkpoint with its SHA-256 content identity; implementation cannot edit it directly.
 _Avoid_: Mutable test file, permitted production path
 
+**Test objection cycle**:
+A bounded implementation-to-test dispute in which implementation submits the
+protected test's claim and observable evidence, the original test session may
+accept or reject that objection, and an accepted revision must pass independent
+red verification before implementation resumes. Automation is gated by the
+measured pilot and permits at most two revision attempts before human review.
+_Avoid_: Test rewrite, implementation-owned test edit, unbounded repair
+
 **Workflow route**:
 The factory-owned stage sequence an authorized issue author selects with one bounded frozen issue marker before claim. `acceptance` runs the independent test role before implementation; `design-acceptance` runs architecture, then the test role, then implementation. An absent marker follows the repository test policy. The route is recorded in the specification packet and is immutable for the run; it is never inferred from changed files, issue prose, or model judgment.
 _Avoid_: Inferred workflow, repository-declared route, mode

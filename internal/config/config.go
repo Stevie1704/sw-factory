@@ -131,6 +131,10 @@ type RetryLimits struct {
 // Repository policy may choose a lower value, but never a higher one.
 const MaxCheckRepairAttempts = 3
 
+// MaxTestRevisionAttempts is the hard safety ceiling for automated disputes
+// between implementation-owned behavior and protected tests.
+const MaxTestRevisionAttempts = 2
+
 type TestMode string
 
 const (
@@ -142,6 +146,10 @@ type TestPolicy struct {
 	Mode                    TestMode `yaml:"mode"`
 	AllowHumanExemption     bool     `yaml:"allow_human_exemption"`
 	AllowTechnicalExemption bool     `yaml:"allow_technical_exemption"`
+	// AllowAutomatedObjections is the explicit evidence-gate switch for the
+	// bounded implementation-versus-test revision loop. It remains disabled
+	// until the measured pilot authorizes automation.
+	AllowAutomatedObjections bool `yaml:"allow_automated_objections"`
 	// TestPaths adds repository-relative prefixes where the test role may edit.
 	TestPaths []string `yaml:"test_paths"`
 	// InfrastructurePaths adds essential test-support prefixes owned by the test role.
@@ -524,6 +532,9 @@ func ValidateRepository(config RepositoryConfig) error {
 		}
 		if field == "retry_limits.check_repair" && value > MaxCheckRepairAttempts {
 			return validation(field, fmt.Sprintf("must not exceed %d", MaxCheckRepairAttempts))
+		}
+		if field == "retry_limits.test_revision" && value > MaxTestRevisionAttempts {
+			return validation(field, fmt.Sprintf("must not exceed %d", MaxTestRevisionAttempts))
 		}
 	}
 	if err := validateTestPolicyPaths("test_policy.test_paths", config.TestPolicy.TestPaths); err != nil {

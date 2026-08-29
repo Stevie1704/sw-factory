@@ -31,12 +31,20 @@ func roleHandoffFromReport(value report.Handoff) *store.RoleHandoff {
 		ProductionFilesChanged: append([]string(nil), value.ProductionFilesChanged...),
 		FocusedCommands:        append([]string(nil), value.FocusedCommands...),
 		KnownLimitations:       append([]string(nil), value.KnownLimitations...),
+		TestObjections:         make([]store.TestObjection, 0, len(value.TestObjections)),
 		AcceptanceMapping:      make([]store.HandoffAcceptance, 0, len(value.AcceptanceMapping)),
 	}
 	for _, mapping := range value.AcceptanceMapping {
 		result.AcceptanceMapping = append(result.AcceptanceMapping, store.HandoffAcceptance{
 			Criterion: mapping.Criterion,
 			Evidence:  mapping.Evidence,
+		})
+	}
+	for _, objection := range value.TestObjections {
+		result.TestObjections = append(result.TestObjections, store.TestObjection{
+			Test:     objection.Test,
+			Claim:    objection.Claim,
+			Evidence: objection.Evidence,
 		})
 	}
 	return result

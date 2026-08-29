@@ -515,6 +515,51 @@ func TestRunPersistsTheProtectedTestHandoffProjection(t *testing.T) {
 	}
 }
 
+// TestRunPersistsTheTestObjectionProjection verifies an objection, its native
+// test-session identity, bounded history, and pre-existing worktree hashes
+// survive a SQLite restart.
+func TestRunPersistsTheTestObjectionProjection(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := store.Run{
+		ID:                           "run-objection-projection",
+		RepositoryPath:               "/work/repository",
+		Stage:                        store.StageTest,
+		Status:                       store.StatusActive,
+		CheckpointSHA:                strings.Repeat("b", 64),
+		TestInvocationID:             "inv-test",
+		TestRevisionAttempts:         1,
+		TestRevisionBudget:           2,
+		TestRevisionHistory:          []store.TestRevision{{Attempt: 1, Outcome: store.TestRevisionPending}},
+		TestObjection:                &store.TestObjection{Test: "internal/factory/agent_test.go:TestBehavior", Claim: "the assertion is too narrow", Evidence: "public behavior is correct", InvocationID: "inv-test"},
+		TestRevisionBaseChangedPaths: []store.ProtectedTestPath{{Path: "internal/factory/agent.go", SHA256: strings.Repeat("c", 64)}},
+	}
+	if err := opened.SaveRun(context.Background(), want); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.TestInvocationID != want.TestInvocationID || got.TestRevisionAttempts != 1 || got.TestRevisionBudget != 2 || len(got.TestRevisionHistory) != 1 || got.TestObjection == nil || got.TestObjection.Claim != want.TestObjection.Claim || len(got.TestRevisionBaseChangedPaths) != 1 || got.TestRevisionBaseChangedPaths[0].SHA256 != strings.Repeat("c", 64) {
+		t.Fatalf("CurrentRun() = %#v, want persisted objection projection", got)
+	}
+}
+
 // TestRunPersistsImplementationAndSpecificationReviewProjections verifies the
 // reviewer packet's durable handoffs survive the schema-20 restart boundary.
 func TestRunPersistsImplementationAndSpecificationReviewProjections(t *testing.T) {

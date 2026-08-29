@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -24,6 +25,10 @@ import (
 // testExemptionMarkerPrefix identifies the exact issue marker that authorizes
 // a human test-stage skip.
 const testExemptionMarkerPrefix = "<!-- factory-test-exemption:"
+
+// measuredPilotIssueNumber is the fixed evidence-gate issue named by the
+// objection-cycle specification.
+const measuredPilotIssueNumber = 26
 
 // testPolicyModeForRun returns the frozen test-policy mode used by status and
 // command projections. Invalid historical packets return the empty mode so a
@@ -346,6 +351,327 @@ func validateImplementationOwnedSignals(value report.Report, invocation store.In
 	return nil
 }
 
+// testRevisionPending reports whether the run is waiting for the test role to
+// answer an implementation objection. It is used by startup recovery to
+// allow the next invocation in the same bounded cycle.
+func testRevisionPending(run store.Run) bool {
+	return run.Stage == store.StageTest && run.Status == store.StatusActive && run.TestObjection != nil
+}
+
+// implementationTestObjection reports whether a completed implementation
+// handoff requests the protected test-stage objection route.
+func implementationTestObjection(value report.Report, invocation store.Invocation) bool {
+	return invocation.Role == workflow.RoleImplementation &&
+		invocation.Stage == store.StageImplementation &&
+		value.Outcome == report.OutcomeCompleted && value.Handoff != nil && len(value.Handoff.TestObjections) > 0
+}
+
+// validateImplementationTestObjection enforces the independent-test route and
+// bounded-cycle preconditions before an implementation report can redirect a
+// run away from implementation.
+func validateImplementationTestObjection(value report.Report, invocation store.Invocation, run store.Run, packet SpecificationPacket) error {
+	if !implementationTestObjection(value, invocation) {
+		return nil
+	}
+	if !independentTestStageDeclared(packet) || run.TestStageSkipped {
+		return errors.New("test objections require an active independent test stage")
+	}
+	if run.TestHandoff == nil || len(run.ProtectedTestPaths) == 0 {
+		return errors.New("test objections require a completed protected test handoff")
+	}
+	budget := run.TestRevisionBudget
+	if budget == 0 {
+		budget = packet.RepositoryConfig.RetryLimits.TestRevision
+	}
+	if budget <= 0 {
+		return errors.New("test objection revision budget must be positive")
+	}
+	if len(value.Handoff.TestObjections) != 1 {
+		return errors.New("implementation must submit exactly one test objection per report")
+	}
+	return nil
+}
+
+// automatedTestObjectionGate reads the authorized measured-pilot decision
+// before allowing an objection to start an automated revision. Configuration
+// alone cannot open this gate; an authorized maintainer must have recorded the
+// latest decision on issue #26.
+func (s *Service) automatedTestObjectionGate(ctx context.Context, registration config.RepositoryRegistration, packet SpecificationPacket) (bool, string) {
+	if !packet.RepositoryConfig.TestPolicy.AllowAutomatedObjections {
+		return false, "test objection recorded; automated revision is disabled pending measured-pilot authorization"
+	}
+	if s.deps.Comments == nil {
+		return false, "test objection recorded; issue #26 proceed decision could not be verified"
+	}
+	comments, err := s.deps.Comments.IssueComments(ctx, commandRepository(registration), measuredPilotIssueNumber)
+	if err != nil {
+		return false, "test objection recorded; issue #26 proceed decision could not be verified"
+	}
+	sort.SliceStable(comments, func(left, right int) bool {
+		if !comments[left].UpdatedAt.IsZero() && !comments[right].UpdatedAt.IsZero() && !comments[left].UpdatedAt.Equal(comments[right].UpdatedAt) {
+			return comments[left].UpdatedAt.Before(comments[right].UpdatedAt)
+		}
+		return compareCommentIDs(comments[left].ID, comments[right].ID) < 0
+	})
+	decision := ""
+	for _, comment := range comments {
+		if !authorizedCommentAuthor(registration.AuthorizedUsers, comment.Author) {
+			continue
+		}
+		if value, ok := measuredPilotDecision(comment.Body); ok {
+			decision = value
+		}
+	}
+	if decision != "proceed" {
+		return false, "test objection recorded; issue #26 has no authorized proceed decision"
+	}
+	return true, ""
+}
+
+// measuredPilotDecision extracts one exact decision line or machine-readable
+// marker from a pilot comment. Ordinary prose mentioning the word proceed is
+// intentionally not sufficient to authorize automation.
+func measuredPilotDecision(body string) (string, bool) {
+	const markerPrefix = "<!-- factory-pilot-decision:"
+	const markerSuffix = "-->"
+	for _, rawLine := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(rawLine)
+		lowerLine := strings.ToLower(line)
+		if strings.HasPrefix(lowerLine, markerPrefix) && strings.HasSuffix(lowerLine, markerSuffix) {
+			value := strings.TrimSpace(line[len(markerPrefix) : len(line)-len(markerSuffix)])
+			if decision, ok := normalizeMeasuredPilotDecision(value); ok {
+				return decision, true
+			}
+		}
+		line = strings.TrimSpace(strings.TrimLeft(line, "-*# "))
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 || !strings.EqualFold(strings.TrimSpace(parts[0]), "decision") {
+			continue
+		}
+		if decision, ok := normalizeMeasuredPilotDecision(parts[1]); ok {
+			return decision, true
+		}
+	}
+	return "", false
+}
+
+// normalizeMeasuredPilotDecision keeps the pilot decision vocabulary closed
+// and strips only presentation backticks around a decision value.
+func normalizeMeasuredPilotDecision(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "`")
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "proceed", "revise and repeat", "stop":
+		return value, true
+	default:
+		return "", false
+	}
+}
+
+// projectImplementationTestObjection moves a validated implementation
+// objection to the test stage and freezes the dirty implementation paths that
+// the resumed test role must treat as pre-existing context.
+func projectImplementationTestObjection(previous store.Run, value report.Report, invocation store.Invocation, packet SpecificationPacket, observed gitadapter.WorktreeState, automated bool, automationReason string) (store.Run, error) {
+	if err := validateImplementationTestObjection(value, invocation, previous, packet); err != nil {
+		return store.Run{}, err
+	}
+	next := previous
+	budget := next.TestRevisionBudget
+	if budget == 0 {
+		budget = packet.RepositoryConfig.RetryLimits.TestRevision
+	}
+	if budget <= 0 {
+		return store.Run{}, errors.New("test objection revision budget must be positive")
+	}
+	next.TestRevisionBudget = budget
+	if next.TestInvocationID == "" {
+		return store.Run{}, errors.New("test objection has no original test invocation")
+	}
+	objection := value.Handoff.TestObjections[0]
+	disputeKey := testObjectionDisputeKey(objection)
+	if !testRevisionHistoryMatchesDispute(next.TestRevisionHistory, disputeKey) {
+		next.TestRevisionAttempts = 0
+		next.TestRevisionHistory = nil
+	}
+	next.TestObjection = &store.TestObjection{
+		Test:         objection.Test,
+		Claim:        objection.Claim,
+		Evidence:     objection.Evidence,
+		InvocationID: next.TestInvocationID,
+	}
+	basePaths, err := protectedTestPathsForCheckpoint(previous.Worktree, observed.ChangedPaths)
+	if err != nil {
+		return store.Run{}, fmt.Errorf("record test objection worktree context: %w", err)
+	}
+	next.TestRevisionBaseChangedPaths = basePaths
+	next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
+	next.ImplementationHandoff = next.RoleHandoff
+	next.PendingQuestions = nil
+	next.ClarificationCommentID = ""
+	next.ClarificationNotificationSent = false
+	next.ActiveInvocationID = ""
+	next.TestStageSkipped = false
+	if !automated {
+		next.Stage = store.StageTest
+		next.Status = store.StatusWaitingForHuman
+		if strings.TrimSpace(automationReason) == "" {
+			automationReason = "test objection recorded; automated revision is disabled pending measured-pilot authorization"
+		}
+		next.LifecycleReason = automationReason
+		return next, nil
+	}
+	if next.TestRevisionAttempts >= budget {
+		next.Stage = store.StageTest
+		next.Status = store.StatusWaitingForHuman
+		next.LifecycleReason = fmt.Sprintf("test objection submitted after %d revision attempts; waiting for human disposition", next.TestRevisionAttempts)
+		return next, nil
+	}
+	next.TestRevisionAttempts++
+	next.TestRevisionHistory = append(next.TestRevisionHistory, store.TestRevision{
+		Attempt:    next.TestRevisionAttempts,
+		Outcome:    store.TestRevisionPending,
+		DisputeKey: disputeKey,
+	})
+	next.Stage = store.StageTest
+	next.Status = store.StatusActive
+	next.LifecycleReason = fmt.Sprintf("implementation test objection pending test revision %d/%d", next.TestRevisionAttempts, budget)
+	return next, nil
+}
+
+// testObjectionDisputeKey identifies the behavioral claim under dispute while
+// allowing updated evidence to accompany a later cycle for the same claim.
+func testObjectionDisputeKey(objection report.TestObjection) string {
+	value := strings.TrimSpace(objection.Test) + "\x00" + strings.TrimSpace(objection.Claim)
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
+}
+
+// testRevisionHistoryMatchesDispute reports whether retained cycles belong to
+// the same test claim. Empty keys are legacy history and start a fresh dispute.
+func testRevisionHistoryMatchesDispute(history []store.TestRevision, disputeKey string) bool {
+	if len(history) == 0 || strings.TrimSpace(disputeKey) == "" {
+		return len(history) == 0
+	}
+	for _, revision := range history {
+		if revision.DisputeKey == "" || revision.DisputeKey != disputeKey {
+			return false
+		}
+	}
+	return true
+}
+
+// finishImplementationTestObjection starts the bounded test-role response or
+// publishes the human pause when no revision budget remains.
+func (s *Service) finishImplementationTestObjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
+	if _, journaled := runStore.(PendingEffectStore); !journaled {
+		if err := s.stopRunWorker(ctx, run.ID); err != nil {
+			return AgentResult{}, err
+		}
+	}
+	if run.Status == store.StatusWaitingForHuman {
+		if err := s.notifyWorkspace(ctx, registration, "factory test objection waiting", run.LifecycleReason); err != nil {
+			return AgentResult{}, err
+		}
+		return AgentResult{Invocation: *invocation, Report: value}, nil
+	}
+	if run.Status != store.StatusActive || run.Stage != store.StageTest {
+		return AgentResult{}, fmt.Errorf("test objection did not enter an active test stage: %s/%s", run.Stage, run.Status)
+	}
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{
+		RunID:        run.ID,
+		Role:         workflow.RoleTest,
+		Stage:        store.StageTest,
+		testRevision: true,
+	}); err != nil {
+		return AgentResult{}, fmt.Errorf("resume original test session for objection: %w", err)
+	}
+	return AgentResult{Invocation: *invocation, Report: value}, nil
+}
+
+// testRevisionChangedPaths returns paths newly changed after an implementation
+// objection. Existing implementation changes remain in the worktree while the
+// test role revises only its owned files.
+func testRevisionChangedPaths(state gitadapter.WorktreeState, base []store.ProtectedTestPath) ([]string, error) {
+	baseSet := make(map[string]struct{}, len(base))
+	for _, path := range base {
+		clean, err := cleanTestPath(path.Path)
+		if err != nil {
+			return nil, err
+		}
+		baseSet[clean] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(state.ChangedPaths))
+	changed := make([]string, 0, len(state.ChangedPaths))
+	for _, path := range state.ChangedPaths {
+		clean, err := cleanTestPath(path)
+		if err != nil {
+			return nil, err
+		}
+		if _, alreadyDirty := baseSet[clean]; alreadyDirty {
+			continue
+		}
+		if _, duplicate := seen[clean]; duplicate {
+			continue
+		}
+		seen[clean] = struct{}{}
+		changed = append(changed, clean)
+	}
+	sort.Strings(changed)
+	return changed, nil
+}
+
+// validateTestRevisionBasePaths verifies that implementation changes present
+// when an objection was submitted are byte-for-byte unchanged while the test
+// role owns the resumed session.
+func validateTestRevisionBasePaths(worktree string, base []store.ProtectedTestPath) error {
+	for _, path := range base {
+		current, err := testPathDigest(worktree, path.Path)
+		if err != nil {
+			return fmt.Errorf("inspect test-revision base path %q: %w", path.Path, err)
+		}
+		if current != path.SHA256 {
+			return fmt.Errorf("test revision changed pre-existing path %q", path.Path)
+		}
+	}
+	return nil
+}
+
+// mergeProtectedTestPaths refreshes hashes for the original protected tests
+// and any files changed by an accepted revision.
+func mergeProtectedTestPaths(worktree string, previous []store.ProtectedTestPath, changed []string) ([]store.ProtectedTestPath, error) {
+	paths := make(map[string]struct{}, len(previous)+len(changed))
+	for _, value := range previous {
+		paths[value.Path] = struct{}{}
+	}
+	for _, path := range changed {
+		clean, err := cleanTestPath(path)
+		if err != nil {
+			return nil, err
+		}
+		paths[clean] = struct{}{}
+	}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+	return protectedTestPathsForCheckpoint(worktree, ordered)
+}
+
+// setTestRevisionOutcome replaces the pending history entry for an attempt,
+// or appends one when recovering a legacy run without that entry.
+func setTestRevisionOutcome(history []store.TestRevision, attempt int, outcome store.TestRevisionOutcome) []store.TestRevision {
+	updated := append([]store.TestRevision(nil), history...)
+	for index := range updated {
+		if updated[index].Attempt == attempt {
+			updated[index].Outcome = outcome
+			return updated
+		}
+	}
+	return append(updated, store.TestRevision{Attempt: attempt, Outcome: outcome})
+}
+
 // isUnverifiableTestReport identifies a completed test envelope whose identity
 // is trustworthy enough to enter the required human-disposition path after
 // payload validation fails.
@@ -473,6 +799,9 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	_, ok := runStore.(InvocationStore)
 	if !ok {
 		return AgentResult{}, errors.New("operational store does not support visible invocations")
+	}
+	if run.TestObjection != nil {
+		return s.acceptTestRevisionReport(ctx, registration, runStore, run, invocation, value, state)
 	}
 	if err := validateTestChangedPaths(state.ChangedPaths, decodeTestPolicy(run.SpecificationPacket)); err != nil {
 		if stopErr := s.stopRunWorker(ctx, run.ID); stopErr != nil {
@@ -631,6 +960,251 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 		return AgentResult{}, fmt.Errorf("launch next role after test handoff: %w", err)
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
+}
+
+// acceptTestRevisionReport handles the test role's response to one
+// implementation objection. Revisions are independently red-verified and
+// checkpointed before the implementation role can resume.
+func (s *Service) acceptTestRevisionReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report, state gitadapter.WorktreeState) (AgentResult, error) {
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return AgentResult{}, fmt.Errorf("decode specification packet for test revision: %w", err)
+	}
+	if err := validateTestRevisionBasePaths(run.Worktree, run.TestRevisionBaseChangedPaths); err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, err.Error())
+	}
+	if value.Outcome == report.OutcomeNeedsClarification {
+		previous := *run
+		run.Status = store.StatusWaitingForHuman
+		run.Stage = store.StageTest
+		run.PendingQuestions = pendingQuestionsFromReport(value.Questions)
+		run.ClarificationCommentID = ""
+		run.ClarificationNotificationSent = false
+		run.LifecycleReason = "test role requested clarification during objection revision"
+		run.Revision = previous.Revision + 1
+		run.UpdatedAt = s.deps.Now().UTC()
+		if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
+			return AgentResult{}, fmt.Errorf("persist test objection clarification: %w", err)
+		}
+		published, err := s.ensureClarificationPublication(ctx, registration, runStore, *run)
+		if err != nil {
+			return AgentResult{}, err
+		}
+		*run = published
+		return AgentResult{Invocation: *invocation, Report: value}, nil
+	}
+	if value.Outcome == report.OutcomeCannotProceed {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "test role cannot respond to implementation objection")
+	}
+	if value.TestObjectionResponse == nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "test objection response is missing")
+	}
+	newPaths, err := testRevisionChangedPaths(state, run.TestRevisionBaseChangedPaths)
+	if err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test worktree paths could not be verified")
+	}
+	if err := validateTestChangedPaths(newPaths, packet.RepositoryConfig.TestPolicy); err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "test objection revision changed a non-test path")
+	}
+	if value.TestObjectionResponse.Decision == report.TestObjectionRejected {
+		if len(newPaths) != 0 {
+			return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "rejected test objection changed the worktree")
+		}
+		reason := "test role rejected implementation objection"
+		if strings.TrimSpace(value.TestObjectionResponse.Reason) != "" {
+			reason += ": " + value.TestObjectionResponse.Reason
+		}
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionRejected, reason)
+	}
+	if value.TestObjectionResponse.Decision != report.TestObjectionAccepted {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "test objection response decision could not be verified")
+	}
+	if value.TestHandoff == nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "accepted test objection has no revised test handoff")
+	}
+	if len(newPaths) == 0 {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "accepted test objection did not revise a test path")
+	}
+	if s.deps.Worker == nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised red-test worker is unavailable")
+	}
+	result, commandErr := s.deps.Worker.RunCommand(ctx, worker.CommandRequest{
+		RunID:             run.ID,
+		Command:           value.TestHandoff.FocusedTestCommand,
+		EnvironmentPolicy: worker.EnvironmentPolicyRole,
+		Role:              workflow.RoleTest,
+	})
+	stopErr := s.stopRunWorker(ctx, run.ID)
+	output := result.Stdout + "\n" + result.Stderr
+	if commandErr != nil || stopErr != nil || result.ExitCode == 0 || !strings.Contains(output, value.TestHandoff.ExpectedFailureReason) {
+		if stopErr != nil && commandErr == nil {
+			commandErr = stopErr
+		}
+		reason := "revised focused red-test verification is disputed or unverifiable"
+		if commandErr != nil {
+			reason = "revised focused red-test verification could not be completed"
+		} else if result.ExitCode != 0 && !strings.Contains(output, value.TestHandoff.ExpectedFailureReason) {
+			reason = "revised focused red-test output did not contain the expected failure reason"
+		}
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, reason)
+	}
+	inspector := s.worktreeInspector()
+	if inspector == nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised red-test worktree inspection is unavailable")
+	}
+	verifiedState, err := inspector.Inspect(ctx, run.Worktree)
+	if err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised red-test worktree inspection failed")
+	}
+	if verifiedState.HeadSHA != run.CheckpointSHA {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test-stage checkpoint changed during red-test verification")
+	}
+	if err := validateTestRevisionBasePaths(run.Worktree, run.TestRevisionBaseChangedPaths); err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised red-test changed pre-existing implementation work")
+	}
+	newPaths, err = testRevisionChangedPaths(verifiedState, run.TestRevisionBaseChangedPaths)
+	if err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised red-test worktree paths could not be verified")
+	}
+	if err := validateTestChangedPaths(newPaths, packet.RepositoryConfig.TestPolicy); err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test-stage path ownership dispute")
+	}
+	if len(newPaths) == 0 {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test handoff has no changed test path")
+	}
+	protected, err := mergeProtectedTestPaths(run.Worktree, run.ProtectedTestPaths, newPaths)
+	if err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised protected test paths could not be verified")
+	}
+	workspace := s.gitWorkspace()
+	if workspace == nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint workspace is unavailable")
+	}
+	checkpointRequest := gitadapter.CheckpointRequest{
+		RunID:        run.ID,
+		WorktreePath: run.Worktree,
+		ParentSHA:    run.CheckpointSHA,
+		Kind:         gitadapter.CheckpointKindTest,
+		Paths:        append([]string(nil), newPaths...),
+		Message:      "verified revised focused test is red",
+	}
+	previous := *run
+	handoff := convertTestHandoff(*value.TestHandoff)
+	next := *run
+	next.TestHandoff = &handoff
+	next.TestObjection = nil
+	next.TestRevisionBaseChangedPaths = nil
+	next.TestRevisionHistory = setTestRevisionOutcome(next.TestRevisionHistory, next.TestRevisionAttempts, store.TestRevisionAccepted)
+	next.TestInvocationID = invocation.ID
+	next.ProtectedTestPaths = protected
+	next.SpecificationReview = nil
+	transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(store.StageTest, report.OutcomeCompleted)
+	if transitionErr != nil {
+		return AgentResult{}, transitionErr
+	}
+	next.Stage = transition.Stage
+	next.Status = transition.Status
+	next.PendingQuestions = nil
+	next.ClarificationCommentID = ""
+	next.ClarificationNotificationSent = false
+	next.LifecycleReason = fmt.Sprintf("test objection accepted; revised protected handoff ready for implementation (revision %d/%d)", next.TestRevisionAttempts, next.TestRevisionBudget)
+	next.Revision = previous.Revision + 1
+	next.UpdatedAt = s.deps.Now().UTC()
+	checkpoint := gitadapter.CheckpointResult{}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		repository := commandRepository(registration)
+		issue, issueErr := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+		if issueErr != nil {
+			return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint issue context could not be read")
+		}
+		issue = ensureIssueIdentity(issue, packet.Issue, run.IssueNumber)
+		checkpoint, next, err = s.checkpointAndPersistWithEffect(ctx, runStore, workspace, checkpointRequest, repository, issue, previous, next)
+	} else {
+		checkpoint, err = workspace.CreateCheckpoint(ctx, checkpointRequest)
+	}
+	if err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint could not be created")
+	}
+	if !github.ValidCommitSHA(checkpoint.SHA) {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint returned an invalid commit identity")
+	}
+	if _, journaled := runStore.(PendingEffectStore); !journaled {
+		next.TestCheckpointSHA = checkpoint.SHA
+		next.CheckpointSHA = checkpoint.SHA
+		if err := s.persistAgentRunState(ctx, registration, runStore, previous, next); err != nil {
+			return AgentResult{}, fmt.Errorf("persist revised test handoff: %w", err)
+		}
+	}
+	*run = next
+	nextRole, nextRoleDeclared := workflow.DefaultRegistry().RoleForRunStage(next.Stage)
+	if !nextRoleDeclared {
+		return AgentResult{}, fmt.Errorf("no role is declared for revised test handoff stage %q", next.Stage)
+	}
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, run, AgentRequest{RunID: run.ID, Role: nextRole.Name, Stage: nextRole.Stage}); err != nil {
+		return AgentResult{}, fmt.Errorf("launch implementation after revised test handoff: %w", err)
+	}
+	return AgentResult{Invocation: *invocation, Report: value}, nil
+}
+
+// pauseTestRevisionForHuman records a bounded objection-cycle outcome and
+// leaves the implementation changes available for explicit human review.
+func (s *Service) pauseTestRevisionForHuman(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report, outcome store.TestRevisionOutcome, reason string) (AgentResult, error) {
+	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		return AgentResult{}, err
+	}
+	previous := *run
+	run.Stage = store.StageTest
+	run.Status = store.StatusWaitingForHuman
+	run.ActiveInvocationID = ""
+	run.PendingQuestions = nil
+	run.TestRevisionHistory = setTestRevisionOutcome(run.TestRevisionHistory, run.TestRevisionAttempts, outcome)
+	run.LifecycleReason = reason
+	run.UpdatedAt = s.deps.Now().UTC()
+	run.Revision = previous.Revision + 1
+	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
+		return AgentResult{}, fmt.Errorf("persist test objection human pause: %w", err)
+	}
+	if err := s.notifyWorkspace(ctx, registration, "factory test objection waiting", run.ID+" is waiting for human test-objection disposition"); err != nil {
+		return AgentResult{}, err
+	}
+	return AgentResult{Invocation: *invocation, Report: value}, nil
+}
+
+// pauseUnverifiableTestRevisionReport converts a structurally invalid but
+// identity-bound revision report into a durable human pause before the normal
+// result-acceptance effect can mark its invocation complete.
+func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
+	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		return AgentResult{}, err
+	}
+	if invocation.NativeSessionID != "" {
+		_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+		if err != nil {
+			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test revision: %w", err)
+		}
+		if err := harnessRuntime.Finish(ctx, harness.Session{
+			InvocationID:    invocation.ID,
+			NativeSessionID: invocation.NativeSessionID,
+			Surface:         invocationSurface(*invocation),
+		}); err != nil {
+			return AgentResult{}, fmt.Errorf("finish unverifiable test revision session: %w", err)
+		}
+	}
+	invocation.Status = store.InvocationStatusWaitingForHuman
+	invocation.UpdatedAt = s.deps.Now().UTC()
+	invocationStore, ok := runStore.(InvocationStore)
+	if !ok {
+		return AgentResult{}, errors.New("operational store does not support test revision invocation persistence")
+	}
+	if err := invocationStore.SaveInvocation(ctx, *invocation); err != nil {
+		return AgentResult{}, fmt.Errorf("persist unverifiable test revision invocation: %w", err)
+	}
+	if recorder, ok := runStore.(evaluationRecorder); ok {
+		if err := recorder.RecordEvaluationEscalation(ctx, run.ID, store.EvaluationEscalationTestDispute); err != nil {
+			return AgentResult{}, fmt.Errorf("record test objection verification dispute: %w", err)
+		}
+	}
+	return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "test objection revision report is unverifiable")
 }
 
 // pauseUnverifiableTestReport stops the visible test execution before placing

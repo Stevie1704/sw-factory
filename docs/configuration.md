@@ -161,6 +161,8 @@ test_policy:
   mode: required
   allow_human_exemption: true
   allow_technical_exemption: true
+  # Enable only after the measured pilot records a proceed decision in #26.
+  allow_automated_objections: false
   # Optional prefixes for essential test infrastructure.
   test_paths: []
   infrastructure_paths: []
@@ -181,6 +183,16 @@ evaluation:
 ```
 
 The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+
+`test_policy.allow_automated_objections` is the evidence-gated switch for the
+implementation-to-test objection cycle. Keep it `false` until the measured
+pilot in issue #26 records `proceed`; while disabled, a structured objection is
+persisted and the run waits for a human. When enabled, the coordinator resumes
+the original test session, permits at most two revision attempts, and reruns the
+revised focused command independently before implementation can continue.
+The coordinator also verifies the latest decision comment on #26 from an
+authorized maintainer (`Decision: proceed` or the equivalent machine-readable
+pilot marker); a later `revise and repeat` or `stop` decision closes the gate.
 
 ## Per-role harness, model, and reasoning effort
 

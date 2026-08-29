@@ -54,6 +54,13 @@ type Request struct {
 	// TestHandoff is the accepted test-stage transfer packet shown to
 	// implementation, when available.
 	TestHandoff *store.TestHandoff
+	// TestObjection is the current implementation dispute shown to a resumed
+	// test role, when an objection cycle is active.
+	TestObjection *store.TestObjection
+	// TestRevisionAttempt is the one-based objection cycle being reviewed.
+	TestRevisionAttempt int
+	// TestRevisionBudget is the frozen objection-cycle ceiling.
+	TestRevisionBudget int
 	// ProtectedTestPaths identifies test files implementation must preserve.
 	ProtectedTestPaths []store.ProtectedTestPath
 	// TestExemption carries a provisional technical exemption to later review.
@@ -192,6 +199,23 @@ Test-stage ownership:
 			}
 			testContext += "- Treat the accepted design as the interface under test; it does not replace the frozen specification packet.\n"
 		}
+		if request.TestObjection != nil {
+			objection, err := marshalHandoff(request.TestObjection)
+			if err != nil {
+				return "", fmt.Errorf("encode test objection: %w", err)
+			}
+			testContext += fmt.Sprintf(`
+Test-objection revision:
+- This is objection revision attempt %d of %d.
+- Resume the original test session and inspect the current implementation in the mounted worktree before deciding.
+- The implementation role is not allowed to edit protected tests; decide whether the objection is valid from the current code and the frozen specification.
+- If accepted, edit only behavioral tests or authorized test infrastructure, rerun the focused red command, and report with --objection-decision accepted --objection-reason ... plus the revised test handoff.
+- If rejected, leave the worktree unchanged and report with --objection-decision rejected --objection-reason ...; the coordinator will escalate the dispute to a human.
+- Do not weaken the test merely to accommodate an implementation that violates the frozen behavior.
+Current objection (coordinator-owned):
+%s
+`, request.TestRevisionAttempt, request.TestRevisionBudget, objection)
+		}
 	} else if implementationOwnsTDD && definition.Kind == workflow.RoleKindHandoff && request.Role == workflow.RoleImplementation {
 		testContext = `
 Implementation-owned TDD:
@@ -209,7 +233,7 @@ Implementation-owned TDD:
 		if err != nil {
 			return "", fmt.Errorf("encode test handoff context: %w", err)
 		}
-		testContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n- Do not edit any protected test path or change its recorded content.\n", data)
+		testContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n- Do not edit any protected test path or change its recorded content.\n- If a protected test is incorrect, submit a structured objection with --test-objection test|claim|evidence; never edit the protected test.\n", data)
 	}
 	reviewContext := ""
 	if definition.Kind == workflow.RoleKindReview {
