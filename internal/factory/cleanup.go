@@ -78,6 +78,9 @@ type CleanupRun struct {
 	// WorkerRunID is the logical worker identity passed to the runtime adapter;
 	// Docker names remain private to that adapter.
 	WorkerRunID string
+	// WorkerIDs contains the exact worker identities for this run. Review
+	// invocations use separate identities while ordinary roles use RunID.
+	WorkerIDs []string
 	// StoredOutputs contains the exact generated output directories to remove.
 	StoredOutputs []string
 	// Roles selects run-scoped role-home volumes for the worker adapter.
@@ -197,7 +200,7 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 			return result, fmt.Errorf("reserve cleanup for run %q: %w", target.RunID, err)
 		}
 		rollback := func() { _ = cleanupTransaction.Rollback() }
-		if err := runtime.Cleanup(ctx, worker.CleanupRequest{RunID: target.RunID, Roles: target.Roles, StoredOutputs: target.StoredOutputs}); err != nil {
+		if err := runtime.Cleanup(ctx, worker.CleanupRequest{RunID: target.RunID, WorkerIDs: target.WorkerIDs, Roles: target.Roles, StoredOutputs: target.StoredOutputs}); err != nil {
 			rollback()
 			return result, fmt.Errorf("clean worker for run %q: %w", target.RunID, err)
 		}
@@ -334,15 +337,26 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 	for _, role := range roles {
 		roleSet[role] = struct{}{}
 	}
+	workerIDs := []string{run.ID}
+	seenWorkerIDs := map[string]struct{}{run.ID: {}}
 	for _, invocation := range candidate.Invocations {
 		if !safeCleanupIdentifier(invocation.Role) {
 			return CleanupRun{}, fmt.Sprintf("invocation %q has an unsafe worker role", invocation.ID)
+		}
+		workerID := workerIDForInvocation(invocation)
+		if !safeCleanupIdentifier(workerID) {
+			return CleanupRun{}, fmt.Sprintf("invocation %q has an unsafe worker identity", invocation.ID)
+		}
+		if _, exists := seenWorkerIDs[workerID]; !exists {
+			seenWorkerIDs[workerID] = struct{}{}
+			workerIDs = append(workerIDs, workerID)
 		}
 		if _, exists := roleSet[invocation.Role]; !exists {
 			roleSet[invocation.Role] = struct{}{}
 			roles = append(roles, invocation.Role)
 		}
 	}
+	sort.Strings(workerIDs)
 	sort.Strings(roles)
 	eligibleAt := run.TerminalAt
 	if eligibleAt.IsZero() {
@@ -359,6 +373,7 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 		Branch:         run.Branch,
 		Worktree:       worktree,
 		WorkerRunID:    run.ID,
+		WorkerIDs:      workerIDs,
 		StoredOutputs:  storedOutputs,
 		Roles:          roles,
 	}, ""
@@ -410,7 +425,7 @@ func cleanupPlansEqual(left, right CleanupPlan) bool {
 	}
 	for index := range left.Runs {
 		leftRun, rightRun := left.Runs[index], right.Runs[index]
-		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !stringSlicesEqual(leftRun.StoredOutputs, rightRun.StoredOutputs) || !stringSlicesEqual(leftRun.Roles, rightRun.Roles) {
+		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !stringSlicesEqual(leftRun.WorkerIDs, rightRun.WorkerIDs) || !stringSlicesEqual(leftRun.StoredOutputs, rightRun.StoredOutputs) || !stringSlicesEqual(leftRun.Roles, rightRun.Roles) {
 			return false
 		}
 	}

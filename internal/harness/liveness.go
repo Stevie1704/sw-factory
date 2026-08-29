@@ -21,6 +21,7 @@ func nativeSessionRunning(ctx context.Context, runtime worker.WorkerRuntime, req
 	}
 	result, err := runtime.RunCommand(ctx, worker.CommandRequest{
 		RunID:             request.RunID,
+		WorkerID:          request.WorkerID,
 		Command:           fmt.Sprintf(`ps -eo pid=,args= | awk -v me="$$" '$1 != me && $0 ~ /%s/ { found = 1 } END { exit found ? 0 : 1 }'`, processPattern),
 		EnvironmentPolicy: worker.EnvironmentPolicyClean,
 		Role:              "coordinator",

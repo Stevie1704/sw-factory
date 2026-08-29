@@ -137,11 +137,14 @@ type harnessResumeEffectPayload struct {
 // resultAcceptanceEffectPayload is the complete durable intent for accepting
 // a validated visible report.
 type resultAcceptanceEffectPayload struct {
-	Repository     github.Repository
-	SocketPath     string
-	Issue          github.Issue
-	Session        harness.Session
-	Invocation     store.Invocation
+	Repository github.Repository
+	SocketPath string
+	Issue      github.Issue
+	Session    harness.Session
+	Invocation store.Invocation
+	// WorkerID identifies the worker that owns this invocation. Empty legacy
+	// payloads intentionally fall back to the run-scoped worker identity.
+	WorkerID       string
 	Previous       store.Run
 	Next           store.Run
 	StopWorker     bool
@@ -1080,6 +1083,7 @@ func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore,
 		Issue:          github.Issue{Number: next.IssueNumber},
 		Session:        session,
 		Invocation:     invocation,
+		WorkerID:       workerIDForInvocation(invocation),
 		Previous:       previous,
 		Next:           next,
 		StopWorker:     stopWorker,
@@ -1125,7 +1129,11 @@ func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore,
 			return fmt.Errorf("finish accepted harness session: %w", err)
 		}
 		if stopWorker {
-			if err := s.stopRunWorker(ctx, previous.ID); err != nil {
+			workerID := payload.WorkerID
+			if workerID == "" {
+				workerID = previous.ID
+			}
+			if err := s.stopRunWorker(ctx, workerID); err != nil {
 				return err
 			}
 		}
@@ -1215,7 +1223,11 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 		// the invocation was already marked terminal before an earlier process
 		// crossed this boundary; that state is the durable evidence that the
 		// acceptance reservation was already in flight.
-		if err := s.stopRunWorker(ctx, effect.RunID); err != nil {
+		workerID := payload.WorkerID
+		if workerID == "" {
+			workerID = effect.RunID
+		}
+		if err := s.stopRunWorker(ctx, workerID); err != nil {
 			return store.Run{}, err
 		}
 	}
@@ -1601,7 +1613,7 @@ func (s *Service) replayPendingStateTransition(ctx context.Context, runStore Run
 		}
 	}
 	if payload.StopWorker {
-		if err := s.stopRunWorker(ctx, effect.RunID); err != nil {
+		if err := s.stopActiveRunWorkers(ctx, runStore, payload.Previous); err != nil {
 			return store.Run{}, fmt.Errorf("stop worker during state-transition replay: %w", err)
 		}
 	}

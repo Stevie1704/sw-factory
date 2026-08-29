@@ -368,7 +368,7 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 		return AuthRefreshResult{}, err
 	}
 	*invocation = recoveredInvocation
-	if err := seed(ctx, run.ID); err != nil {
+	if err := seed(ctx, run.ID, workerIDForInvocation(*invocation)); err != nil {
 		return AuthRefreshResult{}, newCredentialProjectionError(string(harnessName))
 	}
 	return AuthRefreshResult{Run: *run, Invocation: *invocation, Harness: harnessName}, nil
@@ -484,35 +484,40 @@ func (s *Service) reconcileActiveHarnessLiveness(ctx context.Context, registrati
 	if run.Status != store.StatusActive {
 		return nil
 	}
-	activeStore, ok := runStore.(ActiveInvocationStore)
-	if !ok {
+	activeValues, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if !supported {
 		return nil
 	}
-	active, err := activeStore.ActiveInvocation(ctx, run.ID)
 	if err != nil {
 		return fmt.Errorf("read active invocation for liveness monitoring: %w", err)
 	}
-	if active == nil || active.AttachRequired || strings.TrimSpace(active.NativeSessionID) == "" {
+	for index := range activeValues {
+		active := activeValues[index]
+		if active.AttachRequired || strings.TrimSpace(active.NativeSessionID) == "" {
+			continue
+		}
+		_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
+		if runtimeErr != nil {
+			return fmt.Errorf("ensure harness for liveness monitoring: %w", runtimeErr)
+		}
+		livenessInspector, ok := harnessRuntime.(harness.NativeSessionLivenessInspector)
+		if !ok {
+			continue
+		}
+		running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{
+			RunID: run.ID, WorkerID: workerIDForInvocation(active), Harness: active.Harness,
+		})
+		if livenessErr != nil {
+			return fmt.Errorf("check native session liveness: %w", livenessErr)
+		}
+		if running {
+			continue
+		}
+		_, _, _, reconcileErr := s.reconcileInterruptedRunWithMode(ctx, registration, runStore, run, true)
+		if reconcileErr != nil {
+			return reconcileErr
+		}
 		return nil
-	}
-	_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
-	if runtimeErr != nil {
-		return fmt.Errorf("ensure harness for liveness monitoring: %w", runtimeErr)
-	}
-	livenessInspector, ok := harnessRuntime.(harness.NativeSessionLivenessInspector)
-	if !ok {
-		return nil
-	}
-	running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, Harness: active.Harness})
-	if livenessErr != nil {
-		return fmt.Errorf("check native session liveness: %w", livenessErr)
-	}
-	if running {
-		return nil
-	}
-	_, _, _, reconcileErr := s.reconcileInterruptedRunWithMode(ctx, registration, runStore, run, true)
-	if reconcileErr != nil {
-		return reconcileErr
 	}
 	return nil
 }
@@ -525,7 +530,7 @@ func (s *Service) pauseForHarnessCapacity(ctx context.Context, registration conf
 		harnessName = "harness"
 	}
 	changed := run.Status != store.StatusWaitingForHarness || !strings.HasPrefix(run.LifecycleReason, "harness capacity unavailable")
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	if !changed {
@@ -550,7 +555,7 @@ func (s *Service) pauseForHarnessCapacity(ctx context.Context, registration conf
 // pauseForAuthentication records a redacted human-waiting state after the
 // harness rejects its credential. The source credential remains untouched.
 func (s *Service) pauseForAuthentication(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	changed := run.Status != store.StatusWaitingForHuman || !strings.HasPrefix(run.LifecycleReason, "harness authentication expired")
@@ -576,7 +581,7 @@ func (s *Service) pauseForAuthentication(ctx context.Context, registration confi
 // pauseForManualRecovery escalates a failed explicit resume without changing
 // any workflow retry budget.
 func (s *Service) pauseForManualRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string, cause error) (store.Run, error) {
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	changed := run.Status != store.StatusWaitingForHuman || !strings.HasPrefix(run.LifecycleReason, "automatic harness recovery exhausted")
@@ -630,6 +635,8 @@ func (s *Service) ensureWorkerForInvocation(ctx context.Context, registration co
 	}
 	request := worker.StartRequest{
 		RunID:             run.ID,
+		WorkerID:          workerIDForInvocation(invocation),
+		WorktreeReadOnly:  roleIsKind(invocation, workflow.RoleKindReview),
 		WorktreePath:      run.Worktree,
 		GitMetadataPath:   gitMetadataPath,
 		Image:             packet.RepositoryConfig.WorkerBuild.Image,
@@ -643,7 +650,7 @@ func (s *Service) ensureWorkerForInvocation(ctx context.Context, registration co
 	if s.deps.Worker == nil {
 		return worker.StartRequest{}, invocation, errors.New("worker runtime is required for invocation recovery")
 	}
-	inspection, err := s.deps.Worker.Inspect(ctx, run.ID)
+	inspection, err := s.deps.Worker.Inspect(ctx, workerIDForInvocation(invocation))
 	if err != nil {
 		return worker.StartRequest{}, invocation, fmt.Errorf("inspect worker for invocation recovery: %w", err)
 	}
@@ -728,14 +735,13 @@ func (s *Service) restoreInvocationTerminal(ctx context.Context, terminalRuntime
 // latestInvocationForAuthRefresh selects the active invocation or the latest
 // superseded attempt that still carries the worker identity needed to reseed.
 func latestInvocationForAuthRefresh(ctx context.Context, runStore RunStore, run store.Run) (*store.Invocation, error) {
-	if activeStore, ok := runStore.(ActiveInvocationStore); ok {
-		active, err := activeStore.ActiveInvocation(ctx, run.ID)
-		if err != nil {
-			return nil, fmt.Errorf("read active invocation for auth refresh: %w", err)
-		}
-		if active != nil {
-			return active, nil
-		}
+	activeValues, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read active invocation for auth refresh: %w", err)
+	}
+	if supported && len(activeValues) > 0 {
+		active := activeValues[len(activeValues)-1]
+		return &active, nil
 	}
 	latestStore, ok := runStore.(LatestInvocationStore)
 	if !ok {
@@ -769,12 +775,12 @@ func (s *Service) supersedeInvocation(ctx context.Context, registration config.R
 	if err != nil {
 		return fmt.Errorf("read run to release superseded invocation: %w", err)
 	}
-	if current == nil || current.ActiveInvocationID != invocation.ID {
+	if current == nil || (current.ActiveInvocationID != invocation.ID && !containsString(current.ActiveInvocationIDs, invocation.ID)) {
 		return nil
 	}
 	previous := *current
 	next := previous
-	next.ActiveInvocationID = ""
+	releaseActiveInvocation(&next, invocation.ID)
 	next.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, next); err != nil {
 		return fmt.Errorf("release superseded invocation delegation: %w", err)
@@ -800,18 +806,57 @@ func validateOptionalRunID(runID string) error {
 // ensureInvocationAttached rejects workflow progression while a manual native
 // resume remains unacknowledged by the operator.
 func (s *Service) ensureInvocationAttached(ctx context.Context, runStore RunStore, run store.Run) error {
-	activeStore, ok := runStore.(ActiveInvocationStore)
-	if !ok {
+	activeValues, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if !supported {
 		return nil
 	}
-	active, err := activeStore.ActiveInvocation(ctx, run.ID)
 	if err != nil {
 		return fmt.Errorf("read active invocation attach gate: %w", err)
 	}
-	if active != nil && active.AttachRequired {
-		return &ManualResumeRequiredError{RunID: run.ID}
+	for _, active := range activeValues {
+		if active.AttachRequired {
+			return &ManualResumeRequiredError{RunID: run.ID}
+		}
 	}
 	return nil
+}
+
+// stopActiveRunWorkers stops every currently delegated worker, preserving the
+// shared credential volume and all durable invocation artifacts. Review roles
+// own separate worker identities, so a run-level pause must stop each one.
+func (s *Service) stopActiveRunWorkers(ctx context.Context, runStore RunStore, run store.Run) error {
+	if s.deps.Worker == nil {
+		return nil
+	}
+	activeValues, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if err != nil {
+		return fmt.Errorf("read active invocations before stopping workers: %w", err)
+	}
+	workerIDs := make([]string, 0, len(activeValues))
+	seen := make(map[string]struct{}, len(activeValues))
+	if supported {
+		for _, invocation := range activeValues {
+			workerID := workerIDForInvocation(invocation)
+			if _, exists := seen[workerID]; exists {
+				continue
+			}
+			seen[workerID] = struct{}{}
+			workerIDs = append(workerIDs, workerID)
+		}
+	} else if run.ActiveInvocationID != "" || len(run.ActiveInvocationIDs) != 0 {
+		workerIDs = append(workerIDs, run.ID)
+	}
+	if len(workerIDs) == 0 {
+		// Preserve the historical idempotent stop for a run whose invocation
+		// history is empty or already terminal. The run-scoped worker is absent
+		// for isolated review workers, so this is harmless in that case.
+		workerIDs = append(workerIDs, run.ID)
+	}
+	var stopErr error
+	for _, workerID := range workerIDs {
+		stopErr = errors.Join(stopErr, s.stopRunWorker(ctx, workerID))
+	}
+	return stopErr
 }
 
 // resetStartupState lets a successful explicit attach reopen progression seams

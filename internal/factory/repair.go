@@ -674,14 +674,14 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	}
 	workerStarted = true
 	if seedCredentials != nil {
-		if err := seedCredentials(ctx, run.ID); err != nil {
+		if err := seedCredentials(ctx, run.ID, workerIDForInvocation(invocation)); err != nil {
 			return store.Invocation{}, run, newCredentialProjectionError(previous.Harness)
 		}
 	}
 	next := run
 	next.Stage = store.StageImplementation
 	next.Status = store.StatusActive
-	next.ActiveInvocationID = invocation.ID
+	addActiveInvocation(&next, invocation.ID)
 	next.CheckRepairBudget = repairPacket.Budget
 	next.CheckRepairPendingAttempt = repairPacket.Attempt
 	next.LifecycleReason = fmt.Sprintf("check-repair attempt %d active", repairPacket.Attempt)

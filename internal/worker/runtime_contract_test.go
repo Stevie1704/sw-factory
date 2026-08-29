@@ -142,6 +142,28 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	}
 }
 
+// TestDockerRuntimeMountsReviewWorktreesReadOnly verifies that a review worker
+// cannot mutate the immutable checkpoint through its checkout mount.
+func TestDockerRuntimeMountsReviewWorktreesReadOnly(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.StartRequest{
+		RunID:            "run-contract-review",
+		WorkerID:         "run-contract-review-invocation",
+		WorktreeReadOnly: true,
+		WorktreePath:     makeDirectory(t, "worktree"),
+		GitMetadataPath:  makeDirectory(t, "git-metadata"),
+		Image:            "ghcr.io/example/factory-worker",
+		ImageDigest:      testWorkerDigest,
+		Role:             "specification-review",
+	}
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	runLine := findLogLine(t, readStubLog(t, logPath), " run ")
+	assertContainsAll(t, runLine, "dst=/work,readonly", "dst=/git,readonly")
+}
+
 // TestDockerRuntimeResumesThePinnedWorker verifies that resume starts the
 // existing run container rather than creating a new worker or changing its
 // image selection.

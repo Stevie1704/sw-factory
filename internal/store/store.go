@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 27
+const CurrentSchemaVersion = 28
 
 // MaxTestRevisionAttempts is the hard safety ceiling for automated
 // implementation-versus-test objection cycles.
@@ -340,14 +340,22 @@ type ReviewFinding struct {
 	SuggestedOwner string `json:"suggested_owner"`
 }
 
-// SpecificationReview is the latest review result and its exact checkpoint
-// identity. A result is stale as soon as the run checkpoint changes.
-type SpecificationReview struct {
+// ReviewResult is one review role's latest exact-checkpoint result. A result
+// is stale as soon as the run checkpoint changes.
+type ReviewResult struct {
 	// CheckpointSHA identifies the exact commit reviewed.
 	CheckpointSHA string `json:"checkpoint_sha"`
 	// Findings contains every accepted complete finding.
 	Findings []ReviewFinding `json:"findings"`
 }
+
+// SpecificationReview is the specification review's exact-checkpoint result.
+type SpecificationReview = ReviewResult
+
+// StandardsReview is the documented-standards review's exact-checkpoint
+// result. It reuses the same finding contract while remaining a separate
+// durable projection.
+type StandardsReview = ReviewResult
 
 // ProtectedTestPath records the content identity implementation must preserve.
 type ProtectedTestPath struct {
@@ -398,6 +406,8 @@ type Run struct {
 	ImplementationHandoff *RoleHandoff
 	// SpecificationReview is the latest exact-checkpoint review result.
 	SpecificationReview *SpecificationReview
+	// StandardsReview is the latest exact-checkpoint standards result.
+	StandardsReview *StandardsReview
 	// TestExemption records a pre-authorized or technical test-stage exemption.
 	TestExemption *TestExemption
 	// ProtectedTestPaths records every test-stage path and its checkpoint hash.
@@ -409,9 +419,13 @@ type Run struct {
 	// which lets a status projection separate an active run from an active
 	// invocation without reading the invocation table.
 	ActiveInvocationID string
-	ImageDigest        string
-	Coordinator        string
-	StatusCommentID    string
+	// ActiveInvocationIDs identifies every concurrently executing harness
+	// invocation. ActiveInvocationID remains the compatibility projection of
+	// the first entry for older status consumers.
+	ActiveInvocationIDs []string
+	ImageDigest         string
+	Coordinator         string
+	StatusCommentID     string
 	// PullRequestNumber is the persisted idempotency identity of the draft PR.
 	PullRequestNumber int
 	// PullRequestURL is the operator-facing URL of the draft PR.
@@ -716,9 +730,9 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       test_handoff, test_invocation_id, test_revision_attempts,
 		       test_revision_budget, test_revision_history, test_objection,
 		       test_revision_base_changed_paths,
-		       implementation_handoff, specification_review,
+			implementation_handoff, specification_review, standards_review,
 		       test_exemption, protected_test_paths, test_stage_skipped,
-		       active_invocation_id,
+		       active_invocation_id, active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -744,9 +758,9 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       test_handoff, test_invocation_id, test_revision_attempts,
 		       test_revision_budget, test_revision_history, test_objection,
 		       test_revision_base_changed_paths,
-		       implementation_handoff, specification_review,
+			implementation_handoff, specification_review, standards_review,
 		       test_exemption, protected_test_paths, test_stage_skipped,
-		       active_invocation_id,
+		       active_invocation_id, active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent,
@@ -766,9 +780,10 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, testCheckpointSHA string
-	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON string
+	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON, standardsReviewJSON string
 	var testRevisionHistoryJSON, testObjectionJSON, testRevisionBaseChangedPathsJSON string
 	var testExemptionJSON, protectedTestPathsJSON string
+	var activeInvocationIDsJSON string
 	var pendingQuestionsJSON, clarificationCommentID, terminalAt, createdAt, updatedAt string
 	var clarificationNotificationSent bool
 	var err error
@@ -792,10 +807,12 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&testRevisionBaseChangedPathsJSON,
 		&roleHandoffJSON,
 		&specificationReviewJSON,
+		&standardsReviewJSON,
 		&testExemptionJSON,
 		&protectedTestPathsJSON,
 		&run.TestStageSkipped,
 		&run.ActiveInvocationID,
+		&activeInvocationIDsJSON,
 		&run.ImageDigest,
 		&run.Coordinator,
 		&run.StatusCommentID,
@@ -871,6 +888,23 @@ func scanRun(row *sql.Row) (*Run, error) {
 		if err := json.Unmarshal([]byte(specificationReviewJSON), run.SpecificationReview); err != nil {
 			return nil, fmt.Errorf("decode specification review: %w", err)
 		}
+	}
+	if standardsReviewJSON != "" {
+		run.StandardsReview = &StandardsReview{}
+		if err := json.Unmarshal([]byte(standardsReviewJSON), run.StandardsReview); err != nil {
+			return nil, fmt.Errorf("decode standards review: %w", err)
+		}
+	}
+	if activeInvocationIDsJSON != "" {
+		if err := json.Unmarshal([]byte(activeInvocationIDsJSON), &run.ActiveInvocationIDs); err != nil {
+			return nil, fmt.Errorf("decode active invocation ids: %w", err)
+		}
+	}
+	if len(run.ActiveInvocationIDs) == 0 && run.ActiveInvocationID != "" {
+		run.ActiveInvocationIDs = []string{run.ActiveInvocationID}
+	}
+	if run.ActiveInvocationID == "" && len(run.ActiveInvocationIDs) > 0 {
+		run.ActiveInvocationID = run.ActiveInvocationIDs[0]
 	}
 	if testExemptionJSON != "" {
 		run.TestExemption = &TestExemption{}
@@ -1096,6 +1130,9 @@ func normalizeRun(run Run) (Run, error) {
 	if run.CheckpointSHA == "" && run.BaseCheckpointSHA != "" {
 		run.CheckpointSHA = run.BaseCheckpointSHA
 	}
+	if err := normalizeActiveInvocationProjection(&run); err != nil {
+		return Run{}, err
+	}
 	if err := validateTestProjection(run); err != nil {
 		return Run{}, err
 	}
@@ -1149,6 +1186,42 @@ func normalizeRun(run Run) (Run, error) {
 		run.TerminalAt = time.Time{}
 	}
 	return run, nil
+}
+
+// normalizeActiveInvocationProjection keeps the historical singular marker
+// and the concurrent invocation projection mutually compatible.
+func normalizeActiveInvocationProjection(run *Run) error {
+	if run == nil {
+		return errors.New("run is required for active invocation normalization")
+	}
+	ids := append([]string(nil), run.ActiveInvocationIDs...)
+	if run.ActiveInvocationID != "" {
+		found := false
+		for _, id := range ids {
+			if id == run.ActiveInvocationID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ids = append([]string{run.ActiveInvocationID}, ids...)
+		}
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for index, id := range ids {
+		if !safeQuestionIdentifier(id) {
+			return fmt.Errorf("run active invocation %d has an unsafe identifier", index)
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("run active invocation %q is duplicated", id)
+		}
+		seen[id] = struct{}{}
+	}
+	run.ActiveInvocationIDs = ids
+	if run.ActiveInvocationID == "" && len(ids) > 0 {
+		run.ActiveInvocationID = ids[0]
+	}
+	return nil
 }
 
 // validateTestProjection checks the bounded durable test-stage state before it
@@ -1284,35 +1357,61 @@ func validateTestProjection(run Run) error {
 			}
 		}
 	}
-	if run.SpecificationReview != nil {
-		if run.SpecificationReview.CheckpointSHA != run.CheckpointSHA {
-			return errors.New("specification review must match the run checkpoint SHA")
+	if err := validateReviewProjection("specification", run.SpecificationReview, run.CheckpointSHA); err != nil {
+		return err
+	}
+	if err := validateReviewProjection("standards", run.StandardsReview, run.CheckpointSHA); err != nil {
+		return err
+	}
+	if len(run.ActiveInvocationIDs) > 32 {
+		return errors.New("run active invocation ids exceed 32 entries")
+	}
+	seenActiveInvocations := make(map[string]struct{}, len(run.ActiveInvocationIDs))
+	for index, invocationID := range run.ActiveInvocationIDs {
+		if !safeQuestionIdentifier(invocationID) {
+			return fmt.Errorf("run active invocation %d has an unsafe identifier", index)
 		}
-		if !validGateCheckpointSHA(run.SpecificationReview.CheckpointSHA) {
-			return errors.New("specification review checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
+		if _, exists := seenActiveInvocations[invocationID]; exists {
+			return fmt.Errorf("run active invocation %q is duplicated", invocationID)
 		}
-		if len(run.SpecificationReview.Findings) > 64 {
-			return errors.New("specification review findings exceed 64 entries")
+		seenActiveInvocations[invocationID] = struct{}{}
+	}
+	return nil
+}
+
+// validateReviewProjection checks one nullable exact-checkpoint review result
+// before it is serialized into the operational store.
+func validateReviewProjection(label string, review *ReviewResult, checkpoint string) error {
+	if review == nil {
+		return nil
+	}
+	if review.CheckpointSHA != checkpoint {
+		return fmt.Errorf("%s review must match the run checkpoint SHA", label)
+	}
+	if !validGateCheckpointSHA(review.CheckpointSHA) {
+		return fmt.Errorf("%s review checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters", label)
+	}
+	if len(review.Findings) > 64 {
+		return fmt.Errorf("%s review findings exceed 64 entries", label)
+	}
+	for index, finding := range review.Findings {
+		for field, value := range map[string]string{
+			"location": finding.Location, "claim": finding.Claim, "evidence": finding.Evidence,
+			"suggested_resolution": finding.SuggestedResolution, "suggested_owner": finding.SuggestedOwner,
+		} {
+			if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+				return fmt.Errorf("%s review finding %d %s is required and must be single-line", label, index, field)
+			}
 		}
-		for index, finding := range run.SpecificationReview.Findings {
-			for field, value := range map[string]string{
-				"location": finding.Location, "claim": finding.Claim, "evidence": finding.Evidence,
-				"suggested_resolution": finding.SuggestedResolution, "suggested_owner": finding.SuggestedOwner,
-			} {
-				if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
-					return fmt.Errorf("specification review finding %d %s is required and must be single-line", index, field)
-				}
-			}
-			switch finding.Severity {
-			case "blocker", "advisory":
-			default:
-				return fmt.Errorf("unsupported specification review severity %q", finding.Severity)
-			}
-			switch finding.Category {
-			case "correctness", "security", "specification", "documented_standards", "taste", "scope":
-			default:
-				return fmt.Errorf("unsupported specification review category %q", finding.Category)
-			}
+		switch finding.Severity {
+		case "blocker", "advisory":
+		default:
+			return fmt.Errorf("unsupported %s review severity %q", label, finding.Severity)
+		}
+		switch finding.Category {
+		case "correctness", "security", "specification", "documented_standards", "taste", "scope":
+		default:
+			return fmt.Errorf("unsupported %s review category %q", label, finding.Category)
 		}
 	}
 	return nil
@@ -1476,6 +1575,31 @@ func specificationReviewJSON(value *SpecificationReview) string {
 	return string(data)
 }
 
+// standardsReviewJSON serializes a nullable exact-checkpoint standards review.
+func standardsReviewJSON(value *StandardsReview) string {
+	if value == nil {
+		return ""
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// activeInvocationIDsJSON serializes the concurrent invocation projection as
+// a stable JSON array for restart-safe status rendering.
+func activeInvocationIDsJSON(values []string) string {
+	if values == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
 // testExemptionJSON serializes a nullable test exemption projection.
 func testExemptionJSON(value *TestExemption) string {
 	if value == nil {
@@ -1523,10 +1647,12 @@ func runValues(run Run) []any {
 		testRevisionBaseChangedPathsJSON(run.TestRevisionBaseChangedPaths),
 		roleHandoffJSON(roleHandoffForRun(run)),
 		specificationReviewJSON(run.SpecificationReview),
+		standardsReviewJSON(run.StandardsReview),
 		testExemptionJSON(run.TestExemption),
 		protectedTestPathsJSON(run.ProtectedTestPaths),
 		run.TestStageSkipped,
 		run.ActiveInvocationID,
+		activeInvocationIDsJSON(run.ActiveInvocationIDs),
 		run.ImageDigest,
 		run.Coordinator,
 		run.StatusCommentID,
@@ -1571,9 +1697,9 @@ const saveRunStatement = `
 			test_handoff, test_invocation_id, test_revision_attempts,
 			test_revision_budget, test_revision_history, test_objection,
 			test_revision_base_changed_paths, implementation_handoff,
-			specification_review,
+			specification_review, standards_review,
 			test_exemption, protected_test_paths, test_stage_skipped,
-			active_invocation_id,
+			active_invocation_id, active_invocation_ids,
 			image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
 			lifecycle_notification_sent,
@@ -1588,7 +1714,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -1609,10 +1735,12 @@ const saveRunStatement = `
 			test_revision_base_changed_paths = excluded.test_revision_base_changed_paths,
 			implementation_handoff = excluded.implementation_handoff,
 			specification_review = excluded.specification_review,
+			standards_review = excluded.standards_review,
 			test_exemption = excluded.test_exemption,
 			protected_test_paths = excluded.protected_test_paths,
 			test_stage_skipped = excluded.test_stage_skipped,
 			active_invocation_id = excluded.active_invocation_id,
+			active_invocation_ids = excluded.active_invocation_ids,
 			image_digest = excluded.image_digest,
 			coordinator = excluded.coordinator,
 			status_comment_id = excluded.status_comment_id,
@@ -1645,9 +1773,9 @@ const saveRunIfRevisionStatement = `
 			test_handoff = ?, test_invocation_id = ?, test_revision_attempts = ?,
 			test_revision_budget = ?, test_revision_history = ?, test_objection = ?,
 			test_revision_base_changed_paths = ?, implementation_handoff = ?,
-			specification_review = ?,
+			specification_review = ?, standards_review = ?,
 			test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
-			active_invocation_id = ?,
+			active_invocation_id = ?, active_invocation_ids = ?,
 			image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
 			lifecycle_notification_sent = ?,
@@ -1910,8 +2038,41 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 	return scanInvocation(row)
 }
 
+// ActiveInvocations returns every currently executing invocation for one run
+// in deterministic update order. Review roles may run together; ordinary
+// roles remain constrained by the coordinator before they reach this query.
+func (s *Store) ActiveInvocations(ctx context.Context, runID string) ([]Invocation, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, errors.New("invocation run id is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
+		       native_session_id, workspace_id, status_surface_id,
+		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
+		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+		FROM invocations
+		WHERE run_id = ? AND status = ?
+		ORDER BY updated_at, id`, runID, InvocationStatusActive)
+	if err != nil {
+		return nil, fmt.Errorf("list active invocations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	result := make([]Invocation, 0)
+	for rows.Next() {
+		invocation, scanErr := scanInvocation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, *invocation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read active invocations: %w", err)
+	}
+	return result, nil
+}
+
 // scanInvocation decodes one invocation row and its RFC3339 timestamps.
-func scanInvocation(row *sql.Row) (*Invocation, error) {
+func scanInvocation(row interface{ Scan(...any) error }) (*Invocation, error) {
 	var invocation Invocation
 	var permittedPathJSON, createdAt, updatedAt string
 	if err := row.Scan(
@@ -2656,6 +2817,17 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 					return fmt.Errorf("apply store migration 27: %w", err)
 				}
 			}
+		case 28:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN standards_review TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN active_invocation_ids TEXT NOT NULL DEFAULT '[]'",
+				"DROP INDEX one_active_invocation_per_run",
+				"CREATE UNIQUE INDEX one_active_invocation_per_role ON invocations (run_id, role) WHERE status = 'active'",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 28: %w", err)
+				}
+			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
 		}
@@ -2835,7 +3007,9 @@ func reconcileDuplicateInvocations(ctx context.Context, tx *sql.Tx) error {
 // without depending on a driver-specific SQLite error type.
 func isActiveInvocationConflict(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "one_active_invocation_per_run") || strings.Contains(message, "unique constraint failed: invocations.run_id")
+	return strings.Contains(message, "one_active_invocation_per_run") ||
+		strings.Contains(message, "one_active_invocation_per_role") ||
+		strings.Contains(message, "unique constraint failed: invocations.run_id, invocations.role")
 }
 
 // backupDatabase creates a private 0600 backup of the database and returns its path.

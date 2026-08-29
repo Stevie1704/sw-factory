@@ -29,6 +29,8 @@ type StartRequest struct {
 	InvocationID string
 	// RunID identifies the worker run.
 	RunID string
+	// WorkerID selects an invocation-isolated worker when supplied.
+	WorkerID string
 	// Role identifies the workflow role.
 	Role string
 	// Stage identifies the workflow stage.
@@ -80,6 +82,8 @@ type Capabilities struct {
 type NativeSessionRequest struct {
 	// RunID identifies the worker run whose native session is checked.
 	RunID string
+	// WorkerID selects the invocation-isolated worker whose session is checked.
+	WorkerID string
 	// Harness identifies the adapter-owned session format.
 	Harness string
 }

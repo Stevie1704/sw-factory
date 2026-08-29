@@ -405,6 +405,7 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.RoleHandoff = nil
 	run.ImplementationHandoff = nil
 	run.SpecificationReview = nil
+	run.StandardsReview = nil
 	run.ProtectedTestPaths = nil
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
@@ -442,18 +443,14 @@ func agentRequestForRun(run store.Run) AgentRequest {
 // stopRunWorkerIfActive stops only a currently active invocation so an answer
 // or refresh does not create a spurious worker-stop side effect after a pause.
 func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, run store.Run) error {
-	activeStore, ok := runStore.(ActiveInvocationStore)
-	if !ok {
-		return nil
-	}
-	active, err := activeStore.ActiveInvocation(ctx, run.ID)
+	activeValues, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
 	if err != nil {
 		return fmt.Errorf("look up active invocation before packet refresh: %w", err)
 	}
-	if active == nil {
+	if !supported || len(activeValues) == 0 {
 		return nil
 	}
-	return s.stopRunWorker(ctx, run.ID)
+	return s.stopActiveRunWorkers(ctx, runStore, run)
 }
 
 // applyPacketChangeTransition atomically applies the state transition and

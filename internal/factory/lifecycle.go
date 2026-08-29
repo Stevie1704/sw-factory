@@ -231,7 +231,7 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 	}
 	journaled := false
 	if _, journaled = runStore.(PendingEffectStore); !journaled {
-		if err := s.stopRunWorker(ctx, previous.ID); err != nil {
+		if err := s.stopActiveRunWorkers(ctx, runStore, previous); err != nil {
 			return next, err
 		}
 	}

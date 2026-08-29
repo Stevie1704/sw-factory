@@ -227,15 +227,25 @@ test checkpoint, records every changed test/infrastructure path and its SHA-256
 content hash, then launches implementation. Implementation report acceptance
 rechecks those hashes and rejects any direct edit to a protected test path.
 
-## Specification review
+## Concurrent isolated reviews
 
-After `factory draft-pr` creates the draft pull request, the next `factory
-agent` invocation automatically selects the `spec_review` role at the
-`review` stage. The reviewer runs in a fresh role session against the exact
-implementation checkpoint. Its read-only invocation packet contains the frozen
-specification packet, accepted test and implementation handoffs, protected
-test-path hashes, the base-to-checkpoint diff, bounded gate-result summaries,
-and any prior findings. It never receives upstream harness transcripts.
+After `factory draft-pr` creates the draft pull request, the coordinator starts
+the `spec_review` and `standards_review` roles against the same exact
+implementation checkpoint. Their external sessions run concurrently, while
+the coordinator applies reports serially. Each role receives a fresh
+read-only worker surface, private home and temporary storage, and its own
+invocation identity. Neither role receives implementation or test handoffs,
+upstream harness transcripts, or the other reviewer's conclusions. A reviewer
+may receive only findings previously accepted for that same role and
+checkpoint.
+
+The specification reviewer evaluates the frozen requirement and observable
+behavior. The standards reviewer evaluates, in order, non-overridable factory
+safety rules, the frozen specification, scoped repository instructions,
+contribution and architecture documentation, and nearby conventions. A
+technical test exemption is provisional evidence for the standards reviewer,
+not an automatic waiver. Both reviewers inspect the same immutable
+base-to-checkpoint diff and must report that checkpoint SHA.
 
 The reviewer publishes a completed report with repeated finding flags:
 
@@ -250,11 +260,12 @@ Every finding must include a location, claim, evidence, severity, category,
 suggested resolution, and suggested owner. Only blocker findings classified as
 correctness, security, specification, or documented-standards violations gate
 readiness. Taste and scope findings remain visible advisories. The coordinator
-attaches the stable `factory/review/specification` Commit Status to the exact
-reviewed SHA and invalidates the durable review projection when the checkpoint
-changes. Accepted findings appear in both the editable issue status comment and
-the generated pull-request review section. A technical test exemption in
-required mode remains marked provisional in the review packet and projections.
+attaches the stable `factory/review/specification` and
+`factory/review/standards` Commit Status contexts to the exact reviewed SHA,
+and invalidates both durable review projections when the checkpoint changes.
+Accepted findings appear in both the editable issue status comment and the
+generated pull-request review section. The run becomes ready only after every
+configured reviewer has completed successfully.
 
 Human skips must be frozen in the issue before claim with an exact marker:
 

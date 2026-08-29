@@ -20,7 +20,8 @@ const (
 	RoleArchitecture = "architecture"
 	// RoleSpecificationReview identifies the independent specification reviewer.
 	RoleSpecificationReview = "spec_review"
-	// RoleStandardsReview identifies the legacy standards-review policy role.
+	// RoleStandardsReview identifies the independent documented-standards
+	// reviewer.
 	RoleStandardsReview = "standards_review"
 
 	// PromptVersionTest identifies the immutable test-role prompt.
@@ -36,7 +37,7 @@ const (
 
 	// StageArchitecture identifies the optional architecture invocation stage.
 	StageArchitecture store.Stage = store.StageArchitecture
-	// StageStandardsReview identifies the legacy standards-review invocation stage.
+	// StageStandardsReview identifies the documented-standards review invocation stage.
 	StageStandardsReview store.Stage = "standards_review"
 )
 
@@ -236,8 +237,13 @@ func DefaultRegistry() Registry {
 			DefaultPermittedPaths: []string{"."},
 			Kind:                  RoleKindReview,
 			Surface:               SurfaceRole,
-			StartStages:           []store.Stage{store.StageDraftPR},
+			StartStages:           []store.Stage{store.StageDraftPR, store.StageReview},
 			RunStages:             []store.Stage{store.StageDraftPR},
+			PromptInstructions: `Specification-review scope:
+- Evaluate the frozen specification and the observable behavior of the exact checkpoint.
+- Keep documented repository standards in scope only when they directly affect the frozen requirement.
+- Do not use another reviewer's result, transcript, or session state as evidence.
+`,
 		},
 		{
 			Name:                  RoleStandardsReview,
@@ -246,8 +252,13 @@ func DefaultRegistry() Registry {
 			DefaultPermittedPaths: []string{"."},
 			Kind:                  RoleKindReview,
 			Surface:               SurfaceRole,
-			StartStages:           []store.Stage{store.StageDraftPR},
+			StartStages:           []store.Stage{store.StageDraftPR, store.StageReview},
 			RunStages:             []store.Stage{StageStandardsReview},
+			PromptInstructions: `Standards-review precedence:
+- Evaluate the checkpoint in this order: non-overridable factory safety rules; the frozen specification; scoped repository instructions; contribution and architecture documentation; nearby repository conventions.
+- Treat a provisional test exemption as evidence to evaluate, not as a waiver. Reject it with a concrete documented-standards or correctness finding when it is unjustified.
+- Do not use the specification reviewer's conclusions, transcript, implementation context, or session state as evidence.
+`,
 		},
 	}
 

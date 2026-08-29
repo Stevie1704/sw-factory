@@ -383,7 +383,7 @@ func (s *Service) applyJournaledStateTransition(ctx context.Context, runStore Ru
 	}
 	apply := func() error {
 		if transition.StopWorker {
-			if err := s.stopRunWorker(ctx, transition.Previous.ID); err != nil {
+			if err := s.stopActiveRunWorkers(ctx, runStore, transition.Previous); err != nil {
 				return err
 			}
 		}
@@ -1064,18 +1064,32 @@ func testRevisionStatusComment(run store.Run) string {
 // a recovered GitHub comment without treating its marker alone as agreement.
 func StatusCommentBody(run store.Run) string { return statusCommentBody(run) }
 
-// specificationReviewStatusComment renders the complete accepted review
-// finding contract in the single editable issue supervision comment.
+// specificationReviewStatusComment renders every configured review result in
+// the single editable issue supervision comment. The historical function name
+// remains as the compatibility seam for callers that only knew the first role.
 func specificationReviewStatusComment(run store.Run) string {
-	if run.SpecificationReview == nil {
+	if run.Stage != store.StageReview && run.SpecificationReview == nil && run.StandardsReview == nil {
+		return ""
+	}
+	result := renderReviewStatusComment("Specification review", run.SpecificationReview, run)
+	if standardsReviewConfigured(run) || run.StandardsReview != nil {
+		result += renderReviewStatusComment("Standards review", run.StandardsReview, run)
+	}
+	return result
+}
+
+// renderReviewStatusComment renders one role-owned review result with bounded
+// finding detail and an explicit pending state for the shared checkpoint.
+func renderReviewStatusComment(title string, review *store.ReviewResult, run store.Run) string {
+	if review == nil {
 		if run.Stage != store.StageReview {
 			return ""
 		}
-		return fmt.Sprintf("\n### Specification review\n\n- status: pending for checkpoint `%s`\n", safeStatusCommentValue(run.CheckpointSHA))
+		return fmt.Sprintf("\n### %s\n\n- status: pending for checkpoint `%s`\n", title, safeStatusCommentValue(run.CheckpointSHA))
 	}
-	blocking, advisory := reviewFindingCounts(run.SpecificationReview.Findings)
-	result := fmt.Sprintf("\n### Specification review\n\n- reviewed checkpoint: `%s`\n- outcome: %d blocking findings, %d advisory findings\n", safeStatusCommentValue(run.SpecificationReview.CheckpointSHA), blocking, advisory)
-	for index, finding := range run.SpecificationReview.Findings {
+	blocking, advisory := reviewFindingCounts(review.Findings)
+	result := fmt.Sprintf("\n### %s\n\n- reviewed checkpoint: `%s`\n- outcome: %d blocking findings, %d advisory findings\n", title, safeStatusCommentValue(review.CheckpointSHA), blocking, advisory)
+	for index, finding := range review.Findings {
 		result += fmt.Sprintf("\n#### Finding %d — %s/%s\n\n- location: `%s`\n- claim: %s\n- evidence: %s\n- suggested resolution: %s\n- suggested owner: `%s`\n", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category), safeStatusCommentValue(finding.Location), safeStatusCommentValue(finding.Claim), safeStatusCommentValue(finding.Evidence), safeStatusCommentValue(finding.SuggestedResolution), safeStatusCommentValue(finding.SuggestedOwner))
 	}
 	return result

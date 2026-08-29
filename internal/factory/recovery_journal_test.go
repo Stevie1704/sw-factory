@@ -25,6 +25,21 @@ import (
 // journaled restart fixture.
 const journalRecoveryImageDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+// TestRecoveryTargetsOnlyTheReviewerWithARecoverableProjection verifies that
+// one failed reviewer cannot make the coordinator resume a healthy concurrent
+// reviewer after restart.
+func TestRecoveryTargetsOnlyTheReviewerWithARecoverableProjection(t *testing.T) {
+	active := []store.Invocation{
+		{ID: "inv-spec", RunID: "run-recovery-review", Status: store.InvocationStatusActive},
+		{ID: "inv-standards", RunID: "run-recovery-review", Status: store.InvocationStatusActive},
+	}
+	diagnosis := RecoveryDiagnosis{Discrepancies: []RecoveryDiscrepancy{{InvocationID: "inv-standards", Recoverable: true}}}
+	target := recoveryTargetActiveInvocation(diagnosis, active)
+	if target == nil || target.ID != "inv-standards" {
+		t.Fatalf("recovery target = %#v, want inv-standards", target)
+	}
+}
+
 // TestJournaledStartupRecreatesALostWorkerAndResumesOnce verifies the real
 // startup reconciliation path recreates a missing worker from the persisted
 // start request, resumes the native session once, persists the resume ceiling,

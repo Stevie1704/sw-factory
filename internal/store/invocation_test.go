@@ -138,6 +138,46 @@ func TestStoreFindsOnlyTheNewestActiveInvocation(t *testing.T) {
 	}
 }
 
+// TestStorePersistsConcurrentReviewInvocations verifies the store permits one
+// active invocation per review role while preserving both identities across a
+// reopen.
+func TestStorePersistsConcurrentReviewInvocations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	created := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	for _, invocation := range []store.Invocation{
+		{ID: "inv-spec", RunID: "run-reviews", Harness: "codex", Role: "spec_review", Stage: store.StageReview, Status: store.InvocationStatusActive, CreatedAt: created, UpdatedAt: created},
+		{ID: "inv-standards", RunID: "run-reviews", Harness: "codex", Role: "standards_review", Stage: store.Stage("standards_review"), Status: store.InvocationStatusActive, CreatedAt: created, UpdatedAt: created.Add(time.Minute)},
+	} {
+		if err := opened.SaveInvocation(context.Background(), invocation); err != nil {
+			t.Fatalf("SaveInvocation(%s) error = %v", invocation.ID, err)
+		}
+	}
+	active, err := opened.ActiveInvocations(context.Background(), "run-reviews")
+	if err != nil {
+		t.Fatalf("ActiveInvocations() error = %v", err)
+	}
+	if len(active) != 2 || active[0].ID != "inv-spec" || active[1].ID != "inv-standards" {
+		t.Fatalf("ActiveInvocations() = %#v, want both review roles in order", active)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if err := reopened.SaveInvocation(context.Background(), store.Invocation{
+		ID: "inv-spec-duplicate", RunID: "run-reviews", Harness: "codex", Role: "spec_review", Stage: store.StageReview, Status: store.InvocationStatusActive,
+	}); err == nil || !strings.Contains(err.Error(), "active invocation already exists") {
+		t.Fatalf("duplicate specification invocation error = %v, want role-scoped uniqueness", err)
+	}
+}
+
 // TestStoreFindsTheLatestInvocationForRepair verifies terminal history lookup
 // returns the most recently updated implementation session, not only active
 // rows.

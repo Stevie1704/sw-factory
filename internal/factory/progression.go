@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -60,6 +61,10 @@ type progressionState struct {
 	Run *store.Run
 	// Active is the invocation that may still produce a report.
 	Active *store.Invocation
+	// ActiveInvocations contains every invocation that may still produce a
+	// report. Active remains populated with the first item for compatibility
+	// with older progression tests and embedders.
+	ActiveInvocations []*store.Invocation
 	// Latest is the most recent invocation of any status.
 	Latest *store.Invocation
 	// Supported reports whether the operational store exposes the durable
@@ -108,7 +113,7 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			return progressionResult{Outcome: progressionIdle, Steps: result.Steps, Reason: "run disappeared after " + step.name}, nil
 		}
 		result.Run = *advanced.Run
-		if !progressionAdvanced(*state.Run, state.Active, *advanced.Run, advanced.Active) {
+		if !progressionAdvancedMany(*state.Run, state.ActiveInvocations, *advanced.Run, advanced.ActiveInvocations) {
 			return s.publishProgressionStop(ctx, registration, *advanced.Run, progressionResult{
 				Outcome: progressionWaiting,
 				Steps:   result.Steps,
@@ -132,6 +137,31 @@ type progressionAction struct {
 	action func(context.Context) error
 }
 
+// startReviewRound launches the specification and standards reviewers for the
+// same frozen checkpoint. Launching is coordinator-serialized, while the two
+// resulting harness sessions remain live concurrently in their own workers,
+// homes, and result directories.
+func (s *Service) startReviewRound(ctx context.Context, runID string) error {
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("review round run id is required")
+	}
+	if _, err := s.StartAgent(ctx, AgentRequest{
+		RunID: runID,
+		Role:  workflow.RoleSpecificationReview,
+		Stage: store.StageReview,
+	}); err != nil {
+		return fmt.Errorf("start specification reviewer: %w", err)
+	}
+	if _, err := s.StartAgent(ctx, AgentRequest{
+		RunID: runID,
+		Role:  workflow.RoleStandardsReview,
+		Stage: workflow.StageStandardsReview,
+	}); err != nil {
+		return fmt.Errorf("start standards reviewer: %w", err)
+	}
+	return nil
+}
+
 // progressionStep selects the single legal next transition for a run, or the
 // waiting state that stops unattended progression. Exactly one of the two
 // return values is set.
@@ -141,27 +171,57 @@ func (s *Service) progressionStep(state progressionState) (progressionAction, *p
 	case ActivityTerminal:
 		return progressionAction{}, &progressionResult{Outcome: progressionTerminal, Reason: "run is " + string(run.Status)}
 	case ActivityWaitingForHuman:
-		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: waitingReason(run, "waiting for human disposition")}
+		if !hasActiveReviewInvocations(state) {
+			return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: waitingReason(run, "waiting for human disposition")}
+		}
 	case ActivityWaitingForHarness:
 		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: waitingReason(run, "waiting for harness capacity")}
 	}
 	if run.CheckRepairPendingAttempt != 0 {
 		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)}
 	}
-	if state.Active != nil {
-		if state.Active.AttachRequired {
-			return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("invocation %q requires `factory attach`", state.Active.ID)}
+	activeInvocations := state.ActiveInvocations
+	if len(activeInvocations) == 0 && state.Active != nil {
+		activeInvocations = []*store.Invocation{state.Active}
+	}
+	if len(activeInvocations) > 0 {
+		for _, active := range activeInvocations {
+			if active.AttachRequired {
+				return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("invocation %q requires `factory attach`", active.ID)}
+			}
 		}
-		if !agentResultReady(*state.Active) {
-			return progressionAction{}, &progressionResult{Outcome: progressionInvocationActive, Reason: fmt.Sprintf("invocation %q is executing", state.Active.ID)}
+		for _, active := range activeInvocations {
+			if !agentResultReady(*active) {
+				continue
+			}
+			invocationID := active.ID
+			return progressionAction{name: "accept agent report", action: func(ctx context.Context) error {
+				_, err := s.AcceptAgentReport(ctx, AgentReportRequest{RunID: run.ID, InvocationID: invocationID})
+				return err
+			}}, nil
 		}
-		invocationID := state.Active.ID
-		return progressionAction{name: "accept agent report", action: func(ctx context.Context) error {
-			_, err := s.AcceptAgentReport(ctx, AgentReportRequest{RunID: run.ID, InvocationID: invocationID})
-			return err
-		}}, nil
+		ids := make([]string, 0, len(activeInvocations))
+		for _, active := range activeInvocations {
+			ids = append(ids, active.ID)
+		}
+		return progressionAction{}, &progressionResult{Outcome: progressionInvocationActive, Reason: fmt.Sprintf("invocations %s are executing", strings.Join(ids, ", "))}
 	}
 	return s.progressionStageStep(state)
+}
+
+// hasActiveReviewInvocations reports whether an otherwise human-waiting review
+// round still has an independent result that can be serialized and applied.
+func hasActiveReviewInvocations(state progressionState) bool {
+	active := state.ActiveInvocations
+	if len(active) == 0 && state.Active != nil {
+		active = []*store.Invocation{state.Active}
+	}
+	for _, invocation := range active {
+		if roleIsKind(*invocation, workflow.RoleKindReview) {
+			return true
+		}
+	}
+	return false
 }
 
 // progressionStageStep selects the transition the workflow registry declares
@@ -181,9 +241,16 @@ func (s *Service) progressionStageStep(state progressionState) (progressionActio
 			return err
 		}}, nil
 	case store.StageDraftPR:
-		// The independent specification review is a deliberate step, so
-		// unattended progression ends at the draft pull request.
+		if concurrentReviewsConfigured(run) {
+			return progressionAction{name: "start concurrent reviews", action: func(ctx context.Context) error {
+				return s.startReviewRound(ctx, run.ID)
+			}}, nil
+		}
+		// Older packets without the standards role retain the historical
+		// draft-pull-request stop until they are explicitly reviewed.
 		return progressionAction{}, &progressionResult{Outcome: progressionDraftPullRequest, Reason: fmt.Sprintf("draft pull request #%d is ready for review", run.PullRequestNumber)}
+	case store.StageReview:
+		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: "review round has no active invocation"}
 	}
 	definition, declared := registry.Stage(run.Stage)
 	if !declared {
@@ -221,16 +288,32 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 		return progressionState{}, fmt.Errorf("read run for progression: %w", err)
 	}
 	activeStore, hasActive := opened.(ActiveInvocationStore)
+	_, hasAllActive := opened.(ActiveInvocationsStore)
 	latestStore, hasLatest := opened.(LatestInvocationStore)
-	if !hasActive || !hasLatest {
+	if (!hasActive && !hasAllActive) || !hasLatest {
 		return progressionState{}, nil
 	}
 	state := progressionState{Run: run, Supported: true}
 	if run == nil {
 		return state, nil
 	}
-	if state.Active, err = activeStore.ActiveInvocation(ctx, run.ID); err != nil {
+	if allActiveStore, ok := opened.(ActiveInvocationsStore); ok {
+		active, activeErr := allActiveStore.ActiveInvocations(ctx, run.ID)
+		if activeErr != nil {
+			return progressionState{}, fmt.Errorf("read active invocations for progression: %w", activeErr)
+		}
+		state.ActiveInvocations = make([]*store.Invocation, 0, len(active))
+		for index := range active {
+			invocation := active[index]
+			state.ActiveInvocations = append(state.ActiveInvocations, &invocation)
+		}
+		if len(state.ActiveInvocations) > 0 {
+			state.Active = state.ActiveInvocations[0]
+		}
+	} else if state.Active, err = activeStore.ActiveInvocation(ctx, run.ID); err != nil {
 		return progressionState{}, fmt.Errorf("read active invocation for progression: %w", err)
+	} else if state.Active != nil {
+		state.ActiveInvocations = []*store.Invocation{state.Active}
 	}
 	if state.Latest, err = latestStore.LatestInvocation(ctx, run.ID); err != nil {
 		return progressionState{}, fmt.Errorf("read latest invocation for progression: %w", err)
@@ -242,13 +325,36 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 // Without this check a seam that returns success without advancing the run
 // would keep the coordinator repeating the same external operation.
 func progressionAdvanced(previous store.Run, previousInvocation *store.Invocation, next store.Run, nextInvocation *store.Invocation) bool {
+	return progressionAdvancedMany(previous, optionalInvocationList(previousInvocation), next, optionalInvocationList(nextInvocation))
+}
+
+// progressionAdvancedMany reports whether a transition changed durable run or
+// any member of the concurrent invocation projection.
+func progressionAdvancedMany(previous store.Run, previousInvocations []*store.Invocation, next store.Run, nextInvocations []*store.Invocation) bool {
 	if previous.Stage != next.Stage || previous.Status != next.Status || previous.Revision != next.Revision {
 		return true
 	}
 	if previous.CheckpointSHA != next.CheckpointSHA || previous.PullRequestNumber != next.PullRequestNumber {
 		return true
 	}
-	return invocationIdentity(previousInvocation) != invocationIdentity(nextInvocation)
+	if len(previousInvocations) != len(nextInvocations) {
+		return true
+	}
+	for index := range previousInvocations {
+		if invocationIdentity(previousInvocations[index]) != invocationIdentity(nextInvocations[index]) {
+			return true
+		}
+	}
+	return false
+}
+
+// optionalInvocationList converts the compatibility single-invocation view
+// used by older callers into the plural progression representation.
+func optionalInvocationList(invocation *store.Invocation) []*store.Invocation {
+	if invocation == nil {
+		return nil
+	}
+	return []*store.Invocation{invocation}
 }
 
 // invocationIdentity renders the comparable identity of an optional

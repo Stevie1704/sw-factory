@@ -3,6 +3,7 @@ package factory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +22,8 @@ import (
 const reviewCheckpoint = "fedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedc"
 
 // TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories verifies
-// the independent reviewer receives the exact diff and structured handoffs,
-// while taste/scope findings remain visible without blocking readiness.
+// the independent reviewer receives the exact diff without inheriting
+// implementation, test, or other-reviewer session context.
 func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.T) {
 	fixture := newReviewFixture(t)
 	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
@@ -38,6 +39,9 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if len(fixture.worker.starts) != 1 || len(fixture.worker.commands) != 1 || !strings.Contains(fixture.worker.commands[0].Command, reviewCheckpoint) {
 		t.Fatalf("review worker effects = starts %#v commands %#v, want one exact-diff command", fixture.worker.starts, fixture.worker.commands)
 	}
+	if !fixture.worker.starts[0].WorktreeReadOnly {
+		t.Fatal("review worker worktree is writable, want a read-only checkpoint mount")
+	}
 	packetData, err := os.ReadFile(filepath.Join(launch.Invocation.InvocationDirectory, "specification.json"))
 	if err != nil {
 		t.Fatalf("read review packet: %v", err)
@@ -46,8 +50,11 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if err := json.Unmarshal(packetData, &packet); err != nil {
 		t.Fatalf("decode review packet: %v", err)
 	}
-	if packet.ReviewContext == nil || packet.ReviewContext.CheckpointSHA != reviewCheckpoint || packet.ReviewContext.CurrentDiff != "diff --git a/internal/factory/review.go b/internal/factory/review.go\n" || packet.ReviewContext.ImplementationHandoff == nil {
-		t.Fatalf("review context = %#v, want exact checkpoint, diff, and implementation handoff", packet.ReviewContext)
+	if packet.ReviewContext == nil || packet.ReviewContext.CheckpointSHA != reviewCheckpoint || packet.ReviewContext.CurrentDiff != "diff --git a/internal/factory/review.go b/internal/factory/review.go\n" || packet.ReviewContext.ImplementationHandoff != nil || packet.ReviewContext.TestHandoff != nil || len(packet.ReviewContext.ProtectedTestPaths) != 0 || packet.ReviewContext.TestExemption != nil {
+		t.Fatalf("review context = %#v, want exact diff without implementation/test context", packet.ReviewContext)
+	}
+	if packet.TestHandoff != nil || packet.TestObjection != nil || packet.TestExemption != nil || len(packet.ProtectedTestPaths) != 0 {
+		t.Fatalf("review packet inherited test context: %#v", packet)
 	}
 	for _, marker := range []string{"specification-review-v1", "exact checkpoint", "--finding", "no upstream harness transcript"} {
 		if !strings.Contains(strings.ToLower(launch.Prompt), strings.ToLower(marker)) {
@@ -105,6 +112,161 @@ func TestSpecificationReviewBlocksOnlyConcreteViolations(t *testing.T) {
 	}
 }
 
+// TestConcurrentReviewRolesUseIndependentCheckpointSessions verifies that the
+// specification and standards reviewers can be live at once without sharing a
+// worker identity, prompt context, or durable result projection.
+func TestConcurrentReviewRolesUseIndependentCheckpointSessions(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode review packet: %v", err)
+	}
+	packet.RepositoryConfig.RoleHarnessDefaults["standards_review"] = config.HarnessCodex
+	packet.RepositoryConfig.ModelOptions["standards_review"] = []string{"gpt-5"}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("encode review packet: %v", err)
+	}
+	run.SpecificationPacket = string(packetData)
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save concurrent review packet: %v", err)
+	}
+	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"})
+
+	specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: "spec_review", Stage: store.StageReview,
+	})
+	if err != nil {
+		t.Fatalf("start specification reviewer: %v", err)
+	}
+	standards, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: "standards_review", Stage: store.Stage("standards_review"),
+	})
+	if err != nil {
+		t.Fatalf("start standards reviewer: %v", err)
+	}
+	if specification.Invocation.ID == standards.Invocation.ID || len(fixture.runStore.current.ActiveInvocationIDs) != 2 || fixture.runStore.current.Stage != store.StageReview {
+		t.Fatalf("concurrent run projection = %#v, want two active review invocations at review stage", fixture.runStore.current)
+	}
+	if len(fixture.worker.starts) != 2 || fixture.worker.starts[0].WorkerID == fixture.worker.starts[1].WorkerID || fixture.worker.starts[0].WorkerID == "" || fixture.worker.starts[1].WorkerID == "" {
+		t.Fatalf("review worker identities = %#v, want two isolated workers", fixture.worker.starts)
+	}
+	for _, start := range fixture.worker.starts {
+		if !start.WorktreeReadOnly {
+			t.Fatalf("review worker start = %#v, want read-only checkpoint mount", start)
+		}
+	}
+	if len(fixture.statuses.values) != 2 || fixture.statuses.values[0].Context != factory.SpecificationReviewStatusContext || fixture.statuses.values[1].Context != factory.StandardsReviewStatusContext {
+		t.Fatalf("review status contexts = %#v, want one stable context per role", fixture.statuses.values)
+	}
+	if !strings.Contains(strings.ToLower(standards.Prompt), "non-overridable factory safety rules") || strings.Contains(standards.Prompt, "specification reviewer's conclusions") == false {
+		t.Fatalf("standards prompt does not contain isolated precedence rules:\n%s", standards.Prompt)
+	}
+	standardsPacketData, err := os.ReadFile(filepath.Join(standards.Invocation.InvocationDirectory, "specification.json"))
+	if err != nil {
+		t.Fatalf("read standards packet: %v", err)
+	}
+	var standardsPacket factory.InvocationPacket
+	if err := json.Unmarshal(standardsPacketData, &standardsPacket); err != nil {
+		t.Fatalf("decode standards packet: %v", err)
+	}
+	if standardsPacket.ReviewContext == nil || standardsPacket.ReviewContext.ImplementationHandoff != nil || standardsPacket.ReviewContext.TestHandoff != nil || len(standardsPacket.ReviewContext.ProtectedTestPaths) != 0 || standardsPacket.ReviewContext.TestExemption == nil {
+		t.Fatalf("standards review context = %#v, want only deliberate exemption among upstream test signals", standardsPacket.ReviewContext)
+	}
+	if standardsPacket.TestHandoff != nil || standardsPacket.TestObjection != nil || standardsPacket.TestExemption != nil || len(standardsPacket.ProtectedTestPaths) != 0 {
+		t.Fatalf("standards packet inherited test context: %#v", standardsPacket)
+	}
+
+	for _, launch := range []factory.AgentLaunchResult{specification, standards} {
+		value := reviewReport(launch, nil)
+		if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+			t.Fatalf("write %s review report: %v", launch.Invocation.Role, err)
+		}
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: specification.Invocation.ID}); err != nil {
+		t.Fatalf("accept specification review: %v", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || len(fixture.runStore.current.ActiveInvocationIDs) != 1 {
+		t.Fatalf("after specification acceptance = %#v, want one standards reviewer remaining", fixture.runStore.current)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: standards.Invocation.ID}); err != nil {
+		t.Fatalf("accept standards review: %v", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReady || fixture.runStore.current.Status != store.StatusActive || fixture.runStore.current.StandardsReview == nil {
+		t.Fatalf("completed review round = %#v, want ready with standards result", fixture.runStore.current)
+	}
+}
+
+// TestReviewRejectsAStaleCheckpointWithATypedFailure verifies a result cannot
+// silently attach to a newer immutable checkpoint.
+func TestReviewRejectsAStaleCheckpointWithATypedFailure(t *testing.T) {
+	fixture := newReviewFixture(t)
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	value := reviewReport(launch, nil)
+	value.ReviewHandoff.ReviewedSHA = factoryGateCheckpoint
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write stale review report: %v", err)
+	}
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: launch.Invocation.RunID, InvocationID: launch.Invocation.ID})
+	var mismatch *factory.ReviewCheckpointMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("AcceptAgentReport() error = %v, want ReviewCheckpointMismatchError", err)
+	}
+	if mismatch.Expected != reviewCheckpoint || mismatch.Observed != factoryGateCheckpoint || mismatch.Role != launch.Invocation.Role || mismatch.InvocationID != launch.Invocation.ID {
+		t.Fatalf("checkpoint mismatch = %#v, want exact role and SHA identities", mismatch)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || len(fixture.runStore.current.ActiveInvocationIDs) != 1 {
+		t.Fatalf("run after stale review = %#v, want active review unchanged", fixture.runStore.current)
+	}
+}
+
+// TestStandardsReviewCanBlockAProvisionalTestExemption verifies the standards
+// role receives the deliberate exemption signal and can reject it as a
+// documented-standards violation without inheriting implementation context.
+func TestStandardsReviewCanBlockAProvisionalTestExemption(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode review packet: %v", err)
+	}
+	packet.RepositoryConfig.RoleHarnessDefaults["standards_review"] = config.HarnessCodex
+	packet.RepositoryConfig.ModelOptions["standards_review"] = []string{"gpt-5"}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("encode review packet: %v", err)
+	}
+	run.SpecificationPacket = string(packetData)
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save standards review packet: %v", err)
+	}
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: "standards_review", Stage: store.Stage("standards_review"),
+	})
+	if err != nil {
+		t.Fatalf("start standards reviewer: %v", err)
+	}
+	value := reviewReport(launch, []report.ReviewFinding{{
+		Location: "issue body", Claim: "the provisional test exemption violates repository standards", Evidence: "the exemption is not allowed by the frozen policy", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryDocumentedStandards, SuggestedResolution: "satisfy the required test policy", SuggestedOwner: "implementation",
+	}})
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write standards review report: %v", err)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID}); err != nil {
+		t.Fatalf("accept standards review: %v", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || fixture.runStore.current.Status != store.StatusWaitingForHuman || fixture.runStore.current.StandardsReview == nil {
+		t.Fatalf("standards-blocked run = %#v, want review/waiting_for_human with result", fixture.runStore.current)
+	}
+	if got := fixture.statuses.values[len(fixture.statuses.values)-1]; got.Context != factory.StandardsReviewStatusContext || got.State != github.CommitStatusFailure {
+		t.Fatalf("standards status = %#v, want failure in standards context", got)
+	}
+}
+
 // reviewFixture bundles the Factory seam and all isolated review projections.
 type reviewFixture struct {
 	service      *factory.Service
@@ -148,7 +310,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
-	ids := []string{"run-review", "review-session"}
+	ids := []string{"run-review", "review-session", "standards-session"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
 		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },

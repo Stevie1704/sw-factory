@@ -156,6 +156,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		checkpoint := gitadapter.CheckpointResult{}
 		checkpointErr := error(nil)
 		next.SpecificationReview = nil
+		next.StandardsReview = nil
 		next.Stage = checkpointTransition.Stage
 		next.Status = checkpointTransition.Status
 		next.LifecycleReason = "evaluating implementation checkpoint"
@@ -456,41 +457,49 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s\n\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, generatedReviewSection(run), issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
 }
 
-// generatedReviewSection renders the latest exact-checkpoint review, including
-// advisory findings that never gate readiness but must remain visible.
+// generatedReviewSection renders every configured exact-checkpoint review,
+// including advisory findings that never gate readiness but must remain visible.
 func generatedReviewSection(run store.Run) string {
-	lines := []string{generatedReviewStart, "### Specification review", ""}
-	if run.SpecificationReview == nil || run.SpecificationReview.CheckpointSHA != run.CheckpointSHA {
-		if run.Stage == store.StageReview {
-			lines = append(lines, fmt.Sprintf("- status: pending for checkpoint `%s`", safeStatusCommentValue(run.CheckpointSHA)))
-		} else {
-			lines = append(lines, "- status: not run")
-		}
-		lines = append(lines, generatedReviewEnd)
-		return strings.Join(lines, "\n")
+	lines := []string{generatedReviewStart}
+	appendGeneratedReview(&lines, "Specification review", run.SpecificationReview, run.Stage == store.StageReview, run.CheckpointSHA)
+	if standardsReviewConfigured(run) || run.StandardsReview != nil {
+		appendGeneratedReview(&lines, "Standards review", run.StandardsReview, run.Stage == store.StageReview, run.CheckpointSHA)
 	}
-	review := run.SpecificationReview
+	lines = append(lines, generatedReviewEnd)
+	return strings.Join(lines, "\n")
+}
+
+// appendGeneratedReview appends one role-owned review projection to a generated
+// pull-request section without exposing a reviewer's private session state.
+func appendGeneratedReview(lines *[]string, title string, review *store.ReviewResult, pending bool, checkpoint string) {
+	*lines = append(*lines, "\n### "+title, "")
+	if review == nil {
+		if pending {
+			*lines = append(*lines, fmt.Sprintf("- status: pending for checkpoint `%s`", safeStatusCommentValue(checkpoint)))
+		} else {
+			*lines = append(*lines, "- status: not run")
+		}
+		return
+	}
 	blockers, advisories := reviewFindingCounts(review.Findings)
-	lines = append(lines,
+	*lines = append(*lines,
 		fmt.Sprintf("- reviewed checkpoint: `%s`", safeStatusCommentValue(review.CheckpointSHA)),
 		fmt.Sprintf("- outcome: %d blocking findings, %d advisory findings", blockers, advisories),
 	)
 	if len(review.Findings) == 0 {
-		lines = append(lines, "- findings: none")
-	} else {
-		for index, finding := range review.Findings {
-			lines = append(lines,
-				fmt.Sprintf("\n#### Finding %d — %s/%s", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category)),
-				fmt.Sprintf("- location: `%s`", safeStatusCommentValue(finding.Location)),
-				fmt.Sprintf("- claim: %s", safeStatusCommentValue(finding.Claim)),
-				fmt.Sprintf("- evidence: %s", safeStatusCommentValue(finding.Evidence)),
-				fmt.Sprintf("- suggested resolution: %s", safeStatusCommentValue(finding.SuggestedResolution)),
-				fmt.Sprintf("- suggested owner: `%s`", safeStatusCommentValue(finding.SuggestedOwner)),
-			)
-		}
+		*lines = append(*lines, "- findings: none")
+		return
 	}
-	lines = append(lines, generatedReviewEnd)
-	return strings.Join(lines, "\n")
+	for index, finding := range review.Findings {
+		*lines = append(*lines,
+			fmt.Sprintf("\n#### Finding %d — %s/%s", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category)),
+			fmt.Sprintf("- location: `%s`", safeStatusCommentValue(finding.Location)),
+			fmt.Sprintf("- claim: %s", safeStatusCommentValue(finding.Claim)),
+			fmt.Sprintf("- evidence: %s", safeStatusCommentValue(finding.Evidence)),
+			fmt.Sprintf("- suggested resolution: %s", safeStatusCommentValue(finding.SuggestedResolution)),
+			fmt.Sprintf("- suggested owner: `%s`", safeStatusCommentValue(finding.SuggestedOwner)),
+		)
+	}
 }
 
 // mergeGeneratedPullRequestBody replaces only the marked factory section and
