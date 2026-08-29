@@ -23,6 +23,7 @@ repository. The deeper contracts live in
 - [What factory does](#what-factory-does)
 - [Core concepts](#core-concepts)
 - [Run lifecycle](#run-lifecycle)
+  - [Workflow routes](#workflow-routes)
 - [Prerequisites](#prerequisites)
 - [Build and install](#build-and-install)
 - [Configure a host](#configure-a-host)
@@ -109,8 +110,8 @@ cannot add arbitrary roles or redefine the transition graph in
 | --------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | <code>claim</code>                | Coordinator                              | The issue, repository policy, target branch, run branch, worktree, and status projection are frozen.                                                        |
 | <code>preflight</code>            | Coordinator                              | Setup and baseline gates run before an agent edits anything.                                                                                                |
-| <code>test</code> (required mode) | <code>test</code> role                   | The independent agent adds a focused test or test infrastructure change. The coordinator reruns the focused command and accepts only verified red evidence. |
-| <code>architecture</code>         | <code>architecture</code> role, optional | The agent writes a design document under the permitted architecture path, then hands off to implementation.                                                 |
+| <code>test</code>                 | <code>test</code> role                   | The independent agent adds a focused test or test infrastructure change. The coordinator reruns the focused command and accepts only verified red evidence. Required mode and the contract-first routes use this stage. |
+| <code>architecture</code>         | <code>architecture</code> role, optional | The agent writes a design document under the permitted architecture path. The <code>design-acceptance</code> route hands that design to the test role; otherwise the design goes to implementation.                     |
 | <code>implementation</code>       | <code>implementation</code> role         | The agent edits production code and submits a structured implementation handoff.                                                                            |
 | <code>check</code>                | Coordinator                              | The accepted implementation is checkpointed and every configured gate runs against that exact checkpoint.                                                   |
 | <code>draft_pr</code>             | Coordinator                              | The host pushes the run branch before the gate statuses, then creates or updates one draft pull request after successful gates.                             |
@@ -123,9 +124,10 @@ revise focused behavioral tests and essential test infrastructure within its
 permitted scope. There is no separate test invocation, handoff, checkpoint,
 protected-test path, exemption, or test-stage dispute in advisory mode.
 
-Repositories using required mode enter the independent test stage. That stage
-can be skipped only through an explicitly permitted human or technical
-exemption. The human exemption marker must be present in the frozen issue before
+Repositories using required mode, and any run whose issue selected a workflow
+route, enter the independent test stage. In required mode that stage can be
+skipped only through an explicitly permitted human or technical exemption; a
+selected route removes the human skip. The human exemption marker must be present in the frozen issue before
 claim:
 
 ~~~text
@@ -136,6 +138,60 @@ The test policy must allow that exemption. In required mode, a test handoff neve
 owns production files. Once accepted, its test checkpoint and protected test
 paths are carried into implementation, and an implementation report that changes
 a protected test path is rejected.
+
+### Workflow routes
+
+Most changes take the fast path. An authorized issue author may instead select
+one factory-owned contract-first route before claim, when independently
+authored behavioral evidence is worth the extra invocation:
+
+| Route                              | Sequence                                                                       | Choose it when                                                                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| fast (no marker, advisory policy)  | implementation-owned TDD → gates → independent review                          | The default. The change is ordinary product work and one agent can own its own red/green/refactor loop.                              |
+| <code>acceptance</code>            | acceptance test → implementation TDD → gates → independent review              | The interface is already stable and you want the behavioral contract written by an agent that cannot also change it.                 |
+| <code>design-acceptance</code>     | architecture → acceptance test → implementation TDD → gates → independent review | The change introduces a new interface. Architecture establishes the boundary first, and the accepted design becomes the test contract. |
+
+Select a route with exactly one marker in the issue body, before the issue is
+claimed. Like the test-exemption marker, the route marker is matched literally
+anywhere in the body, so write it exactly as shown, and do not quote an example
+marker in an issue you intend to claim:
+
+~~~text
+<!-- factory-route: acceptance -->
+~~~
+
+~~~text
+<!-- factory-route: design-acceptance -->
+~~~
+
+Route selection is explicit, never inferred. The coordinator does not derive a
+route from changed files, issue prose, or model judgment. These rules hold:
+
+- The frozen issue grammar accepts at most one route marker. A duplicate,
+  unterminated, or undeclared marker rejects the claim with a typed policy code
+  (<code>route_duplicate</code>, <code>route_invalid</code>) before any agent
+  runs.
+- A route that names a role the repository has not configured rejects the claim
+  with <code>route_unavailable</code>. The <code>acceptance</code> route needs
+  the <code>test</code> role; <code>design-acceptance</code> needs the
+  <code>architecture</code> and <code>test</code> roles.
+- The selected route is recorded in the specification packet at claim and is
+  immutable for the run. A later issue edit, a <code>/factory refresh</code>,
+  repository guidance, and agent reports cannot change it.
+- An absent marker follows repository policy. Advisory policy takes the fast
+  path; required policy keeps its mandatory independent test stage. Required
+  policy cannot be downgraded through issue content.
+- A selected route runs the independent test stage even under advisory policy,
+  and it overrides a pre-authorized human test-exemption marker.
+- The test role must prove acceptance through the highest practical observable
+  interface and must not prescribe private implementation structure the frozen
+  criteria do not require.
+- Gates and the independent specification review keep their exact-checkpoint
+  behavior on every route.
+
+The frozen route and current stage appear in <code>factory status</code>, in the
+<code>factory agent</code> launch output, and in the single editable GitHub
+status comment. No projection exposes agent transcripts.
 
 Every stage also has an orthogonal status:
 
@@ -520,9 +576,11 @@ during setup.
 
 ### 2. Prepare and claim an issue
 
-Create or select an open issue with the <code>agent-ready</code> label. Confirm
-that the GitHub username issuing commands is registered as an authorized user,
-then run:
+Create or select an open issue with the <code>agent-ready</code> label. If the
+change needs a contract-first sequence, add exactly one
+<code>factory-route</code> marker to the issue body now; the route cannot be
+changed after claim. See [Workflow routes](#workflow-routes). Confirm that the
+GitHub username issuing commands is registered as an authorized user, then run:
 
 ~~~sh
 factory issue \
@@ -543,15 +601,17 @@ The command:
 7. runs the baseline setup and gates automatically.
 
 The output includes the run ID, branch, worktree, stage, status, test policy,
-and baseline gate count. Save the <code>run</code> value. With this repository's
-advisory policy, a healthy run normally becomes
+route, and baseline gate count. Save the <code>run</code> value. With this
+repository's advisory policy and no route marker, a healthy run normally becomes
 <code>implementation/active</code>. A required-mode repository normally becomes
 <code>test/active</code>; an authorized human exemption can move that run
-directly to <code>implementation/active</code>.
+directly to <code>implementation/active</code>. The <code>acceptance</code>
+route becomes <code>test/active</code> and the <code>design-acceptance</code>
+route becomes <code>architecture/active</code>.
 
 The claim refuses closed issues, pull requests, issues without the exact
-<code>agent-ready</code> label, conflicting factory state, and a repository that
-already has a non-terminal run. A failed claim compensates for any workspace it
+<code>agent-ready</code> label, conflicting factory state, a malformed or
+unavailable route marker, and a repository that already has a non-terminal run. A failed claim compensates for any workspace it
 created. A baseline failure prevents agent startup unless the frozen issue
 contains an explicit <code>factory-baseline-target</code> marker permitted by
 the baseline policy. The supported target values are <code>setup</code>,
@@ -572,6 +632,7 @@ The output reports:
 - invocation ID;
 - run ID;
 - role and stage;
+- frozen test policy and workflow route;
 - worker-backed workspace ID; and
 - opaque cmux surface IDs.
 
@@ -580,10 +641,14 @@ The invocation receives a read-only specification packet at
 at <code>/results</code>. The prompt and terminal content are not printed by
 the coordinator.
 
-With this repository's advisory policy, the first invocation is the
-<code>implementation</code> role. Use the visible implementation surface to own
-the complete red/green/refactor loop, including a focused behavioral test when
-practical, then submit the common implementation report from inside that worker
+With this repository's advisory policy and no route marker, the first
+invocation is the <code>implementation</code> role. On the
+<code>acceptance</code> route it is the <code>test</code> role; on the
+<code>design-acceptance</code> route it is the <code>architecture</code> role,
+whose accepted design is then handed to the test role. For an advisory run with
+no route marker, use the visible implementation surface to own the complete
+red/green/refactor loop, including a focused behavioral test when practical,
+then submit the common implementation report from inside that worker
 (see [Structured agent reports](#structured-agent-reports)). Accept it from the
 host:
 

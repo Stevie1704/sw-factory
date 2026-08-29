@@ -55,7 +55,8 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			}
 			if !s.invocationStartedHere(active.ID) && active.RecoveryResumeCount > 0 {
 				s.markInvocationStarted(active.ID)
-				return AgentLaunchResult{Invocation: *active, TestPolicyMode: testPolicyModeForRun(*run)}, nil
+				resumedRoute, _ := routeForRun(*run)
+				return AgentLaunchResult{Invocation: *active, TestPolicyMode: testPolicyModeForRun(*run), Route: resumedRoute}, nil
 			}
 			return AgentLaunchResult{}, fmt.Errorf("run %q already has active invocation %q", run.ID, active.ID)
 		}
@@ -67,7 +68,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
-	if !testStageConfigured(packet.RepositoryConfig) {
+	if !testRolePolicySatisfied(packet) {
 		return AgentLaunchResult{}, errors.New("frozen repository packet lacks the mandatory test-stage role policy")
 	}
 	request, err = selectAgentRole(*run, request)
@@ -115,12 +116,13 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, fmt.Errorf("publish pending specification review status: %w", err)
 		}
 	}
-	if roleDefinition.Kind == workflow.RoleKindTest && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory {
-		return AgentLaunchResult{}, errors.New("test role is unavailable in advisory mode; implementation owns TDD")
+	if roleDefinition.Kind == workflow.RoleKindTest && !independentTestStageDeclared(packet) {
+		return AgentLaunchResult{}, errors.New("test role is unavailable in advisory mode without a selected route; implementation owns TDD")
 	}
-	if roleDefinition.RequiresTestHandoff && packet.RepositoryConfig.TestPolicy.Mode == config.TestModeRequired && run.Stage == store.StageClaim && !run.TestStageSkipped {
+	if roleDefinition.RequiresTestHandoff && independentTestStageDeclared(packet) && run.Stage == store.StageClaim && !run.TestStageSkipped {
 		return AgentLaunchResult{}, errors.New("implementation agent cannot bypass the configured test stage")
 	}
+	designHandoff := designHandoffForInvocation(*run, packet, roleDefinition)
 	policy, err := resolveAgentPolicy(packet.RepositoryConfig, request)
 	if err != nil {
 		return AgentLaunchResult{}, err
@@ -159,6 +161,8 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		SpecificationPacket: run.SpecificationPacket,
 		PromptVersion:       roleDefinition.PromptVersion,
 		TestPolicyMode:      packet.RepositoryConfig.TestPolicy.Mode,
+		Route:               packet.Route,
+		DesignHandoff:       designHandoff,
 		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
 		TestHandoff:         run.TestHandoff,
 		ProtectedTestPaths:  append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...),
@@ -173,6 +177,8 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		SpecificationPacket:     run.SpecificationPacket,
 		RepositoryGuidance:      packet.Issue.Body,
 		TestPolicyMode:          string(packet.RepositoryConfig.TestPolicy.Mode),
+		Route:                   packet.Route,
+		DesignHandoff:           designHandoff,
 		TestHandoff:             run.TestHandoff,
 		ProtectedTestPaths:      run.ProtectedTestPaths,
 		TestExemption:           run.TestExemption,
@@ -400,7 +406,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		}
 	}
 	s.markInvocationStarted(invocation.ID)
-	return AgentLaunchResult{Invocation: invocation, Prompt: promptText, TestPolicyMode: packet.RepositoryConfig.TestPolicy.Mode}, nil
+	return AgentLaunchResult{Invocation: invocation, Prompt: promptText, TestPolicyMode: packet.RepositoryConfig.TestPolicy.Mode, Route: packet.Route}, nil
 }
 
 // resumePersistedInvocation restores one active invocation after a coordinator
@@ -526,6 +532,8 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 		SpecificationPacket:     run.SpecificationPacket,
 		RepositoryGuidance:      packet.Issue.Body,
 		TestPolicyMode:          string(packet.RepositoryConfig.TestPolicy.Mode),
+		Route:                   packet.Route,
+		DesignHandoff:           persisted.DesignHandoff,
 		TestHandoff:             persisted.TestHandoff,
 		ProtectedTestPaths:      persisted.ProtectedTestPaths,
 		TestExemption:           persisted.TestExemption,
@@ -589,6 +597,9 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 		}
 		if persisted.TestPolicyMode != packet.RepositoryConfig.TestPolicy.Mode {
 			return errors.New("persisted invocation packet test policy does not match the frozen repository policy")
+		}
+		if persisted.Route != packet.Route {
+			return errors.New("persisted invocation packet route does not match the frozen specification packet route")
 		}
 	}
 	if invocation.Role == workflow.RoleSpecificationReview {

@@ -66,6 +66,10 @@ accepted or after an authorized exemption. In `test_policy.mode: advisory`,
 the healthy baseline leaves the run in `implementation/active` and this command
 starts implementation directly. The implementation prompt owns the complete
 red/green/refactor loop in advisory mode, including focused behavioral tests.
+A frozen issue that selected a workflow route overrides that fast path: the
+`acceptance` route starts the test role first, and the `design-acceptance`
+route starts the architecture role first and hands its accepted design to the
+test role.
 The agent auth flags must name the same sources registered for the repository;
 distinct one-off sources are refused because recovery never persists host
 credential paths. Change the registered source with `factory register` instead.
@@ -81,7 +85,9 @@ handles. It does not print the role prompt or terminal contents.
 `factory issue` completes a claim, runs the frozen baseline suite, and persists
 the worktree, branch, checkpoint, issue projection, and status-comment identity.
 A required-mode repository advances to `test/active`; an advisory repository
-advances to `implementation/active`. A separate coordinator process may start
+advances to `implementation/active`. A selected `acceptance` route advances to
+`test/active` and a selected `design-acceptance` route advances to
+`architecture/active`, whatever the repository test policy. A separate coordinator process may start
 the first test or implementation invocation when its
 read-only recovery diagnosis finds that every checked projection agrees and
 the operational store contains no invocation history. This is a completed
@@ -138,11 +144,13 @@ adapter.
 
 Each invocation receives a read-only `specification.json` packet under the
 worker path `/invocation`. It contains the frozen claim packet, invocation
-identity, role, stage, prompt version, and `test_policy_mode`. A required-mode
-implementation packet also carries the accepted test handoff and content hashes
-of protected test paths. An advisory implementation packet carries no test-stage
-disposition; its normal implementation handoff may include behavioral tests and
-test infrastructure. The worker receives a separate writable `/results` mount
+identity, role, stage, prompt version, `test_policy_mode`, and the frozen
+`route`. A required-mode implementation packet also carries the accepted test
+handoff and content hashes of protected test paths. An implementation-owned
+advisory packet carries no test-stage disposition; its normal implementation
+handoff may include behavioral tests and test infrastructure. A test invocation
+on the `design-acceptance` route also receives `design_handoff`, the accepted
+architecture design it must exercise. The worker receives a separate writable `/results` mount
 containing only that invocation's result directory.
 
 The harness reports through the worker-image command:

@@ -65,6 +65,11 @@ type Request struct {
 	// TestPolicyMode identifies whether implementation owns TDD or consumes an
 	// independently verified test-stage handoff.
 	TestPolicyMode string
+	// Route identifies the frozen contract-first workflow route of the run.
+	Route workflow.Route
+	// DesignHandoff is the accepted architecture design shown to the test role
+	// on the design-acceptance route.
+	DesignHandoff *store.RoleHandoff
 	// ReviewContext is the frozen, content-limited packet supplied to the
 	// independent reviewer. It is omitted for non-review roles.
 	ReviewContext *ReviewContext
@@ -139,10 +144,13 @@ func (r Registry) Build(request Request) (string, error) {
 			return "", fmt.Errorf("%s identity must be a single line", field)
 		}
 	}
+	// A selected contract-first route places an independent test role before
+	// implementation, so implementation never owns the TDD loop on a route.
+	implementationOwnsTDD := request.TestPolicyMode == "advisory" && !request.Route.RequiresIndependentTestStage()
 	repairContext := ""
 	if request.CheckRepairAttempt > 0 {
 		repairInstruction := "- Repair the implementation in the mounted worktree; do not edit tests or gates merely to make them pass."
-		if request.TestPolicyMode == "advisory" {
+		if implementationOwnsTDD {
 			repairInstruction = "- Repair the implementation in the mounted worktree and revise behavioral tests or essential test infrastructure when needed; do not weaken deterministic gates merely to make them pass."
 		}
 		repairContext = fmt.Sprintf(`
@@ -167,11 +175,24 @@ Test-stage ownership:
 - Edit only behavioral tests and explicitly authorized essential test infrastructure.
 - Do not edit production behavior, implementation files, or gate definitions.
 - Add tests that fail for the expected behavior reason on the frozen base implementation, then run the focused command.
+- Exercise the highest practical observable interface that can prove the frozen acceptance criteria.
+- Do not prescribe private implementation structure that the criteria do not require; a test must not name internal helpers, fields, or call sequences an equivalent implementation could change.
 - Report the changed test files, acceptance coverage, focused command, expected failure reason, and observed red evidence.
 - A technical exemption is provisional and must include a bounded reason for later review.
 `
 		testContext += fmt.Sprintf("- Frozen additional test scope: %s\n", string(scope))
-	} else if request.TestPolicyMode == "advisory" && definition.Kind == workflow.RoleKindHandoff && request.Role == workflow.RoleImplementation {
+		if request.DesignHandoff != nil {
+			design, err := marshalHandoff(request.DesignHandoff)
+			if err != nil {
+				return "", fmt.Errorf("encode accepted design handoff: %w", err)
+			}
+			testContext += fmt.Sprintf("\nAccepted architecture design (coordinator-owned):\n%s\n", design)
+			for _, artifact := range request.DesignHandoff.ProductionFilesChanged {
+				testContext += fmt.Sprintf("- Design artifact to read in the mounted worktree: %s\n", sanitizeFenced(strings.TrimSpace(artifact)))
+			}
+			testContext += "- Treat the accepted design as the interface under test; it does not replace the frozen specification packet.\n"
+		}
+	} else if implementationOwnsTDD && definition.Kind == workflow.RoleKindHandoff && request.Role == workflow.RoleImplementation {
 		testContext = `
 Implementation-owned TDD:
 - Own the complete red/green/refactor loop for the frozen specification.
@@ -180,7 +201,7 @@ Implementation-owned TDD:
 - Include the focused test commands and behavioral evidence in the structured implementation handoff.
 `
 	} else if request.TestHandoff != nil || len(request.ProtectedTestPaths) > 0 || request.TestExemption != nil {
-		data, err := json.Marshal(struct {
+		data, err := marshalHandoff(struct {
 			Handoff   *store.TestHandoff        `json:"test_handoff,omitempty"`
 			Protected []store.ProtectedTestPath `json:"protected_test_paths,omitempty"`
 			Exemption *store.TestExemption      `json:"test_exemption,omitempty"`
@@ -188,7 +209,7 @@ Implementation-owned TDD:
 		if err != nil {
 			return "", fmt.Errorf("encode test handoff context: %w", err)
 		}
-		testContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n- Do not edit any protected test path or change its recorded content.\n", string(data))
+		testContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n- Do not edit any protected test path or change its recorded content.\n", data)
 	}
 	reviewContext := ""
 	if definition.Kind == workflow.RoleKindReview {
@@ -277,4 +298,14 @@ func sanitizeFenced(value string) string {
 		value = strings.ReplaceAll(value, marker, "[redacted delimiter]")
 	}
 	return value
+}
+
+// marshalHandoff serializes coordinator-owned handoff data and neutralizes any
+// prompt delimiter text carried in its untrusted string fields.
+func marshalHandoff(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return sanitizeFenced(string(data)), nil
 }
