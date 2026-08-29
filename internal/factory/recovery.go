@@ -347,8 +347,36 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 			}
 			return
 		}
+		inactive := inactiveInvocationStore{OperationalStore: runStore}
+		if latestStore, exposesLatest := runStore.(LatestInvocationStore); exposesLatest {
+			s.inspectInvocationProjectionSingle(ctx, diagnosis, registration, latestInactiveInvocationStore{
+				inactiveInvocationStore: inactive,
+				LatestInvocationStore:   latestStore,
+			}, run)
+			return
+		}
+		s.inspectInvocationProjectionSingle(ctx, diagnosis, registration, inactive, run)
+		return
 	}
 	s.inspectInvocationProjectionSingle(ctx, diagnosis, registration, runStore, run)
+}
+
+// inactiveInvocationStore adapts an empty plural active projection to the
+// legacy single-invocation inspection implementation.
+type inactiveInvocationStore struct {
+	OperationalStore
+}
+
+// ActiveInvocation reports that the plural projection contains no invocation.
+func (inactiveInvocationStore) ActiveInvocation(context.Context, string) (*store.Invocation, error) {
+	return nil, nil
+}
+
+// latestInactiveInvocationStore preserves the optional latest-invocation
+// projection while adapting an empty plural active projection.
+type latestInactiveInvocationStore struct {
+	inactiveInvocationStore
+	LatestInvocationStore
 }
 
 // selectedActiveInvocationStore supplies one member of a plural active

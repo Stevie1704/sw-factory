@@ -70,14 +70,3 @@ func workerIDForInvocation(invocation store.Invocation) string {
 	}
 	return invocation.RunID
 }
-
-// workerIDForRole returns the worker identity used before an invocation is
-// persisted. Review callers should prefer workerIDForInvocation once the
-// invocation ID exists so the worker resources are fresh per iteration.
-func workerIDForRole(runID, role string) string {
-	definition, exists := workflow.DefaultRegistry().Role(role)
-	if exists && definition.Kind == workflow.RoleKindReview {
-		return runID + "-" + role
-	}
-	return runID
-}

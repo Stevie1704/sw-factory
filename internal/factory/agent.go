@@ -661,7 +661,7 @@ func releaseActiveInvocation(run *store.Run, invocationID string) {
 	if len(run.ActiveInvocationIDs) == 0 && run.ActiveInvocationID != "" {
 		run.ActiveInvocationIDs = []string{run.ActiveInvocationID}
 	}
-	remaining := run.ActiveInvocationIDs[:0]
+	remaining := make([]string, 0, len(run.ActiveInvocationIDs))
 	for _, activeID := range run.ActiveInvocationIDs {
 		if activeID != invocationID {
 			remaining = append(remaining, activeID)

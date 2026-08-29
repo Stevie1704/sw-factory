@@ -169,9 +169,11 @@ func concurrentReviewsConfigured(run store.Run) bool {
 // packet has produced an exact-checkpoint result. A result from another
 // checkpoint never completes the round.
 func reviewRoundComplete(run store.Run) bool {
-	specification := reviewResultForRole(run, workflow.RoleSpecificationReview)
-	if specification == nil || specification.CheckpointSHA != run.CheckpointSHA {
-		return false
+	if reviewRoleConfigured(run, workflow.RoleSpecificationReview) {
+		specification := reviewResultForRole(run, workflow.RoleSpecificationReview)
+		if specification == nil || specification.CheckpointSHA != run.CheckpointSHA {
+			return false
+		}
 	}
 	if !standardsReviewConfigured(run) {
 		return true
