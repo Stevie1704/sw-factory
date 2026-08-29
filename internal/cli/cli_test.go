@@ -419,6 +419,68 @@ func TestRunStatusReportsNoRegisteredRepository(t *testing.T) {
 	}
 }
 
+// TestRunStatusDistinguishesAnActiveInvocationFromAnActiveRun verifies the
+// status command never lets the single `agent-running` label imply that a
+// harness is executing when none is.
+func TestRunStatusDistinguishesAnActiveInvocationFromAnActiveRun(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidRepositoryConfig(t, repositoryPath)
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"register", "--config", configPath, "--repository", repositoryPath, "--github-owner", "example", "--github-repository", "project", "--authorized-user", "alice", "--operational-data", operationalPath}, &output, &output); code != 0 {
+		t.Fatalf("register exit code = %d, output = %s", code, output.String())
+	}
+	started := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
+	run := store.Run{
+		ID: "run-cli-activity", RepositoryPath: repositoryPath, IssueNumber: 12,
+		Stage: store.StageImplementation, Status: store.StatusActive,
+		CreatedAt: started, UpdatedAt: started,
+	}
+	saveRun := func(value store.Run) {
+		opened, err := store.Open(context.Background(), operationalPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := opened.SaveRun(context.Background(), value); err != nil {
+			_ = opened.Close()
+			t.Fatal(err)
+		}
+		if err := opened.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	saveRun(run)
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"status", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("status exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "activity=run-active") || strings.Contains(output.String(), "active invocation:") {
+		t.Fatalf("status output = %q, want run-active without an invocation identity", output.String())
+	}
+
+	run.ActiveInvocationID = "inv-cli-activity"
+	run.UpdatedAt = started.Add(time.Minute)
+	saveRun(run)
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"status", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("status exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "activity=invocation-active") || !strings.Contains(output.String(), "active invocation: inv-cli-activity") {
+		t.Fatalf("status output = %q, want the executing invocation identity", output.String())
+	}
+}
+
 // TestRunEvaluationReportsAndDeliberatelyDeletesLocalSummaries verifies the
 // user-facing local report and explicit deletion commands do not need GitHub.
 func TestRunEvaluationReportsAndDeliberatelyDeletesLocalSummaries(t *testing.T) {
