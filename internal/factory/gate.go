@@ -610,11 +610,12 @@ func suiteErrHasBlockingFailure(suite gate.SuiteResult) bool {
 }
 
 // prepareGitMetadataProjection creates or reuses a sanitized Git metadata
-// projection for a run. It copies history and refs without copying repository
-// configuration, remotes, hooks, or other files that could carry credentials or
-// host paths. The projection is stable for the run so a reused worker keeps the
-// same mounted metadata after a coordinator restart. It returns the projection
-// path or an error if the inputs or projection are invalid.
+// projection for a run. It copies or refreshes history and refs without copying
+// repository configuration, remotes, hooks, or other files that could carry
+// credentials or host paths. The projection is stable for the run so a reused
+// worker keeps the same mounted metadata after a coordinator restart. It
+// returns the projection path or an error if the inputs or projection are
+// invalid.
 func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (string, error) {
 	if strings.TrimSpace(runID) == "" || filepath.Base(runID) != runID || runID == "." || runID == ".." || strings.ContainsAny(runID, `/\`) {
 		return "", fmt.Errorf("run id %q cannot name a git metadata projection", runID)
@@ -644,6 +645,9 @@ func prepareGitMetadataProjection(runID, repositoryPath, worktreePath string) (s
 			return "", fmt.Errorf("git metadata projection %q contains forbidden configuration", projection)
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return "", fmt.Errorf("inspect git metadata projection configuration: %w", statErr)
+		}
+		if err := copyGitMetadata(source, projection); err != nil {
+			return "", fmt.Errorf("refresh git metadata: %w", err)
 		}
 		if err := overlayWorktreeGitState(worktreePath, projection); err != nil {
 			return "", fmt.Errorf("refresh git metadata projection: %w", err)
@@ -784,25 +788,33 @@ func skipGitMetadata(relative string, directory bool) bool {
 	return base == "config" || base == "config.worktree" || base == "FETCH_HEAD" || base == "alternates"
 }
 
-// copyGitMetadataFile streams one regular Git metadata file into the projection
-// while preserving the specified non-secret permission bits.
+// copyGitMetadataFile streams one regular Git metadata file into a temporary
+// sibling and atomically replaces the projection entry while preserving the
+// specified non-secret permission bits.
 func copyGitMetadataFile(source, destination string, mode fs.FileMode) error {
 	input, err := os.Open(source)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = input.Close() }()
-	if err := os.Chmod(destination, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	temporary, err := os.CreateTemp(filepath.Dir(destination), "."+filepath.Base(destination)+".tmp-")
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(output, input)
-	chmodErr := output.Chmod(mode)
-	closeErr := output.Close()
-	return errors.Join(copyErr, chmodErr, closeErr)
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if _, err := io.Copy(temporary, input); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, destination)
 }
 
 // overlayWorktreeGitState copies the run worktree's HEAD and index from its
