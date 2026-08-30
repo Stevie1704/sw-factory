@@ -577,6 +577,11 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
+	// The coordinator's progression pass owns the baseline, so a run that has
+	// not passed it yet must not launch a role here.
+	if awaitingBaseline(run) {
+		return run, nil
+	}
 	request := normalizeAgentRequest(agentRequestForRun(run))
 	if err := validateAgentRequest(request); err != nil {
 		return run, err
@@ -593,10 +598,21 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	return run, nil
 }
 
+// awaitingBaseline reports whether a run has not yet passed its frozen
+// baseline suite. Only the claim stage runs that suite, so a packet change
+// must leave such a run there: a post-baseline stage it jumped to could never
+// satisfy the baseline gate and would wedge the run permanently.
+func awaitingBaseline(run store.Run) bool {
+	return run.Stage == store.StageClaim
+}
+
 // packetResumeStageForPacket preserves test ownership when a configured test
 // stage receives a new specification packet, including refreshes initiated
 // after implementation has already started.
 func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store.Stage {
+	if awaitingBaseline(run) {
+		return store.StageClaim
+	}
 	if entry := postBaselineStage(packet); entry != store.StageTest {
 		return entry
 	}
@@ -632,6 +648,19 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
 	run.TestStageSkipped = false
+	// The healthy baseline result selects the entry stage, not the packet
+	// change itself. A packet the baseline could never leave still parks
+	// visibly, because advanceAfterBaseline rejects it after every pass.
+	if awaitingBaseline(*run) {
+		if !testRolePolicySatisfied(packet) {
+			run.Status = store.StatusWaitingForHuman
+			run.LifecycleReason = "frozen repository packet lacks the mandatory test-stage role policy"
+			return
+		}
+		run.Status = store.StatusActive
+		run.LifecycleReason = "specification packet changed; baseline restarted"
+		return
+	}
 	if entry := postBaselineStage(packet); entry != store.StageTest {
 		run.Stage = entry
 		run.Status = store.StatusActive
@@ -887,7 +916,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 	for _, target := range targets {
 		listed, listErr := s.deps.Comments.IssueComments(ctx, repository, target)
 		if listErr != nil {
-			return nil, listErr
+			return nil, &pollingTransportError{err: fmt.Errorf("list comments for #%d: %w", target, listErr)}
 		}
 		for _, comment := range listed {
 			comments = append(comments, polledComment{target: target, comment: comment})

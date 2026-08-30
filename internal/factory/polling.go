@@ -166,6 +166,21 @@ func (s *Service) Start(ctx context.Context) error {
 			}
 			return err
 		}
+		if err := s.pollLoopCommands(pollContext); err != nil {
+			if pollingContextDone(err) {
+				return nil
+			}
+			var transportErr *pollingTransportError
+			if errors.As(err, &transportErr) {
+				delay = backoff
+				continue
+			}
+			// Every remaining command failure, from a rejected comment to an
+			// unreadable command store, leaves the run untouched and is
+			// retried by the next pass over the same comments. None of them
+			// may stop an unattended coordinator, so the queue observation
+			// below still runs.
+		}
 		result, err := s.pollOnce(pollContext, registration)
 		if err != nil {
 			if pollingContextDone(err) {
@@ -205,6 +220,24 @@ func (s *Service) Start(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// pollLoopCommands applies the structured /factory comments that appeared on
+// the reconciled run's issue and draft pull request. An absent run is the
+// ordinary idle case of an unattended coordinator, not a failure, so it
+// reports no error.
+func (s *Service) pollLoopCommands(ctx context.Context) error {
+	if s.deps.Comments == nil {
+		return nil
+	}
+	if _, err := s.PollCommands(ctx, CommandPollRequest{}); err != nil {
+		var rejection *PolicyRejection
+		if errors.As(err, &rejection) && rejection.Code == PolicyRejectionNoRun {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // reconcileRegisteredRun opens the operational store once after the polling
