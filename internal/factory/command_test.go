@@ -317,11 +317,18 @@ func commandHost() config.HostConfig {
 
 // newCommandService builds a service at the public command seam.
 func newCommandService(runStore *commandRunStore, githubAdapter *commandGitHub, comments github.CommentReader) *factory.Service {
+	return newCommandServiceWithStore(runStore, githubAdapter, comments)
+}
+
+// newCommandServiceWithStore builds the same command seam over any operational
+// store, letting a test add the optional persistence seams it needs.
+func newCommandServiceWithStore(runStore factory.OperationalStore, githubAdapter *commandGitHub, comments github.CommentReader) *factory.Service {
 	dependencies := factory.Dependencies{
 		Config:    commandConfig{host: commandHost()},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		GitHub:    githubAdapter,
 		Comments:  comments,
+		Terminal:  &lifecycleTerminal{},
 		Now:       func() time.Time { return time.Date(2026, 8, 23, 10, 11, 12, 0, time.UTC) },
 	}
 	return factory.NewWithDependencies("/host/config.yaml", dependencies)
@@ -526,4 +533,101 @@ func (g *commandGitHub) SetPullRequestDraft(_ context.Context, _ github.Reposito
 type commandEditedComment struct {
 	id   string
 	body string
+}
+
+// TestHandleCommandRefreshKeepsAClaimStageRunAtClaim verifies a refresh before
+// the frozen baseline ran leaves the run at claim. Only the claim stage runs
+// the baseline suite, so a jump to a post-baseline stage would wedge the run on
+// an incomplete baseline gate.
+func TestHandleCommandRefreshKeepsAClaimStageRunAtClaim(t *testing.T) {
+	t.Parallel()
+
+	run := claimStageCommandRun(t, store.StatusActive)
+	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	runStore := &commandInvocationRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
+	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 42,
+		Comment:     github.Comment{ID: "20", Author: "alice", Body: "/factory refresh"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Stage != store.StageClaim || result.Run.Status != store.StatusActive {
+		t.Fatalf("result = %#v, want an accepted refresh that stays at the claim stage", result)
+	}
+	if len(runStore.invocations) != 0 {
+		t.Fatalf("invocations started = %#v, want none before the baseline ran", runStore.invocations)
+	}
+}
+
+// TestHandleCommandAnswerKeepsAClaimStageRunAtClaim verifies an answer that
+// arrives before the frozen baseline ran resumes the run at claim rather than
+// at a post-baseline stage it can never satisfy.
+func TestHandleCommandAnswerKeepsAClaimStageRunAtClaim(t *testing.T) {
+	t.Parallel()
+
+	run := claimStageCommandRun(t, store.StatusWaitingForHuman)
+	run.PendingQuestions = []store.PendingQuestion{{ID: "format", Prompt: "Which format should be used?"}}
+	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}}, statusComment: github.Comment{ID: "status-1"}}
+	runStore := &commandInvocationRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
+	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 42,
+		Comment:     github.Comment{ID: "21", Author: "alice", Body: "/factory answer format use the existing JSON format"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Stage != store.StageClaim || result.Run.Status != store.StatusActive {
+		t.Fatalf("result = %#v, want an accepted answer that stays at the claim stage", result)
+	}
+	if len(result.Run.PendingQuestions) != 0 {
+		t.Fatalf("pending questions = %#v, want the answered question removed", result.Run.PendingQuestions)
+	}
+	if len(runStore.invocations) != 0 {
+		t.Fatalf("invocations started = %#v, want none before the baseline ran", runStore.invocations)
+	}
+}
+
+// claimStageCommandRun creates a run that was claimed but has not yet passed
+// its frozen baseline suite. Its packet declares the complete test-stage
+// policy, so only the missing baseline can block a post-baseline stage.
+func claimStageCommandRun(t *testing.T, status store.Status) store.Run {
+	t.Helper()
+	packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, RepositoryConfig: validRepositoryConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := commandRun(t, status)
+	run.Stage = store.StageClaim
+	run.Worktree = "/worktree/run-command"
+	run.SpecificationPacket = string(packet)
+	return run
+}
+
+// commandInvocationRunStore adds the visible-invocation seam to the command
+// fixture so packet-change resumption takes its agent-launching path.
+type commandInvocationRunStore struct {
+	*commandRunStore
+	invocations []store.Invocation
+}
+
+// SaveInvocation records a launched invocation for resumption assertions.
+func (s *commandInvocationRunStore) SaveInvocation(_ context.Context, invocation store.Invocation) error {
+	s.invocations = append(s.invocations, invocation)
+	return nil
+}
+
+// Invocation returns a previously recorded invocation.
+func (s *commandInvocationRunStore) Invocation(_ context.Context, runID, invocationID string) (*store.Invocation, error) {
+	for index := range s.invocations {
+		if s.invocations[index].RunID == runID && s.invocations[index].ID == invocationID {
+			found := s.invocations[index]
+			return &found, nil
+		}
+	}
+	return nil, nil
 }
