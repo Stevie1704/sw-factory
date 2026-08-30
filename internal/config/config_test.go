@@ -651,6 +651,14 @@ func TestValidateRepositoryRejectsInvalidFieldsOneAtATime(t *testing.T) {
 			field: "retry_limits.test_revision",
 		},
 		{
+			name: "review repair limit above hard ceiling",
+			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
+				c.RetryLimits.ReviewRepair = config.MaxReviewRepairAttempts + 1
+				return c
+			},
+			field: "retry_limits.review_repair",
+		},
+		{
 			name: "invalid test policy mode",
 			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
 				c.TestPolicy.Mode = "sometimes"

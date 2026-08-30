@@ -73,8 +73,8 @@ type PushRequest struct {
 	Branch string
 }
 
-// BaseSyncRequest selects a fast-forward-only synchronization with a remote
-// target branch.
+// BaseSyncRequest selects a merge of a remote target branch into a run
+// worktree.
 type BaseSyncRequest struct {
 	// WorktreePath is the run worktree to update.
 	WorktreePath string
@@ -450,8 +450,8 @@ func (m *LocalWorktreeManager) IsAncestor(ctx context.Context, worktreePath, anc
 	return true, nil
 }
 
-// SynchronizeBase fetches the named target branch and fast-forwards the run
-// worktree to it. It never rebases or force-updates a run branch.
+// SynchronizeBase fetches the named target branch and merges it into the run
+// worktree. It never rebases or force-updates a run branch.
 func (m *LocalWorktreeManager) SynchronizeBase(ctx context.Context, request BaseSyncRequest) error {
 	if strings.TrimSpace(request.WorktreePath) == "" {
 		return errors.New("base synchronization worktree path is required")
@@ -468,8 +468,8 @@ func (m *LocalWorktreeManager) SynchronizeBase(ctx context.Context, request Base
 	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"fetch", "--no-tags", DefaultRemoteName, "refs/heads/" + request.TargetBranch}); err != nil {
 		return fmt.Errorf("fetch base branch %q: %w", request.TargetBranch, err)
 	}
-	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"merge", "--ff-only", "FETCH_HEAD"}); err != nil {
-		return fmt.Errorf("fast-forward base branch %q: %w", request.TargetBranch, err)
+	if _, err := m.runner().Run(ctx, request.WorktreePath, []string{"merge", "--no-edit", "FETCH_HEAD"}); err != nil {
+		return fmt.Errorf("merge base branch %q: %w", request.TargetBranch, err)
 	}
 	return nil
 }

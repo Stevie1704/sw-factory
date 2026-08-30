@@ -109,6 +109,52 @@ func TestReviewRoundCompleteRequiresOnlyConfiguredRoles(t *testing.T) {
 	}
 }
 
+// TestMissingConcurrentReviewRoleResumesTheUnlaunchedReviewer verifies a
+// partial concurrent launch can continue after the completed review result is
+// accepted, regardless of which reviewer finished first.
+func TestMissingConcurrentReviewRoleResumesTheUnlaunchedReviewer(t *testing.T) {
+	t.Parallel()
+
+	checkpoint := "checkpoint"
+	packet := SpecificationPacket{Version: specificationPacketVersion, RepositoryConfig: config.RepositoryConfig{
+		RoleHarnessDefaults: map[string]config.Harness{
+			workflow.RoleSpecificationReview: config.HarnessCodex,
+			workflow.RoleStandardsReview:     config.HarnessCodex,
+		},
+		ModelOptions: map[string][]string{
+			workflow.RoleSpecificationReview: {"gpt-5"},
+			workflow.RoleStandardsReview:     {"gpt-5"},
+		},
+	}}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name            string
+		specification   *store.SpecificationReview
+		standards       *store.StandardsReview
+		wantMissingRole string
+	}{
+		{name: "standards missing", specification: &store.SpecificationReview{CheckpointSHA: checkpoint}, wantMissingRole: workflow.RoleStandardsReview},
+		{name: "specification missing", standards: &store.StandardsReview{CheckpointSHA: checkpoint}, wantMissingRole: workflow.RoleSpecificationReview},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := progressionState{Run: &store.Run{
+				Stage:               store.StageReview,
+				Status:              store.StatusActive,
+				CheckpointSHA:       checkpoint,
+				SpecificationPacket: string(packetData),
+				SpecificationReview: test.specification,
+				StandardsReview:     test.standards,
+			}}
+			if got, ok := missingConcurrentReviewRole(state); !ok || got != test.wantMissingRole {
+				t.Fatalf("missingConcurrentReviewRole() = %q/%t, want %q/true", got, ok, test.wantMissingRole)
+			}
+		})
+	}
+}
+
 // pluralOnlyRecoveryStore exposes concurrent and latest invocation lookups but
 // intentionally omits the legacy singular active-invocation interface.
 type pluralOnlyRecoveryStore struct {

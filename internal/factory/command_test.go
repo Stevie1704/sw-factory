@@ -142,6 +142,61 @@ func TestHandleCommandPersistsHarnessConfiguration(t *testing.T) {
 	}
 }
 
+// TestHandleCommandAmendsAReadyPullRequest verifies an authorized revision
+// creates a new packet version, drafts the existing PR, invalidates the old
+// evidence, and preserves the host-owned checkpoint identity.
+func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusActive)
+	run.Stage = store.StageReady
+	run.Branch = "factory/run-command"
+	run.Worktree = "/tmp/factory-run-command"
+	run.CheckpointSHA = strings.Repeat("a", 64)
+	run.PullRequestNumber = 17
+	run.PullRequestURL = "https://github.com/example/project/pull/17"
+	githubAdapter := &commandGitHub{
+		issue:         github.Issue{Number: 42, Title: "Amended issue", Body: "new requirements", State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: "status-1"},
+		pullRequest:   github.PullRequest{Number: 17, URL: run.PullRequestURL, State: "open", Draft: false, HeadBranch: run.Branch, BaseBranch: "main"},
+	}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	service := newCommandService(runStore, githubAdapter, nil)
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 42,
+		Comment:     github.Comment{ID: "16", Author: "alice", Body: "/factory revision"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Stage != store.StageClaim || result.Run.Status != store.StatusActive {
+		t.Fatalf("revision result = %#v, want accepted active claim restart for the reduced command store", result)
+	}
+	if result.Run.ProcessedCommentID != "16" || result.Run.Revision != 1 || result.Run.ProcessedCommentRevision != 1 {
+		t.Fatalf("revision watermark = %#v, want comment 16 at revision 1", result.Run)
+	}
+	if result.Run.Branch != run.Branch || result.Run.Worktree != run.Worktree || result.Run.CheckpointSHA != run.CheckpointSHA || result.Run.BaseCheckpointSHA != run.CheckpointSHA || result.Run.PullRequestNumber != run.PullRequestNumber {
+		t.Fatalf("revision destroyed resumable host identity: before=%#v after=%#v", run, result.Run)
+	}
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(result.Run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode amended packet: %v", err)
+	}
+	if packet.Version != 2 || packet.Issue.Body != "new requirements" {
+		t.Fatalf("amended packet = %#v, want version 2 with current issue", packet)
+	}
+	if !githubAdapter.pullRequest.Draft || len(githubAdapter.draftChanges) != 1 || !githubAdapter.draftChanges[0] {
+		t.Fatalf("pull request draft changes = %#v/%v, want one draft transition", githubAdapter.draftChanges, githubAdapter.pullRequest)
+	}
+	if len(runStore.invalidations) != 0 {
+		t.Fatalf("downstream invalidations = %#v, want none for a complete amendment invalidation", runStore.invalidations)
+	}
+	if len(runStore.allInvalidations) != 1 || runStore.allInvalidations[0] != run.ID {
+		t.Fatalf("complete invalidations = %#v, want one for %q", runStore.allInvalidations, run.ID)
+	}
+}
+
 // TestHandleCommandPersistsAClaudeHarnessConfiguration verifies an authorized
 // issue comment can select Claude Code now that the adapter exists, and that
 // the run records the choice for the next invocation.
@@ -295,6 +350,10 @@ type commandRunStore struct {
 	saveErrors []error
 	// lifecycleClaims tracks claimed notification deliveries.
 	lifecycleClaims map[string]map[store.Status]bool
+	// allInvalidations records complete specification-amendment invalidations.
+	allInvalidations []string
+	// invalidations records downstream packet-change invalidations.
+	invalidations []string
 }
 
 // CurrentRun returns the active run when one exists.
@@ -346,7 +405,17 @@ func (s *commandRunStore) SaveRunIfRevision(ctx context.Context, expected int64,
 
 // InvalidateRunResults satisfies the packet-version seam for command tests;
 // this reduced store has no invocation or gate-result tables to clear.
-func (*commandRunStore) InvalidateRunResults(context.Context, string) error { return nil }
+func (s *commandRunStore) InvalidateRunResults(_ context.Context, runID string) error {
+	s.invalidations = append(s.invalidations, runID)
+	return nil
+}
+
+// InvalidateAllRunResults satisfies the complete packet-amendment seam in the
+// reduced command store, which has no separate invocation or gate tables.
+func (s *commandRunStore) InvalidateAllRunResults(_ context.Context, runID string) error {
+	s.allInvalidations = append(s.allInvalidations, runID)
+	return nil
+}
 
 // ClaimLifecycleNotification atomically claims notification delivery.
 func (s *commandRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
@@ -386,6 +455,8 @@ type commandGitHub struct {
 	replacedLabels  []string
 	createdComments []string
 	editedComments  []commandEditedComment
+	pullRequest     github.PullRequest
+	draftChanges    []bool
 }
 
 // Issue returns the issue projection used by retry transitions.
@@ -425,6 +496,30 @@ func (g *commandGitHub) EditIssueComment(_ context.Context, _ github.Repository,
 // IssueComments supplies the comments observed by polling.
 func (g *commandGitHub) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
 	return append([]github.Comment(nil), g.comments...), nil
+}
+
+// FindPullRequest returns the tracked pull request used by revision commands.
+func (g *commandGitHub) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
+	return g.pullRequest, nil
+}
+
+// CreatePullRequest is unused by command tests but completes the pull-request
+// client seam supplied by the command GitHub fixture.
+func (g *commandGitHub) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
+	return g.pullRequest, nil
+}
+
+// UpdatePullRequest is unused by revision handling because draft transitions
+// use the dedicated readiness method.
+func (g *commandGitHub) UpdatePullRequest(context.Context, github.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
+	return g.pullRequest, nil
+}
+
+// SetPullRequestDraft records the explicit readiness mutation for revisions.
+func (g *commandGitHub) SetPullRequestDraft(_ context.Context, _ github.Repository, _ int, draft bool) (github.PullRequest, error) {
+	g.draftChanges = append(g.draftChanges, draft)
+	g.pullRequest.Draft = draft
+	return g.pullRequest, nil
 }
 
 // commandEditedComment records a status-comment edit.

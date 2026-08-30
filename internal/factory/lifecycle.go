@@ -65,6 +65,14 @@ func (s *Service) PollLifecycle(ctx context.Context, request LifecycleRequest) (
 	if err != nil || result.Outcome != LifecycleUnchanged || store.IsTerminalStatus(result.Run.Status) {
 		return result, err
 	}
+	if reviewReadinessEligible(*run) {
+		updated, readinessErr := s.finalizeReviewReadiness(ctx, registration, runStore, *run)
+		*run = updated
+		result.Run = updated
+		if readinessErr != nil {
+			return result, readinessErr
+		}
+	}
 	if err := s.ensureProgressionStartup(ctx, registration, runStore, run); err != nil {
 		return LifecycleResult{}, err
 	}

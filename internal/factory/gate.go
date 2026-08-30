@@ -99,7 +99,7 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 		return gate.Result{}, err
 	}
 	suite, err := s.runGateSuite(ctx, registration, runStore, *run, packet, gate.PhaseCheckpoint, plan)
-	if persistErr := persistGateSuite(ctx, runStore, *run, suite); persistErr != nil {
+	if persistErr := persistGateSuite(ctx, runStore, *run, packet.RepositoryConfig.Gates, suite); persistErr != nil {
 		err = errors.Join(err, persistErr)
 	}
 	for _, result := range suite.Gates {
@@ -153,14 +153,22 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	if err != nil {
 		return BaselineResult{}, err
 	}
-	if err := s.verifyGateCheckpoint(ctx, *run); err != nil {
+	return s.runBaselineProjection(ctx, registration, runStore, *run, packet)
+}
+
+// runBaselineProjection evaluates and persists a complete baseline suite for
+// a run already validated by its caller. The helper is shared by the normal
+// claim flow and authorized revisions, whose current implementation checkpoint
+// becomes the new pre-edit boundary for the amended specification.
+func (s *Service) runBaselineProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket) (BaselineResult, error) {
+	if err := s.verifyGateCheckpoint(ctx, run); err != nil {
 		return BaselineResult{}, err
 	}
-	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, *run, packet, gate.PhaseBaseline, packet.RepositoryConfig.Gates)
-	result := BaselineResult{Run: *run, Gates: suite.Gates}
-	persistErr := persistGateSuite(ctx, runStore, *run, suite)
+	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, run, packet, gate.PhaseBaseline, packet.RepositoryConfig.Gates)
+	result := BaselineResult{Run: run, Gates: suite.Gates}
+	persistErr := persistGateSuite(ctx, runStore, run, packet.RepositoryConfig.Gates, suite)
 	if suiteErr == nil && persistErr == nil {
-		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, *run, packet)
+		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, run, packet)
 		result.Run = advanced
 		if advanceErr != nil {
 			return result, advanceErr
@@ -173,7 +181,7 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 				return result, fmt.Errorf("record baseline evaluation exemption: %w", err)
 			}
 		}
-		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, *run, packet)
+		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, run, packet)
 		result.Run = advanced
 		if advanceErr != nil {
 			return result, advanceErr
@@ -182,7 +190,7 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	}
 	effectiveErr := errors.Join(suiteErr, persistErr)
 
-	next := *run
+	next := run
 	next.Stage = store.StagePreflight
 	next.Status = store.StatusFailed
 	if suiteErr == nil && persistErr != nil {
@@ -195,7 +203,7 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	updated, transitionErr := s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository: commandRepository(registration),
 		Issue:      issue,
-		Previous:   *run,
+		Previous:   run,
 		Next:       next,
 	})
 	result.Run = updated
@@ -263,6 +271,61 @@ func (s *Service) ensureBaselineReadyAtCheckpoint(ctx context.Context, runStore 
 	}
 	if suiteErrHasBlockingFailure(suite) && !baselineFailureTargeted(packet.Issue.Body, suite) {
 		return errors.New("baseline has an untargeted blocking gate failure")
+	}
+	return nil
+}
+
+// ensureFinalCheckpointGatesPassed verifies every configured gate result for
+// the exact checkpoint that the reviewers inspected. Readiness is never
+// inferred from a review result alone: every gate must have a matching,
+// successful, content-free projection before the pull request can become
+// non-draft.
+func ensureFinalCheckpointGatesPassed(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) error {
+	resultStore, ok := runStore.(GateResultStore)
+	if !ok {
+		return errors.New("operational store does not support final checkpoint gate results")
+	}
+	if !github.ValidCommitSHA(run.CheckpointSHA) {
+		return errors.New("final readiness requires a valid checkpoint SHA")
+	}
+	fingerprint, err := setupInputFingerprint(run.Worktree, packet.RepositoryConfig.SetupFiles)
+	if err != nil {
+		return fmt.Errorf("fingerprint final gate setup files: %w", err)
+	}
+	results, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseCheckpoint, run.CheckpointSHA)
+	if err != nil {
+		return fmt.Errorf("read final checkpoint gate results: %w", err)
+	}
+	if len(results) != len(packet.RepositoryConfig.Gates) {
+		return fmt.Errorf("final checkpoint gate results are incomplete: got %d, want %d", len(results), len(packet.RepositoryConfig.Gates))
+	}
+	ordinals := configuredGateOrdinals(packet.RepositoryConfig.Gates)
+	declaredByName := make(map[string]config.GateConfig, len(packet.RepositoryConfig.Gates))
+	for _, declared := range packet.RepositoryConfig.Gates {
+		declaredByName[declared.Name] = declared
+	}
+	seen := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		ordinal, ok := ordinals[result.GateName]
+		declared, declaredOK := declaredByName[result.GateName]
+		if !ok || !declaredOK || result.RunID != run.ID || result.CheckpointSHA != run.CheckpointSHA || result.Phase != store.GatePhaseCheckpoint || result.Ordinal != ordinal || result.Blocking != declared.Blocking || result.SetupFingerprint != fingerprint {
+			return fmt.Errorf("final checkpoint gate result %q does not match the frozen run identity", result.GateName)
+		}
+		if _, duplicate := seen[result.GateName]; duplicate {
+			return fmt.Errorf("final checkpoint gate result %q is duplicated", result.GateName)
+		}
+		seen[result.GateName] = struct{}{}
+		if result.Outcome != store.GateOutcomePassed {
+			return fmt.Errorf("final checkpoint gate %q has outcome %q; readiness requires success", result.GateName, result.Outcome)
+		}
+		if result.Status != "" && result.Status != string(github.CommitStatusSuccess) {
+			return fmt.Errorf("final checkpoint gate %q has status %q; readiness requires success", result.GateName, result.Status)
+		}
+	}
+	for _, declared := range packet.RepositoryConfig.Gates {
+		if _, ok := seen[declared.Name]; !ok {
+			return fmt.Errorf("final checkpoint gate result %q is missing", declared.Name)
+		}
 	}
 	return nil
 }
@@ -369,7 +432,7 @@ func setupAlreadySucceeded(ctx context.Context, runStore RunStore, run store.Run
 
 // persistGateSuite records content-limited gate projections when the selected
 // operational store supports the issue #9 result table.
-func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, suite gate.SuiteResult) error {
+func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, configuredGates []config.GateConfig, suite gate.SuiteResult) error {
 	resultStore, ok := runStore.(GateResultStore)
 	if !ok || len(suite.Gates) == 0 {
 		return nil
@@ -381,7 +444,12 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 		}
 	}
 	results := make([]store.GateResult, 0, len(suite.Gates))
-	for ordinal, result := range suite.Gates {
+	ordinals := configuredGateOrdinals(configuredGates)
+	for _, result := range suite.Gates {
+		ordinal, ok := ordinals[result.GateName]
+		if !ok {
+			return fmt.Errorf("gate result %q is not declared in the frozen specification packet", result.GateName)
+		}
 		results = append(results, store.GateResult{
 			RunID:            run.ID,
 			CheckpointSHA:    result.CheckpointSHA,
@@ -437,6 +505,16 @@ func persistGateSuite(ctx context.Context, runStore RunStore, run store.Run, sui
 		}
 	}
 	return nil
+}
+
+// configuredGateOrdinals indexes the frozen full-suite order by gate name so
+// dependency-only runs retain the same durable identity as complete runs.
+func configuredGateOrdinals(gates []config.GateConfig) map[string]int {
+	ordinals := make(map[string]int, len(gates))
+	for ordinal, declared := range gates {
+		ordinals[declared.Name] = ordinal
+	}
+	return ordinals
 }
 
 // setupInputFingerprint hashes the configured manifest and lockfile contents

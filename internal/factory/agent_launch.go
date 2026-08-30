@@ -66,6 +66,20 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, fmt.Errorf("agent role %q is not declared by the workflow registry", request.Role)
 	}
 	testRevision := roleDefinition.Kind == workflow.RoleKindTest && run.Stage == store.StageTest && run.TestObjection != nil
+	reviewRepair := request.reviewRepair && request.Role == workflow.RoleImplementation && request.Stage == store.StageImplementation && run.Stage == store.StageImplementation
+	implementationResume := request.resumeImplementation && request.Role == workflow.RoleImplementation && request.Stage == store.StageImplementation && run.Stage == store.StageImplementation
+	if request.reviewRepair && !reviewRepair {
+		return AgentLaunchResult{}, errors.New("review repair requires the implementation role at the implementation stage")
+	}
+	if request.resumeImplementation && !implementationResume {
+		return AgentLaunchResult{}, errors.New("implementation resume requires the implementation role at the implementation stage")
+	}
+	if reviewRepair && implementationResume {
+		return AgentLaunchResult{}, errors.New("review repair and implementation resume are mutually exclusive")
+	}
+	if reviewRepair && run.ReviewRepairPacket == nil {
+		return AgentLaunchResult{}, errors.New("review repair requires a persisted review-repair packet")
+	}
 	if request.testRevision && !testRevision {
 		return AgentLaunchResult{}, errors.New("test revision requires an active test objection")
 	}
@@ -98,13 +112,45 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 			return AgentLaunchResult{}, errors.New("original test invocation has no native session identifier")
 		}
 	}
+	if reviewRepair {
+		resumeSource, err = latestImplementationInvocation(ctx, runStore, run.ID)
+		if err != nil {
+			return AgentLaunchResult{}, err
+		}
+		if resumeSource != nil {
+			if resumeSource.Status == store.InvocationStatusActive {
+				return AgentLaunchResult{}, fmt.Errorf("latest implementation invocation %q is still active", resumeSource.ID)
+			}
+			if strings.TrimSpace(resumeSource.NativeSessionID) == "" {
+				// A completed handoff may come from a harness without native
+				// session recovery; start a fresh repair session in that case.
+				resumeSource = nil
+			}
+		}
+	}
+	if implementationResume {
+		resumeSource, err = latestImplementationInvocation(ctx, runStore, run.ID)
+		if err != nil {
+			return AgentLaunchResult{}, err
+		}
+		if resumeSource != nil {
+			if resumeSource.Status == store.InvocationStatusActive {
+				return AgentLaunchResult{}, fmt.Errorf("latest implementation invocation %q is still active", resumeSource.ID)
+			}
+			if strings.TrimSpace(resumeSource.NativeSessionID) == "" {
+				// A harness without native recovery still receives a fresh
+				// implementation session while its persisted artifacts remain intact.
+				resumeSource = nil
+			}
+		}
+	}
 	if len(request.PermittedPaths) == 0 {
 		request.PermittedPaths = append([]string(nil), roleDefinition.DefaultPermittedPaths...)
 	}
 	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	if latestStore, ok := runStore.(LatestInvocationStore); ok && !testRevision {
+	if latestStore, ok := runStore.(LatestInvocationStore); ok && !testRevision && !reviewRepair && !implementationResume {
 		latest, latestErr := latestStore.LatestInvocation(ctx, run.ID)
 		if latestErr != nil {
 			return AgentLaunchResult{}, fmt.Errorf("look up latest invocation before launch: %w", latestErr)
@@ -201,6 +247,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	testObjection := run.TestObjection
 	testRevisionAttempt := run.TestRevisionAttempts
 	testRevisionBudget := run.TestRevisionBudget
+	reviewRepairPacket := run.ReviewRepairPacket
 	protectedTestPaths := append([]store.ProtectedTestPath(nil), run.ProtectedTestPaths...)
 	testExemption := run.TestExemption
 	if isReview {
@@ -212,6 +259,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		testObjection = nil
 		testRevisionAttempt = 0
 		testRevisionBudget = 0
+		reviewRepairPacket = nil
 		protectedTestPaths = nil
 		testExemption = nil
 	}
@@ -235,6 +283,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		TestRevisionBudget:  testRevisionBudget,
 		ProtectedTestPaths:  protectedTestPaths,
 		TestExemption:       testExemption,
+		ReviewRepair:        reviewRepairPacket,
 		ReviewContext:       reviewContext,
 	}
 	promptRequest := prompt.Request{
@@ -253,6 +302,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		TestRevisionBudget:      testRevisionBudget,
 		ProtectedTestPaths:      protectedTestPaths,
 		TestExemption:           testExemption,
+		ReviewRepair:            reviewRepairPacket,
 		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
 		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
 		ReviewContext:           reviewContext,
@@ -485,6 +535,10 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		run.Stage = stage
 	}
 	run.Status = store.StatusActive
+	if reviewRepair {
+		run.ReviewRepairPendingAttempt = 0
+		run.ReviewRepairHistory = reviewRepairHistoryWithOutcome(run.ReviewRepairHistory, run.ReviewRepairPacket.Attempt, store.ReviewRepairStarted, run.ReviewRepairPacket)
+	}
 	addActiveInvocation(run, invocation.ID)
 	if roleDefinition.Kind == workflow.RoleKindTest {
 		run.TestInvocationID = invocation.ID
@@ -637,6 +691,7 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 		TestRevisionBudget:      persisted.TestRevisionBudget,
 		ProtectedTestPaths:      persisted.ProtectedTestPaths,
 		TestExemption:           persisted.TestExemption,
+		ReviewRepair:            persisted.ReviewRepair,
 		TestPaths:               packet.RepositoryConfig.TestPolicy.TestPaths,
 		TestInfrastructurePaths: packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
 		CheckRepairAttempt:      checkRepairAttempt(persisted.CheckRepair),
@@ -710,6 +765,15 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 			return errors.New("persisted invocation packet test revision state does not match the run")
 		}
 	}
+	if persisted.SchemaVersion >= 8 {
+		expectedReviewRepair := run.ReviewRepairPacket
+		if invocation.Role != workflow.RoleImplementation {
+			expectedReviewRepair = nil
+		}
+		if !sameReviewRepairPacket(persisted.ReviewRepair, expectedReviewRepair) {
+			return errors.New("persisted invocation packet review-repair context does not match the run")
+		}
+	}
 	if roleDefinition, ok := workflow.DefaultRegistry().Role(invocation.Role); ok && roleDefinition.Kind == workflow.RoleKindReview {
 		if persisted.ReviewContext == nil {
 			return fmt.Errorf("persisted %s invocation packet has no review context", invocation.Role)
@@ -722,6 +786,17 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 		}
 	}
 	return nil
+}
+
+// sameReviewRepairPacket compares the coordinator-owned repair context without
+// relying on pointer identity across a restart.
+func sameReviewRepairPacket(left, right *store.ReviewRepairPacket) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	leftData, leftErr := json.Marshal(left)
+	rightData, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftData) == string(rightData)
 }
 
 // sameTestObjection compares the coordinator-owned objection payload without

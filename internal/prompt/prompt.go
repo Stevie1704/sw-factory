@@ -51,6 +51,9 @@ type Request struct {
 	// CheckRepairBudget is the run's configured repair ceiling when a repair is
 	// active.
 	CheckRepairBudget int
+	// ReviewRepair carries the complete blocking-review packet to an
+	// implementation repair invocation, including reviewer ownership hints.
+	ReviewRepair *store.ReviewRepairPacket
 	// TestHandoff is the accepted test-stage transfer packet shown to
 	// implementation, when available.
 	TestHandoff *store.TestHandoff
@@ -170,6 +173,22 @@ Check-repair context:
 - Read the coordinator-supplied check-repair packet in /invocation/specification.json.
 %s
 `, request.CheckRepairAttempt, request.CheckRepairBudget, repairInstruction)
+	}
+	if request.ReviewRepair != nil {
+		data, err := marshalHandoff(request.ReviewRepair)
+		if err != nil {
+			return "", fmt.Errorf("encode review-repair packet: %w", err)
+		}
+		repairContext += fmt.Sprintf(`
+Review-repair context:
+- This is bounded review-repair attempt %d of %d for the exact checkpoint that produced the findings.
+- Read the coordinator-supplied review-repair packet in /invocation/specification.json.
+- Repair production behavior for implementation-owned findings and do not edit protected tests.
+- When a finding names the test role as suggested owner, submit a structured test objection through the existing report protocol; never edit that test directly.
+- Preserve the frozen specification and deterministic gates; do not dismiss a finding without observable evidence.
+Review-repair packet (coordinator-owned):
+%s
+`, request.ReviewRepair.Attempt, request.ReviewRepair.Budget, data)
 	}
 	version := definition.PromptVersion
 	testContext := ""

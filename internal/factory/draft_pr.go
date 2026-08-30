@@ -176,6 +176,9 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		if run.CheckRepairAttempts > 0 && checkpoint.SHA == run.CheckpointSHA {
 			return DraftPullRequestResult{}, fmt.Errorf("check-repair attempt %d did not produce a new checkpoint SHA", run.CheckRepairAttempts)
 		}
+		if run.ReviewRepairAttempts > 0 && checkpoint.SHA == run.CheckpointSHA {
+			return DraftPullRequestResult{}, fmt.Errorf("review-repair attempt %d did not produce a new checkpoint SHA", run.ReviewRepairAttempts)
+		}
 		if _, journaled := runStore.(PendingEffectStore); !journaled {
 			next.CheckpointSHA = checkpoint.SHA
 			next, err = s.applyStateTransition(ctx, runStore, stateTransition{
@@ -269,7 +272,7 @@ func (s *Service) runConfiguredGates(ctx context.Context, registration config.Re
 		return nil, err
 	}
 	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, run, packet, gate.PhaseCheckpoint, packet.RepositoryConfig.Gates)
-	if persistErr := persistGateSuite(ctx, runStore, run, suite); persistErr != nil {
+	if persistErr := persistGateSuite(ctx, runStore, run, packet.RepositoryConfig.Gates, suite); persistErr != nil {
 		suiteErr = errors.Join(suiteErr, persistErr)
 	}
 	return suite.Gates, suiteErr

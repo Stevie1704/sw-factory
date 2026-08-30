@@ -91,6 +91,60 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	}
 }
 
+// TestLocalGitWorkspaceMergesAnAdvancedTargetIntoTheRunBranch verifies the
+// readiness synchronization handles divergent commits with a regular merge.
+func TestLocalGitWorkspaceMergesAnAdvancedTargetIntoTheRunBranch(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repository := filepath.Join(root, "project")
+	remote := filepath.Join(root, "project-origin.git")
+	initializeGitRepository(t, repository, remote)
+	manager := &gitadapter.LocalWorktreeManager{WorktreeDir: filepath.Join(root, "worktrees")}
+	workspace, err := manager.Create(context.Background(), repository, "main", "run-sync")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Worktree, "implementation.txt"), []byte("implementation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, workspace.Worktree, "add", "implementation.txt")
+	runGit(t, workspace.Worktree, "commit", "-m", "implementation")
+
+	if err := os.WriteFile(filepath.Join(repository, "target.txt"), []byte("target update\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", "target.txt")
+	runGit(t, repository, "commit", "-m", "advance target")
+	runGit(t, repository, "push", "origin", "main")
+
+	if err := manager.SynchronizeBase(context.Background(), gitadapter.BaseSyncRequest{
+		WorktreePath: workspace.Worktree,
+		TargetBranch: "main",
+	}); err != nil {
+		t.Fatalf("SynchronizeBase() error = %v", err)
+	}
+	parents := strings.Fields(strings.TrimSpace(runGit(t, workspace.Worktree, "rev-list", "--parents", "-n", "1", "HEAD")))
+	if len(parents) != 3 {
+		t.Fatalf("merged HEAD parents = %v, want merge commit with two parents", parents)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Worktree, "branch", "--show-current")); got != workspace.Branch {
+		t.Fatalf("run branch = %q, want unchanged %q", got, workspace.Branch)
+	}
+	for name, want := range map[string]string{"implementation.txt": "implementation\n", "target.txt": "target update\n"} {
+		contents, readErr := os.ReadFile(filepath.Join(workspace.Worktree, name))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(contents) != want {
+			t.Errorf("%s = %q, want %q", name, contents, want)
+		}
+	}
+	if err := manager.Remove(context.Background(), repository, workspace); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+}
+
 // TestLocalWorktreeManagerCreatesAScopedTestCheckpoint verifies the test
 // checkpoint cannot accidentally commit an implementation path and carries a
 // distinct marker from the later implementation checkpoint.

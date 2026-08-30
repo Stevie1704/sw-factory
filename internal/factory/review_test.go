@@ -76,6 +76,12 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if accepted.Report.ReviewHandoff == nil || fixture.runStore.current.Stage != store.StageReady || fixture.runStore.current.Status != store.StatusActive {
 		t.Fatalf("accepted review = %#v run=%#v, want ready/active", accepted.Report, fixture.runStore.current)
 	}
+	if fixture.pullRequests.existing.Draft {
+		t.Fatal("ready pull request remained draft")
+	}
+	if !fixture.runStore.current.ReadyNotificationSent || len(fixture.runStore.current.ActiveInvocationIDs) != 0 {
+		t.Fatalf("ready projection = %#v, want durable notification and no active invocation", fixture.runStore.current)
+	}
 	if len(fixture.statuses.values) != 2 || fixture.statuses.values[1].State != github.CommitStatusSuccess {
 		t.Fatalf("review statuses after acceptance = %#v, want pending then success", fixture.statuses.values)
 	}
@@ -87,8 +93,89 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	}
 }
 
+// TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates
+// verifies a blocker-free review cannot mark a pull request ready when the
+// final checkpoint gate projection is missing success.
+func TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := fixture.runStore.current
+	results := fixture.runStore.gateResults[run.ID]
+	for index := range results {
+		if results[index].Phase == store.GatePhaseCheckpoint {
+			results[index].Outcome = store.GateOutcomeFailed
+			results[index].Status = string(github.CommitStatusFailure)
+		}
+	}
+	fixture.runStore.gateResults[run.ID] = results
+
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	value := reviewReport(launch, nil)
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write review report: %v", err)
+	}
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "final checkpoint gate") {
+		t.Fatalf("AcceptAgentReport() error = %v, want final gate refusal", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || fixture.runStore.current.Status != store.StatusActive {
+		t.Fatalf("run after readiness refusal = %#v, want review/active retry state", fixture.runStore.current)
+	}
+	if !fixture.pullRequests.existing.Draft {
+		t.Fatal("pull request became ready despite an unsuccessful final gate")
+	}
+}
+
+// TestSpecificationReviewRefusesAnUnreviewedPullRequestHead verifies readiness
+// cannot make a PR non-draft when its remote branch moved after review.
+func TestSpecificationReviewRefusesAnUnreviewedPullRequestHead(t *testing.T) {
+	fixture := newReviewFixture(t)
+	fixture.pullRequests.existing.HeadSHA = strings.Repeat("a", 64)
+	fixture.pullRequests.existing.Draft = false
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	value := reviewReport(launch, nil)
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write review report: %v", err)
+	}
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: launch.Invocation.RunID, InvocationID: launch.Invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "head") {
+		t.Fatalf("AcceptAgentReport() error = %v, want remote-head refusal", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || !fixture.pullRequests.existing.Draft {
+		t.Fatalf("run/PR after remote-head refusal = %#v/%#v, want review and draft", fixture.runStore.current, fixture.pullRequests.existing)
+	}
+}
+
+// TestSpecificationReviewRestoresDraftAfterAConcurrentHeadChange verifies a
+// race during the readiness mutation cannot leave the unreviewed PR ready.
+func TestSpecificationReviewRestoresDraftAfterAConcurrentHeadChange(t *testing.T) {
+	fixture := newReviewFixture(t)
+	fixture.pullRequests.readyHeadSHA = strings.Repeat("a", 64)
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	value := reviewReport(launch, nil)
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write review report: %v", err)
+	}
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: launch.Invocation.RunID, InvocationID: launch.Invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "head") {
+		t.Fatalf("AcceptAgentReport() error = %v, want readiness race refusal", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || !fixture.pullRequests.existing.Draft {
+		t.Fatalf("run/PR after readiness race = %#v/%#v, want review and draft", fixture.runStore.current, fixture.pullRequests.existing)
+	}
+}
+
 // TestSpecificationReviewBlocksOnlyConcreteViolations verifies a correctness
-// blocker moves the run to human review and publishes failure for the exact SHA.
+// blocker becomes one bounded implementation repair packet and publishes
+// failure for the exact SHA.
 func TestSpecificationReviewBlocksOnlyConcreteViolations(t *testing.T) {
 	fixture := newReviewFixture(t)
 	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
@@ -104,8 +191,14 @@ func TestSpecificationReviewBlocksOnlyConcreteViolations(t *testing.T) {
 	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err != nil {
 		t.Fatalf("AcceptAgentReport() error = %v", err)
 	}
-	if fixture.runStore.current.Stage != store.StageReview || fixture.runStore.current.Status != store.StatusWaitingForHuman {
-		t.Fatalf("blocked run = %#v, want review/waiting_for_human", fixture.runStore.current)
+	if fixture.runStore.current.Stage != store.StageImplementation || fixture.runStore.current.Status != store.StatusActive {
+		t.Fatalf("blocked run = %#v, want implementation/active repair", fixture.runStore.current)
+	}
+	if fixture.runStore.current.ReviewRepairAttempts != 1 || fixture.runStore.current.ReviewRepairPacket == nil || len(fixture.runStore.current.ReviewRepairPacket.Findings) != 1 {
+		t.Fatalf("review repair projection = %#v, want one bounded finding packet", fixture.runStore.current)
+	}
+	if len(fixture.runStore.current.ActiveInvocationIDs) != 1 {
+		t.Fatalf("active repair invocations = %#v, want one implementation session", fixture.runStore.current.ActiveInvocationIDs)
 	}
 	if got := fixture.statuses.values[len(fixture.statuses.values)-1].State; got != github.CommitStatusFailure {
 		t.Fatalf("final review status = %q, want failure", got)
@@ -132,7 +225,10 @@ func TestConcurrentReviewRolesUseIndependentCheckpointSessions(t *testing.T) {
 	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("save concurrent review packet: %v", err)
 	}
-	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"})
+	fixture.worker.results = append(fixture.worker.results,
+		worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"},
+		worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"},
+	)
 
 	specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
 		RunID: run.ID, Role: "spec_review", Stage: store.StageReview,
@@ -198,6 +294,66 @@ func TestConcurrentReviewRolesUseIndependentCheckpointSessions(t *testing.T) {
 	}
 }
 
+// TestConcurrentReviewBlockersBecomeOneRepairPacket verifies the complete
+// review round routes both isolated reviewers' blockers to one implementation
+// repair invocation instead of repairing from whichever report arrived last.
+func TestConcurrentReviewBlockersBecomeOneRepairPacket(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode review packet: %v", err)
+	}
+	packet.RepositoryConfig.RoleHarnessDefaults["standards_review"] = config.HarnessCodex
+	packet.RepositoryConfig.ModelOptions["standards_review"] = []string{"gpt-5"}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("encode review packet: %v", err)
+	}
+	run.SpecificationPacket = string(packetData)
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save concurrent review packet: %v", err)
+	}
+	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"})
+
+	specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: "spec_review", Stage: store.StageReview})
+	if err != nil {
+		t.Fatalf("start specification reviewer: %v", err)
+	}
+	standards, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: "standards_review", Stage: store.Stage("standards_review")})
+	if err != nil {
+		t.Fatalf("start standards reviewer: %v", err)
+	}
+	specificationReport := reviewReport(specification, []report.ReviewFinding{{
+		Location: "internal/factory/review.go:10", Claim: "specification blocker", Evidence: "the acceptance path is incomplete", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryCorrectness, SuggestedResolution: "complete the path", SuggestedOwner: "implementation",
+	}})
+	standardsReport := reviewReport(standards, []report.ReviewFinding{{
+		Location: "internal/factory/review.go:20", Claim: "standards blocker", Evidence: "the lifecycle rule is violated", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryDocumentedStandards, SuggestedResolution: "follow the documented rule", SuggestedOwner: "test",
+	}})
+	if _, err := report.WriteAtomicForInvocation(specification.Invocation.ResultDirectory, specification.Invocation.ID, specificationReport); err != nil {
+		t.Fatalf("write specification report: %v", err)
+	}
+	if _, err := report.WriteAtomicForInvocation(standards.Invocation.ResultDirectory, standards.Invocation.ID, standardsReport); err != nil {
+		t.Fatalf("write standards report: %v", err)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: specification.Invocation.ID}); err != nil {
+		t.Fatalf("accept specification review: %v", err)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: standards.Invocation.ID}); err != nil {
+		t.Fatalf("accept standards review: %v", err)
+	}
+	current := fixture.runStore.current
+	if current.Stage != store.StageImplementation || current.Status != store.StatusActive || current.ReviewRepairPacket == nil {
+		t.Fatalf("review repair run = %#v, want active implementation repair", current)
+	}
+	if len(current.ReviewRepairPacket.Findings) != 2 || current.ReviewRepairPacket.Findings[0].ReviewerRole != "spec_review" || current.ReviewRepairPacket.Findings[1].ReviewerRole != "standards_review" {
+		t.Fatalf("combined review packet = %#v, want both reviewers in declaration order", current.ReviewRepairPacket)
+	}
+	if len(current.ActiveInvocationIDs) != 1 {
+		t.Fatalf("repair active invocations = %#v, want one implementation invocation", current.ActiveInvocationIDs)
+	}
+}
+
 // TestReviewRejectsAStaleCheckpointWithATypedFailure verifies a result cannot
 // silently attach to a newer immutable checkpoint.
 func TestReviewRejectsAStaleCheckpointWithATypedFailure(t *testing.T) {
@@ -259,8 +415,8 @@ func TestStandardsReviewCanBlockAProvisionalTestExemption(t *testing.T) {
 	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID}); err != nil {
 		t.Fatalf("accept standards review: %v", err)
 	}
-	if fixture.runStore.current.Stage != store.StageReview || fixture.runStore.current.Status != store.StatusWaitingForHuman || fixture.runStore.current.StandardsReview == nil {
-		t.Fatalf("standards-blocked run = %#v, want review/waiting_for_human with result", fixture.runStore.current)
+	if fixture.runStore.current.Stage != store.StageReview || fixture.runStore.current.Status != store.StatusActive || fixture.runStore.current.StandardsReview == nil {
+		t.Fatalf("standards-blocked run = %#v, want active review waiting for the other reviewer", fixture.runStore.current)
 	}
 	if got := fixture.statuses.values[len(fixture.statuses.values)-1]; got.Context != factory.StandardsReviewStatusContext || got.State != github.CommitStatusFailure {
 		t.Fatalf("standards status = %#v, want failure in standards context", got)
@@ -297,7 +453,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	issue := github.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{github.LabelAgentReady}}
 	githubAdapter := &fakeGitHub{issueValue: issue}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
 	worktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-review", Worktree: worktreePath}},
 		state:        gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-review", HeadSHA: factoryGateCheckpoint},
@@ -310,7 +466,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
-	ids := []string{"run-review", "review-session", "standards-session"}
+	ids := []string{"run-review", "review-session", "standards-session", "repair-session"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
 		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },

@@ -56,6 +56,8 @@ frozen specification packet
         v
 required: test -> implementation -> checkpoint gates -> draft PR -> review
              |          |                 |                  |          |
+             |          |                 |                  +--> bounded repair -> gates/review
+             |          |                 |                  |          |
              |          |                 |                  |          +--> ready
              |          |                 |                  +--> human review/merge
              |          |                 +--> bounded check repair loop
@@ -118,7 +120,7 @@ cannot add arbitrary roles or redefine the transition graph in
 | <code>check</code>                | Coordinator                              | The accepted implementation is checkpointed and every configured gate runs against that exact checkpoint.                                                   |
 | <code>draft_pr</code>             | Coordinator                              | The host pushes the run branch before the gate statuses, then creates or updates one draft pull request after successful gates.                             |
 | <code>review</code>               | <code>spec_review</code> + <code>standards_review</code> | Isolated reviewers concurrently inspect the same exact checkpoint and report role-scoped blocking findings or advisories.                         |
-| <code>ready</code>                | Coordinator                              | The run is ready for a human to review and merge. Factory leaves the pull request as a draft and does not merge it.                                         |
+| <code>ready</code>                | Coordinator                              | The final target synchronization and review gates passed; Factory marks the pull request ready for a human to review and merge, but does not merge it.       |
 
 The checked-in policy uses advisory mode: after a healthy baseline, the
 implementation role owns the complete red/green/refactor loop. It may add or
@@ -842,13 +844,23 @@ factory agent-report \
   --invocation-id <review-invocation-id>
 ~~~
 
-Correctness, security, specification, and documented-standards blockers keep
-the run waiting for human action. Taste and scope findings are advisory. The
-run moves to <code>ready</code> only after both configured reviews succeed,
-updates <code>factory/review/specification</code> and
-<code>factory/review/standards</code> for the exact checkpoint, and updates the
-generated review subsection of the draft PR. The pull request remains a draft
-for a human to inspect and merge.
+Correctness, security, specification, and documented-standards blockers are
+combined from both reviewers into one implementation repair packet. A finding
+that suggests test ownership must use the existing structured test-objection
+protocol; implementation never edits protected tests directly. An accepted
+repair creates a new checkpoint, reruns every configured gate, and starts both
+review roles in fresh sessions against that new SHA. The review-repair budget
+is capped at two attempts, and a materially repeated blocker escalates
+immediately to a human. Taste and scope findings remain advisory.
+
+The run moves to <code>ready</code> only after both configured reviews succeed,
+the configured target branch has been merged into the factory branch when
+<code>base_synchronization.mode: before_ready</code> is enabled, and the final
+checkpoint has passed all gates. A target-branch merge that changes the SHA
+returns the run to checks and starts a fresh review round. A merge conflict
+waits for human disposition; Factory never rebases or force-updates the run
+branch. After the final checks the coordinator explicitly marks the pull
+request ready for human inspection and merge.
 
 ### 7. Observe and finish the run
 
@@ -996,12 +1008,19 @@ Authorized users can control the current run with exact, single-line comments:
 /factory status
 /factory refresh
 /factory answer clarification-1 use the existing JSON format
+/factory revision
 /factory retry
 /factory cancel
 /factory config harness=codex
 ~~~
 
 Only usernames registered in the host configuration may issue these commands.
+`/factory revision` is authorized only on an active ready run. It snapshots
+the current open issue into a new packet version, drafts the tracked pull
+request, invalidates every prior gate and review result, treats the current
+clean checkpoint as the new amendment baseline, preserves the branch and
+worktree, and restarts the workflow from that checkpoint. The
+command does not rebase, force-push, merge, or delete anything remotely.
 The command parser rejects malformed or unauthorized comments without changing
 workflow state. Comments are processed once using a persisted watermark.
 

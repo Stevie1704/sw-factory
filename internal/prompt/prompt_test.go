@@ -158,6 +158,41 @@ func TestBuildIncludesCheckRepairContext(t *testing.T) {
 	}
 }
 
+// TestBuildIncludesCombinedReviewRepairOwnership verifies implementation sees
+// one bounded packet while suggested test ownership stays inside the objection
+// protocol rather than becoming an unrestricted edit instruction.
+func TestBuildIncludesCombinedReviewRepairOwnership(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-review-repair",
+		RunID:               "run-review",
+		Role:                "implementation",
+		Stage:               "implementation",
+		SpecificationPacket: `{"issue":{"title":"Repair review findings"}}`,
+		ReviewRepair: &store.ReviewRepairPacket{
+			Version: 1, RunID: "run-review", CheckpointSHA: strings.Repeat("a", 64), Attempt: 1, Budget: 2,
+			Findings: []store.ReviewRepairFinding{{
+				ReviewerRole: "spec_review",
+				Finding:      store.ReviewFinding{Location: "internal/factory/review.go:42", Claim: "missing transition", Severity: "blocker", Category: "correctness", SuggestedOwner: "test"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"Review-repair context:",
+		"bounded review-repair attempt 1 of 2",
+		"reviewer_role",
+		"submit a structured test objection",
+		"never edit that test directly",
+		"/invocation/specification.json",
+	} {
+		if !strings.Contains(value, marker) {
+			t.Fatalf("review-repair prompt missing %q:\n%s", marker, value)
+		}
+	}
+}
+
 // TestBuildIncludesIndependentReviewRules verifies the reviewer is directed to
 // the immutable packet and the complete finding contract without transcripts.
 func TestBuildIncludesIndependentReviewRules(t *testing.T) {

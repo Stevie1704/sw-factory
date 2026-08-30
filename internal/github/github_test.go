@@ -243,7 +243,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeCommandRunner{outputs: [][]byte{
-		[]byte(`[{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}]`),
+		[]byte(`[{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1","sha":"0123456789abcdef0123456789abcdef01234567"},"base":{"ref":"main"}}]`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Created","body":"generated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Updated","body":"human text\n\ngenerated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
@@ -255,7 +255,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindPullRequest() error = %v", err)
 	}
-	if found.Number != 12 || found.HeadBranch != "factory/run-1" || found.BaseBranch != "main" || found.Body != "human text" {
+	if found.Number != 12 || found.HeadBranch != "factory/run-1" || found.HeadSHA != "0123456789abcdef0123456789abcdef01234567" || found.BaseBranch != "main" || found.Body != "human text" {
 		t.Fatalf("found pull request = %#v, want decoded identity", found)
 	}
 
@@ -302,6 +302,45 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	}
 	if payload["head"] != "factory/run-1" || payload["base"] != "main" || payload["draft"] != true {
 		t.Fatalf("create payload = %#v, want branch/base/draft", payload)
+	}
+}
+
+// TestGhClientTogglesPullRequestDraftStateThroughTheHostCLI verifies readiness
+// uses GitHub's dedicated draft transition instead of a body PATCH.
+func TestGhClientTogglesPullRequestDraftStateThroughTheHostCLI(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(""),
+		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","state":"open","draft":false,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
+		[]byte(""),
+		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
+	}}
+	client := &github.GhClient{Runner: runner}
+	repository := github.Repository{Owner: "example", Name: "project"}
+
+	ready, err := client.SetPullRequestDraft(context.Background(), repository, 12, false)
+	if err != nil {
+		t.Fatalf("SetPullRequestDraft(false) error = %v", err)
+	}
+	if ready.Number != 12 || ready.Draft {
+		t.Fatalf("ready pull request = %#v, want nondraft #12", ready)
+	}
+	draft, err := client.SetPullRequestDraft(context.Background(), repository, 12, true)
+	if err != nil {
+		t.Fatalf("SetPullRequestDraft(true) error = %v", err)
+	}
+	if draft.Number != 12 || !draft.Draft {
+		t.Fatalf("draft pull request = %#v, want draft #12", draft)
+	}
+	if len(runner.calls) != 4 {
+		t.Fatalf("GitHub calls = %d, want CLI transition plus GET for each toggle", len(runner.calls))
+	}
+	if !containsArgs(runner.calls[0].args, "pr", "ready", "12", "--repo", "example/project") || hasArgs(runner.calls[0].args, "--undo") {
+		t.Fatalf("ready args = %#v, want gh pr ready without --undo", runner.calls[0].args)
+	}
+	if !containsArgs(runner.calls[2].args, "pr", "ready", "12", "--repo", "example/project", "--undo") {
+		t.Fatalf("draft args = %#v, want gh pr ready --undo", runner.calls[2].args)
 	}
 }
 
