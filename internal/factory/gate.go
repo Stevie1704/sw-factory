@@ -693,7 +693,8 @@ func gitMetadataProjectionPath(runID, worktreePath string) string {
 // remotes, commands, or host paths. It rejects symbolic links and other
 // non-regular entries.
 func copyGitMetadata(source, destination string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+	managedFiles := make(map[string]struct{})
+	if err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -724,10 +725,45 @@ func copyGitMetadata(source, destination string) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported git metadata entry %q", relative)
 		}
+		managedFiles[relative] = struct{}{}
 		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			return err
 		}
 		return copyGitMetadataFile(path, target, 0o640)
+	}); err != nil {
+		return err
+	}
+	return removeStaleGitMetadataFiles(destination, managedFiles)
+}
+
+// removeStaleGitMetadataFiles removes projected regular metadata files that
+// are no longer present in the current permitted source set. Directories and
+// excluded paths remain outside this reconciliation step.
+func removeStaleGitMetadataFiles(destination string, managedFiles map[string]struct{}) error {
+	return filepath.WalkDir(destination, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(destination, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		if skipGitMetadata(relative, entry.IsDir()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if _, ok := managedFiles[relative]; ok {
+			return nil
+		}
+		return os.Remove(path)
 	})
 }
 
