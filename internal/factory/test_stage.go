@@ -411,7 +411,7 @@ func (s *Service) automatedTestObjectionGate(ctx context.Context, registration c
 		if !comments[left].UpdatedAt.IsZero() && !comments[right].UpdatedAt.IsZero() && !comments[left].UpdatedAt.Equal(comments[right].UpdatedAt) {
 			return comments[left].UpdatedAt.Before(comments[right].UpdatedAt)
 		}
-		return compareCommentIDs(comments[left].ID, comments[right].ID) < 0
+		return compareGitHubIDs(comments[left].ID, comments[right].ID) < 0
 	})
 	decision := ""
 	for _, comment := range comments {

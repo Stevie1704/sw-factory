@@ -179,16 +179,20 @@ Check-repair context:
 		if err != nil {
 			return "", fmt.Errorf("encode review-repair packet: %w", err)
 		}
+		scope := fmt.Sprintf("This is bounded review-repair attempt %d of %d for the exact checkpoint that produced the findings.", request.ReviewRepair.Attempt, request.ReviewRepair.Budget)
+		if request.ReviewRepair.Source == store.ReviewRepairSourceHuman {
+			scope = fmt.Sprintf("An authorized maintainer requested changes in GitHub review %s against the exact current checkpoint. It does not consume the bounded factory review-repair budget.", request.ReviewRepair.ReviewID)
+		}
 		repairContext += fmt.Sprintf(`
 Review-repair context:
-- This is bounded review-repair attempt %d of %d for the exact checkpoint that produced the findings.
+- %s
 - Read the coordinator-supplied review-repair packet in /invocation/specification.json.
 - Repair production behavior for implementation-owned findings and do not edit protected tests.
 - When a finding names the test role as suggested owner, submit a structured test objection through the existing report protocol; never edit that test directly.
 - Preserve the frozen specification and deterministic gates; do not dismiss a finding without observable evidence.
 Review-repair packet (coordinator-owned):
 %s
-`, request.ReviewRepair.Attempt, request.ReviewRepair.Budget, data)
+`, scope, data)
 	}
 	version := definition.PromptVersion
 	testContext := ""

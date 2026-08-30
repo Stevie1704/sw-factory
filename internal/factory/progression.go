@@ -52,6 +52,9 @@ type progressionResult struct {
 	Steps int
 	// Reason is the operator-facing explanation of Outcome.
 	Reason string
+	// Step names the transition that stopped the pass. It is used in the
+	// published waiting reason and defaults to an unexplained stall.
+	Step string
 }
 
 // progressionState is one consistent read of the run and the invocation it
@@ -81,6 +84,20 @@ type progressionState struct {
 // creating a second invocation, checkpoint, push, comment, or pull request.
 func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRegistration) (progressionResult, error) {
 	result := progressionResult{Outcome: progressionIdle}
+	lifecycle, err := s.observePullRequestEvents(ctx, registration)
+	if err != nil {
+		if pollingContextDone(err) || ctx.Err() != nil {
+			return result, err
+		}
+		state, readErr := s.readProgressionState(ctx, registration)
+		if readErr != nil || state.Run == nil {
+			return result, errors.Join(err, readErr)
+		}
+		return s.stopProgressionAfterFailure(ctx, registration, *state.Run, "observe pull-request events", err, result.Steps)
+	}
+	if lifecycle.Outcome == LifecycleCompleted || lifecycle.Outcome == LifecycleCancelled {
+		return progressionResult{Outcome: progressionTerminal, Run: lifecycle.Run, Reason: lifecycle.Reason}, nil
+	}
 	for result.Steps < maxProgressionSteps {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -128,6 +145,50 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 	})
 }
 
+// observePullRequestEvents makes one bounded GitHub observation for a run that
+// already has a tracked pull request, before the pass applies any coordinator
+// transition. Pull-request lifecycle is observed first, because a merged or
+// closed pull request ends the run and must not be followed by repair,
+// readiness, or infrastructure work. A pending durable effect defers both
+// observations to reconciliation, which owns the unresolved mutation.
+func (s *Service) observePullRequestEvents(ctx context.Context, registration config.RepositoryRegistration) (LifecycleResult, error) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
+	if err != nil {
+		return LifecycleResult{}, fmt.Errorf("open operational store to observe pull-request events: %w", err)
+	}
+	defer func() { _ = opened.Close() }()
+	runStore, ok := opened.(RunStore)
+	if !ok {
+		return LifecycleResult{Outcome: LifecycleUnchanged}, nil
+	}
+	run, err := runStore.CurrentRun(ctx)
+	if err != nil {
+		return LifecycleResult{}, fmt.Errorf("read run to observe pull-request events: %w", err)
+	}
+	if run == nil || run.PullRequestNumber == 0 {
+		return LifecycleResult{Outcome: LifecycleUnchanged}, nil
+	}
+	if journal, journaled := runStore.(PendingEffectStore); journaled {
+		pending, pendingErr := journal.PendingEffect(ctx, run.ID)
+		if pendingErr != nil {
+			return LifecycleResult{}, fmt.Errorf("read pending effect before pull-request observation: %w", pendingErr)
+		}
+		if pending != nil {
+			return LifecycleResult{Outcome: LifecycleUnchanged}, nil
+		}
+	}
+	lifecycle, err := s.observeLifecycle(ctx, registration, runStore, run)
+	if err != nil {
+		return lifecycle, err
+	}
+	if lifecycle.Outcome != LifecycleUnchanged || store.IsTerminalStatus(lifecycle.Run.Status) {
+		return lifecycle, nil
+	}
+	return lifecycle, s.consumeHumanReview(ctx, registration, runStore, lifecycle.Run)
+}
+
 // progressionAction is one coordinator-owned transition selected from durable
 // run state. The coordinator, never an agent, chooses it.
 type progressionAction struct {
@@ -173,6 +234,13 @@ func (s *Service) progressionStep(state progressionState) (progressionAction, *p
 			_, err := s.StartAgent(ctx, AgentRequest{RunID: run.ID, Role: definition.Name, Stage: definition.Stage})
 			return err
 		}}, nil
+	}
+	if reviewReadinessSettled(run) {
+		return progressionAction{}, &progressionResult{
+			Outcome: progressionWaiting,
+			Step:    "pull-request readiness",
+			Reason:  fmt.Sprintf("pull request #%d is ready and waiting for human disposition", run.PullRequestNumber),
+		}
 	}
 	if reviewReadinessEligible(run) {
 		return progressionAction{name: "finalize pull-request readiness", action: func(ctx context.Context) error {
@@ -445,7 +513,11 @@ func (s *Service) publishProgressionStop(ctx context.Context, registration confi
 	if stop.Outcome != progressionWaiting || run.Status != store.StatusActive {
 		return stop, nil
 	}
-	paused, err := s.pauseProgression(ctx, registration, run, "stall", errors.New(stop.Reason))
+	step := stop.Step
+	if step == "" {
+		step = "stall"
+	}
+	paused, err := s.pauseProgression(ctx, registration, run, step, errors.New(stop.Reason))
 	if err != nil {
 		return stop, err
 	}

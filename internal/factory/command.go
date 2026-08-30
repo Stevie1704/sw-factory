@@ -180,7 +180,7 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		}
 		*run = updated
 	}
-	if commentAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
+	if githubIDAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
 	}
 	if !authorizedCommentAuthor(registration.AuthorizedUsers, request.Comment.Author) {
@@ -894,7 +894,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 		}
 	}
 	sort.SliceStable(comments, func(left, right int) bool {
-		return compareCommentIDs(comments[left].comment.ID, comments[right].comment.ID) < 0
+		return compareGitHubIDs(comments[left].comment.ID, comments[right].comment.ID) < 0
 	})
 	results := make([]CommandResult, 0)
 	currentRun := *run
@@ -1150,9 +1150,10 @@ func authorizedCommentAuthor(authorized []string, author string) bool {
 	return false
 }
 
-// commentAlreadyProcessed checks the persisted numeric GitHub watermark and
-// falls back to identity equality for synthetic or nonnumeric test IDs.
-func commentAlreadyProcessed(processed, current string) bool {
+// githubIDAlreadyProcessed checks a persisted numeric GitHub watermark, such
+// as a processed comment or an applied review, and falls back to identity
+// equality for synthetic or nonnumeric test IDs.
+func githubIDAlreadyProcessed(processed, current string) bool {
 	if strings.TrimSpace(processed) == "" || strings.TrimSpace(current) == "" {
 		return false
 	}
@@ -1167,9 +1168,10 @@ func commentAlreadyProcessed(processed, current string) bool {
 	return false
 }
 
-// compareCommentIDs sorts numeric GitHub IDs numerically and keeps other IDs
-// deterministic without allowing a human-readable message to control flow.
-func compareCommentIDs(left, right string) int {
+// compareGitHubIDs orders numeric GitHub identities numerically and keeps
+// other identities deterministic without allowing a human-readable message to
+// control flow.
+func compareGitHubIDs(left, right string) int {
 	leftID, leftErr := strconv.ParseUint(left, 10, 64)
 	rightID, rightErr := strconv.ParseUint(right, 10, 64)
 	if leftErr == nil && rightErr == nil {

@@ -23,6 +23,14 @@ func reviewReadinessEligible(run store.Run) bool {
 	return reviewRoundComplete(run) && !reviewHasBlockingResult(run)
 }
 
+// reviewReadinessSettled reports whether the final readiness boundary is
+// already complete for the current checkpoint. Retrying it then cannot change
+// anything, so unattended progression must publish the human disposition it is
+// waiting for instead of reporting a stalled transition.
+func reviewReadinessSettled(run store.Run) bool {
+	return run.Stage == store.StageReady && run.ReadyNotificationSent && reviewReadinessEligible(run)
+}
+
 // finalizeReviewReadiness performs the final target synchronization, explicit
 // PR readiness transition, durable ready state, and operator notification.
 // A target change returns the run to checks so every gate and reviewer starts

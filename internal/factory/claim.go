@@ -1107,6 +1107,9 @@ func reviewRepairStatusComment(run store.Run) string {
 	if run.ReviewRepairPendingAttempt > 0 {
 		result += fmt.Sprintf("- pending: attempt %d\n", run.ReviewRepairPendingAttempt)
 	}
+	if packet := run.ReviewRepairPacket; packet != nil && packet.Source == store.ReviewRepairSourceHuman {
+		result += fmt.Sprintf("- human review: %s (does not consume the budget)\n", safeStatusCommentValue(packet.ReviewID))
+	}
 	if len(run.ReviewRepairHistory) > 0 {
 		outcomes := make([]string, 0, len(run.ReviewRepairHistory))
 		for _, attempt := range run.ReviewRepairHistory {
