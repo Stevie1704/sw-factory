@@ -543,7 +543,8 @@ type Run struct {
 	// prevention and persisted supervision updates.
 	Revision int64
 	// ProcessedCommentID is the highest processed GitHub comment watermark for
-	// this run. Editing that comment must never execute it again.
+	// this run. Claim initializes it to the latest pre-claim issue comment so
+	// historical commands cannot execute against the new run.
 	ProcessedCommentID string
 	// ProcessedCommentRevision records the run revision at which the watermark
 	// was persisted, making the watermark tuple restart-safe and auditable.

@@ -18,6 +18,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -243,7 +244,7 @@ type continuationFixture struct {
 	reviews         *continuationReviews
 	statuses        *gateStatuses
 	lease           *pollingLease
-	terminal        *agentTerminal
+	terminal        *continuationTerminal
 	harness         *continuationHarness
 	operationalPath string
 	configPath      string
@@ -300,12 +301,18 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 		statuses:            &gateStatuses{},
 		clock:               monotonicClock(time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)),
 		lease:               &pollingLease{},
-		terminal:            &agentTerminal{},
+		terminal:            &continuationTerminal{agentTerminal: &agentTerminal{}},
 		operationalPath:     filepath.Join(root, "state", "factory.db"),
 		firstRunID:          "run-continuation",
 		checkpointsReviewed: map[string]struct{}{},
 	}
 	fixture.harness = &continuationHarness{fixture: fixture}
+	fixture.terminal.onNotify = func() {
+		run := fixture.latestRun(t)
+		if run != nil && store.IsTerminalStatus(run.Status) {
+			fixture.recordTerminalRun(*run)
+		}
+	}
 
 	registration := config.RepositoryRegistration{
 		Path:                 repositoryPath,
@@ -323,6 +330,7 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 			LoadRepository:     func(string) (config.RepositoryConfig, error) { return policy, nil },
 			GitHub:             fixture.commands,
 			IssuePoller:        fixture.commands,
+			Comments:           emptyCommentReader{},
 			Lease:              fixture.lease,
 			PullRequests:       fixture.pullRequests,
 			PullRequestReviews: fixture.reviews,
@@ -349,6 +357,33 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 func (f *continuationFixture) restart() *factory.Service {
 	f.service = factory.NewWithDependencies(f.configPath, f.dependencies())
 	return f.service
+}
+
+// emptyCommentReader keeps unattended continuation tests in the normal
+// command-enabled mode without introducing command traffic into the fixture.
+type emptyCommentReader struct{}
+
+// IssueComments returns no human commands for the continuation fixture.
+func (emptyCommentReader) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
+	return nil, nil
+}
+
+// continuationTerminal records the terminal state before the same polling
+// pass can claim the next queued issue.
+type continuationTerminal struct {
+	*agentTerminal
+	onNotify func()
+}
+
+// Notify records the terminal notification and captures the persisted state.
+func (t *continuationTerminal) Notify(ctx context.Context, notification terminal.Notification) error {
+	if err := t.agentTerminal.Notify(ctx, notification); err != nil {
+		return err
+	}
+	if t.onNotify != nil {
+		t.onNotify()
+	}
+	return nil
 }
 
 // monotonicClock returns a strictly increasing coordinator clock, so the

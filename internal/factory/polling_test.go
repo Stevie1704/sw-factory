@@ -171,10 +171,10 @@ func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
 	}
 }
 
-// TestStartAppliesQueuedIssueCommands verifies the unattended loop reads the
-// structured /factory comments of the run it already reconciled, instead of
-// waiting for an operator to run the `factory poll` command by hand.
-func TestStartAppliesQueuedIssueCommands(t *testing.T) {
+// TestStartAppliesIssueCommandsPostedAfterClaim verifies the unattended loop
+// applies a command posted after claim while ignoring an older command that
+// remains in the issue's comment history.
+func TestStartAppliesIssueCommandsPostedAfterClaim(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -183,7 +183,13 @@ func TestStartAppliesQueuedIssueCommands(t *testing.T) {
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
 	comments := &pollingCommentReader{
-		comments: []github.Comment{{ID: "15", Author: "alice", Body: "/factory status"}},
+		commentBatches: [][]github.Comment{
+			{{ID: "14", Author: "alice", Body: "/factory cancel"}},
+			{
+				{ID: "14", Author: "alice", Body: "/factory cancel"},
+				{ID: "15", Author: "alice", Body: "/factory status"},
+			},
+		},
 		onList: func(call int) {
 			if call >= 2 {
 				cancel()
@@ -204,7 +210,10 @@ func TestStartAppliesQueuedIssueCommands(t *testing.T) {
 		t.Fatal("comment listings = 0, want the polling loop to read issue commands")
 	}
 	if !savedCommandWatermark(runStore.saved, "15", "status") {
-		t.Fatalf("saved runs = %#v, want the status command applied with its watermark", runStore.saved)
+		t.Fatalf("saved runs = %#v, want the post-claim status command applied with its watermark", runStore.saved)
+	}
+	if strings.Contains(githubAdapter.lastLabelMutation, github.LabelAgentCancelled) {
+		t.Fatal("the pre-claim cancel command changed the run state")
 	}
 }
 
@@ -220,9 +229,9 @@ func TestStartBacksOffCommandTransportFailures(t *testing.T) {
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
 	comments := &pollingCommentReader{
-		listErrors: []error{errors.New("GitHub comment transport unavailable")},
+		listErrors: []error{nil, errors.New("GitHub comment transport unavailable")},
 		onList: func(call int) {
-			if call >= 2 {
+			if call >= 3 {
 				cancel()
 			}
 		},
@@ -237,11 +246,11 @@ func TestStartBacksOffCommandTransportFailures(t *testing.T) {
 	if err := service.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v, want the loop to survive a command transport failure", err)
 	}
-	if comments.calls != 2 {
-		t.Fatalf("comment listings = %d, want one retry after transport backoff", comments.calls)
+	if comments.calls != 3 {
+		t.Fatalf("comment listings = %d, want one retry after command transport backoff", comments.calls)
 	}
-	if gap := comments.times[1].Sub(comments.times[0]); gap < 20*time.Millisecond {
-		t.Fatalf("command retry gap = %s, want the configured backoff before the second command poll", gap)
+	if gap := comments.times[2].Sub(comments.times[1]); gap < 20*time.Millisecond {
+		t.Fatalf("command retry gap = %s, want the configured backoff before the retry", gap)
 	}
 	if savedCommandWatermark(runStore.saved, "15", "status") {
 		t.Fatal("a queued command was applied although every comment listing failed")
@@ -262,7 +271,11 @@ func savedCommandWatermark(saved []store.Run, commentID, command string) bool {
 // pollingCommentReader supplies structured command comments to the polling
 // loop with controllable transport failures.
 type pollingCommentReader struct {
-	comments   []github.Comment
+	// comments is the fallback history returned after commentBatches are used.
+	comments []github.Comment
+	// commentBatches supplies one deterministic history for each list call.
+	commentBatches [][]github.Comment
+	// listErrors supplies deterministic failures for successive list calls.
 	listErrors []error
 	calls      int
 	times      []time.Time
@@ -281,7 +294,12 @@ func (r *pollingCommentReader) IssueComments(context.Context, github.Repository,
 	if len(r.listErrors) > 0 {
 		err := r.listErrors[0]
 		r.listErrors = r.listErrors[1:]
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+	}
+	if r.calls <= len(r.commentBatches) {
+		return append([]github.Comment(nil), r.commentBatches[r.calls-1]...), nil
 	}
 	return append([]github.Comment(nil), r.comments...), nil
 }

@@ -188,6 +188,10 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err != nil {
 		return IssueResult{}, fmt.Errorf("validate frozen issue route for #%d: %w", issueNumber, err)
 	}
+	processedCommentID, err := s.claimCommentWatermark(ctx, repository, issueNumber)
+	if err != nil {
+		return IssueResult{}, err
+	}
 
 	runID, err := s.deps.NewRunID()
 	if err != nil {
@@ -237,6 +241,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		CheckRepairBudget:   repositoryConfig.RetryLimits.CheckRepair,
 		ReviewRepairBudget:  repositoryConfig.RetryLimits.ReviewRepair,
 		TestRevisionBudget:  testRevisionBudget,
+		ProcessedCommentID:  processedCommentID,
 		SpecificationPacket: string(packetData),
 		CreatedAt:           startedAt,
 		UpdatedAt:           startedAt,
@@ -262,6 +267,29 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return IssueResult{}, cleanupWorkspace(failureErr)
 	}
 	return IssueResult{Run: run, Packet: packet}, nil
+}
+
+// claimCommentWatermark captures the latest existing issue comment before a
+// run can receive commands. Every claimed run accepts commands, so the reader
+// must be available before the claim creates any durable or external effects.
+func (s *Service) claimCommentWatermark(ctx context.Context, repository github.Repository, issueNumber int) (string, error) {
+	if s.deps.Comments == nil {
+		return "", errors.New("GitHub comment reader is required to establish the command cutoff before claim")
+	}
+	comments, err := s.deps.Comments.IssueComments(ctx, repository, issueNumber)
+	if err != nil {
+		return "", fmt.Errorf("list comments on issue #%d before claim: %w", issueNumber, err)
+	}
+	latestCommentID := ""
+	for _, comment := range comments {
+		if strings.TrimSpace(comment.ID) == "" {
+			continue
+		}
+		if latestCommentID == "" || compareGitHubIDs(latestCommentID, comment.ID) < 0 {
+			latestCommentID = comment.ID
+		}
+	}
+	return latestCommentID, nil
 }
 
 // testRevisionBudgetForPacket returns a revision ceiling only for runs that
