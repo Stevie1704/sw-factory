@@ -84,8 +84,10 @@ _Avoid_: Docker API
 The persistent coordinator's bounded pass that drives one claimed run through
 baseline, its route-selected stages, result acceptance, the exact-checkpoint
 gates, the bounded check-repair loop, the push, and one draft pull request
-without an operator running a stage-driving command. It stops at the first
-human or infrastructure waiting state.
+without an operator running a stage-driving command. Each pass also applies
+the structured commands an operator left on the run's issue or draft pull
+request, so no comment needs a command-polling CLI invocation either. It
+stops at the first human or infrastructure waiting state.
 _Avoid_: Autonomous agent, agent-driven workflow, auto-merge
 
 **Run activity**:
