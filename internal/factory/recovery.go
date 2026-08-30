@@ -480,6 +480,14 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	}
 	invocationID = active.ID
 	diagnosis.InvocationExists = true
+	if invocationProjectionNeverEstablished(*active) {
+		// The launch boundary rolled this invocation back before it recorded any
+		// external identity, so no worker, terminal, or harness projection was
+		// ever created for it. Its empty identities are the durable result of a
+		// completed rollback rather than restart drift, and comparing them with
+		// live projections would block every later start permanently.
+		return
+	}
 	hasNativeSession := strings.TrimSpace(active.NativeSessionID) != ""
 	if !hasNativeSession {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
@@ -708,6 +716,19 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 		return false
 	}
 	return run.Stage == store.StageReady || run.Stage == store.StageCheck || run.Status == store.StatusWaitingForHuman
+}
+
+// invocationProjectionNeverEstablished reports that a historical invocation was
+// rolled back at the launch boundary before it recorded a native session or a
+// workspace. Such an invocation owns no external projection to compare, so the
+// coordinator must read its empty identities as recorded history rather than as
+// an infrastructure discrepancy. An active invocation is always compared,
+// because a live agent with no persisted identity is genuine drift.
+func invocationProjectionNeverEstablished(invocation store.Invocation) bool {
+	if invocation.Status == store.InvocationStatusActive {
+		return false
+	}
+	return strings.TrimSpace(invocation.NativeSessionID) == "" && strings.TrimSpace(invocation.WorkspaceID) == ""
 }
 
 // terminalInvocationProjectionExpectedStopped reports the coordinator-owned

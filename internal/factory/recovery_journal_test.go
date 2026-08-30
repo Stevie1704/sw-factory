@@ -487,6 +487,75 @@ func TestRecoveryAcceptsAnUninspectableSessionAtAHumanWaitingBoundary(t *testing
 	}
 }
 
+// TestRecoveryAcceptsAnInvocationRolledBackBeforeLaunch verifies that an
+// invocation the launch boundary rolled back before it recorded any external
+// identity is read as history rather than as restart drift. Reporting its empty
+// identities would block every later start permanently, because no effect can
+// ever fill those columns.
+func TestRecoveryAcceptsAnInvocationRolledBackBeforeLaunch(t *testing.T) {
+	now := time.Unix(4, 0).UTC()
+	run := store.Run{ID: "run-rolled-back-launch", Stage: store.StageTest, Status: store.StatusWaitingForHuman}
+	invocation := store.Invocation{
+		ID: "inv-rolled-back-launch", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "test", Stage: store.StageTest,
+		Status:    store.InvocationStatusCannotProceed,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	service := &Service{deps: Dependencies{
+		Worker:   &journalRecoveryWorker{inspection: worker.Inspection{}},
+		Terminal: &journalRecoveryTerminal{},
+		Harness:  &journalRecoveryHarness{},
+	}}
+	baseStore := &repairLaunchStore{run: run, invocations: map[string]store.Invocation{invocation.ID: invocation}}
+	runStore := &terminalProjectionStore{repairLaunchStore: baseStore}
+	diagnosis := newRecoveryDiagnosis(run.ID)
+
+	service.inspectInvocationProjection(context.Background(), &diagnosis, config.RepositoryRegistration{}, runStore, run)
+	if len(diagnosis.Discrepancies) != 0 {
+		t.Fatalf("recovery discrepancies = %#v, want rolled-back invocation accepted as history", diagnosis.Discrepancies)
+	}
+	if !diagnosis.InvocationExists {
+		t.Fatal("diagnosis.InvocationExists = false, want the rolled-back invocation reported as history")
+	}
+}
+
+// TestRecoveryReportsAnActiveInvocationWithoutIdentity verifies that the
+// rolled-back allowance does not weaken the live case: an active invocation
+// with no persisted identity is genuine drift and must still be reported.
+func TestRecoveryReportsAnActiveInvocationWithoutIdentity(t *testing.T) {
+	now := time.Unix(5, 0).UTC()
+	run := store.Run{ID: "run-active-without-identity", Stage: store.StageTest, Status: store.StatusActive}
+	invocation := store.Invocation{
+		ID: "inv-active-without-identity", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "test", Stage: store.StageTest,
+		Status:    store.InvocationStatusActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	service := &Service{deps: Dependencies{
+		Worker:   &journalRecoveryWorker{inspection: worker.Inspection{}},
+		Terminal: &journalRecoveryTerminal{},
+		Harness:  &journalRecoveryHarness{},
+	}}
+	baseStore := &repairLaunchStore{run: run, invocations: map[string]store.Invocation{invocation.ID: invocation}}
+	runStore := selectedActiveInvocationStore{OperationalStore: baseStore, active: invocation}
+	diagnosis := newRecoveryDiagnosis(run.ID)
+
+	service.inspectInvocationProjectionSingle(context.Background(), &diagnosis, config.RepositoryRegistration{}, runStore, run)
+	nativeSession := false
+	workspace := false
+	for _, discrepancy := range diagnosis.Discrepancies {
+		if discrepancy.Source == "native session" && discrepancy.Field == "identity" {
+			nativeSession = true
+		}
+		if discrepancy.Source == "cmux" && discrepancy.Field == "workspace" {
+			workspace = true
+		}
+	}
+	if !nativeSession || !workspace {
+		t.Fatalf("recovery discrepancies = %#v, want native session and workspace drift for an active invocation", diagnosis.Discrepancies)
+	}
+}
+
 // TestPollLifecycleCompletesAMergedRunBeforeRecovery verifies that a deleted
 // remote branch and historical worker projection cannot block the public
 // lifecycle seam from recording an already-merged pull request.
