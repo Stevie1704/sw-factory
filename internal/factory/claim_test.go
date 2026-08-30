@@ -93,6 +93,87 @@ func TestIssueClaimsAnEligibleIssueWithAFrozenPacketAndOneStatusComment(t *testi
 	}
 }
 
+// TestIssueClaimScopesCommandsToTheRunStart verifies pre-claim commands are
+// ignored while a command posted after claim remains available exactly once.
+func TestIssueClaimScopesCommandsToTheRunStart(t *testing.T) {
+	t.Parallel()
+
+	issue := github.Issue{
+		Number: 42,
+		Title:  "Scope commands to the claimed run",
+		State:  "open",
+		Labels: []string{github.LabelAgentReady},
+	}
+	oldCommand := github.Comment{ID: "100", Author: "alice", Body: "/factory cancel"}
+	latestHistory := github.Comment{ID: "102", Author: "alice", Body: "historical discussion"}
+	newCommand := github.Comment{ID: "103", Author: "alice", Body: "/factory status"}
+	githubAdapter := &fakeGitHub{issueValue: issue, comments: []github.Comment{latestHistory, oldCommand}}
+	service := newClaimService(githubAdapter, &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}, &fakeRunStore{}, validRepositoryConfig())
+
+	claimed, err := service.ClaimIssue(context.Background(), issue.Number)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+	if claimed.Run.ProcessedCommentID != latestHistory.ID {
+		t.Fatalf("claim watermark = %q, want latest pre-claim comment %q", claimed.Run.ProcessedCommentID, latestHistory.ID)
+	}
+
+	githubAdapter.comments = append(githubAdapter.comments, newCommand)
+	first, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("first PollCommands() error = %v", err)
+	}
+	if len(first) != 2 || first[0].Outcome != factory.CommandReplayed || first[1].Outcome != factory.CommandAccepted {
+		t.Fatalf("first PollCommands() = %#v, want one replayed pre-claim and one accepted post-claim command", first)
+	}
+	if first[1].Run.Status != store.StatusActive || first[1].Run.LastCommandName != "status" {
+		t.Fatalf("post-claim command run = %#v, want active status projection", first[1].Run)
+	}
+	if len(githubAdapter.replacedLabels) != 1 || githubAdapter.replacedLabels[0] != github.LabelAgentRunning {
+		t.Fatalf("label mutations = %#v, want the claim label only", githubAdapter.replacedLabels)
+	}
+	if len(githubAdapter.editedComments) != 1 {
+		t.Fatalf("status comment edits = %d, want one post-claim command edit", len(githubAdapter.editedComments))
+	}
+
+	second, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: claimed.Run.ID})
+	if err != nil {
+		t.Fatalf("second PollCommands() error = %v", err)
+	}
+	if len(second) != 2 || second[0].Outcome != factory.CommandReplayed || second[1].Outcome != factory.CommandReplayed {
+		t.Fatalf("second PollCommands() = %#v, want both comments replayed", second)
+	}
+	if len(githubAdapter.editedComments) != 1 {
+		t.Fatalf("status comment edits after replay = %d, want no duplicate edit", len(githubAdapter.editedComments))
+	}
+}
+
+// TestIssueClaimFailsClosedWhenCommentHistoryCannotBeRead verifies the claim
+// does not create a run when it cannot establish the command cutoff.
+func TestIssueClaimFailsClosedWhenCommentHistoryCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	githubAdapter := &fakeGitHub{
+		issueValue:  github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}},
+		commentsErr: errors.New("GitHub comments unavailable"),
+	}
+	worktree := &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}
+	runStore := &fakeRunStore{}
+	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
+
+	_, err := service.ClaimIssue(context.Background(), 42)
+	if err == nil || !strings.Contains(err.Error(), "before claim") || !strings.Contains(err.Error(), "GitHub comments unavailable") {
+		t.Fatalf("ClaimIssue() error = %v, want comment-cutoff failure", err)
+	}
+	if worktree.called || len(runStore.saved) != 0 || len(githubAdapter.replacedLabels) != 0 || len(githubAdapter.createdComments) != 0 {
+		t.Fatalf("claim effects = workspace=%t/runs=%d/labels=%d/comments=%d, want none", worktree.called, len(runStore.saved), len(githubAdapter.replacedLabels), len(githubAdapter.createdComments))
+	}
+}
+
 // TestIssueRefusesClosedOrUnauthorizedIssuesBeforeCreatingAWorkspace verifies
 // eligibility is checked before any host or GitHub mutation.
 func TestIssueRefusesClosedOrUnauthorizedIssuesBeforeCreatingAWorkspace(t *testing.T) {
@@ -446,6 +527,10 @@ type fakeGitHub struct {
 	createCommentErr error
 	statusComment    github.Comment
 	findCommentCalls int
+	// comments contains the issue history returned to command polling.
+	comments []github.Comment
+	// commentsErr simulates a failure while establishing the claim cutoff.
+	commentsErr error
 }
 
 // Issue returns the configured issue snapshot.
@@ -490,6 +575,14 @@ func (f *fakeGitHub) FindStatusComment(_ context.Context, _ github.Repository, _
 func (f *fakeGitHub) EditIssueComment(_ context.Context, _ github.Repository, id, body string) error {
 	f.editedComments = append(f.editedComments, editedComment{id: id, body: body})
 	return nil
+}
+
+// IssueComments returns the issue comments visible to command polling.
+func (f *fakeGitHub) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
+	if f.commentsErr != nil {
+		return nil, f.commentsErr
+	}
+	return append([]github.Comment(nil), f.comments...), nil
 }
 
 // editedComment records one status-comment edit.
