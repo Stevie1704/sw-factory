@@ -32,7 +32,7 @@ const (
 )
 
 // TestStartTraversesReviewRepairHumanRepairReadinessAndMergeBeforeTheNextClaim
-// is the end-to-end proof for autonomous review repair and terminal queue
+// is the end-to-end proof for unattended review repair and terminal queue
 // continuation. One `factory start` process queues two eligible issues and
 // drives the first through the draft pull request, both independent reviews, a
 // blocking agent finding, an authorized human `CHANGES_REQUESTED` repair,
@@ -58,12 +58,7 @@ func TestStartTraversesReviewRepairHumanRepairReadinessAndMergeBeforeTheNextClai
 	if first.MergeCommitSHA != continuationMergeSHA {
 		t.Fatalf("first run merge commit = %q, want the observed merge commit", first.MergeCommitSHA)
 	}
-	if !fixture.pullRequests.wasReady {
-		t.Fatal("pull request never left draft, so readiness was never reached")
-	}
-	if fixture.pullRequests.merges != 0 {
-		t.Fatal("the factory merged its own pull request")
-	}
+	fixture.assertDraftRoundTrip(t)
 	if first.ProcessedReviewID != "4001" {
 		t.Fatalf("review watermark = %q, want the applied GitHub review identity", first.ProcessedReviewID)
 	}
@@ -102,6 +97,63 @@ func TestStartCancelsAnUnmergedClosedPullRequestAndClaimsTheNextIssue(t *testing
 	fixture.assertNextIssueClaimed(t)
 }
 
+// TestRestartDoesNotReapplyAnAlreadyConsumedHumanReview proves the persisted
+// review watermark survives a coordinator process boundary: a restarted
+// coordinator re-reads the same submitted review and must not start a second
+// repair, a second review round, or a second readiness change for it.
+func TestRestartDoesNotReapplyAnAlreadyConsumedHumanReview(t *testing.T) {
+	t.Parallel()
+
+	fixture := newContinuationFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	fixture.driveTerminalOutcome(t, cancel, func() { cancel() })
+
+	if err := fixture.service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	applied := fixture.harness.roleStarts()
+	draftTransitions := len(fixture.pullRequests.draftTransitions())
+	reads := fixture.reviews.readCount()
+	if watermark := fixture.appliedReviewID(t); watermark != "4001" {
+		t.Fatalf("review watermark = %q, want the applied review", watermark)
+	}
+
+	restarted, restartCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer restartCancel()
+	ticks := 0
+	fixture.lease.onRenew = func(github.Lease) {
+		if ticks++; ticks >= 4 {
+			restartCancel()
+		}
+	}
+	if err := fixture.restart().Start(restarted); err != nil {
+		t.Fatalf("restarted Start() error = %v", err)
+	}
+
+	if got := fixture.harness.roleStarts(); len(got) != len(applied) {
+		t.Fatalf("invocations after restart = %d, want the %d from before the restart", len(got), len(applied))
+	}
+	if got := len(fixture.pullRequests.draftTransitions()); got != draftTransitions {
+		t.Fatalf("readiness changes after restart = %d, want the %d from before the restart", got, draftTransitions)
+	}
+	// Without this the assertions above would pass for a coordinator that
+	// never looked at the review again.
+	if fixture.reviews.readCount() <= reads {
+		t.Fatal("the restarted coordinator never re-read the submitted review")
+	}
+}
+
+// appliedReviewID reads the review watermark the coordinator persisted.
+func (f *continuationFixture) appliedReviewID(t *testing.T) string {
+	t.Helper()
+	run := f.latestRun(t)
+	if run == nil {
+		t.Fatal("no persisted run")
+	}
+	return run.ProcessedReviewID
+}
+
 // assertUnattendedReviewRepairHappened checks the evidence that both review
 // loops ran without a stage-driving CLI command: two full review rounds per
 // checkpoint, one agent repair, and one human repair.
@@ -122,11 +174,60 @@ func (f *continuationFixture) assertUnattendedReviewRepairHappened(t *testing.T)
 	}
 	// The submitted review stays visible to every later poll, so a second
 	// repair here would mean the watermark failed to make it replay-safe.
-	if f.reviews.reads < 2 {
-		t.Fatalf("review polls = %d, want the submitted review to be observed again after it was applied", f.reviews.reads)
+	if f.reviews.readCount() < 2 {
+		t.Fatalf("review polls = %d, want the submitted review to be observed again after it was applied", f.reviews.readCount())
 	}
 	if !f.humanRepairPacketSeen {
 		t.Fatal("no implementation invocation received the human review repair packet")
+	}
+	// The human repair must not advance, reset, or record a bounded factory
+	// round; only the one agent-found blocker consumed the budget.
+	terminal := f.firstTerminalRun(t)
+	if terminal.ReviewRepairAttempts != 1 {
+		t.Fatalf("factory review-repair attempts = %d, want only the one agent-found repair", terminal.ReviewRepairAttempts)
+	}
+	if len(terminal.ReviewRepairHistory) != 1 || terminal.ReviewRepairHistory[0].Attempt != 1 {
+		t.Fatalf("review-repair history = %#v, want one bounded factory round", terminal.ReviewRepairHistory)
+	}
+	f.assertGatesReranPerCheckpoint(t)
+}
+
+// assertDraftRoundTrip proves the pull request became ready, was returned to
+// draft for the human repair, and became ready again only after the repaired
+// checkpoint passed everything.
+func (f *continuationFixture) assertDraftRoundTrip(t *testing.T) {
+	t.Helper()
+	want := []bool{false, true, false}
+	got := f.pullRequests.draftTransitions()
+	if len(got) != len(want) {
+		t.Fatalf("draft transitions = %v, want ready, back to draft for the human repair, then ready again", got)
+	}
+	for index, draft := range want {
+		if got[index] != draft {
+			t.Fatalf("draft transitions = %v, want %v", got, want)
+		}
+	}
+}
+
+// assertGatesReranPerCheckpoint proves no gate result survived a code change:
+// every checkpoint the run produced has its own published gate status, and
+// both reviewers reported against that same exact checkpoint.
+func (f *continuationFixture) assertGatesReranPerCheckpoint(t *testing.T) {
+	t.Helper()
+	published := map[string]map[string]bool{}
+	for _, status := range f.statuses.values {
+		if published[status.SHA] == nil {
+			published[status.SHA] = map[string]bool{}
+		}
+		published[status.SHA][status.Context] = true
+	}
+	wanted := []string{"factory/gate/test", factory.SpecificationReviewStatusContext, factory.StandardsReviewStatusContext}
+	for _, checkpoint := range []string{implementationCheckpoint, firstRepairCheckpoint, secondRepairCheckpoint} {
+		for _, context := range wanted {
+			if !published[checkpoint][context] {
+				t.Fatalf("checkpoint %s is missing the %s status; published = %v", checkpoint[:6], context, published[checkpoint])
+			}
+		}
 	}
 }
 
@@ -140,10 +241,14 @@ type continuationFixture struct {
 	workspace       *unattendedWorkspace
 	pullRequests    *continuationPullRequests
 	reviews         *continuationReviews
+	statuses        *gateStatuses
 	lease           *pollingLease
 	terminal        *agentTerminal
 	harness         *continuationHarness
 	operationalPath string
+	configPath      string
+	clock           func() time.Time
+	dependencies    func() factory.Dependencies
 
 	mu                    sync.Mutex
 	terminalRun           *store.Run
@@ -185,13 +290,15 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 	}}
 	fixture := &continuationFixture{
 		commands: newContinuationGitHub([]github.Issue{
-			{Number: 7, Title: "Drive the review loops", Body: "Implement autonomous review repair.", State: "open", Labels: []string{github.LabelAgentReady}},
+			{Number: 7, Title: "Drive the review loops", Body: "Implement unattended review repair.", State: "open", Labels: []string{github.LabelAgentReady}},
 			{Number: 9, Title: "Wait for the queue", Body: "Implement the next queued change.", State: "open", Labels: []string{github.LabelAgentReady}},
 		}),
 		worker:              &unattendedWorker{},
 		workspace:           workspace,
 		pullRequests:        newContinuationPullRequests(workspace),
 		reviews:             &continuationReviews{},
+		statuses:            &gateStatuses{},
+		clock:               monotonicClock(time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)),
 		lease:               &pollingLease{},
 		terminal:            &agentTerminal{},
 		operationalPath:     filepath.Join(root, "state", "factory.db"),
@@ -208,29 +315,40 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 		OperationalDataPath:  fixture.operationalPath,
 		RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}
-	fixture.service = factory.NewWithDependencies(filepath.Join(root, "config.yaml"), factory.Dependencies{
-		Config:             &fakeConfig{value: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}},
-		OpenStore:          func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
-		LoadRepository:     func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:             fixture.commands,
-		IssuePoller:        fixture.commands,
-		Lease:              fixture.lease,
-		PullRequests:       fixture.pullRequests,
-		PullRequestReviews: fixture.reviews,
-		CommitStatuses:     &gateStatuses{},
-		Worktree:           fixture.workspace,
-		GitWorkspace:       fixture.workspace,
-		Worker:             fixture.worker,
-		Terminal:           fixture.terminal,
-		Harness:            fixture.harness,
-		Now:                monotonicClock(time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)),
-		NewRunID:           newSequentialRunID(fixture.firstRunID),
-		Coordinator:        "coordinator-test",
-		StartupDiagnosis: func(context.Context) (factory.DoctorResult, error) {
-			return factory.DoctorResult{Report: doctor.Report{Results: []doctor.Result{doctor.Success("startup")}}}, nil
-		},
-	})
+	fixture.configPath = filepath.Join(root, "config.yaml")
+	fixture.dependencies = func() factory.Dependencies {
+		return factory.Dependencies{
+			Config:             &fakeConfig{value: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}},
+			OpenStore:          func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
+			LoadRepository:     func(string) (config.RepositoryConfig, error) { return policy, nil },
+			GitHub:             fixture.commands,
+			IssuePoller:        fixture.commands,
+			Lease:              fixture.lease,
+			PullRequests:       fixture.pullRequests,
+			PullRequestReviews: fixture.reviews,
+			CommitStatuses:     fixture.statuses,
+			Worktree:           fixture.workspace,
+			GitWorkspace:       fixture.workspace,
+			Worker:             fixture.worker,
+			Terminal:           fixture.terminal,
+			Harness:            fixture.harness,
+			Now:                fixture.clock,
+			NewRunID:           newSequentialRunID(fixture.firstRunID),
+			Coordinator:        "coordinator-test",
+			StartupDiagnosis: func(context.Context) (factory.DoctorResult, error) {
+				return factory.DoctorResult{Report: doctor.Report{Results: []doctor.Result{doctor.Success("startup")}}}, nil
+			},
+		}
+	}
+	fixture.service = factory.NewWithDependencies(fixture.configPath, fixture.dependencies())
 	return fixture
+}
+
+// restart models a coordinator process boundary: a fresh service opens the
+// same operational store and adapters with no in-memory continuity.
+func (f *continuationFixture) restart() *factory.Service {
+	f.service = factory.NewWithDependencies(f.configPath, f.dependencies())
+	return f.service
 }
 
 // monotonicClock returns a strictly increasing coordinator clock, so the
@@ -589,11 +707,10 @@ func (g *continuationGitHub) EditIssueComment(_ context.Context, _ github.Reposi
 // continuationPullRequests keeps one tracked pull request whose head follows
 // the pushed checkpoint and whose terminal disposition the test controls.
 type continuationPullRequests struct {
-	mu        sync.Mutex
-	workspace *unattendedWorkspace
-	current   github.PullRequest
-	wasReady  bool
-	merges    int
+	mu           sync.Mutex
+	workspace    *unattendedWorkspace
+	current      github.PullRequest
+	draftChanges []bool
 }
 
 // newContinuationPullRequests binds the fake to the pushed-checkpoint source.
@@ -646,10 +763,16 @@ func (p *continuationPullRequests) SetPullRequestDraft(_ context.Context, _ gith
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.current.Draft = draft
-	if !draft {
-		p.wasReady = true
-	}
+	p.draftChanges = append(p.draftChanges, draft)
 	return p.projection(), nil
+}
+
+// draftTransitions returns every explicit readiness change the coordinator
+// requested, in order. `false` means the pull request became ready.
+func (p *continuationPullRequests) draftTransitions() []bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]bool(nil), p.draftChanges...)
 }
 
 // merge applies the human merge the factory is never allowed to perform.
@@ -684,6 +807,13 @@ func (r *continuationReviews) PullRequestReviews(context.Context, github.Reposit
 		r.reads++
 	}
 	return append([]github.PullRequestReview(nil), r.reviews...), nil
+}
+
+// readCount reports how many polls observed a non-empty review list.
+func (r *continuationReviews) readCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.reads
 }
 
 // submit records one newly submitted review.

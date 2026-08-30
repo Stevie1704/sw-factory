@@ -1216,7 +1216,8 @@ and both fresh reviewers must pass again before the pull request can become
 ready a second time.
 
 A human-requested repair is not one of the bounded factory repair rounds and
-never consumes the <code>review_repair</code> budget.
+never consumes the <code>review_repair</code> budget. The editable status
+comment names the review that triggered it under the review-repair cycle.
 
 These do not start work: an unsubmitted review draft, an ordinary issue or
 pull-request comment, a <code>COMMENTED</code> review, an approval, a dismissed

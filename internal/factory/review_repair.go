@@ -98,6 +98,16 @@ func decideReviewRepair(run store.Run, findings []store.ReviewRepairFinding) rev
 	return decision
 }
 
+// consumesBoundedRepairRound reports whether one implementation launch consumes
+// a reserved factory repair round.
+//
+// Only a factory packet reserves a round. A human-requested repair carries no
+// attempt number, so recording it would reset the bounded budget and let every
+// `CHANGES_REQUESTED` review revive an exhausted repair allowance.
+func consumesBoundedRepairRound(reviewRepair bool, packet *store.ReviewRepairPacket) bool {
+	return reviewRepair && packet != nil && packet.Source != store.ReviewRepairSourceHuman
+}
+
 // reviewRepairRemaining returns a non-negative budget remainder.
 func reviewRepairRemaining(budget, attempts int) int {
 	if budget <= attempts {

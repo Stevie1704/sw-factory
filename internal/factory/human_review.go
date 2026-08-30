@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -34,57 +35,65 @@ func (s *Service) pullRequestReviewReader() github.PullRequestReviewReader {
 
 // consumeHumanReview applies at most one newly submitted `CHANGES_REQUESTED`
 // review from an authorized maintainer as a single implementation repair
-// packet. It reports whether it changed durable run state.
+// packet.
 //
 // Only a completed review decision is a progression event. An unsubmitted
 // draft, an ordinary comment, a `COMMENTED` review, an approval, a dismissed
 // decision, and a review from an unauthorized user are all read and ignored.
-func (s *Service) consumeHumanReview(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, bool, error) {
+func (s *Service) consumeHumanReview(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) error {
 	if !humanReviewEligible(run) {
-		return run, false, nil
+		return nil
 	}
 	reader := s.pullRequestReviewReader()
 	if reader == nil {
-		return run, false, nil
+		return nil
 	}
 	active, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
 	if err != nil {
-		return run, false, fmt.Errorf("look up active invocations before human review: %w", err)
+		return fmt.Errorf("look up active invocations before human review: %w", err)
 	}
 	if !supported || len(active) > 0 {
 		// A human review must never interrupt a harness session that can still
 		// write a structured result for the current checkpoint.
-		return run, false, nil
+		return nil
 	}
-	repository := commandRepository(registration)
-	reviews, err := reader.PullRequestReviews(ctx, repository, run.PullRequestNumber)
+	reviews, err := reader.PullRequestReviews(ctx, commandRepository(registration), run.PullRequestNumber)
 	if err != nil {
-		return run, false, fmt.Errorf("read reviews for pull request #%d: %w", run.PullRequestNumber, err)
+		return fmt.Errorf("read reviews for pull request #%d: %w", run.PullRequestNumber, err)
 	}
-	review, found := newestApplicableHumanReview(reviews, registration.AuthorizedUsers, run.ProcessedReviewID)
-	if !found {
-		return run, false, nil
+	applicable := applicableHumanReviews(reviews, registration.AuthorizedUsers, run.ProcessedReviewID)
+	if len(applicable) == 0 {
+		return nil
 	}
-	findings := humanRepairFindings(run, review)
+	findings := make([]store.ReviewRepairFinding, 0, len(applicable))
+	for _, review := range applicable {
+		findings = append(findings, humanRepairFindings(run, review)...)
+	}
 	if len(findings) == 0 {
-		return run, false, nil
+		return nil
 	}
+	return s.applyHumanRepair(ctx, registration, runStore, run, applicable, findings)
+}
 
-	// Return the pull request to draft before the durable transition. The
-	// watermark only advances with that transition, so an interrupted pass
-	// repeats an idempotent draft change instead of losing the review.
+// applyHumanRepair returns the pull request to draft, resumes implementation
+// from the current checkpoint, and persists the review watermark.
+//
+// The draft change comes first and is idempotent, while the watermark advances
+// only with the durable transition. An interrupted pass therefore repeats the
+// draft change instead of losing the review.
+func (s *Service) applyHumanRepair(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, applicable []github.PullRequestReview, findings []store.ReviewRepairFinding) error {
 	if err := s.returnPullRequestToDraft(ctx, registration, run); err != nil {
-		return run, false, err
+		return err
 	}
-
+	watermark := applicable[len(applicable)-1].ID
 	next := run
 	next.Stage = store.StageImplementation
 	next.Status = store.StatusActive
-	next.LifecycleReason = fmt.Sprintf("authorized human review %s requested changes; resuming implementation from checkpoint %s", review.ID, run.CheckpointSHA)
+	next.LifecycleReason = fmt.Sprintf("authorized human review %s requested changes; resuming implementation from checkpoint %s", watermark, run.CheckpointSHA)
 	next.ReviewRepairPacket = &store.ReviewRepairPacket{
 		Version:       1,
 		Source:        store.ReviewRepairSourceHuman,
-		ReviewID:      review.ID,
+		ReviewID:      watermark,
 		RunID:         run.ID,
 		CheckpointSHA: run.CheckpointSHA,
 		Budget:        run.ReviewRepairBudget,
@@ -96,20 +105,20 @@ func (s *Service) consumeHumanReview(ctx context.Context, registration config.Re
 	next.StandardsReview = nil
 	next.ReviewRepairPendingAttempt = 0
 	next.ReadyNotificationSent = false
+	// An outstanding reviewer question was asked about the superseded
+	// checkpoint, and the maintainer has now given direction for it. Clearing
+	// it matches how a factory repair round supersedes the same question.
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
-	next.ProcessedReviewID = review.ID
+	next.ProcessedReviewID = watermark
 	next.Revision = run.Revision + 1
 	next.ProcessedReviewRevision = next.Revision
 	next.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, run, next); err != nil {
-		return run, false, fmt.Errorf("persist human review repair state: %w", err)
+		return fmt.Errorf("persist human review repair state: %w", err)
 	}
-	if current, currentErr := runStore.CurrentRun(ctx); currentErr == nil && current != nil {
-		next = *current
-	}
-	return next, true, nil
+	return nil
 }
 
 // humanReviewEligible reports whether the run has a tracked pull request whose
@@ -129,12 +138,15 @@ func humanReviewEligible(run store.Run) bool {
 	}
 }
 
-// newestApplicableHumanReview selects the single newest submitted
-// `CHANGES_REQUESTED` review from an authorized maintainer that the persisted
-// watermark has not already applied.
-func newestApplicableHumanReview(reviews []github.PullRequestReview, authorized []string, watermark string) (github.PullRequestReview, bool) {
-	selected := github.PullRequestReview{}
-	found := false
+// applicableHumanReviews returns every submitted `CHANGES_REQUESTED` review
+// from an authorized maintainer that the persisted watermark has not already
+// applied, oldest identity first.
+//
+// Two maintainers can request changes between two polls. Returning all of them
+// lets one repair packet carry every outstanding instruction, so advancing the
+// watermark to the newest identity cannot discard an older unapplied review.
+func applicableHumanReviews(reviews []github.PullRequestReview, authorized []string, watermark string) []github.PullRequestReview {
+	applicable := make([]github.PullRequestReview, 0, len(reviews))
 	for _, review := range reviews {
 		if review.State != github.PullRequestReviewChangesRequested {
 			continue
@@ -145,16 +157,15 @@ func newestApplicableHumanReview(reviews []github.PullRequestReview, authorized 
 		if !authorizedCommentAuthor(authorized, review.Author) {
 			continue
 		}
-		if commentAlreadyProcessed(watermark, review.ID) {
+		if githubIDAlreadyProcessed(watermark, review.ID) {
 			continue
 		}
-		if found && compareCommentIDs(review.ID, selected.ID) <= 0 {
-			continue
-		}
-		selected = review
-		found = true
+		applicable = append(applicable, review)
 	}
-	return selected, found
+	sort.SliceStable(applicable, func(left, right int) bool {
+		return compareGitHubIDs(applicable[left].ID, applicable[right].ID) < 0
+	})
+	return applicable
 }
 
 // humanRepairFindings converts one completed review into blocking findings.

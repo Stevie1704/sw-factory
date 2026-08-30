@@ -535,8 +535,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		run.Stage = stage
 	}
 	run.Status = store.StatusActive
-	if reviewRepair {
-		// The reservation is now consumed by a visible invocation.
+	if consumesBoundedRepairRound(reviewRepair, run.ReviewRepairPacket) {
 		run.ReviewRepairAttempts = run.ReviewRepairPacket.Attempt
 		run.ReviewRepairPendingAttempt = 0
 		run.ReviewRepairHistory = reviewRepairHistoryWithOutcome(run.ReviewRepairHistory, run.ReviewRepairPacket.Attempt, store.ReviewRepairStarted, run.ReviewRepairPacket)

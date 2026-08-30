@@ -194,11 +194,12 @@ func (s *Service) Start(ctx context.Context) error {
 				continue
 			}
 			consecutiveProgressionFailures = 0
-			if progression.Outcome == progressionTerminal || progression.Outcome == progressionIdle {
-				// The run this pass owned reached a terminal state, which
-				// releases the one-active-run constraint. Observe the queue
-				// again without waiting a full interval so the next oldest
-				// eligible issue starts promptly.
+			// A run this pass drove into a terminal state releases the
+			// one-active-run constraint. Observe the queue again without
+			// waiting a full interval so the next oldest eligible issue starts
+			// promptly. An idle pass that performed no transition is not a
+			// release, so it keeps the ordinary interval.
+			if progression.Outcome == progressionTerminal || (progression.Outcome == progressionIdle && progression.Steps > 0) {
 				leaseRunID = ""
 				delay = 0
 			}

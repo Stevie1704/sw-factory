@@ -541,7 +541,7 @@ func (c *GhClient) FindPullRequest(ctx context.Context, repository Repository, h
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}
-	responses, err := decodePullRequestList(output)
+	responses, err := decodeJSONPages[pullRequestResponse](output)
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("decode pull requests for %q: %w", headBranch, err)
 	}
@@ -881,12 +881,6 @@ func (r pullRequestResponse) pullRequest() PullRequest {
 		State: r.State, Draft: r.Draft, Merged: r.Merged || r.MergedAt != nil,
 		MergeCommitSHA: r.MergeCommitSHA, HeadBranch: r.Head.Ref, HeadSHA: r.Head.SHA, BaseBranch: r.Base.Ref,
 	}
-}
-
-// decodePullRequestList accepts both gh --slurp pagination output and a plain
-// single-page array, which keeps the adapter tolerant of test and CLI modes.
-func decodePullRequestList(output []byte) ([]pullRequestResponse, error) {
-	return decodeJSONPages[pullRequestResponse](output)
 }
 
 // validatePullRequestBranches rejects values that could alter an API request

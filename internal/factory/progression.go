@@ -182,8 +182,7 @@ func (s *Service) observePullRequestEvents(ctx context.Context, registration con
 	if lifecycle.Outcome != LifecycleUnchanged || store.IsTerminalStatus(lifecycle.Run.Status) {
 		return nil
 	}
-	_, _, err = s.consumeHumanReview(ctx, registration, runStore, *run)
-	return err
+	return s.consumeHumanReview(ctx, registration, runStore, lifecycle.Run)
 }
 
 // progressionAction is one coordinator-owned transition selected from durable

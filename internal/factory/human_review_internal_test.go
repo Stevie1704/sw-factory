@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -13,11 +14,11 @@ import (
 // submittedAt is one non-zero submission time shared by the review fixtures.
 var submittedAt = time.Date(2026, 8, 29, 9, 30, 0, 0, time.UTC)
 
-// TestNewestApplicableHumanReviewAcceptsOnlyAnAuthorizedCompletedDecision
-// proves that only a submitted `CHANGES_REQUESTED` review from an authorized
-// maintainer starts work, and that the persisted watermark makes repeated
-// polling replay-safe.
-func TestNewestApplicableHumanReviewAcceptsOnlyAnAuthorizedCompletedDecision(t *testing.T) {
+// TestApplicableHumanReviewsAcceptOnlyAuthorizedCompletedDecisions proves that
+// only a submitted `CHANGES_REQUESTED` review from an authorized maintainer
+// starts work, that concurrent decisions are all carried, and that the
+// persisted watermark makes repeated polling replay-safe.
+func TestApplicableHumanReviewsAcceptOnlyAuthorizedCompletedDecisions(t *testing.T) {
 	t.Parallel()
 
 	authorized := []string{"alice", "bob"}
@@ -29,20 +30,29 @@ func TestNewestApplicableHumanReviewAcceptsOnlyAnAuthorizedCompletedDecision(t *
 		name      string
 		reviews   []github.PullRequestReview
 		watermark string
-		wantID    string
+		wantIDs   []string
 	}{
 		{
 			name:    "authorized changes requested",
 			reviews: []github.PullRequestReview{changesRequested},
-			wantID:  "40",
+			wantIDs: []string{"40"},
 		},
 		{
-			name: "newest authorized decision wins",
+			name: "concurrent authorized decisions are all carried, oldest first",
+			reviews: []github.PullRequestReview{
+				{ID: "41", Author: "bob", State: github.PullRequestReviewChangesRequested, Body: "and rename the flag", SubmittedAt: submittedAt},
+				changesRequested,
+			},
+			wantIDs: []string{"40", "41"},
+		},
+		{
+			name: "watermark keeps only the unapplied decision",
 			reviews: []github.PullRequestReview{
 				changesRequested,
 				{ID: "41", Author: "bob", State: github.PullRequestReviewChangesRequested, Body: "and rename the flag", SubmittedAt: submittedAt},
 			},
-			wantID: "41",
+			watermark: "40",
+			wantIDs:   []string{"41"},
 		},
 		{
 			name:      "already applied review is skipped",
@@ -78,12 +88,14 @@ func TestNewestApplicableHumanReviewAcceptsOnlyAnAuthorizedCompletedDecision(t *
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			selected, found := newestApplicableHumanReview(test.reviews, authorized, test.watermark)
-			if found != (test.wantID != "") {
-				t.Fatalf("found = %t, want %t", found, test.wantID != "")
+			applicable := applicableHumanReviews(test.reviews, authorized, test.watermark)
+			if len(applicable) != len(test.wantIDs) {
+				t.Fatalf("applicable reviews = %d, want %d", len(applicable), len(test.wantIDs))
 			}
-			if found && selected.ID != test.wantID {
-				t.Fatalf("selected review = %q, want %q", selected.ID, test.wantID)
+			for index, review := range applicable {
+				if review.ID != test.wantIDs[index] {
+					t.Fatalf("applicable review %d = %q, want %q", index, review.ID, test.wantIDs[index])
+				}
 			}
 		})
 	}
@@ -125,6 +137,60 @@ func TestHumanRepairFindingsCarryTheBodyAndEveryInlineComment(t *testing.T) {
 		if !reviewFindingBlocks(finding.Finding) {
 			t.Fatalf("finding %d does not block readiness", index)
 		}
+	}
+}
+
+// TestStatusCommentPublishesTheUnbudgetedHumanRepair verifies an operator can
+// see that a human review, not a factory reviewer, requested the current
+// repair, and that it does not consume the bounded repair budget.
+func TestStatusCommentPublishesTheUnbudgetedHumanRepair(t *testing.T) {
+	t.Parallel()
+
+	run := store.Run{
+		ID:                 "run-human",
+		ReviewRepairBudget: 2,
+		ReviewRepairPacket: &store.ReviewRepairPacket{
+			Version: 1, Source: store.ReviewRepairSourceHuman, ReviewID: "4001",
+			RunID: "run-human", Budget: 2,
+		},
+	}
+	body := reviewRepairStatusComment(run)
+	if !strings.Contains(body, "- human review: 4001 (does not consume the budget)") {
+		t.Fatalf("status comment = %q, want the published human repair trigger", body)
+	}
+	if !strings.Contains(body, "- attempts: 0/2") {
+		t.Fatalf("status comment = %q, want an unchanged factory repair budget", body)
+	}
+}
+
+// TestConsumesBoundedRepairRoundExcludesHumanRequestedRepair verifies that only
+// a factory packet consumes a reserved repair round. Every implementation
+// launch that carries a packet reaches this rule, including the test-stage
+// handoff, so a human review must not reset an exhausted repair budget.
+func TestConsumesBoundedRepairRoundExcludesHumanRequestedRepair(t *testing.T) {
+	t.Parallel()
+
+	factoryPacket := &store.ReviewRepairPacket{Version: 1, Attempt: 2, Budget: 2}
+	humanPacket := &store.ReviewRepairPacket{Version: 1, Source: store.ReviewRepairSourceHuman, ReviewID: "4001", Budget: 2}
+	tests := []struct {
+		name         string
+		reviewRepair bool
+		packet       *store.ReviewRepairPacket
+		want         bool
+	}{
+		{name: "factory packet on a repair launch", reviewRepair: true, packet: factoryPacket, want: true},
+		{name: "legacy packet without a source", reviewRepair: true, packet: &store.ReviewRepairPacket{Version: 1, Attempt: 1, Budget: 2}, want: true},
+		{name: "human packet on a repair launch", reviewRepair: true, packet: humanPacket},
+		{name: "factory packet on an ordinary launch", packet: factoryPacket},
+		{name: "no packet", reviewRepair: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := consumesBoundedRepairRound(test.reviewRepair, test.packet); got != test.want {
+				t.Fatalf("consumesBoundedRepairRound = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
 
