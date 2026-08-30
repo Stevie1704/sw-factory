@@ -32,7 +32,7 @@ func TestPollOnceClaimsTheOldestEligibleIssue(t *testing.T) {
 	runStore := &fakeRunStore{}
 	service := newPollingService(root, githubAdapter, githubAdapter, nil, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
 		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
-	}})
+	}}, nil)
 
 	result, err := service.PollOnce(context.Background())
 	if err != nil {
@@ -59,7 +59,7 @@ func TestPollOnceDoesNotClaimWhileARunIsActive(t *testing.T) {
 	runStore := &fakeRunStore{saved: []store.Run{active}}
 	issues := []github.Issue{{Number: 7, State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}, issues: issues}
-	service := newPollingService(root, githubAdapter, githubAdapter, nil, runStore, &fakeWorktree{})
+	service := newPollingService(root, githubAdapter, githubAdapter, nil, runStore, &fakeWorktree{}, nil)
 
 	result, err := service.PollOnce(context.Background())
 	if err != nil {
@@ -115,7 +115,7 @@ func TestStartPollsThenStopsWithoutCancellingTheActiveRun(t *testing.T) {
 	}}
 	service := newPollingService(root, githubAdapter, githubAdapter, lease, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
 		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
-	}})
+	}}, nil)
 	ctx, stop := context.WithCancel(context.Background())
 	cancel = stop
 
@@ -152,7 +152,7 @@ func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
 	}}
 	lease := &pollingLease{}
 	runStore := &fakeRunStore{}
-	service := newPollingService(root, &fakeGitHub{}, reader, lease, runStore, &fakeWorktree{})
+	service := newPollingService(root, &fakeGitHub{}, reader, lease, runStore, &fakeWorktree{}, nil)
 	ctx, stop := context.WithCancel(context.Background())
 	cancel = stop
 	started := time.Now()
@@ -169,6 +169,122 @@ func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
 	if len(runStore.saved) != 0 {
 		t.Fatalf("runs saved after queue transport failures = %#v, want none", runStore.saved)
 	}
+}
+
+// TestStartAppliesQueuedIssueCommands verifies the unattended loop reads the
+// structured /factory comments of the run it already reconciled, instead of
+// waiting for an operator to run the `factory poll` command by hand.
+func TestStartAppliesQueuedIssueCommands(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
+	runStore := &fakeRunStore{}
+	var cancel context.CancelFunc
+	comments := &pollingCommentReader{
+		comments: []github.Comment{{ID: "15", Author: "alice", Body: "/factory status"}},
+		onList: func(call int) {
+			if call >= 2 {
+				cancel()
+			}
+		},
+	}
+	service := newPollingService(root, githubAdapter, githubAdapter, &pollingLease{}, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}, comments)
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	cancel = stop
+	defer stop()
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if comments.calls == 0 {
+		t.Fatal("comment listings = 0, want the polling loop to read issue commands")
+	}
+	if !savedCommandWatermark(runStore.saved, "15", "status") {
+		t.Fatalf("saved runs = %#v, want the status command applied with its watermark", runStore.saved)
+	}
+}
+
+// TestStartBacksOffCommandTransportFailures verifies a comment-listing failure
+// delays the next command poll by the configured backoff and never stops the
+// coordinator.
+func TestStartBacksOffCommandTransportFailures(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
+	runStore := &fakeRunStore{}
+	var cancel context.CancelFunc
+	comments := &pollingCommentReader{
+		listErrors: []error{errors.New("GitHub comment transport unavailable")},
+		onList: func(call int) {
+			if call >= 2 {
+				cancel()
+			}
+		},
+	}
+	service := newPollingService(root, githubAdapter, githubAdapter, &pollingLease{}, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}, comments)
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	cancel = stop
+	defer stop()
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v, want the loop to survive a command transport failure", err)
+	}
+	if comments.calls != 2 {
+		t.Fatalf("comment listings = %d, want one retry after transport backoff", comments.calls)
+	}
+	if gap := comments.times[1].Sub(comments.times[0]); gap < 20*time.Millisecond {
+		t.Fatalf("command retry gap = %s, want the configured backoff before the second command poll", gap)
+	}
+	if savedCommandWatermark(runStore.saved, "15", "status") {
+		t.Fatal("a command was applied although its comment listing failed")
+	}
+}
+
+// savedCommandWatermark reports whether any persisted run recorded the named
+// command against the supplied comment identifier.
+func savedCommandWatermark(saved []store.Run, commentID, command string) bool {
+	for _, run := range saved {
+		if run.ProcessedCommentID == commentID && run.LastCommandName == command {
+			return true
+		}
+	}
+	return false
+}
+
+// pollingCommentReader supplies structured command comments to the polling
+// loop with controllable transport failures.
+type pollingCommentReader struct {
+	comments   []github.Comment
+	listErrors []error
+	calls      int
+	times      []time.Time
+	onList     func(int)
+}
+
+// IssueComments records the listing time, runs the optional test hook, and
+// then replays the configured transport failure or comment set.
+func (r *pollingCommentReader) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
+	r.calls++
+	r.times = append(r.times, time.Now())
+	if r.onList != nil {
+		r.onList(r.calls)
+	}
+	if len(r.listErrors) > 0 {
+		err := r.listErrors[0]
+		r.listErrors = r.listErrors[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append([]github.Comment(nil), r.comments...), nil
 }
 
 // pollingGitHub combines the existing claim fake with a deterministic issue
@@ -239,7 +355,7 @@ func (f *pollingLease) RenewLease(_ context.Context, _ github.Repository, lease 
 
 // newPollingService constructs a service with real queue/claim behavior and
 // isolated fakes for the external polling and lease adapters.
-func newPollingService(root string, githubAdapter github.Client, issuePoller github.IssuePoller, lease github.LeaseClient, runStore *fakeRunStore, worktree gitadapter.WorktreeManager) *factory.Service {
+func newPollingService(root string, githubAdapter github.Client, issuePoller github.IssuePoller, lease github.LeaseClient, runStore *fakeRunStore, worktree gitadapter.WorktreeManager, comments github.CommentReader) *factory.Service {
 	registration := config.RepositoryRegistration{
 		Path:                 filepath.Join(root, "repository"),
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
@@ -258,6 +374,8 @@ func newPollingService(root string, githubAdapter github.Client, issuePoller git
 		IssuePoller:    issuePoller,
 		Lease:          lease,
 		Worktree:       worktree,
+		Comments:       comments,
+		Terminal:       &lifecycleTerminal{},
 		Now: func() time.Time {
 			return time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 		},

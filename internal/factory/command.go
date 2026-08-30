@@ -577,6 +577,12 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
+	// A run still at claim has no frozen baseline yet, so the coordinator's
+	// progression pass owns the next transition. Launching a role here would
+	// fail the baseline gate that only the claim stage can produce.
+	if run.Stage == store.StageClaim {
+		return run, nil
+	}
 	request := normalizeAgentRequest(agentRequestForRun(run))
 	if err := validateAgentRequest(request); err != nil {
 		return run, err
@@ -597,6 +603,12 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 // stage receives a new specification packet, including refreshes initiated
 // after implementation has already started.
 func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store.Stage {
+	// Only the claim stage runs the frozen baseline suite, so a run that has
+	// not left it must stay there. A jump to a post-baseline stage can never
+	// satisfy the baseline gate and wedges the run permanently.
+	if run.Stage == store.StageClaim {
+		return store.StageClaim
+	}
 	if entry := postBaselineStage(packet); entry != store.StageTest {
 		return entry
 	}
@@ -632,6 +644,14 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
 	run.TestStageSkipped = false
+	// A run still at claim keeps the baseline as its next step; the entry
+	// stage is selected by the healthy baseline result, not by the packet
+	// change itself.
+	if run.Stage == store.StageClaim {
+		run.Status = store.StatusActive
+		run.LifecycleReason = "specification packet changed; baseline restarted"
+		return
+	}
 	if entry := postBaselineStage(packet); entry != store.StageTest {
 		run.Stage = entry
 		run.Status = store.StatusActive
@@ -887,7 +907,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 	for _, target := range targets {
 		listed, listErr := s.deps.Comments.IssueComments(ctx, repository, target)
 		if listErr != nil {
-			return nil, listErr
+			return nil, &pollingTransportError{err: fmt.Errorf("list comments for #%d: %w", target, listErr)}
 		}
 		for _, comment := range listed {
 			comments = append(comments, polledComment{target: target, comment: comment})
