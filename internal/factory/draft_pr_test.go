@@ -560,6 +560,7 @@ type fakePullRequests struct {
 	created         github.PullRequest
 	createdRequests []github.PullRequestRequest
 	updatedRequests []github.PullRequestRequest
+	readyHeadSHA    string
 }
 
 // FindPullRequest returns the currently known branch pull request.
@@ -591,7 +592,11 @@ func (f *fakePullRequests) UpdatePullRequest(_ context.Context, _ github.Reposit
 // review gates pass.
 func (f *fakePullRequests) SetPullRequestDraft(_ context.Context, _ github.Repository, _ int, draft bool) (github.PullRequest, error) {
 	f.existing.Draft = draft
-	return f.existing, nil
+	updated := f.existing
+	if !draft && f.readyHeadSHA != "" {
+		updated.HeadSHA = f.readyHeadSHA
+	}
+	return updated, nil
 }
 
 var _ gitadapter.GitWorkspace = (*draftGitWorkspace)(nil)

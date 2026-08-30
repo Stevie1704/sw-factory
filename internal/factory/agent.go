@@ -394,6 +394,9 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if err := validateImplementationOwnedSignals(value, *invocation, packet); err != nil {
 		return AgentResult{}, err
 	}
+	if err := validateReviewRepairTestOwnerRouting(value, *invocation, *run, packet); err != nil {
+		return AgentResult{}, err
+	}
 	validationContext.TestPaths = packet.RepositoryConfig.TestPolicy.TestPaths
 	validationContext.TestInfrastructurePaths = packet.RepositoryConfig.TestPolicy.InfrastructurePaths
 	if isReviewInvocation && value.ReviewHandoff != nil && value.ReviewHandoff.ReviewedSHA != run.CheckpointSHA {
@@ -435,8 +438,15 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		if err := validateTestChangedPaths(observedChanges, packet.RepositoryConfig.TestPolicy); err != nil {
 			return AgentResult{}, fmt.Errorf("test revision path ownership: %w", err)
 		}
-	} else if err := validateProtectedTestPaths(run.Worktree, state, run.ProtectedTestPaths); err != nil {
-		return AgentResult{}, err
+	} else {
+		if invocation.Role == workflow.RoleImplementation && independentTestStageDeclared(packet) && !run.TestStageSkipped {
+			if err := validateImplementationTestPaths(state.ChangedPaths, packet.RepositoryConfig.TestPolicy); err != nil {
+				return AgentResult{}, err
+			}
+		}
+		if err := validateProtectedTestPaths(run.Worktree, state, run.ProtectedTestPaths); err != nil {
+			return AgentResult{}, err
+		}
 	}
 	if value.Outcome == report.OutcomeNeedsClarification {
 		if err := validateClarificationQuestions(packet, run.PendingQuestions, value.Questions); err != nil {
@@ -714,8 +724,8 @@ func reviewCanBeAcceptedWhileWaiting(run store.Run, invocation store.Invocation)
 // reviewHasBlockingResult reports whether either isolated reviewer has a
 // concrete correctness, security, specification, or standards violation.
 func reviewHasBlockingResult(run store.Run) bool {
-	return (run.SpecificationReview != nil && reviewHasBlockingFinding(run.SpecificationReview.Findings)) ||
-		(run.StandardsReview != nil && reviewHasBlockingFinding(run.StandardsReview.Findings))
+	return (reviewRoleConfigured(run, workflow.RoleSpecificationReview) && run.SpecificationReview != nil && reviewHasBlockingFinding(run.SpecificationReview.Findings)) ||
+		(reviewRoleConfigured(run, workflow.RoleStandardsReview) && run.StandardsReview != nil && reviewHasBlockingFinding(run.StandardsReview.Findings))
 }
 
 // containsString reports whether a string occurs in a small coordinator-owned

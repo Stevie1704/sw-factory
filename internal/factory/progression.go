@@ -167,6 +167,18 @@ func (s *Service) startReviewRound(ctx context.Context, runID string) error {
 // return values is set.
 func (s *Service) progressionStep(state progressionState) (progressionAction, *progressionResult) {
 	run := *state.Run
+	if role, ok := missingConcurrentReviewRole(state); ok {
+		definition, _ := workflow.DefaultRegistry().Role(role)
+		return progressionAction{name: "start missing " + role + " review", action: func(ctx context.Context) error {
+			_, err := s.StartAgent(ctx, AgentRequest{RunID: run.ID, Role: definition.Name, Stage: definition.Stage})
+			return err
+		}}, nil
+	}
+	if reviewReadinessEligible(run) {
+		return progressionAction{name: "finalize pull-request readiness", action: func(ctx context.Context) error {
+			return s.retryReviewReadiness(ctx, run.ID)
+		}}, nil
+	}
 	switch RunActivityFor(run) {
 	case ActivityTerminal:
 		return progressionAction{}, &progressionResult{Outcome: progressionTerminal, Reason: "run is " + string(run.Status)}
@@ -207,6 +219,34 @@ func (s *Service) progressionStep(state progressionState) (progressionAction, *p
 		return progressionAction{}, &progressionResult{Outcome: progressionInvocationActive, Reason: fmt.Sprintf("invocations %s are executing", strings.Join(ids, ", "))}
 	}
 	return s.progressionStageStep(state)
+}
+
+// missingConcurrentReviewRole returns the one reviewer that can be resumed
+// after a partial concurrent-review launch. It waits for any active reviewer
+// and requires one exact-checkpoint result so a human clarification is never
+// mistaken for a failed launch.
+func missingConcurrentReviewRole(state progressionState) (string, bool) {
+	if state.Run == nil || state.Run.Stage != store.StageReview || !concurrentReviewsConfigured(*state.Run) || hasActiveReviewInvocations(state) {
+		return "", false
+	}
+	run := *state.Run
+	roles := []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview}
+	hasCurrentResult := false
+	missingRole := ""
+	for _, role := range roles {
+		result := reviewResultForRole(run, role)
+		if result != nil && result.CheckpointSHA == run.CheckpointSHA {
+			hasCurrentResult = true
+			continue
+		}
+		if missingRole == "" {
+			missingRole = role
+		}
+	}
+	if hasCurrentResult && missingRole != "" {
+		return missingRole, true
+	}
+	return "", false
 }
 
 // hasActiveReviewInvocations reports whether an otherwise human-waiting review
@@ -335,6 +375,9 @@ func progressionAdvancedMany(previous store.Run, previousInvocations []*store.In
 		return true
 	}
 	if previous.CheckpointSHA != next.CheckpointSHA || previous.PullRequestNumber != next.PullRequestNumber {
+		return true
+	}
+	if previous.ReadyNotificationSent != next.ReadyNotificationSent {
 		return true
 	}
 	if len(previousInvocations) != len(nextInvocations) {

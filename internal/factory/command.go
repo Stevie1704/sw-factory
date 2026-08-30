@@ -368,10 +368,11 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 // handleRevisionCommand applies an authorized specification amendment to a
 // ready pull request. It preserves the existing branch, worktree, checkpoint,
 // pull-request identity, and invocation artifacts while invalidating every
-// result for the superseded packet and restarting implementation.
+// result from the superseded packet and restarting at the current checkpoint.
 func (s *Service) handleRevisionCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
-	if run.Stage != store.StageReady || run.Status != store.StatusActive {
-		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("revision is only allowed for an active ready run, not stage %q/status %q", run.Stage, run.Status)}
+	readyStatus := run.Status == store.StatusActive || run.Status == store.StatusWaitingForHuman
+	if run.Stage != store.StageReady || !readyStatus {
+		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("revision is only allowed for a ready run, not stage %q/status %q", run.Stage, run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	if run.PullRequestNumber <= 0 {
@@ -429,8 +430,11 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 	}
 	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; specification amendment created")
 	next.Status = store.StatusActive
-	next.Stage = store.StageImplementation
 	next.SpecificationPacket = string(encodedPacket)
+	// The current ready checkpoint is the clean pre-edit boundary for the new
+	// amendment. Baseline gates are rerun there before a new role starts.
+	next.BaseCheckpointSHA = run.CheckpointSHA
+	next.Stage = store.StageClaim
 	resetRevisionProjection(&next, packet)
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
@@ -439,10 +443,10 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 	next.LifecycleNotificationSent = false
 	next.LifecycleReason = fmt.Sprintf("authorized specification amendment v%d; implementation restarted at checkpoint", packet.Version)
 	next.UpdatedAt = s.deps.Now().UTC()
-	// The command watermark is committed only after the implementation restart
-	// succeeds, keeping the amendment retryable across a launch failure.
-	processedCommentID := next.ProcessedCommentID
-	next.ProcessedCommentID = run.ProcessedCommentID
+	// The command watermark commits with the amendment and complete result
+	// invalidation. If rebaseline or role launch fails afterward, normal
+	// progression resumes the durable claim-stage restart without replaying the
+	// external command.
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
 	}
@@ -452,19 +456,14 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 	}
 	updated, err = s.resumeAfterRevision(ctx, registration, runStore, updated)
 	if err != nil {
-		return CommandResult{}, fmt.Errorf("resume implementation after revision: %w", err)
-	}
-	updated, err = s.persistPacketChangeWatermark(ctx, runStore, updated, processedCommentID)
-	if err != nil {
-		return CommandResult{}, fmt.Errorf("persist revision command watermark: %w", err)
+		return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, fmt.Errorf("resume amended workflow after revision: %w", err)
 	}
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
 }
 
-// resetRevisionProjection removes evidence tied to the superseded packet while
-// keeping the existing checkpoint and host-owned workspace resumable. The new
-// packet always restarts at implementation so required test/review evidence is
-// regenerated from the amended intent rather than being reused accidentally.
+// resetRevisionProjection removes every review, repair, and test-stage
+// projection tied to the superseded packet. The caller establishes the new
+// amendment baseline at the existing clean checkpoint before resumption.
 func resetRevisionProjection(run *store.Run, packet SpecificationPacket) {
 	if run == nil {
 		return
@@ -481,6 +480,9 @@ func resetRevisionProjection(run *store.Run, packet SpecificationPacket) {
 	run.ReviewRepairPendingAttempt = 0
 	run.ReviewRepairHistory = nil
 	run.ReviewRepairPacket = nil
+	run.CheckRepairAttempts = 0
+	run.CheckRepairBudget = packet.RepositoryConfig.RetryLimits.CheckRepair
+	run.CheckRepairPendingAttempt = 0
 	run.RoleHandoff = nil
 	run.ImplementationHandoff = nil
 	run.SpecificationReview = nil
@@ -492,20 +494,80 @@ func resetRevisionProjection(run *store.Run, packet SpecificationPacket) {
 	clearActiveInvocations(run)
 }
 
-// resumeAfterRevision launches implementation using the latest persisted
-// implementation session when native harness recovery is available.
+// resumeAfterRevision re-establishes the new amendment baseline at the current
+// clean checkpoint, then launches the role selected by the frozen route and
+// test policy. Implementation resumes its native session when possible.
 func (s *Service) resumeAfterRevision(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
-	request := AgentRequest{RunID: run.ID, Role: workflow.RoleImplementation, Stage: store.StageImplementation, resumeImplementation: true}
-	if _, err := s.startAgentWithStore(ctx, registration, runStore, &run, request); err != nil {
+	if err := s.ensureInvocationAttached(ctx, runStore, run); err != nil {
 		return run, err
+	}
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return run, fmt.Errorf("decode specification packet for revision baseline: %w", err)
+	}
+	baseline, err := s.runBaselineProjection(ctx, registration, runStore, run, packet)
+	if err != nil {
+		return baseline.Run, fmt.Errorf("re-establish baseline after revision: %w", err)
+	}
+	updated := baseline.Run
+	definition, ok := workflow.DefaultRegistry().RoleForRunStage(updated.Stage)
+	if !ok {
+		return updated, fmt.Errorf("no role is declared for revision stage %q", updated.Stage)
+	}
+	request := AgentRequest{RunID: updated.ID, Role: definition.Name, Stage: definition.Stage}
+	if definition.Name == workflow.RoleImplementation {
+		request.resumeImplementation = true
+	}
+	if _, err := s.startAgentWithStore(ctx, registration, runStore, &updated, request); err != nil {
+		if cleanupErr := s.supersedeFailedRevisionInvocation(ctx, runStore, updated.ID, definition.Name); cleanupErr != nil {
+			return updated, errors.Join(err, cleanupErr)
+		}
+		return updated, err
 	}
 	if current, err := runStore.CurrentRun(ctx); err == nil && current != nil {
 		return *current, nil
 	}
-	return run, nil
+	return updated, nil
+}
+
+// supersedeFailedRevisionInvocation makes a failed post-amendment launch
+// retryable by normal progression. A pending effect is left untouched for
+// startup reconciliation; otherwise the failed invocation is superseded so a
+// fresh role launch cannot be mistaken for a duplicate.
+func (s *Service) supersedeFailedRevisionInvocation(ctx context.Context, runStore RunStore, runID, role string) error {
+	if journal, ok := runStore.(PendingEffectStore); ok {
+		pending, err := journal.PendingEffect(ctx, runID)
+		if err != nil {
+			return fmt.Errorf("inspect pending revision launch: %w", err)
+		}
+		if pending != nil {
+			return nil
+		}
+	}
+	if invalidator, ok := runStore.(runResultInvalidator); ok {
+		return invalidator.InvalidateRunResults(ctx, runID)
+	}
+	roleStore, ok := runStore.(LatestInvocationByRoleStore)
+	if !ok {
+		return nil
+	}
+	invocationStore, ok := runStore.(InvocationStore)
+	if !ok {
+		return nil
+	}
+	invocation, err := roleStore.LatestInvocationByRole(ctx, runID, role)
+	if err != nil {
+		return fmt.Errorf("look up failed revision invocation: %w", err)
+	}
+	if invocation == nil || invocation.Status == store.InvocationStatusSuperseded {
+		return nil
+	}
+	invocation.Status = store.InvocationStatusSuperseded
+	invocation.UpdatedAt = s.deps.Now().UTC()
+	return invocationStore.SaveInvocation(ctx, *invocation)
 }
 
 // resumeAfterPacketChange launches the implementation role when the store has
@@ -800,6 +862,13 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 	}
 	if lifecycle.Outcome != LifecycleUnchanged {
 		return nil, nil
+	}
+	if reviewReadinessEligible(*run) {
+		updated, readinessErr := s.finalizeReviewReadiness(ctx, registration, runStore, *run)
+		*run = updated
+		if readinessErr != nil {
+			return nil, readinessErr
+		}
 	}
 	published, publicationErr := s.ensureClarificationPublication(ctx, registration, runStore, *run)
 	if publicationErr != nil {

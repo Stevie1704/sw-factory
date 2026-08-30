@@ -138,6 +138,8 @@ type PullRequest struct {
 	MergeCommitSHA string
 	// HeadBranch is the source branch name.
 	HeadBranch string
+	// HeadSHA is the exact commit currently referenced by the source branch.
+	HeadSHA string
 	// BaseBranch is the target branch name.
 	BaseBranch string
 }
@@ -799,6 +801,7 @@ type pullRequestResponse struct {
 	MergeCommitSHA string `json:"merge_commit_sha"`
 	Head           struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
@@ -827,7 +830,7 @@ func (r pullRequestResponse) pullRequest() PullRequest {
 	return PullRequest{
 		Number: r.Number, URL: r.HTMLURL, Title: r.Title, Body: r.Body,
 		State: r.State, Draft: r.Draft, Merged: r.Merged || r.MergedAt != nil,
-		MergeCommitSHA: r.MergeCommitSHA, HeadBranch: r.Head.Ref, BaseBranch: r.Base.Ref,
+		MergeCommitSHA: r.MergeCommitSHA, HeadBranch: r.Head.Ref, HeadSHA: r.Head.SHA, BaseBranch: r.Base.Ref,
 	}
 }
 

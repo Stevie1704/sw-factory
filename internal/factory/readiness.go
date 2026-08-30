@@ -11,6 +11,18 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
+// reviewReadinessEligible reports whether the complete review round has passed
+// and the coordinator may retry its final readiness boundary.
+func reviewReadinessEligible(run store.Run) bool {
+	if run.Stage != store.StageReview && run.Stage != store.StageReady {
+		return false
+	}
+	if run.Status != store.StatusActive && run.Status != store.StatusWaitingForHuman {
+		return false
+	}
+	return reviewRoundComplete(run) && !reviewHasBlockingResult(run)
+}
+
 // finalizeReviewReadiness performs the final target synchronization, explicit
 // PR readiness transition, durable ready state, and operator notification.
 // A target change returns the run to checks so every gate and reviewer starts
@@ -34,6 +46,9 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	}
 	if existing.Merged || existing.State != "" && existing.State != "open" {
 		return run, fmt.Errorf("pull request #%d is not open and cannot become ready", existing.Number)
+	}
+	if existing.HeadSHA != run.CheckpointSHA {
+		return run, s.rejectUnreviewedPullRequestHead(ctx, repository, existing, run.CheckpointSHA)
 	}
 
 	if packet.RepositoryConfig.BaseSynchronization.Mode == config.BaseSynchronizationBeforeReady {
@@ -78,6 +93,12 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 			return next, nil
 		}
 	}
+	if err := s.verifyGateCheckpoint(ctx, run); err != nil {
+		return run, fmt.Errorf("verify final readiness checkpoint: %w", err)
+	}
+	if err := ensureFinalCheckpointGatesPassed(ctx, runStore, run, packet); err != nil {
+		return run, err
+	}
 
 	if existing.Draft {
 		updated, err := s.setPullRequestDraft(ctx, repository, existing, false)
@@ -85,6 +106,9 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 			return run, err
 		}
 		existing = updated
+		if existing.HeadSHA != run.CheckpointSHA {
+			return run, s.rejectUnreviewedPullRequestHead(ctx, repository, existing, run.CheckpointSHA)
+		}
 	}
 	if existing.Draft {
 		return run, fmt.Errorf("pull request #%d remained draft after readiness request", existing.Number)
@@ -105,6 +129,46 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 		}
 	}
 	return s.ensureReadyNotification(ctx, registration, runStore, next)
+}
+
+// rejectUnreviewedPullRequestHead keeps a mismatched remote head non-ready and
+// retryable. It retries the compensating draft transition after a coordinator
+// restart, covering both a concurrent push and a crash after readiness changed.
+func (s *Service) rejectUnreviewedPullRequestHead(ctx context.Context, repository github.Repository, existing github.PullRequest, checkpointSHA string) error {
+	mismatch := fmt.Errorf("pull request #%d head %q does not match reviewed checkpoint %q", existing.Number, existing.HeadSHA, checkpointSHA)
+	if existing.Draft {
+		return mismatch
+	}
+	reverted, revertErr := s.setPullRequestDraft(ctx, repository, existing, true)
+	if revertErr != nil {
+		return errors.Join(mismatch, fmt.Errorf("restore pull request #%d to draft after head change: %w", existing.Number, revertErr))
+	}
+	if !reverted.Draft {
+		return errors.Join(mismatch, fmt.Errorf("pull request #%d remained ready after head-change rollback", existing.Number))
+	}
+	return mismatch
+}
+
+// retryReviewReadiness reopens the active run through the normal startup
+// seam and retries the complete finalization boundary after a transient
+// GitHub, base-synchronization, PR-readiness, or notification failure.
+func (s *Service) retryReviewReadiness(ctx context.Context, runID string) error {
+	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = runStore.Close() }()
+	if run == nil {
+		return fmt.Errorf("active run %q is no longer available", runID)
+	}
+	if run.ID != runID {
+		return fmt.Errorf("active run is %s, not %s", run.ID, runID)
+	}
+	if (run.Stage != store.StageReview && run.Stage != store.StageReady) || (run.Status != store.StatusActive && run.Status != store.StatusWaitingForHuman) {
+		return nil
+	}
+	_, err = s.finalizeReviewReadiness(ctx, registration, runStore, *run)
+	return err
 }
 
 // setPullRequestDraft toggles readiness through the dedicated adapter when

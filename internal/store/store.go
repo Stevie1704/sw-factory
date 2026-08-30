@@ -394,6 +394,11 @@ type ReviewRepairPacket struct {
 	// Findings contains every blocking finding from the completed review round;
 	// implementation routes test-owned findings through the objection protocol.
 	Findings []ReviewRepairFinding `json:"findings"`
+	// ResolvedTestOwnerFindingKeys records opaque identities for test-owned
+	// findings that the independent test role accepted and revised. These
+	// findings no longer require the implementation to submit the same
+	// objection after the revised test checkpoint is created.
+	ResolvedTestOwnerFindingKeys []string `json:"resolved_test_owner_finding_keys,omitempty"`
 }
 
 // ReviewRepairAttempt records one content-free review-repair lifecycle entry.
@@ -432,8 +437,9 @@ type Run struct {
 	Branch         string
 	Worktree       string
 	CheckpointSHA  string
-	// BaseCheckpointSHA remains the immutable pre-edit checkpoint after test
-	// files receive their own checkpoint.
+	// BaseCheckpointSHA is the immutable pre-edit checkpoint for the current
+	// specification version. An authorized revision promotes its clean current
+	// checkpoint to establish a new amendment baseline.
 	BaseCheckpointSHA string
 	// TestCheckpointSHA identifies the separate protected test checkpoint.
 	TestCheckpointSHA string
@@ -1541,6 +1547,19 @@ func validateReviewRepairProjection(run Run) error {
 			if !safeQuestionIdentifier(finding.ReviewerRole) {
 				return fmt.Errorf("review repair packet finding %d has an unsafe reviewer role", index)
 			}
+		}
+		if len(packet.ResolvedTestOwnerFindingKeys) > len(packet.Findings) {
+			return errors.New("review repair packet has too many resolved test-owner findings")
+		}
+		seenResolved := make(map[string]struct{}, len(packet.ResolvedTestOwnerFindingKeys))
+		for index, key := range packet.ResolvedTestOwnerFindingKeys {
+			if len(key) != 64 || !isLowerHex(key) {
+				return fmt.Errorf("review repair packet resolved test-owner key %d is invalid", index)
+			}
+			if _, exists := seenResolved[key]; exists {
+				return fmt.Errorf("review repair packet resolved test-owner key %d is duplicated", index)
+			}
+			seenResolved[key] = struct{}{}
 		}
 	}
 	return nil

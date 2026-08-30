@@ -153,14 +153,22 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	if err != nil {
 		return BaselineResult{}, err
 	}
-	if err := s.verifyGateCheckpoint(ctx, *run); err != nil {
+	return s.runBaselineProjection(ctx, registration, runStore, *run, packet)
+}
+
+// runBaselineProjection evaluates and persists a complete baseline suite for
+// a run already validated by its caller. The helper is shared by the normal
+// claim flow and authorized revisions, whose current implementation checkpoint
+// becomes the new pre-edit boundary for the amended specification.
+func (s *Service) runBaselineProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket) (BaselineResult, error) {
+	if err := s.verifyGateCheckpoint(ctx, run); err != nil {
 		return BaselineResult{}, err
 	}
-	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, *run, packet, gate.PhaseBaseline, packet.RepositoryConfig.Gates)
-	result := BaselineResult{Run: *run, Gates: suite.Gates}
-	persistErr := persistGateSuite(ctx, runStore, *run, suite)
+	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, run, packet, gate.PhaseBaseline, packet.RepositoryConfig.Gates)
+	result := BaselineResult{Run: run, Gates: suite.Gates}
+	persistErr := persistGateSuite(ctx, runStore, run, suite)
 	if suiteErr == nil && persistErr == nil {
-		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, *run, packet)
+		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, run, packet)
 		result.Run = advanced
 		if advanceErr != nil {
 			return result, advanceErr
@@ -173,7 +181,7 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 				return result, fmt.Errorf("record baseline evaluation exemption: %w", err)
 			}
 		}
-		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, *run, packet)
+		advanced, advanceErr := s.advanceAfterBaseline(ctx, registration, runStore, run, packet)
 		result.Run = advanced
 		if advanceErr != nil {
 			return result, advanceErr
@@ -182,7 +190,7 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	}
 	effectiveErr := errors.Join(suiteErr, persistErr)
 
-	next := *run
+	next := run
 	next.Stage = store.StagePreflight
 	next.Status = store.StatusFailed
 	if suiteErr == nil && persistErr != nil {
@@ -195,7 +203,7 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	updated, transitionErr := s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository: commandRepository(registration),
 		Issue:      issue,
-		Previous:   *run,
+		Previous:   run,
 		Next:       next,
 	})
 	result.Run = updated
@@ -263,6 +271,45 @@ func (s *Service) ensureBaselineReadyAtCheckpoint(ctx context.Context, runStore 
 	}
 	if suiteErrHasBlockingFailure(suite) && !baselineFailureTargeted(packet.Issue.Body, suite) {
 		return errors.New("baseline has an untargeted blocking gate failure")
+	}
+	return nil
+}
+
+// ensureFinalCheckpointGatesPassed verifies every configured gate result for
+// the exact checkpoint that the reviewers inspected. Readiness is never
+// inferred from a review result alone: every gate must have a matching,
+// successful, content-free projection before the pull request can become
+// non-draft.
+func ensureFinalCheckpointGatesPassed(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) error {
+	resultStore, ok := runStore.(GateResultStore)
+	if !ok {
+		return errors.New("operational store does not support final checkpoint gate results")
+	}
+	if !github.ValidCommitSHA(run.CheckpointSHA) {
+		return errors.New("final readiness requires a valid checkpoint SHA")
+	}
+	fingerprint, err := setupInputFingerprint(run.Worktree, packet.RepositoryConfig.SetupFiles)
+	if err != nil {
+		return fmt.Errorf("fingerprint final gate setup files: %w", err)
+	}
+	results, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseCheckpoint, run.CheckpointSHA)
+	if err != nil {
+		return fmt.Errorf("read final checkpoint gate results: %w", err)
+	}
+	if len(results) != len(packet.RepositoryConfig.Gates) {
+		return fmt.Errorf("final checkpoint gate results are incomplete: got %d, want %d", len(results), len(packet.RepositoryConfig.Gates))
+	}
+	for ordinal, declared := range packet.RepositoryConfig.Gates {
+		result := results[ordinal]
+		if result.RunID != run.ID || result.CheckpointSHA != run.CheckpointSHA || result.Phase != store.GatePhaseCheckpoint || result.Ordinal != ordinal || result.GateName != declared.Name || result.Blocking != declared.Blocking || result.SetupFingerprint != fingerprint {
+			return fmt.Errorf("final checkpoint gate result %q does not match the frozen run identity", declared.Name)
+		}
+		if result.Outcome != store.GateOutcomePassed {
+			return fmt.Errorf("final checkpoint gate %q has outcome %q; readiness requires success", declared.Name, result.Outcome)
+		}
+		if result.Status != "" && result.Status != string(github.CommitStatusSuccess) {
+			return fmt.Errorf("final checkpoint gate %q has status %q; readiness requires success", declared.Name, result.Status)
+		}
 	}
 	return nil
 }

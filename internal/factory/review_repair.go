@@ -10,6 +10,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -124,21 +125,201 @@ func reviewRepairBlockerKeys(findings []store.ReviewRepairFinding) []string {
 // reviewRepairFindingKey hashes stable finding identity fields. Reviewer role
 // is retained in the repair packet for provenance but excluded here so the
 // same material blocker is recognized even when the other reviewer reports it
-// on the next round. Evidence and suggested resolution are deliberately
-// excluded so immaterial wording changes do not evade escalation.
+// on the next round. Line movement and common claim paraphrases are normalized
+// while a distinct claim in the same file/category remains distinguishable.
 func reviewRepairFindingKey(finding store.ReviewRepairFinding) string {
 	value := strings.Join([]string{
-		reviewRepairKeyValue(finding.Finding.Location),
+		reviewRepairLocationKey(finding.Finding.Location),
 		reviewRepairKeyValue(finding.Finding.Category),
+		reviewRepairClaimKeyValue(finding.Finding.Claim),
+	}, "\x00")
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
+}
+
+// reviewRepairLocationKey reduces a source location to its stable ownership
+// surface. Line and column movement between repair rounds, or a paraphrased
+// claim from a fresh reviewer session, must not let the same file-level
+// blocker consume a second automatic repair attempt.
+func reviewRepairLocationKey(value string) string {
+	value = reviewRepairKeyValue(value)
+	if marker := strings.LastIndex(value, "#l"); marker >= 0 && allDecimal(value[marker+2:]) {
+		value = strings.TrimSpace(value[:marker])
+	}
+	parts := strings.Split(value, ":")
+	for len(parts) > 1 && allDecimal(parts[len(parts)-1]) {
+		parts = parts[:len(parts)-1]
+	}
+	return strings.Join(parts, ":")
+}
+
+// allDecimal reports whether a location suffix is a line or column number.
+func allDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, runeValue := range value {
+		if runeValue < '0' || runeValue > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// reviewRepairKeyValue canonicalizes bounded reviewer metadata before hashing.
+func reviewRepairKeyValue(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(reviewSingleLine(value)), " "))
+}
+
+// reviewRepairClaimKeyValue canonicalizes only safe claim vocabulary before
+// repeated-blocker hashing. It preserves negation, word order, and material
+// nouns so opposite or merely related claims cannot collapse into one key.
+func reviewRepairClaimKeyValue(value string) string {
+	value = strings.ToLower(strings.Join(strings.Fields(reviewSingleLine(value)), " "))
+	for _, replacement := range []struct {
+		old string
+		new string
+	}{
+		{old: "doesn't verify", new: "skips"},
+		{old: "does not verify", new: "skips"},
+		{old: "doesn't check", new: "skips"},
+		{old: "does not check", new: "skips"},
+		{old: "doesn't validate", new: "skips"},
+		{old: "does not validate", new: "skips"},
+	} {
+		value = strings.ReplaceAll(value, replacement.old, replacement.new)
+	}
+	stopWords := map[string]struct{}{
+		"a": {}, "an": {}, "and": {}, "are": {}, "as": {}, "be": {}, "before": {}, "by": {},
+		"can": {}, "for": {}, "from": {}, "has": {}, "have": {}, "in": {}, "into": {},
+		"is": {}, "it": {}, "must": {}, "of": {}, "on": {}, "should": {}, "that": {},
+		"the": {}, "this": {}, "to": {}, "was": {}, "were": {}, "with": {},
+	}
+	synonyms := map[string]string{
+		"readiness": "ready", "ready": "ready", "last": "final", "final": "final",
+		"skip": "skip", "skips": "skip", "omitted": "skip", "omits": "skip", "omit": "skip",
+		"check": "check", "checks": "check", "checked": "check", "checking": "check",
+		"validate": "validate", "validates": "validate", "validated": "validate", "validation": "validate",
+		"verify": "verify", "verifies": "verify", "verified": "verify", "verification": "verify",
+	}
+	words := strings.Fields(value)
+	canonical := make([]string, 0, len(words))
+	for _, word := range words {
+		word = strings.Trim(word, "`.,:;!?()[]{}\"")
+		if word == "" {
+			continue
+		}
+		if _, stop := stopWords[word]; stop {
+			continue
+		}
+		if replacement, ok := synonyms[word]; ok {
+			word = replacement
+		}
+		if word == "transition" || word == "transitions" {
+			continue
+		}
+		canonical = append(canonical, word)
+	}
+	return strings.Join(canonical, " ")
+}
+
+// reviewRepairTestOwnerFindingKey hashes the stable identity used to remember
+// which test-owned finding was accepted through the objection protocol.
+func reviewRepairTestOwnerFindingKey(finding store.ReviewRepairFinding) string {
+	value := strings.Join([]string{
+		reviewRepairKeyValue(finding.Finding.Location),
 		reviewRepairKeyValue(finding.Finding.Claim),
 	}, "\x00")
 	digest := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(digest[:])
 }
 
-// reviewRepairKeyValue canonicalizes bounded reviewer metadata before hashing.
-func reviewRepairKeyValue(value string) string {
-	return strings.ToLower(strings.Join(strings.Fields(reviewSingleLine(value)), " "))
+// reviewRepairTestOwnerFindingMatches reports whether one structured test
+// objection identifies a test-owned review finding by claim or test location.
+func reviewRepairTestOwnerFindingMatches(test, claim string, finding store.ReviewRepairFinding) bool {
+	if reviewRepairKeyValue(claim) != "" && reviewRepairKeyValue(claim) == reviewRepairKeyValue(finding.Finding.Claim) {
+		return true
+	}
+	return reviewRepairLocationKey(test) != "" && reviewRepairLocationKey(test) == reviewRepairLocationKey(finding.Finding.Location)
+}
+
+// reviewRepairTestOwnerFindingResolved reports whether the test-owned finding
+// was already accepted and revised during the current repair packet.
+func reviewRepairTestOwnerFindingResolved(packet store.ReviewRepairPacket, finding store.ReviewRepairFinding) bool {
+	key := reviewRepairTestOwnerFindingKey(finding)
+	for _, resolved := range packet.ResolvedTestOwnerFindingKeys {
+		if resolved == key {
+			return true
+		}
+	}
+	return false
+}
+
+// unresolvedReviewRepairTestOwnerFindings returns only test-owned findings
+// whose objection cycle has not yet produced an accepted revised test.
+func unresolvedReviewRepairTestOwnerFindings(packet store.ReviewRepairPacket) []store.ReviewRepairFinding {
+	findings := make([]store.ReviewRepairFinding, 0)
+	for _, finding := range packet.Findings {
+		if strings.EqualFold(strings.TrimSpace(finding.Finding.SuggestedOwner), workflow.RoleTest) && !reviewRepairTestOwnerFindingResolved(packet, finding) {
+			findings = append(findings, finding)
+		}
+	}
+	return findings
+}
+
+// recordReviewRepairTestOwnerResolution records an accepted independent-test
+// objection without mutating the prior packet through a shared pointer.
+func recordReviewRepairTestOwnerResolution(run *store.Run) error {
+	if run == nil || run.ReviewRepairPacket == nil || run.TestObjection == nil {
+		return nil
+	}
+	packet := *run.ReviewRepairPacket
+	for _, finding := range unresolvedReviewRepairTestOwnerFindings(packet) {
+		if !reviewRepairTestOwnerFindingMatches(run.TestObjection.Test, run.TestObjection.Claim, finding) {
+			continue
+		}
+		key := reviewRepairTestOwnerFindingKey(finding)
+		for _, resolved := range packet.ResolvedTestOwnerFindingKeys {
+			if resolved == key {
+				run.ReviewRepairPacket = &packet
+				return nil
+			}
+		}
+		packet.ResolvedTestOwnerFindingKeys = append(packet.ResolvedTestOwnerFindingKeys, key)
+		run.ReviewRepairPacket = &packet
+		return nil
+	}
+	return errors.New("accepted test objection does not identify an unresolved test-owner review finding")
+}
+
+// validateReviewRepairTestOwnerRouting requires a review-repair report to use
+// the existing structured objection protocol whenever a reviewer assigns a
+// blocker to the test role. The coordinator therefore never accepts a direct
+// implementation handoff that silently edits or dismisses protected tests.
+func validateReviewRepairTestOwnerRouting(value report.Report, invocation store.Invocation, run store.Run, packet SpecificationPacket) error {
+	if invocation.Role != workflow.RoleImplementation || invocation.Stage != store.StageImplementation || value.Outcome != report.OutcomeCompleted || value.Handoff == nil || run.ReviewRepairPacket == nil {
+		return nil
+	}
+	testOwnerFindings := unresolvedReviewRepairTestOwnerFindings(*run.ReviewRepairPacket)
+	if len(testOwnerFindings) == 0 {
+		return nil
+	}
+	if !independentTestStageDeclared(packet) || run.TestStageSkipped {
+		return errors.New("review repair assigned to the test role requires an active independent test stage")
+	}
+	if len(value.Handoff.TestObjections) == 0 {
+		return errors.New("review repair assigned to the test role requires a structured test objection")
+	}
+	if len(value.Handoff.TestObjections) != 1 {
+		return errors.New("review repair must submit exactly one structured test objection per implementation report")
+	}
+	objection := value.Handoff.TestObjections[0]
+	for _, finding := range testOwnerFindings {
+		if reviewRepairTestOwnerFindingMatches(objection.Test, objection.Claim, finding) {
+			return nil
+		}
+	}
+	return errors.New("structured test objection must identify one unresolved test-owner review finding")
 }
 
 // reviewRepairHasRepeatedBlocker reports whether any current blocker identity
@@ -227,7 +408,7 @@ func blockingReviewFindingsForRun(run store.Run) []store.ReviewRepairFinding {
 	}
 	findings := make([]store.ReviewRepairFinding, 0)
 	for _, value := range results {
-		if value.result == nil || value.result.CheckpointSHA != run.CheckpointSHA {
+		if !reviewRoleConfigured(run, value.role) || value.result == nil || value.result.CheckpointSHA != run.CheckpointSHA {
 			continue
 		}
 		for _, finding := range value.result.Findings {

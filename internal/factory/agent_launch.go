@@ -765,8 +765,12 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 			return errors.New("persisted invocation packet test revision state does not match the run")
 		}
 	}
-	if persisted.SchemaVersion >= 8 && persisted.ReviewRepair != nil {
-		if !sameReviewRepairPacket(persisted.ReviewRepair, run.ReviewRepairPacket) {
+	if persisted.SchemaVersion >= 8 {
+		expectedReviewRepair := run.ReviewRepairPacket
+		if invocation.Role != workflow.RoleImplementation {
+			expectedReviewRepair = nil
+		}
+		if !sameReviewRepairPacket(persisted.ReviewRepair, expectedReviewRepair) {
 			return errors.New("persisted invocation packet review-repair context does not match the run")
 		}
 	}

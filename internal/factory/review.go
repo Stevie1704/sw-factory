@@ -427,13 +427,12 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 			statusState = github.CommitStatusSuccess
 			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
 		} else if reviewRoundComplete(*run) {
-			transition, transitionErr := workflow.DefaultRegistry().ResolveReportTransition(invocation.Stage, value.Outcome)
-			if transitionErr != nil {
-				return AgentResult{}, transitionErr
-			}
-			run.Stage = transition.Stage
-			run.Status = transition.Status
-			run.LifecycleReason = "all configured reviews passed; ready for merge"
+			// Keep readiness provisional until the coordinator has revalidated
+			// final-SHA gates, synchronized the target when configured, removed
+			// the draft flag, and persisted the ready projection.
+			run.Stage = store.StageReview
+			run.Status = store.StatusActive
+			run.LifecycleReason = "all configured reviews passed; finalizing pull-request readiness"
 			statusState = github.CommitStatusSuccess
 			statusDescription = fmt.Sprintf("%s passed; review round complete", invocation.Role)
 		} else {

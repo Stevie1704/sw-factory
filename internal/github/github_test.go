@@ -243,7 +243,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeCommandRunner{outputs: [][]byte{
-		[]byte(`[{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}]`),
+		[]byte(`[{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1","sha":"0123456789abcdef0123456789abcdef01234567"},"base":{"ref":"main"}}]`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Created","body":"generated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Existing","body":"human text","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Updated","body":"human text\n\ngenerated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
@@ -255,7 +255,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindPullRequest() error = %v", err)
 	}
-	if found.Number != 12 || found.HeadBranch != "factory/run-1" || found.BaseBranch != "main" || found.Body != "human text" {
+	if found.Number != 12 || found.HeadBranch != "factory/run-1" || found.HeadSHA != "0123456789abcdef0123456789abcdef01234567" || found.BaseBranch != "main" || found.Body != "human text" {
 		t.Fatalf("found pull request = %#v, want decoded identity", found)
 	}
 

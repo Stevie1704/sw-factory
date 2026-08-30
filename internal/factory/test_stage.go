@@ -728,6 +728,23 @@ func testOwnedPath(path string, policy config.TestPolicy) bool {
 	return false
 }
 
+// validateImplementationTestPaths rejects any implementation-owned change to
+// a test path while an independent test stage is active. This applies to new
+// paths as well as protected paths, so implementation cannot bypass test-role
+// ownership by creating or replacing an unprotected test file.
+func validateImplementationTestPaths(paths []string, policy config.TestPolicy) error {
+	for _, path := range paths {
+		clean, err := cleanTestPath(path)
+		if err != nil {
+			return err
+		}
+		if testOwnedPath(clean, policy) {
+			return fmt.Errorf("implementation changed test-owned path %q; the independent test role owns test paths", path)
+		}
+	}
+	return nil
+}
+
 // validateProtectedTestPaths verifies implementation has not changed a
 // protected test path since the test checkpoint, including a deleted file.
 func validateProtectedTestPaths(worktree string, state gitadapter.WorktreeState, protected []store.ProtectedTestPath) error {
@@ -1093,6 +1110,9 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 	handoff := convertTestHandoff(*value.TestHandoff)
 	next := *run
 	next.TestHandoff = &handoff
+	if err := recordReviewRepairTestOwnerResolution(&next); err != nil {
+		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, err.Error())
+	}
 	next.TestObjection = nil
 	next.TestRevisionBaseChangedPaths = nil
 	next.TestRevisionHistory = setTestRevisionOutcome(next.TestRevisionHistory, next.TestRevisionAttempts, store.TestRevisionAccepted)

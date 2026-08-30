@@ -192,3 +192,24 @@ func TestPromptForPersistedInvocationRejectsInvalidReviewContext(t *testing.T) {
 		})
 	}
 }
+
+// TestValidatePersistedInvocationPacketRequiresReviewRepairContext verifies
+// recovery cannot resume implementation while silently dropping a durable
+// blocking-review packet.
+func TestValidatePersistedInvocationPacketRequiresReviewRepairContext(t *testing.T) {
+	packet := &store.ReviewRepairPacket{RunID: "run-repair", CheckpointSHA: "checkpoint", Attempt: 1, Budget: 2}
+	run := store.Run{ID: "run-repair", SpecificationPacket: "specification", ReviewRepairPacket: packet}
+	invocation := store.Invocation{ID: "inv-repair", RunID: run.ID, Role: workflow.RoleImplementation, Stage: store.StageImplementation, PromptVersion: "implementation-v1"}
+	persisted := InvocationPacket{
+		SchemaVersion:       invocationPacketVersion,
+		InvocationID:        invocation.ID,
+		RunID:               run.ID,
+		Role:                invocation.Role,
+		Stage:               invocation.Stage,
+		SpecificationPacket: run.SpecificationPacket,
+		PromptVersion:       invocation.PromptVersion,
+	}
+	if err := validatePersistedInvocationPacket(run, invocation, persisted); err == nil || !strings.Contains(err.Error(), "review-repair context") {
+		t.Fatalf("validatePersistedInvocationPacket() error = %v, want missing review-repair context refusal", err)
+	}
+}

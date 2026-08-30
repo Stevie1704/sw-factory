@@ -170,13 +170,13 @@ func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleCommand() error = %v", err)
 	}
-	if result.Outcome != factory.CommandAccepted || result.Run.Stage != store.StageImplementation || result.Run.Status != store.StatusActive {
-		t.Fatalf("revision result = %#v, want accepted active implementation restart", result)
+	if result.Outcome != factory.CommandAccepted || result.Run.Stage != store.StageClaim || result.Run.Status != store.StatusActive {
+		t.Fatalf("revision result = %#v, want accepted active claim restart for the reduced command store", result)
 	}
-	if result.Run.ProcessedCommentID != "16" || result.Run.Revision != 2 {
-		t.Fatalf("revision watermark = %#v, want comment 16 at revision 2", result.Run)
+	if result.Run.ProcessedCommentID != "16" || result.Run.Revision != 1 || result.Run.ProcessedCommentRevision != 1 {
+		t.Fatalf("revision watermark = %#v, want comment 16 at revision 1", result.Run)
 	}
-	if result.Run.Branch != run.Branch || result.Run.Worktree != run.Worktree || result.Run.CheckpointSHA != run.CheckpointSHA || result.Run.PullRequestNumber != run.PullRequestNumber {
+	if result.Run.Branch != run.Branch || result.Run.Worktree != run.Worktree || result.Run.CheckpointSHA != run.CheckpointSHA || result.Run.BaseCheckpointSHA != run.CheckpointSHA || result.Run.PullRequestNumber != run.PullRequestNumber {
 		t.Fatalf("revision destroyed resumable host identity: before=%#v after=%#v", run, result.Run)
 	}
 	var packet factory.SpecificationPacket
@@ -188,6 +188,9 @@ func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
 	}
 	if !githubAdapter.pullRequest.Draft || len(githubAdapter.draftChanges) != 1 || !githubAdapter.draftChanges[0] {
 		t.Fatalf("pull request draft changes = %#v/%v, want one draft transition", githubAdapter.draftChanges, githubAdapter.pullRequest)
+	}
+	if len(runStore.invalidations) != 0 {
+		t.Fatalf("downstream invalidations = %#v, want none for a complete amendment invalidation", runStore.invalidations)
 	}
 	if len(runStore.allInvalidations) != 1 || runStore.allInvalidations[0] != run.ID {
 		t.Fatalf("complete invalidations = %#v, want one for %q", runStore.allInvalidations, run.ID)
@@ -349,6 +352,8 @@ type commandRunStore struct {
 	lifecycleClaims map[string]map[store.Status]bool
 	// allInvalidations records complete specification-amendment invalidations.
 	allInvalidations []string
+	// invalidations records downstream packet-change invalidations.
+	invalidations []string
 }
 
 // CurrentRun returns the active run when one exists.
@@ -400,7 +405,10 @@ func (s *commandRunStore) SaveRunIfRevision(ctx context.Context, expected int64,
 
 // InvalidateRunResults satisfies the packet-version seam for command tests;
 // this reduced store has no invocation or gate-result tables to clear.
-func (*commandRunStore) InvalidateRunResults(context.Context, string) error { return nil }
+func (s *commandRunStore) InvalidateRunResults(_ context.Context, runID string) error {
+	s.invalidations = append(s.invalidations, runID)
+	return nil
+}
 
 // InvalidateAllRunResults satisfies the complete packet-amendment seam in the
 // reduced command store, which has no separate invocation or gate tables.

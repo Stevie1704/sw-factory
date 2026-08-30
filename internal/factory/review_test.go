@@ -93,6 +93,86 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	}
 }
 
+// TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates
+// verifies a blocker-free review cannot mark a pull request ready when the
+// final checkpoint gate projection is missing success.
+func TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := fixture.runStore.current
+	results := fixture.runStore.gateResults[run.ID]
+	for index := range results {
+		if results[index].Phase == store.GatePhaseCheckpoint {
+			results[index].Outcome = store.GateOutcomeFailed
+			results[index].Status = string(github.CommitStatusFailure)
+		}
+	}
+	fixture.runStore.gateResults[run.ID] = results
+
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	value := reviewReport(launch, nil)
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write review report: %v", err)
+	}
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "final checkpoint gate") {
+		t.Fatalf("AcceptAgentReport() error = %v, want final gate refusal", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || fixture.runStore.current.Status != store.StatusActive {
+		t.Fatalf("run after readiness refusal = %#v, want review/active retry state", fixture.runStore.current)
+	}
+	if !fixture.pullRequests.existing.Draft {
+		t.Fatal("pull request became ready despite an unsuccessful final gate")
+	}
+}
+
+// TestSpecificationReviewRefusesAnUnreviewedPullRequestHead verifies readiness
+// cannot make a PR non-draft when its remote branch moved after review.
+func TestSpecificationReviewRefusesAnUnreviewedPullRequestHead(t *testing.T) {
+	fixture := newReviewFixture(t)
+	fixture.pullRequests.existing.HeadSHA = strings.Repeat("a", 64)
+	fixture.pullRequests.existing.Draft = false
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	value := reviewReport(launch, nil)
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write review report: %v", err)
+	}
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: launch.Invocation.RunID, InvocationID: launch.Invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "head") {
+		t.Fatalf("AcceptAgentReport() error = %v, want remote-head refusal", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || !fixture.pullRequests.existing.Draft {
+		t.Fatalf("run/PR after remote-head refusal = %#v/%#v, want review and draft", fixture.runStore.current, fixture.pullRequests.existing)
+	}
+}
+
+// TestSpecificationReviewRestoresDraftAfterAConcurrentHeadChange verifies a
+// race during the readiness mutation cannot leave the unreviewed PR ready.
+func TestSpecificationReviewRestoresDraftAfterAConcurrentHeadChange(t *testing.T) {
+	fixture := newReviewFixture(t)
+	fixture.pullRequests.readyHeadSHA = strings.Repeat("a", 64)
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	value := reviewReport(launch, nil)
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("write review report: %v", err)
+	}
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: launch.Invocation.RunID, InvocationID: launch.Invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "head") {
+		t.Fatalf("AcceptAgentReport() error = %v, want readiness race refusal", err)
+	}
+	if fixture.runStore.current.Stage != store.StageReview || !fixture.pullRequests.existing.Draft {
+		t.Fatalf("run/PR after readiness race = %#v/%#v, want review and draft", fixture.runStore.current, fixture.pullRequests.existing)
+	}
+}
+
 // TestSpecificationReviewBlocksOnlyConcreteViolations verifies a correctness
 // blocker becomes one bounded implementation repair packet and publishes
 // failure for the exact SHA.
@@ -373,7 +453,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	issue := github.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{github.LabelAgentReady}}
 	githubAdapter := &fakeGitHub{issueValue: issue}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
 	worktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-review", Worktree: worktreePath}},
 		state:        gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-review", HeadSHA: factoryGateCheckpoint},

@@ -475,9 +475,10 @@ version, preserves resolved answers, invalidates superseded downstream
 invocations and checkpoint results, and resumes implementation against the new
 snapshot. `/factory revision` is the authorized ready-PR amendment command: it
 creates a new packet version from the current open issue, drafts the tracked PR,
-invalidates all prior gate and review results including baseline, preserves the
-existing branch/worktree, and restarts implementation from the current
-checkpoint. It never merges or force-updates a remote branch.
+invalidates all prior gate and review results, treats the current clean
+checkpoint as the new amendment baseline, preserves the existing
+branch/worktree, and restarts the workflow from the current checkpoint. It
+never merges or force-updates a remote branch.
 
 The poll command also observes the tracked pull request and issue lifecycle.
 A merged pull request completes the run and records its merge commit; closing

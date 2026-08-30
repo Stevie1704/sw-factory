@@ -1017,8 +1017,9 @@ Authorized users can control the current run with exact, single-line comments:
 Only usernames registered in the host configuration may issue these commands.
 `/factory revision` is authorized only on an active ready run. It snapshots
 the current open issue into a new packet version, drafts the tracked pull
-request, invalidates every prior gate and review result, preserves the branch
-and worktree, and restarts implementation from the current checkpoint. The
+request, invalidates every prior gate and review result, treats the current
+clean checkpoint as the new amendment baseline, preserves the branch and
+worktree, and restarts the workflow from that checkpoint. The
 command does not rebase, force-push, merge, or delete anything remotely.
 The command parser rejects malformed or unauthorized comments without changing
 workflow state. Comments are processed once using a persisted watermark.
