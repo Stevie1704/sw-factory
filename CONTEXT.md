@@ -10,7 +10,9 @@ _Avoid_: Job, task, workflow instance
 
 **GitHub lifecycle observation**:
 One coordinator read of the tracked issue and pull request that can identify
-successful merge completion or an unmerged closure requiring cancellation.
+successful merge completion, an unmerged closure requiring cancellation, or a
+newly submitted authorized review requesting changes. Lifecycle is always read
+before any repair, readiness, or infrastructure work.
 _Avoid_: Screen scrape, hidden workflow transition
 
 **Specification packet**:
@@ -83,12 +85,33 @@ _Avoid_: Docker API
 **Unattended progression**:
 The persistent coordinator's bounded pass that drives one claimed run through
 baseline, its route-selected stages, result acceptance, the exact-checkpoint
-gates, the bounded check-repair loop, the push, and one draft pull request
-without an operator running a stage-driving command. Each pass also applies
-the structured commands an operator left on the run's issue or draft pull
-request, so no comment needs a command-polling CLI invocation either. It
-stops at the first human or infrastructure waiting state.
+gates, the bounded check-repair loop, the push, one draft pull request, the
+independent review round, the bounded review-repair loop, and pull-request
+readiness without an operator running a stage-driving command. It stops at the
+first human or infrastructure waiting state, and it resumes the issue queue
+after a terminal pull-request outcome.
 _Avoid_: Autonomous agent, agent-driven workflow, auto-merge
+
+**Human repair packet**:
+The coordinator-owned repair context built from one or more applicable
+`CHANGES_REQUESTED` reviews by authorized maintainers, holding their completed
+review bodies and inline findings. Concurrent applicable reviews form one
+packet outside the bounded factory repair rounds and never consume the
+review-repair budget.
+_Avoid_: Comment command, review reply, advisory feedback
+
+**Review watermark**:
+The persisted identity of the last human review a run applied. It makes
+repeated polling and a coordinator restart unable to apply the same review
+twice.
+_Avoid_: Comment watermark, last poll time
+
+**Queue release**:
+The terminal transition of the active run - a merged pull request completes it
+and an unmerged closure cancels it - that ends the one-active-run constraint
+and lets the same coordinator process claim the next oldest eligible issue.
+Waiting-for-human and retryable-infrastructure states never release it.
+_Avoid_: Cleanup, retention, restart
 
 **Run activity**:
 The published distinction between an active run whose next transition the

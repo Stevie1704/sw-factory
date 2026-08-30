@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 30
+const CurrentSchemaVersion = 31
 
 // MaxTestRevisionAttempts is the hard safety ceiling for automated
 // implementation-versus-test objection cycles.
@@ -378,11 +378,31 @@ type ReviewRepairFinding struct {
 	Finding ReviewFinding `json:"finding"`
 }
 
+// ReviewRepairSource identifies who produced the blocking findings in one
+// repair packet. An empty value is the factory reviewers, which keeps packets
+// written before human-review repair readable.
+type ReviewRepairSource string
+
+const (
+	// ReviewRepairSourceFactory means the independent factory reviewers
+	// produced the findings and the bounded repair budget applies.
+	ReviewRepairSourceFactory ReviewRepairSource = "factory"
+	// ReviewRepairSourceHuman means an authorized maintainer requested the
+	// changes through a completed GitHub review.
+	ReviewRepairSourceHuman ReviewRepairSource = "human"
+)
+
 // ReviewRepairPacket is the coordinator-owned combined blocking-review packet
 // mounted in the implementation repair invocation.
 type ReviewRepairPacket struct {
 	// Version identifies this packet shape.
 	Version int `json:"version"`
+	// Source identifies who requested the repair. It is empty for packets
+	// written before human-requested repair existed, which means factory.
+	Source ReviewRepairSource `json:"source,omitempty"`
+	// ReviewID is the GitHub review identity of a human repair packet. It is
+	// empty for a factory packet.
+	ReviewID string `json:"review_id,omitempty"`
 	// RunID identifies the owning factory run.
 	RunID string `json:"run_id"`
 	// CheckpointSHA identifies the exact checkpoint that produced the findings.
@@ -528,6 +548,13 @@ type Run struct {
 	// ProcessedCommentRevision records the run revision at which the watermark
 	// was persisted, making the watermark tuple restart-safe and auditable.
 	ProcessedCommentRevision int64
+	// ProcessedReviewID is the highest applied GitHub pull-request review
+	// watermark for this run. Repeated polling and a coordinator restart must
+	// never apply the same completed human review twice.
+	ProcessedReviewID string
+	// ProcessedReviewRevision records the run revision at which the review
+	// watermark was persisted, making the tuple restart-safe and auditable.
+	ProcessedReviewRevision int64
 	// LastCommandName is the last recognized structured command kind.
 	LastCommandName string
 	// LastCommandOutcome is accepted, rejected, or replayed for the last command.
@@ -818,6 +845,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
+		       processed_review_id, processed_review_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
@@ -848,6 +876,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
+		       processed_review_id, processed_review_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
@@ -914,6 +943,8 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.Revision,
 		&run.ProcessedCommentID,
 		&run.ProcessedCommentRevision,
+		&run.ProcessedReviewID,
+		&run.ProcessedReviewRevision,
 		&run.LastCommandName,
 		&run.LastCommandOutcome,
 		&run.LastCommandMessage,
@@ -1537,8 +1568,23 @@ func validateReviewRepairProjection(run Run) error {
 		if packet.Version <= 0 || packet.RunID != run.ID || !validGateCheckpointSHA(packet.CheckpointSHA) {
 			return errors.New("review repair packet identity is invalid")
 		}
-		if packet.Attempt < 1 || packet.Attempt > run.ReviewRepairBudget || packet.Budget != run.ReviewRepairBudget {
-			return errors.New("review repair packet budget or attempt is invalid")
+		if packet.Budget != run.ReviewRepairBudget {
+			return errors.New("review repair packet budget is invalid")
+		}
+		switch packet.Source {
+		case ReviewRepairSourceHuman:
+			// A human-requested repair is not one of the bounded factory
+			// rounds, so it carries no attempt number and never exhausts the
+			// budget. Its GitHub review identity is what makes it replayable.
+			if packet.Attempt != 0 || strings.TrimSpace(packet.ReviewID) == "" {
+				return errors.New("human review repair packet must identify its GitHub review and carry no attempt")
+			}
+		case "", ReviewRepairSourceFactory:
+			if packet.Attempt < 1 || packet.Attempt > run.ReviewRepairBudget || packet.ReviewID != "" {
+				return errors.New("factory review repair packet attempt is invalid")
+			}
+		default:
+			return fmt.Errorf("unsupported review repair source %q", packet.Source)
 		}
 		if len(packet.Findings) == 0 || len(packet.Findings) > 256 {
 			return errors.New("review repair packet findings must contain one to 256 entries")
@@ -1892,6 +1938,8 @@ func runValues(run Run) []any {
 		run.Revision,
 		run.ProcessedCommentID,
 		run.ProcessedCommentRevision,
+		run.ProcessedReviewID,
+		run.ProcessedReviewRevision,
 		run.LastCommandName,
 		run.LastCommandOutcome,
 		run.LastCommandMessage,
@@ -1934,7 +1982,8 @@ const saveRunStatement = `
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
 			lifecycle_notification_sent, ready_notification_sent,
 			revision, processed_comment_id,
-			processed_comment_revision, last_command_name, last_command_outcome,
+			processed_comment_revision, processed_review_id, processed_review_revision,
+			last_command_name, last_command_outcome,
 			last_command_message, harness_override, check_repair_attempts,
 			check_repair_budget, check_repair_pending_attempt, specification_packet,
 			pending_questions, clarification_comment_id,
@@ -1945,7 +1994,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -1989,6 +2038,8 @@ const saveRunStatement = `
 			revision = excluded.revision,
 			processed_comment_id = excluded.processed_comment_id,
 			processed_comment_revision = excluded.processed_comment_revision,
+			processed_review_id = excluded.processed_review_id,
+			processed_review_revision = excluded.processed_review_revision,
 			last_command_name = excluded.last_command_name,
 			last_command_outcome = excluded.last_command_outcome,
 			last_command_message = excluded.last_command_message,
@@ -2019,7 +2070,8 @@ const saveRunIfRevisionStatement = `
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
 			lifecycle_notification_sent = ?, ready_notification_sent = ?,
 			revision = ?, processed_comment_id = ?,
-			processed_comment_revision = ?, last_command_name = ?, last_command_outcome = ?,
+			processed_comment_revision = ?, processed_review_id = ?, processed_review_revision = ?,
+			last_command_name = ?, last_command_outcome = ?,
 			last_command_message = ?, harness_override = ?, check_repair_attempts = ?,
 			check_repair_budget = ?, check_repair_pending_attempt = ?, specification_packet = ?,
 			pending_questions = ?, clarification_comment_id = ?,
@@ -3143,6 +3195,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 30:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN ready_notification_sent INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return fmt.Errorf("apply store migration 30: %w", err)
+			}
+		case 31:
+			for _, statement := range []string{
+				"ALTER TABLE operational_runs ADD COLUMN processed_review_id TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE operational_runs ADD COLUMN processed_review_revision INTEGER NOT NULL DEFAULT 0",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 31: %w", err)
+				}
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

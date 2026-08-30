@@ -194,8 +194,10 @@ func (s *Service) Start(ctx context.Context) error {
 			return err
 		}
 		leaseRunID = result.Run.ID
+		delay = interval
 		if result.Outcome == PollClaimed || result.Outcome == PollActiveRun {
-			if _, err := s.driveRun(pollContext, registration); err != nil {
+			progression, err := s.driveRun(pollContext, registration)
+			if err != nil {
 				if pollingContextDone(err) {
 					return nil
 				}
@@ -207,8 +209,16 @@ func (s *Service) Start(ctx context.Context) error {
 				continue
 			}
 			consecutiveProgressionFailures = 0
+			// A run this pass drove into a terminal state releases the
+			// one-active-run constraint. Observe the queue again without
+			// waiting a full interval so the next oldest eligible issue starts
+			// promptly. An idle pass that performed no transition is not a
+			// release, so it keeps the ordinary interval.
+			if progression.Outcome == progressionTerminal || (progression.Outcome == progressionIdle && progression.Steps > 0) {
+				leaseRunID = ""
+				delay = 0
+			}
 		}
-		delay = interval
 	}
 }
 

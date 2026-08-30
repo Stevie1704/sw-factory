@@ -34,6 +34,10 @@ repository. The deeper contracts live in
 - [Recovery and authentication](#recovery-and-authentication)
 - [Persistent polling](#persistent-polling)
   - [Unattended claim-to-draft-PR progression](#unattended-claim-to-draft-pr-progression)
+  - [Unattended review, repair, and readiness](#unattended-review-repair-and-readiness)
+  - [Human review as a repair trigger](#human-review-as-a-repair-trigger)
+  - [Terminal outcomes and queue continuation](#terminal-outcomes-and-queue-continuation)
+  - [States that intentionally pause progression](#states-that-intentionally-pause-progression)
 - [Evaluation and cleanup](#evaluation-and-cleanup)
 - [Security and data boundaries](#security-and-data-boundaries)
 - [Command reference](#command-reference)
@@ -560,8 +564,10 @@ model.
 ## Run an issue from start to draft PR
 
 Routine operation needs one command: <code>factory start</code> claims the
-oldest eligible issue and drives it to a draft pull request without any further
-CLI step. See [Persistent polling](#persistent-polling).
+oldest eligible issue, drives it to a draft pull request, runs both independent
+reviews and their bounded repair loop, marks the pull request ready, and claims
+the next issue after a human merges or closes it - all without a further CLI
+step. See [Persistent polling](#persistent-polling).
 
 The one-shot commands below perform the same boundaries one at a time. Use them
 for diagnosis or a deliberately manual run; they are the clearest way to see
@@ -1166,14 +1172,6 @@ no agent may choose, skip, or redefine one.
 6. A coherent checkpoint that passes every gate is pushed and receives one
    draft pull request.
 
-Progression stops in its defined waiting state, and publishes the reason in the
-editable status comment, for a clarification request, a policy rejection, an
-exhausted retry budget, a harness rate limit, an authentication failure, an
-invocation that requires <code>factory attach</code>, or an ambiguous recovery.
-The concurrent isolated reviews remain a deliberate step; unattended
-progression ends at the draft pull request or while either review awaits human
-action.
-
 Repeated polling and a coordinator restart are safe. Every transition runs
 through the same durable effect journal as the one-shot commands, so a second
 pass reconciles pending effects instead of creating a second invocation,
@@ -1181,6 +1179,86 @@ checkpoint, push, comment, status, or pull request. The supervisor also
 observes a tracked issue or pull request before restart reconciliation when no
 effect is pending, which lets an already-merged or closed target enter its
 terminal state even after GitHub deletes the run branch.
+
+### Unattended review, repair, and readiness
+
+The draft pull request is not the end of the routine path. When the frozen
+packet declares both independent review roles, the coordinator continues
+without any stage-driving command.
+
+1. It launches the specification reviewer and the standards reviewer for the
+   same immutable checkpoint. Launching is serialized; the two sessions then
+   run concurrently in their own workers, homes, and result directories, and
+   neither reviewer ever sees the other's findings.
+2. When both reviewers have reported for the exact current checkpoint, their
+   blocking findings are combined into one implementation repair packet. A
+   finding that names the test role still reaches it through the existing
+   structured objection protocol; implementation never edits a protected test.
+3. The repair produces a new checkpoint, which reruns every configured gate and
+   both reviewers in fresh sessions. No gate result and no review result
+   survives a code change, because both are keyed by the exact commit.
+4. A materially repeated blocker escalates immediately, even with budget left,
+   and an exhausted <code>review_repair</code> budget escalates too. Both enter
+   the waiting-for-human state instead of looping.
+5. When the final checkpoint passes every gate and neither reviewer reports a
+   blocker, the coordinator synchronizes the target if configured, removes the
+   draft flag, and waits. The factory never approves and never merges.
+
+### Human review as a repair trigger
+
+One or more submitted GitHub reviews with the <code>CHANGES_REQUESTED</code>
+decision from users in <code>authorized_users</code> are a progression event.
+The coordinator combines all concurrent applicable reviews before one repair
+flow begins, consuming them as a single human repair packet holding every
+review body and inline comment. It returns the pull request to draft when it was
+already ready and resumes implementation from the current checkpoint. All
+downstream results for the superseded checkpoint are invalidated, so every gate
+and both fresh reviewers must pass again before the pull request can become
+ready a second time.
+
+A human-requested repair is not one of the bounded factory repair rounds and
+never consumes the <code>review_repair</code> budget. The editable status
+comment names the review that triggered it under the review-repair cycle.
+
+These do not start work: an unsubmitted review draft, an ordinary issue or
+pull-request comment, a <code>COMMENTED</code> review, an approval, a dismissed
+decision, and any review from a user outside <code>authorized_users</code>.
+
+The applied review identity is persisted as a watermark on the run, so repeated
+polling and a coordinator restart cannot apply the same review twice.
+
+### Terminal outcomes and queue continuation
+
+The coordinator observes the tracked pull request before it applies any
+transition, so a terminal disposition always wins over further work.
+
+| Observation                        | Outcome                                                                         |
+| ---------------------------------- | ------------------------------------------------------------------------------- |
+| Pull request merged                | The run completes and records the merge commit.                                  |
+| Pull request closed without merge  | The run is cancelled; its branch, worktree, worker, and artifacts are retained.  |
+| Issue closed                       | The run is cancelled the same way.                                               |
+
+Either terminal outcome releases the one-active-run constraint. The same
+<code>factory start</code> process then claims the next oldest eligible issue
+without waiting for a full polling interval and without an operator restart.
+Retention is unchanged: cleanup stays an explicit, separate seven-day
+operation.
+
+### States that intentionally pause progression
+
+A non-terminal waiting state keeps the run active and suppresses new claims, so
+the queue stays blocked until a person or infrastructure resolves it. The
+reason is published in the editable status comment.
+
+| Pause                                   | Who resolves it                                     |
+| --------------------------------------- | --------------------------------------------------- |
+| Clarification request                   | An authorized <code>/factory answer</code> comment.  |
+| Ready pull request awaiting disposition | A human merge or close.                              |
+| Repeated blocker or exhausted budget    | A human decision on the finding.                     |
+| Policy rejection                        | An authorized command or an issue change.            |
+| Harness rate limit or expired auth      | Harness infrastructure; the coordinator retries.     |
+| Invocation needing <code>factory attach</code> | An operator attaching the resumed session.    |
+| Ambiguous recovery discrepancy          | A human reconciliation decision.                     |
 
 ### Activity in status output
 
@@ -1203,7 +1281,9 @@ editable status comment publish a separate activity value:
 available for diagnosis and deliberate manual operation. They are not part of
 routine unattended progression. Likewise, <code>factory poll</code> is the
 explicit one-shot command for issue/PR lifecycle observation and structured
-GitHub command handling.
+GitHub command handling. It does not consume human reviews: the
+<code>CHANGES_REQUESTED</code> repair trigger belongs to the persistent
+coordinator.
 
 ## Evaluation and cleanup
 
@@ -1345,7 +1425,7 @@ supported by the installed binary.
 | <code>factory register</code>               | Register the one repository, GitHub identity, authorized users, polling settings, cmux settings, auth sources, repository policy path, and SQLite path.           |
 | <code>factory bootstrap-labels</code>       | Create the six factory-owned GitHub labels explicitly and idempotently.                                                                                           |
 | <code>factory doctor</code>                 | Run the complete startup diagnosis and print every problem/action.                                                                                                |
-| <code>factory start</code>                  | Run the persistent queue/lease supervisor and drive each claimed run to its draft pull request.                                                                    |
+| <code>factory start</code>                  | Run the persistent queue/lease supervisor, drive each claimed run through review, repair, and readiness, and continue with the next issue after a terminal outcome. |
 | <code>factory stop</code>                   | Stop a running supervisor without cancelling the active run.                                                                                                      |
 | <code>factory issue [--issue N] N</code>    | Diagnostic: claim one issue and run its baseline. The number may be positional or supplied with <code>--issue</code>, but not both.                               |
 | <code>factory agent</code>                  | Diagnostic: start the active stage's visible role, or select a validated role/stage/harness/model/reasoning override.                                             |

@@ -98,6 +98,16 @@ func decideReviewRepair(run store.Run, findings []store.ReviewRepairFinding) rev
 	return decision
 }
 
+// consumesBoundedRepairRound reports whether one implementation launch consumes
+// a reserved factory repair round.
+//
+// Only a factory packet reserves a round. A human-requested repair carries no
+// attempt number, so recording it would reset the bounded budget and let every
+// `CHANGES_REQUESTED` review revive an exhausted repair allowance.
+func consumesBoundedRepairRound(reviewRepair bool, packet *store.ReviewRepairPacket) bool {
+	return reviewRepair && packet != nil && packet.Source != store.ReviewRepairSourceHuman
+}
+
 // reviewRepairRemaining returns a non-negative budget remainder.
 func reviewRepairRemaining(budget, attempts int) int {
 	if budget <= attempts {
@@ -506,7 +516,9 @@ func (s *Service) routeReviewRepair(ctx context.Context, registration config.Rep
 		next.Stage = store.StageImplementation
 		next.Status = store.StatusActive
 		next.LifecycleReason = fmt.Sprintf("blocking review findings routed to implementation repair attempt %d of %d", decision.Attempt, run.ReviewRepairBudget)
-		next.ReviewRepairAttempts = decision.Attempt
+		// Reserve the round without consuming it. The attempt count advances
+		// only when the visible implementation invocation actually launches,
+		// so an interrupted launch stays distinguishable from a used attempt.
 		next.ReviewRepairPendingAttempt = decision.Attempt
 		next.ReviewRepairPacket = packet
 		next.ReviewRepairHistory = reviewRepairHistoryWithOutcome(run.ReviewRepairHistory, decision.Attempt, store.ReviewRepairPending, packet)

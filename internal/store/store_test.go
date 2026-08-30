@@ -1242,3 +1242,69 @@ func TestLatestRunIncludesTerminalState(t *testing.T) {
 		t.Fatalf("LatestRun() = %#v, want terminal run %#v", got, wanted)
 	}
 }
+
+// TestStorePersistsTheHumanReviewWatermarkAndPacket verifies the replay-safe
+// GitHub review identity and the unbounded human repair packet survive a
+// coordinator restart, and that the packet still rejects a missing identity.
+func TestStorePersistsTheHumanReviewWatermarkAndPacket(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	finding := store.ReviewRepairFinding{ReviewerRole: "human", Finding: store.ReviewFinding{
+		Location: "internal/factory/polling.go:42", Claim: "this branch never releases the queue",
+		Evidence: "GitHub review 4001 submitted by alice", Severity: "blocker", Category: "specification",
+		SuggestedResolution: "release queue ownership on the terminal transition", SuggestedOwner: "implementation",
+	}}
+	run := store.Run{
+		ID:                      "run-human-review",
+		RepositoryPath:          "/work/repository",
+		Stage:                   store.StageImplementation,
+		Status:                  store.StatusActive,
+		ReviewRepairBudget:      2,
+		ProcessedReviewID:       "4001",
+		ProcessedReviewRevision: 7,
+		Revision:                7,
+		ReviewRepairPacket: &store.ReviewRepairPacket{
+			Version: 1, Source: store.ReviewRepairSourceHuman, ReviewID: "4001",
+			RunID: "run-human-review", CheckpointSHA: strings.Repeat("b", 64), Budget: 2,
+			Findings: []store.ReviewRepairFinding{finding},
+		},
+		CheckpointSHA: strings.Repeat("b", 64),
+		CreatedAt:     time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ProcessedReviewID != "4001" || got.ProcessedReviewRevision != 7 {
+		t.Fatalf("CurrentRun() = %#v, want the persisted human review watermark", got)
+	}
+	if got.ReviewRepairPacket == nil || got.ReviewRepairPacket.Source != store.ReviewRepairSourceHuman || got.ReviewRepairPacket.ReviewID != "4001" {
+		t.Fatalf("CurrentRun() packet = %#v, want the human repair packet", got.ReviewRepairPacket)
+	}
+
+	anonymous := run
+	anonymous.ID = "run-anonymous-human-review"
+	packet := *run.ReviewRepairPacket
+	packet.RunID = anonymous.ID
+	packet.ReviewID = ""
+	anonymous.ReviewRepairPacket = &packet
+	if err := reopened.SaveRun(context.Background(), anonymous); err == nil || !strings.Contains(err.Error(), "must identify its GitHub review") {
+		t.Fatalf("SaveRun() error = %v, want a refusal of an unidentified human repair packet", err)
+	}
+}

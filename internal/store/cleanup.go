@@ -265,6 +265,7 @@ func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
 		       revision, processed_comment_id, processed_comment_revision,
+		       processed_review_id, processed_review_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
