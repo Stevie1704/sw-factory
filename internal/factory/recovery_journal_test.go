@@ -448,6 +448,45 @@ func TestRecoveryAcceptsAStoppedWorkerAfterReadiness(t *testing.T) {
 	}
 }
 
+// TestRecoveryAcceptsAnUninspectableSessionAtAHumanWaitingBoundary verifies
+// that a run paused for human disposition, whose worker the pause deliberately
+// stopped, does not report a native-session discrepancy. Such a discrepancy is
+// not recoverable and would block the coordinator from starting at all.
+func TestRecoveryAcceptsAnUninspectableSessionAtAHumanWaitingBoundary(t *testing.T) {
+	now := time.Unix(3, 0).UTC()
+	run := store.Run{ID: "run-human-waiting-session", Stage: store.StageTest, Status: store.StatusWaitingForHuman}
+	invocation := store.Invocation{
+		ID: "inv-human-waiting-session", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "test", Stage: store.StageTest,
+		NativeSessionID: "session-human-waiting", WorkspaceID: "workspace-human-waiting",
+		ImplementationSurfaceID: "surface-human-waiting", RoleSurfaceID: "surface-human-waiting",
+		Status:    store.InvocationStatusWaitingForHuman,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	workerRuntime := &journalRecoveryWorker{inspection: worker.Inspection{}}
+	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
+		Exists: true, WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
+		Surfaces: []terminal.Surface{
+			{ID: terminal.SurfaceID(invocation.RoleSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+		},
+	}}
+	service := &Service{deps: Dependencies{
+		Worker: workerRuntime, Terminal: terminalRuntime,
+		Harness: &journalRecoveryHarness{
+			nativeSessionID:  invocation.NativeSessionID,
+			nativeSessionErr: errors.New(`worker "run-human-waiting-session" is not running`),
+		},
+	}}
+	baseStore := &repairLaunchStore{run: run, invocations: map[string]store.Invocation{invocation.ID: invocation}}
+	runStore := &terminalProjectionStore{repairLaunchStore: baseStore}
+	diagnosis := newRecoveryDiagnosis(run.ID)
+
+	service.inspectInvocationProjection(context.Background(), &diagnosis, config.RepositoryRegistration{}, runStore, run)
+	if len(diagnosis.Discrepancies) != 0 {
+		t.Fatalf("recovery discrepancies = %#v, want stopped session accepted while waiting for human", diagnosis.Discrepancies)
+	}
+}
+
 // TestPollLifecycleCompletesAMergedRunBeforeRecovery verifies that a deleted
 // remote branch and historical worker projection cannot block the public
 // lifecycle seam from recording an already-merged pull request.
@@ -936,6 +975,7 @@ var _ terminal.WorkspaceInspector = (*journalRecoveryTerminal)(nil)
 // calls so the startup test can detect duplicate continuation.
 type journalRecoveryHarness struct {
 	nativeSessionID     string
+	nativeSessionErr    error
 	resumeCalls         int
 	failResumeOnce      bool
 	resumeErr           error
@@ -971,6 +1011,9 @@ func (*journalRecoveryHarness) Finish(context.Context, harness.Session) error { 
 
 // NativeSessionID returns the stable native session projection.
 func (h *journalRecoveryHarness) NativeSessionID(context.Context, harness.NativeSessionRequest) (string, error) {
+	if h.nativeSessionErr != nil {
+		return "", h.nativeSessionErr
+	}
 	return h.nativeSessionID, nil
 }
 

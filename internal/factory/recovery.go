@@ -638,6 +638,13 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	if !hasNativeSession {
 		return
 	}
+	if expectedStopped {
+		// A human-waiting boundary intentionally finishes the harness session
+		// and stops the worker. The native session cannot be inspected without
+		// a running worker, so its absence is the expected projection here
+		// rather than a discrepancy that must block the coordinator.
+		return
+	}
 	if inspector, ok := harnessRuntime.(harness.NativeSessionInspector); ok {
 		observed, providerErr := inspector.NativeSessionID(ctx, harness.NativeSessionRequest{RunID: run.ID, WorkerID: workerIDForInvocation(*active), Harness: active.Harness})
 		if providerErr != nil {

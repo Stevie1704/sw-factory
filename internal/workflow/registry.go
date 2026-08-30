@@ -25,7 +25,7 @@ const (
 	RoleStandardsReview = "standards_review"
 
 	// PromptVersionTest identifies the immutable test-role prompt.
-	PromptVersionTest = "test-v1"
+	PromptVersionTest = "test-v2"
 	// PromptVersionImplementation identifies the immutable implementation prompt.
 	PromptVersionImplementation = "implementation-v1"
 	// PromptVersionArchitecture identifies the immutable architecture prompt.
