@@ -244,7 +244,7 @@ func TestStartBacksOffCommandTransportFailures(t *testing.T) {
 		t.Fatalf("command retry gap = %s, want the configured backoff before the second command poll", gap)
 	}
 	if savedCommandWatermark(runStore.saved, "15", "status") {
-		t.Fatal("a command was applied although its comment listing failed")
+		t.Fatal("a queued command was applied although every comment listing failed")
 	}
 }
 
@@ -270,7 +270,8 @@ type pollingCommentReader struct {
 }
 
 // IssueComments records the listing time, runs the optional test hook, and
-// then replays the configured transport failure or comment set.
+// then replays the next configured transport failure, or the comment set once
+// the failures are exhausted.
 func (r *pollingCommentReader) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
 	r.calls++
 	r.times = append(r.times, time.Now())
@@ -280,9 +281,7 @@ func (r *pollingCommentReader) IssueComments(context.Context, github.Repository,
 	if len(r.listErrors) > 0 {
 		err := r.listErrors[0]
 		r.listErrors = r.listErrors[1:]
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	return append([]github.Comment(nil), r.comments...), nil
 }

@@ -592,6 +592,36 @@ func TestHandleCommandAnswerKeepsAClaimStageRunAtClaim(t *testing.T) {
 	}
 }
 
+// TestHandleCommandRefreshParksAClaimStageRunWithoutATestRolePolicy verifies
+// a packet the baseline could never leave still parks visibly at claim. The
+// post-baseline transition rejects such a packet on every pass, so an active
+// run would fail unattended progression instead of asking for a human.
+func TestHandleCommandRefreshParksAClaimStageRunWithoutATestRolePolicy(t *testing.T) {
+	t.Parallel()
+
+	// commandRun freezes a packet whose role harness defaults omit the test
+	// role, which is exactly the mandatory policy the test stage requires.
+	run := commandRun(t, store.StatusActive)
+	run.Stage = store.StageClaim
+	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	runStore := &commandInvocationRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
+	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 42,
+		Comment:     github.Comment{ID: "22", Author: "alice", Body: "/factory refresh"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Run.Stage != store.StageClaim || result.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("run = stage %q status %q, want a claim-stage run waiting for a human", result.Run.Stage, result.Run.Status)
+	}
+	if !strings.Contains(result.Run.LifecycleReason, "mandatory test-stage role policy") {
+		t.Fatalf("lifecycle reason = %q, want the missing test-role policy", result.Run.LifecycleReason)
+	}
+}
+
 // claimStageCommandRun creates a run that was claimed but has not yet passed
 // its frozen baseline suite. Its packet declares the complete test-stage
 // policy, so only the missing baseline can block a post-baseline stage.
@@ -613,6 +643,18 @@ func claimStageCommandRun(t *testing.T, status store.Status) store.Run {
 type commandInvocationRunStore struct {
 	*commandRunStore
 	invocations []store.Invocation
+}
+
+// SaveGateResults satisfies the baseline gate seam; a claim-stage run has no
+// baseline results to retain.
+func (s *commandInvocationRunStore) SaveGateResults(context.Context, []store.GateResult) error {
+	return nil
+}
+
+// GateResults reports the empty baseline projection of a run that has not yet
+// run its frozen suite, so a post-baseline stage cannot satisfy the gate.
+func (s *commandInvocationRunStore) GateResults(context.Context, string, store.GatePhase, string) ([]store.GateResult, error) {
+	return nil, nil
 }
 
 // SaveInvocation records a launched invocation for resumption assertions.

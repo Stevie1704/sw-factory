@@ -175,10 +175,11 @@ func (s *Service) Start(ctx context.Context) error {
 				delay = backoff
 				continue
 			}
-			// A command that cannot be applied is already visible as a
-			// rejection on its issue, and the next pass reads the same
-			// comments again. Keep observing the queue instead of stopping the
-			// coordinator over one operator comment.
+			// Every remaining command failure, from a rejected comment to an
+			// unreadable command store, leaves the run untouched and is
+			// retried by the next pass over the same comments. None of them
+			// may stop an unattended coordinator, so the queue observation
+			// below still runs.
 		}
 		result, err := s.pollOnce(pollContext, registration)
 		if err != nil {

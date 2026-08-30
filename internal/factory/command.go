@@ -577,10 +577,9 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
-	// A run still at claim has no frozen baseline yet, so the coordinator's
-	// progression pass owns the next transition. Launching a role here would
-	// fail the baseline gate that only the claim stage can produce.
-	if run.Stage == store.StageClaim {
+	// The coordinator's progression pass owns the baseline, so a run that has
+	// not passed it yet must not launch a role here.
+	if awaitingBaseline(run) {
 		return run, nil
 	}
 	request := normalizeAgentRequest(agentRequestForRun(run))
@@ -599,14 +598,19 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	return run, nil
 }
 
+// awaitingBaseline reports whether a run has not yet passed its frozen
+// baseline suite. Only the claim stage runs that suite, so a packet change
+// must leave such a run there: a post-baseline stage it jumped to could never
+// satisfy the baseline gate and would wedge the run permanently.
+func awaitingBaseline(run store.Run) bool {
+	return run.Stage == store.StageClaim
+}
+
 // packetResumeStageForPacket preserves test ownership when a configured test
 // stage receives a new specification packet, including refreshes initiated
 // after implementation has already started.
 func packetResumeStageForPacket(run store.Run, packet SpecificationPacket) store.Stage {
-	// Only the claim stage runs the frozen baseline suite, so a run that has
-	// not left it must stay there. A jump to a post-baseline stage can never
-	// satisfy the baseline gate and wedges the run permanently.
-	if run.Stage == store.StageClaim {
+	if awaitingBaseline(run) {
 		return store.StageClaim
 	}
 	if entry := postBaselineStage(packet); entry != store.StageTest {
@@ -644,10 +648,15 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
 	run.TestStageSkipped = false
-	// A run still at claim keeps the baseline as its next step; the entry
-	// stage is selected by the healthy baseline result, not by the packet
-	// change itself.
-	if run.Stage == store.StageClaim {
+	// The healthy baseline result selects the entry stage, not the packet
+	// change itself. A packet the baseline could never leave still parks
+	// visibly, because advanceAfterBaseline rejects it after every pass.
+	if awaitingBaseline(*run) {
+		if !testRolePolicySatisfied(packet) {
+			run.Status = store.StatusWaitingForHuman
+			run.LifecycleReason = "frozen repository packet lacks the mandatory test-stage role policy"
+			return
+		}
 		run.Status = store.StatusActive
 		run.LifecycleReason = "specification packet changed; baseline restarted"
 		return
