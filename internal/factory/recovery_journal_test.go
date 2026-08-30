@@ -466,6 +466,35 @@ func TestPollLifecycleCompletesAMergedRunBeforeRecovery(t *testing.T) {
 	}
 }
 
+// TestDriveRunPropagatesTerminalLifecycleOutcomes verifies that lifecycle
+// observations release the queue through the progression result consumed by
+// the persistent polling loop.
+func TestDriveRunPropagatesTerminalLifecycleOutcomes(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		merged  bool
+		outcome LifecycleOutcome
+		status  store.Status
+	}{
+		{name: "completed", merged: true, outcome: LifecycleCompleted, status: store.StatusComplete},
+		{name: "cancelled", outcome: LifecycleCancelled, status: store.StatusCancelled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDraftPRRecoveryFixture(t, "run-drive-"+test.name, 19, test.merged, "")
+			if !test.merged {
+				fixture.github.pullRequest.State = "closed"
+			}
+			result, err := fixture.lifecycleService().driveRun(context.Background(), fixture.host.Repositories[0])
+			if err != nil {
+				t.Fatalf("driveRun() error = %v", err)
+			}
+			if result.Outcome != progressionTerminal || result.Run.Status != test.status {
+				t.Fatalf("driveRun() result = %#v, want terminal %s lifecycle outcome", result, test.outcome)
+			}
+		})
+	}
+}
+
 // TestStartCompletesAMergedRunBeforeRecovery verifies the persistent
 // supervisor records an already-merged pull request before startup
 // reconciliation can reject its deleted remote branch.

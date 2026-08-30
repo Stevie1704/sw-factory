@@ -93,10 +93,11 @@ after a terminal pull-request outcome.
 _Avoid_: Autonomous agent, agent-driven workflow, auto-merge
 
 **Human repair packet**:
-The coordinator-owned repair context built from one submitted
-`CHANGES_REQUESTED` review by an authorized maintainer, holding the completed
-review body and its inline findings. It is not one of the bounded factory
-repair rounds and never consumes the review-repair budget.
+The coordinator-owned repair context built from one or more applicable
+`CHANGES_REQUESTED` reviews by authorized maintainers, holding their completed
+review bodies and inline findings. Concurrent applicable reviews form one
+packet outside the bounded factory repair rounds and never consume the
+review-repair budget.
 _Avoid_: Comment command, review reply, advisory feedback
 
 **Review watermark**:

@@ -84,7 +84,8 @@ type progressionState struct {
 // creating a second invocation, checkpoint, push, comment, or pull request.
 func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRegistration) (progressionResult, error) {
 	result := progressionResult{Outcome: progressionIdle}
-	if err := s.observePullRequestEvents(ctx, registration); err != nil {
+	lifecycle, err := s.observePullRequestEvents(ctx, registration)
+	if err != nil {
 		if pollingContextDone(err) || ctx.Err() != nil {
 			return result, err
 		}
@@ -93,6 +94,9 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			return result, errors.Join(err, readErr)
 		}
 		return s.stopProgressionAfterFailure(ctx, registration, *state.Run, "observe pull-request events", err, result.Steps)
+	}
+	if lifecycle.Outcome == LifecycleCompleted || lifecycle.Outcome == LifecycleCancelled {
+		return progressionResult{Outcome: progressionTerminal, Run: lifecycle.Run, Reason: lifecycle.Reason}, nil
 	}
 	for result.Steps < maxProgressionSteps {
 		if err := ctx.Err(); err != nil {
@@ -147,42 +151,42 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 // closed pull request ends the run and must not be followed by repair,
 // readiness, or infrastructure work. A pending durable effect defers both
 // observations to reconciliation, which owns the unresolved mutation.
-func (s *Service) observePullRequestEvents(ctx context.Context, registration config.RepositoryRegistration) error {
+func (s *Service) observePullRequestEvents(ctx context.Context, registration config.RepositoryRegistration) (LifecycleResult, error) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
 	if err != nil {
-		return fmt.Errorf("open operational store to observe pull-request events: %w", err)
+		return LifecycleResult{}, fmt.Errorf("open operational store to observe pull-request events: %w", err)
 	}
 	defer func() { _ = opened.Close() }()
 	runStore, ok := opened.(RunStore)
 	if !ok {
-		return nil
+		return LifecycleResult{Outcome: LifecycleUnchanged}, nil
 	}
 	run, err := runStore.CurrentRun(ctx)
 	if err != nil {
-		return fmt.Errorf("read run to observe pull-request events: %w", err)
+		return LifecycleResult{}, fmt.Errorf("read run to observe pull-request events: %w", err)
 	}
 	if run == nil || run.PullRequestNumber == 0 {
-		return nil
+		return LifecycleResult{Outcome: LifecycleUnchanged}, nil
 	}
 	if journal, journaled := runStore.(PendingEffectStore); journaled {
 		pending, pendingErr := journal.PendingEffect(ctx, run.ID)
 		if pendingErr != nil {
-			return fmt.Errorf("read pending effect before pull-request observation: %w", pendingErr)
+			return LifecycleResult{}, fmt.Errorf("read pending effect before pull-request observation: %w", pendingErr)
 		}
 		if pending != nil {
-			return nil
+			return LifecycleResult{Outcome: LifecycleUnchanged}, nil
 		}
 	}
 	lifecycle, err := s.observeLifecycle(ctx, registration, runStore, run)
 	if err != nil {
-		return err
+		return lifecycle, err
 	}
 	if lifecycle.Outcome != LifecycleUnchanged || store.IsTerminalStatus(lifecycle.Run.Status) {
-		return nil
+		return lifecycle, nil
 	}
-	return s.consumeHumanReview(ctx, registration, runStore, lifecycle.Run)
+	return lifecycle, s.consumeHumanReview(ctx, registration, runStore, lifecycle.Run)
 }
 
 // progressionAction is one coordinator-owned transition selected from durable

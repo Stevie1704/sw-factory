@@ -1206,11 +1206,12 @@ without any stage-driving command.
 
 ### Human review as a repair trigger
 
-A submitted GitHub review with the <code>CHANGES_REQUESTED</code> decision from
-a user in <code>authorized_users</code> is a progression event. The coordinator
-consumes that one completed review as a single human repair packet holding its
-review body and every inline comment, returns the pull request to draft when it
-was already ready, and resumes implementation from the current checkpoint. All
+One or more submitted GitHub reviews with the <code>CHANGES_REQUESTED</code>
+decision from users in <code>authorized_users</code> are a progression event.
+The coordinator combines all concurrent applicable reviews before one repair
+flow begins, consuming them as a single human repair packet holding every
+review body and inline comment. It returns the pull request to draft when it was
+already ready and resumes implementation from the current checkpoint. All
 downstream results for the superseded checkpoint are invalidated, so every gate
 and both fresh reviewers must pass again before the pull request can become
 ready a second time.
