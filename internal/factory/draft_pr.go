@@ -272,7 +272,7 @@ func (s *Service) runConfiguredGates(ctx context.Context, registration config.Re
 		return nil, err
 	}
 	suite, suiteErr := s.runGateSuite(ctx, registration, runStore, run, packet, gate.PhaseCheckpoint, packet.RepositoryConfig.Gates)
-	if persistErr := persistGateSuite(ctx, runStore, run, suite); persistErr != nil {
+	if persistErr := persistGateSuite(ctx, runStore, run, packet.RepositoryConfig.Gates, suite); persistErr != nil {
 		suiteErr = errors.Join(suiteErr, persistErr)
 	}
 	return suite.Gates, suiteErr

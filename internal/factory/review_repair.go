@@ -274,7 +274,11 @@ func recordReviewRepairTestOwnerResolution(run *store.Run) error {
 		return nil
 	}
 	packet := *run.ReviewRepairPacket
-	for _, finding := range unresolvedReviewRepairTestOwnerFindings(packet) {
+	unresolved := unresolvedReviewRepairTestOwnerFindings(packet)
+	if len(unresolved) == 0 {
+		return nil
+	}
+	for _, finding := range unresolved {
 		if !reviewRepairTestOwnerFindingMatches(run.TestObjection.Test, run.TestObjection.Claim, finding) {
 			continue
 		}

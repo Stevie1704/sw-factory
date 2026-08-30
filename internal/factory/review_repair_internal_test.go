@@ -181,7 +181,7 @@ func TestReviewRepairTestOwnerRequiresStructuredObjection(t *testing.T) {
 // TestReviewRepairTestOwnerRoutesOneStructuredObjectionPerCycle verifies that
 // one implementation report follows the existing single-objection protocol;
 // remaining findings stay queued for later objection cycles.
-func TestReviewRepairTestOwnerRequiresEveryStructuredObjection(t *testing.T) {
+func TestReviewRepairTestOwnerRoutesOneStructuredObjectionPerCycle(t *testing.T) {
 	t.Parallel()
 
 	findings := []store.ReviewRepairFinding{
@@ -260,6 +260,37 @@ func TestRecordReviewRepairTestOwnerResolutionTracksTheAcceptedFinding(t *testin
 	}
 	if len(run.ReviewRepairPacket.ResolvedTestOwnerFindingKeys) != 1 || run.ReviewRepairPacket.ResolvedTestOwnerFindingKeys[0] != reviewRepairTestOwnerFindingKey(finding) {
 		t.Fatalf("resolved test-owner keys = %#v, want one matching key", run.ReviewRepairPacket.ResolvedTestOwnerFindingKeys)
+	}
+}
+
+// TestRecordReviewRepairTestOwnerResolutionIgnoresObjectionWithoutFindings
+// verifies an accepted objection is harmless after all test-owned findings are
+// absent or resolved.
+func TestRecordReviewRepairTestOwnerResolutionIgnoresObjectionWithoutFindings(t *testing.T) {
+	t.Parallel()
+
+	run := store.Run{
+		ReviewRepairPacket: &store.ReviewRepairPacket{},
+		TestObjection:      &store.TestObjection{Test: "tests/ready_test.go:12", Claim: "the ready behavior is untested"},
+	}
+	if err := recordReviewRepairTestOwnerResolution(&run); err != nil {
+		t.Fatalf("recordReviewRepairTestOwnerResolution() error = %v, want no-op without test-owner findings", err)
+	}
+}
+
+// TestRecordReviewRepairTestOwnerResolutionRejectsUnmatchedObjection verifies
+// an objection cannot resolve a different outstanding test-owned finding.
+func TestRecordReviewRepairTestOwnerResolutionRejectsUnmatchedObjection(t *testing.T) {
+	t.Parallel()
+
+	run := store.Run{
+		ReviewRepairPacket: &store.ReviewRepairPacket{Findings: []store.ReviewRepairFinding{{
+			Finding: store.ReviewFinding{Location: "tests/ready_test.go:12", Claim: "the ready behavior is untested", SuggestedOwner: workflow.RoleTest},
+		}}},
+		TestObjection: &store.TestObjection{Test: "tests/merge_test.go:24", Claim: "the merge behavior is untested"},
+	}
+	if err := recordReviewRepairTestOwnerResolution(&run); err == nil || !strings.Contains(err.Error(), "does not identify") {
+		t.Fatalf("recordReviewRepairTestOwnerResolution() error = %v, want unmatched objection refusal", err)
 	}
 }
 

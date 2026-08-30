@@ -694,7 +694,7 @@ func TestStorePersistsReviewRepairState(t *testing.T) {
 		}},
 		ReviewRepairPacket: &store.ReviewRepairPacket{
 			Version: 1, RunID: "run-review-repair", CheckpointSHA: strings.Repeat("b", 64), Attempt: 2, Budget: 2,
-			Findings: []store.ReviewRepairFinding{{ReviewerRole: "spec_review", Finding: store.ReviewFinding{Location: "internal/factory/review.go:1", Claim: "behavior is incomplete", Severity: "blocker", Category: "correctness", SuggestedOwner: "implementation"}}},
+			Findings: []store.ReviewRepairFinding{{ReviewerRole: "spec_review", Finding: store.ReviewFinding{Location: "internal/factory/review.go:1", Claim: "behavior is incomplete", Evidence: "the completion branch omits the required transition", Severity: "blocker", Category: "correctness", SuggestedResolution: "apply the required transition before returning", SuggestedOwner: "implementation"}}},
 		},
 		CheckpointSHA:     strings.Repeat("b", 64),
 		BaseCheckpointSHA: strings.Repeat("c", 64),
@@ -717,6 +717,40 @@ func TestStorePersistsReviewRepairState(t *testing.T) {
 	}
 	if got == nil || got.ReviewRepairAttempts != 1 || got.ReviewRepairBudget != 2 || got.ReviewRepairPendingAttempt != 2 || len(got.ReviewRepairHistory) != 1 || got.ReviewRepairPacket == nil || got.ReviewRepairPacket.Findings[0].ReviewerRole != "spec_review" {
 		t.Fatalf("CurrentRun() = %#v, want review-repair state preserved", got)
+	}
+}
+
+// TestStoreRejectsIncompleteReviewRepairFindings verifies repair packets use
+// the same complete nested finding contract as exact-checkpoint reviews.
+func TestStoreRejectsIncompleteReviewRepairFindings(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	run := store.Run{
+		ID:                 "run-incomplete-review-repair",
+		RepositoryPath:     "/work/repository",
+		Stage:              store.StageImplementation,
+		Status:             store.StatusActive,
+		ReviewRepairBudget: 1,
+		ReviewRepairPacket: &store.ReviewRepairPacket{
+			Version: 1, RunID: "run-incomplete-review-repair", CheckpointSHA: strings.Repeat("b", 64), Attempt: 1, Budget: 1,
+			Findings: []store.ReviewRepairFinding{{
+				ReviewerRole: "spec_review",
+				Finding: store.ReviewFinding{
+					Location: "internal/factory/review.go:1", Claim: "behavior is incomplete", Severity: "blocker", Category: "correctness", SuggestedResolution: "apply the required transition", SuggestedOwner: "implementation",
+				},
+			}},
+		},
+		CheckpointSHA: strings.Repeat("b", 64),
+		CreatedAt:     time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err == nil || !strings.Contains(err.Error(), "evidence is required") {
+		t.Fatalf("SaveRun() error = %v, want incomplete review-repair finding refusal", err)
 	}
 }
 

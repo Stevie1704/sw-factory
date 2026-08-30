@@ -1547,6 +1547,9 @@ func validateReviewRepairProjection(run Run) error {
 			if !safeQuestionIdentifier(finding.ReviewerRole) {
 				return fmt.Errorf("review repair packet finding %d has an unsafe reviewer role", index)
 			}
+			if err := validateReviewFinding("review repair packet", index, finding.Finding); err != nil {
+				return err
+			}
 		}
 		if len(packet.ResolvedTestOwnerFindingKeys) > len(packet.Findings) {
 			return errors.New("review repair packet has too many resolved test-owner findings")
@@ -1581,24 +1584,33 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 		return fmt.Errorf("%s review findings exceed 64 entries", label)
 	}
 	for index, finding := range review.Findings {
-		for field, value := range map[string]string{
-			"location": finding.Location, "claim": finding.Claim, "evidence": finding.Evidence,
-			"suggested_resolution": finding.SuggestedResolution, "suggested_owner": finding.SuggestedOwner,
-		} {
-			if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
-				return fmt.Errorf("%s review finding %d %s is required and must be single-line", label, index, field)
-			}
+		if err := validateReviewFinding(label, index, finding); err != nil {
+			return err
 		}
-		switch finding.Severity {
-		case "blocker", "advisory":
-		default:
-			return fmt.Errorf("unsupported %s review severity %q", label, finding.Severity)
+	}
+	return nil
+}
+
+// validateReviewFinding applies the shared nested finding contract to both
+// exact-checkpoint reviews and review-repair packets.
+func validateReviewFinding(label string, index int, finding ReviewFinding) error {
+	for field, value := range map[string]string{
+		"location": finding.Location, "claim": finding.Claim, "evidence": finding.Evidence,
+		"suggested_resolution": finding.SuggestedResolution, "suggested_owner": finding.SuggestedOwner,
+	} {
+		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("%s review finding %d %s is required and must be single-line", label, index, field)
 		}
-		switch finding.Category {
-		case "correctness", "security", "specification", "documented_standards", "taste", "scope":
-		default:
-			return fmt.Errorf("unsupported %s review category %q", label, finding.Category)
-		}
+	}
+	switch finding.Severity {
+	case "blocker", "advisory":
+	default:
+		return fmt.Errorf("unsupported %s review severity %q", label, finding.Severity)
+	}
+	switch finding.Category {
+	case "correctness", "security", "specification", "documented_standards", "taste", "scope":
+	default:
+		return fmt.Errorf("unsupported %s review category %q", label, finding.Category)
 	}
 	return nil
 }
