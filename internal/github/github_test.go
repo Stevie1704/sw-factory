@@ -420,3 +420,49 @@ func hasArgs(args []string, wanted ...string) bool {
 	}
 	return true
 }
+
+// TestGhClientReadsCompletedPullRequestReviews verifies the read-only review
+// seam decodes submitted decisions, keeps an unsubmitted draft recognizable,
+// and fetches inline comments only for a changes-requested decision.
+func TestGhClientReadsCompletedPullRequestReviews(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`[[{"id":4001,"body":"restore the validation","state":"CHANGES_REQUESTED","submitted_at":"2026-08-29T09:30:00Z","html_url":"https://github.com/example/project/pull/17#pullrequestreview-4001","user":{"login":"alice"}},` +
+			`{"id":4002,"body":"looks interesting","state":"COMMENTED","submitted_at":"2026-08-29T09:31:00Z","user":{"login":"bob"}},` +
+			`{"id":4003,"body":"still drafting","state":"PENDING","user":{"login":"alice"}}]]`),
+		[]byte(`[[{"path":"internal/factory/polling.go","line":42,"body":"this branch never releases the queue"},` +
+			`{"path":"internal/factory/gate.go","position":9,"body":"legacy diff anchor"}]]`),
+	}}
+	client := &github.GhClient{Runner: runner}
+
+	reviews, err := client.PullRequestReviews(context.Background(), github.Repository{Owner: "example", Name: "project"}, 17)
+	if err != nil {
+		t.Fatalf("PullRequestReviews() error = %v", err)
+	}
+	if len(reviews) != 3 {
+		t.Fatalf("reviews = %d, want every listed review", len(reviews))
+	}
+	changes := reviews[0]
+	if changes.ID != "4001" || changes.Author != "alice" || changes.State != github.PullRequestReviewChangesRequested {
+		t.Fatalf("first review = %#v, want the authorized changes-requested decision", changes)
+	}
+	if changes.SubmittedAt.IsZero() || changes.Body != "restore the validation" {
+		t.Fatalf("first review = %#v, want the submitted body and time", changes)
+	}
+	if len(changes.Comments) != 2 || changes.Comments[0].Line != 42 || changes.Comments[1].Line != 9 {
+		t.Fatalf("inline comments = %#v, want the line anchor and the legacy position fallback", changes.Comments)
+	}
+	if len(reviews[1].Comments) != 0 {
+		t.Fatal("a commented review triggered an inline-comment request")
+	}
+	if !reviews[2].SubmittedAt.IsZero() || reviews[2].State != github.PullRequestReviewPending {
+		t.Fatalf("draft review = %#v, want an unsubmitted pending decision", reviews[2])
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("gh calls = %d, want the review list and one inline-comment list", len(runner.calls))
+	}
+	if !containsArgs(runner.calls[1].args, "api", "repos/example/project/pulls/17/reviews/4001/comments") {
+		t.Fatalf("inline comment call = %#v, want the changes-requested review only", runner.calls[1].args)
+	}
+}

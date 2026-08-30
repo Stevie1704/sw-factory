@@ -179,8 +179,10 @@ func (s *Service) Start(ctx context.Context) error {
 			return err
 		}
 		leaseRunID = result.Run.ID
+		delay = interval
 		if result.Outcome == PollClaimed || result.Outcome == PollActiveRun {
-			if _, err := s.driveRun(pollContext, registration); err != nil {
+			progression, err := s.driveRun(pollContext, registration)
+			if err != nil {
 				if pollingContextDone(err) {
 					return nil
 				}
@@ -192,8 +194,15 @@ func (s *Service) Start(ctx context.Context) error {
 				continue
 			}
 			consecutiveProgressionFailures = 0
+			if progression.Outcome == progressionTerminal || progression.Outcome == progressionIdle {
+				// The run this pass owned reached a terminal state, which
+				// releases the one-active-run constraint. Observe the queue
+				// again without waiting a full interval so the next oldest
+				// eligible issue starts promptly.
+				leaseRunID = ""
+				delay = 0
+			}
 		}
-		delay = interval
 	}
 }
 

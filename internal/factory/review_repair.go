@@ -506,7 +506,9 @@ func (s *Service) routeReviewRepair(ctx context.Context, registration config.Rep
 		next.Stage = store.StageImplementation
 		next.Status = store.StatusActive
 		next.LifecycleReason = fmt.Sprintf("blocking review findings routed to implementation repair attempt %d of %d", decision.Attempt, run.ReviewRepairBudget)
-		next.ReviewRepairAttempts = decision.Attempt
+		// Reserve the round without consuming it. The attempt count advances
+		// only when the visible implementation invocation actually launches,
+		// so an interrupted launch stays distinguishable from a used attempt.
 		next.ReviewRepairPendingAttempt = decision.Attempt
 		next.ReviewRepairPacket = packet
 		next.ReviewRepairHistory = reviewRepairHistoryWithOutcome(run.ReviewRepairHistory, decision.Attempt, store.ReviewRepairPending, packet)

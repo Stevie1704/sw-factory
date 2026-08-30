@@ -150,6 +150,9 @@ type Dependencies struct {
 	GitWorkspace gitadapter.GitWorkspace
 	// PullRequests owns idempotent draft pull-request discovery and mutation.
 	PullRequests github.PullRequestClient
+	// PullRequestReviews lists completed human reviews of a tracked pull
+	// request. It is read-only: the factory never submits or dismisses one.
+	PullRequestReviews github.PullRequestReviewReader
 	// Comments lists issue and pull-request comments for command polling.
 	Comments github.CommentReader
 	Worker   worker.WorkerRuntime
@@ -323,6 +326,11 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.PullRequests == nil {
 		if client, ok := dependencies.GitHub.(github.PullRequestClient); ok {
 			dependencies.PullRequests = client
+		}
+	}
+	if dependencies.PullRequestReviews == nil {
+		if reader, ok := dependencies.GitHub.(github.PullRequestReviewReader); ok {
+			dependencies.PullRequestReviews = reader
 		}
 	}
 	if dependencies.Comments == nil {

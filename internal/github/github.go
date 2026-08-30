@@ -221,6 +221,61 @@ type PullRequestClient interface {
 	UpdatePullRequest(context.Context, Repository, int, PullRequestRequest) (PullRequest, error)
 }
 
+// PullRequestReviewState is the bounded GitHub review decision vocabulary.
+// Only a submitted review carries one; an unsubmitted draft is `PENDING`.
+type PullRequestReviewState string
+
+const (
+	// PullRequestReviewPending is an unsubmitted review draft. It is visible
+	// only to its author and must never start factory work.
+	PullRequestReviewPending PullRequestReviewState = "PENDING"
+	// PullRequestReviewCommented is a submitted review without a decision.
+	PullRequestReviewCommented PullRequestReviewState = "COMMENTED"
+	// PullRequestReviewApproved is a submitted approval.
+	PullRequestReviewApproved PullRequestReviewState = "APPROVED"
+	// PullRequestReviewChangesRequested is the only review decision the
+	// coordinator treats as a progression event.
+	PullRequestReviewChangesRequested PullRequestReviewState = "CHANGES_REQUESTED"
+	// PullRequestReviewDismissed is a decision a maintainer later withdrew.
+	PullRequestReviewDismissed PullRequestReviewState = "DISMISSED"
+)
+
+// PullRequestReviewComment is one inline, file-anchored review finding.
+type PullRequestReviewComment struct {
+	// Path is the repository-relative file the reviewer annotated.
+	Path string
+	// Line is the annotated line in the file, or zero when GitHub reports none.
+	Line int
+	// Body is the reviewer's complete comment text.
+	Body string
+}
+
+// PullRequestReview is one completed human review of a tracked pull request.
+type PullRequestReview struct {
+	// ID is the immutable GitHub review identity used as a replay watermark.
+	ID string
+	// Author is the GitHub login that submitted the review.
+	Author string
+	// State is the submitted review decision.
+	State PullRequestReviewState
+	// Body is the completed review summary text.
+	Body string
+	// URL is the browser URL for operator supervision.
+	URL string
+	// SubmittedAt is the submission time. It is the zero value while GitHub
+	// still holds the review as an unsubmitted draft.
+	SubmittedAt time.Time
+	// Comments contains the review's inline findings in GitHub order.
+	Comments []PullRequestReviewComment
+}
+
+// PullRequestReviewReader is the read-only seam for observing completed human
+// reviews. It is separate from the mutation clients because the factory never
+// submits, approves, dismisses, or merges a review.
+type PullRequestReviewReader interface {
+	PullRequestReviews(context.Context, Repository, int) ([]PullRequestReview, error)
+}
+
 // PullRequestDraftClient owns the explicit draft/readiness mutation for an
 // existing pull request. Keeping it separate prevents body updates from
 // accidentally changing merge readiness.
@@ -601,25 +656,19 @@ func (c *GhClient) ListCommitStatuses(ctx context.Context, repository Repository
 	if err != nil {
 		return nil, fmt.Errorf("list commit statuses for %s: %w", sha, err)
 	}
-	var pages [][]commitStatusResponse
-	if err := json.Unmarshal(output, &pages); err != nil {
-		var flat []commitStatusResponse
-		if flatErr := json.Unmarshal(output, &flat); flatErr != nil {
-			return nil, fmt.Errorf("decode commit statuses for %s: %w", sha, flatErr)
-		}
-		pages = [][]commitStatusResponse{flat}
+	responses, err := decodeJSONPages[commitStatusResponse](output)
+	if err != nil {
+		return nil, fmt.Errorf("decode commit statuses for %s: %w", sha, err)
 	}
-	statuses := make([]CommitStatus, 0)
-	for _, page := range pages {
-		for _, response := range page {
-			statuses = append(statuses, CommitStatus{
-				SHA:         sha,
-				State:       CommitStatusState(response.State),
-				Context:     response.Context,
-				Description: response.Description,
-				TargetURL:   response.TargetURL,
-			})
-		}
+	statuses := make([]CommitStatus, 0, len(responses))
+	for _, response := range responses {
+		statuses = append(statuses, CommitStatus{
+			SHA:         sha,
+			State:       CommitStatusState(response.State),
+			Context:     response.Context,
+			Description: response.Description,
+			TargetURL:   response.TargetURL,
+		})
 	}
 	return statuses, nil
 }
@@ -837,19 +886,7 @@ func (r pullRequestResponse) pullRequest() PullRequest {
 // decodePullRequestList accepts both gh --slurp pagination output and a plain
 // single-page array, which keeps the adapter tolerant of test and CLI modes.
 func decodePullRequestList(output []byte) ([]pullRequestResponse, error) {
-	var pages [][]pullRequestResponse
-	if err := json.Unmarshal(output, &pages); err == nil {
-		result := make([]pullRequestResponse, 0)
-		for _, page := range pages {
-			result = append(result, page...)
-		}
-		return result, nil
-	}
-	var singlePage []pullRequestResponse
-	if err := json.Unmarshal(output, &singlePage); err != nil {
-		return nil, err
-	}
-	return singlePage, nil
+	return decodeJSONPages[pullRequestResponse](output)
 }
 
 // validatePullRequestBranches rejects values that could alter an API request
@@ -876,4 +913,125 @@ func validatePullRequestRequest(request PullRequestRequest) error {
 		return errors.New("pull request body contains a NUL byte")
 	}
 	return nil
+}
+
+// pullRequestReviewResponse is the GitHub pull-request review subset the
+// coordinator needs to recognize one completed human review.
+type pullRequestReviewResponse struct {
+	ID          int64      `json:"id"`
+	Body        string     `json:"body"`
+	State       string     `json:"state"`
+	SubmittedAt *time.Time `json:"submitted_at"`
+	HTMLURL     string     `json:"html_url"`
+	User        struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+// review converts the GitHub response shape into the coordinator-neutral
+// review model. A review GitHub has not submitted has no submission time, and
+// the coordinator uses that absence to ignore an incomplete draft.
+func (r pullRequestReviewResponse) review() PullRequestReview {
+	value := PullRequestReview{
+		ID:       fmt.Sprint(r.ID),
+		Author:   r.User.Login,
+		State:    PullRequestReviewState(strings.ToUpper(strings.TrimSpace(r.State))),
+		Body:     r.Body,
+		URL:      r.HTMLURL,
+		Comments: []PullRequestReviewComment{},
+	}
+	if r.SubmittedAt != nil {
+		value.SubmittedAt = *r.SubmittedAt
+	}
+	return value
+}
+
+// pullRequestReviewCommentResponse is the inline review-comment subset used to
+// carry a human reviewer's file-anchored findings into a repair packet.
+type pullRequestReviewCommentResponse struct {
+	Path     string `json:"path"`
+	Line     int    `json:"line"`
+	Position int    `json:"position"`
+	Body     string `json:"body"`
+}
+
+// comment converts one inline review comment into the neutral model, keeping
+// the newer `line` anchor and falling back to the legacy diff position.
+func (r pullRequestReviewCommentResponse) comment() PullRequestReviewComment {
+	line := r.Line
+	if line == 0 {
+		line = r.Position
+	}
+	return PullRequestReviewComment{Path: r.Path, Line: line, Body: r.Body}
+}
+
+// PullRequestReviews lists every submitted review for one pull request,
+// including the inline comments of the reviews that carry them. It is
+// read-only: the factory never submits, approves, or dismisses a review.
+func (c *GhClient) PullRequestReviews(ctx context.Context, repository Repository, number int) ([]PullRequestReview, error) {
+	if number <= 0 {
+		return nil, errors.New("pull request number must be positive")
+	}
+	output, err := c.callBytes(ctx, []string{
+		"api", fmt.Sprintf("repos/%s/pulls/%d/reviews", repository.String(), number),
+		"--method", "GET", "--paginate", "--slurp",
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list reviews for pull request #%d: %w", number, err)
+	}
+	responses, err := decodeJSONPages[pullRequestReviewResponse](output)
+	if err != nil {
+		return nil, fmt.Errorf("decode reviews for pull request #%d: %w", number, err)
+	}
+	reviews := make([]PullRequestReview, 0, len(responses))
+	for _, response := range responses {
+		review := response.review()
+		if review.State == PullRequestReviewChangesRequested {
+			comments, commentErr := c.pullRequestReviewComments(ctx, repository, number, response.ID)
+			if commentErr != nil {
+				return nil, commentErr
+			}
+			review.Comments = comments
+		}
+		reviews = append(reviews, review)
+	}
+	return reviews, nil
+}
+
+// pullRequestReviewComments lists the inline findings of one review.
+func (c *GhClient) pullRequestReviewComments(ctx context.Context, repository Repository, number int, reviewID int64) ([]PullRequestReviewComment, error) {
+	output, err := c.callBytes(ctx, []string{
+		"api", fmt.Sprintf("repos/%s/pulls/%d/reviews/%d/comments", repository.String(), number, reviewID),
+		"--method", "GET", "--paginate", "--slurp",
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list inline comments for review %d: %w", reviewID, err)
+	}
+	responses, err := decodeJSONPages[pullRequestReviewCommentResponse](output)
+	if err != nil {
+		return nil, fmt.Errorf("decode inline comments for review %d: %w", reviewID, err)
+	}
+	comments := make([]PullRequestReviewComment, 0, len(responses))
+	for _, response := range responses {
+		comments = append(comments, response.comment())
+	}
+	return comments, nil
+}
+
+// decodeJSONPages accepts both gh --slurp pagination output and a plain
+// single-page array, which keeps the adapter tolerant of test and CLI modes.
+func decodeJSONPages[T any](output []byte) ([]T, error) {
+	var pages [][]T
+	if err := json.Unmarshal(output, &pages); err == nil {
+		result := make([]T, 0)
+		for _, page := range pages {
+			result = append(result, page...)
+		}
+		return result, nil
+	}
+	var singlePage []T
+	if err := json.Unmarshal(output, &singlePage); err != nil {
+		return nil, err
+	}
+	return singlePage, nil
 }
