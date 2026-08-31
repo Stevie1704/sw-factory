@@ -12,6 +12,7 @@ import (
 
 	commandlanguage "github.com/Stevie1704/sw-factory/internal/command"
 	"github.com/Stevie1704/sw-factory/internal/config"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -417,6 +418,17 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 	if existing.Merged || !strings.EqualFold(strings.TrimSpace(existing.State), "open") {
 		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("pull request #%d is not open", existing.Number)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	worktreeManager := s.worktreeManager()
+	if worktreeManager == nil {
+		return CommandResult{}, errors.New("revision requires a GitWorkspace for exact repository guidance capture")
+	}
+	packet.RepositoryGuidance, err = captureRepositoryGuidance(ctx, worktreeManager, gitadapter.Workspace{
+		BaseSHA:  run.CheckpointSHA,
+		Worktree: run.Worktree,
+	})
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("capture repository guidance for revision: %w", err)
 	}
 	if _, err := s.setPullRequestDraft(ctx, repository, existing, true); err != nil {
 		return CommandResult{}, err

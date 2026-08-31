@@ -328,7 +328,7 @@ func TestConcurrentReviewBlockersBecomeOneRepairPacket(t *testing.T) {
 		Location: "internal/factory/review.go:10", Claim: "specification blocker", Evidence: "the acceptance path is incomplete", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryCorrectness, SuggestedResolution: "complete the path", SuggestedOwner: "implementation",
 	}})
 	standardsReport := reviewReport(standards, []report.ReviewFinding{{
-		Location: "internal/factory/review.go:20", Claim: "standards blocker", Evidence: "the lifecycle rule is violated", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryDocumentedStandards, SuggestedResolution: "follow the documented rule", SuggestedOwner: "test",
+		Location: "internal/factory/review.go:20", Claim: "standards blocker", Evidence: "source=guidance:AGENTS.md;hunk=internal/factory/review.go:20;the lifecycle rule is violated", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryDocumentedStandards, SuggestedResolution: "follow the documented rule", SuggestedOwner: "test",
 	}})
 	if _, err := report.WriteAtomicForInvocation(specification.Invocation.ResultDirectory, specification.Invocation.ID, specificationReport); err != nil {
 		t.Fatalf("write specification report: %v", err)
@@ -407,7 +407,7 @@ func TestStandardsReviewCanBlockAProvisionalTestExemption(t *testing.T) {
 		t.Fatalf("start standards reviewer: %v", err)
 	}
 	value := reviewReport(launch, []report.ReviewFinding{{
-		Location: "issue body", Claim: "the provisional test exemption violates repository standards", Evidence: "the exemption is not allowed by the frozen policy", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryDocumentedStandards, SuggestedResolution: "satisfy the required test policy", SuggestedOwner: "implementation",
+		Location: "issue body", Claim: "the provisional test exemption violates repository standards", Evidence: "source=guidance:CONTEXT.md;hunk=issue body;the exemption is not allowed by the frozen policy", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryDocumentedStandards, SuggestedResolution: "satisfy the required test policy", SuggestedOwner: "implementation",
 	}})
 	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
 		t.Fatalf("write standards review report: %v", err)

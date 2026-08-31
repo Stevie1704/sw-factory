@@ -293,8 +293,16 @@ func reviewFindingBlocks(finding store.ReviewFinding) bool {
 // standards axis can block only on a concrete documented-standards finding;
 // its heuristic or cross-axis observations remain advisory.
 func reviewFindingBlocksForRole(role string, finding store.ReviewFinding) bool {
-	if role == workflow.RoleStandardsReview && finding.Category != string(report.ReviewCategoryDocumentedStandards) {
-		return false
+	if role == workflow.RoleStandardsReview {
+		if finding.Category != string(report.ReviewCategoryDocumentedStandards) {
+			return false
+		}
+		// The report layer requires standards provenance. Recheck the source
+		// class here because durable legacy findings and reconstructed packets
+		// must not let a heuristic masquerade as a blocking documented rule.
+		if !strings.HasPrefix(strings.TrimSpace(finding.Evidence), "source=guidance:") {
+			return false
+		}
 	}
 	return reviewFindingBlocks(finding)
 }

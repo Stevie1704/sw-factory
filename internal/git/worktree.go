@@ -116,6 +116,7 @@ type GuidanceDocument struct {
 // claim time. WorktreeManager remains small so existing adapters can continue
 // to manage worktrees without implementing guidance capture.
 type RepositoryGuidanceReader interface {
+	// ReadRepositoryGuidance reads selected guidance files from an exact commit.
 	ReadRepositoryGuidance(context.Context, string, string) ([]GuidanceDocument, error)
 }
 
@@ -241,7 +242,7 @@ func (m *LocalWorktreeManager) ReadRepositoryGuidance(ctx context.Context, workt
 	}
 	paths := make([]string, 0)
 	for _, candidate := range strings.Split(string(pathsOutput), "\x00") {
-		if candidate != "" && repositoryGuidancePath(candidate) {
+		if candidate != "" && IsRepositoryGuidancePath(candidate) {
 			paths = append(paths, candidate)
 		}
 	}
@@ -257,9 +258,9 @@ func (m *LocalWorktreeManager) ReadRepositoryGuidance(ctx context.Context, workt
 	return documents, nil
 }
 
-// repositoryGuidancePath reports whether a tracked path is a conventional
+// IsRepositoryGuidancePath reports whether a tracked path is a conventional
 // repository guidance document consumed by role prompts.
-func repositoryGuidancePath(path string) bool {
+func IsRepositoryGuidancePath(path string) bool {
 	path = filepath.ToSlash(filepath.Clean(path))
 	if path == "." || strings.HasPrefix(path, "../") || filepath.IsAbs(path) {
 		return false

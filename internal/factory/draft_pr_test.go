@@ -517,6 +517,12 @@ func (w *draftGitWorkspace) Create(context.Context, string, string, string) (git
 	return w.workspace, nil
 }
 
+// ReadRepositoryGuidance returns no documents for the in-memory Git fixture;
+// production capture still requires the exact-checkpoint reader seam.
+func (*draftGitWorkspace) ReadRepositoryGuidance(context.Context, string, string) ([]gitadapter.GuidanceDocument, error) {
+	return nil, nil
+}
+
 // Remove implements GitWorkspace for the coordinator test.
 func (*draftGitWorkspace) Remove(context.Context, string, gitadapter.Workspace) error { return nil }
 

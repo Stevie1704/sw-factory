@@ -87,7 +87,7 @@ var expectedPromptSHA256 = map[string]string{
 	workflow.PromptVersionTest:                "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
 	workflow.PromptVersionArchitecture:        "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
 	workflow.PromptVersionSpecificationReview: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
-	workflow.PromptVersionStandardsReview:     "f47db6259255d7700988ad5e85ab12ad4edb2f588b36697fcad24d8280ead025",
+	workflow.PromptVersionStandardsReview:     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"standards-review-v1":                     "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472",
 }

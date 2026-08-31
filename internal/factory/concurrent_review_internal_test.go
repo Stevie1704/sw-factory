@@ -128,18 +128,20 @@ func TestStandardsReviewKeepsCrossAxisAndHeuristicFindingsAdvisory(t *testing.T)
 	for _, test := range []struct {
 		name     string
 		category report.ReviewCategory
+		evidence string
 		want     bool
 	}{
-		{name: "heuristic scope", category: report.ReviewCategoryScope, want: false},
-		{name: "cross-axis correctness", category: report.ReviewCategoryCorrectness, want: false},
-		{name: "documented standard", category: report.ReviewCategoryDocumentedStandards, want: true},
+		{name: "heuristic scope", category: report.ReviewCategoryScope, evidence: "source=heuristic:duplicated logic shape;hunk=review.go:20;the shape repeats", want: false},
+		{name: "cross-axis correctness", category: report.ReviewCategoryCorrectness, evidence: "source=heuristic:misplaced behavior;hunk=review.go:20;the behavior is elsewhere", want: false},
+		{name: "documented standard", category: report.ReviewCategoryDocumentedStandards, evidence: "source=guidance:AGENTS.md;hunk=review.go:20;the named rule is violated", want: true},
+		{name: "heuristic mislabeled as documented", category: report.ReviewCategoryDocumentedStandards, evidence: "source=heuristic:naming that does not reveal intent;hunk=review.go:20;the name is vague", want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			run := store.Run{
 				CheckpointSHA:       checkpoint,
 				SpecificationPacket: string(packetData),
 				StandardsReview: &store.ReviewResult{CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
-					Severity: string(report.ReviewSeverityBlocker), Category: string(test.category),
+					Severity: string(report.ReviewSeverityBlocker), Category: string(test.category), Evidence: test.evidence,
 				}}},
 			}
 			if got := reviewHasBlockingResult(run); got != test.want {

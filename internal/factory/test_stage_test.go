@@ -759,6 +759,12 @@ func (w *testStageWorkspace) Create(context.Context, string, string, string) (gi
 	return w.workspace, nil
 }
 
+// ReadRepositoryGuidance returns no documents for the in-memory Git fixture;
+// production capture still uses the exact base checkpoint.
+func (*testStageWorkspace) ReadRepositoryGuidance(context.Context, string, string) ([]gitadapter.GuidanceDocument, error) {
+	return nil, nil
+}
+
 // Remove releases the deterministic test workspace.
 func (*testStageWorkspace) Remove(context.Context, string, gitadapter.Workspace) error { return nil }
 

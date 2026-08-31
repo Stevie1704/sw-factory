@@ -126,7 +126,7 @@ waiting state. The `agent-running` label alone cannot express it.
 _Avoid_: Agent-running label, run status
 
 **Invocation**:
-One immutable harness attempt within a run, with its own invocation packet, role-owned visible surface handles, factory prompt version and content identity, and native session identifier when known.
+One immutable harness attempt within a run, with its own invocation packet, role-owned visible surface handles, factory prompt version, and native session identifier when known.
 _Avoid_: Terminal transcript
 
 **Surface**:

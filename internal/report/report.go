@@ -1021,6 +1021,59 @@ func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error
 		default:
 			return fmt.Errorf("unsupported review finding category %q", finding.Category)
 		}
+		if context.Role == "standards_review" {
+			if err := validateStandardsFindingProvenance(index, finding); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateStandardsFindingProvenance requires every standards-axis finding to
+// name its source class and the exact hunk it describes. The compact syntax
+// stays inside the existing evidence field so the report CLI contract remains
+// unchanged: source=guidance:<document>;hunk=<location>;<evidence> or
+// source=heuristic:<name>;hunk=<location>;<evidence>.
+func validateStandardsFindingProvenance(index int, finding ReviewFinding) error {
+	const sourcePrefix = "source="
+	const hunkPrefix = ";hunk="
+	evidence := strings.TrimSpace(finding.Evidence)
+	if !strings.HasPrefix(evidence, sourcePrefix) {
+		return fmt.Errorf("review findings[%d].evidence must start with source=guidance:<document> or source=heuristic:<name>", index)
+	}
+	sourceEnd := strings.Index(evidence, hunkPrefix)
+	if sourceEnd <= len(sourcePrefix) {
+		return fmt.Errorf("review findings[%d].evidence must name a guidance document or heuristic before ;hunk=", index)
+	}
+	source := strings.TrimSpace(evidence[len(sourcePrefix):sourceEnd])
+	if strings.HasPrefix(source, "guidance:") {
+		if strings.TrimSpace(strings.TrimPrefix(source, "guidance:")) == "" {
+			return fmt.Errorf("review findings[%d].evidence guidance source must name a document", index)
+		}
+	} else if strings.HasPrefix(source, "heuristic:") {
+		if strings.TrimSpace(strings.TrimPrefix(source, "heuristic:")) == "" {
+			return fmt.Errorf("review findings[%d].evidence heuristic source must name a baseline heuristic", index)
+		}
+	} else {
+		return fmt.Errorf("review findings[%d].evidence source must use guidance:<document> or heuristic:<name>", index)
+	}
+	hunkStart := sourceEnd + len(hunkPrefix)
+	if hunkStart >= len(evidence) {
+		return fmt.Errorf("review findings[%d].evidence must name the hunk after ;hunk=", index)
+	}
+	hunkEnd := strings.IndexByte(evidence[hunkStart:], ';')
+	if hunkEnd < 0 {
+		hunkEnd = len(evidence)
+	} else {
+		hunkEnd += hunkStart
+	}
+	hunk := strings.TrimSpace(evidence[hunkStart:hunkEnd])
+	if hunk == "" || hunk != strings.TrimSpace(finding.Location) {
+		return fmt.Errorf("review findings[%d].evidence hunk must match location %q", index, finding.Location)
+	}
+	if hunkEnd == len(evidence) || strings.TrimSpace(evidence[hunkEnd+1:]) == "" {
+		return fmt.Errorf("review findings[%d].evidence must include observable evidence after the hunk", index)
 	}
 	return nil
 }

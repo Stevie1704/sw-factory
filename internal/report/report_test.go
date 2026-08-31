@@ -384,6 +384,62 @@ func TestValidateAcceptsACompleteSpecificationReview(t *testing.T) {
 	}
 }
 
+// TestValidateRequiresStandardsFindingProvenance verifies each standards-axis
+// finding names a guidance document or heuristic and binds that source to its
+// exact reported hunk.
+func TestValidateRequiresStandardsFindingProvenance(t *testing.T) {
+	tests := []struct {
+		name     string
+		evidence string
+		wantErr  bool
+	}{
+		{
+			name:     "documented guidance",
+			evidence: "source=guidance:AGENTS.md;hunk=internal/factory/review.go:20;named repository rule is violated",
+		},
+		{
+			name:     "heuristic baseline",
+			evidence: "source=heuristic:duplicated logic shape;hunk=internal/factory/review.go:20;the same decision is repeated",
+		},
+		{
+			name:     "missing source",
+			evidence: "the same decision is repeated",
+			wantErr:  true,
+		},
+		{
+			name:     "mismatched hunk",
+			evidence: "source=guidance:AGENTS.md;hunk=internal/factory/review.go:21;named repository rule is violated",
+			wantErr:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := specificationReviewReport()
+			value.Role = "standards_review"
+			value.Stage = "standards_review"
+			value.ReviewHandoff.Findings = []report.ReviewFinding{{
+				Location:            "internal/factory/review.go:20",
+				Claim:               "the checkpoint has a review issue",
+				Evidence:            test.evidence,
+				Severity:            report.ReviewSeverityAdvisory,
+				Category:            report.ReviewCategoryDocumentedStandards,
+				SuggestedResolution: "address the finding",
+				SuggestedOwner:      "implementation",
+			}}
+			err := report.Validate(value, report.ValidationContext{
+				InvocationID: "inv-review", RunID: "run-review", Harness: "codex", Role: "standards_review", Stage: "standards_review",
+				CheckpointSHA: value.ReviewHandoff.ReviewedSHA,
+			})
+			if test.wantErr && err == nil {
+				t.Fatal("Validate() accepted malformed standards provenance")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v, want accepted standards provenance", err)
+			}
+		})
+	}
+}
+
 // TestValidateRejectsAnIncompleteReviewFinding verifies every finding field is
 // required before a reviewer can influence readiness.
 func TestValidateRejectsAnIncompleteReviewFinding(t *testing.T) {
