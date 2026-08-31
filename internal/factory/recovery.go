@@ -722,13 +722,11 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 // rolled back at the launch boundary before it recorded a native session or a
 // workspace. Such an invocation owns no external projection to compare, so the
 // coordinator must read its empty identities as recorded history rather than as
-// an infrastructure discrepancy. An active invocation is always compared,
-// because a live agent with no persisted identity is genuine drift.
+// an infrastructure discrepancy. Only the cannot-proceed status records that
+// rollback; every other status is compared so missing identities remain drift.
 func invocationProjectionNeverEstablished(invocation store.Invocation) bool {
-	if invocation.Status == store.InvocationStatusActive {
-		return false
-	}
-	return strings.TrimSpace(invocation.NativeSessionID) == "" && strings.TrimSpace(invocation.WorkspaceID) == ""
+	return invocation.Status == store.InvocationStatusCannotProceed &&
+		strings.TrimSpace(invocation.NativeSessionID) == "" && strings.TrimSpace(invocation.WorkspaceID) == ""
 }
 
 // terminalInvocationProjectionExpectedStopped reports the coordinator-owned

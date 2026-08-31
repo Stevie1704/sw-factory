@@ -519,6 +519,53 @@ func TestRecoveryAcceptsAnInvocationRolledBackBeforeLaunch(t *testing.T) {
 	}
 }
 
+func TestInvocationProjectionNeverEstablishedRequiresCannotProceed(t *testing.T) {
+	tests := []struct {
+		name       string
+		invocation store.Invocation
+		want       bool
+	}{
+		{
+			name: "cannot proceed with empty identities",
+			invocation: store.Invocation{
+				Status: store.InvocationStatusCannotProceed,
+			},
+			want: true,
+		},
+		{
+			name: "completed with empty identities",
+			invocation: store.Invocation{
+				Status: store.InvocationStatusCompleted,
+			},
+			want: false,
+		},
+		{
+			name: "cannot proceed with a native session",
+			invocation: store.Invocation{
+				Status:          store.InvocationStatusCannotProceed,
+				NativeSessionID: "session-1",
+			},
+			want: false,
+		},
+		{
+			name: "cannot proceed with a workspace",
+			invocation: store.Invocation{
+				Status:      store.InvocationStatusCannotProceed,
+				WorkspaceID: "workspace-1",
+			},
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := invocationProjectionNeverEstablished(test.invocation); got != test.want {
+				t.Errorf("invocationProjectionNeverEstablished() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 // TestRecoveryReportsAnActiveInvocationWithoutIdentity verifies that the
 // rolled-back allowance does not weaken the live case: an active invocation
 // with no persisted identity is genuine drift and must still be reported.
