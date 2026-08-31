@@ -442,7 +442,7 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 		version string
 		sha256  string
 	}{
-		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "7613ac7a5f4f13dc15940c5a9f50389d7d9570eef4e78389c9d4ec9225b56c5a"},
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f"},
 		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2"},
 		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507"},
@@ -456,6 +456,40 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 			}
 			if identity.Version != test.version || identity.SHA256 != test.sha256 {
 				t.Fatalf("ContentIdentity() = %#v, want version %q and SHA-256 %q", identity, test.version, test.sha256)
+			}
+		})
+	}
+}
+
+// TestBuildVerifiesRetainedLegacyPromptVersions verifies restart recovery still
+// loads each explicitly retained role body through the same identity check.
+func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
+	tests := []struct {
+		name    string
+		role    string
+		stage   string
+		version string
+		marker  string
+	}{
+		{name: "implementation v1", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v1", marker: "Implementation-owned TDD:"},
+		{name: "standards review v1", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v1", marker: "Standards-review precedence:"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := prompt.Build(prompt.Request{
+				InvocationID:        "inv-legacy",
+				RunID:               "run-legacy",
+				Role:                test.role,
+				Stage:               test.stage,
+				PromptVersion:       test.version,
+				TestPolicyMode:      "advisory",
+				SpecificationPacket: `{}`,
+			})
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if !strings.Contains(value, "factory prompt version "+test.version) || !strings.Contains(value, test.marker) {
+				t.Fatalf("legacy prompt missing version or body marker:\n%s", value)
 			}
 		})
 	}

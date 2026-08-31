@@ -423,7 +423,7 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 	if worktreeManager == nil {
 		return CommandResult{}, errors.New("revision requires a GitWorkspace for exact repository guidance capture")
 	}
-	packet.RepositoryGuidance, err = captureRepositoryGuidance(ctx, worktreeManager, gitadapter.Workspace{
+	packet.RepositoryGuidance, packet.RepositoryGuidancePaths, err = captureRepositoryGuidance(ctx, worktreeManager, gitadapter.Workspace{
 		BaseSHA:  run.CheckpointSHA,
 		Worktree: run.Worktree,
 	})

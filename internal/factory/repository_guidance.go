@@ -13,23 +13,23 @@ import (
 
 // captureRepositoryGuidance freezes checked-in repository guidance at the
 // workspace's immutable base checkpoint before any role can mutate it.
-func captureRepositoryGuidance(ctx context.Context, manager gitadapter.WorktreeManager, workspace gitadapter.Workspace) (string, error) {
+func captureRepositoryGuidance(ctx context.Context, manager gitadapter.WorktreeManager, workspace gitadapter.Workspace) (string, []string, error) {
 	reader, ok := manager.(gitadapter.RepositoryGuidanceReader)
 	if !ok {
-		return "", errors.New("exact repository guidance reader is required at claim time")
+		return "", nil, errors.New("exact repository guidance reader is required at claim time")
 	}
 	documents, err := reader.ReadRepositoryGuidance(ctx, workspace.Worktree, workspace.BaseSHA)
 	if err != nil {
-		return "", fmt.Errorf("capture repository guidance at base checkpoint: %w", err)
+		return "", nil, fmt.Errorf("capture repository guidance at base checkpoint: %w", err)
 	}
 	return formatRepositoryGuidance(documents)
 }
 
 // formatRepositoryGuidance creates a deterministic, named projection of the
 // captured documents for the prompt fence. Empty guidance remains valid.
-func formatRepositoryGuidance(documents []gitadapter.GuidanceDocument) (string, error) {
+func formatRepositoryGuidance(documents []gitadapter.GuidanceDocument) (string, []string, error) {
 	if len(documents) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	ordered := append([]gitadapter.GuidanceDocument(nil), documents...)
 	sort.SliceStable(ordered, func(left, right int) bool {
@@ -37,15 +37,17 @@ func formatRepositoryGuidance(documents []gitadapter.GuidanceDocument) (string, 
 	})
 	var builder strings.Builder
 	seen := make(map[string]struct{}, len(ordered))
+	paths := make([]string, 0, len(ordered))
 	for _, document := range ordered {
 		path := pathpkg.Clean(strings.ReplaceAll(document.Path, "\\", "/"))
 		if !gitadapter.IsRepositoryGuidancePath(path) {
-			return "", fmt.Errorf("unsupported repository guidance path %q", document.Path)
+			return "", nil, fmt.Errorf("unsupported repository guidance path %q", document.Path)
 		}
 		if _, exists := seen[path]; exists {
-			return "", fmt.Errorf("repository guidance path %q appears more than once", path)
+			return "", nil, fmt.Errorf("repository guidance path %q appears more than once", path)
 		}
 		seen[path] = struct{}{}
+		paths = append(paths, path)
 		builder.WriteString("### ")
 		builder.WriteString(path)
 		builder.WriteByte('\n')
@@ -54,5 +56,5 @@ func formatRepositoryGuidance(documents []gitadapter.GuidanceDocument) (string, 
 			builder.WriteByte('\n')
 		}
 	}
-	return strings.TrimRight(builder.String(), "\n"), nil
+	return strings.TrimRight(builder.String(), "\n"), paths, nil
 }

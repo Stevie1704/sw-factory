@@ -83,7 +83,7 @@ var rolePromptVersions = map[string]map[string]string{
 // versioned role body. A body edit must update its prompt version and this
 // identity together.
 var expectedPromptSHA256 = map[string]string{
-	workflow.PromptVersionImplementation:      "7613ac7a5f4f13dc15940c5a9f50389d7d9570eef4e78389c9d4ec9225b56c5a",
+	workflow.PromptVersionImplementation:      "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	workflow.PromptVersionTest:                "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
 	workflow.PromptVersionArchitecture:        "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
 	workflow.PromptVersionSpecificationReview: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
@@ -247,8 +247,7 @@ func (r Registry) Build(request Request) (string, error) {
 	if request.CheckRepairAttempt > 0 {
 		repairContext = fmt.Sprintf(`
 Check-repair context:
-- This is repair attempt %d of %d for a failed deterministic checkpoint.
-- Read the coordinator-supplied check-repair packet in /invocation/specification.json.
+- This is repair attempt %d of %d.
 	`, request.CheckRepairAttempt, request.CheckRepairBudget)
 	}
 	if request.ReviewRepair != nil {
@@ -256,14 +255,13 @@ Check-repair context:
 		if err != nil {
 			return "", fmt.Errorf("encode review-repair packet: %w", err)
 		}
-		scope := fmt.Sprintf("This is bounded review-repair attempt %d of %d for the exact checkpoint that produced the findings.", request.ReviewRepair.Attempt, request.ReviewRepair.Budget)
+		scope := fmt.Sprintf("bounded review-repair attempt %d of %d", request.ReviewRepair.Attempt, request.ReviewRepair.Budget)
 		if request.ReviewRepair.Source == store.ReviewRepairSourceHuman {
-			scope = fmt.Sprintf("An authorized maintainer requested changes in GitHub review %s against the exact current checkpoint. It does not consume the bounded factory review-repair budget.", request.ReviewRepair.ReviewID)
+			scope = fmt.Sprintf("authorized maintainer review: %s (outside the bounded factory repair budget)", request.ReviewRepair.ReviewID)
 		}
 		repairContext += fmt.Sprintf(`
 Review-repair context:
 - %s
-- Read the coordinator-supplied review-repair packet in /invocation/specification.json.
 Review-repair packet (coordinator-owned):
 %s
 `, scope, data)

@@ -297,10 +297,12 @@ func reviewFindingBlocksForRole(role string, finding store.ReviewFinding) bool {
 		if finding.Category != string(report.ReviewCategoryDocumentedStandards) {
 			return false
 		}
-		// The report layer requires standards provenance. Recheck the source
-		// class here because durable legacy findings and reconstructed packets
-		// must not let a heuristic masquerade as a blocking documented rule.
-		if !strings.HasPrefix(strings.TrimSpace(finding.Evidence), "source=guidance:") {
+		// The report layer requires provenance for current prompts. Recheck a
+		// present source class here because durable legacy findings predate that
+		// field, while a current heuristic must not masquerade as a documented
+		// rule.
+		evidence := strings.TrimSpace(finding.Evidence)
+		if strings.HasPrefix(evidence, "source=heuristic:") {
 			return false
 		}
 	}

@@ -411,6 +411,11 @@ func TestValidateRequiresStandardsFindingProvenance(t *testing.T) {
 			evidence: "source=guidance:AGENTS.md;hunk=internal/factory/review.go:21;named repository rule is violated",
 			wantErr:  true,
 		},
+		{
+			name:     "uncaptured guidance document",
+			evidence: "source=guidance:CONTEXT.md;hunk=internal/factory/review.go:20;named repository rule is violated",
+			wantErr:  true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -428,7 +433,7 @@ func TestValidateRequiresStandardsFindingProvenance(t *testing.T) {
 			}}
 			err := report.Validate(value, report.ValidationContext{
 				InvocationID: "inv-review", RunID: "run-review", Harness: "codex", Role: "standards_review", Stage: "standards_review",
-				CheckpointSHA: value.ReviewHandoff.ReviewedSHA,
+				CheckpointSHA: value.ReviewHandoff.ReviewedSHA, RepositoryGuidancePaths: []string{"AGENTS.md"}, RepositoryGuidanceBound: true,
 			})
 			if test.wantErr && err == nil {
 				t.Fatal("Validate() accepted malformed standards provenance")

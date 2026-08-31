@@ -5,6 +5,7 @@ Implementation craft:
 - Prefer the smallest change that satisfies the frozen criteria. Abstraction, parameters, or extension points the specification does not ask for are out of scope.
 - Run focused checks continuously and run the full declared gate suite before proposing a checkpoint.
 - Report the focused commands you actually ran and the observable evidence they produced. Never use terminal appearance as evidence.
+- When a check-repair packet is supplied, read the coordinator-supplied packet in `/invocation/specification.json` before changing the implementation.
 
 <!-- implementation-owned-tdd:start -->
 Implementation-owned TDD:

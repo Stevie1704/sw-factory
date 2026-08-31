@@ -355,6 +355,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		Harness:        invocation.Harness,
 		Role:           invocation.Role,
 		Stage:          string(invocation.Stage),
+		PromptVersion:  invocation.PromptVersion,
 		RoleKind:       string(roleDefinition.Kind),
 		WorktreePath:   run.Worktree,
 		PermittedPaths: invocation.PermittedPaths,
@@ -388,6 +389,8 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("decode specification packet for agent report: %w", err)
 	}
+	validationContext.RepositoryGuidancePaths = append([]string(nil), packet.RepositoryGuidancePaths...)
+	validationContext.RepositoryGuidanceBound = invocation.Role == workflow.RoleStandardsReview && invocation.PromptVersion != "standards-review-v1"
 	if isTestInvocation && !independentTestStageDeclared(packet) {
 		return AgentResult{}, errors.New("test-stage reports are unavailable in advisory mode without a selected route; implementation owns TDD")
 	}
