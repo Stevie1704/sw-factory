@@ -3,6 +3,7 @@ package terminal_test
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -27,6 +28,102 @@ func treeResponse(workspaceID string, titledSurfaces map[string]string) string {
 		panes = append(panes, `{"surfaces":[{"id":"`+identifier+`","title":"`+title+`","type":"terminal"}]}`)
 	}
 	return `{"windows":[{"workspaces":[{"id":"` + workspaceID + `","panes":[` + strings.Join(panes, ",") + `]}]}]}`
+}
+
+// TestLaunchSurfaceNeverTypesTheCommandItself verifies the launch keeps a
+// large multi-line argument off the terminal. A role prompt is delivered this
+// way, and typing one races the interactive program's own screen redraw: the
+// program then receives it truncated and re-spliced with no error reported
+// anywhere, which is how an agent ends up working from an incomplete prompt.
+func TestLaunchSurfaceNeverTypesTheCommandItself(t *testing.T) {
+	runner := &fakeRunner{}
+	runtime := terminal.NewCmuxRuntime(runner)
+	prompt := "factory prompt version implementation-v1\n" + strings.Repeat("frozen specification line\n", 400)
+
+	if err := runtime.LaunchSurface(context.Background(), implementationSurface, terminal.Command{
+		Executable: "factory-worker-attach",
+		Args:       []string{"--run-id", "run-1", "--", "codex", prompt},
+	}); err != nil {
+		t.Fatalf("LaunchSurface() error = %v", err)
+	}
+
+	joined := strings.Join(runner.calls, "\n")
+	if strings.Contains(joined, "frozen specification line") {
+		t.Fatal("adapter typed the command argument into the terminal, want only a script path")
+	}
+	if strings.Contains(joined, "\n") != strings.Contains(joined, "send-key") {
+		t.Fatalf("adapter calls = %q, want no embedded newline beyond the call separator", joined)
+	}
+	script := launchScriptPath(t, runner.calls)
+	defer func() { _ = os.Remove(script) }()
+	// One short line plus the trailing Enter keystroke, whatever the size of
+	// the command being launched.
+	if sent := sentBody(t, runner.calls); sent != "sh "+quoteForTest(script) {
+		t.Fatalf("typed line = %q, want only the script path", sent)
+	}
+}
+
+// TestLaunchScriptRunsTheCommandAndRemovesItself verifies the staged script
+// carries the whole command, replaces the shell through exec so the surface
+// keeps owning one process, and unlinks itself so a prompt does not outlive
+// the launch.
+func TestLaunchScriptRunsTheCommandAndRemovesItself(t *testing.T) {
+	runner := &fakeRunner{}
+	runtime := terminal.NewCmuxRuntime(runner)
+	if err := runtime.LaunchSurface(context.Background(), implementationSurface, terminal.Command{
+		Executable: "factory-worker-attach",
+		Args:       []string{"--run-id", "run-1", "--", "codex", "a prompt with 'quotes' and\nnewlines"},
+	}); err != nil {
+		t.Fatalf("LaunchSurface() error = %v", err)
+	}
+	script := launchScriptPath(t, runner.calls)
+	defer func() { _ = os.Remove(script) }()
+
+	body, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v, want the staged launch script", err)
+	}
+	for _, want := range []string{"rm -f ", "exec 'factory-worker-attach'", "a prompt with '\\''quotes'\\'' and\nnewlines"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("launch script = %q, want it to contain %q", string(body), want)
+		}
+	}
+	info, err := os.Stat(script)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	// The script holds the role prompt, so it stays owner-readable only.
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("launch script mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// sentBody returns the single text body the adapter typed into the surface.
+func sentBody(t *testing.T, calls []string) string {
+	t.Helper()
+	for _, call := range calls {
+		if after, found := strings.CutPrefix(call, "send --surface "+string(implementationSurface)+" "); found {
+			return after
+		}
+	}
+	t.Fatalf("adapter calls = %q, want one send call", calls)
+	return ""
+}
+
+// launchScriptPath returns the staged script path the adapter typed.
+func launchScriptPath(t *testing.T, calls []string) string {
+	t.Helper()
+	body := sentBody(t, calls)
+	path, found := strings.CutPrefix(body, "sh ")
+	if !found {
+		t.Fatalf("typed line = %q, want a staged script invocation", body)
+	}
+	return strings.ReplaceAll(strings.Trim(path, "'"), "'\\''", "'")
+}
+
+// quoteForTest mirrors the adapter's single-quote shell quoting.
+func quoteForTest(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 // TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam verifies that the
