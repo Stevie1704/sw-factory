@@ -1,9 +1,15 @@
 package factory
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/prompt"
@@ -211,5 +217,129 @@ func TestValidatePersistedInvocationPacketRequiresReviewRepairContext(t *testing
 	}
 	if err := validatePersistedInvocationPacket(run, invocation, persisted); err == nil || !strings.Contains(err.Error(), "review-repair context") {
 		t.Fatalf("validatePersistedInvocationPacket() error = %v, want missing review-repair context refusal", err)
+	}
+}
+
+// TestWriteHarnessFailureDiagnosticRecordsTheTranscript verifies that a failed
+// launch leaves a readable local diagnostic beside its invocation, since the
+// surface is closed and the worker stopped immediately afterwards.
+func TestWriteHarnessFailureDiagnosticRecordsTheTranscript(t *testing.T) {
+	root := t.TempDir()
+	observed := time.Date(2026, 8, 31, 8, 32, 55, 0, time.UTC)
+	cause := errors.New("discover Codex native session: deadline exceeded")
+	launchErr := &harness.LaunchFailure{Cause: cause, Transcript: "codex: stream error: 429 Too Many Requests"}
+
+	path := writeHarnessFailureDiagnostic(root, "launch", launchErr, harness.LaunchTranscript(launchErr), observed)
+	if path != filepath.Join(root, harnessFailureDiagnosticName) {
+		t.Fatalf("writeHarnessFailureDiagnostic() = %q, want the invocation-local diagnostic path", path)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v, want the diagnostic written", err)
+	}
+	for _, want := range []string{"2026-08-31T08:32:55Z", "occasion: launch", cause.Error(), "codex: stream error: 429 Too Many Requests"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("diagnostic = %q, want it to contain %q", string(body), want)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	// The transcript holds harness output, so it stays owner-readable only.
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("diagnostic mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// TestWriteHarnessFailureDiagnosticNamesTheOccasion verifies that a session
+// that exited after a successful launch is distinguishable from a launch that
+// never started. Claude Code assigns its own session identifier, so its failed
+// launches only ever reach this occasion.
+func TestWriteHarnessFailureDiagnosticNamesTheOccasion(t *testing.T) {
+	root := t.TempDir()
+	cause := errors.New("claude native session \"session-1\" exited before reporting")
+
+	path := writeHarnessFailureDiagnostic(root, "session exit", cause, "claude: invalid API key", time.Now().UTC())
+	if path == "" {
+		t.Fatal("writeHarnessFailureDiagnostic() = \"\", want a diagnostic path")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{"occasion: session exit", "exited before reporting", "claude: invalid API key"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("diagnostic = %q, want it to contain %q", string(body), want)
+		}
+	}
+}
+
+// TestWriteHarnessFailureDiagnosticSkipsAnEmptyTranscript verifies that a
+// failure carrying no captured output writes no file and reports no path, so
+// nothing points an operator at a diagnostic that does not exist.
+func TestWriteHarnessFailureDiagnosticSkipsAnEmptyTranscript(t *testing.T) {
+	root := t.TempDir()
+	launchErr := &harness.LaunchFailure{Cause: errors.New("discover Codex native session: deadline exceeded")}
+
+	if path := writeHarnessFailureDiagnostic(root, "launch", launchErr, harness.LaunchTranscript(launchErr), time.Now().UTC()); path != "" {
+		t.Fatalf("writeHarnessFailureDiagnostic() = %q, want no path without a transcript", path)
+	}
+	if _, err := os.Stat(filepath.Join(root, harnessFailureDiagnosticName)); !os.IsNotExist(err) {
+		t.Fatalf("Stat() error = %v, want no diagnostic file", err)
+	}
+}
+
+// readableRecoveryTerminal adds the optional surface-read capability to the
+// recovery terminal fake.
+type readableRecoveryTerminal struct {
+	*journalRecoveryTerminal
+	screen  string
+	readErr error
+	lines   int
+}
+
+// ReadSurface returns the fake surface output and records the requested bound.
+func (t *readableRecoveryTerminal) ReadSurface(_ context.Context, _ terminal.SurfaceID, lines int) (string, error) {
+	t.lines = lines
+	if t.readErr != nil {
+		return "", t.readErr
+	}
+	return t.screen, nil
+}
+
+// TestCaptureSurfaceTranscriptReadsABoundedSurface verifies the coordinator
+// captures a bounded transcript when the terminal adapter can read surfaces.
+func TestCaptureSurfaceTranscriptReadsABoundedSurface(t *testing.T) {
+	runtime := &readableRecoveryTerminal{journalRecoveryTerminal: &journalRecoveryTerminal{}, screen: "  claude: invalid API key  "}
+
+	if got := captureSurfaceTranscript(context.Background(), runtime, "surface-1"); got != "claude: invalid API key" {
+		t.Fatalf("captureSurfaceTranscript() = %q, want the trimmed surface output", got)
+	}
+	if runtime.lines != harnessTranscriptLines {
+		t.Fatalf("requested lines = %d, want the bounded transcript length %d", runtime.lines, harnessTranscriptLines)
+	}
+}
+
+// TestCaptureSurfaceTranscriptDegradesQuietly verifies that a capture failure
+// never propagates. The caller is already reporting a harness failure, and a
+// missing diagnostic must not replace it.
+func TestCaptureSurfaceTranscriptDegradesQuietly(t *testing.T) {
+	cases := map[string]struct {
+		runtime   terminal.TerminalRuntime
+		surfaceID terminal.SurfaceID
+	}{
+		"adapter cannot read surfaces": {runtime: &journalRecoveryTerminal{}, surfaceID: "surface-1"},
+		"invocation has no surface":    {runtime: &readableRecoveryTerminal{journalRecoveryTerminal: &journalRecoveryTerminal{}, screen: "output"}, surfaceID: ""},
+		"read fails": {runtime: &readableRecoveryTerminal{
+			journalRecoveryTerminal: &journalRecoveryTerminal{}, readErr: errors.New("surface is gone"),
+		}, surfaceID: "surface-1"},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := captureSurfaceTranscript(context.Background(), test.runtime, test.surfaceID); got != "" {
+				t.Fatalf("captureSurfaceTranscript() = %q, want empty", got)
+			}
+		})
 	}
 }

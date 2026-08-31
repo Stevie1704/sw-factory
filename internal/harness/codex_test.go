@@ -162,6 +162,93 @@ func TestCodexDiscoveryFailureClosesTheSurface(t *testing.T) {
 	}
 }
 
+// TestCodexDiscoveryFailureCapturesTheSurfaceTranscript verifies that the
+// surface output diagnosing a failed launch is captured before the surface is
+// closed. Without it the cause is unrecoverable: the surface is gone and the
+// worker is stopped by the time anyone reads the run.
+func TestCodexDiscoveryFailureCapturesTheSurfaceTranscript(t *testing.T) {
+	workerRuntime := &snapshotWorker{fakeWorker: &fakeWorker{}, snapshots: [][]string{{"session-old"}}}
+	base := &fakeTerminal{
+		surface:    terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"},
+		launchHook: workerRuntime.markSurfaceStarted,
+	}
+	terminalRuntime := &readableTerminal{fakeTerminal: base, screen: "codex: stream error: 429 Too Many Requests"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := harness.NewCodex(workerRuntime, terminalRuntime).Start(ctx, harness.StartRequest{
+		InvocationID: "inv-transcript",
+		RunID:        "run-1",
+		Role:         "implementation",
+		Stage:        "implementation",
+		WorkspaceID:  "workspace-run",
+		Surface:      base.surface,
+		Prompt:       "Start the implementation.",
+	})
+	if !errors.Is(err, harness.ErrNativeSessionUnavailable) {
+		t.Fatalf("Start() error = %v, want native-session-unavailable sentinel", err)
+	}
+	if got := harness.LaunchTranscript(err); got != terminalRuntime.screen {
+		t.Fatalf("LaunchTranscript() = %q, want %q", got, terminalRuntime.screen)
+	}
+	// Capture must happen while the surface still exists.
+	if terminalRuntime.readAfterClose {
+		t.Fatal("surface was read after it was closed, want capture before cleanup")
+	}
+	if base.closed != string(base.surface.ID) {
+		t.Fatalf("closed surface = %q, want %q", base.closed, base.surface.ID)
+	}
+}
+
+// TestCodexLaunchFailureKeepsTheTranscriptOutOfTheMessage verifies the captured
+// harness output never reaches Error(). That string is copied into the run
+// lifecycle reason and the GitHub status comment, which stay free of work
+// content.
+func TestCodexLaunchFailureKeepsTheTranscriptOutOfTheMessage(t *testing.T) {
+	workerRuntime := &snapshotWorker{fakeWorker: &fakeWorker{}, snapshots: [][]string{{"session-old"}}}
+	base := &fakeTerminal{
+		surface:    terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"},
+		launchHook: workerRuntime.markSurfaceStarted,
+	}
+	terminalRuntime := &readableTerminal{fakeTerminal: base, screen: "secret-bearing agent output"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := harness.NewCodex(workerRuntime, terminalRuntime).Start(ctx, harness.StartRequest{
+		InvocationID: "inv-bounded", RunID: "run-1", Role: "implementation", Stage: "implementation",
+		WorkspaceID: "workspace-run", Surface: base.surface, Prompt: "Start the implementation.",
+	})
+	if err == nil {
+		t.Fatal("Start() error = nil, want a launch failure")
+	}
+	if strings.Contains(err.Error(), terminalRuntime.screen) {
+		t.Fatalf("Start() error = %q, want the transcript excluded from the message", err.Error())
+	}
+	if !strings.Contains(err.Error(), "discover Codex native session") {
+		t.Fatalf("Start() error = %q, want the launch cause preserved", err.Error())
+	}
+}
+
+// TestCodexDiscoveryFailureSurvivesAnUnreadableSurface verifies that a terminal
+// adapter without the read capability still reports the launch failure itself.
+func TestCodexDiscoveryFailureSurvivesAnUnreadableSurface(t *testing.T) {
+	workerRuntime := &snapshotWorker{fakeWorker: &fakeWorker{}, snapshots: [][]string{{"session-old"}}}
+	terminalRuntime := &fakeTerminal{
+		surface:    terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"},
+		launchHook: workerRuntime.markSurfaceStarted,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := harness.NewCodex(workerRuntime, terminalRuntime).Start(ctx, harness.StartRequest{
+		InvocationID: "inv-unreadable", RunID: "run-1", Role: "implementation", Stage: "implementation",
+		WorkspaceID: "workspace-run", Surface: terminalRuntime.surface, Prompt: "Start the implementation.",
+	})
+	if !errors.Is(err, harness.ErrNativeSessionUnavailable) {
+		t.Fatalf("Start() error = %v, want native-session-unavailable sentinel", err)
+	}
+	if got := harness.LaunchTranscript(err); got != "" {
+		t.Fatalf("LaunchTranscript() = %q, want empty for an unreadable surface", got)
+	}
+}
+
 // TestCodexLegacyDiscoveryFailureClosesTheSurface verifies cleanup also
 // covers runtimes that expose only the single-session lookup seam.
 func TestCodexLegacyDiscoveryFailureClosesTheSurface(t *testing.T) {
@@ -328,3 +415,24 @@ var _ worker.InteractiveRuntime = (*fakeWorker)(nil)
 var _ worker.NativeSessionSnapshotProvider = (*snapshotWorker)(nil)
 var _ worker.NativeSessionProvider = (*failingNativeSessionWorker)(nil)
 var _ terminal.TerminalRuntime = (*fakeTerminal)(nil)
+
+// readableTerminal adds the optional surface-read capability to the harness
+// terminal fake and records whether the read happened after cleanup.
+type readableTerminal struct {
+	*fakeTerminal
+	screen         string
+	readAfterClose bool
+}
+
+// ReadSurface returns the fake surface output and notes read-after-close.
+func (t *readableTerminal) ReadSurface(_ context.Context, _ terminal.SurfaceID, lines int) (string, error) {
+	if lines <= 0 {
+		return "", errors.New("surface line count must be greater than zero")
+	}
+	if t.closed != "" {
+		t.readAfterClose = true
+	}
+	return t.screen, nil
+}
+
+var _ terminal.SurfaceReader = (*readableTerminal)(nil)
