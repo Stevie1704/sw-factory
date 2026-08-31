@@ -101,6 +101,7 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 	for _, expected := range []string{
 		"<!-- factory-generated:start -->", "Add the factory handoff", "Implement the supervised draft PR boundary.",
 		"stage: `draft_pr`", "format", "test", "intervention: `none`", "factory status", "factory draft-pr --run-id run-draft",
+		"Closes #42",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("generated PR body %q does not contain %q", body, expected)
@@ -115,7 +116,11 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 
 	// A repeated command recovers the existing pull request and does not make
 	// another checkpoint, push, or pull request.
-	pullRequests.existing = github.PullRequest{Number: 17, URL: pullRequests.created.URL, Body: "human-authored notes", State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}
+	// The existing body carries human text on both sides of a stale generated
+	// section, so regeneration must take the replace branch rather than append
+	// a second one. Human text alone would exercise only the append branch.
+	priorBody := "human-authored notes\n\n<!-- factory-generated:start -->\n## Factory run\n\n- stale generated section\n\nCloses #42\n<!-- factory-generated:end -->\n\ntrailing human notes"
+	pullRequests.existing = github.PullRequest{Number: 17, URL: pullRequests.created.URL, Body: priorBody, State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}
 	repeated, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: "run-draft", Intervention: "human reviewed"})
 	if err != nil {
 		t.Fatalf("repeated CreateDraftPullRequest() error = %v", err)
@@ -124,8 +129,20 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 		t.Fatalf("repeated effects/result = %#v, checkpoints=%d pushes=%d creates=%d updates=%d", repeated, len(workspace.checkpoints), len(workspace.pushes), len(pullRequests.createdRequests), len(pullRequests.updatedRequests))
 	}
 	updatedBody := pullRequests.updatedRequests[0].Body
-	if !strings.Contains(updatedBody, "human-authored notes") || strings.Count(updatedBody, "<!-- factory-generated:start -->") != 1 || !strings.Contains(updatedBody, "intervention: `human reviewed`") {
-		t.Fatalf("updated PR body = %q, want preserved human text and one regenerated section", updatedBody)
+	if !strings.Contains(updatedBody, "human-authored notes") || !strings.Contains(updatedBody, "trailing human notes") {
+		t.Fatalf("updated PR body = %q, want human text preserved on both sides of the generated section", updatedBody)
+	}
+	if strings.Count(updatedBody, "<!-- factory-generated:start -->") != 1 || strings.Contains(updatedBody, "stale generated section") {
+		t.Fatalf("updated PR body = %q, want the stale generated section replaced by exactly one regenerated section", updatedBody)
+	}
+	if !strings.Contains(updatedBody, "intervention: `human reviewed`") {
+		t.Fatalf("updated PR body = %q, want the regenerated intervention marker", updatedBody)
+	}
+	// The closing keyword is what makes GitHub link the pull request to the
+	// issue and close it on merge, so regeneration must carry it over exactly
+	// once: dropping it stops the auto-close, duplicating it is malformed.
+	if strings.Count(updatedBody, "Closes #42") != 1 {
+		t.Fatalf("updated PR body = %q, want exactly one closing keyword for issue 42", updatedBody)
 	}
 }
 

@@ -3,7 +3,6 @@ package terminal_test
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
