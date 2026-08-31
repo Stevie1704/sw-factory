@@ -548,10 +548,23 @@ func TestInvocationProjectionNeverEstablishedRequiresCannotProceed(t *testing.T)
 			want: false,
 		},
 		{
-			name: "cannot proceed with a workspace",
+			// A rollback that reached workspace reservation still tore down
+			// everything it built, so a reserved workspace is not evidence of a
+			// live projection.
+			name: "cannot proceed with a reserved workspace and no session",
 			invocation: store.Invocation{
 				Status:      store.InvocationStatusCannotProceed,
 				WorkspaceID: "workspace-1",
+			},
+			want: true,
+		},
+		{
+			name: "cannot proceed with a surface and a native session",
+			invocation: store.Invocation{
+				Status:          store.InvocationStatusCannotProceed,
+				NativeSessionID: "session-1",
+				WorkspaceID:     "workspace-1",
+				RoleSurfaceID:   "surface-1",
 			},
 			want: false,
 		},
@@ -563,6 +576,41 @@ func TestInvocationProjectionNeverEstablishedRequiresCannotProceed(t *testing.T)
 				t.Errorf("invocationProjectionNeverEstablished() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+// TestRecoveryAcceptsAPartiallyRolledBackInvocation verifies that a launch
+// rolled back after it had already reserved a workspace and a role surface is
+// still read as history. The rollback closes the surface it created, so cmux
+// reports that surface as missing; treating that as drift deadlocks every
+// later start exactly as an empty identity does.
+func TestRecoveryAcceptsAPartiallyRolledBackInvocation(t *testing.T) {
+	now := time.Unix(6, 0).UTC()
+	run := store.Run{ID: "run-partial-rollback", Stage: store.StageImplementation, Status: store.StatusWaitingForHuman}
+	invocation := store.Invocation{
+		ID: "inv-partial-rollback", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		WorkspaceID: "workspace-partial-rollback", RoleSurfaceID: "surface-partial-rollback",
+		Status:    store.InvocationStatusCannotProceed,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	// The workspace survives because later roles reuse it; only the surface the
+	// rollback closed is gone.
+	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
+		Exists: true, WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
+	}}
+	service := &Service{deps: Dependencies{
+		Worker:   &journalRecoveryWorker{inspection: worker.Inspection{}},
+		Terminal: terminalRuntime,
+		Harness:  &journalRecoveryHarness{},
+	}}
+	baseStore := &repairLaunchStore{run: run, invocations: map[string]store.Invocation{invocation.ID: invocation}}
+	runStore := &terminalProjectionStore{repairLaunchStore: baseStore}
+	diagnosis := newRecoveryDiagnosis(run.ID)
+
+	service.inspectInvocationProjection(context.Background(), &diagnosis, config.RepositoryRegistration{}, runStore, run)
+	if len(diagnosis.Discrepancies) != 0 {
+		t.Fatalf("recovery discrepancies = %#v, want partial rollback accepted as history", diagnosis.Discrepancies)
 	}
 }
 

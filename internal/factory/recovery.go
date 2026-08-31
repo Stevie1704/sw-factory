@@ -481,11 +481,12 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	invocationID = active.ID
 	diagnosis.InvocationExists = true
 	if invocationProjectionNeverEstablished(*active) {
-		// The launch boundary rolled this invocation back before it recorded any
-		// external identity, so no worker, terminal, or harness projection was
-		// ever created for it. Its empty identities are the durable result of a
-		// completed rollback rather than restart drift, and comparing them with
-		// live projections would block every later start permanently.
+		// The launch boundary rolled this invocation back before its agent
+		// started, so it owns no live worker, terminal, or harness projection.
+		// Any workspace or surface it had already reserved was torn down by the
+		// same rollback. Its identities are the durable result of that completed
+		// rollback rather than restart drift, and comparing them with live
+		// projections would block every later start permanently.
 		return
 	}
 	hasNativeSession := strings.TrimSpace(active.NativeSessionID) != ""
@@ -719,14 +720,17 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 }
 
 // invocationProjectionNeverEstablished reports that a historical invocation was
-// rolled back at the launch boundary before it recorded a native session or a
-// workspace. Such an invocation owns no external projection to compare, so the
-// coordinator must read its empty identities as recorded history rather than as
-// an infrastructure discrepancy. Only the cannot-proceed status records that
-// rollback; every other status is compared so missing identities remain drift.
+// rolled back at the launch boundary before its agent ever started. The native
+// session identifier is the anchor of every live projection, so a rolled-back
+// invocation without one owns no worker, terminal, or harness state to compare,
+// whether or not it had already reserved a workspace or a surface: the rollback
+// stops the worker and closes the surface it created. The coordinator must read
+// those identities as recorded history rather than as an infrastructure
+// discrepancy. Only the cannot-proceed status records that rollback; every other
+// status is compared so missing identities remain drift.
 func invocationProjectionNeverEstablished(invocation store.Invocation) bool {
 	return invocation.Status == store.InvocationStatusCannotProceed &&
-		strings.TrimSpace(invocation.NativeSessionID) == "" && strings.TrimSpace(invocation.WorkspaceID) == ""
+		strings.TrimSpace(invocation.NativeSessionID) == ""
 }
 
 // terminalInvocationProjectionExpectedStopped reports the coordinator-owned
