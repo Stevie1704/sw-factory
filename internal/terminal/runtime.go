@@ -292,8 +292,13 @@ func (r *CmuxRuntime) CreateSurface(ctx context.Context, request SurfaceRequest)
 }
 
 // LaunchSurface starts a command in a surface created as part of a workspace
-// layout. The command is sent as one shell-quoted line; terminal output is
-// never read to determine whether it started.
+// layout. The command is written to a private script and only that script's
+// path is typed, because a terminal is a lossy channel for anything longer
+// than a short single line. A role prompt is multi-kilobyte and multi-line, and
+// typing it races the interactive program redrawing its own screen: the
+// program receives the argument truncated and re-spliced, with no error
+// anywhere. Terminal output is still never read to decide whether the command
+// started.
 func (r *CmuxRuntime) LaunchSurface(ctx context.Context, surfaceID SurfaceID, command Command) error {
 	if strings.TrimSpace(string(surfaceID)) == "" {
 		return errors.New("surface id is required")
@@ -301,10 +306,39 @@ func (r *CmuxRuntime) LaunchSurface(ctx context.Context, surfaceID SurfaceID, co
 	if err := validateCommand(command); err != nil {
 		return err
 	}
-	if err := r.sendToSurface(ctx, surfaceID, commandLine(command)+"\n"); err != nil {
+	script, err := writeLaunchScript(commandLine(command))
+	if err != nil {
+		return fmt.Errorf("stage terminal launch: %w", err)
+	}
+	if err := r.sendToSurface(ctx, surfaceID, "sh "+shellQuote(script)+"\n"); err != nil {
+		_ = os.Remove(script)
 		return fmt.Errorf("launch terminal surface: %w", err)
 	}
 	return nil
+}
+
+// writeLaunchScript stores one launch command line in a private script and
+// returns its path. The script removes itself before exec, so a command line
+// carrying a role prompt does not outlive the launch; the shell keeps reading
+// the script through its own open descriptor after the file is unlinked. The
+// exec then leaves the surface owning the same process it owned before.
+func writeLaunchScript(launchCommand string) (string, error) {
+	file, err := os.CreateTemp("", "factory-launch-*.sh")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	body := "rm -f " + shellQuote(path) + "\nexec " + launchCommand + "\n"
+	if _, err := file.WriteString(body); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 // SendInput routes exact bytes to a visible surface; screen content is never
