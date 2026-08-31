@@ -959,6 +959,11 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 	if !writeOutput(output, errorsOutput, "cleanup complete: runs=%d\n", len(result.Deleted)) {
 		return 1
 	}
+	for _, retained := range result.Retained {
+		if !writeOutput(output, errorsOutput, "cleanup retained terminal workspace: %s run=%s reason=%s (close it manually)\n", retained.WorkspaceID, retained.RunID, retained.Reason) {
+			return 1
+		}
+	}
 	return 0
 }
 
@@ -972,6 +977,14 @@ func writeCleanupPlan(output, errorsOutput io.Writer, plan factory.CleanupPlan) 
 			return false
 		}
 		if len(run.Roles) > 0 && !writeOutput(output, errorsOutput, "cleanup worker roles: %s\n", strings.Join(run.Roles, ", ")) {
+			return false
+		}
+		for _, workspaceID := range run.WorkspaceIDs {
+			if !writeOutput(output, errorsOutput, "cleanup terminal workspace: %s\n", workspaceID) {
+				return false
+			}
+		}
+		if len(run.WorkspaceIDs) == 0 && !writeOutput(output, errorsOutput, "cleanup terminal workspace: none\n") {
 			return false
 		}
 		for _, outputPath := range run.StoredOutputs {

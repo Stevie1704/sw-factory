@@ -13,6 +13,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -75,6 +76,10 @@ type CleanupRun struct {
 	Branch string
 	// Worktree is the exact local worktree path to remove.
 	Worktree string
+	// WorkspaceIDs contains the opaque terminal workspace handles this run
+	// created. Cleanup is the last operation that knows them, because the
+	// deleted invocation rows are their only durable record.
+	WorkspaceIDs []string
 	// WorkerRunID is the logical worker identity passed to the runtime adapter;
 	// Docker names remain private to that adapter.
 	WorkerRunID string
@@ -107,6 +112,18 @@ type CleanupPlan struct {
 	Skipped []CleanupSkippedRun
 }
 
+// CleanupRetainedWorkspace reports one terminal workspace that survived a
+// confirmed cleanup. Its run's local resources are already removed, so the
+// operator has to close the workspace by hand.
+type CleanupRetainedWorkspace struct {
+	// RunID identifies the run that created the workspace.
+	RunID string
+	// WorkspaceID is the opaque terminal workspace handle left in place.
+	WorkspaceID string
+	// Reason is the bounded operator-facing explanation.
+	Reason string
+}
+
 // CleanupResult contains the preview and any operational rows removed after
 // confirmation.
 type CleanupResult struct {
@@ -114,6 +131,9 @@ type CleanupResult struct {
 	Plan CleanupPlan
 	// Deleted contains one row-count projection for each removed run.
 	Deleted []store.CleanupDeletionResult
+	// Retained contains every workspace that could not be closed. Local
+	// deletion continues regardless, so this is a report, not a failure.
+	Retained []CleanupRetainedWorkspace
 }
 
 // CleanupConfirmationRequiredError tells a CLI or embedder to display the
@@ -147,7 +167,9 @@ func (*CleanupPlanChangedError) Error() string { return "cleanup plan changed; p
 // Cleanup previews eligible local artifacts and removes them only when the
 // caller explicitly confirms the complete plan. It reads the lifecycle of a
 // tracked pull request but never mutates GitHub, deletes remote branches, or
-// removes local evaluation summaries.
+// removes local evaluation summaries. A confirmed cleanup also closes the
+// terminal workspaces of every removed run, because their handles live only in
+// the invocation rows this operation deletes.
 func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupResult, error) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
@@ -204,6 +226,10 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 			rollback()
 			return result, fmt.Errorf("clean worker for run %q: %w", target.RunID, err)
 		}
+		// The terminal workspace runs in the worktree that the next step
+		// removes, so it is closed first. A close failure never blocks local
+		// deletion; it is reported instead.
+		result.Retained = append(result.Retained, s.closeRunWorkspaces(ctx, registration, target)...)
 		if err := workspace.Remove(ctx, registration.Path, gitadapter.Workspace{RunID: target.RunID, Branch: target.Branch, Worktree: target.Worktree}); err != nil {
 			rollback()
 			return result, fmt.Errorf("remove Git workspace for run %q: %w", target.RunID, err)
@@ -222,6 +248,35 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 		}
 	}
 	return result, nil
+}
+
+// closeRunWorkspaces closes every terminal workspace one cleanup target owns
+// and returns the workspaces that survived. Cleanup must still remove local
+// resources when the terminal server is absent, so an unavailable runtime and
+// a rejected close are both reported rather than returned as errors.
+func (s *Service) closeRunWorkspaces(ctx context.Context, registration config.RepositoryRegistration, target CleanupRun) []CleanupRetainedWorkspace {
+	if len(target.WorkspaceIDs) == 0 {
+		return nil
+	}
+	terminalRuntime := s.deps.Terminal
+	if terminalRuntime == nil {
+		var err error
+		terminalRuntime, err = s.ensureTerminalRuntime(registration.Cmux.SocketPath)
+		if err != nil {
+			retained := make([]CleanupRetainedWorkspace, 0, len(target.WorkspaceIDs))
+			for _, workspaceID := range target.WorkspaceIDs {
+				retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: fmt.Sprintf("ensure terminal runtime: %v", err)})
+			}
+			return retained
+		}
+	}
+	var retained []CleanupRetainedWorkspace
+	for _, workspaceID := range target.WorkspaceIDs {
+		if err := terminalRuntime.CloseWorkspace(ctx, terminal.WorkspaceID(workspaceID)); err != nil {
+			retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: err.Error()})
+		}
+	}
+	return retained
 }
 
 // openCleanupStore loads the registered repository and opens its cleanup-capable
@@ -337,6 +392,21 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 	for _, role := range roles {
 		roleSet[role] = struct{}{}
 	}
+	workspaceIDs := make([]string, 0, len(candidate.Invocations))
+	seenWorkspaceIDs := make(map[string]struct{}, len(candidate.Invocations))
+	for _, invocation := range candidate.Invocations {
+		workspaceID := strings.TrimSpace(invocation.WorkspaceID)
+		if workspaceID == "" {
+			continue
+		}
+		if _, exists := seenWorkspaceIDs[workspaceID]; exists {
+			continue
+		}
+		seenWorkspaceIDs[workspaceID] = struct{}{}
+		workspaceIDs = append(workspaceIDs, workspaceID)
+	}
+	sort.Strings(workspaceIDs)
+
 	workerIDs := []string{run.ID}
 	seenWorkerIDs := map[string]struct{}{run.ID: {}}
 	for _, invocation := range candidate.Invocations {
@@ -372,6 +442,7 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 		RepositoryPath: registration.Path,
 		Branch:         run.Branch,
 		Worktree:       worktree,
+		WorkspaceIDs:   workspaceIDs,
 		WorkerRunID:    run.ID,
 		WorkerIDs:      workerIDs,
 		StoredOutputs:  storedOutputs,
@@ -425,7 +496,7 @@ func cleanupPlansEqual(left, right CleanupPlan) bool {
 	}
 	for index := range left.Runs {
 		leftRun, rightRun := left.Runs[index], right.Runs[index]
-		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !stringSlicesEqual(leftRun.WorkerIDs, rightRun.WorkerIDs) || !stringSlicesEqual(leftRun.StoredOutputs, rightRun.StoredOutputs) || !stringSlicesEqual(leftRun.Roles, rightRun.Roles) {
+		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !stringSlicesEqual(leftRun.WorkspaceIDs, rightRun.WorkspaceIDs) || !stringSlicesEqual(leftRun.WorkerIDs, rightRun.WorkerIDs) || !stringSlicesEqual(leftRun.StoredOutputs, rightRun.StoredOutputs) || !stringSlicesEqual(leftRun.Roles, rightRun.Roles) {
 			return false
 		}
 	}

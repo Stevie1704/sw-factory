@@ -186,6 +186,8 @@ _Avoid_: Event journal, telemetry, transcript archive
 **Cleanup**:
 The explicit, seven-day retention operation that previews and removes one or
 more terminal runs' local worktrees, local branches, workers, role sessions,
-generated outputs, and operational rows while retaining remote branches,
-credential stores, and local evaluation summaries.
+terminal workspaces, generated outputs, and operational rows while retaining
+remote branches, credential stores, and local evaluation summaries. It is the
+last operation that knows a run's workspace handles, so a workspace it cannot
+close is reported for manual closure instead of being lost silently.
 _Avoid_: Remote branch deletion, automatic summary deletion
