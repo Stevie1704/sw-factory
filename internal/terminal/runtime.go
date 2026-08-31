@@ -13,7 +13,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
+
+// commandWaitDelay bounds how long a terminal command may hold its output
+// pipes open after its context ended.
+const commandWaitDelay = 5 * time.Second
 
 // WorkspaceID is an opaque terminal workspace handle.
 type WorkspaceID string
@@ -430,15 +435,28 @@ func (r *CmuxRuntime) ReadSurface(ctx context.Context, surfaceID SurfaceID, line
 	return string(output), nil
 }
 
-// CloseWorkspace closes a workspace through the adapter lifecycle command.
+// CloseWorkspace closes a workspace through the adapter lifecycle command. A
+// workspace the adapter already lost is reported as closed, because the
+// caller's intended end state is the one that already holds.
 func (r *CmuxRuntime) CloseWorkspace(ctx context.Context, workspaceID WorkspaceID) error {
 	if strings.TrimSpace(string(workspaceID)) == "" {
 		return errors.New("workspace id is required")
 	}
 	if _, err := r.run(ctx, []string{"close-workspace", "--workspace", string(workspaceID)}, nil); err != nil {
+		if isWorkspaceNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("close terminal workspace: %w", err)
 	}
 	return nil
+}
+
+// isWorkspaceNotFound reports the adapter's absent-workspace response, which
+// both inspection and close treat as a successful negative result. An adapter
+// that reports an absent workspace some other way costs only a redundant
+// close report, never a failed cleanup.
+func isWorkspaceNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not_found: Workspace not found")
 }
 
 // InspectWorkspace reads one workspace and its surface identities without
@@ -451,7 +469,7 @@ func (r *CmuxRuntime) InspectWorkspace(ctx context.Context, workspaceID Workspac
 	}
 	topology, err := r.topology(ctx, []string{"tree", "--workspace", string(workspaceID), "--json", "--id-format", "uuids"})
 	if err != nil {
-		if strings.Contains(err.Error(), "not_found: Workspace not found") {
+		if isWorkspaceNotFound(err) {
 			return WorkspaceInspection{WorkspaceID: workspaceID}, nil
 		}
 		return WorkspaceInspection{}, err
@@ -483,6 +501,9 @@ func (r *CmuxRuntime) run(ctx context.Context, args []string, input []byte) ([]b
 		binary = "cmux"
 	}
 	command := exec.CommandContext(ctx, binary, args...)
+	// A killed terminal command can leave a descendant holding the inherited
+	// output pipes, which would block Wait after the deadline that killed it.
+	command.WaitDelay = commandWaitDelay
 	// Deprecation hints are written to the same stream this adapter reports as
 	// a failure reason, so silence them and keep stderr to actual errors.
 	command.Env = append(os.Environ(), "CMUX_QUIET=1")

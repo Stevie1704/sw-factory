@@ -952,6 +952,12 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		Before:       preview.Plan.Before,
 		ExpectedPlan: &preview.Plan,
 	})
+	// Retained workspaces are reported before any failure, because a run
+	// cleaned earlier in the same pass may already have lost the invocation
+	// rows holding its handle.
+	if !writeRetainedWorkspaces(output, errorsOutput, result.Retained) {
+		return 1
+	}
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -960,6 +966,17 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		return 1
 	}
 	return 0
+}
+
+// writeRetainedWorkspaces names every terminal workspace the operator now has
+// to close by hand.
+func writeRetainedWorkspaces(output, errorsOutput io.Writer, retained []factory.CleanupRetainedWorkspace) bool {
+	for _, workspace := range retained {
+		if !writeOutput(output, errorsOutput, "cleanup retained terminal workspace: %s run=%s reason=%s (close it manually)\n", workspace.WorkspaceID, workspace.RunID, workspace.Reason) {
+			return false
+		}
+	}
+	return true
 }
 
 // writeCleanupPlan renders every exact target before any confirmed mutation.
@@ -972,6 +989,14 @@ func writeCleanupPlan(output, errorsOutput io.Writer, plan factory.CleanupPlan) 
 			return false
 		}
 		if len(run.Roles) > 0 && !writeOutput(output, errorsOutput, "cleanup worker roles: %s\n", strings.Join(run.Roles, ", ")) {
+			return false
+		}
+		for _, workspaceID := range run.WorkspaceIDs {
+			if !writeOutput(output, errorsOutput, "cleanup terminal workspace: %s\n", workspaceID) {
+				return false
+			}
+		}
+		if len(run.WorkspaceIDs) == 0 && !writeOutput(output, errorsOutput, "cleanup terminal workspace: none\n") {
 			return false
 		}
 		for _, outputPath := range run.StoredOutputs {

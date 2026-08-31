@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -77,6 +79,7 @@ func TestCleanupPreviewRequiresConfirmationAndProtectsEligibleRun(t *testing.T) 
 		Status:              store.InvocationStatusCompleted,
 		InvocationDirectory: invocationPath,
 		ResultDirectory:     resultPath,
+		WorkspaceID:         "workspace-eligible",
 		CreatedAt:           terminalAt,
 		UpdatedAt:           terminalAt,
 	}); err != nil {
@@ -87,25 +90,11 @@ func TestCleanupPreviewRequiresConfirmationAndProtectsEligibleRun(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	workspace := &cleanupTestWorkspace{}
+	var events []string
+	workspace := &cleanupTestWorkspace{events: &events}
 	runtime := &cleanupTestWorker{}
-	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config: &fakeConfigRepository{value: config.HostConfig{
-			SchemaVersion: 1,
-			Repositories: []config.RepositoryRegistration{{
-				Path:                repositoryPath,
-				OperationalDataPath: operationalPath,
-			}},
-		}},
-		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
-			return store.Open(ctx, path)
-		},
-		GitWorkspace: workspace,
-		Worker:       runtime,
-		Now: func() time.Time {
-			return now
-		},
-	})
+	terminalRuntime := &cleanupTestTerminal{events: &events}
+	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
 
 	result, err := service.Cleanup(ctx, factory.CleanupRequest{})
 	var confirmationErr *factory.CleanupConfirmationRequiredError
@@ -117,6 +106,12 @@ func TestCleanupPreviewRequiresConfirmationAndProtectsEligibleRun(t *testing.T) 
 	}
 	if result.Plan.Runs[0].RunID != "run-eligible" {
 		t.Fatalf("planned run = %q, want run-eligible", result.Plan.Runs[0].RunID)
+	}
+	if got := result.Plan.Runs[0].WorkspaceIDs; len(got) != 1 || got[0] != "workspace-eligible" {
+		t.Fatalf("planned workspaces = %#v, want [workspace-eligible]", got)
+	}
+	if len(terminalRuntime.closed) != 0 {
+		t.Fatalf("workspace closes = %#v, want preview to be side-effect free", terminalRuntime.closed)
 	}
 	if len(workspace.removed) != 0 {
 		t.Fatalf("workspace removals = %d, want preview to be side-effect free", len(workspace.removed))
@@ -143,6 +138,21 @@ func TestCleanupPreviewRequiresConfirmationAndProtectsEligibleRun(t *testing.T) 
 	}
 	if len(runtime.cleaned) != 1 || runtime.cleaned[0].RunID != "run-eligible" {
 		t.Fatalf("worker cleanups = %#v, want run-eligible", runtime.cleaned)
+	}
+	if len(confirmed.Retained) != 0 {
+		t.Fatalf("retained workspaces = %#v, want none", confirmed.Retained)
+	}
+	if got := terminalRuntime.closed; len(got) != 1 || got[0] != "workspace-eligible" {
+		t.Fatalf("workspace closes = %#v, want [workspace-eligible]", got)
+	}
+	// An unresponsive terminal must not stall the local deletion that follows.
+	if terminalRuntime.unboundedCloses != 0 {
+		t.Fatalf("unbounded workspace closes = %d, want every close bounded", terminalRuntime.unboundedCloses)
+	}
+	// The workspace runs in the worktree, so it must be closed before the
+	// worktree is removed.
+	if len(events) != 2 || events[0] != "close-workspace" || events[1] != "remove-worktree" {
+		t.Fatalf("cleanup effect order = %#v, want close-workspace then remove-worktree", events)
 	}
 	for _, path := range []string{worktreePath, invocationPath, resultPath, filepath.Join(root, "worktrees", ".factory-git", "run-eligible")} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -308,9 +318,222 @@ func TestCleanupKeepsAnOpenPullRequestRun(t *testing.T) {
 	}
 }
 
+// TestCleanupReportsWorkspacesItCannotClose verifies that an unreachable
+// terminal never blocks local deletion and that the surviving workspace is
+// reported, because cleanup deletes the only durable record of its handle.
+func TestCleanupReportsWorkspacesItCannotClose(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	worktreePath := filepath.Join(root, "worktrees", "run-retained")
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	for _, path := range []string{repositoryPath, worktreePath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
+	// A tmux-shaped handle also pins that the plan admits the handle forms of
+	// the adapter this seam is expected to migrate to.
+	saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-retained", worktreePath, "$3", now)
+
+	workspace := &cleanupTestWorkspace{}
+	runtime := &cleanupTestWorker{}
+	// The adapter reports terminal stderr verbatim, so the failure carries the
+	// newline that would otherwise forge a second cleanup line.
+	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running\n\x1b[1Ecleanup complete: runs=0")}
+	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
+
+	confirmed, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
+	if err != nil {
+		t.Fatalf("confirmed Cleanup() error = %v, want a failed close to be non-fatal", err)
+	}
+	if len(confirmed.Deleted) != 1 || confirmed.Deleted[0].RunID != "run-retained" {
+		t.Fatalf("confirmed deletions = %#v, want run-retained", confirmed.Deleted)
+	}
+	if len(workspace.removed) != 1 {
+		t.Fatalf("workspace removals = %#v, want the worktree removed anyway", workspace.removed)
+	}
+	if len(confirmed.Retained) != 1 {
+		t.Fatalf("retained workspaces = %#v, want one", confirmed.Retained)
+	}
+	retained := confirmed.Retained[0]
+	if retained.RunID != "run-retained" || retained.WorkspaceID != "$3" || retained.Reason == "" {
+		t.Fatalf("retained workspace = %#v, want the run-owned handle with a reason", retained)
+	}
+	// A terminal renders an escape sequence as line movement, so the reason
+	// must carry no control character at all, not merely no newline.
+	for _, character := range retained.Reason {
+		if character < ' ' || character == 0x7f {
+			t.Fatalf("retained reason = %q, want one operator-facing line", retained.Reason)
+		}
+	}
+}
+
+// TestCleanupReportsRetainedWorkspacesWhenALaterStepFails verifies that a
+// failed cleanup still names the workspaces it left behind. The invocation
+// rows holding those handles may already be gone, so a report suppressed by an
+// error would lose them permanently.
+func TestCleanupReportsRetainedWorkspacesWhenALaterStepFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	worktreePath := filepath.Join(root, "worktrees", "run-failing")
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	for _, path := range []string{repositoryPath, worktreePath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
+	saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-failing", worktreePath, "workspace-failing", now)
+
+	workspace := &cleanupTestWorkspace{removeErr: errors.New("worktree is locked")}
+	runtime := &cleanupTestWorker{}
+	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running")}
+	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
+
+	result, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
+	if err == nil {
+		t.Fatal("Cleanup() error = nil, want the failed worktree removal")
+	}
+	if len(result.Retained) != 1 || result.Retained[0].WorkspaceID != "workspace-failing" {
+		t.Fatalf("retained workspaces = %#v, want workspace-failing reported alongside the error", result.Retained)
+	}
+}
+
+// TestCleanupSkipsARunWithAnUnsafeWorkspaceHandle verifies that a malformed
+// terminal handle cannot enter the plan, matching how cleanup treats every
+// other unvalidated run identity.
+func TestCleanupSkipsARunWithAnUnsafeWorkspaceHandle(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		workspaceID string
+	}{
+		{name: "option shaped", workspaceID: "--workspace"},
+		{name: "next line", workspaceID: "workspace\u0085unsafe"},
+		{name: "control sequence introducer", workspaceID: "workspace\u009bunsafe"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			repositoryPath := filepath.Join(root, "repository")
+			worktreePath := filepath.Join(root, "worktrees", "run-unsafe")
+			operationalPath := filepath.Join(root, "state", "factory.db")
+			for _, path := range []string{repositoryPath, worktreePath} {
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
+			saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-unsafe", worktreePath, test.workspaceID, now)
+
+			workspace := &cleanupTestWorkspace{}
+			runtime := &cleanupTestWorker{}
+			terminalRuntime := &cleanupTestTerminal{}
+			service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
+
+			result, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
+			var blockedErr *factory.CleanupBlockedError
+			if !errors.As(err, &blockedErr) {
+				t.Fatalf("Cleanup() error = %v, want CleanupBlockedError", err)
+			}
+			if len(result.Plan.Runs) != 0 || len(result.Plan.Skipped) != 1 {
+				t.Fatalf("cleanup plan = %#v, want only the unsafe run skipped", result.Plan)
+			}
+			if !strings.Contains(result.Plan.Skipped[0].Reason, "unsafe terminal workspace handle") {
+				t.Fatalf("skip reason = %q, want the unsafe workspace handle", result.Plan.Skipped[0].Reason)
+			}
+			if len(terminalRuntime.closed) != 0 || len(workspace.removed) != 0 {
+				t.Fatalf("cleanup effects = closes=%#v removals=%#v, want none", terminalRuntime.closed, workspace.removed)
+			}
+		})
+	}
+}
+
+// newCleanupService builds a Factory service whose destructive seams are all
+// test doubles, so a cleanup test observes effects instead of performing them.
+func newCleanupService(repositoryPath, operationalPath string, workspace *cleanupTestWorkspace, runtime *cleanupTestWorker, terminalRuntime *cleanupTestTerminal, now time.Time) *factory.Service {
+	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config: &fakeConfigRepository{value: config.HostConfig{
+			SchemaVersion: 1,
+			Repositories: []config.RepositoryRegistration{{
+				Path:                repositoryPath,
+				OperationalDataPath: operationalPath,
+			}},
+		}},
+		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
+			return store.Open(ctx, path)
+		},
+		GitWorkspace: workspace,
+		Worker:       runtime,
+		Terminal:     terminalRuntime,
+		Now: func() time.Time {
+			return now
+		},
+	})
+}
+
+// saveCleanupFixture persists one seven-day-old terminal run and the single
+// invocation that owns its terminal workspace handle.
+func saveCleanupFixture(ctx context.Context, t *testing.T, repositoryPath, operationalPath, runID, worktreePath, workspaceID string, now time.Time) {
+	t.Helper()
+
+	terminalAt := now.Add(-8 * 24 * time.Hour)
+	opened, err := store.Open(ctx, operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := opened.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	if err := opened.SaveRun(ctx, store.Run{
+		ID:             runID,
+		RepositoryPath: repositoryPath,
+		IssueNumber:    23,
+		Stage:          store.StageReady,
+		Status:         store.StatusComplete,
+		Branch:         "factory/" + runID,
+		Worktree:       worktreePath,
+		TerminalAt:     terminalAt,
+		CreatedAt:      terminalAt.Add(-time.Hour),
+		UpdatedAt:      terminalAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveInvocation(ctx, store.Invocation{
+		ID:          "invocation-1",
+		RunID:       runID,
+		Harness:     "codex",
+		Role:        "implementation",
+		Stage:       store.StageImplementation,
+		Status:      store.InvocationStatusCompleted,
+		WorkspaceID: workspaceID,
+		CreatedAt:   terminalAt,
+		UpdatedAt:   terminalAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // cleanupTestWorkspace records host cleanup effects for the Factory seam.
 type cleanupTestWorkspace struct {
 	removed []gitadapter.Workspace
+	// removeErr fails removal so later cleanup steps can be observed.
+	removeErr error
+	// events is an optional shared log that orders cleanup effects.
+	events *[]string
 }
 
 // Create returns an unused workspace because preview cleanup never creates one.
@@ -321,6 +544,12 @@ func (*cleanupTestWorkspace) Create(context.Context, string, string, string) (gi
 // Remove records the exact workspace selected for deletion.
 func (w *cleanupTestWorkspace) Remove(_ context.Context, _ string, workspace gitadapter.Workspace) error {
 	w.removed = append(w.removed, workspace)
+	if w.events != nil {
+		*w.events = append(*w.events, "remove-worktree")
+	}
+	if w.removeErr != nil {
+		return w.removeErr
+	}
 	if err := os.RemoveAll(workspace.Worktree); err != nil {
 		return err
 	}
@@ -381,4 +610,57 @@ func (w *cleanupTestWorker) Cleanup(_ context.Context, request worker.CleanupReq
 		}
 	}
 	return nil
+}
+
+// cleanupTestTerminal records terminal workspace closes for the Factory seam.
+type cleanupTestTerminal struct {
+	// closed records every workspace handle cleanup asked to close.
+	closed []string
+	// closeErr fails every close so retention reporting can be observed.
+	closeErr error
+	// unboundedCloses counts closes that arrived without a deadline.
+	unboundedCloses int
+	// events is an optional shared log that orders cleanup effects.
+	events *[]string
+}
+
+// EnsureControlWorkspace satisfies terminal.TerminalRuntime for cleanup tests.
+func (*cleanupTestTerminal) EnsureControlWorkspace(context.Context, terminal.WorkspaceRequest) (terminal.Workspace, error) {
+	return terminal.Workspace{ID: "control"}, nil
+}
+
+// EnsureRunWorkspace satisfies terminal.TerminalRuntime for cleanup tests.
+func (*cleanupTestTerminal) EnsureRunWorkspace(context.Context, terminal.RunWorkspaceRequest) (terminal.RunWorkspace, error) {
+	return terminal.RunWorkspace{}, errors.New("unexpected run workspace creation")
+}
+
+// CreateSurface satisfies terminal.TerminalRuntime for cleanup tests.
+func (*cleanupTestTerminal) CreateSurface(context.Context, terminal.SurfaceRequest) (terminal.Surface, error) {
+	return terminal.Surface{}, errors.New("unexpected surface creation")
+}
+
+// LaunchSurface satisfies terminal.TerminalRuntime for cleanup tests.
+func (*cleanupTestTerminal) LaunchSurface(context.Context, terminal.SurfaceID, terminal.Command) error {
+	return nil
+}
+
+// SendInput satisfies terminal.TerminalRuntime for cleanup tests.
+func (*cleanupTestTerminal) SendInput(context.Context, terminal.SurfaceID, []byte) error { return nil }
+
+// Notify satisfies terminal.TerminalRuntime for cleanup tests.
+func (*cleanupTestTerminal) Notify(context.Context, terminal.Notification) error { return nil }
+
+// CloseSurface satisfies terminal.TerminalRuntime for cleanup tests.
+func (*cleanupTestTerminal) CloseSurface(context.Context, terminal.SurfaceID) error { return nil }
+
+// CloseWorkspace records the exact workspace handle cleanup closed.
+func (t *cleanupTestTerminal) CloseWorkspace(ctx context.Context, workspaceID terminal.WorkspaceID) error {
+	t.closed = append(t.closed, string(workspaceID))
+	if _, bounded := ctx.Deadline(); !bounded {
+		t.unboundedCloses++
+	}
+	if t.events != nil {
+		*t.events = append(*t.events, "close-workspace")
+	}
+	return t.closeErr
 }

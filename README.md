@@ -1241,7 +1241,8 @@ transition, so a terminal disposition always wins over further work.
 Either terminal outcome releases the one-active-run constraint. The same
 <code>factory start</code> process then claims the next oldest eligible issue
 without waiting for a full polling interval and without an operator restart.
-Retention is unchanged: cleanup stays an explicit, separate seven-day
+Retention is unchanged: the terminal workspace, branch, worktree, and worker
+survive the transition, and cleanup stays an explicit, separate seven-day
 operation.
 
 ### States that intentionally pause progression
@@ -1344,9 +1345,9 @@ factory cleanup --config /Users/me/.config/factory/config.yaml
 ~~~
 
 The preview lists each selected worktree, local branch, worker target, role
-volume, and stored output. The preview intentionally returns exit status
-<code>2</code> when no <code>--confirm</code> flag is supplied. Confirm the
-displayed plan:
+volume, stored output, and terminal workspace. The preview intentionally
+returns exit status <code>2</code> when no <code>--confirm</code> flag is
+supplied. Confirm the displayed plan:
 
 ~~~sh
 factory cleanup \
@@ -1363,10 +1364,17 @@ factory cleanup \
   --confirm
 ~~~
 
-A pending effect, malformed run identity, unproven path scope, or a still-open
-pull request blocks cleanup for that run. The confirmation pass refuses a
-changed plan, so the resources displayed in the preview are the resources being
-authorized for removal.
+A pending effect, malformed run identity, malformed terminal workspace handle,
+unproven path scope, or a still-open pull request blocks cleanup for that run.
+The confirmation pass refuses a changed plan, so the resources displayed in the
+preview are the resources being authorized for removal.
+
+Cleanup also closes the terminal workspaces the removed runs created, because
+the deleted invocation rows are the only durable record of those handles. A
+workspace close never blocks local deletion: when the terminal is unavailable
+or refuses the close, cleanup removes the local resources anyway and prints
+<code>cleanup retained terminal workspace</code> for each workspace the
+operator has to close by hand.
 
 ## Security and data boundaries
 

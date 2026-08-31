@@ -183,9 +183,20 @@ tables are separate from repository configuration, disposable run artifacts,
 and the isolated local evaluation-summary projection.
 _Avoid_: Event journal, telemetry, transcript archive
 
+**Terminal workspace**:
+The visible workspace one run owns in the terminal adapter, identified by an
+opaque handle the adapter alone interprets. It holds the run's surfaces and
+uses the run worktree as its working directory. A terminal outcome retains it;
+only cleanup closes it. Distinct from the Git worktree and branch the
+coordinator removes at the same moment, and from the coordinator's own control
+workspace, which no run owns and cleanup never closes.
+_Avoid_: Terminal window, pane, tab, Git workspace
+
 **Cleanup**:
 The explicit, seven-day retention operation that previews and removes one or
 more terminal runs' local worktrees, local branches, workers, role sessions,
-generated outputs, and operational rows while retaining remote branches,
-credential stores, and local evaluation summaries.
+terminal workspaces, generated outputs, and operational rows while retaining
+remote branches, credential stores, and local evaluation summaries. It is the
+last operation that knows a run's workspace handles, so a workspace it cannot
+close is reported for manual closure instead of being lost silently.
 _Avoid_: Remote branch deletion, automatic summary deletion

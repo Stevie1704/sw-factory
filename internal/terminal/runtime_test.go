@@ -217,12 +217,18 @@ func TestCmuxRuntimePreservesOtherInspectionErrors(t *testing.T) {
 // JSON for creation and topology queries, and a plain acknowledgement line for
 // every lifecycle command.
 type fakeRunner struct {
+	// workspaceIDs supplies the handles returned by successive creations.
 	workspaceIDs []string
-	tree         string
+	// tree is the topology fixture returned by a topology query.
+	tree string
 	// treeErr is returned when the fixture handles a topology query.
-	treeErr    error
+	treeErr error
+	// closeErr is returned when the fixture handles a workspace close.
+	closeErr error
+	// newSurface is the response returned by a surface creation.
 	newSurface string
-	calls      []string
+	// calls records every host terminal command the adapter issued.
+	calls []string
 }
 
 // Run records one host terminal command and returns its fixture.
@@ -243,6 +249,11 @@ func (r *fakeRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, er
 		return []byte(r.tree), nil
 	case args[0] == "new-surface":
 		return []byte(r.newSurface), nil
+	case args[0] == "close-workspace":
+		if r.closeErr != nil {
+			return nil, r.closeErr
+		}
+		return []byte("OK\n"), nil
 	default:
 		return []byte("OK\n"), nil
 	}
@@ -251,3 +262,31 @@ func (r *fakeRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, er
 var _ terminal.CommandRunner = (*fakeRunner)(nil)
 var _ terminal.TerminalRuntime = (*terminal.CmuxRuntime)(nil)
 var _ terminal.SurfaceReader = (*terminal.CmuxRuntime)(nil)
+
+// TestCmuxRuntimeTreatsAnAbsentWorkspaceAsClosed verifies that closing a
+// workspace the terminal already lost succeeds. Cleanup reports every close it
+// cannot complete, so an absent workspace must not produce a false report of
+// work the operator still has to do.
+func TestCmuxRuntimeTreatsAnAbsentWorkspaceAsClosed(t *testing.T) {
+	runner := &fakeRunner{closeErr: errors.New("terminal command failed: not_found: Workspace not found")}
+	runtime := terminal.NewCmuxRuntime(runner)
+
+	if err := runtime.CloseWorkspace(context.Background(), runWorkspaceID); err != nil {
+		t.Fatalf("CloseWorkspace() error = %v, want an absent workspace to be closed", err)
+	}
+	if joined := strings.Join(runner.calls, "\n"); !strings.Contains(joined, "close-workspace --workspace "+runWorkspaceID) {
+		t.Fatalf("adapter calls = %q, want the close command", joined)
+	}
+}
+
+// TestCmuxRuntimeReportsAFailedWorkspaceClose verifies that an ordinary close
+// failure still reaches the caller.
+func TestCmuxRuntimeReportsAFailedWorkspaceClose(t *testing.T) {
+	runner := &fakeRunner{closeErr: errors.New("terminal command failed: connection refused")}
+	runtime := terminal.NewCmuxRuntime(runner)
+
+	err := runtime.CloseWorkspace(context.Background(), runWorkspaceID)
+	if err == nil || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("CloseWorkspace() error = %v, want the adapter failure", err)
+	}
+}
