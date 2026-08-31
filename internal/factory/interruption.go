@@ -513,9 +513,33 @@ func (s *Service) reconcileActiveHarnessLiveness(ctx context.Context, registrati
 		if running {
 			continue
 		}
-		_, _, _, reconcileErr := s.reconcileInterruptedRunWithMode(ctx, registration, runStore, run, true)
+		// The coordinator, not the adapter, is the first to see that a session
+		// is gone. Claude Code assigns its own session identifier, so a Claude
+		// launch that dies immediately is only ever observed here. Capture the
+		// surface before reconciliation stops the worker behind it.
+		diagnostic := s.recordSessionExitDiagnostic(ctx, registration, run, active)
+		recovered, _, _, reconcileErr := s.reconcileInterruptedRunWithMode(ctx, registration, runStore, run, true)
 		if reconcileErr != nil {
+			if diagnostic != "" {
+				return fmt.Errorf("%w (session-exit diagnostic: %s)", reconcileErr, diagnostic)
+			}
 			return reconcileErr
+		}
+		if diagnostic != "" {
+			diagnosticReason := fmt.Sprintf("session-exit diagnostic: %s", diagnostic)
+			next := recovered
+			if strings.TrimSpace(next.LifecycleReason) == "" {
+				next.LifecycleReason = diagnosticReason
+			} else if !strings.Contains(next.LifecycleReason, diagnosticReason) {
+				next.LifecycleReason += "; " + diagnosticReason
+			}
+			if next.LifecycleReason != recovered.LifecycleReason {
+				next.Revision = recovered.Revision + 1
+				next.UpdatedAt = s.deps.Now().UTC()
+				if err := s.persistAgentRunState(ctx, registration, runStore, recovered, next); err != nil {
+					return fmt.Errorf("persist session-exit diagnostic projection %q: %w", diagnostic, err)
+				}
+			}
 		}
 		return nil
 	}
@@ -866,4 +890,19 @@ func (s *Service) resetStartupState() {
 	defer s.startupMu.Unlock()
 	s.startupChecked = false
 	s.startupErr = nil
+}
+
+// recordSessionExitDiagnostic captures what a harness printed before its
+// session ended and writes it beside the invocation. Without it an exited
+// session reports only that it exited, which is the same dead end a failed
+// launch used to reach. It returns only the local diagnostic path so callers
+// can expose that location without copying transcript contents into metadata.
+func (s *Service) recordSessionExitDiagnostic(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) string {
+	terminalRuntime := s.deps.Terminal
+	if terminalRuntime == nil {
+		terminalRuntime = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
+	}
+	transcript := captureSurfaceTranscript(ctx, terminalRuntime, invocationSurface(invocation).ID)
+	cause := fmt.Errorf("%s native session %q exited before reporting", invocation.Harness, invocation.NativeSessionID)
+	return writeHarnessFailureDiagnostic(invocationRoot(run, invocation.ID), "session exit", cause, transcript, s.deps.Now().UTC())
 }

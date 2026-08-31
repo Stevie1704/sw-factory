@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -98,6 +99,13 @@ type WorkspaceInspection struct {
 // persisted cmux handles before a native session is resumed.
 type WorkspaceInspector interface {
 	InspectWorkspace(context.Context, WorkspaceID) (WorkspaceInspection, error)
+}
+
+// SurfaceReader is the optional adapter capability that reads a surface's
+// visible output. A launch that fails leaves its diagnosis only on the surface,
+// so callers capture that output before the failure path closes the surface.
+type SurfaceReader interface {
+	ReadSurface(context.Context, SurfaceID, int) (string, error)
 }
 
 // SurfaceRequest asks the adapter to create one additional terminal surface.
@@ -398,6 +406,28 @@ func (r *CmuxRuntime) CloseSurface(ctx context.Context, surfaceID SurfaceID) err
 		return fmt.Errorf("close terminal surface: %w", err)
 	}
 	return nil
+}
+
+// ReadSurface returns one surface's visible output and scrollback, bounded to
+// the requested number of lines.
+func (r *CmuxRuntime) ReadSurface(ctx context.Context, surfaceID SurfaceID, lines int) (string, error) {
+	if strings.TrimSpace(string(surfaceID)) == "" {
+		return "", errors.New("surface id is required")
+	}
+	if lines <= 0 {
+		return "", errors.New("surface line count must be greater than zero")
+	}
+	// Surface lookup is scoped to a workspace, so the owning workspace is
+	// resolved before the surface is read.
+	workspaceID, err := r.surfaceWorkspace(ctx, surfaceID)
+	if err != nil {
+		return "", err
+	}
+	output, err := r.run(ctx, []string{"read-screen", "--surface", string(surfaceID), "--workspace", string(workspaceID), "--scrollback", "--lines", strconv.Itoa(lines)}, nil)
+	if err != nil {
+		return "", fmt.Errorf("read terminal surface: %w", err)
+	}
+	return string(output), nil
 }
 
 // CloseWorkspace closes a workspace through the adapter lifecycle command.

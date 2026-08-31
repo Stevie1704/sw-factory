@@ -137,15 +137,19 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 		if snapshotProvider != nil {
 			discovered, discoverErr := discoverNativeSession(ctx, snapshotProvider, baseline, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if discoverErr != nil {
+				// Codex reports why it could not start on its surface, so the
+				// transcript is captured before the surface is closed.
+				failure := captureLaunchFailure(ctx, c.Terminal, surface.ID, fmt.Errorf("discover Codex native session: %w", discoverErr))
 				_ = c.Terminal.CloseSurface(ctx, surface.ID)
-				return Session{}, fmt.Errorf("discover Codex native session: %w", discoverErr)
+				return Session{}, failure
 			}
 			nativeSessionID = discovered
 		} else if provider, ok := c.Worker.(worker.NativeSessionProvider); ok {
 			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if discoverErr != nil {
+				failure := captureLaunchFailure(ctx, c.Terminal, surface.ID, fmt.Errorf("discover Codex native session: %w", discoverErr))
 				_ = c.Terminal.CloseSurface(ctx, surface.ID)
-				return Session{}, fmt.Errorf("discover Codex native session: %w", discoverErr)
+				return Session{}, failure
 			}
 			nativeSessionID = discovered
 		}

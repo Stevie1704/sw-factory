@@ -145,7 +145,80 @@ const (
 	// nativeSessionDiscoveryMaxInterval keeps discovery responsive without
 	// repeatedly invoking the worker while the harness is still starting.
 	nativeSessionDiscoveryMaxInterval = 500 * time.Millisecond
+	// launchCaptureTimeout bounds the best-effort diagnostic read of a failing
+	// launch surface so capture never delays reporting the failure itself.
+	launchCaptureTimeout = 10 * time.Second
 )
+
+// launchTranscriptLines bounds the surface output captured when a launch
+// fails. It is large enough to hold a harness startup banner and its error,
+// and small enough to stay a readable diagnostic rather than a transcript.
+const launchTranscriptLines = 200
+
+// LaunchFailure reports a harness launch that failed after its surface existed,
+// carrying the output that surface was showing at the moment of failure.
+//
+// The transcript is deliberately absent from Error(). A launch error reaches
+// operator-visible projections such as the run lifecycle reason and the GitHub
+// status comment, which stay free of work content; the transcript belongs in
+// local diagnostics that only the operator running the coordinator can read.
+type LaunchFailure struct {
+	// Cause is the underlying launch failure.
+	Cause error
+	// Transcript is the captured surface output, empty when capture failed or
+	// the terminal adapter cannot read surfaces.
+	Transcript string
+}
+
+// Error returns the underlying cause without the captured transcript.
+func (e *LaunchFailure) Error() string {
+	if e == nil {
+		return "harness launch failed"
+	}
+	if e.Cause == nil {
+		return "harness launch failed"
+	}
+	return e.Cause.Error()
+}
+
+// Unwrap exposes the underlying cause so existing classification keeps working.
+func (e *LaunchFailure) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// LaunchTranscript returns the surface output captured for a failed launch, or
+// an empty string when the error carries none.
+func LaunchTranscript(err error) string {
+	var failure *LaunchFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return ""
+	}
+	return failure.Transcript
+}
+
+// captureLaunchFailure enriches a launch failure with the surface output that
+// diagnoses it. The surface is about to be closed by the caller, so this is the
+// only moment the harness's own error message is still readable. Capture is
+// best-effort: a diagnostic that cannot be read must never replace the failure
+// the caller is already reporting.
+func captureLaunchFailure(ctx context.Context, runtime terminal.TerminalRuntime, surfaceID terminal.SurfaceID, cause error) error {
+	reader, readable := runtime.(terminal.SurfaceReader)
+	if !readable || strings.TrimSpace(string(surfaceID)) == "" {
+		return &LaunchFailure{Cause: cause}
+	}
+	// The caller's context is commonly already past its deadline when a launch
+	// fails, so capture runs on its own bounded context.
+	captureContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), launchCaptureTimeout)
+	defer cancel()
+	transcript, err := reader.ReadSurface(captureContext, surfaceID, launchTranscriptLines)
+	if err != nil {
+		return &LaunchFailure{Cause: cause}
+	}
+	return &LaunchFailure{Cause: cause, Transcript: strings.TrimSpace(transcript)}
+}
 
 // ErrNativeSessionUnavailable reports that a fresh launch did not expose a
 // newly persisted native session before discovery timed out or was canceled.
