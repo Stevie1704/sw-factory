@@ -101,6 +101,7 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 	for _, expected := range []string{
 		"<!-- factory-generated:start -->", "Add the factory handoff", "Implement the supervised draft PR boundary.",
 		"stage: `draft_pr`", "format", "test", "intervention: `none`", "factory status", "factory draft-pr --run-id run-draft",
+		"Closes #42",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("generated PR body %q does not contain %q", body, expected)
@@ -126,6 +127,11 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 	updatedBody := pullRequests.updatedRequests[0].Body
 	if !strings.Contains(updatedBody, "human-authored notes") || strings.Count(updatedBody, "<!-- factory-generated:start -->") != 1 || !strings.Contains(updatedBody, "intervention: `human reviewed`") {
 		t.Fatalf("updated PR body = %q, want preserved human text and one regenerated section", updatedBody)
+	}
+	// The closing keyword is what makes GitHub link the pull request to the
+	// issue and close it on merge, so regeneration must never drop it.
+	if strings.Count(updatedBody, "Closes #42") != 1 {
+		t.Fatalf("updated PR body = %q, want exactly one closing keyword for issue 42", updatedBody)
 	}
 }
 
