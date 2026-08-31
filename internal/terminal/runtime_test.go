@@ -217,14 +217,18 @@ func TestCmuxRuntimePreservesOtherInspectionErrors(t *testing.T) {
 // JSON for creation and topology queries, and a plain acknowledgement line for
 // every lifecycle command.
 type fakeRunner struct {
+	// workspaceIDs supplies the handles returned by successive creations.
 	workspaceIDs []string
-	tree         string
+	// tree is the topology fixture returned by a topology query.
+	tree string
 	// treeErr is returned when the fixture handles a topology query.
 	treeErr error
 	// closeErr is returned when the fixture handles a workspace close.
-	closeErr   error
+	closeErr error
+	// newSurface is the response returned by a surface creation.
 	newSurface string
-	calls      []string
+	// calls records every host terminal command the adapter issued.
+	calls []string
 }
 
 // Run records one host terminal command and returns its fixture.

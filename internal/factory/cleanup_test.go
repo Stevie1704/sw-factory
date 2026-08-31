@@ -338,11 +338,13 @@ func TestCleanupReportsWorkspacesItCannotClose(t *testing.T) {
 	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
 	// A tmux-shaped handle also pins that the plan admits the handle forms of
 	// the adapter this seam is expected to migrate to.
-	saveCleanupFixture(ctx, t, operationalPath, repositoryPath, "run-retained", worktreePath, "$3", now)
+	saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-retained", worktreePath, "$3", now)
 
 	workspace := &cleanupTestWorkspace{}
 	runtime := &cleanupTestWorker{}
-	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running")}
+	// The adapter reports terminal stderr verbatim, so the failure carries the
+	// newline that would otherwise forge a second cleanup line.
+	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running\ncleanup complete: runs=0")}
 	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
 
 	confirmed, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
@@ -361,6 +363,9 @@ func TestCleanupReportsWorkspacesItCannotClose(t *testing.T) {
 	retained := confirmed.Retained[0]
 	if retained.RunID != "run-retained" || retained.WorkspaceID != "$3" || retained.Reason == "" {
 		t.Fatalf("retained workspace = %#v, want the run-owned handle with a reason", retained)
+	}
+	if strings.ContainsAny(retained.Reason, "\r\n") {
+		t.Fatalf("retained reason = %q, want one operator-facing line", retained.Reason)
 	}
 }
 
@@ -383,7 +388,7 @@ func TestCleanupReportsRetainedWorkspacesWhenALaterStepFails(t *testing.T) {
 	}
 
 	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
-	saveCleanupFixture(ctx, t, operationalPath, repositoryPath, "run-failing", worktreePath, "workspace-failing", now)
+	saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-failing", worktreePath, "workspace-failing", now)
 
 	workspace := &cleanupTestWorkspace{removeErr: errors.New("worktree is locked")}
 	runtime := &cleanupTestWorker{}
@@ -417,7 +422,7 @@ func TestCleanupSkipsARunWithAnUnsafeWorkspaceHandle(t *testing.T) {
 	}
 
 	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
-	saveCleanupFixture(ctx, t, operationalPath, repositoryPath, "run-unsafe", worktreePath, "--workspace", now)
+	saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-unsafe", worktreePath, "--workspace", now)
 
 	workspace := &cleanupTestWorkspace{}
 	runtime := &cleanupTestWorker{}
@@ -465,7 +470,7 @@ func newCleanupService(repositoryPath, operationalPath string, workspace *cleanu
 
 // saveCleanupFixture persists one seven-day-old terminal run and the single
 // invocation that owns its terminal workspace handle.
-func saveCleanupFixture(ctx context.Context, t *testing.T, operationalPath, repositoryPath, runID, worktreePath, workspaceID string, now time.Time) {
+func saveCleanupFixture(ctx context.Context, t *testing.T, repositoryPath, operationalPath, runID, worktreePath, workspaceID string, now time.Time) {
 	t.Helper()
 
 	terminalAt := now.Add(-8 * 24 * time.Hour)

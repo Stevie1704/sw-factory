@@ -23,7 +23,10 @@ const (
 	// local run artifacts may be removed.
 	CleanupRetention = 7 * 24 * time.Hour
 	// cleanupWorkspaceCloseTimeout bounds one best-effort terminal workspace
-	// close so an unresponsive terminal cannot stall local deletion.
+	// close so an unresponsive terminal cannot stall local deletion. The
+	// adapter adds its own wait delay after this deadline kills the command,
+	// so one close costs slightly more than this and a run costs one close per
+	// workspace it owns.
 	cleanupWorkspaceCloseTimeout = 10 * time.Second
 )
 
@@ -123,7 +126,8 @@ type CleanupRetainedWorkspace struct {
 	RunID string
 	// WorkspaceID is the opaque terminal workspace handle left in place.
 	WorkspaceID string
-	// Reason is the bounded operator-facing explanation.
+	// Reason is the single-line operator-facing explanation of why the close
+	// did not happen.
 	Reason string
 }
 
@@ -267,8 +271,9 @@ func (s *Service) closeRunWorkspaces(ctx context.Context, socketPath string, tar
 		terminalRuntime, err = s.ensureTerminalRuntime(socketPath)
 		if err != nil {
 			retained := make([]CleanupRetainedWorkspace, 0, len(target.WorkspaceIDs))
+			reason := safeStatusCommentValue(fmt.Sprintf("ensure terminal runtime: %v", err))
 			for _, workspaceID := range target.WorkspaceIDs {
-				retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: fmt.Sprintf("ensure terminal runtime: %v", err)})
+				retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: reason})
 			}
 			return retained
 		}
@@ -282,7 +287,9 @@ func (s *Service) closeRunWorkspaces(ctx context.Context, socketPath string, tar
 		err := terminalRuntime.CloseWorkspace(closeCtx, terminal.WorkspaceID(workspaceID))
 		cancel()
 		if err != nil {
-			retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: err.Error()})
+			// Adapter stderr reaches the operator's plan output verbatim, so a
+			// multi-line failure must not be able to forge a cleanup line.
+			retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: safeStatusCommentValue(err.Error())})
 		}
 	}
 	return retained
