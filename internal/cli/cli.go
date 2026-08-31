@@ -952,6 +952,11 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		Before:       preview.Plan.Before,
 		ExpectedPlan: &preview.Plan,
 	})
+	// Retained workspaces are reported before any failure, because cleanup has
+	// already deleted the invocation rows holding their handles.
+	if !writeRetainedWorkspaces(output, errorsOutput, result.Retained) {
+		return 1
+	}
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -959,12 +964,18 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 	if !writeOutput(output, errorsOutput, "cleanup complete: runs=%d\n", len(result.Deleted)) {
 		return 1
 	}
-	for _, retained := range result.Retained {
-		if !writeOutput(output, errorsOutput, "cleanup retained terminal workspace: %s run=%s reason=%s (close it manually)\n", retained.WorkspaceID, retained.RunID, retained.Reason) {
-			return 1
+	return 0
+}
+
+// writeRetainedWorkspaces names every terminal workspace the operator now has
+// to close by hand.
+func writeRetainedWorkspaces(output, errorsOutput io.Writer, retained []factory.CleanupRetainedWorkspace) bool {
+	for _, workspace := range retained {
+		if !writeOutput(output, errorsOutput, "cleanup retained terminal workspace: %s run=%s reason=%s (close it manually)\n", workspace.WorkspaceID, workspace.RunID, workspace.Reason) {
+			return false
 		}
 	}
-	return 0
+	return true
 }
 
 // writeCleanupPlan renders every exact target before any confirmed mutation.

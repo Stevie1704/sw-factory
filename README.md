@@ -1364,8 +1364,8 @@ factory cleanup \
   --confirm
 ~~~
 
-A pending effect, malformed run identity, unproven path scope, or a still-open
-pull request blocks cleanup for that run. The confirmation pass refuses a
+A pending effect, malformed run identity, malformed terminal workspace handle,
+unproven path scope, or a still-open pull request blocks cleanup for that run. The confirmation pass refuses a
 changed plan, so the resources displayed in the preview are the resources being
 authorized for removal.
 

@@ -22,6 +22,9 @@ const (
 	// CleanupRetention is the minimum age of a terminal run before ordinary
 	// local run artifacts may be removed.
 	CleanupRetention = 7 * 24 * time.Hour
+	// cleanupWorkspaceCloseTimeout bounds one best-effort terminal workspace
+	// close so an unresponsive terminal cannot stall local deletion.
+	cleanupWorkspaceCloseTimeout = 10 * time.Second
 )
 
 // cleanupWorkerRoles covers every factory-declared role that can create a
@@ -229,7 +232,7 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 		// The terminal workspace runs in the worktree that the next step
 		// removes, so it is closed first. A close failure never blocks local
 		// deletion; it is reported instead.
-		result.Retained = append(result.Retained, s.closeRunWorkspaces(ctx, registration, target)...)
+		result.Retained = append(result.Retained, s.closeRunWorkspaces(ctx, registration.Cmux.SocketPath, target)...)
 		if err := workspace.Remove(ctx, registration.Path, gitadapter.Workspace{RunID: target.RunID, Branch: target.Branch, Worktree: target.Worktree}); err != nil {
 			rollback()
 			return result, fmt.Errorf("remove Git workspace for run %q: %w", target.RunID, err)
@@ -254,14 +257,14 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 // and returns the workspaces that survived. Cleanup must still remove local
 // resources when the terminal server is absent, so an unavailable runtime and
 // a rejected close are both reported rather than returned as errors.
-func (s *Service) closeRunWorkspaces(ctx context.Context, registration config.RepositoryRegistration, target CleanupRun) []CleanupRetainedWorkspace {
+func (s *Service) closeRunWorkspaces(ctx context.Context, socketPath string, target CleanupRun) []CleanupRetainedWorkspace {
 	if len(target.WorkspaceIDs) == 0 {
 		return nil
 	}
 	terminalRuntime := s.deps.Terminal
 	if terminalRuntime == nil {
 		var err error
-		terminalRuntime, err = s.ensureTerminalRuntime(registration.Cmux.SocketPath)
+		terminalRuntime, err = s.ensureTerminalRuntime(socketPath)
 		if err != nil {
 			retained := make([]CleanupRetainedWorkspace, 0, len(target.WorkspaceIDs))
 			for _, workspaceID := range target.WorkspaceIDs {
@@ -272,7 +275,13 @@ func (s *Service) closeRunWorkspaces(ctx context.Context, registration config.Re
 	}
 	var retained []CleanupRetainedWorkspace
 	for _, workspaceID := range target.WorkspaceIDs {
-		if err := terminalRuntime.CloseWorkspace(ctx, terminal.WorkspaceID(workspaceID)); err != nil {
+		// An unreachable terminal can accept the connection and never answer,
+		// so each close is bounded rather than allowed to stall the removal of
+		// local resources that follows it.
+		closeCtx, cancel := context.WithTimeout(ctx, cleanupWorkspaceCloseTimeout)
+		err := terminalRuntime.CloseWorkspace(closeCtx, terminal.WorkspaceID(workspaceID))
+		cancel()
+		if err != nil {
 			retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: err.Error()})
 		}
 	}
@@ -392,23 +401,10 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 	for _, role := range roles {
 		roleSet[role] = struct{}{}
 	}
-	workspaceIDs := make([]string, 0, len(candidate.Invocations))
-	seenWorkspaceIDs := make(map[string]struct{}, len(candidate.Invocations))
-	for _, invocation := range candidate.Invocations {
-		workspaceID := strings.TrimSpace(invocation.WorkspaceID)
-		if workspaceID == "" {
-			continue
-		}
-		if _, exists := seenWorkspaceIDs[workspaceID]; exists {
-			continue
-		}
-		seenWorkspaceIDs[workspaceID] = struct{}{}
-		workspaceIDs = append(workspaceIDs, workspaceID)
-	}
-	sort.Strings(workspaceIDs)
-
 	workerIDs := []string{run.ID}
 	seenWorkerIDs := map[string]struct{}{run.ID: {}}
+	var workspaceIDs []string
+	seenWorkspaceIDs := make(map[string]struct{}, len(candidate.Invocations))
 	for _, invocation := range candidate.Invocations {
 		if !safeCleanupIdentifier(invocation.Role) {
 			return CleanupRun{}, fmt.Sprintf("invocation %q has an unsafe worker role", invocation.ID)
@@ -425,9 +421,20 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 			roleSet[invocation.Role] = struct{}{}
 			roles = append(roles, invocation.Role)
 		}
+		if invocation.WorkspaceID == "" {
+			continue
+		}
+		if !safeWorkspaceHandle(invocation.WorkspaceID) {
+			return CleanupRun{}, fmt.Sprintf("invocation %q has an unsafe terminal workspace handle", invocation.ID)
+		}
+		if _, exists := seenWorkspaceIDs[invocation.WorkspaceID]; !exists {
+			seenWorkspaceIDs[invocation.WorkspaceID] = struct{}{}
+			workspaceIDs = append(workspaceIDs, invocation.WorkspaceID)
+		}
 	}
 	sort.Strings(workerIDs)
 	sort.Strings(roles)
+	sort.Strings(workspaceIDs)
 	eligibleAt := run.TerminalAt
 	if eligibleAt.IsZero() {
 		eligibleAt = run.UpdatedAt
@@ -484,6 +491,23 @@ func safeCleanupIdentifier(value string) bool {
 			continue
 		}
 		return false
+	}
+	return true
+}
+
+// safeWorkspaceHandle accepts an opaque terminal workspace handle that is safe
+// to display in the plan and to pass as one command argument. Handles are
+// adapter-generated and never name a path, so this is deliberately wider than
+// safeCleanupIdentifier: it rejects only empty, padded, option-shaped, and
+// control-character values.
+func safeWorkspaceHandle(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") {
+		return false
+	}
+	for _, character := range value {
+		if character < ' ' || character == 0x7f {
+			return false
+		}
 	}
 	return true
 }
