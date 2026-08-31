@@ -458,14 +458,10 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 		}
 	}
 	// GitHub links a pull request to its issue, and closes that issue on merge,
-	// only for an explicit closing keyword; the bare `#42` reference above is a
+	// only for an explicit closing keyword; the bare `#42` identity line is a
 	// mention. The keyword belongs to the regenerated factory section so that
 	// neither a repeated draft-PR pass nor human-authored PR text can drop it.
-	closingDeclaration := ""
-	if run.IssueNumber > 0 {
-		closingDeclaration = fmt.Sprintf("\n\nCloses #%d", run.IssueNumber)
-	}
-	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s%s\n\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, closingDeclaration, generatedReviewSection(run), issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run: `%s`\n- issue: #%d — %s\n- specification packet: version %d, target branch `%s`\n- checkpoint: `%s`\n- stage: `draft_pr`\n- intervention: `%s`\n%s\n\nCloses #%d\n\n%s\n\n### Issue summary\n\n%s\n\n### Gates\n\n%s\n\n### Control commands\n\n- `factory status`\n- `factory draft-pr --run-id %s`\n\n%s", generatedPullRequestStart, run.ID, packet.Issue.Number, defaultString(packet.Issue.Title, "(untitled)"), packet.Version, packet.RepositoryConfig.TargetBranch, run.CheckpointSHA, intervention, testStageDisposition, run.IssueNumber, generatedReviewSection(run), issueBody, strings.Join(gateLines, "\n"), run.ID, generatedPullRequestEnd)
 }
 
 // generatedReviewSection renders every configured exact-checkpoint review,
