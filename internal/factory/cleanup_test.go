@@ -344,7 +344,7 @@ func TestCleanupReportsWorkspacesItCannotClose(t *testing.T) {
 	runtime := &cleanupTestWorker{}
 	// The adapter reports terminal stderr verbatim, so the failure carries the
 	// newline that would otherwise forge a second cleanup line.
-	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running\ncleanup complete: runs=0")}
+	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running\n\x1b[1Ecleanup complete: runs=0")}
 	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
 
 	confirmed, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
@@ -364,8 +364,12 @@ func TestCleanupReportsWorkspacesItCannotClose(t *testing.T) {
 	if retained.RunID != "run-retained" || retained.WorkspaceID != "$3" || retained.Reason == "" {
 		t.Fatalf("retained workspace = %#v, want the run-owned handle with a reason", retained)
 	}
-	if strings.ContainsAny(retained.Reason, "\r\n") {
-		t.Fatalf("retained reason = %q, want one operator-facing line", retained.Reason)
+	// A terminal renders an escape sequence as line movement, so the reason
+	// must carry no control character at all, not merely no newline.
+	for _, character := range retained.Reason {
+		if character < ' ' || character == 0x7f {
+			t.Fatalf("retained reason = %q, want one operator-facing line", retained.Reason)
+		}
 	}
 }
 

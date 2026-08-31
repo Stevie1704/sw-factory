@@ -188,8 +188,9 @@ The visible workspace one run owns in the terminal adapter, identified by an
 opaque handle the adapter alone interprets. It holds the run's surfaces and
 uses the run worktree as its working directory. A terminal outcome retains it;
 only cleanup closes it. Distinct from the Git worktree and branch the
-coordinator removes at the same moment.
-_Avoid_: cmux window, pane, tab, Git workspace
+coordinator removes at the same moment, and from the coordinator's own control
+workspace, which no run owns and cleanup never closes.
+_Avoid_: Terminal window, pane, tab, Git workspace
 
 **Cleanup**:
 The explicit, seven-day retention operation that previews and removes one or

@@ -1185,10 +1185,18 @@ func renderReviewStatusComment(title string, review *store.ReviewResult, run sto
 }
 
 // safeStatusCommentValue keeps command feedback single-line and prevents
-// untrusted GitHub login or parser text from changing the status-comment
-// structure.
+// untrusted GitHub login, parser, or adapter text from changing the structure
+// of the surface it is rendered on. Every control character is replaced, not
+// only the newline: a terminal renders an escape sequence as line movement, so
+// a value carrying one could forge a line on an operator's screen.
 func safeStatusCommentValue(value string) string {
-	value = strings.NewReplacer("\r", " ", "\n", " ", "`", "'", "\x00", " ").Replace(value)
+	value = strings.Map(func(character rune) rune {
+		if character < ' ' || character == 0x7f {
+			return ' '
+		}
+		return character
+	}, value)
+	value = strings.ReplaceAll(value, "`", "'")
 	return strings.TrimSpace(value)
 }
 
