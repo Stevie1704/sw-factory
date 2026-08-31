@@ -27,13 +27,13 @@ const (
 	// PromptVersionTest identifies the immutable test-role prompt.
 	PromptVersionTest = "test-v2"
 	// PromptVersionImplementation identifies the immutable implementation prompt.
-	PromptVersionImplementation = "implementation-v1"
+	PromptVersionImplementation = "implementation-v2"
 	// PromptVersionArchitecture identifies the immutable architecture prompt.
 	PromptVersionArchitecture = "architecture-v1"
 	// PromptVersionSpecificationReview identifies the immutable review prompt.
 	PromptVersionSpecificationReview = "specification-review-v1"
 	// PromptVersionStandardsReview identifies the immutable standards-review prompt.
-	PromptVersionStandardsReview = "standards-review-v1"
+	PromptVersionStandardsReview = "standards-review-v2"
 
 	// StageArchitecture identifies the optional architecture invocation stage.
 	StageArchitecture store.Stage = store.StageArchitecture
@@ -86,9 +86,6 @@ type RoleDefinition struct {
 	// RequiresTestHandoff reports whether the role may start only after the
 	// required test-stage handoff has been accepted.
 	RequiresTestHandoff bool
-	// PromptInstructions contains role-specific instructions surrounded by the
-	// common factory-owned safety and reporting rules.
-	PromptInstructions string
 }
 
 // StageTransition is the coordinator-owned result of accepting one report
@@ -223,12 +220,6 @@ func DefaultRegistry() Registry {
 			Surface:               SurfaceRole,
 			StartStages:           []store.Stage{store.StageArchitecture, store.StageImplementation},
 			RunStages:             []store.Stage{store.StageArchitecture},
-			PromptInstructions: `Architecture-role ownership:
-- Produce a concise design document under the permitted architecture path.
-- Describe the proposed boundaries, invariants, and observable acceptance evidence.
-- Do not implement production behavior or edit tests unless the frozen specification explicitly requires the document itself.
-- List the design document in the completed handoff's changed-file field.
-`,
 		},
 		{
 			Name:                  RoleSpecificationReview,
@@ -239,11 +230,6 @@ func DefaultRegistry() Registry {
 			Surface:               SurfaceRole,
 			StartStages:           []store.Stage{store.StageDraftPR, store.StageReview},
 			RunStages:             []store.Stage{store.StageDraftPR},
-			PromptInstructions: `Specification-review scope:
-- Evaluate the frozen specification and the observable behavior of the exact checkpoint.
-- Keep documented repository standards in scope only when they directly affect the frozen requirement.
-- Do not use another reviewer's result, transcript, or session state as evidence.
-`,
 		},
 		{
 			Name:                  RoleStandardsReview,
@@ -254,11 +240,6 @@ func DefaultRegistry() Registry {
 			Surface:               SurfaceRole,
 			StartStages:           []store.Stage{store.StageDraftPR, store.StageReview},
 			RunStages:             []store.Stage{StageStandardsReview},
-			PromptInstructions: `Standards-review precedence:
-- Evaluate the checkpoint in this order: non-overridable factory safety rules; the frozen specification; scoped repository instructions; contribution and architecture documentation; nearby repository conventions.
-- Treat a provisional test exemption as evidence to evaluate, not as a waiver. Reject it with a concrete documented-standards or correctness finding when it is unjustified.
-- Do not use the specification reviewer's conclusions, transcript, implementation context, or session state as evidence.
-`,
 		},
 	}
 

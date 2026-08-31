@@ -426,7 +426,7 @@ func blockingReviewFindingsForRun(run store.Run) []store.ReviewRepairFinding {
 			continue
 		}
 		for _, finding := range value.result.Findings {
-			if reviewFindingBlocks(finding) {
+			if reviewFindingBlocksForRole(value.role, finding) {
 				findings = append(findings, store.ReviewRepairFinding{ReviewerRole: value.role, Finding: finding})
 			}
 		}

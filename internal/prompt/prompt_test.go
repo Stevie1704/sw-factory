@@ -430,3 +430,81 @@ func TestBuildRoutedCheckRepairPromptKeepsTestsProtected(t *testing.T) {
 		t.Fatalf("routed repair prompt missing the protected-test instruction:\n%s", value)
 	}
 }
+
+// TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable
+// verifies each workflow role resolves to the checked-in embedded body that its
+// version claims.
+func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *testing.T) {
+	tests := []struct {
+		name    string
+		role    string
+		stage   string
+		version string
+		sha256  string
+	}{
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "7613ac7a5f4f13dc15940c5a9f50389d7d9570eef4e78389c9d4ec9225b56c5a"},
+		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f"},
+		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2"},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507"},
+		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "f47db6259255d7700988ad5e85ab12ad4edb2f588b36697fcad24d8280ead025"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			identity, err := prompt.ContentIdentity(test.role, test.stage)
+			if err != nil {
+				t.Fatalf("ContentIdentity() error = %v", err)
+			}
+			if identity.Version != test.version || identity.SHA256 != test.sha256 {
+				t.Fatalf("ContentIdentity() = %#v, want version %q and SHA-256 %q", identity, test.version, test.sha256)
+			}
+		})
+	}
+}
+
+// TestBuildAcceptsEmptyRepositoryGuidance verifies an empty checked-in guidance
+// set remains a valid prompt input and still leaves the owned fence in place.
+func TestBuildAcceptsEmptyRepositoryGuidance(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-empty-guidance",
+		RunID:               "run-empty-guidance",
+		Role:                workflow.RoleImplementation,
+		Stage:               string(store.StageImplementation),
+		SpecificationPacket: `{}`,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(value, "--- BEGIN REPOSITORY GUIDANCE ---\n\n--- END REPOSITORY GUIDANCE ---") {
+		t.Fatalf("empty guidance fence missing:\n%s", value)
+	}
+}
+
+// TestBuildStandardsReviewPromptSeparatesDocumentedRulesFromHeuristics
+// verifies the standards axis names its authoritative source and keeps the
+// heuristic baseline advisory.
+func TestBuildStandardsReviewPromptSeparatesDocumentedRulesFromHeuristics(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-standards",
+		RunID:               "run-standards",
+		Role:                workflow.RoleStandardsReview,
+		Stage:               string(workflow.StageStandardsReview),
+		SpecificationPacket: `{}`,
+		RepositoryGuidance:  "### AGENTS.md\nUse named repository rules.",
+		ReviewContext:       &prompt.ReviewContext{CheckpointSHA: strings.Repeat("a", 64)},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"repository's own documented standards",
+		"duplicated logic shape",
+		"Every standards finding must cite",
+		"explicitly overridable floor",
+		"Baseline heuristic findings are advisory and never gate readiness",
+		"Do not merge them with specification findings",
+	} {
+		if !strings.Contains(value, marker) {
+			t.Fatalf("standards prompt missing %q:\n%s", marker, value)
+		}
+	}
+}

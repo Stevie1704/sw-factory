@@ -44,7 +44,7 @@ func TestStartAgentPersistsAReadOnlyPacketAndRecoverableSurfaceState(t *testing.
 	if err := json.Unmarshal(packetData, &packet); err != nil {
 		t.Fatalf("decode invocation packet: %v", err)
 	}
-	if packet.InvocationID != launch.Invocation.ID || packet.SpecificationPacket == "" || packet.PromptVersion != "implementation-v1" || packet.TestPolicyMode != config.TestModeRequired {
+	if packet.InvocationID != launch.Invocation.ID || packet.SpecificationPacket == "" || packet.PromptVersion != workflow.PromptVersionImplementation || packet.TestPolicyMode != config.TestModeRequired {
 		t.Fatalf("invocation packet = %#v, want frozen identity and prompt version", packet)
 	}
 	if len(terminalRuntime.notifications) != 1 || len(harnessRuntime.starts) != 1 {

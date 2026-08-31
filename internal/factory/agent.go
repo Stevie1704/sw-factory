@@ -724,8 +724,8 @@ func reviewCanBeAcceptedWhileWaiting(run store.Run, invocation store.Invocation)
 // reviewHasBlockingResult reports whether either isolated reviewer has a
 // concrete correctness, security, specification, or standards violation.
 func reviewHasBlockingResult(run store.Run) bool {
-	return (reviewRoleConfigured(run, workflow.RoleSpecificationReview) && run.SpecificationReview != nil && reviewHasBlockingFinding(run.SpecificationReview.Findings)) ||
-		(reviewRoleConfigured(run, workflow.RoleStandardsReview) && run.StandardsReview != nil && reviewHasBlockingFinding(run.StandardsReview.Findings))
+	return (reviewRoleConfigured(run, workflow.RoleSpecificationReview) && run.SpecificationReview != nil && reviewHasBlockingFindingForRole(workflow.RoleSpecificationReview, run.SpecificationReview.Findings)) ||
+		(reviewRoleConfigured(run, workflow.RoleStandardsReview) && run.StandardsReview != nil && reviewHasBlockingFindingForRole(workflow.RoleStandardsReview, run.StandardsReview.Findings))
 }
 
 // containsString reports whether a string occurs in a small coordinator-owned

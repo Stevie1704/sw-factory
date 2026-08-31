@@ -27,7 +27,9 @@ The factory-owned registry in `internal/workflow` is the authority for:
 - persisted stages and report-outcome transitions.
 
 `internal/prompt` builds the common factory prompt from those declarations and
-records the selected prompt version in every invocation packet and store row.
+loads role-specific instruction bodies from factory-embedded Markdown, with a
+checked-in content identity for each prompt version. It records the selected
+prompt version in every invocation packet and store row.
 The coordinator resolves role selection, report routing, surface identity, and
 outcome transitions through the registry. The operational store persists stage
 and role-surface identities as open metadata, so a later factory release can

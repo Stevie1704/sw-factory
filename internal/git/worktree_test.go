@@ -30,7 +30,19 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, repository, "add", "README.md")
+	if err := os.WriteFile(filepath.Join(repository, "AGENTS.md"), []byte("base agent guidance\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "CONTEXT.md"), []byte("base context\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repository, "docs", "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "docs", "agents", "conventions.md"), []byte("base conventions\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", "README.md", "AGENTS.md", "CONTEXT.md", "docs/agents/conventions.md")
 	runGit(t, repository, "commit", "-m", "initial")
 	runGit(t, repository, "remote", "add", "origin", remote)
 	runGit(t, repository, "push", "origin", "main")
@@ -72,6 +84,25 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	}
 	if string(contents) != "base\n" {
 		t.Fatalf("worktree README = %q, want target branch contents", contents)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Worktree, "AGENTS.md"), []byte("mutable worker edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := manager.ReadRepositoryGuidance(context.Background(), workspace.Worktree, workspace.BaseSHA)
+	if err != nil {
+		t.Fatalf("ReadRepositoryGuidance() error = %v", err)
+	}
+	if len(documents) != 3 {
+		t.Fatalf("guidance documents = %#v, want three tracked guidance files", documents)
+	}
+	for index, want := range []struct{ path, content string }{
+		{path: "AGENTS.md", content: "base agent guidance\n"},
+		{path: "CONTEXT.md", content: "base context\n"},
+		{path: "docs/agents/conventions.md", content: "base conventions\n"},
+	} {
+		if documents[index].Path != want.path || documents[index].Content != want.content {
+			t.Errorf("guidance[%d] = %#v, want %q with %q", index, documents[index], want.path, want.content)
+		}
 	}
 	gitMetadataProjection := filepath.Join(root, "worktrees", ".factory-git", "run-fixed")
 	if err := os.MkdirAll(gitMetadataProjection, 0o755); err != nil {
