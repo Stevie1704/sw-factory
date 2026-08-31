@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -512,7 +513,7 @@ func safeWorkspaceHandle(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if character < ' ' || character == 0x7f {
+		if unicode.IsControl(character) {
 			return false
 		}
 	}

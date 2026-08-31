@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
@@ -1191,7 +1192,7 @@ func renderReviewStatusComment(title string, review *store.ReviewResult, run sto
 // a value carrying one could forge a line on an operator's screen.
 func safeStatusCommentValue(value string) string {
 	value = strings.Map(func(character rune) rune {
-		if character < ' ' || character == 0x7f {
+		if unicode.IsControl(character) {
 			return ' '
 		}
 		return character

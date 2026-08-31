@@ -414,38 +414,49 @@ func TestCleanupReportsRetainedWorkspacesWhenALaterStepFails(t *testing.T) {
 func TestCleanupSkipsARunWithAnUnsafeWorkspaceHandle(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
-	root := t.TempDir()
-	repositoryPath := filepath.Join(root, "repository")
-	worktreePath := filepath.Join(root, "worktrees", "run-unsafe")
-	operationalPath := filepath.Join(root, "state", "factory.db")
-	for _, path := range []string{repositoryPath, worktreePath} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	for _, test := range []struct {
+		name        string
+		workspaceID string
+	}{
+		{name: "option shaped", workspaceID: "--workspace"},
+		{name: "next line", workspaceID: "workspace\u0085unsafe"},
+		{name: "control sequence introducer", workspaceID: "workspace\u009bunsafe"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			repositoryPath := filepath.Join(root, "repository")
+			worktreePath := filepath.Join(root, "worktrees", "run-unsafe")
+			operationalPath := filepath.Join(root, "state", "factory.db")
+			for _, path := range []string{repositoryPath, worktreePath} {
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
-	saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-unsafe", worktreePath, "--workspace", now)
+			now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
+			saveCleanupFixture(ctx, t, repositoryPath, operationalPath, "run-unsafe", worktreePath, test.workspaceID, now)
 
-	workspace := &cleanupTestWorkspace{}
-	runtime := &cleanupTestWorker{}
-	terminalRuntime := &cleanupTestTerminal{}
-	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
+			workspace := &cleanupTestWorkspace{}
+			runtime := &cleanupTestWorker{}
+			terminalRuntime := &cleanupTestTerminal{}
+			service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
 
-	result, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
-	var blockedErr *factory.CleanupBlockedError
-	if !errors.As(err, &blockedErr) {
-		t.Fatalf("Cleanup() error = %v, want CleanupBlockedError", err)
-	}
-	if len(result.Plan.Runs) != 0 || len(result.Plan.Skipped) != 1 {
-		t.Fatalf("cleanup plan = %#v, want only the unsafe run skipped", result.Plan)
-	}
-	if !strings.Contains(result.Plan.Skipped[0].Reason, "unsafe terminal workspace handle") {
-		t.Fatalf("skip reason = %q, want the unsafe workspace handle", result.Plan.Skipped[0].Reason)
-	}
-	if len(terminalRuntime.closed) != 0 || len(workspace.removed) != 0 {
-		t.Fatalf("cleanup effects = closes=%#v removals=%#v, want none", terminalRuntime.closed, workspace.removed)
+			result, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
+			var blockedErr *factory.CleanupBlockedError
+			if !errors.As(err, &blockedErr) {
+				t.Fatalf("Cleanup() error = %v, want CleanupBlockedError", err)
+			}
+			if len(result.Plan.Runs) != 0 || len(result.Plan.Skipped) != 1 {
+				t.Fatalf("cleanup plan = %#v, want only the unsafe run skipped", result.Plan)
+			}
+			if !strings.Contains(result.Plan.Skipped[0].Reason, "unsafe terminal workspace handle") {
+				t.Fatalf("skip reason = %q, want the unsafe workspace handle", result.Plan.Skipped[0].Reason)
+			}
+			if len(terminalRuntime.closed) != 0 || len(workspace.removed) != 0 {
+				t.Fatalf("cleanup effects = closes=%#v removals=%#v, want none", terminalRuntime.closed, workspace.removed)
+			}
+		})
 	}
 }
 
