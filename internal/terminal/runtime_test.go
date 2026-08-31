@@ -29,6 +29,44 @@ func treeResponse(workspaceID string, titledSurfaces map[string]string) string {
 	return `{"windows":[{"workspaces":[{"id":"` + workspaceID + `","panes":[` + strings.Join(panes, ",") + `]}]}]}`
 }
 
+// TestCmuxRuntimeReadsSurfaceScrollback verifies the adapter asks the terminal
+// for a surface's scrollback bounded to the requested line count. A failed
+// launch is diagnosable only from this output, so the request must include the
+// scrollback rather than just the visible screen.
+func TestCmuxRuntimeReadsSurfaceScrollback(t *testing.T) {
+	runner := &fakeRunner{tree: treeResponse(runWorkspaceID, map[string]string{"implementation": implementationSurface})}
+	runtime := terminal.NewCmuxRuntime(runner)
+
+	output, err := runtime.ReadSurface(context.Background(), implementationSurface, 200)
+	if err != nil {
+		t.Fatalf("ReadSurface() error = %v", err)
+	}
+	if strings.TrimSpace(output) != "OK" {
+		t.Fatalf("ReadSurface() = %q, want the terminal output", output)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	for _, wanted := range []string{
+		"read-screen --surface " + string(implementationSurface),
+		"--workspace " + runWorkspaceID,
+		"--scrollback",
+		"--lines 200",
+	} {
+		if !strings.Contains(joined, wanted) {
+			t.Fatalf("adapter calls = %q, want %q", joined, wanted)
+		}
+	}
+}
+
+// TestCmuxRuntimeRejectsAnUnboundedSurfaceRead verifies the adapter refuses a
+// read without a line bound, so a diagnostic capture can never pull an
+// arbitrarily large transcript.
+func TestCmuxRuntimeRejectsAnUnboundedSurfaceRead(t *testing.T) {
+	runtime := terminal.NewCmuxRuntime(&fakeRunner{})
+	if _, err := runtime.ReadSurface(context.Background(), implementationSurface, 0); err == nil {
+		t.Fatal("ReadSurface() error = nil, want a rejected unbounded read")
+	}
+}
+
 // TestCmuxRuntimeKeepsTerminalHandlesBehindThePortableSeam verifies that the
 // adapter creates the control/run surfaces and routes input and notifications
 // without exposing adapter-specific command details to callers.
@@ -212,3 +250,4 @@ func (r *fakeRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, er
 
 var _ terminal.CommandRunner = (*fakeRunner)(nil)
 var _ terminal.TerminalRuntime = (*terminal.CmuxRuntime)(nil)
+var _ terminal.SurfaceReader = (*terminal.CmuxRuntime)(nil)

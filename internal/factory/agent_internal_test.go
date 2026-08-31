@@ -1,9 +1,13 @@
 package factory
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/prompt"
@@ -211,5 +215,52 @@ func TestValidatePersistedInvocationPacketRequiresReviewRepairContext(t *testing
 	}
 	if err := validatePersistedInvocationPacket(run, invocation, persisted); err == nil || !strings.Contains(err.Error(), "review-repair context") {
 		t.Fatalf("validatePersistedInvocationPacket() error = %v, want missing review-repair context refusal", err)
+	}
+}
+
+// TestWriteLaunchFailureDiagnosticRecordsTheTranscript verifies that a failed
+// launch leaves a readable local diagnostic beside its invocation, since the
+// surface is closed and the worker stopped immediately afterwards.
+func TestWriteLaunchFailureDiagnosticRecordsTheTranscript(t *testing.T) {
+	root := t.TempDir()
+	observed := time.Date(2026, 8, 31, 8, 32, 55, 0, time.UTC)
+	cause := errors.New("discover Codex native session: deadline exceeded")
+	launchErr := &harness.LaunchFailure{Cause: cause, Transcript: "codex: stream error: 429 Too Many Requests"}
+
+	path := writeLaunchFailureDiagnostic(root, launchErr, observed)
+	if path != filepath.Join(root, launchFailureDiagnosticName) {
+		t.Fatalf("writeLaunchFailureDiagnostic() = %q, want the invocation-local diagnostic path", path)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v, want the diagnostic written", err)
+	}
+	for _, want := range []string{"2026-08-31T08:32:55Z", cause.Error(), "codex: stream error: 429 Too Many Requests"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("diagnostic = %q, want it to contain %q", string(body), want)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	// The transcript holds harness output, so it stays owner-readable only.
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("diagnostic mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// TestWriteLaunchFailureDiagnosticSkipsAnEmptyTranscript verifies that a launch
+// failure carrying no captured output writes no file and reports no path, so
+// nothing points an operator at a diagnostic that does not exist.
+func TestWriteLaunchFailureDiagnosticSkipsAnEmptyTranscript(t *testing.T) {
+	root := t.TempDir()
+	launchErr := &harness.LaunchFailure{Cause: errors.New("discover Codex native session: deadline exceeded")}
+
+	if path := writeLaunchFailureDiagnostic(root, launchErr, time.Now().UTC()); path != "" {
+		t.Fatalf("writeLaunchFailureDiagnostic() = %q, want no path without a transcript", path)
+	}
+	if _, err := os.Stat(filepath.Join(root, launchFailureDiagnosticName)); !os.IsNotExist(err) {
+		t.Fatalf("Stat() error = %v, want no diagnostic file", err)
 	}
 }

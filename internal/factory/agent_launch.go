@@ -479,6 +479,14 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	if err != nil {
 		classified := harness.ClassifyError(err, string(policy.Harness))
+		// A launch failure is otherwise unrecoverable after the fact: the
+		// surface is closed and the worker stopped, so whatever the harness
+		// printed is written beside the invocation before either happens. The
+		// path travels with the error so every waiting projection names the
+		// diagnostic without carrying its content.
+		if diagnostic := writeLaunchFailureDiagnostic(root, err, s.deps.Now().UTC()); diagnostic != "" {
+			classified = fmt.Errorf("%w (launch diagnostic: %s)", classified, diagnostic)
+		}
 		if harness.IsRateLimited(classified) {
 			preserveInvocation = true
 			invocation.Status = store.InvocationStatusSuperseded
@@ -967,4 +975,27 @@ func credentialHarnessLabel(harnessName string) string {
 	default:
 		return "harness"
 	}
+}
+
+// launchFailureDiagnosticName is the invocation-local file that records what a
+// failed harness launch printed before its surface was closed.
+const launchFailureDiagnosticName = "launch-failure.log"
+
+// writeLaunchFailureDiagnostic records a failed launch beside its invocation
+// and returns the path it wrote, or an empty string when there was nothing to
+// record. The file stays on the coordinator host: it holds harness output,
+// which the operator-visible run projections deliberately exclude. Writing it
+// is best-effort, because losing a diagnostic must never mask the launch
+// failure the caller is already reporting.
+func writeLaunchFailureDiagnostic(invocationRoot string, launchErr error, observedAt time.Time) string {
+	transcript := harness.LaunchTranscript(launchErr)
+	if strings.TrimSpace(invocationRoot) == "" || strings.TrimSpace(transcript) == "" {
+		return ""
+	}
+	path := filepath.Join(invocationRoot, launchFailureDiagnosticName)
+	body := fmt.Sprintf("observed at: %s\nlaunch error: %v\n\nsurface output:\n%s\n", observedAt.Format(time.RFC3339), launchErr, transcript)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		return ""
+	}
+	return path
 }
