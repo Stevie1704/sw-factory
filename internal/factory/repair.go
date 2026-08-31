@@ -511,7 +511,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	}
 	invocationID := "inv-" + identifier
 	createdAt := s.deps.Now().UTC()
-	root := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, invocationID)
+	root := invocationRoot(run, invocationID)
 	packetDirectory := filepath.Join(root, "packet")
 	resultDirectory := filepath.Join(root, "results")
 	if err := os.MkdirAll(packetDirectory, 0o700); err != nil {

@@ -513,6 +513,11 @@ func (s *Service) reconcileActiveHarnessLiveness(ctx context.Context, registrati
 		if running {
 			continue
 		}
+		// The coordinator, not the adapter, is the first to see that a session
+		// is gone. Claude Code assigns its own session identifier, so a Claude
+		// launch that dies immediately is only ever observed here. Capture the
+		// surface before reconciliation stops the worker behind it.
+		s.recordSessionExitDiagnostic(ctx, registration, run, active)
 		_, _, _, reconcileErr := s.reconcileInterruptedRunWithMode(ctx, registration, runStore, run, true)
 		if reconcileErr != nil {
 			return reconcileErr
@@ -866,4 +871,18 @@ func (s *Service) resetStartupState() {
 	defer s.startupMu.Unlock()
 	s.startupChecked = false
 	s.startupErr = nil
+}
+
+// recordSessionExitDiagnostic captures what a harness printed before its
+// session ended and writes it beside the invocation. Without it an exited
+// session reports only that it exited, which is the same dead end a failed
+// launch used to reach.
+func (s *Service) recordSessionExitDiagnostic(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) {
+	terminalRuntime := s.deps.Terminal
+	if terminalRuntime == nil {
+		terminalRuntime = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
+	}
+	transcript := captureSurfaceTranscript(ctx, terminalRuntime, invocationSurface(invocation).ID)
+	cause := fmt.Errorf("%s native session %q exited before reporting", invocation.Harness, invocation.NativeSessionID)
+	writeHarnessFailureDiagnostic(invocationRoot(run, invocation.ID), "session exit", cause, transcript, s.deps.Now().UTC())
 }
