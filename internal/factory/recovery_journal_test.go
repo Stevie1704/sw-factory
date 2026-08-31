@@ -319,7 +319,14 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	githubRuntime.issue.Labels = []string{factoryLabelForStatus(activeRun.Status)}
 	githubRuntime.statusComment.Body = statusCommentBody(activeRun)
 	harnessRuntime.nativeSessionExited = true
-	if err := lossService.retryWaitingForHarness(ctx, registration); err != nil {
+	diagnosticRoot := invocationRoot(activeRun, invocation.ID)
+	if err := os.MkdirAll(diagnosticRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	transcript := "claude: session-exit-secret"
+	liveService := &Service{deps: service.deps}
+	liveService.deps.Terminal = &readableRecoveryTerminal{journalRecoveryTerminal: terminalRuntime, screen: transcript}
+	if err := liveService.retryWaitingForHarness(ctx, registration); err != nil {
 		t.Fatalf("live harness interruption recovery = %v", err)
 	}
 	if harnessRuntime.resumeCalls != 3 {
@@ -328,6 +335,13 @@ func TestJournaledStartupRecreatesALostWorkerAndResumesOnce(t *testing.T) {
 	liveRecovered, err := opened.CurrentRun(ctx)
 	if err != nil || liveRecovered == nil || liveRecovered.Status != store.StatusActive {
 		t.Fatalf("run after live harness recovery = %#v, error = %v; want active run", liveRecovered, err)
+	}
+	diagnosticPath := filepath.Join(diagnosticRoot, harnessFailureDiagnosticName)
+	if !strings.Contains(liveRecovered.LifecycleReason, diagnosticPath) {
+		t.Fatalf("live recovery reason = %q, want diagnostic path %q", liveRecovered.LifecycleReason, diagnosticPath)
+	}
+	if strings.Contains(liveRecovered.LifecycleReason, transcript) {
+		t.Fatalf("live recovery projection leaked transcript: %q", liveRecovered.LifecycleReason)
 	}
 
 	// A configured source that disappears before the next restart must pause
