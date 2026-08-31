@@ -94,24 +94,7 @@ func TestCleanupPreviewRequiresConfirmationAndProtectsEligibleRun(t *testing.T) 
 	workspace := &cleanupTestWorkspace{events: &events}
 	runtime := &cleanupTestWorker{}
 	terminalRuntime := &cleanupTestTerminal{events: &events}
-	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config: &fakeConfigRepository{value: config.HostConfig{
-			SchemaVersion: 1,
-			Repositories: []config.RepositoryRegistration{{
-				Path:                repositoryPath,
-				OperationalDataPath: operationalPath,
-			}},
-		}},
-		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
-			return store.Open(ctx, path)
-		},
-		GitWorkspace: workspace,
-		Worker:       runtime,
-		Terminal:     terminalRuntime,
-		Now: func() time.Time {
-			return now
-		},
-	})
+	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
 
 	result, err := service.Cleanup(ctx, factory.CleanupRequest{})
 	var confirmationErr *factory.CleanupConfirmationRequiredError
@@ -353,65 +336,14 @@ func TestCleanupReportsWorkspacesItCannotClose(t *testing.T) {
 	}
 
 	now := time.Date(2026, time.January, 20, 12, 0, 0, 0, time.UTC)
-	terminalAt := now.Add(-8 * 24 * time.Hour)
-	opened, err := store.Open(ctx, operationalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := opened.SaveRun(ctx, store.Run{
-		ID:             "run-retained",
-		RepositoryPath: repositoryPath,
-		IssueNumber:    23,
-		Stage:          store.StageReady,
-		Status:         store.StatusComplete,
-		Branch:         "factory/run-retained",
-		Worktree:       worktreePath,
-		TerminalAt:     terminalAt,
-		CreatedAt:      terminalAt.Add(-time.Hour),
-		UpdatedAt:      terminalAt,
-	}); err != nil {
-		_ = opened.Close()
-		t.Fatal(err)
-	}
-	if err := opened.SaveInvocation(ctx, store.Invocation{
-		ID:          "invocation-1",
-		RunID:       "run-retained",
-		Harness:     "codex",
-		Role:        "implementation",
-		Stage:       store.StageImplementation,
-		Status:      store.InvocationStatusCompleted,
-		WorkspaceID: "workspace-unreachable",
-		CreatedAt:   terminalAt,
-		UpdatedAt:   terminalAt,
-	}); err != nil {
-		_ = opened.Close()
-		t.Fatal(err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// A tmux-shaped handle also pins that the plan admits the handle forms of
+	// the adapter this seam is expected to migrate to.
+	saveCleanupFixture(ctx, t, operationalPath, repositoryPath, "run-retained", worktreePath, "$3", now)
 
 	workspace := &cleanupTestWorkspace{}
 	runtime := &cleanupTestWorker{}
 	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running")}
-	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config: &fakeConfigRepository{value: config.HostConfig{
-			SchemaVersion: 1,
-			Repositories: []config.RepositoryRegistration{{
-				Path:                repositoryPath,
-				OperationalDataPath: operationalPath,
-			}},
-		}},
-		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
-			return store.Open(ctx, path)
-		},
-		GitWorkspace: workspace,
-		Worker:       runtime,
-		Terminal:     terminalRuntime,
-		Now: func() time.Time {
-			return now
-		},
-	})
+	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
 
 	confirmed, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
 	if err != nil {
@@ -427,7 +359,7 @@ func TestCleanupReportsWorkspacesItCannotClose(t *testing.T) {
 		t.Fatalf("retained workspaces = %#v, want one", confirmed.Retained)
 	}
 	retained := confirmed.Retained[0]
-	if retained.RunID != "run-retained" || retained.WorkspaceID != "workspace-unreachable" || retained.Reason == "" {
+	if retained.RunID != "run-retained" || retained.WorkspaceID != "$3" || retained.Reason == "" {
 		t.Fatalf("retained workspace = %#v, want the run-owned handle with a reason", retained)
 	}
 }
@@ -456,24 +388,7 @@ func TestCleanupReportsRetainedWorkspacesWhenALaterStepFails(t *testing.T) {
 	workspace := &cleanupTestWorkspace{removeErr: errors.New("worktree is locked")}
 	runtime := &cleanupTestWorker{}
 	terminalRuntime := &cleanupTestTerminal{closeErr: errors.New("terminal server is not running")}
-	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config: &fakeConfigRepository{value: config.HostConfig{
-			SchemaVersion: 1,
-			Repositories: []config.RepositoryRegistration{{
-				Path:                repositoryPath,
-				OperationalDataPath: operationalPath,
-			}},
-		}},
-		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
-			return store.Open(ctx, path)
-		},
-		GitWorkspace: workspace,
-		Worker:       runtime,
-		Terminal:     terminalRuntime,
-		Now: func() time.Time {
-			return now
-		},
-	})
+	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
 
 	result, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
 	if err == nil {
@@ -507,7 +422,28 @@ func TestCleanupSkipsARunWithAnUnsafeWorkspaceHandle(t *testing.T) {
 	workspace := &cleanupTestWorkspace{}
 	runtime := &cleanupTestWorker{}
 	terminalRuntime := &cleanupTestTerminal{}
-	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+	service := newCleanupService(repositoryPath, operationalPath, workspace, runtime, terminalRuntime, now)
+
+	result, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
+	var blockedErr *factory.CleanupBlockedError
+	if !errors.As(err, &blockedErr) {
+		t.Fatalf("Cleanup() error = %v, want CleanupBlockedError", err)
+	}
+	if len(result.Plan.Runs) != 0 || len(result.Plan.Skipped) != 1 {
+		t.Fatalf("cleanup plan = %#v, want only the unsafe run skipped", result.Plan)
+	}
+	if !strings.Contains(result.Plan.Skipped[0].Reason, "unsafe terminal workspace handle") {
+		t.Fatalf("skip reason = %q, want the unsafe workspace handle", result.Plan.Skipped[0].Reason)
+	}
+	if len(terminalRuntime.closed) != 0 || len(workspace.removed) != 0 {
+		t.Fatalf("cleanup effects = closes=%#v removals=%#v, want none", terminalRuntime.closed, workspace.removed)
+	}
+}
+
+// newCleanupService builds a Factory service whose destructive seams are all
+// test doubles, so a cleanup test observes effects instead of performing them.
+func newCleanupService(repositoryPath, operationalPath string, workspace *cleanupTestWorkspace, runtime *cleanupTestWorker, terminalRuntime *cleanupTestTerminal, now time.Time) *factory.Service {
+	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config: &fakeConfigRepository{value: config.HostConfig{
 			SchemaVersion: 1,
 			Repositories: []config.RepositoryRegistration{{
@@ -525,21 +461,6 @@ func TestCleanupSkipsARunWithAnUnsafeWorkspaceHandle(t *testing.T) {
 			return now
 		},
 	})
-
-	result, err := service.Cleanup(ctx, factory.CleanupRequest{Confirm: true})
-	var blockedErr *factory.CleanupBlockedError
-	if !errors.As(err, &blockedErr) {
-		t.Fatalf("Cleanup() error = %v, want CleanupBlockedError", err)
-	}
-	if len(result.Plan.Runs) != 0 || len(result.Plan.Skipped) != 1 {
-		t.Fatalf("cleanup plan = %#v, want only the unsafe run skipped", result.Plan)
-	}
-	if !strings.Contains(result.Plan.Skipped[0].Reason, "unsafe terminal workspace handle") {
-		t.Fatalf("skip reason = %q, want the unsafe workspace handle", result.Plan.Skipped[0].Reason)
-	}
-	if len(terminalRuntime.closed) != 0 || len(workspace.removed) != 0 {
-		t.Fatalf("cleanup effects = closes=%#v removals=%#v, want none", terminalRuntime.closed, workspace.removed)
-	}
 }
 
 // saveCleanupFixture persists one seven-day-old terminal run and the single
@@ -673,6 +594,7 @@ func (w *cleanupTestWorker) Cleanup(_ context.Context, request worker.CleanupReq
 
 // cleanupTestTerminal records terminal workspace closes for the Factory seam.
 type cleanupTestTerminal struct {
+	// closed records every workspace handle cleanup asked to close.
 	closed []string
 	// closeErr fails every close so retention reporting can be observed.
 	closeErr error

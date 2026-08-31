@@ -952,8 +952,9 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		Before:       preview.Plan.Before,
 		ExpectedPlan: &preview.Plan,
 	})
-	// Retained workspaces are reported before any failure, because cleanup has
-	// already deleted the invocation rows holding their handles.
+	// Retained workspaces are reported before any failure, because a run
+	// cleaned earlier in the same pass may already have lost the invocation
+	// rows holding its handle.
 	if !writeRetainedWorkspaces(output, errorsOutput, result.Retained) {
 		return 1
 	}
