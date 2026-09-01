@@ -70,7 +70,6 @@ var rolePromptVersions = map[string]map[string]string{
 	},
 	workflow.RoleArchitecture: {
 		"architecture-v1":                  "prompts/legacy/architecture-v1.md",
-		"architecture-v2":                  "prompts/legacy/architecture-v2.md",
 		workflow.PromptVersionArchitecture: rolePromptFiles[workflow.RoleArchitecture],
 	},
 	workflow.RoleSpecificationReview: {
@@ -94,7 +93,6 @@ var expectedPromptSHA256 = map[string]string{
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"architecture-v1":                         "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
-	"architecture-v2":                         "821ca4fbf26c1c914a14730ca6d1856d7c1c655c27201294a7aaae0362aae0cb",
 	"standards-review-v1":                     "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472",
 }
 

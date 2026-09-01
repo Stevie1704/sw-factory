@@ -49,6 +49,10 @@ Adding, updating, or removing a skill is an image change: rebuild the worker
 image and record the new digest in `factory.yaml`. A run already holding role
 storage keeps the skill set that storage was created from.
 
+A vendored skill may deviate from its upstream text where the worker needs
+different behavior. `worker/SKILLS.md` records every deviation and its reason,
+because a silent fork would leave the recorded provenance unverifiable.
+
 Scoping lives in the prompts, so a skill-set change that shifts role ownership
 also bumps a prompt version and its content identity, as ADR 0005 requires.
 

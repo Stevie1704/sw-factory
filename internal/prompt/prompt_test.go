@@ -239,7 +239,7 @@ func TestPromptRegistryBuildsTheArchitectureRoleWithCommonFactoryRules(t *testin
 		t.Fatalf("Build() error = %v", err)
 	}
 	for _, marker := range []string{
-		"factory prompt version architecture-v3",
+		"factory prompt version architecture-v2",
 		"Architecture-role ownership:",
 		"design document",
 		"Only the coordinator accepts a result written by factory-report.",
@@ -521,7 +521,6 @@ func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
 		{name: "implementation v1", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v1", marker: "Implementation-owned TDD:"},
 		{name: "implementation v2", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v2", marker: "Repair and handoff ownership:"},
 		{name: "architecture v1", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v1", marker: "Architecture-role ownership:"},
-		{name: "architecture v2", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v2", marker: "Architecture-role ownership:"},
 		{name: "standards review v1", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v1", marker: "Standards-review precedence:"},
 	}
 	for _, test := range tests {
