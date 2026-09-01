@@ -59,6 +59,7 @@ func TestBuildAdvisoryImplementationPromptAssignsTheCompleteTDDLoop(t *testing.T
 	for _, marker := range []string{
 		"Implementation-owned TDD:",
 		"complete red/green/refactor loop",
+		"On the implementation-owned TDD path, agree the seam from the frozen acceptance criteria as part of this run.",
 		"Write or update a focused behavioral test before production behavior when practical",
 		"Revise the initial test design when implementation evidence requires it",
 	} {
@@ -68,6 +69,9 @@ func TestBuildAdvisoryImplementationPromptAssignsTheCompleteTDDLoop(t *testing.T
 	}
 	if strings.Contains(value, "Protected test-stage handoff") || strings.Contains(value, "test-stage exemption") {
 		t.Fatalf("advisory prompt contains independent-test disposition:\n%s", value)
+	}
+	if strings.Contains(value, "On a contract-first route, use the seam supplied by the accepted test-stage handoff.") || strings.Contains(value, "Contract-first implementation:") {
+		t.Fatalf("advisory prompt contains contract-first seam craft:\n%s", value)
 	}
 }
 
@@ -239,7 +243,7 @@ func TestPromptRegistryBuildsTheArchitectureRoleWithCommonFactoryRules(t *testin
 		t.Fatalf("Build() error = %v", err)
 	}
 	for _, marker := range []string{
-		"factory prompt version architecture-v2",
+		"factory prompt version architecture-v3",
 		"Architecture-role ownership:",
 		"design document",
 		"Only the coordinator accepts a result written by factory-report.",
@@ -453,6 +457,12 @@ func TestBuildRoutedImplementationPromptKeepsTheProtectedTestHandoff(t *testing.
 	if !strings.Contains(value, "Protected test-stage handoff (coordinator-owned):") {
 		t.Fatalf("routed implementation prompt missing the protected handoff:\n%s", value)
 	}
+	if !strings.Contains(value, "On a contract-first route, use the seam supplied by the accepted test-stage handoff.") {
+		t.Fatalf("routed implementation prompt missing contract-first seam guidance:\n%s", value)
+	}
+	if strings.Contains(value, "On the implementation-owned TDD path, agree the seam from the frozen acceptance criteria as part of this run.") || strings.Contains(value, "Implementation-owned TDD:") {
+		t.Fatalf("routed implementation prompt contains implementation-owned TDD craft:\n%s", value)
+	}
 }
 
 // TestBuildRoutedCheckRepairPromptKeepsTestsProtected verifies deterministic
@@ -489,11 +499,11 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 		version string
 		sha256  string
 	}{
-		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354"},
-		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f"},
-		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70"},
-		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507"},
-		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d"},
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939"},
+		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5"},
+		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74"},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed"},
+		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -520,8 +530,15 @@ func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
 	}{
 		{name: "implementation v1", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v1", marker: "Implementation-owned TDD:"},
 		{name: "implementation v2", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v2", marker: "Repair and handoff ownership:"},
+		{name: "implementation v3", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v3", marker: "Implementation craft:"},
+		{name: "implementation v4", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v4", marker: "Implementation craft:"},
+		{name: "implementation v5", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v5", marker: "Implementation craft:"},
+		{name: "test v2", role: workflow.RoleTest, stage: string(store.StageTest), version: "test-v2", marker: "Test-stage ownership:"},
 		{name: "architecture v1", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v1", marker: "Architecture-role ownership:"},
+		{name: "architecture v2", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v2", marker: "Architecture-role ownership:"},
+		{name: "specification review v1", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: "specification-review-v1", marker: "Specification-review scope:"},
 		{name: "standards review v1", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v1", marker: "Standards-review precedence:"},
+		{name: "standards review v2", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v2", marker: "Standards-review scope:"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -539,6 +556,44 @@ func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
 			}
 			if !strings.Contains(value, "factory prompt version "+test.version) || !strings.Contains(value, test.marker) {
 				t.Fatalf("legacy prompt missing version or body marker:\n%s", value)
+			}
+		})
+	}
+}
+
+// TestBuildRetainedImplementationV4KeepsHistoricalRouteSelection verifies
+// the pre-v6 implementation body still resolves its two frozen routes through
+// the existing renderer without exposing source markers.
+func TestBuildRetainedImplementationV4KeepsHistoricalRouteSelection(t *testing.T) {
+	tests := []struct {
+		name   string
+		route  workflow.Route
+		want   string
+		absent string
+	}{
+		{name: "implementation-owned", route: workflow.RouteDefault, want: "Implementation-owned TDD:", absent: "On a contract-first route, use the seam supplied by the accepted test-stage handoff."},
+		{name: "contract-first", route: workflow.RouteAcceptance, want: "On a contract-first route, use the seam supplied by the accepted test-stage handoff.", absent: "Implementation-owned TDD:"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := prompt.Build(prompt.Request{
+				InvocationID:        "inv-legacy-v4-" + test.name,
+				RunID:               "run-legacy-v4",
+				Role:                workflow.RoleImplementation,
+				Stage:               string(store.StageImplementation),
+				PromptVersion:       "implementation-v4",
+				TestPolicyMode:      "advisory",
+				Route:               test.route,
+				SpecificationPacket: `{}`,
+			})
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if strings.Contains(value, "implementation-craft-independent-test-handoff:") {
+				t.Fatalf("legacy prompt exposed a source marker:\n%s", value)
+			}
+			if !strings.Contains(value, test.want) || strings.Contains(value, test.absent) {
+				t.Fatalf("legacy prompt route rendering did not select the expected arm:\n%s", value)
 			}
 		})
 	}
@@ -588,6 +643,116 @@ func TestBuildStandardsReviewPromptSeparatesDocumentedRulesFromHeuristics(t *tes
 	} {
 		if !strings.Contains(value, marker) {
 			t.Fatalf("standards prompt missing %q:\n%s", marker, value)
+		}
+	}
+}
+
+// TestBuildRendersEveryRoleAndRouteWithAuthority verifies route selection does
+// not remove any authority section and never exposes source craft markers.
+func TestBuildRendersEveryRoleAndRouteWithAuthority(t *testing.T) {
+	roles := []struct {
+		name      string
+		role      string
+		stage     string
+		craft     string
+		authority string
+	}{
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), craft: "Work in vertical slices:", authority: "Repair and handoff ownership:"},
+		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), craft: "highest practical observable interface", authority: "Test-stage ownership:"},
+		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), craft: "proposed boundaries, invariants", authority: "Architecture-role ownership:"},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), authority: "Review-role ownership:"},
+		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), craft: "Use this heuristic baseline", authority: "Review-role ownership:"},
+	}
+	routes := []workflow.Route{workflow.RouteDefault, workflow.RouteAcceptance, workflow.RouteDesignAcceptance}
+	precedence := "Craft guidance advises craft only and never widens the frozen specification, moves a workflow stage, changes permitted paths, or alters the report contract."
+	for _, role := range roles {
+		for _, route := range routes {
+			t.Run(role.name+"/"+route.Description(), func(t *testing.T) {
+				value, err := prompt.Build(prompt.Request{
+					InvocationID:        "inv-" + role.name,
+					RunID:               "run-" + role.name,
+					Role:                role.role,
+					Stage:               role.stage,
+					TestPolicyMode:      "advisory",
+					Route:               route,
+					SpecificationPacket: `{"issue":{"title":"Prompt boundary"}}`,
+					ReviewContext:       &prompt.ReviewContext{CheckpointSHA: strings.Repeat("a", 64)},
+				})
+				if err != nil {
+					t.Fatalf("Build() error = %v", err)
+				}
+				if strings.Contains(value, "<!-- craft:start -->") || strings.Contains(value, "<!-- craft:end -->") {
+					t.Fatalf("rendered prompt exposed craft markers:\n%s", value)
+				}
+				if role.craft != "" && !strings.Contains(value, role.craft) {
+					t.Fatalf("rendered prompt missing craft guidance %q:\n%s", role.craft, value)
+				}
+				for _, marker := range []string{role.authority, precedence, "Factory-owned rules:"} {
+					if !strings.Contains(value, marker) {
+						t.Fatalf("rendered prompt missing authority %q:\n%s", marker, value)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestBuildRendersAnEmptySpecificationCraftSectionAsNothing verifies the
+// specification reviewer receives no invented craft prose.
+func TestBuildRendersAnEmptySpecificationCraftSectionAsNothing(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-spec-empty-craft",
+		RunID:               "run-spec-empty-craft",
+		Role:                workflow.RoleSpecificationReview,
+		Stage:               string(store.StageReview),
+		SpecificationPacket: `{}`,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if strings.Contains(value, "<!-- craft:") {
+		t.Fatalf("empty craft section rendered as prose:\n%s", value)
+	}
+}
+
+// TestImplementationPromptRenderingIsRouteDeterministic verifies one recorded
+// prompt version plus one frozen route produces a stable rendered body, while
+// the embedded content identity remains independent of route selection.
+func TestImplementationPromptRenderingIsRouteDeterministic(t *testing.T) {
+	var identity prompt.PromptIdentity
+	for index, route := range []workflow.Route{workflow.RouteDefault, workflow.RouteAcceptance, workflow.RouteDesignAcceptance} {
+		gotIdentity, err := prompt.ContentIdentity(workflow.RoleImplementation, string(store.StageImplementation))
+		if err != nil {
+			t.Fatalf("ContentIdentity(%q) error = %v", route, err)
+		}
+		if index == 0 {
+			identity = gotIdentity
+		} else if gotIdentity != identity {
+			t.Fatalf("route %q changed the embedded identity from %#v to %#v", route, identity, gotIdentity)
+		}
+
+		request := prompt.Request{
+			InvocationID:        "inv-route-deterministic",
+			RunID:               "run-route-deterministic",
+			Role:                workflow.RoleImplementation,
+			Stage:               string(store.StageImplementation),
+			PromptVersion:       identity.Version,
+			TestPolicyMode:      "advisory",
+			Route:               route,
+			SpecificationPacket: `{"issue":{"title":"Route identity"}}`,
+		}
+		recorded, err := prompt.Build(request)
+		if err != nil {
+			t.Fatalf("Build(%q) error = %v", route, err)
+		}
+		implicitRequest := request
+		implicitRequest.PromptVersion = ""
+		implicit, err := prompt.Build(implicitRequest)
+		if err != nil {
+			t.Fatalf("implicit Build(%q) error = %v", route, err)
+		}
+		if recorded != implicit {
+			t.Fatalf("route %q rendered different bytes for the same frozen route with implicit and recorded prompt versions", route)
 		}
 	}
 }

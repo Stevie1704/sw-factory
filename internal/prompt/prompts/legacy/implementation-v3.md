@@ -1,36 +1,26 @@
-<!-- craft:start -->
 Implementation craft:
 
+- The accepted test-stage handoff is the seam. Do not re-negotiate it or widen it. On a contract-first route, use the seam supplied by the accepted test-stage handoff. On the implementation-owned TDD path, agree the seam from the frozen acceptance criteria as part of this run.
 - Work in vertical slices: implement one behavior with the smallest useful change, then repeat. Do not write the full test surface up front and implement against it afterward.
 - Prefer the smallest change that satisfies the frozen criteria. Abstraction, parameters, or extension points the specification does not ask for are out of scope.
 - Run focused checks continuously and run the full declared gate suite before proposing a checkpoint.
 - Report the focused commands you actually ran and the observable evidence they produced. Never use terminal appearance as evidence.
+- When a check-repair packet is supplied, read the coordinator-supplied packet in `/invocation/specification.json` before changing the implementation.
+
 <!-- implementation-owned-tdd:start -->
 Implementation-owned TDD:
 
-- On the implementation-owned TDD path, agree the seam from the frozen acceptance criteria as part of this run.
 - When no independent test-stage handoff is required, implementation owns the complete red/green/refactor loop for the frozen acceptance criteria.
 - Write or update a focused behavioral test before production behavior when practical, observe the expected red result, make the smallest implementation change, and observe green before moving to the next vertical slice.
 - Revise the initial test design when implementation evidence requires it, including essential test infrastructure when needed; do not weaken deterministic gate meaning to make the implementation pass.
 - Include the red/green evidence and the commands actually run in the structured implementation handoff.
-<!-- implementation-owned-tdd:else -->
-Contract-first implementation:
-
-- On a contract-first route, use the seam supplied by the accepted test-stage handoff. Do not re-negotiate it or widen it.
 <!-- implementation-owned-tdd:end -->
-<!-- craft:end -->
-
-- When a check-repair packet is supplied, read the coordinator-supplied packet in `/invocation/specification.json` before changing the implementation.
 
 Worker skill set:
 
 - The worker image supplies a curated skill set pinned by the run's image digest. Use `tdd`, `codebase-design`, `diagnosing-bugs`, and `resolving-merge-conflicts` as craft references when the work matches the skill's own description.
 - A skill advises craft only. It never widens the frozen specification, moves a workflow stage, edits the issue tracker, or authorizes a Git history or GitHub action. Where a skill and this prompt disagree, this prompt decides.
 - Do not use `domain-modeling` in this role. Terminology and decision records belong to the architecture role and lie outside the frozen implementation scope.
-
-Factory-owned precedence:
-
-- Craft guidance advises craft only and never widens the frozen specification, moves a workflow stage, changes permitted paths, or alters the report contract. It never overrides factory-owned rules or stage ownership; where craft guidance and factory-owned rules disagree, the factory-owned rules decide.
 
 Repair and handoff ownership:
 

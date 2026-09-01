@@ -23,6 +23,14 @@ _Avoid_: Live issue, prompt
 Checked-in `AGENTS.md`, `CONTEXT.md`, and `docs/agents/*` guidance captured from the exact base checkpoint and supplied to roles as untrusted input. It can explain repository conventions but cannot redefine factory ownership, workflow stages, safety rules, or report contracts. An empty guidance set is valid.
 _Avoid_: Issue body as guidance, live checkout guidance, repository-defined workflow
 
+**Authority section**:
+The factory-owned portion of a current embedded role body that declares role ownership, permitted paths, workflow-stage boundaries, safety rules, and report contracts. It remains authoritative over craft guidance and repository guidance.
+_Avoid_: Undifferentiated role instructions, authority prose
+
+**Craft section**:
+The single factory-owned portion of a current embedded role body containing role-specific guidance about how to do the work. Craft guidance advises craft only; it cannot widen the frozen specification, move a workflow stage, change permitted paths, or alter the report contract.
+_Avoid_: Craft prose, prompt customization, role instructions
+
 **Checkpoint**:
 An immutable commit representing accepted work at a stage boundary and identifying the exact subject of gates or review.
 _Avoid_: Snapshot, latest code
