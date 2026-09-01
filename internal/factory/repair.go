@@ -520,13 +520,18 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if err := os.MkdirAll(resultDirectory, 0o700); err != nil {
 		return store.Invocation{}, run, fmt.Errorf("create check-repair result directory: %w", err)
 	}
+	promptVersion := previous.PromptVersion
+	if strings.TrimSpace(promptVersion) == "" {
+		promptVersion = prompt.Version
+	}
 	promptText, err := prompt.Build(prompt.Request{
 		InvocationID:        invocationID,
 		RunID:               run.ID,
 		Role:                previous.Role,
 		Stage:               string(store.StageImplementation),
 		SpecificationPacket: run.SpecificationPacket,
-		RepositoryGuidance:  packet.Issue.Body,
+		RepositoryGuidance:  packet.RepositoryGuidance,
+		PromptVersion:       promptVersion,
 		TestPolicyMode:      string(packet.RepositoryConfig.TestPolicy.Mode),
 		Route:               packet.Route,
 		CheckRepairAttempt:  repairPacket.Attempt,
@@ -542,7 +547,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		Role:                previous.Role,
 		Stage:               store.StageImplementation,
 		SpecificationPacket: run.SpecificationPacket,
-		PromptVersion:       prompt.Version,
+		PromptVersion:       promptVersion,
 		TestPolicyMode:      packet.RepositoryConfig.TestPolicy.Mode,
 		Route:               packet.Route,
 		PermittedPaths:      append([]string(nil), previous.PermittedPaths...),
@@ -572,7 +577,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		InvocationDirectory:     packetDirectory,
 		ResultDirectory:         resultDirectory,
 		PermittedPaths:          append([]string(nil), previous.PermittedPaths...),
-		PromptVersion:           prompt.Version,
+		PromptVersion:           promptVersion,
 		Status:                  store.InvocationStatusActive,
 		CreatedAt:               createdAt,
 		UpdatedAt:               createdAt,

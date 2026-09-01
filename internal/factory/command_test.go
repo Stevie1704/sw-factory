@@ -10,6 +10,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
@@ -161,7 +162,10 @@ func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
 		pullRequest:   github.PullRequest{Number: 17, URL: run.PullRequestURL, State: "open", Draft: false, HeadBranch: run.Branch, BaseBranch: "main"},
 	}
 	runStore := &commandRunStore{current: &run, latest: &run}
-	service := newCommandService(runStore, githubAdapter, nil)
+	service := newCommandServiceWithStoreAndWorktree(runStore, githubAdapter, nil, &fakeWorktree{
+		workspace: gitadapter.Workspace{BaseSHA: run.CheckpointSHA, Worktree: run.Worktree},
+		guidance:  []gitadapter.GuidanceDocument{{Path: "AGENTS.md", Content: "revision guidance\n"}},
+	})
 
 	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
 		IssueNumber: 42,
@@ -185,6 +189,9 @@ func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
 	}
 	if packet.Version != 2 || packet.Issue.Body != "new requirements" {
 		t.Fatalf("amended packet = %#v, want version 2 with current issue", packet)
+	}
+	if !strings.Contains(packet.RepositoryGuidance, "revision guidance") {
+		t.Fatalf("amended packet guidance = %q, want guidance captured at the new base checkpoint", packet.RepositoryGuidance)
 	}
 	if !githubAdapter.pullRequest.Draft || len(githubAdapter.draftChanges) != 1 || !githubAdapter.draftChanges[0] {
 		t.Fatalf("pull request draft changes = %#v/%v, want one draft transition", githubAdapter.draftChanges, githubAdapter.pullRequest)
@@ -317,18 +324,25 @@ func commandHost() config.HostConfig {
 
 // newCommandService builds a service at the public command seam.
 func newCommandService(runStore *commandRunStore, githubAdapter *commandGitHub, comments github.CommentReader) *factory.Service {
-	return newCommandServiceWithStore(runStore, githubAdapter, comments)
+	return newCommandServiceWithStoreAndWorktree(runStore, githubAdapter, comments, nil)
 }
 
 // newCommandServiceWithStore builds the same command seam over any operational
 // store, letting a test add the optional persistence seams it needs.
 func newCommandServiceWithStore(runStore factory.OperationalStore, githubAdapter *commandGitHub, comments github.CommentReader) *factory.Service {
+	return newCommandServiceWithStoreAndWorktree(runStore, githubAdapter, comments, nil)
+}
+
+// newCommandServiceWithStoreAndWorktree builds the command seam with an
+// optional exact-checkpoint Git reader for revision tests.
+func newCommandServiceWithStoreAndWorktree(runStore factory.OperationalStore, githubAdapter *commandGitHub, comments github.CommentReader, worktree gitadapter.WorktreeManager) *factory.Service {
 	dependencies := factory.Dependencies{
 		Config:    commandConfig{host: commandHost()},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		GitHub:    githubAdapter,
 		Comments:  comments,
 		Terminal:  &lifecycleTerminal{},
+		Worktree:  worktree,
 		Now:       func() time.Time { return time.Date(2026, 8, 23, 10, 11, 12, 0, time.UTC) },
 	}
 	return factory.NewWithDependencies("/host/config.yaml", dependencies)

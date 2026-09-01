@@ -16,8 +16,12 @@ before any repair, readiness, or infrastructure work.
 _Avoid_: Screen scrape, hidden workflow transition
 
 **Specification packet**:
-The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot, the selected workflow route, and accepted clarifications or revisions.
+The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot, the selected workflow route, accepted clarifications or revisions, and repository guidance captured at the run's base checkpoint.
 _Avoid_: Live issue, prompt
+
+**Repository guidance**:
+Checked-in `AGENTS.md`, `CONTEXT.md`, and `docs/agents/*` guidance captured from the exact base checkpoint and supplied to roles as untrusted input. It can explain repository conventions but cannot redefine factory ownership, workflow stages, safety rules, or report contracts. An empty guidance set is valid.
+_Avoid_: Issue body as guidance, live checkout guidance, repository-defined workflow
 
 **Checkpoint**:
 An immutable commit representing accepted work at a stage boundary and identifying the exact subject of gates or review.
@@ -134,11 +138,11 @@ A configured interactive coding tool, such as Codex, launched through the harnes
 _Avoid_: Lead agent
 
 **Role**:
-The coordinator-owned responsibility assigned to an invocation, such as implementation, architecture, test, or review. The factory-owned role registry couples each role to its invocation stage, prompt version, default permitted paths, report contract, and visible surface strategy; repository guidance cannot change role ownership.
+The coordinator-owned responsibility assigned to an invocation, such as implementation, architecture, test, or review. The factory-owned role registry couples each role to its invocation stage, embedded Markdown prompt version, default permitted paths, report contract, and visible surface strategy; repository guidance cannot change role ownership.
 _Avoid_: Persona
 
 **Workflow registry**:
-The factory-owned declaration of roles, prompts, stages, visible surfaces, and report-outcome transitions. Repository configuration selects harness and model policy for declared roles but cannot add or redefine workflow authority.
+The factory-owned declaration of roles, embedded role prompt identities, stages, visible surfaces, and report-outcome transitions. Specification and documented-standards review are separate concurrent axes with separate durable findings and statuses; repository configuration selects harness and model policy for declared roles but cannot add or redefine workflow authority.
 _Avoid_: Repository-defined workflow, prompt configuration
 
 **Invocation packet**:
@@ -154,7 +158,7 @@ A factory-managed, harness-specific credential copy kept separate from role sess
 _Avoid_: Host auth mount
 
 **Review blocker**:
-A concrete correctness, security, specification, or documented-standards violation that prevents readiness.
+A concrete correctness, security, specification, or documented-standards violation that prevents readiness. A standards-review heuristic baseline finding is advisory and cannot block; only a concrete violation of a named repository rule can block on that axis.
 _Avoid_: Suggestion, preference, advisory finding
 
 **Local evaluation summary**:

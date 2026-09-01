@@ -289,11 +289,37 @@ func reviewFindingBlocks(finding store.ReviewFinding) bool {
 	})
 }
 
+// reviewFindingBlocksForRole applies the role-specific review boundary. The
+// standards axis can block only on a concrete documented-standards finding;
+// its heuristic or cross-axis observations remain advisory.
+func reviewFindingBlocksForRole(role string, finding store.ReviewFinding) bool {
+	if role == workflow.RoleStandardsReview {
+		if finding.Category != string(report.ReviewCategoryDocumentedStandards) {
+			return false
+		}
+		// The report layer requires provenance for current prompts. Recheck a
+		// present source class here because durable legacy findings predate that
+		// field, while a current heuristic must not masquerade as a documented
+		// rule.
+		evidence := strings.TrimSpace(finding.Evidence)
+		if strings.HasPrefix(evidence, "source=heuristic:") {
+			return false
+		}
+	}
+	return reviewFindingBlocks(finding)
+}
+
 // reviewFindingCounts separates concrete gating violations from visible
 // advisories for every supervision surface.
 func reviewFindingCounts(findings []store.ReviewFinding) (blocking, advisory int) {
+	return reviewFindingCountsForRole("", findings)
+}
+
+// reviewFindingCountsForRole separates blocking and advisory findings under a
+// particular review axis for status and pull-request projections.
+func reviewFindingCountsForRole(role string, findings []store.ReviewFinding) (blocking, advisory int) {
 	for _, finding := range findings {
-		if reviewFindingBlocks(finding) {
+		if reviewFindingBlocksForRole(role, finding) {
 			blocking++
 		} else {
 			advisory++
@@ -305,8 +331,14 @@ func reviewFindingCounts(findings []store.ReviewFinding) (blocking, advisory int
 // reviewHasBlockingFinding reports whether the durable finding projection
 // contains a concrete violation that gates readiness.
 func reviewHasBlockingFinding(findings []store.ReviewFinding) bool {
+	return reviewHasBlockingFindingForRole("", findings)
+}
+
+// reviewHasBlockingFindingForRole reports whether one role's result contains a
+// finding permitted to gate readiness on that role's review axis.
+func reviewHasBlockingFindingForRole(role string, findings []store.ReviewFinding) bool {
 	for _, finding := range findings {
-		if reviewFindingBlocks(finding) {
+		if reviewFindingBlocksForRole(role, finding) {
 			return true
 		}
 	}
@@ -403,7 +435,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 			run.Status = store.StatusActive
 			run.LifecycleReason = fmt.Sprintf("review round has blocking violations; routing repair (%s)", invocation.Role)
 			statusState = github.CommitStatusFailure
-			if !reviewHasBlockingFinding(review.Findings) {
+			if !reviewHasBlockingFindingForRole(invocation.Role, review.Findings) {
 				statusState = github.CommitStatusSuccess
 				statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
 			} else {
@@ -413,7 +445,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 			run.Stage = store.StageReview
 			run.Status = store.StatusActive
 			run.LifecycleReason = fmt.Sprintf("%s found blocking findings; waiting for the other review", invocation.Role)
-			if reviewHasBlockingFinding(review.Findings) {
+			if reviewHasBlockingFindingForRole(invocation.Role, review.Findings) {
 				statusState = github.CommitStatusFailure
 				statusDescription = fmt.Sprintf("%s found blocking findings; waiting for the other review", invocation.Role)
 			} else {

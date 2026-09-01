@@ -360,6 +360,10 @@ type ValidationContext struct {
 	Role string
 	// Stage is the expected workflow stage.
 	Stage string
+	// PromptVersion identifies the factory role-body version used by the
+	// invocation; retained legacy standards prompts keep their older report
+	// contract during restart recovery.
+	PromptVersion string
 	// RoleKind is the factory-resolved report contract. Empty preserves the
 	// legacy role-name fallback for callers that validate standalone reports.
 	RoleKind string
@@ -377,6 +381,12 @@ type ValidationContext struct {
 	// TestInfrastructurePaths contains configured repository-relative prefixes
 	// for essential test infrastructure.
 	TestInfrastructurePaths []string
+	// RepositoryGuidancePaths contains the exact guidance document names frozen
+	// in the specification packet for a current standards review.
+	RepositoryGuidancePaths []string
+	// RepositoryGuidanceBound distinguishes a coordinator-supplied empty set
+	// from a worker-side validation that has no frozen packet context.
+	RepositoryGuidanceBound bool
 	// CheckpointSHA is the exact commit a review report must identify when the
 	// coordinator accepts it. It may be blank while a worker writes its report;
 	// the coordinator supplies it during acceptance.
@@ -1021,8 +1031,77 @@ func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error
 		default:
 			return fmt.Errorf("unsupported review finding category %q", finding.Category)
 		}
+		if context.Role == "standards_review" && context.PromptVersion != "standards-review-v1" && (context.CheckpointSHA != "" || context.RepositoryGuidanceBound) {
+			if err := validateStandardsFindingProvenance(index, finding, context); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// validateStandardsFindingProvenance requires every current standards-axis
+// finding to name its source class and exact hunk. Guidance sources must also
+// name one of the documents frozen in the coordinator's specification packet.
+// The compact syntax stays inside the existing evidence field so the report
+// CLI contract remains unchanged: source=guidance:<document>;hunk=<location>;
+// <evidence> or source=heuristic:<name>;hunk=<location>;<evidence>.
+func validateStandardsFindingProvenance(index int, finding ReviewFinding, context ValidationContext) error {
+	const sourcePrefix = "source="
+	const hunkPrefix = ";hunk="
+	evidence := strings.TrimSpace(finding.Evidence)
+	if !strings.HasPrefix(evidence, sourcePrefix) {
+		return fmt.Errorf("review findings[%d].evidence must start with source=guidance:<document> or source=heuristic:<name>", index)
+	}
+	sourceEnd := strings.Index(evidence, hunkPrefix)
+	if sourceEnd <= len(sourcePrefix) {
+		return fmt.Errorf("review findings[%d].evidence must name a guidance document or heuristic before ;hunk=", index)
+	}
+	source := strings.TrimSpace(evidence[len(sourcePrefix):sourceEnd])
+	if strings.HasPrefix(source, "guidance:") {
+		document := strings.TrimSpace(strings.TrimPrefix(source, "guidance:"))
+		if document == "" {
+			return fmt.Errorf("review findings[%d].evidence guidance source must name a document", index)
+		}
+		if context.RepositoryGuidanceBound && !containsGuidancePath(context.RepositoryGuidancePaths, document) {
+			return fmt.Errorf("review findings[%d].evidence guidance source %q was not captured in the specification packet", index, document)
+		}
+	} else if strings.HasPrefix(source, "heuristic:") {
+		if strings.TrimSpace(strings.TrimPrefix(source, "heuristic:")) == "" {
+			return fmt.Errorf("review findings[%d].evidence heuristic source must name a baseline heuristic", index)
+		}
+	} else {
+		return fmt.Errorf("review findings[%d].evidence source must use guidance:<document> or heuristic:<name>", index)
+	}
+	hunkStart := sourceEnd + len(hunkPrefix)
+	if hunkStart >= len(evidence) {
+		return fmt.Errorf("review findings[%d].evidence must name the hunk after ;hunk=", index)
+	}
+	hunkEnd := strings.IndexByte(evidence[hunkStart:], ';')
+	if hunkEnd < 0 {
+		hunkEnd = len(evidence)
+	} else {
+		hunkEnd += hunkStart
+	}
+	hunk := strings.TrimSpace(evidence[hunkStart:hunkEnd])
+	if hunk == "" || hunk != strings.TrimSpace(finding.Location) {
+		return fmt.Errorf("review findings[%d].evidence hunk must match location %q", index, finding.Location)
+	}
+	if hunkEnd == len(evidence) || strings.TrimSpace(evidence[hunkEnd+1:]) == "" {
+		return fmt.Errorf("review findings[%d].evidence must include observable evidence after the hunk", index)
+	}
+	return nil
+}
+
+// containsGuidancePath reports whether a cited guidance document belongs to
+// the exact coordinator-frozen guidance set.
+func containsGuidancePath(paths []string, wanted string) bool {
+	for _, path := range paths {
+		if path == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // validCommitSHA validates the immutable commit identity carried by a review

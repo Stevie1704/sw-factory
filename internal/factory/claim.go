@@ -40,6 +40,12 @@ type SpecificationPacket struct {
 	Version          int                     `json:"version"`
 	Issue            github.Issue            `json:"issue"`
 	RepositoryConfig config.RepositoryConfig `json:"repository_config"`
+	// RepositoryGuidance contains checked-in guidance captured at the run's
+	// immutable base checkpoint and later presented as untrusted prompt input.
+	RepositoryGuidance string `json:"repository_guidance,omitempty"`
+	// RepositoryGuidancePaths records the exact named guidance files represented
+	// in RepositoryGuidance so standards findings can cite only captured files.
+	RepositoryGuidancePaths []string `json:"repository_guidance_paths,omitempty"`
 	// Clarifications contains the authorized answers resolved after claim.
 	Clarifications []Clarification `json:"clarifications,omitempty"`
 	// Route is the factory-owned contract-first workflow route selected by the
@@ -208,10 +214,6 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		RepositoryConfig: repositoryConfig,
 		Route:            route,
 	}
-	packetData, err := json.Marshal(packet)
-	if err != nil {
-		return IssueResult{}, fmt.Errorf("freeze specification packet: %w", err)
-	}
 	worktreeManager := s.worktreeManager()
 	if worktreeManager == nil {
 		return IssueResult{}, errors.New("GitWorkspace is required to create a run worktree")
@@ -225,6 +227,14 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 			return errors.Join(cause, fmt.Errorf("remove claim workspace: %w", cleanupErr))
 		}
 		return cause
+	}
+	packet.RepositoryGuidance, packet.RepositoryGuidancePaths, err = captureRepositoryGuidance(ctx, worktreeManager, workspace)
+	if err != nil {
+		return IssueResult{}, cleanupWorkspace(err)
+	}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		return IssueResult{}, cleanupWorkspace(fmt.Errorf("freeze specification packet: %w", err))
 	}
 	testRevisionBudget := testRevisionBudgetForPacket(packet)
 	run := store.Run{
@@ -1161,23 +1171,23 @@ func specificationReviewStatusComment(run store.Run) string {
 	if run.Stage != store.StageReview && run.SpecificationReview == nil && run.StandardsReview == nil {
 		return ""
 	}
-	result := renderReviewStatusComment("Specification review", run.SpecificationReview, run)
+	result := renderReviewStatusComment(workflow.RoleSpecificationReview, "Specification review", run.SpecificationReview, run)
 	if standardsReviewConfigured(run) || run.StandardsReview != nil {
-		result += renderReviewStatusComment("Standards review", run.StandardsReview, run)
+		result += renderReviewStatusComment(workflow.RoleStandardsReview, "Standards review", run.StandardsReview, run)
 	}
 	return result
 }
 
 // renderReviewStatusComment renders one role-owned review result with bounded
 // finding detail and an explicit pending state for the shared checkpoint.
-func renderReviewStatusComment(title string, review *store.ReviewResult, run store.Run) string {
+func renderReviewStatusComment(role, title string, review *store.ReviewResult, run store.Run) string {
 	if review == nil {
 		if run.Stage != store.StageReview {
 			return ""
 		}
 		return fmt.Sprintf("\n### %s\n\n- status: pending for checkpoint `%s`\n", title, safeStatusCommentValue(run.CheckpointSHA))
 	}
-	blocking, advisory := reviewFindingCounts(review.Findings)
+	blocking, advisory := reviewFindingCountsForRole(role, review.Findings)
 	result := fmt.Sprintf("\n### %s\n\n- reviewed checkpoint: `%s`\n- outcome: %d blocking findings, %d advisory findings\n", title, safeStatusCommentValue(review.CheckpointSHA), blocking, advisory)
 	for index, finding := range review.Findings {
 		result += fmt.Sprintf("\n#### Finding %d — %s/%s\n\n- location: `%s`\n- claim: %s\n- evidence: %s\n- suggested resolution: %s\n- suggested owner: `%s`\n", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category), safeStatusCommentValue(finding.Location), safeStatusCommentValue(finding.Claim), safeStatusCommentValue(finding.Evidence), safeStatusCommentValue(finding.SuggestedResolution), safeStatusCommentValue(finding.SuggestedOwner))

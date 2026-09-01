@@ -468,9 +468,9 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 // including advisory findings that never gate readiness but must remain visible.
 func generatedReviewSection(run store.Run) string {
 	lines := []string{generatedReviewStart}
-	appendGeneratedReview(&lines, "Specification review", run.SpecificationReview, run.Stage == store.StageReview, run.CheckpointSHA)
+	appendGeneratedReview(&lines, workflow.RoleSpecificationReview, "Specification review", run.SpecificationReview, run.Stage == store.StageReview, run.CheckpointSHA)
 	if standardsReviewConfigured(run) || run.StandardsReview != nil {
-		appendGeneratedReview(&lines, "Standards review", run.StandardsReview, run.Stage == store.StageReview, run.CheckpointSHA)
+		appendGeneratedReview(&lines, workflow.RoleStandardsReview, "Standards review", run.StandardsReview, run.Stage == store.StageReview, run.CheckpointSHA)
 	}
 	lines = append(lines, generatedReviewEnd)
 	return strings.Join(lines, "\n")
@@ -478,7 +478,7 @@ func generatedReviewSection(run store.Run) string {
 
 // appendGeneratedReview appends one role-owned review projection to a generated
 // pull-request section without exposing a reviewer's private session state.
-func appendGeneratedReview(lines *[]string, title string, review *store.ReviewResult, pending bool, checkpoint string) {
+func appendGeneratedReview(lines *[]string, role, title string, review *store.ReviewResult, pending bool, checkpoint string) {
 	*lines = append(*lines, "\n### "+title, "")
 	if review == nil {
 		if pending {
@@ -488,7 +488,7 @@ func appendGeneratedReview(lines *[]string, title string, review *store.ReviewRe
 		}
 		return
 	}
-	blockers, advisories := reviewFindingCounts(review.Findings)
+	blockers, advisories := reviewFindingCountsForRole(role, review.Findings)
 	*lines = append(*lines,
 		fmt.Sprintf("- reviewed checkpoint: `%s`", safeStatusCommentValue(review.CheckpointSHA)),
 		fmt.Sprintf("- outcome: %d blocking findings, %d advisory findings", blockers, advisories),

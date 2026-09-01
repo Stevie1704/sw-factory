@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -104,6 +105,47 @@ func TestReviewRoundCompleteRequiresOnlyConfiguredRoles(t *testing.T) {
 
 			if got := reviewRoundComplete(run); got != test.want {
 				t.Fatalf("reviewRoundComplete() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+// TestStandardsReviewKeepsCrossAxisAndHeuristicFindingsAdvisory verifies the
+// standards reviewer cannot turn a non-standards observation into a readiness
+// blocker, while a documented-standard violation still can block its axis.
+func TestStandardsReviewKeepsCrossAxisAndHeuristicFindingsAdvisory(t *testing.T) {
+	checkpoint := "checkpoint"
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		RepositoryConfig: config.RepositoryConfig{
+			RoleHarnessDefaults: map[string]config.Harness{workflow.RoleStandardsReview: config.HarnessCodex},
+			ModelOptions:        map[string][]string{workflow.RoleStandardsReview: {"gpt-5"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		category report.ReviewCategory
+		evidence string
+		want     bool
+	}{
+		{name: "heuristic scope", category: report.ReviewCategoryScope, evidence: "source=heuristic:duplicated logic shape;hunk=review.go:20;the shape repeats", want: false},
+		{name: "cross-axis correctness", category: report.ReviewCategoryCorrectness, evidence: "source=heuristic:misplaced behavior;hunk=review.go:20;the behavior is elsewhere", want: false},
+		{name: "documented standard", category: report.ReviewCategoryDocumentedStandards, evidence: "source=guidance:AGENTS.md;hunk=review.go:20;the named rule is violated", want: true},
+		{name: "heuristic mislabeled as documented", category: report.ReviewCategoryDocumentedStandards, evidence: "source=heuristic:naming that does not reveal intent;hunk=review.go:20;the name is vague", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			run := store.Run{
+				CheckpointSHA:       checkpoint,
+				SpecificationPacket: string(packetData),
+				StandardsReview: &store.ReviewResult{CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
+					Severity: string(report.ReviewSeverityBlocker), Category: string(test.category), Evidence: test.evidence,
+				}}},
+			}
+			if got := reviewHasBlockingResult(run); got != test.want {
+				t.Fatalf("reviewHasBlockingResult() = %t, want %t for %s", got, test.want, test.category)
 			}
 		})
 	}

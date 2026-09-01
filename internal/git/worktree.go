@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/ref"
@@ -100,6 +101,23 @@ type WorktreeState struct {
 type WorktreeManager interface {
 	Create(context.Context, string, string, string) (Workspace, error)
 	Remove(context.Context, string, Workspace) error
+}
+
+// GuidanceDocument is one checked-in repository guidance file captured from a
+// run's immutable base checkpoint.
+type GuidanceDocument struct {
+	// Path is the repository-relative guidance path.
+	Path string
+	// Content is the exact file content at the requested checkpoint.
+	Content string
+}
+
+// RepositoryGuidanceReader is the optional exact-checkpoint read seam used at
+// claim time. WorktreeManager remains small so existing adapters can continue
+// to manage worktrees without implementing guidance capture.
+type RepositoryGuidanceReader interface {
+	// ReadRepositoryGuidance reads selected guidance files from an exact commit.
+	ReadRepositoryGuidance(context.Context, string, string) ([]GuidanceDocument, error)
 }
 
 // WorktreeInspector is the optional read-only worktree observation seam.
@@ -204,6 +222,54 @@ func (m *LocalWorktreeManager) Inspect(ctx context.Context, worktreePath string)
 		HeadSHA:        strings.TrimSpace(string(headOutput)),
 		ChangedPaths:   porcelainPaths(string(statusOutput)),
 	}, nil
+}
+
+// ReadRepositoryGuidance reads factory-relevant guidance files from the exact
+// base checkpoint rather than from the mutable issue or ordinary checkout.
+func (m *LocalWorktreeManager) ReadRepositoryGuidance(ctx context.Context, worktreePath, checkpointSHA string) ([]GuidanceDocument, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil, errors.New("worktree path is required")
+	}
+	if strings.TrimSpace(checkpointSHA) == "" {
+		return nil, errors.New("guidance checkpoint SHA is required")
+	}
+	if err := ref.ValidatePart(checkpointSHA); err != nil {
+		return nil, fmt.Errorf("guidance checkpoint SHA: %w", err)
+	}
+	pathsOutput, err := m.runner().Run(ctx, worktreePath, []string{"ls-tree", "--full-tree", "-r", "--name-only", "-z", checkpointSHA, "--"})
+	if err != nil {
+		return nil, fmt.Errorf("list repository guidance at checkpoint %q: %w", checkpointSHA, err)
+	}
+	paths := make([]string, 0)
+	for _, candidate := range strings.Split(string(pathsOutput), "\x00") {
+		if candidate != "" && IsRepositoryGuidancePath(candidate) {
+			paths = append(paths, candidate)
+		}
+	}
+	sort.Strings(paths)
+	documents := make([]GuidanceDocument, 0, len(paths))
+	for _, path := range paths {
+		content, err := m.runner().Run(ctx, worktreePath, []string{"show", checkpointSHA + ":" + path})
+		if err != nil {
+			return nil, fmt.Errorf("read repository guidance %q at checkpoint %q: %w", path, checkpointSHA, err)
+		}
+		documents = append(documents, GuidanceDocument{Path: path, Content: string(content)})
+	}
+	return documents, nil
+}
+
+// IsRepositoryGuidancePath reports whether a tracked path is a conventional
+// repository guidance document consumed by role prompts.
+func IsRepositoryGuidancePath(path string) bool {
+	path = filepath.ToSlash(filepath.Clean(path))
+	if path == "." || strings.HasPrefix(path, "../") || filepath.IsAbs(path) {
+		return false
+	}
+	base := filepath.Base(path)
+	if base == "AGENTS.md" || base == "CLAUDE.md" || base == "CONTEXT.md" || base == "CONTEXT-MAP.md" {
+		return true
+	}
+	return strings.HasPrefix(path, "docs/agents/")
 }
 
 // repositoryPathFromCommonDir converts Git's common metadata path into the

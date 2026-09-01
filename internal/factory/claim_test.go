@@ -30,11 +30,17 @@ func TestIssueClaimsAnEligibleIssueWithAFrozenPacketAndOneStatusComment(t *testi
 	}
 	repositoryConfig := validRepositoryConfig()
 	githubAdapter := &fakeGitHub{issueValue: issue}
-	worktree := &fakeWorktree{workspace: gitadapter.Workspace{
-		BaseSHA:  "0123456789abcdef",
-		Branch:   "factory/run-fixed",
-		Worktree: "/tmp/.factory-worktrees/project/run-fixed",
-	}}
+	worktree := &fakeWorktree{
+		workspace: gitadapter.Workspace{
+			BaseSHA:  "0123456789abcdef",
+			Branch:   "factory/run-fixed",
+			Worktree: "/tmp/.factory-worktrees/project/run-fixed",
+		},
+		guidance: []gitadapter.GuidanceDocument{
+			{Path: "AGENTS.md", Content: "Use the repository guidance.\n"},
+			{Path: "docs/agents/conventions.md", Content: "Keep changes focused.\n"},
+		},
+	}
 	runStore := &fakeRunStore{}
 	service := newClaimService(githubAdapter, worktree, runStore, repositoryConfig)
 
@@ -87,6 +93,12 @@ func TestIssueClaimsAnEligibleIssueWithAFrozenPacketAndOneStatusComment(t *testi
 	}
 	if packet.RepositoryConfig.TargetBranch != repositoryConfig.TargetBranch {
 		t.Fatalf("packet repository config target branch = %q, want %q", packet.RepositoryConfig.TargetBranch, repositoryConfig.TargetBranch)
+	}
+	if !strings.Contains(packet.RepositoryGuidance, "### AGENTS.md") || !strings.Contains(packet.RepositoryGuidance, "Use the repository guidance.") || !strings.Contains(packet.RepositoryGuidance, "docs/agents/conventions.md") {
+		t.Fatalf("packet repository guidance = %q, want captured guidance documents", packet.RepositoryGuidance)
+	}
+	if strings.Contains(packet.RepositoryGuidance, issue.Body) {
+		t.Fatalf("packet repository guidance copied the issue body: %q", packet.RepositoryGuidance)
 	}
 	if len(runStore.saved) != 2 {
 		t.Fatalf("SaveRun calls = %d, want freeze then comment identity", len(runStore.saved))
@@ -594,6 +606,7 @@ type editedComment struct {
 // fakeWorktree returns a deterministic isolated workspace.
 type fakeWorktree struct {
 	workspace gitadapter.Workspace
+	guidance  []gitadapter.GuidanceDocument
 	called    bool
 	removed   bool
 	removeErr error
@@ -606,6 +619,12 @@ func (f *fakeWorktree) Create(context.Context, string, string, string) (gitadapt
 		return gitadapter.Workspace{}, errors.New("unexpected workspace call")
 	}
 	return f.workspace, nil
+}
+
+// ReadRepositoryGuidance returns the documents configured for the exact base
+// checkpoint requested by the claim test.
+func (f *fakeWorktree) ReadRepositoryGuidance(context.Context, string, string) ([]gitadapter.GuidanceDocument, error) {
+	return append([]gitadapter.GuidanceDocument(nil), f.guidance...), nil
 }
 
 // Remove records cleanup of a created workspace.
