@@ -239,7 +239,7 @@ func TestPromptRegistryBuildsTheArchitectureRoleWithCommonFactoryRules(t *testin
 		t.Fatalf("Build() error = %v", err)
 	}
 	for _, marker := range []string{
-		"factory prompt version architecture-v2",
+		"factory prompt version architecture-v3",
 		"Architecture-role ownership:",
 		"design document",
 		"Only the coordinator accepts a result written by factory-report.",
@@ -292,6 +292,7 @@ func TestBuildScopesTheWorkerSkillSetPerRole(t *testing.T) {
 	}
 	for _, marker := range []string{
 		"Use the `domain-modeling` skill from the worker skill set",
+		"does not authorize writes to root CONTEXT.md or docs/adr/",
 		"never moves a workflow stage",
 	} {
 		if !strings.Contains(architecture, marker) {
@@ -490,7 +491,7 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 	}{
 		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f"},
-		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "821ca4fbf26c1c914a14730ca6d1856d7c1c655c27201294a7aaae0362aae0cb"},
+		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70"},
 		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507"},
 		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d"},
 	}
@@ -520,6 +521,7 @@ func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
 		{name: "implementation v1", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v1", marker: "Implementation-owned TDD:"},
 		{name: "implementation v2", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v2", marker: "Repair and handoff ownership:"},
 		{name: "architecture v1", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v1", marker: "Architecture-role ownership:"},
+		{name: "architecture v2", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v2", marker: "Architecture-role ownership:"},
 		{name: "standards review v1", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v1", marker: "Standards-review precedence:"},
 	}
 	for _, test := range tests {
