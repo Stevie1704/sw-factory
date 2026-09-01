@@ -62,12 +62,14 @@ var rolePromptFiles = map[string]string{
 var rolePromptVersions = map[string]map[string]string{
 	workflow.RoleImplementation: {
 		"implementation-v1":                  "prompts/legacy/implementation-v1.md",
+		"implementation-v2":                  "prompts/legacy/implementation-v2.md",
 		workflow.PromptVersionImplementation: rolePromptFiles[workflow.RoleImplementation],
 	},
 	workflow.RoleTest: {
 		workflow.PromptVersionTest: rolePromptFiles[workflow.RoleTest],
 	},
 	workflow.RoleArchitecture: {
+		"architecture-v1":                  "prompts/legacy/architecture-v1.md",
 		workflow.PromptVersionArchitecture: rolePromptFiles[workflow.RoleArchitecture],
 	},
 	workflow.RoleSpecificationReview: {
@@ -83,12 +85,14 @@ var rolePromptVersions = map[string]map[string]string{
 // versioned role body. A body edit must update its prompt version and this
 // identity together.
 var expectedPromptSHA256 = map[string]string{
-	workflow.PromptVersionImplementation:      "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
+	workflow.PromptVersionImplementation:      "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
 	workflow.PromptVersionTest:                "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
-	workflow.PromptVersionArchitecture:        "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
+	workflow.PromptVersionArchitecture:        "821ca4fbf26c1c914a14730ca6d1856d7c1c655c27201294a7aaae0362aae0cb",
 	workflow.PromptVersionSpecificationReview: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
 	workflow.PromptVersionStandardsReview:     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
+	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
+	"architecture-v1":                         "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
 	"standards-review-v1":                     "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472",
 }
 
