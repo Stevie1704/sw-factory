@@ -38,7 +38,11 @@ The Claude launch additionally passes `--strict-mcp-config` with an empty
 `--mcp-config` set, so a session loads no MCP server from any configuration
 file. A factory role home is created by the worker image and is never seeded
 from a host harness directory, so a session inherits no personal plugin, hook,
-MCP server, skill, or setting. `DISABLE_AUTOUPDATER=1` keeps Claude Code on the
+MCP server, or setting. The only skills a session sees are the curated set the
+worker image installs into both role homes, which the worker image digest pins
+for the run; `worker/SKILLS.md` records the set and ADR 0006 records the
+boundary. Each role prompt names the skills that role may use, because both
+harnesses advertise every installed skill to every role. `DISABLE_AUTOUPDATER=1` keeps Claude Code on the
 version pinned by the run's worker image digest, so a tool upgrade cannot
 change behavior halfway through a run.
 

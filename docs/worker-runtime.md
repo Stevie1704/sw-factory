@@ -55,7 +55,10 @@ reads only the explicit `auth.json` file and streams it into a separate,
 factory-managed credential volume. Codex sees a link to that copy from the role
 home, while session files remain in the role volume. The host harness directory
 is never mounted and the host source is never written back; fresh roles can
-reuse credentials without inheriting another role's session context.
+reuse credentials without inheriting another role's session context. Docker
+seeds a fresh role volume from the worker image, so the role home starts with
+the curated skill set the image installs and with nothing personal from the
+host.
 
 The coordinator prepares `/git` from the repository's objects, refs, and
 worktree state. Git configuration, remote definitions, hooks, submodules, and
