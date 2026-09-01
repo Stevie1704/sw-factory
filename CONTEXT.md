@@ -82,6 +82,10 @@ _Avoid_: Agent check, review
 The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, explicitly declared repository caches, and factory-managed credential copies.
 _Avoid_: Container in workflow decisions
 
+**Worker skill set**:
+The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts.
+_Avoid_: Personal skill, installed skill
+
 **WorkerRuntime**:
 The portable seam that starts, resumes, commands, stops, and inspects a worker while hiding runtime identifiers, container paths, role homes, invocation packets, result files, and process tracking.
 _Avoid_: Docker API

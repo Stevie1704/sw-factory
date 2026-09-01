@@ -27,9 +27,9 @@ const (
 	// PromptVersionTest identifies the immutable test-role prompt.
 	PromptVersionTest = "test-v2"
 	// PromptVersionImplementation identifies the immutable implementation prompt.
-	PromptVersionImplementation = "implementation-v2"
+	PromptVersionImplementation = "implementation-v3"
 	// PromptVersionArchitecture identifies the immutable architecture prompt.
-	PromptVersionArchitecture = "architecture-v1"
+	PromptVersionArchitecture = "architecture-v2"
 	// PromptVersionSpecificationReview identifies the immutable review prompt.
 	PromptVersionSpecificationReview = "specification-review-v1"
 	// PromptVersionStandardsReview identifies the immutable standards-review prompt.

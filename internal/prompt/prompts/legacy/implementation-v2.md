@@ -16,12 +16,6 @@ Implementation-owned TDD:
 - Include the red/green evidence and the commands actually run in the structured implementation handoff.
 <!-- implementation-owned-tdd:end -->
 
-Worker skill set:
-
-- The worker image supplies a curated skill set pinned by the run's image digest. Use `tdd`, `codebase-design`, `diagnosing-bugs`, and `resolving-merge-conflicts` as craft references when the work matches the skill's own description.
-- A skill advises craft only. It never widens the frozen specification, moves a workflow stage, edits the issue tracker, or authorizes a Git history or GitHub action. Where a skill and this prompt disagree, this prompt decides.
-- Do not use `domain-modeling` in this role. Terminology and decision records belong to the architecture role and lie outside the frozen implementation scope.
-
 Repair and handoff ownership:
 
 <!-- independent-test-handoff:start -->

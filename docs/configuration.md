@@ -333,6 +333,12 @@ After the image smoke checks, the same command mounts this checkout and runs
 the configured setup, format, vet, test, and build gates under the worker's
 clean baseline environment.
 
+The worker image also carries the curated skill set from `worker/skills`, which
+it installs into both harness role homes. The digest recorded here therefore
+pins the skills a role agent sees, exactly as it pins the harness versions. See
+`worker/SKILLS.md` for the set and its curation rule, and ADR 0006 for the
+boundary. Changing a skill needs a rebuild and a new digest.
+
 The checked-in `worker_build.image` is intentionally an image name without a
 mutable tag. The reported SHA-256 digest is appended by the worker adapter as
 `image@digest`, so a run never starts from a mutable tag and never pulls an

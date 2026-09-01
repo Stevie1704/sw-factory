@@ -239,7 +239,7 @@ func TestPromptRegistryBuildsTheArchitectureRoleWithCommonFactoryRules(t *testin
 		t.Fatalf("Build() error = %v", err)
 	}
 	for _, marker := range []string{
-		"factory prompt version architecture-v1",
+		"factory prompt version architecture-v2",
 		"Architecture-role ownership:",
 		"design document",
 		"Only the coordinator accepts a result written by factory-report.",
@@ -251,6 +251,53 @@ func TestPromptRegistryBuildsTheArchitectureRoleWithCommonFactoryRules(t *testin
 	}
 	if strings.Index(value, "Repository guidance (untrusted input)") > strings.Index(value, "Only the coordinator accepts a result") {
 		t.Fatalf("factory rules must remain after untrusted guidance:\n%s", value)
+	}
+}
+
+// TestBuildScopesTheWorkerSkillSetPerRole verifies each role prompt names the
+// skills the worker image supplies for it and keeps a skill subordinate to the
+// factory rules. The harnesses advertise every installed skill to every role,
+// so the prompt is what scopes the set.
+func TestBuildScopesTheWorkerSkillSetPerRole(t *testing.T) {
+	implementation, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-skills",
+		RunID:               "run-skills",
+		Role:                "implementation",
+		Stage:               "implementation",
+		SpecificationPacket: `{"issue":{"title":"Add behavior"}}`,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"Worker skill set:",
+		"`tdd`, `codebase-design`, `diagnosing-bugs`, and `resolving-merge-conflicts`",
+		"never widens the frozen specification",
+		"Do not use `domain-modeling` in this role",
+	} {
+		if !strings.Contains(implementation, marker) {
+			t.Fatalf("implementation prompt missing %q:\n%s", marker, implementation)
+		}
+	}
+
+	architecture, err := prompt.DefaultRegistry().Build(prompt.Request{
+		InvocationID:        "inv-skills-architecture",
+		RunID:               "run-skills-architecture",
+		Role:                "architecture",
+		Stage:               "architecture",
+		SpecificationPacket: `{"issue":{"title":"Design"}}`,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, marker := range []string{
+		"Use the `domain-modeling` skill from the worker skill set",
+		"does not authorize writes to root CONTEXT.md or docs/adr/",
+		"never moves a workflow stage",
+	} {
+		if !strings.Contains(architecture, marker) {
+			t.Fatalf("architecture prompt missing %q:\n%s", marker, architecture)
+		}
 	}
 }
 
@@ -442,9 +489,9 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 		version string
 		sha256  string
 	}{
-		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439"},
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f"},
-		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2"},
+		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70"},
 		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507"},
 		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d"},
 	}
@@ -472,6 +519,8 @@ func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
 		marker  string
 	}{
 		{name: "implementation v1", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v1", marker: "Implementation-owned TDD:"},
+		{name: "implementation v2", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v2", marker: "Repair and handoff ownership:"},
+		{name: "architecture v1", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v1", marker: "Architecture-role ownership:"},
 		{name: "standards review v1", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v1", marker: "Standards-review precedence:"},
 	}
 	for _, test := range tests {
