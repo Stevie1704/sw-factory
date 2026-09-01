@@ -34,7 +34,7 @@ const StandardsReviewVersion = workflow.PromptVersionStandardsReview
 // into the factory binary; the target repository cannot replace them at run
 // time.
 //
-//go:embed implementation.md implementation-v1.md test.md architecture.md specification-review.md standards-review.md standards-review-v1.md
+//go:embed prompts/*.md prompts/legacy/*.md
 var rolePromptFS embed.FS
 
 // PromptIdentity identifies the exact embedded role-body bytes used by a
@@ -49,11 +49,11 @@ type PromptIdentity struct {
 // rolePromptFiles maps immutable workflow role names to embedded Markdown
 // files. The map is factory-owned and intentionally has no repository input.
 var rolePromptFiles = map[string]string{
-	workflow.RoleImplementation:      "implementation.md",
-	workflow.RoleTest:                "test.md",
-	workflow.RoleArchitecture:        "architecture.md",
-	workflow.RoleSpecificationReview: "specification-review.md",
-	workflow.RoleStandardsReview:     "standards-review.md",
+	workflow.RoleImplementation:      "prompts/implementation.md",
+	workflow.RoleTest:                "prompts/test.md",
+	workflow.RoleArchitecture:        "prompts/architecture.md",
+	workflow.RoleSpecificationReview: "prompts/specification-review.md",
+	workflow.RoleStandardsReview:     "prompts/standards-review.md",
 }
 
 // rolePromptVersions maps each supported persisted prompt version to its
@@ -61,7 +61,7 @@ var rolePromptFiles = map[string]string{
 // silently substitutes a newer role contract for an older invocation.
 var rolePromptVersions = map[string]map[string]string{
 	workflow.RoleImplementation: {
-		"implementation-v1":                  "implementation-v1.md",
+		"implementation-v1":                  "prompts/legacy/implementation-v1.md",
 		workflow.PromptVersionImplementation: rolePromptFiles[workflow.RoleImplementation],
 	},
 	workflow.RoleTest: {
@@ -74,7 +74,7 @@ var rolePromptVersions = map[string]map[string]string{
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
-		"standards-review-v1":                 "standards-review-v1.md",
+		"standards-review-v1":                 "prompts/legacy/standards-review-v1.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 }
