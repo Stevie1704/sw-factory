@@ -78,7 +78,8 @@ func TestAllEmbeddedPromptVersionsHaveStableContentIdentity(t *testing.T) {
 		version string
 		sha256  string
 	}{
-		{name: "implementation v7", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a"},
+		{name: "implementation v8", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd"},
+		{name: "implementation v7", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v7", sha256: "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a"},
 		{name: "implementation v6", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v6", sha256: "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939"},
 		{name: "implementation v5", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v5", sha256: "563454d454a86d5fe9b35c0c141430cac254c83097281e1c70b02711731d77a2"},
 		{name: "implementation v4", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v4", sha256: "e169b645f4f22d91fa14941765e004d4c9708949502dd35fe146e2696bc78911"},

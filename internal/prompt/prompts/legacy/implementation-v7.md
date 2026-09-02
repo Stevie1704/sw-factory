@@ -38,7 +38,6 @@ Repair and handoff ownership:
 
 <!-- independent-test-handoff:start -->
 - For a required independent test stage, repair implementation behavior in the mounted worktree; do not edit tests or gates merely to make them pass.
-- On a contract-first route, do not edit any protected test path or change its recorded content. If a protected test is incorrect, submit a structured objection with --test-objection test|claim|evidence; never edit the protected test.
 <!-- independent-test-handoff:end -->
 <!-- implementation-owned-tdd-repair:start -->
 - For implementation-owned TDD, revise behavioral tests or essential test infrastructure when needed, while preserving deterministic gate meaning.
@@ -46,3 +45,4 @@ Repair and handoff ownership:
 - During review repair, address implementation-owned findings without editing protected tests. When a finding names the test role as suggested owner, submit a structured test objection through the existing report protocol; never edit that test directly.
 - Preserve the frozen specification and deterministic gates. Do not dismiss a finding without observable evidence.
 - Include the focused commands and observable behavioral evidence in the structured implementation handoff.
+- On a contract-first route, do not edit any protected test path or change its recorded content. If a protected test is incorrect, submit a structured objection with --test-objection test|claim|evidence; never edit the protected test.

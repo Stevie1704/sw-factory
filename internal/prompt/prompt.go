@@ -68,6 +68,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"implementation-v4":                  "prompts/legacy/implementation-v4.md",
 		"implementation-v5":                  "prompts/legacy/implementation-v5.md",
 		"implementation-v6":                  "prompts/legacy/implementation-v6.md",
+		"implementation-v7":                  "prompts/legacy/implementation-v7.md",
 		workflow.PromptVersionImplementation: rolePromptFiles[workflow.RoleImplementation],
 	},
 	workflow.RoleTest: {
@@ -96,7 +97,7 @@ var rolePromptVersions = map[string]map[string]string{
 // versioned role body. A body edit must update its prompt version and this
 // identity together.
 var expectedPromptSHA256 = map[string]string{
-	workflow.PromptVersionImplementation:      "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a",
+	workflow.PromptVersionImplementation:      "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd",
 	workflow.PromptVersionTest:                "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5",
 	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
 	workflow.PromptVersionSpecificationReview: "ea66e87d7f144bbc12c63ba2a2d6bb40c05aaef7112cb12d7cb626c858f2c204",
@@ -107,6 +108,7 @@ var expectedPromptSHA256 = map[string]string{
 	"implementation-v4":                       "e169b645f4f22d91fa14941765e004d4c9708949502dd35fe146e2696bc78911",
 	"implementation-v5":                       "563454d454a86d5fe9b35c0c141430cac254c83097281e1c70b02711731d77a2",
 	"implementation-v6":                       "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939",
+	"implementation-v7":                       "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a",
 	"architecture-v1":                         "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
 	"architecture-v2":                         "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70",
 	"test-v2":                                 "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
@@ -581,13 +583,18 @@ func renderConditionalSection(body, name string, keep bool, scope string) (strin
 		}
 		return strings.TrimSpace(prefix + "\n\n" + arm + "\n\n" + suffix), nil
 	}
-	endIndex += len(end)
-	if !keep {
-		return strings.TrimSpace(body[:startIndex] + "\n" + body[endIndex:]), nil
+	// A marker occupies its own line, so the block is spliced out line by line.
+	// Joining the remaining text with a fixed separator instead would leave the
+	// blank runs that made the rendered prompt look truncated.
+	afterEndIndex := endIndex + len(end)
+	if afterEndIndex < len(body) && body[afterEndIndex] == '\n' {
+		afterEndIndex++
 	}
-	section := body[startIndex:endIndex]
-	section = strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(section, end), start))
-	return strings.TrimSpace(body[:startIndex] + "\n" + section + "\n" + body[endIndex:]), nil
+	if !keep {
+		return strings.TrimSpace(body[:startIndex] + body[afterEndIndex:]), nil
+	}
+	section := strings.TrimLeft(body[startIndex+len(start):endIndex], "\n")
+	return strings.TrimSpace(body[:startIndex] + section + body[afterEndIndex:]), nil
 }
 
 // VersionFor returns the factory-owned prompt version for one role and stage.
@@ -632,9 +639,22 @@ func sanitizeFenced(value string) string {
 // marshalHandoff serializes coordinator-owned handoff data and neutralizes any
 // prompt delimiter text carried in its untrusted string fields.
 func marshalHandoff(value any) (string, error) {
-	data, err := json.Marshal(value)
+	data, err := marshalReadable(value)
 	if err != nil {
 		return "", err
 	}
-	return sanitizeFenced(string(data)), nil
+	return sanitizeFenced(data), nil
+}
+
+// marshalReadable serializes prompt data without Go's default HTML escaping, so
+// a reviewer finding or an issue body reaches the role as the characters it was
+// written with rather than as < and & sequences.
+func marshalReadable(value any) (string, error) {
+	var builder strings.Builder
+	encoder := json.NewEncoder(&builder)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(builder.String(), "\n"), nil
 }
