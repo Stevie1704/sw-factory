@@ -17,6 +17,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 const reviewCheckpoint = "fedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedc"
@@ -468,6 +469,73 @@ func TestStandardsReviewCanBlockAProvisionalTestExemption(t *testing.T) {
 	}
 }
 
+// TestStandardsReviewLaunchCanRetryFromDraftPullRequest verifies a voided
+// standards-review launch reopens its declared invocation boundary rather than
+// being rejected by the draft-pull-request retry path.
+func TestStandardsReviewLaunchCanRetryFromDraftPullRequest(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode review packet: %v", err)
+	}
+	packet.RepositoryConfig.RoleHarnessDefaults[workflow.RoleStandardsReview] = config.HarnessCodex
+	packet.RepositoryConfig.ModelOptions[workflow.RoleStandardsReview] = []string{"gpt-5"}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("encode review packet: %v", err)
+	}
+	run.SpecificationPacket = string(packetData)
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save standards review packet: %v", err)
+	}
+
+	fixture.harness.startErr = errors.New("standards reviewer unavailable")
+	_, err = fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: workflow.RoleStandardsReview, Stage: workflow.StageStandardsReview,
+	})
+	if err == nil || !strings.Contains(err.Error(), "use `/factory retry`") {
+		t.Fatalf("StartAgent(standards review) error = %v, want void-launch retry guidance", err)
+	}
+	failed, err := fixture.runStore.LatestInvocation(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("read failed standards invocation: %v", err)
+	}
+	if failed == nil || failed.Status != store.InvocationStatusSuperseded || !failed.LaunchVoided {
+		t.Fatalf("failed standards invocation = %#v, want a voided superseded launch", failed)
+	}
+
+	run = *fixture.runStore.current
+	run.Status = store.StatusWaitingForHuman
+	run.ActiveInvocationIDs = nil
+	run.LifecycleReason = "unattended progression stopped at standards review launch: harness launch produced no native session or structured report; use /factory retry"
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("persist waiting standards launch: %v", err)
+	}
+
+	retry, err := fixture.service.HandleCommand(context.Background(), factory.CommandRequest{
+		RunID: run.ID, IssueNumber: run.IssueNumber,
+		Comment: github.Comment{ID: "retry-standards-launch", Author: "alice", Body: "/factory retry"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand(standards review) error = %v", err)
+	}
+	if retry.Outcome != factory.CommandAccepted || retry.Run.Status != store.StatusActive || retry.Run.Stage != store.StageDraftPR {
+		t.Fatalf("standards retry result = %#v, want accepted active draft_pr run", retry)
+	}
+
+	fixture.harness.startErr = nil
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: workflow.RoleStandardsReview, Stage: workflow.StageStandardsReview,
+	})
+	if err != nil {
+		t.Fatalf("StartAgent(standards review) after retry error = %v", err)
+	}
+	if launch.Invocation.ID == failed.ID || launch.Invocation.Role != workflow.RoleStandardsReview || launch.Invocation.Stage != workflow.StageStandardsReview {
+		t.Fatalf("recovered standards invocation = %#v, want a fresh standards_review/standards_review invocation", launch.Invocation)
+	}
+}
+
 // reviewFixture bundles the Factory seam and all isolated review projections.
 type reviewFixture struct {
 	service      *factory.Service
@@ -515,7 +583,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
-		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
 	ids := []string{"run-review", "review-session", "standards-session", "repair-session"}

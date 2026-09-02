@@ -1107,9 +1107,6 @@ func isRetryableFailedLaunch(run store.Run, invocation store.Invocation) bool {
 	if !declared || definition.Stage != invocation.Stage {
 		return false
 	}
-	if run.Stage == store.StageDraftPR {
-		return invocation.Stage == store.StageReview && definition.Kind == workflow.RoleKindReview
-	}
 	return invocation.Stage == definition.Stage && workflow.DefaultRegistry().CanStartFrom(invocation.Role, run.Stage)
 }
 
