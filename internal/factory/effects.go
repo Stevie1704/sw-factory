@@ -2,14 +2,13 @@ package factory
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -18,22 +17,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
-// PendingEffectStore is the optional durable journal used to make external
-// mutations recoverable across a coordinator process boundary.
-type PendingEffectStore interface {
-	PendingEffect(context.Context, string) (*store.PendingEffect, error)
-	SavePendingEffect(context.Context, store.PendingEffect) error
-	ClearPendingEffect(context.Context, string, string) error
-}
-
-// PendingEffectAbandoner is the explicit operator seam for discarding one
-// ambiguous effect after human review. It is separate from PendingEffectStore
-// so older in-memory embedders can retain the journal read/replay contract.
-type PendingEffectAbandoner interface {
-	AbandonPendingEffect(context.Context, string, string, string) error
-}
-
-var _ PendingEffectStore = (*store.Store)(nil)
+// PendingEffectStore is retained as a factory-local alias while journal users
+// migrate to the effect package's store-facing protocol contract.
+type PendingEffectStore = effectkernel.PendingEffectStore
 
 // stateTransitionEffectPayload is the serialized intent for one paired issue
 // label and status-comment projection.
@@ -180,66 +166,24 @@ func workflowProjectionFailuref(format string, arguments ...any) error {
 	return &workflowProjectionError{cause: fmt.Errorf(format, arguments...)}
 }
 
-// pendingEffectID derives a stable, bounded identity from the semantic effect
-// rather than from a process-generated UUID. The same operation can therefore
-// be recognized after a restart.
-func pendingEffectID(runID string, kind store.PendingEffectKind, identity string) string {
-	digest := sha256.Sum256([]byte(runID + "\x00" + string(kind) + "\x00" + identity))
-	return string(kind) + ":" + hex.EncodeToString(digest[:])
-}
-
 // withPendingEffect journals one external mutation before running it and
 // acknowledges the journal only after the mutation succeeds. When an older
 // operational-store adapter has no journal seam, it retains the historical
 // direct execution behavior.
 func (s *Service) withPendingEffect(ctx context.Context, runStore RunStore, effect store.PendingEffect, action func() error) error {
-	journal, ok := runStore.(PendingEffectStore)
-	if !ok {
-		return action()
-	}
-	if err := journal.SavePendingEffect(ctx, effect); err != nil {
-		return fmt.Errorf("reserve %s effect: %w", effect.Kind, err)
-	}
-	if err := action(); err != nil {
-		return err
-	}
-	if err := journal.ClearPendingEffect(ctx, effect.RunID, effect.ID); err != nil {
-		return fmt.Errorf("complete %s effect: %w", effect.Kind, err)
-	}
-	return nil
+	return effectkernel.WithPendingEffect(ctx, runStore, effect, action)
 }
 
 // newPendingEffect encodes a replay intent and applies the coordinator clock
 // so all journal records share the run's operational time source.
 func (s *Service) newPendingEffect(runID string, kind store.PendingEffectKind, identity string, payload any) (store.PendingEffect, error) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return store.PendingEffect{}, fmt.Errorf("encode %s effect: %w", kind, err)
-	}
-	if len(data) == 0 || !json.Valid(data) {
-		return store.PendingEffect{}, errors.New("pending effect payload is not valid JSON")
-	}
-	now := s.deps.Now().UTC()
-	return store.PendingEffect{
-		RunID:     runID,
-		ID:        pendingEffectID(runID, kind, identity),
-		Kind:      kind,
-		Payload:   string(data),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}, nil
+	return effectkernel.NewPendingEffect(s.deps.Now().UTC(), runID, kind, identity, payload)
 }
 
 // decodePendingEffect decodes one bounded replay payload and reports malformed
 // journal data as an infrastructure discrepancy rather than a workflow result.
 func decodePendingEffect(effect store.PendingEffect, destination any) error {
-	if strings.TrimSpace(effect.Payload) == "" {
-		return errors.New("pending effect payload is empty")
-	}
-	if err := json.Unmarshal([]byte(effect.Payload), destination); err != nil {
-		return fmt.Errorf("decode %s effect: %w", effect.Kind, err)
-	}
-	return nil
+	return effectkernel.DecodePendingEffect(effect, destination)
 }
 
 // commitStatusPublisher wraps the gate status seam with durable idempotency.
@@ -390,36 +334,10 @@ func sameStringSlice(left, right []string) bool {
 }
 
 // replayPendingEffect completes a journaled effect whose process boundary was
-// crossed before the journal could be cleared. Each handler first observes the
-// external projection where the adapter supports observation, then performs at
-// most the missing part of the original intent.
+// crossed before the journal could be cleared. The protocol kernel routes the
+// durable effect to the factory-owned handler for its kind.
 func (s *Service) replayPendingEffect(ctx context.Context, runStore RunStore, effect store.PendingEffect) (store.Run, error) {
-	switch effect.Kind {
-	case store.PendingEffectKindStateTransition:
-		return s.replayPendingStateTransition(ctx, runStore, effect)
-	case store.PendingEffectKindLabelTransition:
-		return s.replayPendingLabelTransition(ctx, runStore, effect)
-	case store.PendingEffectKindWorkerLaunch:
-		return s.replayPendingWorkerLaunch(ctx, runStore, effect)
-	case store.PendingEffectKindCheckpoint:
-		return s.replayPendingCheckpoint(ctx, runStore, effect)
-	case store.PendingEffectKindPush:
-		return s.replayPendingPush(ctx, runStore, effect)
-	case store.PendingEffectKindPullRequest:
-		return s.replayPendingPullRequest(ctx, runStore, effect)
-	case store.PendingEffectKindCommitStatus:
-		return s.replayPendingCommitStatus(ctx, runStore, effect)
-	case store.PendingEffectKindStatusComment:
-		return s.replayPendingStatusComment(ctx, runStore, effect)
-	case store.PendingEffectKindClarificationComment:
-		return s.replayPendingClarificationComment(ctx, runStore, effect)
-	case store.PendingEffectKindResultAcceptance:
-		return s.replayPendingResultAcceptance(ctx, runStore, effect)
-	case store.PendingEffectKindHarnessResume:
-		return s.replayPendingHarnessResume(ctx, runStore, effect)
-	default:
-		return store.Run{}, fmt.Errorf("unsupported pending effect kind %q", effect.Kind)
-	}
+	return newPendingEffectDispatcher(s).Replay(ctx, runStore, effect)
 }
 
 // replayPendingClarificationComment completes a question publication after a
