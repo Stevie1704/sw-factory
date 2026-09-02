@@ -44,6 +44,8 @@ func factoryRunStore(request effectkernel.ReplayRequest) (RunStore, error) {
 	return runStore, nil
 }
 
+// stateTransitionReplayHandler adapts factory state-transition replay policy
+// to the protocol kernel's replay-handler interface.
 type stateTransitionReplayHandler struct{ service *Service }
 
 // Replay applies a state-transition effect using the factory policy.
@@ -55,6 +57,8 @@ func (h stateTransitionReplayHandler) Replay(ctx context.Context, request effect
 	return h.service.replayPendingStateTransition(ctx, runStore, request.Effect)
 }
 
+// labelTransitionReplayHandler adapts factory label-transition replay policy
+// to the protocol kernel's replay-handler interface.
 type labelTransitionReplayHandler struct{ service *Service }
 
 // Replay applies a standalone label-transition effect using the factory policy.
@@ -66,6 +70,8 @@ func (h labelTransitionReplayHandler) Replay(ctx context.Context, request effect
 	return h.service.replayPendingLabelTransition(ctx, runStore, request.Effect)
 }
 
+// workerLaunchReplayHandler adapts factory worker-launch replay policy to the
+// protocol kernel's replay-handler interface.
 type workerLaunchReplayHandler struct{ service *Service }
 
 // Replay applies a worker-launch effect using the factory policy.
@@ -77,6 +83,8 @@ func (h workerLaunchReplayHandler) Replay(ctx context.Context, request effectker
 	return h.service.replayPendingWorkerLaunch(ctx, runStore, request.Effect)
 }
 
+// checkpointReplayHandler adapts factory checkpoint replay policy to the
+// protocol kernel's replay-handler interface.
 type checkpointReplayHandler struct{ service *Service }
 
 // Replay applies a checkpoint effect using the factory policy.
@@ -88,6 +96,8 @@ func (h checkpointReplayHandler) Replay(ctx context.Context, request effectkerne
 	return h.service.replayPendingCheckpoint(ctx, runStore, request.Effect)
 }
 
+// pushReplayHandler adapts factory push replay policy to the protocol
+// kernel's replay-handler interface.
 type pushReplayHandler struct{ service *Service }
 
 // Replay applies a push effect using the factory policy.
@@ -99,6 +109,8 @@ func (h pushReplayHandler) Replay(ctx context.Context, request effectkernel.Repl
 	return h.service.replayPendingPush(ctx, runStore, request.Effect)
 }
 
+// pullRequestReplayHandler adapts factory pull-request replay policy to the
+// protocol kernel's replay-handler interface.
 type pullRequestReplayHandler struct{ service *Service }
 
 // Replay applies a pull-request effect using the factory policy.
@@ -110,6 +122,8 @@ func (h pullRequestReplayHandler) Replay(ctx context.Context, request effectkern
 	return h.service.replayPendingPullRequest(ctx, runStore, request.Effect)
 }
 
+// commitStatusReplayHandler adapts factory commit-status replay policy to the
+// protocol kernel's replay-handler interface.
 type commitStatusReplayHandler struct{ service *Service }
 
 // Replay applies a commit-status effect using the factory policy.
@@ -121,6 +135,8 @@ func (h commitStatusReplayHandler) Replay(ctx context.Context, request effectker
 	return h.service.replayPendingCommitStatus(ctx, runStore, request.Effect)
 }
 
+// statusCommentReplayHandler adapts factory status-comment replay policy to
+// the protocol kernel's replay-handler interface.
 type statusCommentReplayHandler struct{ service *Service }
 
 // Replay applies a status-comment effect using the factory policy.
@@ -132,6 +148,8 @@ func (h statusCommentReplayHandler) Replay(ctx context.Context, request effectke
 	return h.service.replayPendingStatusComment(ctx, runStore, request.Effect)
 }
 
+// clarificationCommentReplayHandler adapts factory clarification-comment
+// replay policy to the protocol kernel's replay-handler interface.
 type clarificationCommentReplayHandler struct{ service *Service }
 
 // Replay applies a clarification-comment effect using the factory policy.
@@ -143,6 +161,8 @@ func (h clarificationCommentReplayHandler) Replay(ctx context.Context, request e
 	return h.service.replayPendingClarificationComment(ctx, runStore, request.Effect)
 }
 
+// resultAcceptanceReplayHandler adapts factory result-acceptance replay policy
+// to the protocol kernel's replay-handler interface.
 type resultAcceptanceReplayHandler struct{ service *Service }
 
 // Replay applies a result-acceptance effect using the factory policy.
@@ -154,6 +174,8 @@ func (h resultAcceptanceReplayHandler) Replay(ctx context.Context, request effec
 	return h.service.replayPendingResultAcceptance(ctx, runStore, request.Effect)
 }
 
+// harnessResumeReplayHandler adapts factory harness-resume replay policy to
+// the protocol kernel's replay-handler interface.
 type harnessResumeReplayHandler struct{ service *Service }
 
 // Replay applies a harness-resume effect using the factory policy.

@@ -11,11 +11,14 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
+// payloadForTest is a small JSON payload used to verify the kernel codec.
 type payloadForTest struct {
 	Message string `json:"message"`
 	Count   int    `json:"count"`
 }
 
+// journalForTest records protocol ordering while implementing the journal
+// capability required by WithPendingEffect.
 type journalForTest struct {
 	pending  *store.PendingEffect
 	steps    *[]string
@@ -23,12 +26,15 @@ type journalForTest struct {
 	clearErr error
 }
 
+// abandonerForTest captures the bounded arguments passed to the abandonment
+// capability.
 type abandonerForTest struct {
 	runID    string
 	effectID string
 	reason   string
 }
 
+// AbandonPendingEffect records one abandonment request for the test.
 func (a *abandonerForTest) AbandonPendingEffect(_ context.Context, runID, effectID, reason string) error {
 	a.runID = runID
 	a.effectID = effectID
@@ -36,15 +42,18 @@ func (a *abandonerForTest) AbandonPendingEffect(_ context.Context, runID, effect
 	return nil
 }
 
+// replayHandlerForTest records dispatches made through the replay seam.
 type replayHandlerForTest struct {
 	calls int
 }
 
+// Replay records the request and returns its run identity for the test.
 func (h *replayHandlerForTest) Replay(_ context.Context, request effect.ReplayRequest) (store.Run, error) {
 	h.calls++
 	return store.Run{ID: request.Effect.RunID}, nil
 }
 
+// PendingEffect returns the current test reservation.
 func (j *journalForTest) PendingEffect(_ context.Context, _ string) (*store.PendingEffect, error) {
 	if j.pending == nil {
 		return nil, nil
@@ -53,6 +62,8 @@ func (j *journalForTest) PendingEffect(_ context.Context, _ string) (*store.Pend
 	return &copy, nil
 }
 
+// SavePendingEffect records and stores a test reservation unless configured to
+// fail.
 func (j *journalForTest) SavePendingEffect(_ context.Context, pending store.PendingEffect) error {
 	*j.steps = append(*j.steps, "reserve")
 	if j.saveErr != nil {
@@ -63,6 +74,8 @@ func (j *journalForTest) SavePendingEffect(_ context.Context, pending store.Pend
 	return nil
 }
 
+// ClearPendingEffect records and clears a matching test reservation unless
+// configured to fail.
 func (j *journalForTest) ClearPendingEffect(_ context.Context, runID, effectID string) error {
 	*j.steps = append(*j.steps, "complete")
 	if j.clearErr != nil {
@@ -276,6 +289,8 @@ func TestReplayDispatcherRejectsUnknownKindWithTypedError(t *testing.T) {
 	}
 }
 
+// equalStrings compares two string slices element by element for test
+// assertions.
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
