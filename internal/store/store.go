@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 33
+const CurrentSchemaVersion = 34
 
 // MaxTestRevisionAttempts is the hard safety ceiling for automated
 // implementation-versus-test objection cycles.
@@ -145,7 +145,8 @@ const (
 	// InvocationStatusCannotProceed means the report contained blocking evidence.
 	InvocationStatusCannotProceed InvocationStatus = "cannot_proceed"
 	// InvocationStatusSuperseded means a later specification packet invalidated
-	// the invocation before its result could be used for progression.
+	// the invocation, or the coordinator voided a launch with no native session
+	// or structured report, before its result could be used for progression.
 	InvocationStatusSuperseded InvocationStatus = "superseded"
 )
 
@@ -630,6 +631,10 @@ type Invocation struct {
 	PromptCraftSHA256 string
 	// Status is the invocation lifecycle state.
 	Status InvocationStatus
+	// LaunchVoided records that the coordinator or an explicit operator retry
+	// proved this launch produced no native session or structured report and
+	// rolled it back before retry.
+	LaunchVoided bool
 	// RecoveryResumeCount records the number of coordinator-owned native resume
 	// attempts completed for this invocation. Reconciliation permits one.
 	RecoveryResumeCount int
@@ -2000,8 +2005,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 				id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 				native_session_id, workspace_id, status_surface_id,
 				role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-				result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -2023,6 +2028,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 				prompt_craft_source_path = excluded.prompt_craft_source_path,
 				prompt_craft_sha256 = excluded.prompt_craft_sha256,
 				status = excluded.status,
+				launch_voided = excluded.launch_voided,
 				recovery_resume_count = excluded.recovery_resume_count,
 				attach_required = excluded.attach_required,
 				updated_at = excluded.updated_at`,
@@ -2047,6 +2053,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.PromptCraftSourcePath,
 		invocation.PromptCraftSHA256,
 		invocation.Status,
+		invocation.LaunchVoided,
 		invocation.RecoveryResumeCount,
 		invocation.AttachRequired,
 		invocation.CreatedAt.UTC().Format(runTimestampLayout),
@@ -2223,7 +2230,7 @@ func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*In
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND id = ?`, runID, invocationID)
 	return scanInvocation(row)
@@ -2240,7 +2247,7 @@ func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ?
 		ORDER BY updated_at DESC, id DESC
@@ -2262,7 +2269,7 @@ func (s *Store) LatestInvocationByRole(ctx context.Context, runID, role string) 
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND role = ?
 		ORDER BY updated_at DESC, id DESC
@@ -2295,7 +2302,7 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at DESC
@@ -2314,7 +2321,7 @@ func (s *Store) ActiveInvocations(ctx context.Context, runID string) ([]Invocati
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at, id`, runID, InvocationStatusActive)
@@ -2362,6 +2369,7 @@ func scanInvocation(row interface{ Scan(...any) error }) (*Invocation, error) {
 		&invocation.PromptCraftSourcePath,
 		&invocation.PromptCraftSHA256,
 		&invocation.Status,
+		&invocation.LaunchVoided,
 		&invocation.RecoveryResumeCount,
 		&invocation.AttachRequired,
 		&createdAt,
@@ -3147,6 +3155,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			}
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs DROP COLUMN active_invocation_id"); err != nil {
 				return fmt.Errorf("apply store migration 33 active invocation removal: %w", err)
+			}
+		case 34:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN launch_voided INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("apply store migration 34: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

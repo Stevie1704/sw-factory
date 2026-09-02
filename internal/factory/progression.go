@@ -630,15 +630,49 @@ func invocationIdentity(invocation *store.Invocation) string {
 	return invocation.ID + "/" + string(invocation.Status)
 }
 
-// agentResultReady reports whether the invocation has written its structured
-// report. `factory-report` renames the file into place, so its presence is the
-// durable signal that the coordinator may validate a completed result.
-func agentResultReady(invocation store.Invocation) bool {
+// structuredReportPresence identifies whether report.json is absent, present,
+// or impossible to inspect. A stat error other than a definitive not-found
+// result must not be treated as proof that an invocation has no report.
+type structuredReportPresence uint8
+
+const (
+	// structuredReportAbsent means the accepted report path definitively holds
+	// no regular file.
+	structuredReportAbsent structuredReportPresence = iota
+	// structuredReportPresent means a regular report file exists at the only
+	// accepted path.
+	structuredReportPresent
+	// structuredReportIndeterminate means the filesystem could not answer, so
+	// the observation proves nothing about the report.
+	structuredReportIndeterminate
+)
+
+// structuredReportPresenceForInvocation inspects the only accepted report
+// path without interpreting an unreadable parent or filesystem as absence.
+func structuredReportPresenceForInvocation(invocation store.Invocation) (structuredReportPresence, error) {
 	if invocation.ResultDirectory == "" {
-		return false
+		return structuredReportAbsent, nil
 	}
 	info, err := os.Stat(reportPath(invocation))
-	return err == nil && info.Mode().IsRegular()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return structuredReportAbsent, nil
+		}
+		return structuredReportIndeterminate, err
+	}
+	if !info.Mode().IsRegular() {
+		return structuredReportAbsent, nil
+	}
+	return structuredReportPresent, nil
+}
+
+// agentResultReady reports whether the invocation has written its structured
+// report. `factory-report` renames the file into place, so its presence is the
+// durable signal that the coordinator may validate a completed result. An
+// indeterminate filesystem observation remains not-ready for progression.
+func agentResultReady(invocation store.Invocation) bool {
+	presence, err := structuredReportPresenceForInvocation(invocation)
+	return err == nil && presence == structuredReportPresent
 }
 
 // reportPath returns the only accepted structured-report location inside one

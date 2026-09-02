@@ -437,20 +437,185 @@ func TestStartAgentAppliesTheExceptionOnlyToAClaimStage(t *testing.T) {
 	}
 }
 
-// TestStartAgentRollsBackASetupFailure verifies a partially launched session
-// cannot remain active after the harness fails to start.
-func TestStartAgentRollsBackASetupFailure(t *testing.T) {
+// TestStartAgentVoidsASetupFailure verifies a launch without a native session
+// or structured report is superseded while its worker and surface are rolled
+// back.
+func TestStartAgentVoidsASetupFailure(t *testing.T) {
 	service, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
 	harnessRuntime.startErr = errors.New("harness unavailable")
 	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err == nil {
 		t.Fatal("StartAgent() succeeded while the harness was unavailable")
+	} else if !strings.Contains(err.Error(), "use `/factory retry`") {
+		t.Fatalf("StartAgent() error = %v, want retry guidance", err)
 	}
 	invocation, ok := runStore.invocations["inv-generated"]
-	if !ok || invocation.Status != store.InvocationStatusCannotProceed {
-		t.Fatalf("rolled-back invocation = %#v, want cannot_proceed", invocation)
+	if !ok || invocation.Status != store.InvocationStatusSuperseded {
+		t.Fatalf("rolled-back invocation = %#v, want superseded", invocation)
 	}
 	if runtime.stops != 1 || len(terminalRuntime.closed) != 1 || terminalRuntime.closed[0] != "surface-implementation" {
 		t.Fatalf("rollback side effects: stops=%d closed=%v", runtime.stops, terminalRuntime.closed)
+	}
+}
+
+// TestStartAgentPreservesAnIndeterminateReportPath verifies a launch is kept
+// protected when the coordinator cannot determine whether report.json exists.
+func TestStartAgentPreservesAnIndeterminateReportPath(t *testing.T) {
+	service, runStore, runtime, _, harnessRuntime := newAgentService(t)
+	runtime.startHook = func(request worker.StartRequest) {
+		if err := os.Remove(request.ResultPath); err != nil {
+			t.Fatalf("remove result directory: %v", err)
+		}
+		if err := os.WriteFile(request.ResultPath, []byte("result path is not a directory"), 0o600); err != nil {
+			t.Fatalf("replace result directory with a file: %v", err)
+		}
+	}
+	harnessRuntime.startErr = errors.New("harness unavailable")
+	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err == nil {
+		t.Fatal("StartAgent() succeeded while the harness was unavailable")
+	} else if strings.Contains(err.Error(), "use `/factory retry`") {
+		t.Fatalf("StartAgent() exposed retry guidance for an indeterminate report path: %v", err)
+	}
+	invocation, ok := runStore.invocations["inv-generated"]
+	if !ok || invocation.Status != store.InvocationStatusCannotProceed || invocation.LaunchVoided {
+		t.Fatalf("indeterminate launch = %#v, want protected cannot_proceed invocation", invocation)
+	}
+}
+
+// TestStartAgentPreservesAnIndeterminatePendingEffect verifies a launch is kept
+// protected when the durable journal cannot prove the run reserved no effect.
+func TestStartAgentPreservesAnIndeterminatePendingEffect(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	run := *runStore.current
+	worktree := &inspectingWorktree{
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
+		state:        gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA},
+	}
+	journal := &journaledAgentRunStore{agentRunStore: runStore, armPendingErr: errors.New("effect journal unavailable")}
+	fresh := newFreshAgentServiceWithStore(t, runStore, journal, worktree, runtime, terminalRuntime, harnessRuntime)
+	harnessRuntime.startErr = errors.New("prompt exceeds launch limit")
+
+	_, err := fresh.StartAgent(context.Background(), factory.AgentRequest{})
+	if err == nil {
+		t.Fatal("StartAgent() succeeded while the harness launch was unavailable")
+	}
+	if !strings.Contains(err.Error(), "invocation kept protected") {
+		t.Fatalf("StartAgent() error = %v, want the recorded pending-effect discrepancy", err)
+	}
+	if strings.Contains(err.Error(), "use `/factory retry`") {
+		t.Fatalf("StartAgent() exposed retry guidance for an indeterminate effect journal: %v", err)
+	}
+	invocation, ok := runStore.invocations["inv-generated"]
+	if !ok || invocation.Status != store.InvocationStatusCannotProceed || invocation.LaunchVoided {
+		t.Fatalf("indeterminate launch = %#v, want protected cannot_proceed invocation", invocation)
+	}
+}
+
+// TestHandleCommandRetriesAWaitingRunAfterFailedLaunch verifies a launch that
+// never produced a session can be retried without changing the specification
+// packet or repeating the upstream stage.
+func TestHandleCommandRetriesAWaitingRunAfterFailedLaunch(t *testing.T) {
+	service, runStore, _, _, harnessRuntime := newAgentService(t)
+	harnessRuntime.startErr = errors.New("prompt exceeds launch limit")
+	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err == nil {
+		t.Fatal("StartAgent() succeeded while the harness launch was unavailable")
+	}
+
+	failed := runStore.invocations["inv-generated"]
+	if failed.Status != store.InvocationStatusSuperseded {
+		t.Fatalf("failed invocation = %#v, want superseded before retry", failed)
+	}
+	run := *runStore.current
+	run.Status = store.StatusWaitingForHuman
+	run.ActiveInvocationIDs = nil
+	run.LifecycleReason = "unattended progression stopped at start agent: harness launch produced no native session or structured report; use /factory retry"
+	packetBeforeRetry := run.SpecificationPacket
+	if err := runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("persist waiting launch failure: %v", err)
+	}
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: run.IssueNumber,
+		Comment:     github.Comment{ID: "retry-failed-launch", Author: "alice", Body: "/factory retry"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive {
+		t.Fatalf("retry result = %#v, want accepted active run", result)
+	}
+	if result.Run.SpecificationPacket != packetBeforeRetry {
+		t.Fatalf("specification packet changed during retry, want %q", packetBeforeRetry)
+	}
+	if got := runStore.invocations[failed.ID].Status; got != store.InvocationStatusSuperseded {
+		t.Fatalf("failed invocation status = %q, want superseded", got)
+	}
+
+	harnessRuntime.startErr = nil
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() after retry error = %v", err)
+	}
+	if launch.Invocation.ID == failed.ID || launch.Invocation.Role != failed.Role || launch.Invocation.Stage != failed.Stage {
+		t.Fatalf("recovered invocation = %#v, want a fresh %s/%s invocation", launch.Invocation, failed.Role, failed.Stage)
+	}
+}
+
+// TestHandleCommandDoesNotVoidAReportedLaunch verifies a waiting run cannot
+// use retry to discard a structured report merely because its invocation has
+// no native session identity.
+func TestHandleCommandDoesNotVoidAReportedLaunch(t *testing.T) {
+	service, runStore, _, _, _ := newAgentService(t)
+	run := *runStore.current
+	resultDirectory := filepath.Join(t.TempDir(), "results")
+	invocation := store.Invocation{
+		ID:              "inv-reported-launch",
+		RunID:           run.ID,
+		Harness:         "codex",
+		Role:            "implementation",
+		Stage:           store.StageImplementation,
+		ResultDirectory: resultDirectory,
+		Status:          store.InvocationStatusCannotProceed,
+		CreatedAt:       run.UpdatedAt,
+		UpdatedAt:       run.UpdatedAt.Add(time.Minute),
+	}
+	if err := runStore.SaveInvocation(context.Background(), invocation); err != nil {
+		t.Fatalf("SaveInvocation() error = %v", err)
+	}
+	reported := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  invocation.ID,
+		RunID:         invocation.RunID,
+		Harness:       invocation.Harness,
+		Role:          invocation.Role,
+		Stage:         string(invocation.Stage),
+		Outcome:       report.OutcomeCannotProceed,
+		Summary:       "launch evidence is available",
+		Evidence:      []report.Evidence{{Kind: "harness", Detail: "launch diagnostic"}},
+		ReportedAt:    time.Now().UTC(),
+	}
+	if _, err := report.WriteAtomicForInvocation(invocation.ResultDirectory, invocation.ID, reported); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	run.Status = store.StatusWaitingForHuman
+	run.ActiveInvocationIDs = nil
+	run.LifecycleReason = "unattended progression stopped at start agent"
+	if err := runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("persist waiting reported launch: %v", err)
+	}
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: run.IssueNumber,
+		Comment:     github.Comment{ID: "retry-reported-launch", Author: "alice", Body: "/factory retry"},
+	})
+	var rejection *factory.PolicyRejection
+	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionRetryState {
+		t.Fatalf("HandleCommand() error = %v, want retry_state rejection", err)
+	}
+	if result.Outcome != factory.CommandRejected || result.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("retry result = %#v, want rejected waiting run", result)
+	}
+	if got := runStore.invocations[invocation.ID].Status; got != store.InvocationStatusCannotProceed {
+		t.Fatalf("reported invocation status = %q, want unchanged cannot_proceed", got)
 	}
 }
 
@@ -961,6 +1126,14 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 // tests exercise the cross-process startup seam rather than cached service state.
 func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspectingWorktree, runtime *agentWorker, terminalRuntime *agentTerminal, harnessRuntime *agentHarness) *factory.Service {
 	t.Helper()
+	return newFreshAgentServiceWithStore(t, runStore, runStore, worktree, runtime, terminalRuntime, harnessRuntime)
+}
+
+// newFreshAgentServiceWithStore rebuilds the same coordinator around an
+// explicit operational store, so a journal-capable wrapper can take part in
+// the launch seam while the fixture keeps its in-memory run view.
+func newFreshAgentServiceWithStore(t *testing.T, runStore *agentRunStore, operational factory.OperationalStore, worktree *inspectingWorktree, runtime *agentWorker, terminalRuntime *agentTerminal, harnessRuntime *agentHarness) *factory.Service {
+	t.Helper()
 	if runStore.current == nil {
 		t.Fatal("fresh coordinator fixture requires a persisted run")
 	}
@@ -979,7 +1152,7 @@ func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspe
 	}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
-		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return operational, nil },
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil },
 		Worker:         runtime,
 		Terminal:       terminalRuntime,
@@ -1016,6 +1189,52 @@ func (w *inspectingWorktree) Inspect(context.Context, string) (gitadapter.Worktr
 // githubIssueFixture returns the frozen issue used by agent tests.
 func githubIssueFixture() github.Issue {
 	return github.Issue{Number: 6, Title: "Visible implementation", Body: "Repository guidance", State: "open"}
+}
+
+// journaledAgentRunStore adds the durable pending-effect journal to the agent
+// store fake, so the launch seam can be exercised on the journaled path with
+// an injectable lookup failure.
+type journaledAgentRunStore struct {
+	*agentRunStore
+	pending *store.PendingEffect
+	// pendingErr fails every journal lookup while it is set.
+	pendingErr error
+	// armPendingErr becomes pendingErr once one invocation is persisted, so a
+	// pre-launch recovery diagnosis still reads a healthy journal.
+	armPendingErr error
+}
+
+// SaveInvocation persists the invocation and arms the pending journal failure
+// the launch rollback must meet.
+func (s *journaledAgentRunStore) SaveInvocation(ctx context.Context, invocation store.Invocation) error {
+	if err := s.agentRunStore.SaveInvocation(ctx, invocation); err != nil {
+		return err
+	}
+	if s.armPendingErr != nil {
+		s.pendingErr, s.armPendingErr = s.armPendingErr, nil
+	}
+	return nil
+}
+
+// PendingEffect returns the reserved effect, or the injected failure that
+// leaves the coordinator unable to prove the run reserved nothing.
+func (s *journaledAgentRunStore) PendingEffect(context.Context, string) (*store.PendingEffect, error) {
+	if s.pendingErr != nil {
+		return nil, s.pendingErr
+	}
+	return s.pending, nil
+}
+
+// SavePendingEffect reserves one effect before its external mutation.
+func (s *journaledAgentRunStore) SavePendingEffect(_ context.Context, effect store.PendingEffect) error {
+	s.pending = &effect
+	return nil
+}
+
+// ClearPendingEffect releases the reserved effect after it completed.
+func (s *journaledAgentRunStore) ClearPendingEffect(context.Context, string, string) error {
+	s.pending = nil
+	return nil
 }
 
 // agentRunStore is an in-memory invocation-capable operational-store fake.
@@ -1207,6 +1426,7 @@ func (*agentRunStore) Close() error { return nil }
 // agentWorker records the worker start request without running Docker.
 type agentWorker struct {
 	starts        []worker.StartRequest
+	startHook     func(worker.StartRequest)
 	stops         int
 	commands      []worker.CommandRequest
 	results       []worker.CommandResult
@@ -1225,6 +1445,9 @@ func (w *agentWorker) Start(_ context.Context, request worker.StartRequest) erro
 		*w.events = append(*w.events, "start worker")
 	}
 	w.starts = append(w.starts, request)
+	if w.startHook != nil {
+		w.startHook(request)
+	}
 	return nil
 }
 

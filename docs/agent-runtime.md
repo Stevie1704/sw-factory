@@ -354,6 +354,22 @@ invocation receives that packet. A `/factory refresh` command similarly
 re-reads the issue, versions the packet, and invalidates downstream results
 before resuming the role.
 
+A persisted invocation is void when its launch fails before it produces a native
+session identity and its result directory contains no regular `report.json`.
+The coordinator marks that invocation `superseded` while rolling back the
+worker and surface, before unattended progression publishes its waiting state,
+and persists the void decision on the invocation. Restart reconciliation treats
+only that marked superseded launch as history with no live projection.
+A native session identity or report file protects the invocation history from
+being discarded, and so does any indeterminate observation: when the durable
+effect journal or the report path cannot be read, the coordinator keeps the
+invocation `cannot_proceed`, names the discrepancy in its error, and does not
+void the launch. If the run is `waiting_for_human` with no active invocation,
+the lifecycle reason names this void rule and `/factory retry`; that command
+supersedes only the latest invocation satisfying the same rule and reopens the
+existing role boundary with the existing specification packet. It does not
+create a new packet version or retry automatically.
+
 ## Authentication and session state
 
 Registration may name one explicit host credential file per harness:
