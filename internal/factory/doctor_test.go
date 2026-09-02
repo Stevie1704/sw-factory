@@ -24,6 +24,15 @@ func TestDoctorComposesEverySubsystemAndKeepsOptionalAuthNonBlocking(t *testing.
 		t.Fatal(err)
 	}
 	writeRepositoryConfig(t, repositoryPath)
+	configPathOnDisk := filepath.Join(repositoryPath, config.RepositoryConfigFileName)
+	configData, err := os.ReadFile(configPathOnDisk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configData = append(configData, []byte("role_craft:\n  implementation: docs/factory/craft/implementation.md\n  standards_review: docs/factory/craft/standards-review.md\n")...)
+	if err := os.WriteFile(configPathOnDisk, configData, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	configPath := filepath.Join(root, "host", "config.yaml")
 	operationalPath := filepath.Join(root, "state", "factory.db")
 	if err := config.SaveHost(configPath, config.HostConfig{
@@ -69,6 +78,7 @@ func TestDoctorComposesEverySubsystemAndKeepsOptionalAuthNonBlocking(t *testing.
 		"configuration",
 		"github authentication", "github permissions", "github labels",
 		"git remote", "git hooks", "git worktree",
+		"git role craft implementation", "git role craft standards_review",
 		"cmux executable", "cmux socket",
 		"docker daemon", "worker image",
 		"harness capability", "claude worker executable", "codex worker executable",
@@ -140,6 +150,11 @@ func (*factoryDoctorGitWorkspace) CheckHooks(context.Context, gitadapter.DoctorR
 
 // CheckWorktree implements the read-only Git diagnosis seam.
 func (*factoryDoctorGitWorkspace) CheckWorktree(context.Context, gitadapter.DoctorRequest) error {
+	return nil
+}
+
+// CheckRoleCraft implements the optional role-craft diagnosis seam.
+func (*factoryDoctorGitWorkspace) CheckRoleCraft(context.Context, gitadapter.DoctorRequest, string, string) error {
 	return nil
 }
 

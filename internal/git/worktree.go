@@ -120,6 +120,14 @@ type RepositoryGuidanceReader interface {
 	ReadRepositoryGuidance(context.Context, string, string) ([]GuidanceDocument, error)
 }
 
+// RepositoryCraftReader is the optional exact-checkpoint read seam used for
+// configured role-craft files. It is separate from guidance so existing
+// worktree adapters do not have to implement repository craft capture.
+type RepositoryCraftReader interface {
+	// ReadRepositoryCraft reads one configured role-craft file from an exact commit.
+	ReadRepositoryCraft(context.Context, string, string, string) (GuidanceDocument, error)
+}
+
 // WorktreeInspector is the optional read-only worktree observation seam.
 type WorktreeInspector interface {
 	// Inspect reads the current commit and changed paths without mutating Git.
@@ -256,6 +264,29 @@ func (m *LocalWorktreeManager) ReadRepositoryGuidance(ctx context.Context, workt
 		documents = append(documents, GuidanceDocument{Path: path, Content: string(content)})
 	}
 	return documents, nil
+}
+
+// ReadRepositoryCraft reads a configured role-craft file from the immutable
+// checkpoint, never from the mutable run worktree or ordinary checkout.
+func (m *LocalWorktreeManager) ReadRepositoryCraft(ctx context.Context, worktreePath, checkpointSHA, path string) (GuidanceDocument, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return GuidanceDocument{}, errors.New("worktree path is required")
+	}
+	if strings.TrimSpace(checkpointSHA) == "" {
+		return GuidanceDocument{}, errors.New("craft checkpoint SHA is required")
+	}
+	if err := ref.ValidatePart(checkpointSHA); err != nil {
+		return GuidanceDocument{}, fmt.Errorf("craft checkpoint SHA: %w", err)
+	}
+	if err := validateRepositoryFilePath(path); err != nil {
+		return GuidanceDocument{}, fmt.Errorf("craft path: %w", err)
+	}
+	cleanPath := filepath.ToSlash(path)
+	content, err := m.runner().Run(ctx, worktreePath, []string{"show", checkpointSHA + ":" + cleanPath})
+	if err != nil {
+		return GuidanceDocument{}, fmt.Errorf("read repository craft %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
+	}
+	return GuidanceDocument{Path: cleanPath, Content: string(content)}, nil
 }
 
 // IsRepositoryGuidancePath reports whether a tracked path is a conventional
@@ -434,6 +465,24 @@ func checkpointMarker(kind CheckpointKind, runID string) string {
 func validateCheckpointPath(path string) error {
 	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
 		return errors.New("must be a safe repository-relative path")
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean == ".git" || strings.HasPrefix(clean, ".git/") {
+		return errors.New("must remain inside the repository checkout")
+	}
+	return nil
+}
+
+// validateRepositoryFilePath rejects repository file paths with traversal or
+// Git-metadata segments before they are combined with a checkpoint ref.
+func validateRepositoryFilePath(path string) error {
+	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
+		return errors.New("must be a safe repository-relative path")
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
+		if segment == ".." {
+			return errors.New("must not contain parent traversal segments")
+		}
 	}
 	clean := filepath.ToSlash(filepath.Clean(path))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean == ".git" || strings.HasPrefix(clean, ".git/") {

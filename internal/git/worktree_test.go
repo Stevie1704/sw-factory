@@ -42,7 +42,13 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	if err := os.WriteFile(filepath.Join(repository, "docs", "agents", "conventions.md"), []byte("base conventions\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, repository, "add", "README.md", "AGENTS.md", "CONTEXT.md", "docs/agents/conventions.md")
+	if err := os.MkdirAll(filepath.Join(repository, "docs", "factory", "craft"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "docs", "factory", "craft", "implementation.md"), []byte("base implementation craft\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", "README.md", "AGENTS.md", "CONTEXT.md", "docs/agents/conventions.md", "docs/factory/craft/implementation.md")
 	runGit(t, repository, "commit", "-m", "initial")
 	runGit(t, repository, "remote", "add", "origin", remote)
 	runGit(t, repository, "push", "origin", "main")
@@ -87,6 +93,16 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	}
 	if err := os.WriteFile(filepath.Join(workspace.Worktree, "AGENTS.md"), []byte("mutable worker edit\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Worktree, "docs", "factory", "craft", "implementation.md"), []byte("mutable worker craft\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	craft, err := manager.ReadRepositoryCraft(context.Background(), workspace.Worktree, workspace.BaseSHA, "docs/factory/craft/implementation.md")
+	if err != nil {
+		t.Fatalf("ReadRepositoryCraft() error = %v", err)
+	}
+	if craft.Path != "docs/factory/craft/implementation.md" || craft.Content != "base implementation craft\n" {
+		t.Fatalf("craft document = %#v, want immutable base content", craft)
 	}
 	documents, err := manager.ReadRepositoryGuidance(context.Background(), workspace.Worktree, workspace.BaseSHA)
 	if err != nil {

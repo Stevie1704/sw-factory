@@ -54,10 +54,14 @@ standards axis; the two axes are not merged or re-ranked.
 
 ## Consequences
 
-Changing factory role prose is a code-reviewed Markdown change that must also
-update its prompt version and content identity. Repository prompt files or
-runtime prompt configuration cannot replace the embedded bodies. A run has a
-reproducible guidance snapshot even if the issue or checkout changes later.
+Changing factory role authority is a code-reviewed Markdown change that must
+also update its prompt version and content identity. Repository prompt files
+or runtime prompt configuration cannot replace embedded authority, route
+sections, or report contracts. The optional repository `role_craft` map may
+replace only a role's embedded craft section; its path, content, and SHA-256
+identity are captured from the exact base checkpoint and reused for every later
+prompt build. A run has reproducible guidance and craft snapshots even if the
+issue or checkout changes later.
 
 Review results explain whether readiness is blocked by frozen behavior or by a
 named repository standard, while baseline craft observations remain visible

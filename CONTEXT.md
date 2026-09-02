@@ -16,7 +16,7 @@ before any repair, readiness, or infrastructure work.
 _Avoid_: Screen scrape, hidden workflow transition
 
 **Specification packet**:
-The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot, the selected workflow route, accepted clarifications or revisions, and repository guidance captured at the run's base checkpoint.
+The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot, the selected workflow route, accepted clarifications or revisions, repository guidance captured at the run's base checkpoint, and any configured repository role-craft content captured at that same checkpoint.
 _Avoid_: Live issue, prompt
 
 **Repository guidance**:
@@ -28,7 +28,7 @@ The factory-owned portion of a current embedded role body that declares role own
 _Avoid_: Undifferentiated role instructions, authority prose
 
 **Craft section**:
-The single factory-owned portion of a current embedded role body containing role-specific guidance about how to do the work. Craft guidance advises craft only; it cannot widen the frozen specification, move a workflow stage, change permitted paths, or alter the report contract.
+The single factory-owned portion of a current embedded role body containing role-specific guidance about how to do the work. A repository may select replacement craft for a declared role through `role_craft`; the selected bytes are frozen at claim time. Craft guidance advises craft only; it cannot widen the frozen specification, move a workflow stage, change permitted paths, or alter the report contract, and the embedded authority remains authoritative.
 _Avoid_: Craft prose, prompt customization, role instructions
 
 **Checkpoint**:
@@ -79,7 +79,7 @@ A typed discrepancy result that reports the agreement state and discovered discr
 _Avoid_: Recovered run, implicit operator approval
 
 **Startup diagnosis**:
-A complete pre-claim report of host configuration, external access, repository, terminal, worker, harness, authentication, and operational-store readiness. Every subsystem contributes its own bounded check, and the doctor reports all failures before a run can start.
+A complete pre-claim report of host configuration, external access, repository, terminal, worker, harness, authentication, and operational-store readiness. Every subsystem contributes its own bounded check, including one independent target-branch resolution check for every configured `role_craft` entry, and the doctor reports all failures before a run can start.
 _Avoid_: First failure, mid-run diagnosis
 
 **Gate**:
@@ -138,7 +138,7 @@ waiting state. The `agent-running` label alone cannot express it.
 _Avoid_: Agent-running label, run status
 
 **Invocation**:
-One immutable harness attempt within a run, with its own invocation packet, role-owned visible surface handles, factory prompt version, and native session identifier when known.
+One immutable harness attempt within a run, with its own invocation packet, role-owned visible surface handles, factory prompt version, frozen repository role-craft source and SHA-256 identity when configured, and native session identifier when known.
 _Avoid_: Terminal transcript
 
 **Surface**:
@@ -154,11 +154,11 @@ The coordinator-owned responsibility assigned to an invocation, such as implemen
 _Avoid_: Persona
 
 **Workflow registry**:
-The factory-owned declaration of roles, embedded role prompt identities, stages, visible surfaces, and report-outcome transitions. Specification and documented-standards review are separate concurrent axes with separate durable findings and statuses; repository configuration selects harness and model policy for declared roles but cannot add or redefine workflow authority.
+The factory-owned declaration of roles, embedded role prompt identities, stages, visible surfaces, and report-outcome transitions. Specification and documented-standards review are separate concurrent axes with separate durable findings and statuses; repository configuration selects harness, model policy, and optional craft files for declared roles but cannot add or redefine workflow authority.
 _Avoid_: Repository-defined workflow, prompt configuration
 
 **Invocation packet**:
-The read-only, versioned file containing the frozen specification and role identity that the coordinator mounts into one worker invocation.
+The read-only, versioned file containing the frozen specification, role identity, and any frozen repository role-craft content and source identity that the coordinator mounts into one worker invocation.
 _Avoid_: Live issue
 
 **Structured report**:
@@ -190,7 +190,7 @@ Host-local YAML that registers the one repository, its GitHub identity, authoriz
 _Avoid_: Repository policy
 
 **Repository configuration**:
-Checked-in `factory.yaml` that declares the repository's target branch, setup, deterministic gates, harness and model policy for factory-declared roles, budgets, worker build, and base synchronization. It cannot declare roles, prompts, stages, or transitions.
+Checked-in `factory.yaml` that declares the repository's target branch, setup, deterministic gates, harness and model policy for factory-declared roles, optional repository role-craft file selections, budgets, worker build, and base synchronization. It cannot declare roles, prompts, stages, or transitions, and role craft cannot replace embedded authority.
 _Avoid_: Host configuration
 
 **Operational store**:

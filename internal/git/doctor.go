@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
@@ -25,6 +26,9 @@ type DoctorRequest struct {
 	ExpectedRepository string
 	// TargetBranch is the branch fetched to begin a run.
 	TargetBranch string
+	// RoleCraft maps declared factory roles to repository-relative craft files
+	// that must resolve at the target branch head.
+	RoleCraft map[string]string
 }
 
 // remoteFailureKind identifies the bounded failure categories rendered by the
@@ -65,9 +69,17 @@ type DoctorChecker interface {
 	CheckWorktree(context.Context, DoctorRequest) error
 }
 
+// RoleCraftChecker is the optional Git-owned diagnosis seam for configured
+// repository craft files. It remains separate so existing Git adapters can
+// provide the original remote, hooks, and worktree checks unchanged.
+type RoleCraftChecker interface {
+	// CheckRoleCraft verifies one role-craft file at the configured target branch head.
+	CheckRoleCraft(context.Context, DoctorRequest, string, string) error
+}
+
 // StartupChecks returns independent Git remote, hooks, and worktree checks.
 func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check {
-	return []doctor.Check{
+	checks := []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			if checker == nil {
 				return doctor.Failure("git remote", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
@@ -97,6 +109,29 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 			return doctor.Success("git worktree")
 		},
 	}
+	roles := make([]string, 0, len(request.RoleCraft))
+	for role := range request.RoleCraft {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	for _, role := range roles {
+		roleName, path := role, request.RoleCraft[role]
+		checks = append(checks, func(ctx context.Context) doctor.Result {
+			name := "git role craft " + roleName
+			if checker == nil {
+				return doctor.Failure(name, "the Git role-craft diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+			}
+			roleChecker, ok := checker.(RoleCraftChecker)
+			if !ok {
+				return doctor.Failure(name, "the Git adapter cannot verify repository craft at the target branch head", "upgrade the Git workspace adapter to support role-craft diagnosis")
+			}
+			if err := roleChecker.CheckRoleCraft(ctx, request, roleName, path); err != nil {
+				return doctor.Failure(name, fmt.Sprintf("role_craft.%s at %s cannot be resolved at the target branch head", roleName, path), "restore the declared craft file on the target branch or remove the role_craft entry")
+			}
+			return doctor.Success(name)
+		})
+	}
+	return checks
 }
 
 // CheckRemote verifies the ordinary checkout, its configured remote identity,
@@ -238,6 +273,38 @@ func (m *LocalWorktreeManager) CheckWorktree(ctx context.Context, request Doctor
 	}
 	if _, err := m.runner().Run(ctx, request.RepositoryPath, []string{"worktree", "list", "--porcelain"}); err != nil {
 		return fmt.Errorf("list Git worktrees: %w", err)
+	}
+	return nil
+}
+
+// CheckRoleCraft verifies one configured role-craft path resolves to a regular
+// file at the configured target branch head without changing Git references.
+func (m *LocalWorktreeManager) CheckRoleCraft(ctx context.Context, request DoctorRequest, role, path string) error {
+	if err := validateDoctorRepository(request.RepositoryPath); err != nil {
+		return err
+	}
+	if strings.TrimSpace(role) == "" || strings.ContainsAny(role, "\x00\r\n") {
+		return errors.New("role-craft role must be a single line")
+	}
+	if strings.TrimSpace(request.TargetBranch) == "" {
+		return errors.New("role-craft target branch is required")
+	}
+	if err := validateRefPart(request.TargetBranch); err != nil {
+		return fmt.Errorf("role-craft target branch: %w", err)
+	}
+	if err := validateRepositoryFilePath(path); err != nil {
+		return fmt.Errorf("role-craft path: %w", err)
+	}
+	object := request.TargetBranch + ":" + filepath.ToSlash(path)
+	if _, err := m.runner().Run(ctx, request.RepositoryPath, []string{"cat-file", "-e", object}); err != nil {
+		return fmt.Errorf("resolve role-craft file at target branch: %w", err)
+	}
+	fileType, err := m.runner().Run(ctx, request.RepositoryPath, []string{"cat-file", "-t", object})
+	if err != nil {
+		return fmt.Errorf("inspect role-craft object at target branch: %w", err)
+	}
+	if strings.TrimSpace(string(fileType)) != "blob" {
+		return errors.New("role-craft target is not a regular file")
 	}
 	return nil
 }

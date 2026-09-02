@@ -170,6 +170,12 @@ type InvocationPacket struct {
 	SpecificationPacket string `json:"specification_packet"`
 	// PromptVersion identifies the versioned core prompt.
 	PromptVersion string `json:"prompt_version"`
+	// PromptCraftSourcePath identifies the frozen repository craft source used by
+	// this invocation, when the repository selected one.
+	PromptCraftSourcePath string `json:"prompt_craft_source_path,omitempty"`
+	// PromptCraftSHA256 identifies the exact frozen repository craft bytes used by
+	// this invocation, when the repository selected one.
+	PromptCraftSHA256 string `json:"prompt_craft_sha256,omitempty"`
 	// TestPolicyMode identifies the frozen TDD ownership mode for this invocation.
 	TestPolicyMode config.TestMode `json:"test_policy_mode"`
 	// Route identifies the frozen contract-first workflow route of the run.
@@ -209,8 +215,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version eight adds the blocking review-repair packet.
-	invocationPacketVersion = 8
+	// Version nine adds the frozen repository-craft identity.
+	invocationPacketVersion = 9
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )

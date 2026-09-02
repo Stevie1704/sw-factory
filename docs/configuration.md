@@ -31,6 +31,9 @@ capabilities, harness authentication sources, and SQLite. It runs every
 contributor even after a failure and returns a nonzero exit status when any
 blocking prerequisite remains. Each failure includes a bounded problem and a
 corrective action; command output and credential contents are never rendered.
+When the checked-in repository configuration declares `role_craft`, the
+doctor also checks every declared role-craft file independently against the
+configured target branch head and reports each failure.
 The SQLite check opens the existing store read-only; it does not create,
 migrate, back up, chmod, or initialize store state.
 Missing optional host credential files are warnings because a harness may be
@@ -140,6 +143,10 @@ role_harness_defaults:
   architecture: codex
   spec_review: codex
   standards_review: codex
+# Optional role-specific craft selected from the target branch at claim time.
+role_craft:
+  implementation: docs/factory/craft/implementation.md
+  standards_review: docs/factory/craft/standards-review.md
 model_options:
   test: [gpt-5.6-luna]
   implementation: [gpt-5.6-luna]
@@ -185,7 +192,7 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, optional `role_craft` entries for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `role_craft` paths must be nonempty, repository-relative Markdown paths without control characters, backslashes, absolute paths, or any `..` path segment. At claim time each selected file is read from the exact immutable base checkpoint; a missing file fails the claim. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 `test_policy.allow_automated_objections` is the evidence-gated switch for the
 implementation-to-test objection cycle. Keep it `false` until the measured
@@ -235,6 +242,15 @@ in `internal/workflow`. Repository configuration may select harness and model
 policy for a declared role, but `factory.yaml` cannot add or redefine
 `roles`, `stages`, `prompts`, or `transitions`. Such fields are rejected as
 typed repository-policy errors.
+
+The optional `role_craft` map selects one repository-relative Markdown file per
+declared role. Its content replaces only that role's embedded `craft` section;
+the embedded authority, permitted paths, workflow stages, route sections, and
+report contract remain in force. The coordinator captures the file from the
+claim's exact base checkpoint, stores its content and SHA-256 identity in the
+specification and invocation packets, and uses those frozen bytes for every
+prompt rebuild or restart. Repository craft cannot declare prompt bodies,
+factory sections, `allowed_overrides`, or workflow behavior.
 
 The optional architecture role is launched explicitly with the
 factory-declared architecture stage. Its default permitted path is

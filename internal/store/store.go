@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 31
+const CurrentSchemaVersion = 32
 
 // MaxTestRevisionAttempts is the hard safety ceiling for automated
 // implementation-versus-test objection cycles.
@@ -631,6 +631,12 @@ type Invocation struct {
 	PermittedPaths []string
 	// PromptVersion identifies the versioned core role prompt.
 	PromptVersion string
+	// PromptCraftSourcePath identifies the frozen repository craft source used by
+	// this invocation, when the repository selected one.
+	PromptCraftSourcePath string
+	// PromptCraftSHA256 identifies the exact frozen repository craft bytes used by
+	// this invocation, when the repository selected one.
+	PromptCraftSHA256 string
 	// Status is the invocation lifecycle state.
 	Status InvocationStatus
 	// RecoveryResumeCount records the number of coordinator-owned native resume
@@ -2105,6 +2111,9 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	if strings.ContainsAny(invocation.CredentialStoreID, "\x00\r\n") {
 		return errors.New("invocation credential store id contains control characters")
 	}
+	if err := validatePromptCraftIdentity(invocation.PromptCraftSourcePath, invocation.PromptCraftSHA256); err != nil {
+		return err
+	}
 	if invocation.CreatedAt.IsZero() {
 		invocation.CreatedAt = time.Now().UTC()
 	}
@@ -2131,8 +2140,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 				id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 				native_session_id, workspace_id, status_surface_id,
 				role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-				result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -2151,6 +2160,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			result_directory = excluded.result_directory,
 				permitted_paths = excluded.permitted_paths,
 				prompt_version = excluded.prompt_version,
+				prompt_craft_source_path = excluded.prompt_craft_source_path,
+				prompt_craft_sha256 = excluded.prompt_craft_sha256,
 				status = excluded.status,
 				recovery_resume_count = excluded.recovery_resume_count,
 				attach_required = excluded.attach_required,
@@ -2173,6 +2184,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.ResultDirectory,
 		string(permittedPathJSON),
 		invocation.PromptVersion,
+		invocation.PromptCraftSourcePath,
+		invocation.PromptCraftSHA256,
 		invocation.Status,
 		invocation.RecoveryResumeCount,
 		invocation.AttachRequired,
@@ -2184,6 +2197,38 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			return fmt.Errorf("save invocation: active invocation already exists for run %q: %w", invocation.RunID, err)
 		}
 		return fmt.Errorf("save invocation: %w", err)
+	}
+	return nil
+}
+
+// validatePromptCraftIdentity validates the optional source and content digest
+// persisted beside an invocation's embedded prompt version.
+func validatePromptCraftIdentity(sourcePath, digest string) error {
+	if sourcePath == "" && digest == "" {
+		return nil
+	}
+	if sourcePath == "" || digest == "" {
+		return errors.New("invocation prompt craft source path and SHA-256 must be supplied together")
+	}
+	if strings.ContainsAny(sourcePath, "\x00\r\n\\") || filepath.IsAbs(sourcePath) {
+		return errors.New("invocation prompt craft source path must be repository-relative")
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(sourcePath), "/") {
+		if segment == ".." {
+			return errors.New("invocation prompt craft source path must not contain parent traversal segments")
+		}
+	}
+	clean := filepath.ToSlash(filepath.Clean(sourcePath))
+	if clean == "." || clean == ".git" || strings.HasPrefix(clean, ".git/") {
+		return errors.New("invocation prompt craft source path must remain inside the repository checkout")
+	}
+	if len(digest) != 64 {
+		return errors.New("invocation prompt craft SHA-256 must contain 64 lowercase hexadecimal characters")
+	}
+	for _, character := range digest {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return errors.New("invocation prompt craft SHA-256 must contain 64 lowercase hexadecimal characters")
+		}
 	}
 	return nil
 }
@@ -2311,7 +2356,7 @@ func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*In
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND id = ?`, runID, invocationID)
 	return scanInvocation(row)
@@ -2328,7 +2373,7 @@ func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ?
 		ORDER BY updated_at DESC, id DESC
@@ -2350,7 +2395,7 @@ func (s *Store) LatestInvocationByRole(ctx context.Context, runID, role string) 
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND role = ?
 		ORDER BY updated_at DESC, id DESC
@@ -2383,7 +2428,7 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at DESC
@@ -2402,7 +2447,7 @@ func (s *Store) ActiveInvocations(ctx context.Context, runID string) ([]Invocati
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 		       native_session_id, workspace_id, status_surface_id,
 		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, status, recovery_resume_count, attach_required, created_at, updated_at
+		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, recovery_resume_count, attach_required, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at, id`, runID, InvocationStatusActive)
@@ -2447,6 +2492,8 @@ func scanInvocation(row interface{ Scan(...any) error }) (*Invocation, error) {
 		&invocation.ResultDirectory,
 		&permittedPathJSON,
 		&invocation.PromptVersion,
+		&invocation.PromptCraftSourcePath,
+		&invocation.PromptCraftSHA256,
 		&invocation.Status,
 		&invocation.RecoveryResumeCount,
 		&invocation.AttachRequired,
@@ -3204,6 +3251,15 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			} {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 31: %w", err)
+				}
+			}
+		case 32:
+			for _, statement := range []string{
+				"ALTER TABLE invocations ADD COLUMN prompt_craft_source_path TEXT NOT NULL DEFAULT ''",
+				"ALTER TABLE invocations ADD COLUMN prompt_craft_sha256 TEXT NOT NULL DEFAULT ''",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 32: %w", err)
 				}
 			}
 		default:

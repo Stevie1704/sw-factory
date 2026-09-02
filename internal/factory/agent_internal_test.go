@@ -6,11 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
-	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -125,6 +126,76 @@ func TestPromptForPersistedInvocationAcceptsSupportedSchemaVersions(t *testing.T
 				t.Fatalf("promptForPersistedInvocation() prompt contains unexpected %q:\n%s", test.wantAbsent, promptText)
 			}
 		})
+	}
+}
+
+// TestPromptForPersistedInvocationRejectsRepositoryCraftDigestMismatch verifies
+// restart recovery refuses to rebuild a prompt when packet content no longer
+// matches its recorded frozen identity.
+func TestPromptForPersistedInvocationRejectsRepositoryCraftDigestMismatch(t *testing.T) {
+	const sourcePath = "docs/factory/craft/implementation.md"
+	packet := SpecificationPacket{
+		RepositoryConfig: config.RepositoryConfig{RoleCraft: map[string]string{"implementation": sourcePath}},
+		RepositoryCraft: map[string]RepositoryCraftDocument{
+			"implementation": {Path: sourcePath, Content: "frozen craft bytes", SHA256: strings.Repeat("a", 64)},
+		},
+	}
+	run := store.Run{ID: "run-craft-mismatch", SpecificationPacket: "{}"}
+	invocation := store.Invocation{
+		ID: "inv-craft-mismatch", RunID: run.ID, Role: workflow.RoleImplementation, Stage: store.StageImplementation,
+		InvocationDirectory: t.TempDir(), PromptVersion: "implementation-v1",
+		PromptCraftSourcePath: sourcePath, PromptCraftSHA256: strings.Repeat("a", 64),
+	}
+	if err := writeInvocationPacket(invocation.InvocationDirectory, InvocationPacket{
+		SchemaVersion: invocationPacketVersion, InvocationID: invocation.ID, RunID: run.ID,
+		Role: invocation.Role, Stage: invocation.Stage, SpecificationPacket: run.SpecificationPacket,
+		PromptVersion: invocation.PromptVersion, PromptCraftSourcePath: sourcePath, PromptCraftSHA256: strings.Repeat("a", 64),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := promptForPersistedInvocation(run, invocation, packet)
+	var digestErr *CraftDigestMismatchError
+	if !errors.As(err, &digestErr) {
+		t.Fatalf("promptForPersistedInvocation() error = %v, want CraftDigestMismatchError", err)
+	}
+	if digestErr.Role != workflow.RoleImplementation || digestErr.SourcePath != sourcePath {
+		t.Fatalf("digest error = %#v, want implementation/source identity", digestErr)
+	}
+}
+
+// TestPromptForPersistedInvocationUsesFrozenRepositoryCraft verifies restart
+// prompt construction uses packet bytes and keeps embedded authority intact.
+func TestPromptForPersistedInvocationUsesFrozenRepositoryCraft(t *testing.T) {
+	const sourcePath = "docs/factory/craft/implementation.md"
+	content := "Frozen repository implementation recipe."
+	packet := SpecificationPacket{
+		RepositoryConfig: config.RepositoryConfig{RoleCraft: map[string]string{"implementation": sourcePath}},
+		RepositoryCraft: map[string]RepositoryCraftDocument{
+			"implementation": {Path: sourcePath, Content: content, SHA256: digestRepositoryCraft(content)},
+		},
+	}
+	run := store.Run{ID: "run-craft-restart", SpecificationPacket: "{}"}
+	invocation := store.Invocation{
+		ID: "inv-craft-restart", RunID: run.ID, Role: workflow.RoleImplementation, Stage: store.StageImplementation,
+		InvocationDirectory: t.TempDir(), PromptVersion: prompt.Version,
+		PromptCraftSourcePath: sourcePath, PromptCraftSHA256: digestRepositoryCraft(content),
+	}
+	if err := writeInvocationPacket(invocation.InvocationDirectory, InvocationPacket{
+		SchemaVersion: invocationPacketVersion, InvocationID: invocation.ID, RunID: run.ID,
+		Role: invocation.Role, Stage: invocation.Stage, SpecificationPacket: run.SpecificationPacket,
+		PromptVersion: invocation.PromptVersion, PromptCraftSourcePath: sourcePath, PromptCraftSHA256: invocation.PromptCraftSHA256,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	promptText, err := promptForPersistedInvocation(run, invocation, packet)
+	if err != nil {
+		t.Fatalf("promptForPersistedInvocation() error = %v", err)
+	}
+	if !strings.Contains(promptText, content) || strings.Contains(promptText, "Work in vertical slices: implement one behavior") {
+		t.Fatalf("restart prompt did not use frozen repository craft:\n%s", promptText)
+	}
+	if !strings.Contains(promptText, "Factory-owned precedence:") {
+		t.Fatalf("restart prompt lost embedded authority:\n%s", promptText)
 	}
 }
 

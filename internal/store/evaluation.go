@@ -120,14 +120,17 @@ const (
 )
 
 // EvaluationInvocationVersion records version identifiers observed for one
-// invocation. It contains no prompt, transcript, source, or command content.
+// invocation. It contains no prompt, transcript, source-file content, or
+// command content; the craft source fields are identity metadata only.
 type EvaluationInvocationVersion struct {
-	InvocationID        string `json:"invocation_id"`
-	Harness             string `json:"harness"`
-	Model               string `json:"model"`
-	PromptVersion       string `json:"prompt_version"`
-	ReportSchemaVersion int    `json:"report_schema_version"`
-	WorkerVersion       string `json:"worker_version"`
+	InvocationID          string `json:"invocation_id"`
+	Harness               string `json:"harness"`
+	Model                 string `json:"model"`
+	PromptVersion         string `json:"prompt_version"`
+	PromptCraftSourcePath string `json:"prompt_craft_source_path,omitempty"`
+	PromptCraftSHA256     string `json:"prompt_craft_sha256,omitempty"`
+	ReportSchemaVersion   int    `json:"report_schema_version"`
+	WorkerVersion         string `json:"worker_version"`
 }
 
 // EvaluationStageDuration records time spent in one coordinator stage.
@@ -582,11 +585,13 @@ func validateEvaluationSummary(summary EvaluationSummary) error {
 	}
 	for _, version := range summary.InvocationVersions {
 		for field, value := range map[string]string{
-			"invocation id":  version.InvocationID,
-			"harness":        version.Harness,
-			"model":          version.Model,
-			"prompt version": version.PromptVersion,
-			"worker version": version.WorkerVersion,
+			"invocation id":            version.InvocationID,
+			"harness":                  version.Harness,
+			"model":                    version.Model,
+			"prompt version":           version.PromptVersion,
+			"prompt craft source path": version.PromptCraftSourcePath,
+			"prompt craft SHA-256":     version.PromptCraftSHA256,
+			"worker version":           version.WorkerVersion,
 		} {
 			if value != "" && !safeEvaluationValue(value) {
 				return fmt.Errorf("evaluation %s contains unsafe metadata", field)
@@ -934,23 +939,30 @@ func (s *Store) RecordEvaluationInvocation(ctx context.Context, runID string, in
 	if reportSchemaVersion < 0 {
 		return errors.New("evaluation report schema version must not be negative")
 	}
+	if err := validatePromptCraftIdentity(invocation.PromptCraftSourcePath, invocation.PromptCraftSHA256); err != nil {
+		return err
+	}
 	for field, value := range map[string]string{
-		"harness":        invocation.Harness,
-		"model":          invocation.Model,
-		"prompt version": invocation.PromptVersion,
-		"worker version": workerVersion,
+		"harness":                  invocation.Harness,
+		"model":                    invocation.Model,
+		"prompt version":           invocation.PromptVersion,
+		"prompt craft source path": invocation.PromptCraftSourcePath,
+		"prompt craft SHA-256":     invocation.PromptCraftSHA256,
+		"worker version":           workerVersion,
 	} {
 		if value != "" && !safeEvaluationValue(value) {
 			return fmt.Errorf("evaluation %s contains unsafe metadata", field)
 		}
 	}
 	version := EvaluationInvocationVersion{
-		InvocationID:        invocation.ID,
-		Harness:             invocation.Harness,
-		Model:               invocation.Model,
-		PromptVersion:       invocation.PromptVersion,
-		ReportSchemaVersion: reportSchemaVersion,
-		WorkerVersion:       workerVersion,
+		InvocationID:          invocation.ID,
+		Harness:               invocation.Harness,
+		Model:                 invocation.Model,
+		PromptVersion:         invocation.PromptVersion,
+		PromptCraftSourcePath: invocation.PromptCraftSourcePath,
+		PromptCraftSHA256:     invocation.PromptCraftSHA256,
+		ReportSchemaVersion:   reportSchemaVersion,
+		WorkerVersion:         workerVersion,
 	}
 	if err := s.RefreshEvaluationCounts(ctx, runID); err != nil {
 		return err

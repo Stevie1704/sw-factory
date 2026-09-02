@@ -98,6 +98,9 @@ type RecoveryDiagnosis struct {
 	// Recoverable reports that all discrepancies are coordinator-repairable.
 	// It is informational; reconciliation still records every discrepancy.
 	Recoverable bool
+	// workflowCause preserves a typed deterministic cause for callers that need
+	// to classify a recovery refusal beyond its bounded discrepancy projection.
+	workflowCause error
 }
 
 // RecoveryResult contains the durable run after an explicit reconciliation
@@ -480,6 +483,9 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	}
 	invocationID = active.ID
 	diagnosis.InvocationExists = true
+	if craftErr := validatePersistedRepositoryCraft(run, *active); craftErr != nil {
+		addRepositoryCraftRecoveryDiscrepancy(diagnosis, *active, craftErr)
+	}
 	if invocationProjectionNeverEstablished(*active) {
 		// The launch boundary rolled this invocation back before its agent
 		// started, so it owns no live worker, terminal, or harness projection.
@@ -1183,7 +1189,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 		paused, pauseErr := s.pauseForRecovery(ctx, registration, runStore, run, diagnosis)
 		if pauseErr != nil {
 			if hasWorkflowDiscrepancy(diagnosis) {
-				return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(&WorkflowFailureError{RunID: run.ID, Cause: errors.New(recoveryDiscrepancyReason(diagnosis))}, pauseErr)
+				return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(&WorkflowFailureError{RunID: run.ID, Cause: recoveryWorkflowCause(diagnosis)}, pauseErr)
 			}
 			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(&InfrastructureDiscrepancyError{Diagnosis: diagnosis}, pauseErr)
 		}
@@ -1215,7 +1221,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			diagnosis = finalDiagnosis
 		}
 		if hasWorkflowDiscrepancy(diagnosis) {
-			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &WorkflowFailureError{RunID: run.ID, Cause: errors.New(recoveryDiscrepancyReason(diagnosis))}
+			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &WorkflowFailureError{RunID: run.ID, Cause: recoveryWorkflowCause(diagnosis)}
 		}
 		return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
 	}
@@ -1763,6 +1769,47 @@ func addRecoveryDiscrepancy(diagnosis *RecoveryDiagnosis, discrepancy RecoveryDi
 	diagnosis.Discrepancies = append(diagnosis.Discrepancies, discrepancy)
 }
 
+// addRepositoryCraftRecoveryDiscrepancy records a typed craft identity failure
+// as a workflow discrepancy without retaining any repository craft content.
+func addRepositoryCraftRecoveryDiscrepancy(diagnosis *RecoveryDiagnosis, invocation store.Invocation, cause error) {
+	if diagnosis == nil || cause == nil {
+		return
+	}
+	diagnosis.workflowCause = cause
+	var digestMismatch *CraftDigestMismatchError
+	if errors.As(cause, &digestMismatch) {
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+			InvocationID: invocation.ID,
+			Kind:         RecoveryDiscrepancyWorkflow,
+			Source:       "invocation packet",
+			Field:        "prompt craft sha256",
+			Expected:     digestMismatch.Expected,
+			Observed:     digestMismatch.Observed,
+		})
+		return
+	}
+	var sourceMismatch *CraftSourcePathMismatchError
+	if errors.As(cause, &sourceMismatch) {
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+			InvocationID: invocation.ID,
+			Kind:         RecoveryDiscrepancyWorkflow,
+			Source:       "invocation packet",
+			Field:        "prompt craft source path",
+			Expected:     sourceMismatch.Expected,
+			Observed:     sourceMismatch.Observed,
+		})
+		return
+	}
+	addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+		InvocationID: invocation.ID,
+		Kind:         RecoveryDiscrepancyWorkflow,
+		Source:       "invocation packet",
+		Field:        "prompt craft identity",
+		Expected:     "verified packet identity",
+		Observed:     cause.Error(),
+	})
+}
+
 // recoverySourcesAgree reports whether every observed discrepancy is within
 // the coordinator's deterministic repair boundary. Recoverable losses remain
 // visible in the diagnosis but do not force an operator pause.
@@ -1802,7 +1849,7 @@ func recoveryDiscrepancyError(diagnosis RecoveryDiagnosis) error {
 func recoveryErrorWithCause(diagnosis RecoveryDiagnosis, cause error) error {
 	if hasWorkflowDiscrepancy(diagnosis) {
 		if cause == nil {
-			cause = errors.New(recoveryDiscrepancyReason(diagnosis))
+			cause = recoveryWorkflowCause(diagnosis)
 		}
 		return &WorkflowFailureError{RunID: diagnosis.RunID, Cause: errors.Join(cause, recoveryRequiredError(diagnosis))}
 	}
@@ -1811,4 +1858,13 @@ func recoveryErrorWithCause(diagnosis RecoveryDiagnosis, cause error) error {
 		return errors.Join(cause, infrastructure)
 	}
 	return infrastructure
+}
+
+// recoveryWorkflowCause returns the most specific deterministic cause recorded
+// during diagnosis, falling back to the bounded discrepancy summary.
+func recoveryWorkflowCause(diagnosis RecoveryDiagnosis) error {
+	if diagnosis.workflowCause != nil {
+		return diagnosis.workflowCause
+	}
+	return errors.New(recoveryDiscrepancyReason(diagnosis))
 }

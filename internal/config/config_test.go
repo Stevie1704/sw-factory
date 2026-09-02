@@ -206,6 +206,70 @@ func TestValidateRepositoryRejectsUnsafeSetupFiles(t *testing.T) {
 	}
 }
 
+// TestValidateRepositoryAcceptsRepositorySelectedRoleCraft verifies the
+// optional role-keyed craft map remains subordinate to factory role ownership.
+func TestValidateRepositoryAcceptsRepositorySelectedRoleCraft(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.RoleCraft = map[string]string{
+		"implementation":   "docs/factory/craft/implementation.md",
+		"standards_review": "docs/factory/craft/standards-review.md",
+	}
+	if err := config.ValidateRepository(policy); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want role craft map to be valid", err)
+	}
+}
+
+// TestValidateRepositoryRejectsUnsafeRoleCraftPaths verifies role-craft source
+// paths cannot escape the immutable repository checkpoint.
+func TestValidateRepositoryRejectsUnsafeRoleCraftPaths(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		path string
+	}{
+		{name: "unknown role", path: "docs/factory/craft/custom.md"},
+		{name: "absolute", path: "/tmp/craft.md"},
+		{name: "parent traversal", path: "docs/../craft.md"},
+		{name: "empty", path: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			policy := validRepositoryConfig()
+			role := "implementation"
+			if test.name == "unknown role" {
+				role = "custom"
+			}
+			policy.RoleCraft = map[string]string{role: test.path}
+			err := config.ValidateRepository(policy)
+			var validationErr *config.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+			}
+			if validationErr.Field != "role_craft."+role {
+				t.Fatalf("field = %q, want role_craft.%s", validationErr.Field, role)
+			}
+		})
+	}
+}
+
+// TestLoadRepositoryRejectsFactoryCraftDeclarations verifies the historical
+// top-level craft authority remains factory-owned while role_craft is allowed.
+func TestLoadRepositoryRejectsFactoryCraftDeclarations(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(path, []byte("craft: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.LoadRepository(path)
+	var policyErr *config.PolicyError
+	if !errors.As(err, &policyErr) || policyErr.Field != "craft" {
+		t.Fatalf("LoadRepository() error = %v, want craft PolicyError", err)
+	}
+}
+
 // TestValidateRepositoryRejectsInvalidSetupEnvironmentPolicy verifies setup
 // cannot silently select an unconfigured worker environment.
 func TestValidateRepositoryRejectsInvalidSetupEnvironmentPolicy(t *testing.T) {

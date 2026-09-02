@@ -53,6 +53,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		ExpectedOwner:      registration.GitHub.Owner,
 		ExpectedRepository: registration.GitHub.Repository,
 		TargetBranch:       targetBranch(repositoryPolicy),
+		RoleCraft:          roleCraft(repositoryPolicy),
 	})...)
 
 	terminalChecker := s.deps.Terminal
@@ -125,6 +126,19 @@ func targetBranch(policy *config.RepositoryConfig) string {
 		return ""
 	}
 	return policy.TargetBranch
+}
+
+// roleCraft extracts the frozen repository role-craft map for Git diagnosis
+// while keeping configuration failures independent from later checks.
+func roleCraft(policy *config.RepositoryConfig) map[string]string {
+	if policy == nil || len(policy.RoleCraft) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(policy.RoleCraft))
+	for role, path := range policy.RoleCraft {
+		result[role] = path
+	}
+	return result
 }
 
 var _ Factory = (*Service)(nil)

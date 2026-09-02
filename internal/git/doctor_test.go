@@ -59,6 +59,26 @@ func TestLocalWorktreeManagerChecksHooksAndWorktreeSupport(t *testing.T) {
 	}
 }
 
+// TestLocalWorktreeManagerChecksRoleCraftAtTheTargetBranchHead verifies the
+// doctor probes the configured source without reading a mutable worktree file.
+func TestLocalWorktreeManagerChecksRoleCraftAtTheTargetBranchHead(t *testing.T) {
+	repositoryPath := t.TempDir()
+	runner := &gitDoctorRunner{repositoryPath: repositoryPath}
+	manager := &gitadapter.LocalWorktreeManager{Runner: runner}
+	if err := manager.CheckRoleCraft(context.Background(), gitadapter.DoctorRequest{RepositoryPath: repositoryPath, TargetBranch: "main"}, "implementation", "docs/factory/craft/implementation.md"); err != nil {
+		t.Fatalf("CheckRoleCraft() error = %v", err)
+	}
+	joined := strings.Join(runner.commands, "\n")
+	for _, want := range []string{
+		"cat-file -e main:docs/factory/craft/implementation.md",
+		"cat-file -t main:docs/factory/craft/implementation.md",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Git commands = %q, want %q", joined, want)
+		}
+	}
+}
+
 // TestStartupChecksKeepGitFailuresIndependent verifies one failed Git check
 // does not suppress the other Git-owned diagnostics.
 func TestStartupChecksKeepGitFailuresIndependent(t *testing.T) {
@@ -69,6 +89,24 @@ func TestStartupChecksKeepGitFailuresIndependent(t *testing.T) {
 	}
 	if len(report.Results) != 3 || checker.calls != 3 {
 		t.Fatalf("Git results/calls = %d/%d, want three", len(report.Results), checker.calls)
+	}
+}
+
+// TestStartupChecksReportEveryConfiguredRoleCraftEntry verifies each declared
+// craft source receives an independent bounded diagnosis result.
+func TestStartupChecksReportEveryConfiguredRoleCraftEntry(t *testing.T) {
+	checker := &fakeGitDoctorChecker{}
+	report := doctor.Run(context.Background(), gitadapter.StartupChecks(checker, gitadapter.DoctorRequest{
+		RoleCraft: map[string]string{
+			"standards_review": "docs/factory/craft/standards-review.md",
+			"implementation":   "docs/factory/craft/implementation.md",
+		},
+	})...)
+	if !report.Ready() || len(report.Results) != 5 {
+		t.Fatalf("Git report = %#v, want five successful independent checks", report)
+	}
+	if report.Results[3].Name != "git role craft implementation" || report.Results[4].Name != "git role craft standards_review" {
+		t.Fatalf("role-craft checks = %#v, want deterministic role order", report.Results[3:])
 	}
 }
 
@@ -93,6 +131,8 @@ func (r *gitDoctorRunner) Run(_ context.Context, _ string, args []string) ([]byt
 		return []byte("git@github.com:example/project.git\n"), nil
 	case len(args) > 0 && args[0] == "ls-remote":
 		return []byte("0123456789abcdef0123456789abcdef01234567\trefs/heads/main\n"), nil
+	case len(args) == 3 && args[0] == "cat-file" && args[1] == "-t":
+		return []byte("blob\n"), nil
 	case len(args) == 3 && args[0] == "rev-parse" && args[1] == "--git-path":
 		return []byte(r.hooksPath + "\n"), nil
 	default:
@@ -121,6 +161,11 @@ func (f *fakeGitDoctorChecker) CheckHooks(context.Context, gitadapter.DoctorRequ
 // CheckWorktree implements the Git diagnosis seam for composition tests.
 func (f *fakeGitDoctorChecker) CheckWorktree(context.Context, gitadapter.DoctorRequest) error {
 	f.calls++
+	return nil
+}
+
+// CheckRoleCraft implements the optional role-craft diagnosis seam.
+func (*fakeGitDoctorChecker) CheckRoleCraft(context.Context, gitadapter.DoctorRequest, string, string) error {
 	return nil
 }
 
