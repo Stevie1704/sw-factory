@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,10 +32,10 @@ func TestEvaluationSummaryRecordsContentFreeRunAndAggregates(t *testing.T) {
 	if err := opened.EnsureEvaluationSummary(ctx, run); err != nil {
 		t.Fatalf("EnsureEvaluationSummary() error = %v", err)
 	}
-	if err := opened.SaveInvocation(ctx, store.Invocation{ID: "inv-evaluation", RunID: run.ID, Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Model: "gpt-5", PromptVersion: "implementation-v1", Status: store.InvocationStatusCompleted, CreatedAt: started, UpdatedAt: started.Add(2 * time.Minute)}); err != nil {
+	if err := opened.SaveInvocation(ctx, store.Invocation{ID: "inv-evaluation", RunID: run.ID, Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Model: "gpt-5", PromptVersion: "implementation-v1", PromptCraftSourcePath: "docs/factory/craft/implementation.md", PromptCraftSHA256: strings.Repeat("b", 64), Status: store.InvocationStatusCompleted, CreatedAt: started, UpdatedAt: started.Add(2 * time.Minute)}); err != nil {
 		t.Fatalf("SaveInvocation() error = %v", err)
 	}
-	if err := opened.RecordEvaluationInvocation(ctx, run.ID, store.Invocation{ID: "inv-evaluation", RunID: run.ID, Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Model: "gpt-5", PromptVersion: "implementation-v1"}, "sha256:worker", 1); err != nil {
+	if err := opened.RecordEvaluationInvocation(ctx, run.ID, store.Invocation{ID: "inv-evaluation", RunID: run.ID, Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Model: "gpt-5", PromptVersion: "implementation-v1", PromptCraftSourcePath: "docs/factory/craft/implementation.md", PromptCraftSHA256: strings.Repeat("b", 64)}, "sha256:worker", 1); err != nil {
 		t.Fatalf("RecordEvaluationInvocation() error = %v", err)
 	}
 	if err := opened.SaveGateResults(ctx, []store.GateResult{{RunID: run.ID, CheckpointSHA: evaluationCheckpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "test", Outcome: store.GateOutcomePassed, Status: "success", Blocking: true}}); err != nil {
@@ -88,7 +89,7 @@ func TestEvaluationSummaryRecordsContentFreeRunAndAggregates(t *testing.T) {
 	if got.InvocationCount != 1 || got.GateCount != 1 || got.CheckRepairCount != 1 || got.ReviewRevisionCount != 1 || !got.BudgetExhausted {
 		t.Fatalf("summary counts = %#v, want invocation=1 gate=1 check=1 review=1", got)
 	}
-	if len(got.InvocationVersions) != 1 || got.InvocationVersions[0].WorkerVersion != "sha256:worker" {
+	if len(got.InvocationVersions) != 1 || got.InvocationVersions[0].WorkerVersion != "sha256:worker" || got.InvocationVersions[0].PromptCraftSourcePath != "docs/factory/craft/implementation.md" || got.InvocationVersions[0].PromptCraftSHA256 != strings.Repeat("b", 64) {
 		t.Fatalf("summary versions = %#v, want one content-free invocation version", got.InvocationVersions)
 	}
 	if !got.Usage.Available || got.Usage.TotalTokens != 30 || got.Usage.CostMicros != 7 {
@@ -379,6 +380,32 @@ func TestEvaluationSummaryRejectsUnsafeMetadata(t *testing.T) {
 		}},
 	}); err == nil {
 		t.Fatal("SaveEvaluationSummary() error = nil, want unsafe invocation metadata rejection")
+	}
+}
+
+// TestSaveEvaluationSummaryValidatesPromptCraftIdentity verifies direct
+// summary callers cannot serialize an unpaired or malformed craft identity.
+func TestSaveEvaluationSummaryValidatesPromptCraftIdentity(t *testing.T) {
+	ctx := context.Background()
+	opened, err := store.Open(ctx, filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	for index, version := range []store.EvaluationInvocationVersion{
+		{PromptCraftSourcePath: "docs/factory/craft/implementation.md"},
+		{PromptCraftSHA256: strings.Repeat("a", 64)},
+		{PromptCraftSourcePath: "docs/factory/craft/implementation.md", PromptCraftSHA256: strings.Repeat("A", 64)},
+	} {
+		err := opened.SaveEvaluationSummary(ctx, store.EvaluationSummary{
+			RunID:              fmt.Sprintf("run-craft-identity-%d", index),
+			Outcome:            store.EvaluationOutcomeActive,
+			InvocationVersions: []store.EvaluationInvocationVersion{version},
+		})
+		if err == nil || !strings.Contains(err.Error(), "prompt craft") {
+			t.Fatalf("SaveEvaluationSummary(%d) error = %v, want prompt-craft identity rejection", index, err)
+		}
 	}
 }
 

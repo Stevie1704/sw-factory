@@ -524,6 +524,14 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if strings.TrimSpace(promptVersion) == "" {
 		promptVersion = prompt.Version
 	}
+	if err := validateRepositoryCraftPacket(packet, invocationID); err != nil {
+		return store.Invocation{}, run, err
+	}
+	repositoryCraft, err := frozenRepositoryCraftForRole(packet, previous.Role, invocationID)
+	if err != nil {
+		return store.Invocation{}, run, err
+	}
+	craftSourcePath, craftSHA256 := craftMetadataForInvocation(repositoryCraft)
 	promptText, err := prompt.Build(prompt.Request{
 		InvocationID:        invocationID,
 		RunID:               run.ID,
@@ -531,6 +539,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		Stage:               string(store.StageImplementation),
 		SpecificationPacket: run.SpecificationPacket,
 		RepositoryGuidance:  packet.RepositoryGuidance,
+		RepositoryCraft:     repositoryCraftContent(repositoryCraft),
 		PromptVersion:       promptVersion,
 		TestPolicyMode:      string(packet.RepositoryConfig.TestPolicy.Mode),
 		Route:               packet.Route,
@@ -541,17 +550,19 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		return store.Invocation{}, run, err
 	}
 	if err := writeInvocationPacket(packetDirectory, InvocationPacket{
-		SchemaVersion:       invocationPacketVersion,
-		InvocationID:        invocationID,
-		RunID:               run.ID,
-		Role:                previous.Role,
-		Stage:               store.StageImplementation,
-		SpecificationPacket: run.SpecificationPacket,
-		PromptVersion:       promptVersion,
-		TestPolicyMode:      packet.RepositoryConfig.TestPolicy.Mode,
-		Route:               packet.Route,
-		PermittedPaths:      append([]string(nil), previous.PermittedPaths...),
-		CheckRepair:         &repairPacket,
+		SchemaVersion:         invocationPacketVersion,
+		InvocationID:          invocationID,
+		RunID:                 run.ID,
+		Role:                  previous.Role,
+		Stage:                 store.StageImplementation,
+		SpecificationPacket:   run.SpecificationPacket,
+		PromptVersion:         promptVersion,
+		PromptCraftSourcePath: craftSourcePath,
+		PromptCraftSHA256:     craftSHA256,
+		TestPolicyMode:        packet.RepositoryConfig.TestPolicy.Mode,
+		Route:                 packet.Route,
+		PermittedPaths:        append([]string(nil), previous.PermittedPaths...),
+		CheckRepair:           &repairPacket,
 	}); err != nil {
 		return store.Invocation{}, run, err
 	}
@@ -578,6 +589,8 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		ResultDirectory:         resultDirectory,
 		PermittedPaths:          append([]string(nil), previous.PermittedPaths...),
 		PromptVersion:           promptVersion,
+		PromptCraftSourcePath:   craftSourcePath,
+		PromptCraftSHA256:       craftSHA256,
 		Status:                  store.InvocationStatusActive,
 		CreatedAt:               createdAt,
 		UpdatedAt:               createdAt,

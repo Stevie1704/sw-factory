@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -70,10 +71,13 @@ type RepositoryConfig struct {
 	// SetupFiles identifies checked-in manifests and lockfiles used to fingerprint setup.
 	SetupFiles []string `yaml:"setup_files"`
 	// SetupEnvironmentPolicy selects the checked-in worker environment for setup.
-	SetupEnvironmentPolicy EnvironmentPolicy   `yaml:"setup_environment_policy"`
-	Gates                  []GateConfig        `yaml:"gates"`
-	RoleHarnessDefaults    map[string]Harness  `yaml:"role_harness_defaults"`
-	ModelOptions           map[string][]string `yaml:"model_options"`
+	SetupEnvironmentPolicy EnvironmentPolicy  `yaml:"setup_environment_policy"`
+	Gates                  []GateConfig       `yaml:"gates"`
+	RoleHarnessDefaults    map[string]Harness `yaml:"role_harness_defaults"`
+	// RoleCraft maps factory-declared role names to repository-relative Markdown
+	// files whose contents replace only that role's embedded craft section.
+	RoleCraft    map[string]string   `yaml:"role_craft"`
+	ModelOptions map[string][]string `yaml:"model_options"`
 	// ReasoningEffortOptions declares the validated reasoning-effort values a
 	// role may use. A role that declares none accepts no reasoning-effort
 	// selection at all.
@@ -437,6 +441,9 @@ func ValidateRepository(config RepositoryConfig) error {
 		return validation("role_harness_defaults", "must declare at least one role")
 	}
 	workflowRegistry := workflow.DefaultRegistry()
+	if err := validateRoleCraft(config.RoleCraft, workflowRegistry); err != nil {
+		return err
+	}
 	for role, harness := range config.RoleHarnessDefaults {
 		if strings.TrimSpace(role) == "" {
 			return validation("role_harness_defaults", "role names must not be empty")
@@ -617,6 +624,48 @@ func validateSetupFiles(values []string) error {
 			return validation(field, "must be unique")
 		}
 		seen[normalized] = struct{}{}
+	}
+	return nil
+}
+
+// validateRoleCraft validates repository-selected craft files without allowing
+// role ownership or a path outside the repository to cross the configuration
+// boundary.
+func validateRoleCraft(values map[string]string, registry workflow.Registry) error {
+	roles := make([]string, 0, len(values))
+	for role := range values {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	for _, role := range roles {
+		field := "role_craft." + role
+		if strings.TrimSpace(role) == "" {
+			return validation(field, "role names must not be empty")
+		}
+		if _, exists := registry.Role(role); !exists {
+			return validation(field, "role must be declared by the factory-owned workflow registry")
+		}
+		value := values[role]
+		if strings.TrimSpace(value) == "" {
+			return validation(field, "must name a repository-relative Markdown file")
+		}
+		if strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.ContainsAny(value, "\\\x00\r\n") || filepath.IsAbs(value) {
+			return validation(field, "must be a safe repository-relative path")
+		}
+		if !strings.EqualFold(filepath.Ext(value), ".md") {
+			return validation(field, "must name a repository-relative Markdown file")
+		}
+		normalized := filepath.ToSlash(value)
+		segments := strings.Split(normalized, "/")
+		for _, segment := range segments {
+			if segment == ".." {
+				return validation(field, "must not contain parent traversal segments")
+			}
+		}
+		clean := filepath.ToSlash(filepath.Clean(value))
+		if clean == "." || clean == ".git" || strings.HasPrefix(clean, ".git/") {
+			return validation(field, "must remain inside the repository checkout")
+		}
 	}
 	return nil
 }
@@ -814,6 +863,7 @@ func rejectFactoryOwnedWorkflowFields(path string) error {
 // accepted as alternate sources of coordinator authority.
 var factoryOwnedWorkflowFields = map[string]struct{}{
 	"role":              {},
+	"craft":             {},
 	"role_registry":     {},
 	"roles":             {},
 	"stage":             {},

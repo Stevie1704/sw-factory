@@ -105,6 +105,56 @@ func TestIssueClaimsAnEligibleIssueWithAFrozenPacketAndOneStatusComment(t *testi
 	}
 }
 
+// TestIssueClaimFreezesRepositoryCraftFromTheImmutableBase verifies claim reads
+// configured craft through the exact checkpoint seam and stores its identity in
+// the specification packet.
+func TestIssueClaimFreezesRepositoryCraftFromTheImmutableBase(t *testing.T) {
+	t.Parallel()
+
+	issue := github.Issue{Number: 42, Title: "Freeze repository craft", State: "open", Labels: []string{github.LabelAgentReady}}
+	repositoryConfig := validRepositoryConfig()
+	repositoryConfig.RoleCraft = map[string]string{"implementation": "docs/factory/craft/implementation.md"}
+	worktree := &fakeWorktree{
+		workspace: gitadapter.Workspace{BaseSHA: "base-checkpoint", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"},
+		craft: map[string]gitadapter.GuidanceDocument{
+			"docs/factory/craft/implementation.md": {Path: "docs/factory/craft/implementation.md", Content: "base craft bytes\n"},
+		},
+	}
+	service := newClaimService(&fakeGitHub{issueValue: issue}, worktree, &fakeRunStore{}, repositoryConfig)
+
+	result, err := service.ClaimIssue(context.Background(), issue.Number)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+	document, ok := result.Packet.RepositoryCraft["implementation"]
+	if !ok {
+		t.Fatalf("packet repository craft = %#v, want implementation document", result.Packet.RepositoryCraft)
+	}
+	if document.Path != "docs/factory/craft/implementation.md" || document.Content != "base craft bytes\n" || document.SHA256 != "7fb1747549758185c86700760d029f8182d26b5a275a2f4cfe94672834c05710" {
+		t.Fatalf("repository craft document = %#v, want frozen content and digest", document)
+	}
+	if len(worktree.craftCalls) != 1 || worktree.craftCalls[0].checkpoint != worktree.workspace.BaseSHA || worktree.craftCalls[0].worktree != worktree.workspace.Worktree {
+		t.Fatalf("craft calls = %#v, want one read at the immutable workspace checkpoint", worktree.craftCalls)
+	}
+}
+
+// TestIssueClaimFailsWhenConfiguredRepositoryCraftIsMissing verifies a missing
+// base-checkpoint source fails closed and names both its role and path.
+func TestIssueClaimFailsWhenConfiguredRepositoryCraftIsMissing(t *testing.T) {
+	t.Parallel()
+
+	issue := github.Issue{Number: 42, Title: "Missing repository craft", State: "open", Labels: []string{github.LabelAgentReady}}
+	repositoryConfig := validRepositoryConfig()
+	repositoryConfig.RoleCraft = map[string]string{"implementation": "docs/factory/craft/implementation.md"}
+	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base-checkpoint", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
+	service := newClaimService(&fakeGitHub{issueValue: issue}, worktree, &fakeRunStore{}, repositoryConfig)
+
+	_, err := service.ClaimIssue(context.Background(), issue.Number)
+	if err == nil || !strings.Contains(err.Error(), `role "implementation"`) || !strings.Contains(err.Error(), "docs/factory/craft/implementation.md") {
+		t.Fatalf("ClaimIssue() error = %v, want role/path missing-source diagnostic", err)
+	}
+}
+
 // TestIssueClaimScopesCommandsToTheRunStart verifies pre-claim commands are
 // ignored while a command posted after claim remains available exactly once.
 func TestIssueClaimScopesCommandsToTheRunStart(t *testing.T) {
@@ -605,11 +655,20 @@ type editedComment struct {
 
 // fakeWorktree returns a deterministic isolated workspace.
 type fakeWorktree struct {
-	workspace gitadapter.Workspace
-	guidance  []gitadapter.GuidanceDocument
-	called    bool
-	removed   bool
-	removeErr error
+	workspace  gitadapter.Workspace
+	guidance   []gitadapter.GuidanceDocument
+	craft      map[string]gitadapter.GuidanceDocument
+	craftCalls []craftReadCall
+	called     bool
+	removed    bool
+	removeErr  error
+}
+
+// craftReadCall records the exact checkpoint and worktree used for one craft read.
+type craftReadCall struct {
+	worktree   string
+	checkpoint string
+	path       string
 }
 
 // Create records a worktree request and returns the configured workspace.
@@ -625,6 +684,17 @@ func (f *fakeWorktree) Create(context.Context, string, string, string) (gitadapt
 // checkpoint requested by the claim test.
 func (f *fakeWorktree) ReadRepositoryGuidance(context.Context, string, string) ([]gitadapter.GuidanceDocument, error) {
 	return append([]gitadapter.GuidanceDocument(nil), f.guidance...), nil
+}
+
+// ReadRepositoryCraft returns one configured document from the requested base
+// checkpoint and fails when that exact source was not supplied by the fixture.
+func (f *fakeWorktree) ReadRepositoryCraft(_ context.Context, worktree, checkpoint, path string) (gitadapter.GuidanceDocument, error) {
+	f.craftCalls = append(f.craftCalls, craftReadCall{worktree: worktree, checkpoint: checkpoint, path: path})
+	document, ok := f.craft[path]
+	if !ok {
+		return gitadapter.GuidanceDocument{}, errors.New("configured base craft file is missing")
+	}
+	return document, nil
 }
 
 // Remove records cleanup of a created workspace.

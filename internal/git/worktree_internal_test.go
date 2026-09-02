@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+// TestValidateRepositoryFilePathRejectsNonCanonicalPaths verifies repository
+// file identities cannot vary through dot segments or repeated separators.
+func TestValidateRepositoryFilePathRejectsNonCanonicalPaths(t *testing.T) {
+	for _, path := range []string{
+		"./docs/factory/craft/implementation.md",
+		"docs//factory/craft/implementation.md",
+		"docs/./factory/craft/implementation.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if err := validateRepositoryFilePath(path); err == nil {
+				t.Fatalf("validateRepositoryFilePath(%q) error = nil, want non-canonical path rejection", path)
+			}
+		})
+	}
+}
+
 // TestInspectParsesNulDelimitedStatus verifies paths with spaces and arrow
 // text remain intact while rename/copy source fields are ignored. The rename
 // and copy records mirror verified `git status --porcelain=v1 -z` output:

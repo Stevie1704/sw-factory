@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -145,6 +146,10 @@ type Request struct {
 	SpecificationPacket string
 	// RepositoryGuidance is repository-provided guidance treated as untrusted input.
 	RepositoryGuidance string
+	// RepositoryCraft is the exact role-craft content frozen by the coordinator
+	// at claim time. A nil value keeps the embedded craft section unchanged; a
+	// non-nil value replaces that section, including an intentionally empty file.
+	RepositoryCraft *string
 	// CheckRepairAttempt identifies a resumed implementation session when this
 	// prompt is repairing a failed deterministic checkpoint. Zero means a fresh
 	// implementation prompt.
@@ -266,7 +271,7 @@ func (r Registry) Build(request Request) (string, error) {
 	// A selected contract-first route places an independent test role before
 	// implementation, so implementation never owns the TDD loop on a route.
 	implementationOwnsTDD := request.TestPolicyMode == "advisory" && !request.Route.RequiresIndependentTestStage()
-	roleBody, err = renderRoleBody(roleBody, request.Role, implementationOwnsTDD)
+	roleBody, err = renderRoleBodyWithCraft(roleBody, request.Role, implementationOwnsTDD, request.RepositoryCraft)
 	if err != nil {
 		return "", err
 	}
@@ -438,8 +443,14 @@ func (r Registry) roleBody(definition workflow.RoleDefinition, requestedVersion 
 // retains Markdown sections; it never introduces role instruction text from Go
 // source.
 func renderRoleBody(body, role string, implementationOwnsTDD bool) (string, error) {
+	return renderRoleBodyWithCraft(body, role, implementationOwnsTDD, nil)
+}
+
+// renderRoleBodyWithCraft renders the embedded role body, replacing only its
+// validated craft section before selecting any factory-owned route sections.
+func renderRoleBodyWithCraft(body, role string, implementationOwnsTDD bool, repositoryCraft *string) (string, error) {
 	var err error
-	body, err = renderCraftSection(body, role)
+	body, err = renderCraftSectionWithOverride(body, role, repositoryCraft)
 	if err != nil {
 		return "", err
 	}
@@ -485,7 +496,16 @@ func validateCraftSection(body, role string) error {
 // their prose. Bodies without craft markers are legacy bodies and pass through
 // unchanged so persisted invocations rebuild the exact historical prompt.
 func renderCraftSection(body, role string) (string, error) {
+	return renderCraftSectionWithOverride(body, role, nil)
+}
+
+// renderCraftSectionWithOverride replaces the current embedded craft prose when
+// repositoryCraft is present, while preserving the surrounding authority bytes.
+func renderCraftSectionWithOverride(body, role string, repositoryCraft *string) (string, error) {
 	if !strings.Contains(body, craftStartMarker) && !strings.Contains(body, craftEndMarker) {
+		if repositoryCraft != nil {
+			return "", fmt.Errorf("role %q has no replaceable embedded craft section", role)
+		}
 		return body, nil
 	}
 	if err := validateCraftSection(body, role); err != nil {
@@ -494,12 +514,30 @@ func renderCraftSection(body, role string) (string, error) {
 	startIndex := strings.Index(body, craftStartMarker)
 	endIndex := strings.Index(body, craftEndMarker)
 	craft := strings.TrimSpace(body[startIndex+len(craftStartMarker) : endIndex])
+	if repositoryCraft != nil {
+		craft = sanitizeFenced(*repositoryCraft)
+		if marker := findFactorySectionMarker(craft); marker != "" {
+			return "", fmt.Errorf("supplied repository craft for role %q contains factory section marker %q", role, marker)
+		}
+		craft = strings.TrimSpace(craft)
+	}
 	prefix := strings.TrimRight(body[:startIndex], " \t\r\n")
 	suffix := strings.TrimLeft(body[endIndex+len(craftEndMarker):], " \t\r\n")
 	if craft == "" {
 		return strings.TrimSpace(prefix + "\n\n" + suffix), nil
 	}
 	return strings.TrimSpace(prefix + "\n\n" + craft + "\n\n" + suffix), nil
+}
+
+// factorySectionMarkerPattern identifies every factory-owned Markdown section
+// marker shape so repository craft cannot influence route or authority
+// selection. The marker itself is returned for a bounded diagnostic.
+var factorySectionMarkerPattern = regexp.MustCompile(`<!--\s*[A-Za-z0-9][A-Za-z0-9_-]*:(?:start|else|end)\s*-->`)
+
+// findFactorySectionMarker returns the first factory section marker in supplied
+// craft, or an empty string when the content has no renderer syntax.
+func findFactorySectionMarker(value string) string {
+	return factorySectionMarkerPattern.FindString(value)
 }
 
 // renderConditionalSection selects one Markdown section arm delimited by

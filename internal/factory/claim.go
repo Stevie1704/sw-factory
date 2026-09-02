@@ -46,6 +46,10 @@ type SpecificationPacket struct {
 	// RepositoryGuidancePaths records the exact named guidance files represented
 	// in RepositoryGuidance so standards findings can cite only captured files.
 	RepositoryGuidancePaths []string `json:"repository_guidance_paths,omitempty"`
+	// RepositoryCraft contains the exact role-craft files captured from the
+	// immutable base checkpoint. Later prompts use this content only; they do
+	// not reread a checkout or repository branch.
+	RepositoryCraft map[string]RepositoryCraftDocument `json:"repository_craft,omitempty"`
 	// Clarifications contains the authorized answers resolved after claim.
 	Clarifications []Clarification `json:"clarifications,omitempty"`
 	// Route is the factory-owned contract-first workflow route selected by the
@@ -229,6 +233,10 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return cause
 	}
 	packet.RepositoryGuidance, packet.RepositoryGuidancePaths, err = captureRepositoryGuidance(ctx, worktreeManager, workspace)
+	if err != nil {
+		return IssueResult{}, cleanupWorkspace(err)
+	}
+	packet.RepositoryCraft, err = captureRepositoryCraft(ctx, worktreeManager, workspace, repositoryConfig.RoleCraft)
 	if err != nil {
 		return IssueResult{}, cleanupWorkspace(err)
 	}

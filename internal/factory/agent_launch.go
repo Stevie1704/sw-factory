@@ -243,6 +243,9 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err := os.MkdirAll(resultDirectory, 0o700); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("create invocation result directory: %w", err)
 	}
+	if err := validateRepositoryCraftPacket(packet, invocationID); err != nil {
+		return AgentLaunchResult{}, err
+	}
 	testHandoff := run.TestHandoff
 	testObjection := run.TestObjection
 	testRevisionAttempt := run.TestRevisionAttempts
@@ -265,26 +268,33 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	role := request.Role
 	stage := request.Stage
+	repositoryCraft, err := frozenRepositoryCraftForRole(packet, role, invocationID)
+	if err != nil {
+		return AgentLaunchResult{}, err
+	}
+	craftSourcePath, craftSHA256 := craftMetadataForInvocation(repositoryCraft)
 	invocationPacket := InvocationPacket{
-		SchemaVersion:       invocationPacketVersion,
-		InvocationID:        invocationID,
-		RunID:               run.ID,
-		Role:                role,
-		Stage:               stage,
-		SpecificationPacket: run.SpecificationPacket,
-		PromptVersion:       roleDefinition.PromptVersion,
-		TestPolicyMode:      packet.RepositoryConfig.TestPolicy.Mode,
-		Route:               packet.Route,
-		DesignHandoff:       designHandoff,
-		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
-		TestHandoff:         testHandoff,
-		TestObjection:       testObjection,
-		TestRevisionAttempt: testRevisionAttempt,
-		TestRevisionBudget:  testRevisionBudget,
-		ProtectedTestPaths:  protectedTestPaths,
-		TestExemption:       testExemption,
-		ReviewRepair:        reviewRepairPacket,
-		ReviewContext:       reviewContext,
+		SchemaVersion:         invocationPacketVersion,
+		InvocationID:          invocationID,
+		RunID:                 run.ID,
+		Role:                  role,
+		Stage:                 stage,
+		SpecificationPacket:   run.SpecificationPacket,
+		PromptVersion:         roleDefinition.PromptVersion,
+		PromptCraftSourcePath: craftSourcePath,
+		PromptCraftSHA256:     craftSHA256,
+		TestPolicyMode:        packet.RepositoryConfig.TestPolicy.Mode,
+		Route:                 packet.Route,
+		DesignHandoff:         designHandoff,
+		PermittedPaths:        append([]string(nil), request.PermittedPaths...),
+		TestHandoff:           testHandoff,
+		TestObjection:         testObjection,
+		TestRevisionAttempt:   testRevisionAttempt,
+		TestRevisionBudget:    testRevisionBudget,
+		ProtectedTestPaths:    protectedTestPaths,
+		TestExemption:         testExemption,
+		ReviewRepair:          reviewRepairPacket,
+		ReviewContext:         reviewContext,
 	}
 	promptRequest := prompt.Request{
 		InvocationID:            invocationID,
@@ -293,6 +303,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		Stage:                   string(stage),
 		SpecificationPacket:     run.SpecificationPacket,
 		RepositoryGuidance:      packet.RepositoryGuidance,
+		RepositoryCraft:         repositoryCraftContent(repositoryCraft),
 		PromptVersion:           roleDefinition.PromptVersion,
 		TestPolicyMode:          string(packet.RepositoryConfig.TestPolicy.Mode),
 		Route:                   packet.Route,
@@ -316,21 +327,23 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		return AgentLaunchResult{}, err
 	}
 	invocation := store.Invocation{
-		ID:                  invocationID,
-		RunID:               run.ID,
-		Harness:             string(policy.Harness),
-		Role:                role,
-		Stage:               stage,
-		Model:               policy.Model,
-		ReasoningEffort:     policy.ReasoningEffort,
-		CredentialStoreID:   credentialStoreID,
-		InvocationDirectory: packetDirectory,
-		ResultDirectory:     resultDirectory,
-		PermittedPaths:      append([]string(nil), request.PermittedPaths...),
-		PromptVersion:       roleDefinition.PromptVersion,
-		Status:              store.InvocationStatusActive,
-		CreatedAt:           createdAt,
-		UpdatedAt:           createdAt,
+		ID:                    invocationID,
+		RunID:                 run.ID,
+		Harness:               string(policy.Harness),
+		Role:                  role,
+		Stage:                 stage,
+		Model:                 policy.Model,
+		ReasoningEffort:       policy.ReasoningEffort,
+		CredentialStoreID:     credentialStoreID,
+		InvocationDirectory:   packetDirectory,
+		ResultDirectory:       resultDirectory,
+		PermittedPaths:        append([]string(nil), request.PermittedPaths...),
+		PromptVersion:         roleDefinition.PromptVersion,
+		PromptCraftSourcePath: craftSourcePath,
+		PromptCraftSHA256:     craftSHA256,
+		Status:                store.InvocationStatusActive,
+		CreatedAt:             createdAt,
+		UpdatedAt:             createdAt,
 	}
 	if resumeSource != nil {
 		invocation.NativeSessionID = resumeSource.NativeSessionID
@@ -685,6 +698,13 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 	if err := validatePersistedInvocationPacket(run, invocation, persisted); err != nil {
 		return "", err
 	}
+	var repositoryCraft *RepositoryCraftDocument
+	if persisted.SchemaVersion >= 9 || len(packet.RepositoryConfig.RoleCraft) > 0 || invocation.PromptCraftSourcePath != "" || invocation.PromptCraftSHA256 != "" {
+		repositoryCraft, err = validateInvocationCraftIdentity(packet, persisted, invocation)
+		if err != nil {
+			return "", err
+		}
+	}
 	return prompt.Build(prompt.Request{
 		InvocationID:            invocation.ID,
 		RunID:                   run.ID,
@@ -692,6 +712,7 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 		Stage:                   string(invocation.Stage),
 		SpecificationPacket:     run.SpecificationPacket,
 		RepositoryGuidance:      packet.RepositoryGuidance,
+		RepositoryCraft:         repositoryCraftContent(repositoryCraft),
 		PromptVersion:           invocation.PromptVersion,
 		TestPolicyMode:          string(packet.RepositoryConfig.TestPolicy.Mode),
 		Route:                   packet.Route,
@@ -755,6 +776,16 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 	}
 	if invocation.PromptVersion != "" && persisted.PromptVersion != invocation.PromptVersion {
 		return errors.New("persisted invocation packet prompt version does not match the invocation")
+	}
+	if persisted.SchemaVersion >= 9 {
+		if persisted.PromptCraftSourcePath != invocation.PromptCraftSourcePath {
+			return &CraftSourcePathMismatchError{Role: invocation.Role, InvocationID: invocation.ID, Expected: invocation.PromptCraftSourcePath, Observed: persisted.PromptCraftSourcePath}
+		}
+		if persisted.PromptCraftSHA256 != invocation.PromptCraftSHA256 {
+			return &CraftDigestMismatchError{Role: invocation.Role, InvocationID: invocation.ID, SourcePath: invocation.PromptCraftSourcePath, Expected: invocation.PromptCraftSHA256, Observed: persisted.PromptCraftSHA256}
+		}
+	} else if invocation.PromptCraftSourcePath != "" || invocation.PromptCraftSHA256 != "" {
+		return errors.New("legacy persisted invocation packet cannot carry repository craft identity")
 	}
 	if persisted.TestPolicyMode != "" {
 		packet, err := decodeSpecificationPacket(run.SpecificationPacket)
