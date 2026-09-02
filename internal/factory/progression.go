@@ -636,8 +636,14 @@ func invocationIdentity(invocation *store.Invocation) string {
 type structuredReportPresence uint8
 
 const (
+	// structuredReportAbsent means the accepted report path definitively holds
+	// no regular file.
 	structuredReportAbsent structuredReportPresence = iota
+	// structuredReportPresent means a regular report file exists at the only
+	// accepted path.
 	structuredReportPresent
+	// structuredReportIndeterminate means the filesystem could not answer, so
+	// the observation proves nothing about the report.
 	structuredReportIndeterminate
 )
 

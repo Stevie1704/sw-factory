@@ -617,6 +617,10 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	return AgentLaunchResult{Invocation: invocation, Prompt: promptText, TestPolicyMode: packet.RepositoryConfig.TestPolicy.Mode, Route: packet.Route}, nil
 }
 
+// failedLaunchVoidMarker names the launch failure the coordinator may void:
+// one that left neither a native session nor a structured report. It is the
+// single wording every seam matches, so a wrapped error is never annotated
+// with the same rule twice.
 const failedLaunchVoidMarker = "harness launch produced no native session or structured report"
 
 // failedLaunchHasNoEvidence reports whether a persisted launch has no native
