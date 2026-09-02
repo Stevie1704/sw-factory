@@ -163,6 +163,26 @@ func TestPromptForPersistedInvocationRejectsRepositoryCraftDigestMismatch(t *tes
 	}
 }
 
+// TestValidatePersistedRepositoryCraftRejectsMalformedSpecificationPacket
+// verifies recovery cannot skip craft identity validation when the frozen
+// specification packet cannot be decoded.
+func TestValidatePersistedRepositoryCraftRejectsMalformedSpecificationPacket(t *testing.T) {
+	invocation := store.Invocation{
+		ID:                    "inv-craft-malformed",
+		RunID:                 "run-craft-malformed",
+		Role:                  workflow.RoleImplementation,
+		PromptCraftSourcePath: "docs/factory/craft/implementation.md",
+		PromptCraftSHA256:     strings.Repeat("a", 64),
+	}
+	err := validatePersistedRepositoryCraft(store.Run{
+		ID:                  invocation.RunID,
+		SpecificationPacket: "{malformed",
+	}, invocation)
+	if err == nil || !strings.Contains(err.Error(), "decode specification packet") {
+		t.Fatalf("validatePersistedRepositoryCraft() error = %v, want malformed packet rejection", err)
+	}
+}
+
 // TestPromptForPersistedInvocationUsesFrozenRepositoryCraft verifies restart
 // prompt construction uses packet bytes and keeps embedded authority intact.
 func TestPromptForPersistedInvocationUsesFrozenRepositoryCraft(t *testing.T) {

@@ -495,9 +495,13 @@ func validateRepositoryFilePath(path string) error {
 			return errors.New("must not contain parent traversal segments")
 		}
 	}
+	original := filepath.ToSlash(path)
 	clean := filepath.ToSlash(filepath.Clean(path))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean == ".git" || strings.HasPrefix(clean, ".git/") {
 		return errors.New("must remain inside the repository checkout")
+	}
+	if clean != original {
+		return errors.New("must use a clean repository-relative path")
 	}
 	return nil
 }

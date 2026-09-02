@@ -73,10 +73,27 @@ func TestLocalWorktreeManagerChecksRoleCraftAtTheTargetBranchHead(t *testing.T) 
 		"ls-remote --exit-code origin refs/heads/main",
 		"cat-file -e 0123456789abcdef0123456789abcdef01234567:docs/factory/craft/implementation.md",
 		"cat-file -t 0123456789abcdef0123456789abcdef01234567:docs/factory/craft/implementation.md",
+		"ls-tree 0123456789abcdef0123456789abcdef01234567 -- docs/factory/craft/implementation.md",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("Git commands = %q, want %q", joined, want)
 		}
+	}
+}
+
+// TestLocalWorktreeManagerRejectsRoleCraftSymlinkAtTheTargetBranchHead
+// verifies diagnosis does not treat Git symlink blobs as regular files.
+func TestLocalWorktreeManagerRejectsRoleCraftSymlinkAtTheTargetBranchHead(t *testing.T) {
+	repositoryPath := t.TempDir()
+	runner := &gitDoctorRunner{repositoryPath: repositoryPath, treeMode: "120000"}
+	manager := &gitadapter.LocalWorktreeManager{Runner: runner}
+	err := manager.CheckRoleCraft(context.Background(), gitadapter.DoctorRequest{
+		RepositoryPath: repositoryPath,
+		RemoteName:     "origin",
+		TargetBranch:   "main",
+	}, "implementation", "docs/factory/craft/implementation.md")
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("CheckRoleCraft() error = %v, want symlink rejection", err)
 	}
 }
 
@@ -115,6 +132,7 @@ func TestStartupChecksReportEveryConfiguredRoleCraftEntry(t *testing.T) {
 type gitDoctorRunner struct {
 	repositoryPath string
 	hooksPath      string
+	treeMode       string
 	commands       []string
 }
 
@@ -134,6 +152,12 @@ func (r *gitDoctorRunner) Run(_ context.Context, _ string, args []string) ([]byt
 		return []byte("0123456789abcdef0123456789abcdef01234567\trefs/heads/main\n"), nil
 	case len(args) == 3 && args[0] == "cat-file" && args[1] == "-t":
 		return []byte("blob\n"), nil
+	case len(args) >= 1 && args[0] == "ls-tree":
+		mode := r.treeMode
+		if mode == "" {
+			mode = "100644"
+		}
+		return []byte(mode + " blob 0123456789abcdef0123456789abcdef01234567\t" + args[len(args)-1] + "\n"), nil
 	case len(args) == 3 && args[0] == "rev-parse" && args[1] == "--git-path":
 		return []byte(r.hooksPath + "\n"), nil
 	default:

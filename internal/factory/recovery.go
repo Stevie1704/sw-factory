@@ -483,8 +483,13 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	}
 	invocationID = active.ID
 	diagnosis.InvocationExists = true
-	if craftErr := validatePersistedRepositoryCraft(run, *active); craftErr != nil {
-		addRepositoryCraftRecoveryDiscrepancy(diagnosis, *active, craftErr)
+	// Isolated legacy projections may omit the frozen packet entirely. The full
+	// recovery diagnosis reports that absence above; invoke craft validation for
+	// every persisted packet or invocation identity so malformed packets fail closed.
+	if strings.TrimSpace(run.SpecificationPacket) != "" || active.PromptCraftSourcePath != "" || active.PromptCraftSHA256 != "" {
+		if craftErr := validatePersistedRepositoryCraft(run, *active); craftErr != nil {
+			addRepositoryCraftRecoveryDiscrepancy(diagnosis, *active, craftErr)
+		}
 	}
 	if invocationProjectionNeverEstablished(*active) {
 		// The launch boundary rolled this invocation back before its agent

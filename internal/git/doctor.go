@@ -310,7 +310,32 @@ func (m *LocalWorktreeManager) CheckRoleCraft(ctx context.Context, request Docto
 	if strings.TrimSpace(string(fileType)) != "blob" {
 		return errors.New("role-craft target is not a regular file")
 	}
+	treeEntry, err := m.runner().Run(ctx, request.RepositoryPath, []string{"ls-tree", targetHead, "--", filepath.ToSlash(path)})
+	if err != nil {
+		return fmt.Errorf("inspect role-craft tree entry at target branch: %w", err)
+	}
+	if !isRegularRoleCraftTreeEntry(treeEntry, filepath.ToSlash(path)) {
+		return errors.New("role-craft target is not a regular file")
+	}
 	return nil
+}
+
+// isRegularRoleCraftTreeEntry accepts only ordinary executable or non-executable
+// files from one Git tree entry, rejecting symlinks, trees, and malformed output.
+func isRegularRoleCraftTreeEntry(output []byte, expectedPath string) bool {
+	line := strings.TrimSuffix(string(output), "\n")
+	if strings.Contains(line, "\n") {
+		return false
+	}
+	parts := strings.SplitN(line, "\t", 2)
+	if len(parts) != 2 || parts[1] != expectedPath {
+		return false
+	}
+	metadata := strings.Fields(parts[0])
+	if len(metadata) != 3 || metadata[1] != "blob" {
+		return false
+	}
+	return metadata[0] == "100644" || metadata[0] == "100755"
 }
 
 // targetBranchHead resolves the current remote target branch without changing

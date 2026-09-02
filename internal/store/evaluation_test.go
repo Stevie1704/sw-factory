@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,6 +380,32 @@ func TestEvaluationSummaryRejectsUnsafeMetadata(t *testing.T) {
 		}},
 	}); err == nil {
 		t.Fatal("SaveEvaluationSummary() error = nil, want unsafe invocation metadata rejection")
+	}
+}
+
+// TestSaveEvaluationSummaryValidatesPromptCraftIdentity verifies direct
+// summary callers cannot serialize an unpaired or malformed craft identity.
+func TestSaveEvaluationSummaryValidatesPromptCraftIdentity(t *testing.T) {
+	ctx := context.Background()
+	opened, err := store.Open(ctx, filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	for index, version := range []store.EvaluationInvocationVersion{
+		{PromptCraftSourcePath: "docs/factory/craft/implementation.md"},
+		{PromptCraftSHA256: strings.Repeat("a", 64)},
+		{PromptCraftSourcePath: "docs/factory/craft/implementation.md", PromptCraftSHA256: strings.Repeat("A", 64)},
+	} {
+		err := opened.SaveEvaluationSummary(ctx, store.EvaluationSummary{
+			RunID:              fmt.Sprintf("run-craft-identity-%d", index),
+			Outcome:            store.EvaluationOutcomeActive,
+			InvocationVersions: []store.EvaluationInvocationVersion{version},
+		})
+		if err == nil || !strings.Contains(err.Error(), "prompt craft") {
+			t.Fatalf("SaveEvaluationSummary(%d) error = %v, want prompt-craft identity rejection", index, err)
+		}
 	}
 }
 

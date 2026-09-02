@@ -238,7 +238,7 @@ func craftMetadataForInvocation(document *RepositoryCraftDocument) (string, stri
 func validatePersistedRepositoryCraft(run store.Run, invocation store.Invocation) error {
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
-		return nil
+		return fmt.Errorf("decode specification packet for repository craft verification: %w", err)
 	}
 	if len(packet.RepositoryConfig.RoleCraft) == 0 && invocation.PromptCraftSourcePath == "" && invocation.PromptCraftSHA256 == "" {
 		return nil

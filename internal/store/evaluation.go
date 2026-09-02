@@ -584,6 +584,9 @@ func validateEvaluationSummary(summary EvaluationSummary) error {
 		}
 	}
 	for _, version := range summary.InvocationVersions {
+		if err := validatePromptCraftIdentity(version.PromptCraftSourcePath, version.PromptCraftSHA256); err != nil {
+			return fmt.Errorf("evaluation invocation %q prompt craft identity: %w", version.InvocationID, err)
+		}
 		for field, value := range map[string]string{
 			"invocation id":            version.InvocationID,
 			"harness":                  version.Harness,
