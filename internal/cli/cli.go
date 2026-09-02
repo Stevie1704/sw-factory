@@ -661,9 +661,6 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		}
 		if result.Activity == factory.ActivityInvocationActive {
 			activeInvocationIDs := append([]string(nil), result.LatestRun.ActiveInvocationIDs...)
-			if len(activeInvocationIDs) == 0 && result.LatestRun.ActiveInvocationID != "" {
-				activeInvocationIDs = []string{result.LatestRun.ActiveInvocationID}
-			}
 			if len(activeInvocationIDs) == 1 {
 				if !writeOutput(output, errorsOutput, "active invocation: %s\n", activeInvocationIDs[0]) {
 					return 1

@@ -380,7 +380,7 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: "revision requires a tracked pull request"}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
-	if run.ActiveInvocationID != "" || len(run.ActiveInvocationIDs) != 0 {
+	if len(run.ActiveInvocationIDs) != 0 {
 		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: "revision requires a ready run with no active invocation"}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
@@ -496,7 +496,6 @@ func resetRevisionProjection(run *store.Run, packet SpecificationPacket) {
 	run.CheckRepairBudget = packet.RepositoryConfig.RetryLimits.CheckRepair
 	run.CheckRepairPendingAttempt = 0
 	run.RoleHandoff = nil
-	run.ImplementationHandoff = nil
 	run.SpecificationReview = nil
 	run.StandardsReview = nil
 	run.TestExemption = nil
@@ -653,7 +652,6 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestObjection = nil
 	run.TestRevisionBaseChangedPaths = nil
 	run.RoleHandoff = nil
-	run.ImplementationHandoff = nil
 	run.SpecificationReview = nil
 	run.StandardsReview = nil
 	run.ProtectedTestPaths = nil

@@ -64,9 +64,6 @@ func TestFactoryInitializesRegistersAndReportsAnEmptyRunStore(t *testing.T) {
 	if status.RepositoryPath != repositoryPath {
 		t.Fatalf("RepositoryPath = %q, want %q", status.RepositoryPath, repositoryPath)
 	}
-	if status.ActiveRun != nil {
-		t.Fatalf("ActiveRun = %#v, want empty store", status.ActiveRun)
-	}
 }
 
 func TestFactoryRefusesAnInvalidRegistrationBeforePersistingIt(t *testing.T) {
@@ -261,9 +258,6 @@ func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapt
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if status.ActiveRun != nil {
-		t.Fatalf("ActiveRun = %#v, want empty SQLite store", status.ActiveRun)
-	}
 	if status.RepositoryPath != "/work/repository" {
 		t.Fatalf("RepositoryPath = %q", status.RepositoryPath)
 	}
@@ -313,8 +307,8 @@ func TestFactoryStatusReportsTheLatestTerminalRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.ActiveRun == nil || status.ActiveRun.Status != store.StatusComplete || status.ActiveRun.Branch != "factory/run-complete" || status.ActiveRun.Worktree != "/worktrees/run-complete" {
-		t.Fatalf("status.ActiveRun = %#v, want latest terminal run details", status.ActiveRun)
+	if status.LatestRun == nil || status.LatestRun.Status != store.StatusComplete || status.LatestRun.Branch != "factory/run-complete" || status.LatestRun.Worktree != "/worktrees/run-complete" {
+		t.Fatalf("status.LatestRun = %#v, want latest terminal run details", status.LatestRun)
 	}
 }
 
@@ -645,9 +639,6 @@ func TestServiceStatusReturnsAnEmptyResultWhenNoRepositoryIsRegistered(t *testin
 	}
 	if status.RepositoryPath != "" {
 		t.Fatalf("RepositoryPath = %q, want empty", status.RepositoryPath)
-	}
-	if status.ActiveRun != nil {
-		t.Fatalf("ActiveRun = %#v, want nil", status.ActiveRun)
 	}
 }
 

@@ -241,8 +241,6 @@ type RegisterResult struct {
 }
 
 // StatusResult reports the registered repository and the latest known run.
-// ActiveRun is retained as the foundation field name for compatibility; it is
-// an alias of LatestRun and may contain a terminal run when no run is active.
 type StatusResult struct {
 	ConfigPath     string
 	RepositoryPath string
@@ -257,8 +255,6 @@ type StatusResult struct {
 	Activity RunActivity
 	// Recovery contains the read-only diagnosis for an interrupted run.
 	Recovery *RecoveryDiagnosis
-	// Deprecated: use LatestRun.
-	ActiveRun *store.Run
 }
 
 type fileConfigRepository struct{}
@@ -518,7 +514,6 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	} else {
 		result.LatestRun, err = opened.CurrentRun(ctx)
 	}
-	result.ActiveRun = result.LatestRun
 	if err != nil {
 		return StatusResult{}, err
 	}

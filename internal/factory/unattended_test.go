@@ -58,8 +58,8 @@ func TestStartDrivesAnAdvisoryIssueFromQueueToDraftPullRequest(t *testing.T) {
 	if final.CheckpointSHA != implementationCheckpoint {
 		t.Fatalf("final checkpoint = %q, want the implementation checkpoint", final.CheckpointSHA)
 	}
-	if final.ActiveInvocationID != "" {
-		t.Fatalf("final active invocation = %q, want none once no harness executes", final.ActiveInvocationID)
+	if len(final.ActiveInvocationIDs) != 0 {
+		t.Fatalf("final active invocations = %#v, want none once no harness executes", final.ActiveInvocationIDs)
 	}
 	if final.TestHandoff != nil || final.TestCheckpointSHA != "" || len(final.ProtectedTestPaths) != 0 || final.TestStageSkipped {
 		t.Fatalf("advisory run = %#v, want no independent test-stage artifacts", final)
@@ -138,8 +138,8 @@ func TestStartLaunchesOnlyTheStageTheFrozenRouteSelects(t *testing.T) {
 		t.Fatalf("route effects = checkpoints %d pull requests %d, want none while the test role runs", len(fixture.workspace.checkpoints), len(fixture.pullRequests.createdRequests))
 	}
 	run := fixture.currentRun(t)
-	if run.Stage != store.StageTest || run.ActiveInvocationID == "" {
-		t.Fatalf("run = stage %q active invocation %q, want the test stage with a live invocation", run.Stage, run.ActiveInvocationID)
+	if run.Stage != store.StageTest || len(run.ActiveInvocationIDs) == 0 {
+		t.Fatalf("run = stage %q active invocations %#v, want the test stage with a live invocation", run.Stage, run.ActiveInvocationIDs)
 	}
 	if activity := factory.RunActivityFor(run); activity != factory.ActivityInvocationActive {
 		t.Fatalf("activity = %q, want invocation-active", activity)
@@ -271,7 +271,7 @@ func TestStatusCommentSeparatesAnActiveInvocationFromAnActiveRun(t *testing.T) {
 	if body := factory.StatusCommentBody(run); !strings.Contains(body, "- activity: `run-active`") || strings.Contains(body, "active invocation") {
 		t.Fatalf("status comment = %q, want run-active without an invocation identity", body)
 	}
-	run.ActiveInvocationID = "inv-1"
+	run.ActiveInvocationIDs = []string{"inv-1"}
 	if got := factory.RunActivityFor(run); got != factory.ActivityInvocationActive {
 		t.Fatalf("RunActivityFor(active invocation) = %q, want invocation-active", got)
 	}

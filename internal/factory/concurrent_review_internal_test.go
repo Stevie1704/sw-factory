@@ -15,7 +15,6 @@ import (
 // run projection cannot alter the shared slice backing an earlier projection.
 func TestReleaseActiveInvocationDoesNotMutateCopiedRun(t *testing.T) {
 	previous := store.Run{
-		ActiveInvocationID:  "inv-specification",
 		ActiveInvocationIDs: []string{"inv-specification", "inv-standards"},
 	}
 	next := previous
