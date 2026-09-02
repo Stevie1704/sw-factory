@@ -145,7 +145,8 @@ const (
 	// InvocationStatusCannotProceed means the report contained blocking evidence.
 	InvocationStatusCannotProceed InvocationStatus = "cannot_proceed"
 	// InvocationStatusSuperseded means a later specification packet invalidated
-	// the invocation before its result could be used for progression.
+	// the invocation, or the coordinator voided a launch with no native session
+	// or structured report, before its result could be used for progression.
 	InvocationStatusSuperseded InvocationStatus = "superseded"
 )
 

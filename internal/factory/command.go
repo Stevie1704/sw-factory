@@ -982,9 +982,29 @@ type commandRevisionStore interface {
 // handleRetryCommand reopens a failed run at its existing stage and applies
 // the normal label/comment transition without creating a new status comment.
 func (s *Service) handleRetryCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
-	if run.Status != store.StatusFailed && run.Status != store.StatusCancelled {
+	var launch *store.Invocation
+	launchRetry := false
+	if run.Status == store.StatusWaitingForHuman {
+		var launchErr error
+		launch, launchRetry, launchErr = failedLaunchForRetry(ctx, runStore, run)
+		if launchErr != nil {
+			return CommandResult{}, launchErr
+		}
+	}
+	if run.Status != store.StatusFailed && run.Status != store.StatusCancelled && !launchRetry {
 		rejection := &PolicyRejection{Code: PolicyRejectionRetryState, Problem: fmt.Sprintf("retry is only allowed for a failed or cancelled run, not status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if launchRetry {
+		launch.Status = store.InvocationStatusSuperseded
+		launch.UpdatedAt = s.deps.Now().UTC()
+		invocationStore, ok := runStore.(InvocationStore)
+		if !ok {
+			return CommandResult{}, errors.New("operational store does not support failed-launch retry")
+		}
+		if err := invocationStore.SaveInvocation(ctx, *launch); err != nil {
+			return CommandResult{}, fmt.Errorf("supersede failed launch before retry: %w", err)
+		}
 	}
 	if run.StatusCommentID == "" {
 		updated, err := s.recoverCommandStatusComment(ctx, registration, run)
@@ -1008,7 +1028,16 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 			return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 		}
 	}
-	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; retrying run")
+	retryMessage := "command accepted; retrying run"
+	if launchRetry {
+		retryMessage = fmt.Sprintf("command accepted; retrying void %s/%s launch", launch.Role, launch.Stage)
+	}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), retryMessage)
+	if launchRetry {
+		// The active projection is authoritative for the retry precondition; a
+		// stale denormalized ID must not follow the fresh invocation.
+		next.ActiveInvocationIDs = nil
+	}
 	next.Status = store.StatusActive
 	next.MergeCommitSHA = ""
 	next.LifecycleReason = ""
@@ -1022,6 +1051,67 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 		PersistBeforeEffects: true,
 	})
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
+}
+
+// failedLaunchForRetry returns the one invocation a bounded waiting-state
+// retry may void. A retry is admitted only when the run has no active
+// invocation and the latest invocation has neither a native session nor a
+// structured report, so accepted work and recoverable sessions remain guarded.
+func failedLaunchForRetry(ctx context.Context, runStore RunStore, run store.Run) (*store.Invocation, bool, error) {
+	if run.Status != store.StatusWaitingForHuman {
+		return nil, false, nil
+	}
+	active, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("look up active invocations for failed-launch retry: %w", err)
+	}
+	if !supported || len(active) != 0 {
+		return nil, false, nil
+	}
+	latestStore, ok := runStore.(LatestInvocationStore)
+	if !ok {
+		return nil, false, nil
+	}
+	latest, err := latestStore.LatestInvocation(ctx, run.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("look up failed launch for retry: %w", err)
+	}
+	if latest == nil || !isRetryableFailedLaunch(run, *latest) {
+		return nil, false, nil
+	}
+	if _, ok := runStore.(InvocationStore); !ok {
+		return nil, false, nil
+	}
+	return latest, true, nil
+}
+
+// isRetryableFailedLaunch applies the void rule at the command seam. The
+// invocation must be a failed launch for the run's current role boundary; a
+// report or native session is evidence that the history must remain protected.
+func isRetryableFailedLaunch(run store.Run, invocation store.Invocation) bool {
+	if invocation.RunID != run.ID || !failedLaunchHasNoEvidence(invocation) {
+		return false
+	}
+	if invocation.Status != store.InvocationStatusCannotProceed && invocation.Status != store.InvocationStatusSuperseded {
+		return false
+	}
+	if invocation.Status == store.InvocationStatusSuperseded && !supersededFailedLaunchReason(run.LifecycleReason) {
+		return false
+	}
+	definition, declared := workflow.DefaultRegistry().Role(invocation.Role)
+	if !declared || definition.Stage != invocation.Stage {
+		return false
+	}
+	if run.Stage == store.StageDraftPR {
+		return invocation.Stage == store.StageReview && definition.Kind == workflow.RoleKindReview
+	}
+	return invocation.Stage == definition.Stage && workflow.DefaultRegistry().CanStartFrom(invocation.Role, run.Stage)
+}
+
+// supersededFailedLaunchReason identifies a coordinator-voided launch in the
+// lifecycle projection without adding another persisted run status.
+func supersededFailedLaunchReason(reason string) bool {
+	return strings.Contains(reason, failedLaunchVoidMarker)
 }
 
 // handleHarnessConfiguration validates an authorized harness override against

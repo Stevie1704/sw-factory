@@ -360,6 +360,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	invocationPersisted := false
 	workerStarted := false
 	preserveInvocation := false
+	voidedLaunch := false
 	cleanupSurface := terminal.Surface{}
 	defer func() {
 		if returnErr == nil || !invocationPersisted || preserveInvocation {
@@ -374,9 +375,17 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 				return
 			}
 		}
+		voidedLaunch = failedLaunchHasNoEvidence(invocation)
+		if voidedLaunch && !strings.Contains(returnErr.Error(), failedLaunchVoidMarker) {
+			returnErr = fmt.Errorf("%w; %s", returnErr, failedLaunchRetryGuidance(invocation))
+		}
 		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		invocation.Status = store.InvocationStatusCannotProceed
+		if voidedLaunch {
+			invocation.Status = store.InvocationStatusSuperseded
+		} else {
+			invocation.Status = store.InvocationStatusCannotProceed
+		}
 		invocation.UpdatedAt = s.deps.Now().UTC()
 		_ = invocationStore.SaveInvocation(rollbackContext, invocation)
 		if workerStarted {
@@ -500,6 +509,9 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		session, err = harnessRuntime.Start(ctx, startRequest)
 	}
 	if err != nil {
+		if strings.TrimSpace(session.NativeSessionID) != "" {
+			invocation.NativeSessionID = session.NativeSessionID
+		}
 		classified := harness.ClassifyError(err, string(policy.Harness))
 		// A launch failure is otherwise unrecoverable after the fact: the
 		// surface is closed and the worker stopped, so whatever the harness
@@ -588,6 +600,20 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	s.markInvocationStarted(invocation.ID)
 	return AgentLaunchResult{Invocation: invocation, Prompt: promptText, TestPolicyMode: packet.RepositoryConfig.TestPolicy.Mode, Route: packet.Route}, nil
+}
+
+const failedLaunchVoidMarker = "harness launch produced no native session or structured report"
+
+// failedLaunchHasNoEvidence reports whether a persisted launch has no native
+// session or structured report that a later recovery must protect.
+func failedLaunchHasNoEvidence(invocation store.Invocation) bool {
+	return strings.TrimSpace(invocation.NativeSessionID) == "" && !agentResultReady(invocation)
+}
+
+// failedLaunchRetryGuidance identifies a launch that left no evidence to
+// protect and tells the operator which command reopens its role boundary.
+func failedLaunchRetryGuidance(invocation store.Invocation) string {
+	return fmt.Sprintf("%s for %s/%s; use `/factory retry` to start a fresh invocation", failedLaunchVoidMarker, invocation.Role, invocation.Stage)
 }
 
 // resumePersistedInvocation restores one active invocation after a coordinator

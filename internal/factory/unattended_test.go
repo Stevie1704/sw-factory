@@ -2,6 +2,7 @@ package factory_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -109,6 +110,87 @@ func TestUnattendedProgressionStopsAtAWaitingStateAndPublishesIt(t *testing.T) {
 	}
 	if !strings.Contains(factory.StatusCommentBody(final), "- activity: `waiting-for-human`") {
 		t.Fatalf("status comment = %q, want the waiting activity", factory.StatusCommentBody(final))
+	}
+}
+
+// TestFailedLaunchCanRetryTheSameRoleAndPacket verifies the complete recovery
+// seam: unattended progression voids a launch with no native evidence, the
+// operator retry reopens the existing stage, and a fresh invocation reuses the
+// same specification packet.
+func TestFailedLaunchCanRetryTheSameRoleAndPacket(t *testing.T) {
+	fixture := newUnattendedFixture(t)
+	fixture.harness.startErr = errors.New("prompt exceeds launch limit")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture.stopAfterLeaseRenewals(cancel, 3)
+
+	if err := fixture.service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waiting := fixture.currentRun(t)
+	if waiting.Status != store.StatusWaitingForHuman || waiting.Stage != store.StageImplementation {
+		t.Fatalf("waiting run = stage %q status %q, want implementation/waiting_for_human", waiting.Stage, waiting.Status)
+	}
+	if !strings.Contains(waiting.LifecycleReason, "harness launch produced no native session or structured report") || !strings.Contains(waiting.LifecycleReason, "/factory retry") {
+		t.Fatalf("lifecycle reason = %q, want the void rule and retry command", waiting.LifecycleReason)
+	}
+
+	opened, err := store.Open(context.Background(), fixture.operationalPath)
+	if err != nil {
+		t.Fatalf("open operational store after failed launch: %v", err)
+	}
+	failed, err := opened.LatestInvocation(context.Background(), waiting.ID)
+	if err != nil {
+		_ = opened.Close()
+		t.Fatalf("read failed invocation: %v", err)
+	}
+	if failed == nil || failed.Status != store.InvocationStatusSuperseded || failed.Role != "implementation" || failed.Stage != store.StageImplementation {
+		_ = opened.Close()
+		t.Fatalf("failed invocation = %#v, want superseded implementation launch", failed)
+	}
+	failedPacket, err := os.ReadFile(filepath.Join(failed.InvocationDirectory, "specification.json"))
+	if err != nil {
+		_ = opened.Close()
+		t.Fatalf("read failed invocation packet: %v", err)
+	}
+	var failedPacketValue factory.InvocationPacket
+	if err := json.Unmarshal(failedPacket, &failedPacketValue); err != nil {
+		_ = opened.Close()
+		t.Fatalf("decode failed invocation packet: %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("close failed-launch store: %v", err)
+	}
+
+	retry, err := fixture.service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: waiting.IssueNumber,
+		Comment:     github.Comment{ID: "retry-failed-launch", Author: "alice", Body: "/factory retry"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if retry.Outcome != factory.CommandAccepted || retry.Run.Status != store.StatusActive || retry.Run.SpecificationPacket != waiting.SpecificationPacket {
+		t.Fatalf("retry result = %#v, want accepted active run with the same packet", retry)
+	}
+
+	fixture.harness.startErr = nil
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: waiting.ID})
+	if err != nil {
+		t.Fatalf("StartAgent() after retry error = %v", err)
+	}
+	if launch.Invocation.ID == failed.ID || launch.Invocation.Role != failed.Role || launch.Invocation.Stage != failed.Stage {
+		t.Fatalf("recovered invocation = %#v, want a fresh %s/%s invocation", launch.Invocation, failed.Role, failed.Stage)
+	}
+	recoveredPacket, err := os.ReadFile(filepath.Join(launch.Invocation.InvocationDirectory, "specification.json"))
+	if err != nil {
+		t.Fatalf("read recovered invocation packet: %v", err)
+	}
+	var recoveredPacketValue factory.InvocationPacket
+	if err := json.Unmarshal(recoveredPacket, &recoveredPacketValue); err != nil {
+		t.Fatalf("decode recovered invocation packet: %v", err)
+	}
+	if recoveredPacketValue.SpecificationPacket != failedPacketValue.SpecificationPacket {
+		t.Fatalf("recovered specification packet changed from %q to %q", failedPacketValue.SpecificationPacket, recoveredPacketValue.SpecificationPacket)
 	}
 }
 
