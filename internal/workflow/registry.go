@@ -25,15 +25,15 @@ const (
 	RoleStandardsReview = "standards_review"
 
 	// PromptVersionTest identifies the immutable test-role prompt.
-	PromptVersionTest = "test-v2"
+	PromptVersionTest = "test-v3"
 	// PromptVersionImplementation identifies the immutable implementation prompt.
-	PromptVersionImplementation = "implementation-v3"
+	PromptVersionImplementation = "implementation-v6"
 	// PromptVersionArchitecture identifies the immutable architecture prompt.
-	PromptVersionArchitecture = "architecture-v2"
+	PromptVersionArchitecture = "architecture-v3"
 	// PromptVersionSpecificationReview identifies the immutable review prompt.
-	PromptVersionSpecificationReview = "specification-review-v1"
+	PromptVersionSpecificationReview = "specification-review-v2"
 	// PromptVersionStandardsReview identifies the immutable standards-review prompt.
-	PromptVersionStandardsReview = "standards-review-v2"
+	PromptVersionStandardsReview = "standards-review-v3"
 
 	// StageArchitecture identifies the optional architecture invocation stage.
 	StageArchitecture store.Stage = store.StageArchitecture

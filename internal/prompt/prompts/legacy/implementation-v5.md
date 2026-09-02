@@ -5,6 +5,8 @@ Implementation craft:
 - Prefer the smallest change that satisfies the frozen criteria. Abstraction, parameters, or extension points the specification does not ask for are out of scope.
 - Run focused checks continuously and run the full declared gate suite before proposing a checkpoint.
 - Report the focused commands you actually ran and the observable evidence they produced. Never use terminal appearance as evidence.
+- The accepted test-stage handoff is the seam. Do not re-negotiate it or widen it. On a contract-first route, use the seam supplied by the accepted test-stage handoff.
+- The implementation-owned TDD path is described in the nested route-selected block below.
 <!-- implementation-owned-tdd:start -->
 Implementation-owned TDD:
 
@@ -13,10 +15,6 @@ Implementation-owned TDD:
 - Write or update a focused behavioral test before production behavior when practical, observe the expected red result, make the smallest implementation change, and observe green before moving to the next vertical slice.
 - Revise the initial test design when implementation evidence requires it, including essential test infrastructure when needed; do not weaken deterministic gate meaning to make the implementation pass.
 - Include the red/green evidence and the commands actually run in the structured implementation handoff.
-<!-- implementation-owned-tdd:else -->
-Contract-first implementation:
-
-- On a contract-first route, use the seam supplied by the accepted test-stage handoff. Do not re-negotiate it or widen it.
 <!-- implementation-owned-tdd:end -->
 <!-- craft:end -->
 

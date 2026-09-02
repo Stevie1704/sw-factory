@@ -63,20 +63,27 @@ var rolePromptVersions = map[string]map[string]string{
 	workflow.RoleImplementation: {
 		"implementation-v1":                  "prompts/legacy/implementation-v1.md",
 		"implementation-v2":                  "prompts/legacy/implementation-v2.md",
+		"implementation-v3":                  "prompts/legacy/implementation-v3.md",
+		"implementation-v4":                  "prompts/legacy/implementation-v4.md",
+		"implementation-v5":                  "prompts/legacy/implementation-v5.md",
 		workflow.PromptVersionImplementation: rolePromptFiles[workflow.RoleImplementation],
 	},
 	workflow.RoleTest: {
+		"test-v2":                  "prompts/legacy/test-v2.md",
 		workflow.PromptVersionTest: rolePromptFiles[workflow.RoleTest],
 	},
 	workflow.RoleArchitecture: {
 		"architecture-v1":                  "prompts/legacy/architecture-v1.md",
+		"architecture-v2":                  "prompts/legacy/architecture-v2.md",
 		workflow.PromptVersionArchitecture: rolePromptFiles[workflow.RoleArchitecture],
 	},
 	workflow.RoleSpecificationReview: {
+		"specification-review-v1":                 "prompts/legacy/specification-review-v1.md",
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
 		"standards-review-v1":                 "prompts/legacy/standards-review-v1.md",
+		"standards-review-v2":                 "prompts/legacy/standards-review-v2.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 }
@@ -85,16 +92,32 @@ var rolePromptVersions = map[string]map[string]string{
 // versioned role body. A body edit must update its prompt version and this
 // identity together.
 var expectedPromptSHA256 = map[string]string{
-	workflow.PromptVersionImplementation:      "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
-	workflow.PromptVersionTest:                "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
-	workflow.PromptVersionArchitecture:        "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70",
-	workflow.PromptVersionSpecificationReview: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
-	workflow.PromptVersionStandardsReview:     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
+	workflow.PromptVersionImplementation:      "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939",
+	workflow.PromptVersionTest:                "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5",
+	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
+	workflow.PromptVersionSpecificationReview: "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed",
+	workflow.PromptVersionStandardsReview:     "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
+	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
+	"implementation-v4":                       "e169b645f4f22d91fa14941765e004d4c9708949502dd35fe146e2696bc78911",
+	"implementation-v5":                       "563454d454a86d5fe9b35c0c141430cac254c83097281e1c70b02711731d77a2",
 	"architecture-v1":                         "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
+	"architecture-v2":                         "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70",
+	"test-v2":                                 "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
+	"specification-review-v1":                 "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
 	"standards-review-v1":                     "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472",
+	"standards-review-v2":                     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
 }
+
+const (
+	// craftStartMarker begins the single factory-owned craft section in a
+	// current embedded role body.
+	craftStartMarker = "<!-- craft:start -->"
+	// craftEndMarker ends the single factory-owned craft section in a current
+	// embedded role body.
+	craftEndMarker = "<!-- craft:end -->"
+)
 
 // fenceMarkers are the delimiters that untrusted prompt content must not contain.
 var fenceMarkers = []string{
@@ -401,13 +424,25 @@ func (r Registry) roleBody(definition workflow.RoleDefinition, requestedVersion 
 	if identity.SHA256 != expected {
 		return "", PromptIdentity{}, fmt.Errorf("embedded prompt body for version %q has content identity %s, want %s; bump the prompt version", version, identity.SHA256, expected)
 	}
-	return strings.TrimSpace(string(data)), identity, nil
+	body := strings.TrimSpace(string(data))
+	if version == definition.PromptVersion {
+		if err := validateCraftSection(body, definition.Name); err != nil {
+			return "", PromptIdentity{}, err
+		}
+	}
+	return body, identity, nil
 }
 
-// renderRoleBody applies role-owned route selection to an already verified
-// embedded body. The selection removes or retains Markdown sections; it never
-// introduces role instruction text from Go source.
+// renderRoleBody renders the craft section and applies role-owned route
+// selection to an already verified embedded body. The selection removes or
+// retains Markdown sections; it never introduces role instruction text from Go
+// source.
 func renderRoleBody(body, role string, implementationOwnsTDD bool) (string, error) {
+	var err error
+	body, err = renderCraftSection(body, role)
+	if err != nil {
+		return "", err
+	}
 	if role != workflow.RoleImplementation {
 		return body, nil
 	}
@@ -417,11 +452,14 @@ func renderRoleBody(body, role string, implementationOwnsTDD bool) (string, erro
 		scope string
 	}{
 		{name: "implementation-owned-tdd", keep: implementationOwnsTDD, scope: "TDD"},
+		// This marker exists only in the retained pre-v6 implementation body;
+		// keep its historical route behavior without adding a second block to
+		// the current implementation craft section.
+		{name: "implementation-craft-independent-test-handoff", keep: !implementationOwnsTDD, scope: "legacy implementation craft handoff"},
 		{name: "independent-test-handoff", keep: !implementationOwnsTDD, scope: "independent-test handoff"},
 		{name: "implementation-owned-tdd-repair", keep: implementationOwnsTDD, scope: "TDD repair"},
 	}
 	for _, section := range sections {
-		var err error
 		body, err = renderConditionalSection(body, section.name, section.keep, section.scope)
 		if err != nil {
 			return "", err
@@ -430,18 +468,71 @@ func renderRoleBody(body, role string, implementationOwnsTDD bool) (string, erro
 	return strings.TrimSpace(body), nil
 }
 
-// renderConditionalSection removes or retains one Markdown section delimited
-// by factory-owned source markers without adding role prose in Go code.
-func renderConditionalSection(body, name string, keep bool, scope string) (string, error) {
-	start := "<!-- " + name + ":start -->"
-	end := "<!-- " + name + ":end -->"
-	startIndex := strings.Index(body, start)
-	endIndex := strings.Index(body, end)
-	if startIndex < 0 && endIndex < 0 {
+// validateCraftSection verifies that a current role body has exactly one
+// non-nested, correctly ordered craft section. Legacy bodies intentionally do
+// not call this validator so their recorded bytes remain replayable.
+func validateCraftSection(body, role string) error {
+	if strings.Count(body, craftStartMarker) != 1 || strings.Count(body, craftEndMarker) != 1 {
+		return fmt.Errorf("embedded %s prompt has malformed craft section", role)
+	}
+	if strings.Index(body, craftEndMarker) < strings.Index(body, craftStartMarker) {
+		return fmt.Errorf("embedded %s prompt has malformed craft section", role)
+	}
+	return nil
+}
+
+// renderCraftSection removes the factory-owned craft markers while retaining
+// their prose. Bodies without craft markers are legacy bodies and pass through
+// unchanged so persisted invocations rebuild the exact historical prompt.
+func renderCraftSection(body, role string) (string, error) {
+	if !strings.Contains(body, craftStartMarker) && !strings.Contains(body, craftEndMarker) {
 		return body, nil
 	}
-	if startIndex < 0 || endIndex < 0 || endIndex < startIndex {
+	if err := validateCraftSection(body, role); err != nil {
+		return "", err
+	}
+	startIndex := strings.Index(body, craftStartMarker)
+	endIndex := strings.Index(body, craftEndMarker)
+	craft := strings.TrimSpace(body[startIndex+len(craftStartMarker) : endIndex])
+	prefix := strings.TrimRight(body[:startIndex], " \t\r\n")
+	suffix := strings.TrimLeft(body[endIndex+len(craftEndMarker):], " \t\r\n")
+	if craft == "" {
+		return strings.TrimSpace(prefix + "\n\n" + suffix), nil
+	}
+	return strings.TrimSpace(prefix + "\n\n" + craft + "\n\n" + suffix), nil
+}
+
+// renderConditionalSection selects one Markdown section arm delimited by
+// factory-owned source markers without adding role prose in Go code. A section
+// may contain one optional :else marker for a mutually exclusive second arm.
+func renderConditionalSection(body, name string, keep bool, scope string) (string, error) {
+	start := "<!-- " + name + ":start -->"
+	elseMarker := "<!-- " + name + ":else -->"
+	end := "<!-- " + name + ":end -->"
+	startIndex := strings.Index(body, start)
+	elseIndex := strings.Index(body, elseMarker)
+	endIndex := strings.Index(body, end)
+	if startIndex < 0 && elseIndex < 0 && endIndex < 0 {
+		return body, nil
+	}
+	if startIndex < 0 || endIndex < 0 || endIndex < startIndex || (elseIndex >= 0 && (elseIndex < startIndex+len(start) || elseIndex > endIndex)) || strings.Count(body, elseMarker) > 1 {
 		return "", errors.New("embedded implementation prompt has malformed " + scope + " section")
+	}
+	if elseIndex >= 0 {
+		afterEndIndex := endIndex + len(end)
+		prefix := strings.TrimRight(body[:startIndex], " \t\r\n")
+		suffix := strings.TrimLeft(body[afterEndIndex:], " \t\r\n")
+		var arm string
+		if keep {
+			arm = body[startIndex+len(start) : elseIndex]
+		} else {
+			arm = body[elseIndex+len(elseMarker) : endIndex]
+		}
+		arm = strings.TrimSpace(arm)
+		if arm == "" {
+			return strings.TrimSpace(prefix + "\n\n" + suffix), nil
+		}
+		return strings.TrimSpace(prefix + "\n\n" + arm + "\n\n" + suffix), nil
 	}
 	endIndex += len(end)
 	if !keep {

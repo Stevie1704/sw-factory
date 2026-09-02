@@ -27,6 +27,17 @@ their prompt version so restart recovery cannot silently select a different
 body. Route-dependent sections are selected from the embedded body; Go adds
 only frozen specification, handoff, repair, review-context, and scope data.
 
+Each current role body contains exactly one factory-owned `craft` section,
+delimited by `<!-- craft:start -->` and `<!-- craft:end -->`; everything
+outside that section is the role's `authority` section. The craft section
+contains role-specific guidance about how to do the work, while the authority
+section contains ownership, safety, permitted-path, workflow, and reporting
+rules. Craft guidance advises craft only and never widens the frozen
+specification, moves a workflow stage, changes permitted paths, or alters the
+report contract. Where craft guidance and factory-owned rules disagree, the
+factory-owned rules decide. An empty craft section is valid, and rendering
+removes the markers while retaining nonempty craft prose.
+
 At claim time, the coordinator reads the tracked repository guidance files from
 the exact Git base checkpoint and stores the named document projection in the
 frozen specification packet. The prompt always frames that projection as

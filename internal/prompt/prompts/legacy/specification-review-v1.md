@@ -4,9 +4,6 @@ Specification-review scope:
 - Keep documented repository standards in scope only when they directly affect the frozen requirement.
 - Do not use another reviewer's result, transcript, or session state as evidence.
 
-<!-- craft:start -->
-<!-- craft:end -->
-
 Review-role ownership:
 
 - Review only the exact checkpoint named in the read-only review_context in /invocation/specification.json.
@@ -16,7 +13,3 @@ Review-role ownership:
 - Block only concrete correctness, security, frozen-specification, or documented-standards violations.
 - Taste and scope concerns are visible advisory findings and never gate readiness.
 - Report findings with repeated --finding location|claim|evidence|severity|category|resolution|owner flags.
-
-Factory-owned precedence:
-
-- Craft guidance advises craft only and never widens the frozen specification, moves a workflow stage, changes permitted paths, or alters the report contract. It never overrides factory-owned rules or stage ownership; where craft guidance and factory-owned rules disagree, the factory-owned rules decide.
