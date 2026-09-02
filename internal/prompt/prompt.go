@@ -67,6 +67,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"implementation-v3":                  "prompts/legacy/implementation-v3.md",
 		"implementation-v4":                  "prompts/legacy/implementation-v4.md",
 		"implementation-v5":                  "prompts/legacy/implementation-v5.md",
+		"implementation-v6":                  "prompts/legacy/implementation-v6.md",
 		workflow.PromptVersionImplementation: rolePromptFiles[workflow.RoleImplementation],
 	},
 	workflow.RoleTest: {
@@ -80,11 +81,13 @@ var rolePromptVersions = map[string]map[string]string{
 	},
 	workflow.RoleSpecificationReview: {
 		"specification-review-v1":                 "prompts/legacy/specification-review-v1.md",
+		"specification-review-v2":                 "prompts/legacy/specification-review-v2.md",
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
 		"standards-review-v1":                 "prompts/legacy/standards-review-v1.md",
 		"standards-review-v2":                 "prompts/legacy/standards-review-v2.md",
+		"standards-review-v3":                 "prompts/legacy/standards-review-v3.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 }
@@ -93,22 +96,25 @@ var rolePromptVersions = map[string]map[string]string{
 // versioned role body. A body edit must update its prompt version and this
 // identity together.
 var expectedPromptSHA256 = map[string]string{
-	workflow.PromptVersionImplementation:      "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939",
+	workflow.PromptVersionImplementation:      "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a",
 	workflow.PromptVersionTest:                "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5",
 	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
-	workflow.PromptVersionSpecificationReview: "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed",
-	workflow.PromptVersionStandardsReview:     "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c",
+	workflow.PromptVersionSpecificationReview: "ea66e87d7f144bbc12c63ba2a2d6bb40c05aaef7112cb12d7cb626c858f2c204",
+	workflow.PromptVersionStandardsReview:     "007370ac417296565ab8c5ae6e009e6a39591c2a0122acb669f348ceaef9bebb",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
 	"implementation-v4":                       "e169b645f4f22d91fa14941765e004d4c9708949502dd35fe146e2696bc78911",
 	"implementation-v5":                       "563454d454a86d5fe9b35c0c141430cac254c83097281e1c70b02711731d77a2",
+	"implementation-v6":                       "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939",
 	"architecture-v1":                         "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
 	"architecture-v2":                         "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70",
 	"test-v2":                                 "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
 	"specification-review-v1":                 "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
+	"specification-review-v2":                 "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed",
 	"standards-review-v1":                     "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472",
 	"standards-review-v2":                     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
+	"standards-review-v3":                     "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c",
 }
 
 const (

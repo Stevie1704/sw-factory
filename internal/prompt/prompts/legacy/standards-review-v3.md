@@ -5,7 +5,8 @@ Standards-review scope:
 - Every standards finding must cite either a rule in a named repository guidance document or a named baseline heuristic, and identify the hunk to which it applies.
 - Put that provenance in the finding evidence as `source=guidance:<named document>;hunk=<finding location>;<observable evidence>` or `source=heuristic:<baseline name>;hunk=<finding location>;<observable evidence>`; the `hunk` value must match the finding location exactly.
 <!-- craft:start -->
-- Use the `standards-review` skill for this review axis and its fallback heuristic baseline.
+- Use this heuristic baseline only where the repository documents nothing more specific: naming that does not reveal intent; duplicated logic shape; misplaced behavior; recurring parameter clumps; primitives standing in for domain concepts; repeated type switches; scattered edits for one logical change; one module edited for unrelated reasons; speculative generality; long navigation chains; pure delegation; and refused inheritance.
+- The baseline is an explicitly overridable floor.
 <!-- craft:end -->
 - The documented rule overrides this baseline. Each baseline item is an explicit judgement call, never a blocker. Skip anything already enforced by a declared gate.
 - Baseline heuristic findings are advisory and never gate readiness. Only a concrete documented-standards violation may block on this review axis.

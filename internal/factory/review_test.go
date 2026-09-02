@@ -56,7 +56,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if packet.TestHandoff != nil || packet.TestObjection != nil || packet.TestExemption != nil || len(packet.ProtectedTestPaths) != 0 {
 		t.Fatalf("review packet inherited test context: %#v", packet)
 	}
-	for _, marker := range []string{"specification-review-v2", "exact checkpoint", "--finding", "no upstream harness transcript"} {
+	for _, marker := range []string{"specification-review-v3", "exact checkpoint", "--finding", "no upstream harness transcript"} {
 		if !strings.Contains(strings.ToLower(launch.Prompt), strings.ToLower(marker)) {
 			t.Errorf("review prompt missing %q:\n%s", marker, launch.Prompt)
 		}

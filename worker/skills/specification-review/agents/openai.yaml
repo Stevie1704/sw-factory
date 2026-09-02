@@ -1,0 +1,5 @@
+interface:
+  display_name: "Specification Review"
+  short_description: "Review one checkpoint against its frozen spec"
+policy:
+  allow_implicit_invocation: false

@@ -36,12 +36,16 @@ A skill is admitted only when it is craft guidance that applies inside the
 mounted worktree. A skill that mutates the issue tracker, opens a pull request,
 or moves a workflow stage is refused.
 
-The embedded role prompts scope the set per role, because the harnesses cannot:
-the implementation body names `tdd`, `codebase-design`, `diagnosing-bugs`, and
-`resolving-merge-conflicts` and refuses `domain-modeling`, and the architecture
-body claims `domain-modeling` for terminology and decision records. Both bodies
-state that a skill advises craft only and that the factory rules decide any
-disagreement.
+The embedded role prompts scope the set per role, because the harnesses cannot.
+The implementation body invokes an adapted `implement` workflow and assigns
+`tdd` only when implementation owns testing; it also names `codebase-design`,
+`diagnosing-bugs`, and `resolving-merge-conflicts`, while refusing
+`domain-modeling`. The architecture body claims `domain-modeling` for
+terminology and decision records. The specification and standards reviewers
+each invoke a single-axis adaptation of the upstream `code-review` skill; the
+combined subagent orchestration and aggregation remain outside the worker.
+Every body states that a skill advises craft only and that factory rules decide
+any disagreement.
 
 ## Consequences
 

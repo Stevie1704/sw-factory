@@ -1,7 +1,6 @@
 <!-- craft:start -->
 Implementation craft:
 
-- Use the `implement` skill as the implementation workflow for this invocation.
 - Work in vertical slices: implement one behavior with the smallest useful change, then repeat. Do not write the full test surface up front and implement against it afterward.
 - Prefer the smallest change that satisfies the frozen criteria. Abstraction, parameters, or extension points the specification does not ask for are out of scope.
 - Run focused checks continuously and run the full declared gate suite before proposing a checkpoint.
@@ -9,7 +8,6 @@ Implementation craft:
 <!-- implementation-owned-tdd:start -->
 Implementation-owned TDD:
 
-- Use the `tdd` skill for every implementation-owned vertical slice.
 - On the implementation-owned TDD path, agree the seam from the frozen acceptance criteria as part of this run.
 - When no independent test-stage handoff is required, implementation owns the complete red/green/refactor loop for the frozen acceptance criteria.
 - Write or update a focused behavioral test before production behavior when practical, observe the expected red result, make the smallest implementation change, and observe green before moving to the next vertical slice.
@@ -26,7 +24,7 @@ Contract-first implementation:
 
 Worker skill set:
 
-- The worker image supplies a curated skill set pinned by the run's image digest. Use `implement` for the implementation workflow; within that workflow, use `tdd`, `codebase-design`, `diagnosing-bugs`, and `resolving-merge-conflicts` when this prompt and the skill description assign them.
+- The worker image supplies a curated skill set pinned by the run's image digest. Use `tdd`, `codebase-design`, `diagnosing-bugs`, and `resolving-merge-conflicts` as craft references when the work matches the skill's own description.
 - A skill advises craft only. It never widens the frozen specification, moves a workflow stage, edits the issue tracker, or authorizes a Git history or GitHub action. Where a skill and this prompt disagree, this prompt decides.
 - Do not use `domain-modeling` in this role. Terminology and decision records belong to the architecture role and lie outside the frozen implementation scope.
 
