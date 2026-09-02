@@ -2213,6 +2213,9 @@ func validatePromptCraftIdentity(sourcePath, digest string) error {
 	if strings.ContainsAny(sourcePath, "\x00\r\n\\") || filepath.IsAbs(sourcePath) {
 		return errors.New("invocation prompt craft source path must be repository-relative")
 	}
+	if !strings.EqualFold(filepath.Ext(sourcePath), ".md") {
+		return errors.New("invocation prompt craft source path must name a Markdown file")
+	}
 	for _, segment := range strings.Split(filepath.ToSlash(sourcePath), "/") {
 		if segment == ".." {
 			return errors.New("invocation prompt craft source path must not contain parent traversal segments")

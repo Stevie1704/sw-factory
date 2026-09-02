@@ -652,6 +652,9 @@ func validateRoleCraft(values map[string]string, registry workflow.Registry) err
 		if strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.ContainsAny(value, "\\\x00\r\n") || filepath.IsAbs(value) {
 			return validation(field, "must be a safe repository-relative path")
 		}
+		if !strings.EqualFold(filepath.Ext(value), ".md") {
+			return validation(field, "must name a repository-relative Markdown file")
+		}
 		normalized := filepath.ToSlash(value)
 		segments := strings.Split(normalized, "/")
 		for _, segment := range segments {

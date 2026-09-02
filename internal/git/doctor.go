@@ -295,7 +295,11 @@ func (m *LocalWorktreeManager) CheckRoleCraft(ctx context.Context, request Docto
 	if err := validateRepositoryFilePath(path); err != nil {
 		return fmt.Errorf("role-craft path: %w", err)
 	}
-	object := request.TargetBranch + ":" + filepath.ToSlash(path)
+	targetHead, err := m.targetBranchHead(ctx, request)
+	if err != nil {
+		return err
+	}
+	object := targetHead + ":" + filepath.ToSlash(path)
 	if _, err := m.runner().Run(ctx, request.RepositoryPath, []string{"cat-file", "-e", object}); err != nil {
 		return fmt.Errorf("resolve role-craft file at target branch: %w", err)
 	}
@@ -307,6 +311,28 @@ func (m *LocalWorktreeManager) CheckRoleCraft(ctx context.Context, request Docto
 		return errors.New("role-craft target is not a regular file")
 	}
 	return nil
+}
+
+// targetBranchHead resolves the current remote target branch without changing
+// local refs, so role-craft diagnosis observes the same branch head claim will
+// fetch rather than a stale local branch of the same name.
+func (m *LocalWorktreeManager) targetBranchHead(ctx context.Context, request DoctorRequest) (string, error) {
+	remoteName := strings.TrimSpace(request.RemoteName)
+	if remoteName == "" {
+		remoteName = DefaultRemoteName
+	}
+	if err := validateRefPart(remoteName); err != nil {
+		return "", fmt.Errorf("role-craft remote: %w", err)
+	}
+	output, err := m.runner().Run(ctx, request.RepositoryPath, []string{"ls-remote", "--exit-code", remoteName, "refs/heads/" + request.TargetBranch})
+	if err != nil {
+		return "", fmt.Errorf("read role-craft target branch head: %w", err)
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) == 0 || !validCommitSHA(fields[0]) {
+		return "", errors.New("role-craft target branch response did not contain a full commit identity")
+	}
+	return fields[0], nil
 }
 
 // validateDoctorRepository verifies a repository path before invoking Git.

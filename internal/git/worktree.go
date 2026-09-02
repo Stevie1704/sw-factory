@@ -282,7 +282,15 @@ func (m *LocalWorktreeManager) ReadRepositoryCraft(ctx context.Context, worktree
 		return GuidanceDocument{}, fmt.Errorf("craft path: %w", err)
 	}
 	cleanPath := filepath.ToSlash(path)
-	content, err := m.runner().Run(ctx, worktreePath, []string{"show", checkpointSHA + ":" + cleanPath})
+	object := checkpointSHA + ":" + cleanPath
+	fileType, err := m.runner().Run(ctx, worktreePath, []string{"cat-file", "-t", object})
+	if err != nil {
+		return GuidanceDocument{}, fmt.Errorf("resolve repository craft %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
+	}
+	if strings.TrimSpace(string(fileType)) != "blob" {
+		return GuidanceDocument{}, fmt.Errorf("repository craft %q at checkpoint %q is not a regular file", cleanPath, checkpointSHA)
+	}
+	content, err := m.runner().Run(ctx, worktreePath, []string{"show", object})
 	if err != nil {
 		return GuidanceDocument{}, fmt.Errorf("read repository craft %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
 	}
@@ -478,6 +486,9 @@ func validateCheckpointPath(path string) error {
 func validateRepositoryFilePath(path string) error {
 	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
 		return errors.New("must be a safe repository-relative path")
+	}
+	if !strings.EqualFold(filepath.Ext(path), ".md") {
+		return errors.New("must name a repository-relative Markdown file")
 	}
 	for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
 		if segment == ".." {

@@ -233,6 +233,7 @@ func TestValidateRepositoryRejectsUnsafeRoleCraftPaths(t *testing.T) {
 		{name: "unknown role", path: "docs/factory/craft/custom.md"},
 		{name: "absolute", path: "/tmp/craft.md"},
 		{name: "parent traversal", path: "docs/../craft.md"},
+		{name: "not markdown", path: "docs/factory/craft/implementation.txt"},
 		{name: "empty", path: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {

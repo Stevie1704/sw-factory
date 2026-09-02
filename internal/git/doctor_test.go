@@ -65,13 +65,14 @@ func TestLocalWorktreeManagerChecksRoleCraftAtTheTargetBranchHead(t *testing.T) 
 	repositoryPath := t.TempDir()
 	runner := &gitDoctorRunner{repositoryPath: repositoryPath}
 	manager := &gitadapter.LocalWorktreeManager{Runner: runner}
-	if err := manager.CheckRoleCraft(context.Background(), gitadapter.DoctorRequest{RepositoryPath: repositoryPath, TargetBranch: "main"}, "implementation", "docs/factory/craft/implementation.md"); err != nil {
+	if err := manager.CheckRoleCraft(context.Background(), gitadapter.DoctorRequest{RepositoryPath: repositoryPath, RemoteName: "origin", TargetBranch: "main"}, "implementation", "docs/factory/craft/implementation.md"); err != nil {
 		t.Fatalf("CheckRoleCraft() error = %v", err)
 	}
 	joined := strings.Join(runner.commands, "\n")
 	for _, want := range []string{
-		"cat-file -e main:docs/factory/craft/implementation.md",
-		"cat-file -t main:docs/factory/craft/implementation.md",
+		"ls-remote --exit-code origin refs/heads/main",
+		"cat-file -e 0123456789abcdef0123456789abcdef01234567:docs/factory/craft/implementation.md",
+		"cat-file -t 0123456789abcdef0123456789abcdef01234567:docs/factory/craft/implementation.md",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("Git commands = %q, want %q", joined, want)
