@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -904,7 +905,7 @@ func (s *Service) AbandonPendingEffect(ctx context.Context, request AbandonPendi
 	if request.RunID != "" && request.RunID != run.ID {
 		return RecoveryResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	abandoner, ok := runStore.(PendingEffectAbandoner)
+	abandoner, ok := runStore.(effectkernel.PendingEffectAbandoner)
 	if !ok {
 		return RecoveryResult{}, errors.New("operational store does not support pending effect abandonment")
 	}
