@@ -157,6 +157,45 @@ on the `design-acceptance` route also receives `design_handoff`, the accepted
 architecture design it must exercise. The worker receives a separate writable `/results` mount
 containing only that invocation's result directory.
 
+The packet is the complete frozen claim; the prompt is a projection of it. A
+role prompt fences the claimed issue, the accepted clarifications, and the
+frozen run parameters the role acts on - target branch, route, test policy
+mode, declared gates, and the captured guidance paths - and points at
+`/invocation/specification.json` for everything else. Repository guidance
+therefore reaches the role once, inside its own untrusted fence, and
+coordinator-owned configuration such as declared cache paths, worker build,
+and harness or model policy stays out of the context window.
+
+A harness also discovers its own project instruction file from its working
+root, which is the mounted worktree, and loads it as unlabelled instructions: a
+second copy that is mutable during the run and that an implementation role
+could rewrite for itself.
+
+The Codex adapter closes that channel. It launches with
+`-c project_doc_max_bytes=0`, which suppresses `AGENTS.md` at the workspace
+root and in nested directories. The override bounds project documents only; the
+pinned worker skill set lives in the role home (`$CODEX_HOME/skills`,
+`$HOME/.claude/skills`) and stays available.
+
+The Claude adapter does not close it yet, so a Claude invocation still
+auto-discovers `CLAUDE.md` and its local variants from the worktree. The
+harness offers only `--bare` and `--safe-mode`, and neither is usable here:
+`--safe-mode` disables the pinned worker skills along with the project file,
+and `--bare` additionally drops hooks, plugins, and every credential source
+except `ANTHROPIC_API_KEY`, which the factory-managed credential store does not
+supply. Until the harness exposes a narrower control, a Claude role can read
+mutable worktree guidance that the factory did not freeze, and the prompt's
+precedence rule is the only bound on it.
+
+A check repair, a review repair, and a test-objection revision resume the
+harness session that already read the role's first prompt. Such a launch builds
+a continuation prompt: the invocation identity, the coordinator-owned repair or
+objection context, and the factory-owned rules. It repeats neither the frozen
+specification, the repository guidance, nor the role body, because the resumed
+session already holds them. A repair that cannot resume a native session starts
+a fresh session and receives the complete prompt. The packet records
+`continuation`, so restart recovery rebuilds the same prompt shape.
+
 Only a required-mode implementation report may include one structured
 `test_objection` entry. It identifies the protected test, the claim under
 dispute, and observable evidence; it does not authorize an implementation edit

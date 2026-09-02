@@ -91,7 +91,16 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	// The worker is the security boundary. Codex therefore runs without its
 	// redundant inner sandbox or interactive approval gates, which would stall
 	// an unattended invocation despite the worker's outer isolation.
-	command := []string{"codex", "-a", "never", "-s", "danger-full-access"}
+	//
+	// Codex otherwise discovers AGENTS.md from the mounted worktree and loads it
+	// as unlabelled instructions. The coordinator already supplies that guidance
+	// in the prompt, frozen at the run's base checkpoint and fenced as untrusted
+	// input, while the worktree copy is mutable during the run: an implementation
+	// role could rewrite its own instructions. Suppressing the project document
+	// keeps the frozen, fenced copy the only guidance channel. It bounds project
+	// documents alone; the pinned worker skill set lives in the role home and
+	// stays available.
+	command := []string{"codex", "-a", "never", "-s", "danger-full-access", "-c", "project_doc_max_bytes=0"}
 	if request.Model != "" {
 		command = append(command, "-m", request.Model)
 	}

@@ -104,6 +104,46 @@ func TestPromptForPersistedInvocationAcceptsSupportedSchemaVersions(t *testing.T
 }`,
 			want: "factory prompt version implementation-v1",
 		},
+		{
+			name: "version ten continuation",
+			packet: `{
+  "schema_version": 10,
+  "invocation_id": "inv-prompt",
+  "run_id": "run-prompt",
+  "role": "implementation",
+  "stage": "implementation",
+  "specification_packet": "{}",
+  "prompt_version": "implementation-v1",
+  "permitted_paths": ["."],
+  "continuation": true,
+  "check_repair": {
+    "version": 1,
+    "run_id": "run-prompt",
+    "checkpoint_sha": "checkpoint",
+    "attempt": 2,
+    "budget": 3,
+    "setup": {"exit_code": 0},
+    "gates": []
+  }
+}`,
+			want:       "(continuation)",
+			wantAbsent: "--- BEGIN SPECIFICATION PACKET ---",
+		},
+		{
+			name: "version ten fresh session",
+			packet: `{
+  "schema_version": 10,
+  "invocation_id": "inv-prompt",
+  "run_id": "run-prompt",
+  "role": "implementation",
+  "stage": "implementation",
+  "specification_packet": "{}",
+  "prompt_version": "implementation-v1",
+  "permitted_paths": ["."]
+}`,
+			want:       "--- BEGIN SPECIFICATION PACKET ---",
+			wantAbsent: "(continuation)",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()

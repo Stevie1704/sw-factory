@@ -208,6 +208,10 @@ type InvocationPacket struct {
 	// ReviewContext contains the exact checkpoint and bounded review inputs for
 	// an isolated review invocation.
 	ReviewContext *prompt.ReviewContext `json:"review_context,omitempty"`
+	// Continuation records that this invocation continued a harness session that
+	// already held the role's first prompt, so a rebuilt prompt keeps carrying
+	// only what changed.
+	Continuation bool `json:"continuation,omitempty"`
 }
 
 const (
@@ -215,8 +219,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version nine adds the frozen repository-craft identity.
-	invocationPacketVersion = 9
+	// Version ten records whether the prompt continued an existing session.
+	invocationPacketVersion = 10
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )
@@ -1167,8 +1171,11 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 	return nil
 }
 
-// writeInvocationPacket atomically writes the worker-readable packet and
-// leaves credentials and host paths outside its contents.
+// writeInvocationPacket atomically writes the worker-readable packet and leaves
+// credentials outside its contents. The packet carries the frozen claim
+// unchanged, so a repository-declared host path such as a cache location stays
+// in it; the coordinator resolves those paths and the role prompt renders a
+// projection that omits them.
 func writeInvocationPacket(directory string, packet InvocationPacket) error {
 	data, err := json.MarshalIndent(packet, "", "  ")
 	if err != nil {

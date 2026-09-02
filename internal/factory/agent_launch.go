@@ -295,13 +295,21 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		TestExemption:         testExemption,
 		ReviewRepair:          reviewRepairPacket,
 		ReviewContext:         reviewContext,
+		// The harness resumes its own session below, so the session already
+		// holds the role's first prompt and this launch only adds what changed.
+		Continuation: resumeSource != nil,
+	}
+	promptSpecificationText, err := promptSpecification(packet)
+	if err != nil {
+		return AgentLaunchResult{}, err
 	}
 	promptRequest := prompt.Request{
 		InvocationID:            invocationID,
 		RunID:                   run.ID,
 		Role:                    role,
 		Stage:                   string(stage),
-		SpecificationPacket:     run.SpecificationPacket,
+		SpecificationPacket:     promptSpecificationText,
+		Continuation:            invocationPacket.Continuation,
 		RepositoryGuidance:      packet.RepositoryGuidance,
 		RepositoryCraft:         repositoryCraftContent(repositoryCraft),
 		PromptVersion:           roleDefinition.PromptVersion,
@@ -705,12 +713,17 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 			return "", err
 		}
 	}
+	rebuiltSpecification, err := promptSpecification(packet)
+	if err != nil {
+		return "", err
+	}
 	return prompt.Build(prompt.Request{
 		InvocationID:            invocation.ID,
 		RunID:                   run.ID,
 		Role:                    invocation.Role,
 		Stage:                   string(invocation.Stage),
-		SpecificationPacket:     run.SpecificationPacket,
+		SpecificationPacket:     rebuiltSpecification,
+		Continuation:            persisted.Continuation,
 		RepositoryGuidance:      packet.RepositoryGuidance,
 		RepositoryCraft:         repositoryCraftContent(repositoryCraft),
 		PromptVersion:           invocation.PromptVersion,

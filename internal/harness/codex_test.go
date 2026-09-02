@@ -39,7 +39,7 @@ func TestCodexStartsAnInteractiveSessionThroughThePortableSeams(t *testing.T) {
 	}
 	request := workerRuntime.requests[0]
 	wantCommand := []string{
-		"codex", "-a", "never", "-s", "danger-full-access",
+		"codex", "-a", "never", "-s", "danger-full-access", "-c", "project_doc_max_bytes=0",
 		"-m", "gpt-5", "-c", "model_reasoning_effort=high",
 		"Implement the frozen specification.",
 	}
@@ -80,6 +80,62 @@ func TestCodexPassesTheReviewCheckpointToTheWorker(t *testing.T) {
 	}
 }
 
+// TestCodexSuppressesWorktreeProjectDocuments verifies every Codex invocation
+// stops the harness from discovering AGENTS.md in the mounted worktree. The
+// coordinator supplies that guidance frozen at the base checkpoint and fenced
+// as untrusted input; the worktree copy is mutable during the run, so an
+// implementation role could otherwise rewrite its own instructions.
+func TestCodexSuppressesWorktreeProjectDocuments(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		request harness.StartRequest
+		resume  bool
+	}{
+		{name: "start", request: harness.StartRequest{InvocationID: "inv-1", RunID: "run-1", Role: "implementation", Stage: "implementation", WorkspaceID: "workspace-run", Prompt: "Implement the frozen specification."}},
+		{name: "resume", resume: true, request: harness.StartRequest{InvocationID: "inv-2", RunID: "run-1", Role: "implementation", Stage: "implementation", WorkspaceID: "workspace-run", ResumeSessionID: "session-1", Prompt: "Repair the reviewed checkpoint."}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workerRuntime := &fakeWorker{}
+			terminalRuntime := &fakeTerminal{surface: terminal.Surface{ID: "surface-implementation", WorkspaceID: "workspace-run", Name: "implementation"}}
+			request := test.request
+			request.Surface = terminalRuntime.surface
+			codex := harness.NewCodex(workerRuntime, terminalRuntime)
+			var err error
+			if test.resume {
+				_, err = codex.Resume(context.Background(), request)
+			} else {
+				_, err = codex.Start(context.Background(), request)
+			}
+			if err != nil {
+				t.Fatalf("launch error = %v", err)
+			}
+			command := workerRuntime.requests[0].Command
+			override := indexOfArgument(command, "project_doc_max_bytes=0")
+			if override < 0 {
+				t.Fatalf("Codex command = %#v, want the project-document override", command)
+			}
+			if command[override-1] != "-c" {
+				t.Fatalf("Codex command = %#v, want the override passed as a -c configuration value", command)
+			}
+			// A configuration override is a global flag, so Codex rejects it
+			// after the resume subcommand.
+			if subcommand := indexOfArgument(command, "resume"); subcommand >= 0 && override > subcommand {
+				t.Fatalf("Codex command = %#v, want global flags before the resume subcommand", command)
+			}
+		})
+	}
+}
+
+// indexOfArgument returns the position of one command argument, or -1.
+func indexOfArgument(command []string, argument string) int {
+	for index, value := range command {
+		if value == argument {
+			return index
+		}
+	}
+	return -1
+}
+
 // TestCodexResumesWithNativeSessionIdentifier verifies the resume command's
 // global flags precede the resume subcommand as required by the spike.
 func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
@@ -98,7 +154,7 @@ func TestCodexResumesWithNativeSessionIdentifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
 	}
-	wantCommand := []string{"codex", "-a", "never", "-s", "danger-full-access", "resume", "session-1", "Continue the implementation."}
+	wantCommand := []string{"codex", "-a", "never", "-s", "danger-full-access", "-c", "project_doc_max_bytes=0", "resume", "session-1", "Continue the implementation."}
 	if strings.Join(workerRuntime.requests[0].Command, "\x00") != strings.Join(wantCommand, "\x00") {
 		t.Fatalf("resume command = %#v, want native resume command", workerRuntime.requests[0].Command)
 	}

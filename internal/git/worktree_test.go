@@ -54,7 +54,10 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	if err := os.WriteFile(filepath.Join(repository, "docs", "factory", "craft", "tree.md", "marker.md"), []byte("tree marker\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, repository, "add", "README.md", "AGENTS.md", "CONTEXT.md", "docs/agents/conventions.md", "docs/factory/craft/implementation.md", "docs/factory/craft/tree.md/marker.md")
+	if err := os.Symlink("AGENTS.md", filepath.Join(repository, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "add", "README.md", "AGENTS.md", "CLAUDE.md", "CONTEXT.md", "docs/agents/conventions.md", "docs/factory/craft/implementation.md", "docs/factory/craft/tree.md/marker.md")
 	runGit(t, repository, "commit", "-m", "initial")
 	runGit(t, repository, "remote", "add", "origin", remote)
 	runGit(t, repository, "push", "origin", "main")
@@ -118,7 +121,7 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 		t.Fatalf("ReadRepositoryGuidance() error = %v", err)
 	}
 	if len(documents) != 3 {
-		t.Fatalf("guidance documents = %#v, want three tracked guidance files", documents)
+		t.Fatalf("guidance documents = %#v, want three tracked guidance files without the CLAUDE.md symbolic link", documents)
 	}
 	for index, want := range []struct{ path, content string }{
 		{path: "AGENTS.md", content: "base agent guidance\n"},
