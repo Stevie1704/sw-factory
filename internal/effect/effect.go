@@ -29,6 +29,12 @@ type PendingEffectAbandoner interface {
 	AbandonPendingEffect(context.Context, string, string, string) error
 }
 
+// EffectApplier performs the effect-specific external mutation wrapped by the
+// journal protocol. Implementations stay outside the kernel.
+type EffectApplier interface {
+	Apply() error
+}
+
 var _ PendingEffectStore = (*store.Store)(nil)
 var _ PendingEffectAbandoner = (*store.Store)(nil)
 
@@ -149,15 +155,15 @@ func DecodePendingEffect(pending store.PendingEffect, destination any) error {
 // WithPendingEffect reserves one external mutation before applying it and
 // completes the reservation only after the mutation succeeds. A store without
 // the optional journal retains the legacy direct-execution behavior.
-func WithPendingEffect(ctx context.Context, runStore any, pending store.PendingEffect, apply func() error) error {
+func WithPendingEffect(ctx context.Context, runStore any, pending store.PendingEffect, applier EffectApplier) error {
 	journal, ok := runStore.(PendingEffectStore)
 	if !ok {
-		return apply()
+		return applier.Apply()
 	}
 	if err := journal.SavePendingEffect(ctx, pending); err != nil {
 		return fmt.Errorf("reserve %s effect: %w", pending.Kind, err)
 	}
-	if err := apply(); err != nil {
+	if err := applier.Apply(); err != nil {
 		return err
 	}
 	if err := journal.ClearPendingEffect(ctx, pending.RunID, pending.ID); err != nil {

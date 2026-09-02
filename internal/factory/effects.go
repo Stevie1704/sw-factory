@@ -171,7 +171,18 @@ func workflowProjectionFailuref(format string, arguments ...any) error {
 // operational-store adapter has no journal seam, it retains the historical
 // direct execution behavior.
 func (s *Service) withPendingEffect(ctx context.Context, runStore RunStore, effect store.PendingEffect, action func() error) error {
-	return effectkernel.WithPendingEffect(ctx, runStore, effect, action)
+	return effectkernel.WithPendingEffect(ctx, runStore, effect, pendingEffectApplier{action: action})
+}
+
+// pendingEffectApplier adapts a factory-owned effect action to the kernel's
+// interface-valued application seam.
+type pendingEffectApplier struct {
+	action func() error
+}
+
+// Apply runs the factory-owned effect action.
+func (a pendingEffectApplier) Apply() error {
+	return a.action()
 }
 
 // newPendingEffect encodes a replay intent and applies the coordinator clock

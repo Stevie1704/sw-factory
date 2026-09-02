@@ -47,10 +47,29 @@ type replayHandlerForTest struct {
 	calls int
 }
 
+// effectApplierForTest records an application through the kernel's interface
+// seam without passing a function value to the kernel.
+type effectApplierForTest struct {
+	steps  *[]string
+	called *bool
+	err    error
+}
+
 // Replay records the request and returns its run identity for the test.
 func (h *replayHandlerForTest) Replay(_ context.Context, request effect.ReplayRequest) (store.Run, error) {
 	h.calls++
 	return store.Run{ID: request.Effect.RunID}, nil
+}
+
+// Apply records the application step for the test.
+func (a *effectApplierForTest) Apply() error {
+	if a.steps != nil {
+		*a.steps = append(*a.steps, "apply")
+	}
+	if a.called != nil {
+		*a.called = true
+	}
+	return a.err
 }
 
 // PendingEffect returns the current test reservation.
@@ -137,6 +156,21 @@ func TestDecodePendingEffectRejectsMalformedPayload(t *testing.T) {
 	}
 }
 
+// TestWithPendingEffectAcceptsInterfaceApplier verifies the protocol seam is
+// interface-valued rather than a function callback.
+func TestWithPendingEffectAcceptsInterfaceApplier(t *testing.T) {
+	steps := []string{}
+	journal := &journalForTest{steps: &steps}
+	pending := store.PendingEffect{RunID: "run-1", ID: "effect-1", Kind: store.PendingEffectKindPush, Payload: `{}`}
+
+	if err := effect.WithPendingEffect(context.Background(), journal, pending, &effectApplierForTest{steps: &steps}); err != nil {
+		t.Fatalf("WithPendingEffect() error = %v", err)
+	}
+	if got, want := steps, []string{"reserve", "apply", "complete"}; !equalStrings(got, want) {
+		t.Fatalf("protocol steps = %#v, want %#v", got, want)
+	}
+}
+
 // TestWithPendingEffectReservesBeforeApplying verifies that the journal entry
 // is durable before the external mutation and is cleared only after success.
 func TestWithPendingEffectReservesBeforeApplying(t *testing.T) {
@@ -144,10 +178,7 @@ func TestWithPendingEffectReservesBeforeApplying(t *testing.T) {
 	journal := &journalForTest{steps: &steps}
 	pending := store.PendingEffect{RunID: "run-1", ID: "effect-1", Kind: store.PendingEffectKindPush, Payload: `{}`}
 
-	if err := effect.WithPendingEffect(context.Background(), journal, pending, func() error {
-		steps = append(steps, "apply")
-		return nil
-	}); err != nil {
+	if err := effect.WithPendingEffect(context.Background(), journal, pending, &effectApplierForTest{steps: &steps}); err != nil {
 		t.Fatalf("WithPendingEffect() error = %v", err)
 	}
 	if got, want := steps, []string{"reserve", "apply", "complete"}; !equalStrings(got, want) {
@@ -166,10 +197,7 @@ func TestWithPendingEffectRetainsReservationAfterApplyFailure(t *testing.T) {
 	pending := store.PendingEffect{RunID: "run-1", ID: "effect-1", Kind: store.PendingEffectKindPush, Payload: `{}`}
 	applyErr := errors.New("response lost after external mutation")
 
-	err := effect.WithPendingEffect(context.Background(), journal, pending, func() error {
-		steps = append(steps, "apply")
-		return applyErr
-	})
+	err := effect.WithPendingEffect(context.Background(), journal, pending, &effectApplierForTest{steps: &steps, err: applyErr})
 	if !errors.Is(err, applyErr) {
 		t.Fatalf("WithPendingEffect() error = %v, want %v", err, applyErr)
 	}
@@ -189,10 +217,7 @@ func TestWithPendingEffectDoesNotApplyWhenReservationFails(t *testing.T) {
 	journal := &journalForTest{steps: &steps, saveErr: reserveErr}
 	pending := store.PendingEffect{RunID: "run-1", ID: "effect-1", Kind: store.PendingEffectKindPush, Payload: `{}`}
 
-	err := effect.WithPendingEffect(context.Background(), journal, pending, func() error {
-		steps = append(steps, "apply")
-		return nil
-	})
+	err := effect.WithPendingEffect(context.Background(), journal, pending, &effectApplierForTest{steps: &steps})
 	if !errors.Is(err, reserveErr) {
 		t.Fatalf("WithPendingEffect() error = %v, want %v", err, reserveErr)
 	}
@@ -212,10 +237,7 @@ func TestWithPendingEffectReportsCompletionFailure(t *testing.T) {
 	journal := &journalForTest{steps: &steps, clearErr: completeErr}
 	pending := store.PendingEffect{RunID: "run-1", ID: "effect-1", Kind: store.PendingEffectKindPush, Payload: `{}`}
 
-	err := effect.WithPendingEffect(context.Background(), journal, pending, func() error {
-		steps = append(steps, "apply")
-		return nil
-	})
+	err := effect.WithPendingEffect(context.Background(), journal, pending, &effectApplierForTest{steps: &steps})
 	if !errors.Is(err, completeErr) {
 		t.Fatalf("WithPendingEffect() error = %v, want %v", err, completeErr)
 	}
@@ -232,10 +254,7 @@ func TestWithPendingEffectReportsCompletionFailure(t *testing.T) {
 func TestWithPendingEffectKeepsLegacyDirectExecutionFallback(t *testing.T) {
 	called := false
 	pending := store.PendingEffect{RunID: "run-1", ID: "effect-1", Kind: store.PendingEffectKindPush, Payload: `{}`}
-	if err := effect.WithPendingEffect(context.Background(), struct{}{}, pending, func() error {
-		called = true
-		return nil
-	}); err != nil {
+	if err := effect.WithPendingEffect(context.Background(), struct{}{}, pending, &effectApplierForTest{called: &called}); err != nil {
 		t.Fatalf("WithPendingEffect() error = %v", err)
 	}
 	if !called {
