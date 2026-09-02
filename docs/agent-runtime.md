@@ -166,6 +166,14 @@ therefore reaches the role once, inside its own untrusted fence, and
 coordinator-owned configuration such as declared cache paths, worker build,
 and harness or model policy stays out of the context window.
 
+The prompt is the only guidance channel. A harness otherwise discovers
+`AGENTS.md` from its working root, which is the mounted worktree, and loads it
+as unlabelled instructions: a second copy that is mutable during the run and
+that an implementation role could rewrite for itself. The Codex adapter
+therefore launches with `-c project_doc_max_bytes=0`, which bounds project
+documents only. The pinned worker skill set lives in the role home
+(`$CODEX_HOME/skills`, `$HOME/.claude/skills`) and stays available.
+
 A check repair, a review repair, and a test-objection revision resume the
 harness session that already read the role's first prompt. Such a launch builds
 a continuation prompt: the invocation identity, the coordinator-owned repair or
