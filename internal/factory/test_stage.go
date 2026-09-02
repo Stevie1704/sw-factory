@@ -506,7 +506,6 @@ func projectImplementationTestObjection(previous store.Run, value report.Report,
 	}
 	next.TestRevisionBaseChangedPaths = basePaths
 	next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
-	next.ImplementationHandoff = next.RoleHandoff
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false

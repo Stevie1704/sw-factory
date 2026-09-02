@@ -663,27 +663,16 @@ func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registratio
 }
 
 // addActiveInvocation adds one invocation to the durable activity projection.
-// The singular marker remains the first active invocation for compatibility
-// with older status and recovery adapters.
 func addActiveInvocation(run *store.Run, invocationID string) {
 	if run == nil || strings.TrimSpace(invocationID) == "" {
 		return
 	}
-	if len(run.ActiveInvocationIDs) == 0 && run.ActiveInvocationID != "" {
-		run.ActiveInvocationIDs = []string{run.ActiveInvocationID}
-	}
 	for _, activeID := range run.ActiveInvocationIDs {
 		if activeID == invocationID {
-			if run.ActiveInvocationID == "" {
-				run.ActiveInvocationID = invocationID
-			}
 			return
 		}
 	}
 	run.ActiveInvocationIDs = append(run.ActiveInvocationIDs, invocationID)
-	if run.ActiveInvocationID == "" {
-		run.ActiveInvocationID = invocationID
-	}
 }
 
 // releaseActiveInvocation removes one invocation from the run's delegation
@@ -692,9 +681,6 @@ func releaseActiveInvocation(run *store.Run, invocationID string) {
 	if run == nil || strings.TrimSpace(invocationID) == "" {
 		return
 	}
-	if len(run.ActiveInvocationIDs) == 0 && run.ActiveInvocationID != "" {
-		run.ActiveInvocationIDs = []string{run.ActiveInvocationID}
-	}
 	remaining := make([]string, 0, len(run.ActiveInvocationIDs))
 	for _, activeID := range run.ActiveInvocationIDs {
 		if activeID != invocationID {
@@ -702,22 +688,14 @@ func releaseActiveInvocation(run *store.Run, invocationID string) {
 		}
 	}
 	run.ActiveInvocationIDs = remaining
-	if run.ActiveInvocationID == invocationID || !containsString(run.ActiveInvocationIDs, run.ActiveInvocationID) {
-		if len(run.ActiveInvocationIDs) == 0 {
-			run.ActiveInvocationID = ""
-		} else {
-			run.ActiveInvocationID = run.ActiveInvocationIDs[0]
-		}
-	}
 }
 
-// clearActiveInvocations clears both current activity projections when a
+// clearActiveInvocations clears the current activity projection when a
 // transition ends every visible invocation for the run.
 func clearActiveInvocations(run *store.Run) {
 	if run == nil {
 		return
 	}
-	run.ActiveInvocationID = ""
 	run.ActiveInvocationIDs = nil
 }
 
@@ -731,7 +709,7 @@ func reviewCanBeAcceptedWhileWaiting(run store.Run, invocation store.Invocation)
 	if containsString(run.ActiveInvocationIDs, invocation.ID) {
 		return true
 	}
-	return run.ActiveInvocationID == invocation.ID
+	return false
 }
 
 // reviewHasBlockingResult reports whether either isolated reviewer has a
@@ -801,7 +779,6 @@ func agentReportRunProjection(previous store.Run, invocationStage store.Stage, v
 	default:
 		if value.Handoff != nil {
 			next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
-			next.ImplementationHandoff = next.RoleHandoff
 		}
 		next.PendingQuestions = nil
 	}

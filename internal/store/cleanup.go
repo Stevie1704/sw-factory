@@ -260,7 +260,7 @@ func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
 		       review_repair_attempts, review_repair_budget,
 		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
 		       test_exemption, protected_test_paths, test_stage_skipped,
-		       active_invocation_id, active_invocation_ids,
+		       active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,

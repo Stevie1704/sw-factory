@@ -208,7 +208,6 @@ func TestDriveRunDispatchesEveryProgressionCommand(t *testing.T) {
 				ID:                  "run-report-dispatch",
 				Stage:               store.StageImplementation,
 				Status:              store.StatusActive,
-				ActiveInvocationID:  "inv-report-dispatch",
 				ActiveInvocationIDs: []string{"inv-report-dispatch"},
 				SpecificationPacket: progressionDispatchPacket(t, false),
 				Worktree:            "/worktree",

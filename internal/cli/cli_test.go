@@ -469,7 +469,7 @@ func TestRunStatusDistinguishesAnActiveInvocationFromAnActiveRun(t *testing.T) {
 		t.Fatalf("status output = %q, want run-active without an invocation identity", output.String())
 	}
 
-	run.ActiveInvocationID = "inv-cli-activity"
+	run.ActiveInvocationIDs = []string{"inv-cli-activity"}
 	run.UpdatedAt = started.Add(time.Minute)
 	saveRun(run)
 	output.Reset()

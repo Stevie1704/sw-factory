@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 32
+const CurrentSchemaVersion = 33
 
 // MaxTestRevisionAttempts is the hard safety ceiling for automated
 // implementation-versus-test objection cycles.
@@ -484,9 +484,6 @@ type Run struct {
 	TestRevisionBaseChangedPaths []ProtectedTestPath
 	// RoleHandoff is the accepted role transfer packet.
 	RoleHandoff *RoleHandoff
-	// ImplementationHandoff is the legacy compatibility projection of
-	// RoleHandoff. New code should use RoleHandoff.
-	ImplementationHandoff *RoleHandoff
 	// SpecificationReview is the latest exact-checkpoint review result.
 	SpecificationReview *SpecificationReview
 	// StandardsReview is the latest exact-checkpoint standards result.
@@ -510,14 +507,8 @@ type Run struct {
 	ProtectedTestPaths []ProtectedTestPath
 	// TestStageSkipped records an authorized skip before implementation.
 	TestStageSkipped bool
-	// ActiveInvocationID identifies the harness invocation the run currently
-	// delegates to. It is empty whenever no harness is executing for the run,
-	// which lets a status projection separate an active run from an active
-	// invocation without reading the invocation table.
-	ActiveInvocationID string
 	// ActiveInvocationIDs identifies every concurrently executing harness
-	// invocation. ActiveInvocationID remains the compatibility projection of
-	// the first entry for older status consumers.
+	// invocation.
 	ActiveInvocationIDs []string
 	ImageDigest         string
 	Coordinator         string
@@ -847,7 +838,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 		       review_repair_attempts, review_repair_budget,
 		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
 		       test_exemption, protected_test_paths, test_stage_skipped,
-		       active_invocation_id, active_invocation_ids,
+			active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
@@ -878,7 +869,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 		       review_repair_attempts, review_repair_budget,
 		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
 		       test_exemption, protected_test_paths, test_stage_skipped,
-		       active_invocation_id, active_invocation_ids,
+		       active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
 		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
@@ -936,7 +927,6 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&testExemptionJSON,
 		&protectedTestPathsJSON,
 		&run.TestStageSkipped,
-		&run.ActiveInvocationID,
 		&activeInvocationIDsJSON,
 		&run.ImageDigest,
 		&run.Coordinator,
@@ -1009,7 +999,6 @@ func scanRun(row *sql.Row) (*Run, error) {
 		if err := json.Unmarshal([]byte(roleHandoffJSON), run.RoleHandoff); err != nil {
 			return nil, fmt.Errorf("decode role handoff: %w", err)
 		}
-		run.ImplementationHandoff = run.RoleHandoff
 	}
 	if specificationReviewJSON != "" {
 		run.SpecificationReview = &SpecificationReview{}
@@ -1038,12 +1027,6 @@ func scanRun(row *sql.Row) (*Run, error) {
 		if err := json.Unmarshal([]byte(activeInvocationIDsJSON), &run.ActiveInvocationIDs); err != nil {
 			return nil, fmt.Errorf("decode active invocation ids: %w", err)
 		}
-	}
-	if len(run.ActiveInvocationIDs) == 0 && run.ActiveInvocationID != "" {
-		run.ActiveInvocationIDs = []string{run.ActiveInvocationID}
-	}
-	if run.ActiveInvocationID == "" && len(run.ActiveInvocationIDs) > 0 {
-		run.ActiveInvocationID = run.ActiveInvocationIDs[0]
 	}
 	if testExemptionJSON != "" {
 		run.TestExemption = &TestExemption{}
@@ -1081,7 +1064,11 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, saveRunStatement, runValues(run)...); err != nil {
+	values, err := runValues(run)
+	if err != nil {
+		return fmt.Errorf("encode run projections: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, saveRunStatement, values...); err != nil {
 		return fmt.Errorf("save run: %w", err)
 	}
 	return nil
@@ -1238,7 +1225,11 @@ func (s *Store) SaveRunIfRevision(ctx context.Context, expectedRevision int64, r
 	if run.Revision <= expectedRevision {
 		return fmt.Errorf("%w: got %d, expected greater than %d", ErrRevisionNotAdvanced, run.Revision, expectedRevision)
 	}
-	result, err := s.db.ExecContext(ctx, saveRunIfRevisionStatement, append(runValues(run)[1:], run.ID, expectedRevision)...)
+	values, err := runValues(run)
+	if err != nil {
+		return fmt.Errorf("encode run projections: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, saveRunIfRevisionStatement, append(values[1:], run.ID, expectedRevision)...)
 	if err != nil {
 		return fmt.Errorf("save run at revision %d: %w", expectedRevision, err)
 	}
@@ -1268,9 +1259,6 @@ func normalizeRun(run Run) (Run, error) {
 	}
 	if run.CheckpointSHA == "" && run.BaseCheckpointSHA != "" {
 		run.CheckpointSHA = run.BaseCheckpointSHA
-	}
-	if err := normalizeActiveInvocationProjection(&run); err != nil {
-		return Run{}, err
 	}
 	if err := validateTestProjection(run); err != nil {
 		return Run{}, err
@@ -1349,42 +1337,6 @@ func normalizeRun(run Run) (Run, error) {
 		run.TerminalAt = time.Time{}
 	}
 	return run, nil
-}
-
-// normalizeActiveInvocationProjection keeps the historical singular marker
-// and the concurrent invocation projection mutually compatible.
-func normalizeActiveInvocationProjection(run *Run) error {
-	if run == nil {
-		return errors.New("run is required for active invocation normalization")
-	}
-	ids := append([]string(nil), run.ActiveInvocationIDs...)
-	if run.ActiveInvocationID != "" {
-		found := false
-		for _, id := range ids {
-			if id == run.ActiveInvocationID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			ids = append([]string{run.ActiveInvocationID}, ids...)
-		}
-	}
-	seen := make(map[string]struct{}, len(ids))
-	for index, id := range ids {
-		if !safeQuestionIdentifier(id) {
-			return fmt.Errorf("run active invocation %d has an unsafe identifier", index)
-		}
-		if _, exists := seen[id]; exists {
-			return fmt.Errorf("run active invocation %q is duplicated", id)
-		}
-		seen[id] = struct{}{}
-	}
-	run.ActiveInvocationIDs = ids
-	if run.ActiveInvocationID == "" && len(ids) > 0 {
-		run.ActiveInvocationID = ids[0]
-	}
-	return nil
 }
 
 // validateTestProjection checks the bounded durable test-stage state before it
@@ -1492,7 +1444,7 @@ func validateTestProjection(run Run) error {
 			return errors.New("test objection invocation id is unsafe")
 		}
 	}
-	roleHandoff := roleHandoffForRun(run)
+	roleHandoff := run.RoleHandoff
 	if roleHandoff != nil {
 		if strings.TrimSpace(roleHandoff.ChangeSummary) == "" || strings.ContainsAny(roleHandoff.ChangeSummary, "\x00\r\n") {
 			return errors.New("role handoff change summary is required and must be single-line")
@@ -1731,177 +1683,87 @@ func safeQuestionIdentifier(value string) bool {
 	return true
 }
 
-// pendingQuestionsJSON serializes an empty projection as an empty JSON array
-// so migrated and newly created stores have one stable representation.
-func pendingQuestionsJSON(values []PendingQuestion) string {
+// sliceJSON serializes a slice projection as a stable JSON array. A nil slice
+// intentionally remains the empty array used by the operational store.
+func sliceJSON[T any](values []T) (string, error) {
 	if values == nil {
-		return "[]"
+		return "[]", nil
 	}
 	data, err := json.Marshal(values)
 	if err != nil {
-		return "[]"
+		return "", err
 	}
-	return string(data)
+	return string(data), nil
 }
 
-// testHandoffJSON serializes a nullable test handoff projection.
-func testHandoffJSON(value *TestHandoff) string {
+// nullableJSON serializes an optional projection while preserving the empty
+// string representation used for an absent value in the operational store.
+func nullableJSON[T any](value *T) (string, error) {
 	if value == nil {
-		return ""
+		return "", nil
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return string(data)
-}
-
-// testRevisionHistoryJSON serializes the bounded objection-cycle history.
-func testRevisionHistoryJSON(values []TestRevision) string {
-	if values == nil {
-		return "[]"
-	}
-	data, err := json.Marshal(values)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
-// testObjectionJSON serializes a nullable current objection.
-func testObjectionJSON(value *TestObjection) string {
-	if value == nil {
-		return ""
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// testRevisionBaseChangedPathsJSON serializes paths and content identities
-// already dirty when an implementation objection was submitted.
-func testRevisionBaseChangedPathsJSON(values []ProtectedTestPath) string {
-	if values == nil {
-		return "[]"
-	}
-	data, err := json.Marshal(values)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
-// roleHandoffJSON serializes a nullable role handoff.
-func roleHandoffJSON(value *RoleHandoff) string {
-	if value == nil {
-		return ""
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// roleHandoffForRun returns the role-neutral handoff while accepting a legacy
-// run value that only populated the implementation compatibility field.
-func roleHandoffForRun(run Run) *RoleHandoff {
-	if run.RoleHandoff != nil {
-		return run.RoleHandoff
-	}
-	return run.ImplementationHandoff
-}
-
-// specificationReviewJSON serializes a nullable exact-checkpoint review.
-func specificationReviewJSON(value *SpecificationReview) string {
-	if value == nil {
-		return ""
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// standardsReviewJSON serializes a nullable exact-checkpoint standards review.
-func standardsReviewJSON(value *StandardsReview) string {
-	if value == nil {
-		return ""
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// reviewRepairHistoryJSON serializes the bounded review-repair history.
-func reviewRepairHistoryJSON(values []ReviewRepairAttempt) string {
-	if values == nil {
-		return "[]"
-	}
-	data, err := json.Marshal(values)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
-// reviewRepairPacketJSON serializes a nullable review-repair packet.
-func reviewRepairPacketJSON(value *ReviewRepairPacket) string {
-	if value == nil {
-		return ""
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// activeInvocationIDsJSON serializes the concurrent invocation projection as
-// a stable JSON array for restart-safe status rendering.
-func activeInvocationIDsJSON(values []string) string {
-	if values == nil {
-		return "[]"
-	}
-	data, err := json.Marshal(values)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
-}
-
-// testExemptionJSON serializes a nullable test exemption projection.
-func testExemptionJSON(value *TestExemption) string {
-	if value == nil {
-		return ""
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// protectedTestPathsJSON serializes protected paths as a stable JSON array.
-func protectedTestPathsJSON(values []ProtectedTestPath) string {
-	if values == nil {
-		return "[]"
-	}
-	data, err := json.Marshal(values)
-	if err != nil {
-		return "[]"
-	}
-	return string(data)
+	return string(data), nil
 }
 
 // runValues returns the ordered SQL values shared by normal and revision-safe
-// run persistence.
-func runValues(run Run) []any {
+// run persistence, including errors from every JSON projection.
+func runValues(run Run) ([]any, error) {
+	testHandoff, err := nullableJSON(run.TestHandoff)
+	if err != nil {
+		return nil, fmt.Errorf("encode test handoff: %w", err)
+	}
+	testRevisionHistory, err := sliceJSON(run.TestRevisionHistory)
+	if err != nil {
+		return nil, fmt.Errorf("encode test revision history: %w", err)
+	}
+	testObjection, err := nullableJSON(run.TestObjection)
+	if err != nil {
+		return nil, fmt.Errorf("encode test objection: %w", err)
+	}
+	testRevisionBaseChangedPaths, err := sliceJSON(run.TestRevisionBaseChangedPaths)
+	if err != nil {
+		return nil, fmt.Errorf("encode test revision base changed paths: %w", err)
+	}
+	roleHandoff, err := nullableJSON(run.RoleHandoff)
+	if err != nil {
+		return nil, fmt.Errorf("encode role handoff: %w", err)
+	}
+	specificationReview, err := nullableJSON(run.SpecificationReview)
+	if err != nil {
+		return nil, fmt.Errorf("encode specification review: %w", err)
+	}
+	standardsReview, err := nullableJSON(run.StandardsReview)
+	if err != nil {
+		return nil, fmt.Errorf("encode standards review: %w", err)
+	}
+	reviewRepairHistory, err := sliceJSON(run.ReviewRepairHistory)
+	if err != nil {
+		return nil, fmt.Errorf("encode review repair history: %w", err)
+	}
+	reviewRepairPacket, err := nullableJSON(run.ReviewRepairPacket)
+	if err != nil {
+		return nil, fmt.Errorf("encode review repair packet: %w", err)
+	}
+	activeInvocationIDs, err := sliceJSON(run.ActiveInvocationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("encode active invocation ids: %w", err)
+	}
+	testExemption, err := nullableJSON(run.TestExemption)
+	if err != nil {
+		return nil, fmt.Errorf("encode test exemption: %w", err)
+	}
+	protectedTestPaths, err := sliceJSON(run.ProtectedTestPaths)
+	if err != nil {
+		return nil, fmt.Errorf("encode protected test paths: %w", err)
+	}
+	pendingQuestions, err := sliceJSON(run.PendingQuestions)
+	if err != nil {
+		return nil, fmt.Errorf("encode pending questions: %w", err)
+	}
 	return []any{
 		run.ID,
 		run.RepositoryPath,
@@ -1913,26 +1775,25 @@ func runValues(run Run) []any {
 		run.CheckpointSHA,
 		run.BaseCheckpointSHA,
 		run.TestCheckpointSHA,
-		testHandoffJSON(run.TestHandoff),
+		testHandoff,
 		run.TestInvocationID,
 		run.TestRevisionAttempts,
 		run.TestRevisionBudget,
-		testRevisionHistoryJSON(run.TestRevisionHistory),
-		testObjectionJSON(run.TestObjection),
-		testRevisionBaseChangedPathsJSON(run.TestRevisionBaseChangedPaths),
-		roleHandoffJSON(roleHandoffForRun(run)),
-		specificationReviewJSON(run.SpecificationReview),
-		standardsReviewJSON(run.StandardsReview),
+		testRevisionHistory,
+		testObjection,
+		testRevisionBaseChangedPaths,
+		roleHandoff,
+		specificationReview,
+		standardsReview,
 		run.ReviewRepairAttempts,
 		run.ReviewRepairBudget,
 		run.ReviewRepairPendingAttempt,
-		reviewRepairHistoryJSON(run.ReviewRepairHistory),
-		reviewRepairPacketJSON(run.ReviewRepairPacket),
-		testExemptionJSON(run.TestExemption),
-		protectedTestPathsJSON(run.ProtectedTestPaths),
+		reviewRepairHistory,
+		reviewRepairPacket,
+		testExemption,
+		protectedTestPaths,
 		run.TestStageSkipped,
-		run.ActiveInvocationID,
-		activeInvocationIDsJSON(run.ActiveInvocationIDs),
+		activeInvocationIDs,
 		run.ImageDigest,
 		run.Coordinator,
 		run.StatusCommentID,
@@ -1955,13 +1816,13 @@ func runValues(run Run) []any {
 		run.CheckRepairBudget,
 		run.CheckRepairPendingAttempt,
 		run.SpecificationPacket,
-		pendingQuestionsJSON(run.PendingQuestions),
+		pendingQuestions,
 		run.ClarificationCommentID,
 		run.ClarificationNotificationSent,
 		terminalAtValue(run.TerminalAt),
 		run.CreatedAt.UTC().Format(runTimestampLayout),
 		run.UpdatedAt.UTC().Format(runTimestampLayout),
-	}
+	}, nil
 }
 
 // terminalAtValue serializes an absent terminal timestamp as the empty
@@ -1984,7 +1845,7 @@ const saveRunStatement = `
 			review_repair_attempts, review_repair_budget,
 			review_repair_pending_attempt, review_repair_history, review_repair_packet,
 			test_exemption, protected_test_paths, test_stage_skipped,
-			active_invocation_id, active_invocation_ids,
+			active_invocation_ids,
 			image_digest, coordinator, status_comment_id,
 			pull_request_number, pull_request_url, merge_commit_sha, lifecycle_reason,
 			lifecycle_notification_sent, ready_notification_sent,
@@ -2001,7 +1862,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -2031,7 +1892,6 @@ const saveRunStatement = `
 			test_exemption = excluded.test_exemption,
 			protected_test_paths = excluded.protected_test_paths,
 			test_stage_skipped = excluded.test_stage_skipped,
-			active_invocation_id = excluded.active_invocation_id,
 			active_invocation_ids = excluded.active_invocation_ids,
 			image_digest = excluded.image_digest,
 			coordinator = excluded.coordinator,
@@ -2072,7 +1932,7 @@ const saveRunIfRevisionStatement = `
 			review_repair_attempts = ?, review_repair_budget = ?,
 			review_repair_pending_attempt = ?, review_repair_history = ?, review_repair_packet = ?,
 			test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
-			active_invocation_id = ?, active_invocation_ids = ?,
+			active_invocation_ids = ?,
 			image_digest = ?, coordinator = ?, status_comment_id = ?,
 			pull_request_number = ?, pull_request_url = ?, merge_commit_sha = ?, lifecycle_reason = ?,
 			lifecycle_notification_sent = ?, ready_notification_sent = ?,
@@ -2318,7 +2178,11 @@ func (s *Store) saveRunAndInvalidateResults(ctx context.Context, expectedRevisio
 	defer func() { _ = tx.Rollback() }()
 
 	// Update the run state with revision check
-	result, err := tx.ExecContext(ctx, saveRunIfRevisionStatement, append(runValues(run)[1:], run.ID, expectedRevision)...)
+	values, err := runValues(run)
+	if err != nil {
+		return fmt.Errorf("encode run projections: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, saveRunIfRevisionStatement, append(values[1:], run.ID, expectedRevision)...)
 	if err != nil {
 		return fmt.Errorf("save run at revision %d: %w", expectedRevision, err)
 	}
@@ -3264,6 +3128,25 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return fmt.Errorf("apply store migration 32: %w", err)
 				}
+			}
+		case 33:
+			if _, err := tx.ExecContext(ctx, `UPDATE operational_runs
+				SET active_invocation_ids = (
+					SELECT json_group_array(value)
+					FROM (
+						SELECT operational_runs.active_invocation_id AS value, -1 AS position
+						UNION ALL
+						SELECT json_each.value, json_each.key
+						FROM json_each(operational_runs.active_invocation_ids)
+						WHERE json_each.value <> operational_runs.active_invocation_id
+						ORDER BY position
+					)
+				)
+				WHERE active_invocation_id <> ''`); err != nil {
+				return fmt.Errorf("apply store migration 33 active invocation fold: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs DROP COLUMN active_invocation_id"); err != nil {
+				return fmt.Errorf("apply store migration 33 active invocation removal: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

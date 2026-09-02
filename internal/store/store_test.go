@@ -50,6 +50,164 @@ func TestOpenCreatesVersionedStoreWithNoActiveRun(t *testing.T) {
 	}
 }
 
+// TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice verifies
+// schema 32 rows retain every active invocation when the singular projection is
+// removed.
+func TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("initial Open() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("close initial store: %v", err)
+	}
+
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testOperationalRunsColumnExists(t, database, "active_invocation_id") {
+		if _, err := database.ExecContext(t.Context(), "ALTER TABLE operational_runs ADD COLUMN active_invocation_id TEXT NOT NULL DEFAULT ''"); err != nil {
+			_ = database.Close()
+			t.Fatalf("add schema 32 active invocation column: %v", err)
+		}
+	}
+	_, err = database.ExecContext(t.Context(), `
+		INSERT INTO operational_runs (
+			id, repository_path, issue_number, stage, status,
+			active_invocation_id, active_invocation_ids, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+		UPDATE schema_metadata SET version = 32 WHERE singleton = 1`,
+		"run-schema-32", "/work/repository", 118, store.StageImplementation, store.StatusActive,
+		"inv-singular", `["inv-existing"]`, "2026-08-01T00:00:00.000000000Z", "2026-08-01T00:00:01.000000000Z")
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("write schema 32 fixture: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("schema 33 migration error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got := reopened.SchemaVersion(); got != 33 {
+		t.Fatalf("SchemaVersion() = %d, want 33", got)
+	}
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || len(got.ActiveInvocationIDs) != 2 || got.ActiveInvocationIDs[0] != "inv-singular" || got.ActiveInvocationIDs[1] != "inv-existing" {
+		t.Fatalf("CurrentRun() active invocations = %#v, want singular value first", got)
+	}
+
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if testOperationalRunsColumnExists(t, database, "active_invocation_id") {
+		t.Fatal("schema 33 still has the active_invocation_id column")
+	}
+}
+
+// testOperationalRunsColumnExists reports whether a column exists in the
+// migration fixture's operational_runs table.
+func testOperationalRunsColumnExists(t *testing.T, database *sql.DB, wanted string) bool {
+	t.Helper()
+	rows, err := database.QueryContext(t.Context(), "PRAGMA table_info(operational_runs)")
+	if err != nil {
+		t.Fatalf("inspect operational_runs columns: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		cid          int
+		name         string
+		columnType   string
+		notNull      int
+		defaultValue sql.NullString
+		primaryKey   int
+	)
+	for rows.Next() {
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan operational_runs column: %v", err)
+		}
+		if name == wanted {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate operational_runs columns: %v", err)
+	}
+	return false
+}
+
+// TestPreviousBuildImplementationHandoffRowsDecodeIntoRoleHandoff verifies
+// the existing implementation_handoff column remains the durable role-handoff
+// source when the Run compatibility field is removed.
+func TestPreviousBuildImplementationHandoffRowsDecodeIntoRoleHandoff(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("initial Open() error = %v", err)
+	}
+	if err := opened.SaveRun(context.Background(), store.Run{
+		ID:             "run-legacy-handoff",
+		RepositoryPath: "/work/repository",
+		Stage:          store.StageImplementation,
+		Status:         store.StatusActive,
+		CreatedAt:      time.Unix(100, 0).UTC(),
+		UpdatedAt:      time.Unix(200, 0).UTC(),
+	}); err != nil {
+		_ = opened.Close()
+		t.Fatalf("seed run: %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.ExecContext(t.Context(), `UPDATE operational_runs
+		SET implementation_handoff = ?
+		WHERE id = ?`,
+		`{"change_summary":"written by schema 32","acceptance_mapping":[{"criterion":"legacy row","evidence":"stored JSON"}],"production_files_changed":["internal/store/store.go"],"focused_commands":["go test ./internal/store"]}`,
+		"run-legacy-handoff")
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("write previous-build handoff row: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.RoleHandoff == nil || got.RoleHandoff.ChangeSummary != "written by schema 32" {
+		t.Fatalf("CurrentRun() role handoff = %#v, want previous-build handoff", got)
+	}
+}
+
 func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
 	t.Parallel()
 
@@ -560,9 +718,9 @@ func TestRunPersistsTheTestObjectionProjection(t *testing.T) {
 	}
 }
 
-// TestRunPersistsImplementationAndSpecificationReviewProjections verifies the
+// TestRunPersistsRoleAndSpecificationReviewProjections verifies the
 // reviewer packet's durable handoffs survive the schema-20 restart boundary.
-func TestRunPersistsImplementationAndSpecificationReviewProjections(t *testing.T) {
+func TestRunPersistsRoleAndSpecificationReviewProjections(t *testing.T) {
 	t.Parallel()
 
 	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
@@ -577,7 +735,7 @@ func TestRunPersistsImplementationAndSpecificationReviewProjections(t *testing.T
 		Stage:          store.StageReview,
 		Status:         store.StatusWaitingForHuman,
 		CheckpointSHA:  checkpoint,
-		ImplementationHandoff: &store.ImplementationHandoff{
+		RoleHandoff: &store.RoleHandoff{
 			ChangeSummary:          "implemented the requested review behavior",
 			AcceptanceMapping:      []store.HandoffAcceptance{{Criterion: "criterion", Evidence: "focused test"}},
 			ProductionFilesChanged: []string{"internal/factory/review.go"},
@@ -599,8 +757,8 @@ func TestRunPersistsImplementationAndSpecificationReviewProjections(t *testing.T
 	if err != nil {
 		t.Fatalf("CurrentRun() error = %v", err)
 	}
-	if got == nil || got.ImplementationHandoff == nil || got.SpecificationReview == nil || got.SpecificationReview.CheckpointSHA != checkpoint || got.SpecificationReview.Findings[0].SuggestedOwner != "implementation" {
-		t.Fatalf("CurrentRun() = %#v, want implementation and review projections", got)
+	if got == nil || got.RoleHandoff == nil || got.SpecificationReview == nil || got.SpecificationReview.CheckpointSHA != checkpoint || got.SpecificationReview.Findings[0].SuggestedOwner != "implementation" {
+		t.Fatalf("CurrentRun() = %#v, want role handoff and review projections", got)
 	}
 }
 
@@ -766,13 +924,13 @@ func TestStorePersistsTheActiveInvocationDelegation(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	run := store.Run{
-		ID:                 "run-delegation",
-		RepositoryPath:     "/work/repository",
-		Stage:              store.StageImplementation,
-		Status:             store.StatusActive,
-		ActiveInvocationID: "inv-delegation",
-		CreatedAt:          time.Unix(100, 0).UTC(),
-		UpdatedAt:          time.Unix(200, 0).UTC(),
+		ID:                  "run-delegation",
+		RepositoryPath:      "/work/repository",
+		Stage:               store.StageImplementation,
+		Status:              store.StatusActive,
+		ActiveInvocationIDs: []string{"inv-delegation"},
+		CreatedAt:           time.Unix(100, 0).UTC(),
+		UpdatedAt:           time.Unix(200, 0).UTC(),
 	}
 	if err := opened.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("SaveRun() error = %v", err)
@@ -789,10 +947,10 @@ func TestStorePersistsTheActiveInvocationDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentRun() error = %v", err)
 	}
-	if got == nil || got.ActiveInvocationID != "inv-delegation" {
+	if got == nil || len(got.ActiveInvocationIDs) != 1 || got.ActiveInvocationIDs[0] != "inv-delegation" {
 		t.Fatalf("CurrentRun() = %#v, want the persisted active invocation identity", got)
 	}
-	run.ActiveInvocationID = ""
+	run.ActiveInvocationIDs = nil
 	run.UpdatedAt = time.Unix(300, 0).UTC()
 	if err := reopened.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("SaveRun() clearing error = %v", err)
@@ -801,7 +959,7 @@ func TestStorePersistsTheActiveInvocationDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentRun() after clearing error = %v", err)
 	}
-	if cleared == nil || cleared.ActiveInvocationID != "" {
+	if cleared == nil || len(cleared.ActiveInvocationIDs) != 0 {
 		t.Fatalf("CurrentRun() = %#v, want the delegation cleared", cleared)
 	}
 }

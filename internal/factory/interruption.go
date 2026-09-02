@@ -799,7 +799,7 @@ func (s *Service) supersedeInvocation(ctx context.Context, registration config.R
 	if err != nil {
 		return fmt.Errorf("read run to release superseded invocation: %w", err)
 	}
-	if current == nil || (current.ActiveInvocationID != invocation.ID && !containsString(current.ActiveInvocationIDs, invocation.ID)) {
+	if current == nil || !containsString(current.ActiveInvocationIDs, invocation.ID) {
 		return nil
 	}
 	previous := *current
@@ -867,7 +867,7 @@ func (s *Service) stopActiveRunWorkers(ctx context.Context, runStore RunStore, r
 			seen[workerID] = struct{}{}
 			workerIDs = append(workerIDs, workerID)
 		}
-	} else if run.ActiveInvocationID != "" || len(run.ActiveInvocationIDs) != 0 {
+	} else if len(run.ActiveInvocationIDs) != 0 {
 		workerIDs = append(workerIDs, run.ID)
 	}
 	if len(workerIDs) == 0 {

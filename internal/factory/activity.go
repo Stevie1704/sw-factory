@@ -43,7 +43,7 @@ func RunActivityFor(run store.Run) RunActivity {
 	case store.StatusWaitingForHarness:
 		return ActivityWaitingForHarness
 	}
-	if run.ActiveInvocationID != "" || len(run.ActiveInvocationIDs) > 0 {
+	if len(run.ActiveInvocationIDs) > 0 {
 		return ActivityInvocationActive
 	}
 	return ActivityRunActive
@@ -58,9 +58,6 @@ func activityStatusComment(run store.Run) string {
 		return fmt.Sprintf("- activity: `%s`\n", activity)
 	}
 	ids := append([]string(nil), run.ActiveInvocationIDs...)
-	if len(ids) == 0 && run.ActiveInvocationID != "" {
-		ids = []string{run.ActiveInvocationID}
-	}
 	if len(ids) == 1 {
 		return fmt.Sprintf("- activity: `%s`\n- active invocation: `%s`\n", activity, safeStatusCommentValue(ids[0]))
 	}

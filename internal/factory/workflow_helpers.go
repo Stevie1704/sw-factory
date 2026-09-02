@@ -8,15 +8,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
-// roleHandoffForRun returns the role-neutral handoff while accepting rows and
-// fixtures that still populate the legacy implementation field.
-func roleHandoffForRun(run store.Run) *store.RoleHandoff {
-	if run.RoleHandoff != nil {
-		return run.RoleHandoff
-	}
-	return run.ImplementationHandoff
-}
-
 // roleDefinitionForInvocation resolves the factory declaration attached to a
 // persisted invocation and verifies that its role owns its stage.
 func roleDefinitionForInvocation(invocation store.Invocation) (workflow.RoleDefinition, error) {

@@ -544,7 +544,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	run := claimed.Run
 	run.TestStageSkipped = true
 	run.TestExemption = &store.TestExemption{Kind: "human", Justification: "review fixture"}
-	run.ImplementationHandoff = &store.ImplementationHandoff{
+	run.RoleHandoff = &store.RoleHandoff{
 		ChangeSummary:          "implemented review behavior",
 		AcceptanceMapping:      []store.HandoffAcceptance{{Criterion: "review behavior", Evidence: "focused test"}},
 		ProductionFilesChanged: []string{"internal/factory/review.go"},
