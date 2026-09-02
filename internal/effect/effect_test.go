@@ -3,6 +3,7 @@ package effect_test
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -320,4 +321,172 @@ func equalStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+// reservationFailureStoreForTest injects a reservation failure while retaining
+// the real SQLite journal implementation, so the surrounding assertions
+// observe durable rows rather than an in-memory substitute.
+type reservationFailureStoreForTest struct {
+	*store.Store
+	saveErr error
+}
+
+// SavePendingEffect returns the injected reservation failure until it is
+// cleared, then delegates to the real journal.
+func (s *reservationFailureStoreForTest) SavePendingEffect(ctx context.Context, pending store.PendingEffect) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	return s.Store.SavePendingEffect(ctx, pending)
+}
+
+// unusedApplierForTest counts applications that the kernel must never make,
+// such as a mutation whose reservation failed.
+type unusedApplierForTest struct {
+	calls int
+}
+
+// Apply records a call the surrounding assertion expects never to happen.
+func (a *unusedApplierForTest) Apply() error {
+	a.calls++
+	return nil
+}
+
+// lostResponseApplierForTest reproduces one idempotent external mutation whose
+// response is lost on the first attempt. It counts the mutation once, so a
+// restart that replays the same effect cannot hide a second mutation.
+type lostResponseApplierForTest struct {
+	calls        int
+	applied      bool
+	responseLost bool
+}
+
+// Apply performs the mutation once and reports the lost response once.
+func (a *lostResponseApplierForTest) Apply() error {
+	if !a.applied {
+		a.applied = true
+		a.calls++
+	}
+	if !a.responseLost {
+		a.responseLost = true
+		return errors.New("response lost after external mutation")
+	}
+	return nil
+}
+
+// TestExternalEffectsReserveBeforeAndClearAfterFailure verifies the common
+// journal boundary for every external mutation named by issue 21 against the
+// real SQLite journal rather than an in-memory double. A failure before
+// reservation produces no mutation and leaves no durable row; a failure after
+// the mutation keeps the intent durable across a store close and reopen; and a
+// fresh coordinator process completes the same idempotent effect without
+// producing a second mutation.
+//
+// The state_transition kind keeps its equivalent coverage in
+// internal/factory/effects_test.go, where the replay owns the paired GitHub
+// label and status-comment projection.
+func TestExternalEffectsReserveBeforeAndClearAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	effects := []struct {
+		name string
+		kind store.PendingEffectKind
+	}{
+		{name: "status comment", kind: store.PendingEffectKindStatusComment},
+		{name: "labels", kind: store.PendingEffectKindLabelTransition},
+		{name: "commit status", kind: store.PendingEffectKindCommitStatus},
+		{name: "push", kind: store.PendingEffectKindPush},
+		{name: "pull request creation", kind: store.PendingEffectKindPullRequest},
+		{name: "checkpoint commit", kind: store.PendingEffectKindCheckpoint},
+		{name: "worker launch", kind: store.PendingEffectKindWorkerLaunch},
+		{name: "harness resume", kind: store.PendingEffectKindHarnessResume},
+		{name: "result acceptance", kind: store.PendingEffectKindResultAcceptance},
+		{name: "clarification comment", kind: store.PendingEffectKindClarificationComment},
+	}
+
+	for _, test := range effects {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			databaseDirectory := t.TempDir()
+			if err := os.Chmod(databaseDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			databasePath := databaseDirectory + "/effects.db"
+			opened, err := store.Open(ctx, databasePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal := &reservationFailureStoreForTest{Store: opened, saveErr: errors.New("reservation unavailable")}
+			reserved := store.PendingEffect{
+				RunID:     "run-effects",
+				ID:        "effect-" + string(test.kind),
+				Kind:      test.kind,
+				Payload:   "{}",
+				CreatedAt: time.Unix(1, 0).UTC(),
+				UpdatedAt: time.Unix(1, 0).UTC(),
+			}
+
+			blocked := &unusedApplierForTest{}
+			if err := effect.WithPendingEffect(ctx, journal, reserved, blocked); err == nil {
+				t.Fatal("WithPendingEffect() before failure = nil, want reservation failure")
+			}
+			if blocked.calls != 0 {
+				t.Fatalf("external calls before reservation = %d, want zero", blocked.calls)
+			}
+			pending, err := journal.PendingEffect(ctx, reserved.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending != nil {
+				t.Fatalf("pending effect after reservation failure = %#v, want nil", pending)
+			}
+
+			journal.saveErr = nil
+			applier := &lostResponseApplierForTest{}
+			if err := effect.WithPendingEffect(ctx, journal, reserved, applier); err == nil {
+				t.Fatal("WithPendingEffect() after failure = nil, want lost-response error")
+			}
+			pending, err = journal.PendingEffect(ctx, reserved.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending == nil || pending.ID != reserved.ID {
+				t.Fatalf("pending effect after lost response = %#v, want %q", pending, reserved.ID)
+			}
+			if applier.calls != 1 {
+				t.Fatalf("external calls after first attempt = %d, want one", applier.calls)
+			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			reopened, err := store.Open(ctx, databasePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = reopened.Close() }()
+			restarted, err := reopened.PendingEffect(ctx, reserved.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if restarted == nil || restarted.ID != reserved.ID {
+				t.Fatalf("pending effect after restart = %#v, want %q", restarted, reserved.ID)
+			}
+			if err := effect.WithPendingEffect(ctx, reopened, *restarted, applier); err != nil {
+				t.Fatalf("WithPendingEffect() after restart = %v", err)
+			}
+			if applier.calls != 1 {
+				t.Fatalf("external calls after idempotent restart = %d, want one", applier.calls)
+			}
+			pending, err = reopened.PendingEffect(ctx, reserved.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending != nil {
+				t.Fatalf("pending effect after idempotent restart = %#v, want nil", pending)
+			}
+		})
+	}
 }
