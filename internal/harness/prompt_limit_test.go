@@ -11,9 +11,8 @@ import (
 )
 
 // TestLaunchRefusesAPromptLargerThanOneCommandArgument verifies both adapters
-// refuse a prompt the kernel would reject at exec. Linux caps one argument at
-// 32 pages, and the resulting E2BIG reaches the coordinator only as an opaque
-// exec failure followed by an expired native-session deadline.
+// refuse a prompt the kernel would reject at exec, for the reason recorded on
+// maxPromptBytes.
 func TestLaunchRefusesAPromptLargerThanOneCommandArgument(t *testing.T) {
 	oversized := strings.Repeat("x", 200<<10)
 	for _, name := range []string{"codex", "claude"} {

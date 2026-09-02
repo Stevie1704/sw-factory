@@ -20,6 +20,14 @@ const (
 	NameCodex = "codex"
 	// NameClaude identifies the Claude Code adapter.
 	NameClaude = "claude"
+	// maxPromptBytes bounds one launch prompt. Every adapter passes the prompt
+	// as a single command argument, and Linux refuses an argument longer than
+	// 32 pages (MAX_ARG_STRLEN, 128 KiB) with E2BIG. That refusal reaches the
+	// coordinator as an opaque "argument list too long" exec failure and an
+	// expired native-session deadline, so the launch is refused here instead,
+	// where the cause can be named. The headroom below the kernel limit covers
+	// the argument list a wrapper adds around the prompt.
+	maxPromptBytes = 96 << 10
 )
 
 // StartRequest contains the coordinator-owned identity and prompt for one
@@ -279,31 +287,6 @@ func discoverNativeSession(ctx context.Context, provider worker.NativeSessionSna
 // validateStartRequest rejects incomplete identities before any terminal or
 // worker side effect occurs. The harness name only labels the refusal; every
 // adapter enforces the same neutral contract.
-// maxPromptBytes bounds one launch prompt. Every adapter passes the prompt as a
-// single command argument, and Linux refuses an argument longer than 32 pages
-// (MAX_ARG_STRLEN, 128 KiB) with E2BIG. That refusal reaches the coordinator as
-// an opaque "argument list too long" exec failure and an expired native-session
-// deadline, so the launch is refused here instead, where the cause can be named.
-const maxPromptBytes = 96 << 10
-
-// PromptTooLargeError reports a prompt the harness cannot receive. It is a
-// bounded configuration or packet problem, never a transient one: the same
-// prompt fails the same way on every retry.
-type PromptTooLargeError struct {
-	// Harness identifies the adapter that refused the launch.
-	Harness string
-	// Bytes is the assembled prompt length.
-	Bytes int
-	// Limit is the largest prompt an adapter passes to its harness.
-	Limit int
-}
-
-// Error names the observed and permitted sizes so an operator can see which
-// packet content has to shrink.
-func (e *PromptTooLargeError) Error() string {
-	return fmt.Sprintf("%s prompt is %d bytes and exceeds the %d-byte launch limit", e.Harness, e.Bytes, e.Limit)
-}
-
 func validateStartRequest(harnessName string, request StartRequest) error {
 	for field, value := range map[string]string{
 		"invocation id": request.InvocationID,

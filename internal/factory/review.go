@@ -23,9 +23,9 @@ const (
 	// by every documented-standards review invocation.
 	StandardsReviewStatusContext = "factory/review/standards"
 	// maxReviewDiffBytes bounds the immutable diff copied into a review packet.
-	// The bound is the reviewer's reading budget: a diff past it describes a
-	// checkpoint too large to review in one round, and the run stops with a
-	// named reason rather than sending a reviewer into an unreadable packet.
+	// A diff past it describes a checkpoint too large for one review round, so
+	// the run stops at capture with a named reason rather than sending a
+	// reviewer into a packet it cannot work through.
 	maxReviewDiffBytes = 128 << 10
 	// reviewDiffContextLines is the context width of the captured diff. A review
 	// role has the checkpoint worktree mounted read-only, so it can open any

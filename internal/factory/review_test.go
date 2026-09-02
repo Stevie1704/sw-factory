@@ -39,15 +39,13 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if len(fixture.worker.starts) != 1 || len(fixture.worker.commands) != 1 || !strings.Contains(fixture.worker.commands[0].Command, reviewCheckpoint) {
 		t.Fatalf("review worker effects = starts %#v commands %#v, want one exact-diff command", fixture.worker.starts, fixture.worker.commands)
 	}
-	// A review role reads the checkpoint worktree for wider context, so the
-	// captured diff carries only enough to judge each hunk in place. Wide
-	// context multiplied the packet size without adding anything readable.
+	// The captured diff carries only enough to judge each hunk in place, for
+	// the reason recorded on reviewDiffContextLines.
 	if !strings.Contains(fixture.worker.commands[0].Command, "--unified=10") {
 		t.Fatalf("review diff command = %q, want the bounded context width", fixture.worker.commands[0].Command)
 	}
-	// The prompt names the diff's location instead of carrying a second copy.
-	// The launch prompt travels as one command argument, so a prompt that grows
-	// with the reviewed change cannot be executed at all.
+	// The prompt names the diff's location instead of carrying a second copy,
+	// so its size does not follow the reviewed change.
 	reviewPrompt := fixture.harness.starts[len(fixture.harness.starts)-1].Prompt
 	if strings.Contains(reviewPrompt, "diff --git") {
 		t.Fatalf("review prompt repeats the mounted diff:\n%s", reviewPrompt)

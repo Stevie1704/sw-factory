@@ -375,12 +375,15 @@ Review-repair packet (coordinator-owned):
 		if err != nil {
 			return "", fmt.Errorf("encode review context: %w", err)
 		}
+		location := "This checkpoint changed nothing against its base, so the context carries no diff."
+		if size := len(request.ReviewContext.CurrentDiff); size > 0 {
+			location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes. Read it in the mounted packet at\n%s under review_context.current_diff; it is not repeated here.", size, WorkerSpecificationPath)
+		}
 		dynamicContext = fmt.Sprintf(`
 Read-only review context (coordinator-owned):
 %s
-The exact diff for this checkpoint is %d bytes. Read it in the mounted packet at
-%s under review_context.current_diff; it is not repeated here.
-`, data, len(request.ReviewContext.CurrentDiff), WorkerSpecificationPath)
+%s
+`, data, location)
 	}
 	if request.Continuation {
 		return joinPromptSections(

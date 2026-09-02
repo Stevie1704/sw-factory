@@ -146,6 +146,28 @@ func IsAuthenticationExpired(err error) bool {
 	return errors.Is(err, ErrAuthenticationExpired)
 }
 
+// PromptTooLargeError reports a prompt the harness cannot receive. It is a
+// bounded configuration or packet problem, never a transient one: the same
+// prompt fails the same way on every retry, so it reaches an operator rather
+// than a retry budget.
+type PromptTooLargeError struct {
+	// Harness identifies the adapter that refused the launch.
+	Harness string
+	// Bytes is the assembled prompt length.
+	Bytes int
+	// Limit is the largest prompt an adapter passes to its harness.
+	Limit int
+}
+
+// Error names the observed and permitted sizes so an operator can see which
+// packet content has to shrink.
+func (e *PromptTooLargeError) Error() string {
+	if e == nil {
+		return "harness prompt is too large"
+	}
+	return fmt.Sprintf("%s prompt is %d bytes and exceeds the %d-byte launch limit", safeHarnessName(e.Harness), e.Bytes, e.Limit)
+}
+
 // safeHarnessName keeps adapter labels bounded and free of control characters.
 func safeHarnessName(name string) string {
 	name = strings.TrimSpace(name)
