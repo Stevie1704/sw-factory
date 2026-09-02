@@ -41,10 +41,6 @@ A vendored skill is kept at its upstream text wherever possible, because a
 silent fork makes the provenance above unverifiable. Each deviation below is
 deliberate and must survive a re-vendor.
 
-The factory-adapted `implement`, `specification-review`, and `standards-review`
-skills make a successful `factory-report` result-file write their explicit
-completion gate. The coordinator cannot advance from terminal prose alone.
-
 - `diagnosing-bugs/scripts/hitl-loop.template.sh`: the capture helper reads one
   line, which truncates a pasted stack trace, and it echoed the captured text
   verbatim. The template now offers a sentinel-terminated multiline capture and

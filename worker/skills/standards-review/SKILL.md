@@ -35,12 +35,5 @@ Match the diff against these Fowler code smells:
   composition instead.
 
 Cite the applicable documented rule or name the baseline smell for every
-finding. The specification role owns product-intent coverage.
-
-## Completion gate
-
-Complete the role by running `/usr/local/bin/factory-report` with exactly one
-outcome and the evidence required by the role prompt. The command must succeed
-and write the structured result file for this invocation. The coordinator
-advances only from that file; review conclusions and terminal prose are
-supporting evidence, not completion.
+finding. The specification role owns product-intent coverage; return this axis
+directly through the factory report contract.

@@ -47,9 +47,9 @@ func TestReviewSkillsContainOnlyTheirAssignedAxis(t *testing.T) {
 	}
 }
 
-// TestRoleSkillsMakeTheStructuredResultACompletionGate verifies every adapted
-// role skill makes the coordinator-consumed result file a visible done bound.
-func TestRoleSkillsMakeTheStructuredResultACompletionGate(t *testing.T) {
+// TestRoleSkillsLeaveCoordinatorProtocolToThePrompt verifies Docker-baked
+// craft does not absorb the factory-owned result-file completion contract.
+func TestRoleSkillsLeaveCoordinatorProtocolToThePrompt(t *testing.T) {
 	for _, path := range []string{
 		"skills/implement/SKILL.md",
 		"skills/specification-review/SKILL.md",
@@ -57,14 +57,9 @@ func TestRoleSkillsMakeTheStructuredResultACompletionGate(t *testing.T) {
 	} {
 		t.Run(path, func(t *testing.T) {
 			body := readSkill(t, path)
-			normalized := strings.Join(strings.Fields(body), " ")
-			for _, marker := range []string{
-				"## Completion gate",
-				"/usr/local/bin/factory-report",
-				"The coordinator advances only from that file",
-			} {
-				if !strings.Contains(normalized, marker) {
-					t.Fatalf("role skill missing completion-gate marker %q:\n%s", marker, body)
+			for _, protocol := range []string{"/usr/local/bin/factory-report", "The coordinator advances only from that file"} {
+				if strings.Contains(body, protocol) {
+					t.Fatalf("role skill contains factory-owned protocol %q:\n%s", protocol, body)
 				}
 			}
 		})
