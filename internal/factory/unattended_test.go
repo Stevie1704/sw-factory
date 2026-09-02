@@ -144,7 +144,7 @@ func TestFailedLaunchCanRetryTheSameRoleAndPacket(t *testing.T) {
 		_ = opened.Close()
 		t.Fatalf("read failed invocation: %v", err)
 	}
-	if failed == nil || failed.Status != store.InvocationStatusSuperseded || failed.Role != "implementation" || failed.Stage != store.StageImplementation {
+	if failed == nil || failed.Status != store.InvocationStatusSuperseded || !failed.LaunchVoided || failed.Role != "implementation" || failed.Stage != store.StageImplementation {
 		_ = opened.Close()
 		t.Fatalf("failed invocation = %#v, want superseded implementation launch", failed)
 	}
@@ -162,7 +162,7 @@ func TestFailedLaunchCanRetryTheSameRoleAndPacket(t *testing.T) {
 		t.Fatalf("close failed-launch store: %v", err)
 	}
 
-	retry, err := fixture.service.HandleCommand(context.Background(), factory.CommandRequest{
+	retry, err := fixture.restart().HandleCommand(context.Background(), factory.CommandRequest{
 		IssueNumber: waiting.IssueNumber,
 		Comment:     github.Comment{ID: "retry-failed-launch", Author: "alice", Body: "/factory retry"},
 	})

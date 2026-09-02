@@ -75,6 +75,12 @@ func TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice(t *testin
 			t.Fatalf("add schema 32 active invocation column: %v", err)
 		}
 	}
+	if testInvocationColumnExists(t, database, "launch_voided") {
+		if _, err := database.ExecContext(t.Context(), "ALTER TABLE invocations DROP COLUMN launch_voided"); err != nil {
+			_ = database.Close()
+			t.Fatalf("remove schema 34 launch-voided column from schema 32 fixture: %v", err)
+		}
+	}
 	_, err = database.ExecContext(t.Context(), `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status,
@@ -96,8 +102,8 @@ func TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice(t *testin
 		t.Fatalf("schema 33 migration error = %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
-	if got := reopened.SchemaVersion(); got != 33 {
-		t.Fatalf("SchemaVersion() = %d, want 33", got)
+	if got := reopened.SchemaVersion(); got != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
 	}
 	got, err := reopened.CurrentRun(context.Background())
 	if err != nil {
@@ -147,6 +153,37 @@ func testOperationalRunsColumnExists(t *testing.T, database *sql.DB, wanted stri
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate operational_runs columns: %v", err)
+	}
+	return false
+}
+
+// testInvocationColumnExists reports whether a column exists in the
+// migration fixture's invocations table.
+func testInvocationColumnExists(t *testing.T, database *sql.DB, wanted string) bool {
+	t.Helper()
+	rows, err := database.QueryContext(t.Context(), "PRAGMA table_info(invocations)")
+	if err != nil {
+		t.Fatalf("inspect invocations columns: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var (
+		cid          int
+		name         string
+		columnType   string
+		notNull      int
+		defaultValue sql.NullString
+		primaryKey   int
+	)
+	for rows.Next() {
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan invocations column: %v", err)
+		}
+		if name == wanted {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate invocations columns: %v", err)
 	}
 	return false
 }

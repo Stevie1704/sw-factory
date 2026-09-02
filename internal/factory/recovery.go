@@ -738,11 +738,21 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 // whether or not it had already reserved a workspace or a surface: the rollback
 // stops the worker and closes the surface it created. The coordinator must read
 // those identities as recorded history rather than as an infrastructure
-// discrepancy. Only the cannot-proceed status records that rollback; every other
-// status is compared so missing identities remain drift.
+// discrepancy. A legacy cannot-proceed rollback is accepted for compatibility;
+// a superseded rollback is accepted only with the durable LaunchVoided marker
+// and a definitively absent regular report.
 func invocationProjectionNeverEstablished(invocation store.Invocation) bool {
-	return invocation.Status == store.InvocationStatusCannotProceed &&
-		strings.TrimSpace(invocation.NativeSessionID) == ""
+	if strings.TrimSpace(invocation.NativeSessionID) != "" {
+		return false
+	}
+	presence, err := structuredReportPresenceForInvocation(invocation)
+	if err != nil || presence != structuredReportAbsent {
+		return false
+	}
+	if invocation.Status == store.InvocationStatusCannotProceed {
+		return true
+	}
+	return invocation.Status == store.InvocationStatusSuperseded && invocation.LaunchVoided
 }
 
 // terminalInvocationProjectionExpectedStopped reports the coordinator-owned

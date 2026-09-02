@@ -582,6 +582,21 @@ func TestInvocationProjectionNeverEstablishedRequiresCannotProceed(t *testing.T)
 			},
 			want: false,
 		},
+		{
+			name: "superseded without a void marker",
+			invocation: store.Invocation{
+				Status: store.InvocationStatusSuperseded,
+			},
+			want: false,
+		},
+		{
+			name: "voided superseded launch",
+			invocation: store.Invocation{
+				Status:       store.InvocationStatusSuperseded,
+				LaunchVoided: true,
+			},
+			want: true,
+		},
 	}
 
 	for _, test := range tests {

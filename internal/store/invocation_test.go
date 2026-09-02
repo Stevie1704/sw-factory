@@ -41,6 +41,7 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 		PromptCraftSourcePath:   "docs/factory/craft/implementation.md",
 		PromptCraftSHA256:       strings.Repeat("a", 64),
 		Status:                  store.InvocationStatusActive,
+		LaunchVoided:            true,
 		CreatedAt:               created,
 		UpdatedAt:               created,
 	}
@@ -59,7 +60,7 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invocation() error = %v", err)
 	}
-	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.RoleSurfaceID != want.RoleSurfaceID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || got.PromptCraftSourcePath != want.PromptCraftSourcePath || got.PromptCraftSHA256 != want.PromptCraftSHA256 || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
+	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.RoleSurfaceID != want.RoleSurfaceID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || got.PromptCraftSourcePath != want.PromptCraftSourcePath || got.PromptCraftSHA256 != want.PromptCraftSHA256 || !got.LaunchVoided || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
 		t.Fatalf("Invocation() = %#v, want %#v", got, want)
 	}
 	if got.UpdatedAt.UTC() != created {

@@ -375,13 +375,18 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 				return
 			}
 		}
-		voidedLaunch = failedLaunchHasNoEvidence(invocation)
+		var evidenceErr error
+		voidedLaunch, evidenceErr = failedLaunchHasNoEvidence(invocation)
+		if evidenceErr != nil {
+			returnErr = fmt.Errorf("%w; failed launch report presence was indeterminate; invocation kept protected: %v", returnErr, evidenceErr)
+		}
 		if voidedLaunch && !strings.Contains(returnErr.Error(), failedLaunchVoidMarker) {
 			returnErr = fmt.Errorf("%w; %s", returnErr, failedLaunchRetryGuidance(invocation))
 		}
 		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		if voidedLaunch {
+			invocation.LaunchVoided = true
 			invocation.Status = store.InvocationStatusSuperseded
 		} else {
 			invocation.Status = store.InvocationStatusCannotProceed
@@ -605,9 +610,18 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 const failedLaunchVoidMarker = "harness launch produced no native session or structured report"
 
 // failedLaunchHasNoEvidence reports whether a persisted launch has no native
-// session or structured report that a later recovery must protect.
-func failedLaunchHasNoEvidence(invocation store.Invocation) bool {
-	return strings.TrimSpace(invocation.NativeSessionID) == "" && !agentResultReady(invocation)
+// session or structured report that a later recovery must protect. An
+// indeterminate report inspection fails closed so unreadable evidence remains
+// protected.
+func failedLaunchHasNoEvidence(invocation store.Invocation) (bool, error) {
+	if strings.TrimSpace(invocation.NativeSessionID) != "" {
+		return false, nil
+	}
+	presence, err := structuredReportPresenceForInvocation(invocation)
+	if err != nil {
+		return false, err
+	}
+	return presence == structuredReportAbsent, nil
 }
 
 // failedLaunchRetryGuidance identifies a launch that left no evidence to

@@ -457,6 +457,30 @@ func TestStartAgentVoidsASetupFailure(t *testing.T) {
 	}
 }
 
+// TestStartAgentPreservesAnIndeterminateReportPath verifies a launch is kept
+// protected when the coordinator cannot determine whether report.json exists.
+func TestStartAgentPreservesAnIndeterminateReportPath(t *testing.T) {
+	service, runStore, runtime, _, harnessRuntime := newAgentService(t)
+	runtime.startHook = func(request worker.StartRequest) {
+		if err := os.Remove(request.ResultPath); err != nil {
+			t.Fatalf("remove result directory: %v", err)
+		}
+		if err := os.WriteFile(request.ResultPath, []byte("result path is not a directory"), 0o600); err != nil {
+			t.Fatalf("replace result directory with a file: %v", err)
+		}
+	}
+	harnessRuntime.startErr = errors.New("harness unavailable")
+	if _, err := service.StartAgent(context.Background(), factory.AgentRequest{}); err == nil {
+		t.Fatal("StartAgent() succeeded while the harness was unavailable")
+	} else if strings.Contains(err.Error(), "use `/factory retry`") {
+		t.Fatalf("StartAgent() exposed retry guidance for an indeterminate report path: %v", err)
+	}
+	invocation, ok := runStore.invocations["inv-generated"]
+	if !ok || invocation.Status != store.InvocationStatusCannotProceed || invocation.LaunchVoided {
+		t.Fatalf("indeterminate launch = %#v, want protected cannot_proceed invocation", invocation)
+	}
+}
+
 // TestHandleCommandRetriesAWaitingRunAfterFailedLaunch verifies a launch that
 // never produced a session can be retried without changing the specification
 // packet or repeating the upstream stage.
@@ -1319,6 +1343,7 @@ func (*agentRunStore) Close() error { return nil }
 // agentWorker records the worker start request without running Docker.
 type agentWorker struct {
 	starts        []worker.StartRequest
+	startHook     func(worker.StartRequest)
 	stops         int
 	commands      []worker.CommandRequest
 	results       []worker.CommandResult
@@ -1337,6 +1362,9 @@ func (w *agentWorker) Start(_ context.Context, request worker.StartRequest) erro
 		*w.events = append(*w.events, "start worker")
 	}
 	w.starts = append(w.starts, request)
+	if w.startHook != nil {
+		w.startHook(request)
+	}
 	return nil
 }
 

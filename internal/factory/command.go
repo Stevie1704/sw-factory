@@ -997,6 +997,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 	}
 	if launchRetry {
 		launch.Status = store.InvocationStatusSuperseded
+		launch.LaunchVoided = true
 		launch.UpdatedAt = s.deps.Now().UTC()
 		invocationStore, ok := runStore.(InvocationStore)
 		if !ok {
@@ -1089,13 +1090,17 @@ func failedLaunchForRetry(ctx context.Context, runStore RunStore, run store.Run)
 // invocation must be a failed launch for the run's current role boundary; a
 // report or native session is evidence that the history must remain protected.
 func isRetryableFailedLaunch(run store.Run, invocation store.Invocation) bool {
-	if invocation.RunID != run.ID || !failedLaunchHasNoEvidence(invocation) {
+	if invocation.RunID != run.ID {
+		return false
+	}
+	noEvidence, err := failedLaunchHasNoEvidence(invocation)
+	if err != nil || !noEvidence {
 		return false
 	}
 	if invocation.Status != store.InvocationStatusCannotProceed && invocation.Status != store.InvocationStatusSuperseded {
 		return false
 	}
-	if invocation.Status == store.InvocationStatusSuperseded && !supersededFailedLaunchReason(run.LifecycleReason) {
+	if invocation.Status == store.InvocationStatusSuperseded && !invocation.LaunchVoided {
 		return false
 	}
 	definition, declared := workflow.DefaultRegistry().Role(invocation.Role)
@@ -1106,12 +1111,6 @@ func isRetryableFailedLaunch(run store.Run, invocation store.Invocation) bool {
 		return invocation.Stage == store.StageReview && definition.Kind == workflow.RoleKindReview
 	}
 	return invocation.Stage == definition.Stage && workflow.DefaultRegistry().CanStartFrom(invocation.Role, run.Stage)
-}
-
-// supersededFailedLaunchReason identifies a coordinator-voided launch in the
-// lifecycle projection without adding another persisted run status.
-func supersededFailedLaunchReason(reason string) bool {
-	return strings.Contains(reason, failedLaunchVoidMarker)
 }
 
 // handleHarnessConfiguration validates an authorized harness override against
