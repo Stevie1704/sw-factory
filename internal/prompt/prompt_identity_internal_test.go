@@ -78,7 +78,8 @@ func TestAllEmbeddedPromptVersionsHaveStableContentIdentity(t *testing.T) {
 		version string
 		sha256  string
 	}{
-		{name: "implementation v6", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939"},
+		{name: "implementation v7", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a"},
+		{name: "implementation v6", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v6", sha256: "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939"},
 		{name: "implementation v5", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v5", sha256: "563454d454a86d5fe9b35c0c141430cac254c83097281e1c70b02711731d77a2"},
 		{name: "implementation v4", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v4", sha256: "e169b645f4f22d91fa14941765e004d4c9708949502dd35fe146e2696bc78911"},
 		{name: "implementation v3", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v3", sha256: "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354"},
@@ -89,9 +90,11 @@ func TestAllEmbeddedPromptVersionsHaveStableContentIdentity(t *testing.T) {
 		{name: "architecture v3", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74"},
 		{name: "architecture v2", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v2", sha256: "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70"},
 		{name: "architecture v1", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v1", sha256: "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2"},
-		{name: "specification review v2", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed"},
+		{name: "specification review v3", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "ea66e87d7f144bbc12c63ba2a2d6bb40c05aaef7112cb12d7cb626c858f2c204"},
+		{name: "specification review v2", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: "specification-review-v2", sha256: "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed"},
 		{name: "specification review v1", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: "specification-review-v1", sha256: "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507"},
-		{name: "standards review v3", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c"},
+		{name: "standards review v4", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "007370ac417296565ab8c5ae6e009e6a39591c2a0122acb669f348ceaef9bebb"},
+		{name: "standards review v3", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v3", sha256: "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c"},
 		{name: "standards review v2", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v2", sha256: "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d"},
 		{name: "standards review v1", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v1", sha256: "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472"},
 	}

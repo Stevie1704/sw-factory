@@ -58,6 +58,7 @@ func TestBuildAdvisoryImplementationPromptAssignsTheCompleteTDDLoop(t *testing.T
 	}
 	for _, marker := range []string{
 		"Implementation-owned TDD:",
+		"Use the `tdd` skill for every implementation-owned vertical slice.",
 		"complete red/green/refactor loop",
 		"On the implementation-owned TDD path, agree the seam from the frozen acceptance criteria as part of this run.",
 		"Write or update a focused behavioral test before production behavior when practical",
@@ -427,6 +428,7 @@ func TestBuildScopesTheWorkerSkillSetPerRole(t *testing.T) {
 	}
 	for _, marker := range []string{
 		"Worker skill set:",
+		"Use the `implement` skill",
 		"`tdd`, `codebase-design`, `diagnosing-bugs`, and `resolving-merge-conflicts`",
 		"never widens the frozen specification",
 		"Do not use `domain-modeling` in this role",
@@ -434,6 +436,9 @@ func TestBuildScopesTheWorkerSkillSetPerRole(t *testing.T) {
 		if !strings.Contains(implementation, marker) {
 			t.Fatalf("implementation prompt missing %q:\n%s", marker, implementation)
 		}
+	}
+	if strings.Contains(implementation, "`standards-review`") || strings.Contains(implementation, "`specification-review`") || strings.Contains(implementation, "two-axis") {
+		t.Fatalf("implementation prompt invokes review-axis craft:\n%s", implementation)
 	}
 
 	architecture, err := prompt.DefaultRegistry().Build(prompt.Request{
@@ -454,6 +459,37 @@ func TestBuildScopesTheWorkerSkillSetPerRole(t *testing.T) {
 		if !strings.Contains(architecture, marker) {
 			t.Fatalf("architecture prompt missing %q:\n%s", marker, architecture)
 		}
+	}
+
+	reviewRoles := []struct {
+		name   string
+		role   string
+		stage  string
+		skill  string
+		absent string
+	}{
+		{name: "specification", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), skill: "`specification-review`", absent: "`standards-review`"},
+		{name: "standards", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), skill: "`standards-review`", absent: "`specification-review`"},
+	}
+	for _, reviewRole := range reviewRoles {
+		t.Run(reviewRole.name, func(t *testing.T) {
+			value, err := prompt.DefaultRegistry().Build(prompt.Request{
+				InvocationID:        "inv-skills-" + reviewRole.name,
+				RunID:               "run-skills-" + reviewRole.name,
+				Role:                reviewRole.role,
+				Stage:               reviewRole.stage,
+				SpecificationPacket: `{"issue":{"title":"Review"}}`,
+			})
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if !strings.Contains(value, "Use the "+reviewRole.skill+" skill") {
+				t.Fatalf("%s review prompt missing role skill %s:\n%s", reviewRole.name, reviewRole.skill, value)
+			}
+			if strings.Contains(value, reviewRole.absent) || strings.Contains(value, "parallel sub-agents") || strings.Contains(value, "aggregate") {
+				t.Fatalf("%s review prompt contains the other review axis:\n%s", reviewRole.name, value)
+			}
+		})
 	}
 }
 
@@ -606,6 +642,9 @@ func TestBuildRoutedImplementationPromptKeepsTheProtectedTestHandoff(t *testing.
 	if strings.Contains(value, "Implementation-owned TDD:") {
 		t.Fatalf("routed implementation prompt claims TDD ownership:\n%s", value)
 	}
+	if strings.Contains(value, "Use the `tdd` skill for every implementation-owned vertical slice.") {
+		t.Fatalf("routed implementation prompt invokes implementation-owned TDD:\n%s", value)
+	}
 	if !strings.Contains(value, "Protected test-stage handoff (coordinator-owned):") {
 		t.Fatalf("routed implementation prompt missing the protected handoff:\n%s", value)
 	}
@@ -651,11 +690,11 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 		version string
 		sha256  string
 	}{
-		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939"},
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5"},
 		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74"},
-		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed"},
-		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c"},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "ea66e87d7f144bbc12c63ba2a2d6bb40c05aaef7112cb12d7cb626c858f2c204"},
+		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "007370ac417296565ab8c5ae6e009e6a39591c2a0122acb669f348ceaef9bebb"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -787,9 +826,8 @@ func TestBuildStandardsReviewPromptSeparatesDocumentedRulesFromHeuristics(t *tes
 	}
 	for _, marker := range []string{
 		"repository's own documented standards",
-		"duplicated logic shape",
+		"Use the `standards-review` skill",
 		"Every standards finding must cite",
-		"explicitly overridable floor",
 		"Baseline heuristic findings are advisory and never gate readiness",
 		"Do not merge them with specification findings",
 	} {
@@ -812,8 +850,8 @@ func TestBuildRendersEveryRoleAndRouteWithAuthority(t *testing.T) {
 		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), craft: "Work in vertical slices:", authority: "Repair and handoff ownership:"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), craft: "highest practical observable interface", authority: "Test-stage ownership:"},
 		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), craft: "proposed boundaries, invariants", authority: "Architecture-role ownership:"},
-		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), authority: "Review-role ownership:"},
-		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), craft: "Use this heuristic baseline", authority: "Review-role ownership:"},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), craft: "Use the `specification-review` skill", authority: "Review-role ownership:"},
+		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), craft: "Use the `standards-review` skill", authority: "Review-role ownership:"},
 	}
 	routes := []workflow.Route{workflow.RouteDefault, workflow.RouteAcceptance, workflow.RouteDesignAcceptance}
 	precedence := "Craft guidance advises craft only and never widens the frozen specification, moves a workflow stage, changes permitted paths, or alters the report contract."
@@ -849,9 +887,9 @@ func TestBuildRendersEveryRoleAndRouteWithAuthority(t *testing.T) {
 	}
 }
 
-// TestBuildRendersAnEmptySpecificationCraftSectionAsNothing verifies the
-// specification reviewer receives no invented craft prose.
-func TestBuildRendersAnEmptySpecificationCraftSectionAsNothing(t *testing.T) {
+// TestBuildRendersSpecificationReviewSkillCraft verifies the specification
+// reviewer receives its dedicated single-axis skill without source markers.
+func TestBuildRendersSpecificationReviewSkillCraft(t *testing.T) {
 	value, err := prompt.Build(prompt.Request{
 		InvocationID:        "inv-spec-empty-craft",
 		RunID:               "run-spec-empty-craft",
@@ -863,7 +901,10 @@ func TestBuildRendersAnEmptySpecificationCraftSectionAsNothing(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 	if strings.Contains(value, "<!-- craft:") {
-		t.Fatalf("empty craft section rendered as prose:\n%s", value)
+		t.Fatalf("specification craft exposed source markers:\n%s", value)
+	}
+	if !strings.Contains(value, "Use the `specification-review` skill") {
+		t.Fatalf("specification craft missing role skill:\n%s", value)
 	}
 }
 

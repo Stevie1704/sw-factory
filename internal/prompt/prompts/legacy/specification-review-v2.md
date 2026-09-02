@@ -5,7 +5,6 @@ Specification-review scope:
 - Do not use another reviewer's result, transcript, or session state as evidence.
 
 <!-- craft:start -->
-- Use the `specification-review` skill for this review axis.
 <!-- craft:end -->
 
 Review-role ownership:
