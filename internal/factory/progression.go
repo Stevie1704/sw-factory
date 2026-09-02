@@ -73,6 +73,117 @@ type progressionState struct {
 	// Supported reports whether the operational store exposes the durable
 	// invocation history that exactly-once progression requires.
 	Supported bool
+	// ReadyInvocationIDs records the report-readiness observation made while
+	// reading each active invocation. The planner must not repeat that I/O.
+	ReadyInvocationIDs map[string]bool
+}
+
+// progressionActionKind identifies one coordinator seam that can advance a
+// run. The set is intentionally closed so dispatch cannot silently ignore a
+// newly invented transition.
+type progressionActionKind string
+
+const (
+	// progressionActionStartAgent launches the role selected for a run stage.
+	progressionActionStartAgent progressionActionKind = "start_agent"
+	// progressionActionRunBaseline evaluates the frozen pre-edit gate suite.
+	progressionActionRunBaseline progressionActionKind = "run_baseline"
+	// progressionActionAcceptAgentReport accepts one invocation's report.
+	progressionActionAcceptAgentReport progressionActionKind = "accept_agent_report"
+	// progressionActionCreateDraftPullRequest creates the run's draft pull request.
+	progressionActionCreateDraftPullRequest progressionActionKind = "create_draft_pull_request"
+	// progressionActionStartReviewRound launches the concurrent review roles.
+	progressionActionStartReviewRound progressionActionKind = "start_review_round"
+	// progressionActionRetryReviewReadiness retries final pull-request readiness.
+	progressionActionRetryReviewReadiness progressionActionKind = "retry_review_readiness"
+)
+
+// progressionAction is a typed coordinator command selected from durable run
+// state. It contains only the operands needed to dispatch an existing seam;
+// it never captures a service, adapter, or context.
+type progressionAction struct {
+	// kind identifies the coordinator seam to dispatch.
+	kind progressionActionKind
+	// name is the operator-facing transition identity used in status text.
+	name string
+	// runID identifies the run that owns the transition.
+	runID string
+	// role optionally selects a specific role for an agent launch.
+	role string
+	// stage optionally selects a specific invocation stage for an agent launch.
+	stage store.Stage
+	// invocationID identifies the report to accept.
+	invocationID string
+}
+
+// progressionActionError reports an invalid or unhandled typed command.
+type progressionActionError struct {
+	// Action is the command that could not be dispatched.
+	Action progressionAction
+	// Reason explains the invalid operand or unsupported kind.
+	Reason string
+}
+
+// Error returns an actionable description of the invalid progression command.
+func (e *progressionActionError) Error() string {
+	if e == nil {
+		return "invalid progression action"
+	}
+	if e.Action.kind == "" {
+		return "invalid progression action: kind is required"
+	}
+	if e.Reason == "" {
+		return fmt.Sprintf("invalid progression action %q", e.Action.kind)
+	}
+	return fmt.Sprintf("invalid progression action %q: %s", e.Action.kind, e.Reason)
+}
+
+// validate checks that a typed command has exactly the operands its dispatch
+// arm accepts. A malformed command therefore cannot reach an adapter seam.
+func (a progressionAction) validate() error {
+	if strings.TrimSpace(a.name) == "" {
+		return &progressionActionError{Action: a, Reason: "operator-facing name is required"}
+	}
+	if strings.TrimSpace(a.runID) == "" {
+		return &progressionActionError{Action: a, Reason: "run id is required"}
+	}
+
+	noAgentOperands := func() error {
+		if a.role != "" || a.stage != "" || a.invocationID != "" {
+			return &progressionActionError{Action: a, Reason: "unexpected role, stage, or invocation operands"}
+		}
+		return nil
+	}
+
+	switch a.kind {
+	case progressionActionStartAgent:
+		hasRole := strings.TrimSpace(a.role) != ""
+		hasStage := strings.TrimSpace(string(a.stage)) != ""
+		if (a.role != "" && !hasRole) || (a.stage != "" && !hasStage) {
+			return &progressionActionError{Action: a, Reason: "agent role and stage cannot be blank"}
+		}
+		if hasRole != hasStage {
+			return &progressionActionError{Action: a, Reason: "agent role and stage must be provided together"}
+		}
+		if a.invocationID != "" {
+			return &progressionActionError{Action: a, Reason: "agent launch cannot include an invocation id"}
+		}
+	case progressionActionAcceptAgentReport:
+		if strings.TrimSpace(a.invocationID) == "" {
+			return &progressionActionError{Action: a, Reason: "invocation id is required"}
+		}
+		if a.role != "" || a.stage != "" {
+			return &progressionActionError{Action: a, Reason: "report acceptance cannot include role or stage operands"}
+		}
+	case progressionActionRunBaseline, progressionActionCreateDraftPullRequest,
+		progressionActionStartReviewRound, progressionActionRetryReviewReadiness:
+		if err := noAgentOperands(); err != nil {
+			return err
+		}
+	default:
+		return &progressionActionError{Action: a, Reason: "kind is not declared"}
+	}
+	return nil
 }
 
 // driveRun performs one bounded unattended progression pass for the registered
@@ -98,6 +209,7 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 	if lifecycle.Outcome == LifecycleCompleted || lifecycle.Outcome == LifecycleCancelled {
 		return progressionResult{Outcome: progressionTerminal, Run: lifecycle.Run, Reason: lifecycle.Reason}, nil
 	}
+	registry := workflow.DefaultRegistry()
 	for result.Steps < maxProgressionSteps {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -113,13 +225,33 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			return progressionResult{Outcome: progressionIdle, Steps: result.Steps, Reason: "no run to drive"}, nil
 		}
 		result.Run = *state.Run
-		step, stop := s.progressionStep(state)
+		step, stop := progressionStep(state, registry)
 		if stop != nil {
 			stop.Steps = result.Steps
 			return s.publishProgressionStop(ctx, registration, *state.Run, *stop)
 		}
-		if err := step.action(ctx); err != nil {
-			return s.stopProgressionAfterFailure(ctx, registration, *state.Run, step.name, err, result.Steps)
+		if err := step.validate(); err != nil {
+			return result, err
+		}
+		var stepErr error
+		switch step.kind {
+		case progressionActionStartAgent:
+			_, stepErr = s.StartAgent(ctx, AgentRequest{RunID: step.runID, Role: step.role, Stage: step.stage})
+		case progressionActionRunBaseline:
+			_, stepErr = s.RunBaseline(ctx, BaselineRequest{RunID: step.runID})
+		case progressionActionAcceptAgentReport:
+			_, stepErr = s.AcceptAgentReport(ctx, AgentReportRequest{RunID: step.runID, InvocationID: step.invocationID})
+		case progressionActionCreateDraftPullRequest:
+			_, stepErr = s.CreateDraftPullRequest(ctx, DraftPullRequestRequest{RunID: step.runID})
+		case progressionActionStartReviewRound:
+			stepErr = s.startReviewRound(ctx, step.runID)
+		case progressionActionRetryReviewReadiness:
+			stepErr = s.retryReviewReadiness(ctx, step.runID)
+		default:
+			stepErr = &progressionActionError{Action: step, Reason: "kind is not declared for dispatch"}
+		}
+		if stepErr != nil {
+			return s.stopProgressionAfterFailure(ctx, registration, *state.Run, step.name, stepErr, result.Steps)
 		}
 		result.Steps++
 		advanced, err := s.readProgressionState(ctx, registration)
@@ -189,15 +321,6 @@ func (s *Service) observePullRequestEvents(ctx context.Context, registration con
 	return lifecycle, s.consumeHumanReview(ctx, registration, runStore, lifecycle.Run)
 }
 
-// progressionAction is one coordinator-owned transition selected from durable
-// run state. The coordinator, never an agent, chooses it.
-type progressionAction struct {
-	// name is the operator-facing transition identity used in status text.
-	name string
-	// action performs the transition through an existing coordinator seam.
-	action func(context.Context) error
-}
-
 // startReviewRound launches the specification and standards reviewers for the
 // same frozen checkpoint. Launching is coordinator-serialized, while the two
 // resulting harness sessions remain live concurrently in their own workers,
@@ -225,15 +348,25 @@ func (s *Service) startReviewRound(ctx context.Context, runID string) error {
 
 // progressionStep selects the single legal next transition for a run, or the
 // waiting state that stops unattended progression. Exactly one of the two
-// return values is set.
-func (s *Service) progressionStep(state progressionState) (progressionAction, *progressionResult) {
+// return values is set. All observations needed by the decision are supplied
+// in state and registry.
+func progressionStep(state progressionState, registry workflow.Registry) (progressionAction, *progressionResult) {
 	run := *state.Run
-	if role, ok := missingConcurrentReviewRole(state); ok {
-		definition, _ := workflow.DefaultRegistry().Role(role)
-		return progressionAction{name: "start missing " + role + " review", action: func(ctx context.Context) error {
-			_, err := s.StartAgent(ctx, AgentRequest{RunID: run.ID, Role: definition.Name, Stage: definition.Stage})
-			return err
-		}}, nil
+	if role, ok := missingConcurrentReviewRole(state, registry); ok {
+		definition, declared := registry.Role(role)
+		if !declared {
+			return progressionAction{}, &progressionResult{
+				Outcome: progressionWaiting,
+				Reason:  fmt.Sprintf("workflow role %q is not declared by the workflow registry", role),
+			}
+		}
+		return progressionAction{
+			kind:  progressionActionStartAgent,
+			name:  "start missing " + role + " review",
+			runID: run.ID,
+			role:  definition.Name,
+			stage: definition.Stage,
+		}, nil
 	}
 	if reviewReadinessSettled(run) {
 		return progressionAction{}, &progressionResult{
@@ -243,15 +376,17 @@ func (s *Service) progressionStep(state progressionState) (progressionAction, *p
 		}
 	}
 	if reviewReadinessEligible(run) {
-		return progressionAction{name: "finalize pull-request readiness", action: func(ctx context.Context) error {
-			return s.retryReviewReadiness(ctx, run.ID)
-		}}, nil
+		return progressionAction{
+			kind:  progressionActionRetryReviewReadiness,
+			name:  "finalize pull-request readiness",
+			runID: run.ID,
+		}, nil
 	}
 	switch RunActivityFor(run) {
 	case ActivityTerminal:
 		return progressionAction{}, &progressionResult{Outcome: progressionTerminal, Reason: "run is " + string(run.Status)}
 	case ActivityWaitingForHuman:
-		if !hasActiveReviewInvocations(state) {
+		if !hasActiveReviewInvocations(state, registry) {
 			return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: waitingReason(run, "waiting for human disposition")}
 		}
 	case ActivityWaitingForHarness:
@@ -271,14 +406,15 @@ func (s *Service) progressionStep(state progressionState) (progressionAction, *p
 			}
 		}
 		for _, active := range activeInvocations {
-			if !agentResultReady(*active) {
+			if !state.ReadyInvocationIDs[active.ID] {
 				continue
 			}
-			invocationID := active.ID
-			return progressionAction{name: "accept agent report", action: func(ctx context.Context) error {
-				_, err := s.AcceptAgentReport(ctx, AgentReportRequest{RunID: run.ID, InvocationID: invocationID})
-				return err
-			}}, nil
+			return progressionAction{
+				kind:         progressionActionAcceptAgentReport,
+				name:         "accept agent report",
+				runID:        run.ID,
+				invocationID: active.ID,
+			}, nil
 		}
 		ids := make([]string, 0, len(activeInvocations))
 		for _, active := range activeInvocations {
@@ -286,15 +422,15 @@ func (s *Service) progressionStep(state progressionState) (progressionAction, *p
 		}
 		return progressionAction{}, &progressionResult{Outcome: progressionInvocationActive, Reason: fmt.Sprintf("invocations %s are executing", strings.Join(ids, ", "))}
 	}
-	return s.progressionStageStep(state)
+	return progressionStageStep(state, registry)
 }
 
 // missingConcurrentReviewRole returns the one reviewer that can be resumed
 // after a partial concurrent-review launch. It waits for any active reviewer
 // and requires one exact-checkpoint result so a human clarification is never
 // mistaken for a failed launch.
-func missingConcurrentReviewRole(state progressionState) (string, bool) {
-	if state.Run == nil || state.Run.Stage != store.StageReview || !concurrentReviewsConfigured(*state.Run) || hasActiveReviewInvocations(state) {
+func missingConcurrentReviewRole(state progressionState, registry workflow.Registry) (string, bool) {
+	if state.Run == nil || state.Run.Stage != store.StageReview || !concurrentReviewsConfigured(*state.Run) || hasActiveReviewInvocations(state, registry) {
 		return "", false
 	}
 	run := *state.Run
@@ -319,13 +455,17 @@ func missingConcurrentReviewRole(state progressionState) (string, bool) {
 
 // hasActiveReviewInvocations reports whether an otherwise human-waiting review
 // round still has an independent result that can be serialized and applied.
-func hasActiveReviewInvocations(state progressionState) bool {
+func hasActiveReviewInvocations(state progressionState, registry workflow.Registry) bool {
 	active := state.ActiveInvocations
 	if len(active) == 0 && state.Active != nil {
 		active = []*store.Invocation{state.Active}
 	}
 	for _, invocation := range active {
-		if roleIsKind(*invocation, workflow.RoleKindReview) {
+		if invocation == nil {
+			continue
+		}
+		definition, declared := registry.Role(invocation.Role)
+		if declared && definition.Stage == invocation.Stage && definition.Kind == workflow.RoleKindReview {
 			return true
 		}
 	}
@@ -337,22 +477,24 @@ func hasActiveReviewInvocations(state progressionState) bool {
 // stage authority: a stage that declares a coordinator event is driven by the
 // draft-pull-request seam that owns those events, and a stage that declares a
 // role is driven by launching that role.
-func (s *Service) progressionStageStep(state progressionState) (progressionAction, *progressionResult) {
+func progressionStageStep(state progressionState, registry workflow.Registry) (progressionAction, *progressionResult) {
 	run := *state.Run
-	registry := workflow.DefaultRegistry()
 	switch run.Stage {
 	case store.StageClaim:
 		// Leaving claim is the frozen baseline, whose healthy result selects
 		// the entry stage from the route and the repository test policy.
-		return progressionAction{name: "run baseline", action: func(ctx context.Context) error {
-			_, err := s.RunBaseline(ctx, BaselineRequest{RunID: run.ID})
-			return err
-		}}, nil
+		return progressionAction{
+			kind:  progressionActionRunBaseline,
+			name:  "run baseline",
+			runID: run.ID,
+		}, nil
 	case store.StageDraftPR:
 		if concurrentReviewsConfigured(run) {
-			return progressionAction{name: "start concurrent reviews", action: func(ctx context.Context) error {
-				return s.startReviewRound(ctx, run.ID)
-			}}, nil
+			return progressionAction{
+				kind:  progressionActionStartReviewRound,
+				name:  "start concurrent reviews",
+				runID: run.ID,
+			}, nil
 		}
 		// Older packets without the standards role retain the historical
 		// draft-pull-request stop until they are explicitly reviewed.
@@ -367,18 +509,20 @@ func (s *Service) progressionStageStep(state progressionState) (progressionActio
 	_, roleDeclared := registry.RoleForRunStage(run.Stage)
 	stageComplete := state.Latest != nil && state.Latest.Stage == run.Stage && state.Latest.Status == store.InvocationStatusCompleted
 	if len(definition.Events) > 0 && (!roleDeclared || stageComplete) {
-		return progressionAction{name: "create draft pull request", action: func(ctx context.Context) error {
-			_, err := s.CreateDraftPullRequest(ctx, DraftPullRequestRequest{RunID: run.ID})
-			return err
-		}}, nil
+		return progressionAction{
+			kind:  progressionActionCreateDraftPullRequest,
+			name:  "create draft pull request",
+			runID: run.ID,
+		}, nil
 	}
 	if !roleDeclared {
 		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("no coordinator transition is declared for run stage %q", run.Stage)}
 	}
-	return progressionAction{name: "start agent", action: func(ctx context.Context) error {
-		_, err := s.StartAgent(ctx, AgentRequest{RunID: run.ID})
-		return err
-	}}, nil
+	return progressionAction{
+		kind:  progressionActionStartAgent,
+		name:  "start agent",
+		runID: run.ID,
+	}, nil
 }
 
 // readProgressionState reads the run and its invocation projection once. A
@@ -422,6 +566,13 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 		return progressionState{}, fmt.Errorf("read active invocation for progression: %w", err)
 	} else if state.Active != nil {
 		state.ActiveInvocations = []*store.Invocation{state.Active}
+	}
+	state.ReadyInvocationIDs = make(map[string]bool, len(state.ActiveInvocations))
+	for _, invocation := range state.ActiveInvocations {
+		if invocation == nil {
+			continue
+		}
+		state.ReadyInvocationIDs[invocation.ID] = agentResultReady(*invocation)
 	}
 	if state.Latest, err = latestStore.LatestInvocation(ctx, run.ID); err != nil {
 		return progressionState{}, fmt.Errorf("read latest invocation for progression: %w", err)

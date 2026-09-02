@@ -190,7 +190,7 @@ func TestMissingConcurrentReviewRoleResumesTheUnlaunchedReviewer(t *testing.T) {
 				SpecificationReview: test.specification,
 				StandardsReview:     test.standards,
 			}}
-			if got, ok := missingConcurrentReviewRole(state); !ok || got != test.wantMissingRole {
+			if got, ok := missingConcurrentReviewRole(state, workflow.DefaultRegistry()); !ok || got != test.wantMissingRole {
 				t.Fatalf("missingConcurrentReviewRole() = %q/%t, want %q/true", got, ok, test.wantMissingRole)
 			}
 		})
