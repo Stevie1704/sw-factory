@@ -290,6 +290,16 @@ technical test exemption is provisional evidence for the standards reviewer,
 not an automatic waiver. Both reviewers inspect the same immutable
 base-to-checkpoint diff and must report that checkpoint SHA.
 
+The diff is captured with a bounded context width, because a review role has
+the checkpoint worktree mounted read-only and can open any file it needs. It is
+mounted with the invocation packet and named in the prompt rather than repeated
+in it: a launch prompt travels as one command argument, and Linux refuses an
+argument longer than 32 pages, so a prompt that grew with the reviewed change
+could not be executed at all. Every adapter now refuses an oversized prompt
+before launch with a typed error naming the size, and a diff beyond the
+reviewer's reading budget stops the run at capture with a named reason instead
+of producing a packet no reviewer can work through.
+
 The reviewer publishes a completed report with repeated finding flags:
 
 ```sh

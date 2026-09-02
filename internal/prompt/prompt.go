@@ -229,7 +229,9 @@ type ReviewContext struct {
 	// CheckpointSHA identifies the exact commit under review.
 	CheckpointSHA string `json:"checkpoint_sha"`
 	// CurrentDiff is the coordinator-captured diff from the base to checkpoint.
-	CurrentDiff string `json:"current_diff"`
+	// It is omitted when empty so a prompt can carry the rest of the context
+	// while pointing at the mounted packet for the diff itself.
+	CurrentDiff string `json:"current_diff,omitempty"`
 	// TestHandoff is retained for compatibility with older packet readers and is
 	// omitted from new isolated review packets.
 	TestHandoff *store.TestHandoff `json:"test_handoff,omitempty"`
@@ -364,11 +366,24 @@ Review-repair packet (coordinator-owned):
 		dynamicContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n", data)
 	}
 	if definition.Kind == workflow.RoleKindReview && request.ReviewContext != nil {
-		data, err := marshalHandoff(request.ReviewContext)
+		// The diff grows with the reviewed change and is the one unbounded part
+		// of the context. It is already mounted with the packet, so the prompt
+		// carries the bounded observations and names where the diff is.
+		withoutDiff := *request.ReviewContext
+		withoutDiff.CurrentDiff = ""
+		data, err := marshalHandoff(withoutDiff)
 		if err != nil {
 			return "", fmt.Errorf("encode review context: %w", err)
 		}
-		dynamicContext = fmt.Sprintf("\nRead-only review context (coordinator-owned):\n%s\n", data)
+		location := "This checkpoint changed nothing against its base, so the context carries no diff."
+		if size := len(request.ReviewContext.CurrentDiff); size > 0 {
+			location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes. Read it in the mounted packet at\n%s under review_context.current_diff; it is not repeated here.", size, WorkerSpecificationPath)
+		}
+		dynamicContext = fmt.Sprintf(`
+Read-only review context (coordinator-owned):
+%s
+%s
+`, data, location)
 	}
 	if request.Continuation {
 		return joinPromptSections(

@@ -23,7 +23,16 @@ const (
 	// by every documented-standards review invocation.
 	StandardsReviewStatusContext = "factory/review/standards"
 	// maxReviewDiffBytes bounds the immutable diff copied into a review packet.
-	maxReviewDiffBytes = 512 << 10
+	// A diff past it describes a checkpoint too large for one review round, so
+	// the run stops at capture with a named reason rather than sending a
+	// reviewer into a packet it cannot work through.
+	maxReviewDiffBytes = 128 << 10
+	// reviewDiffContextLines is the context width of the captured diff. A review
+	// role has the checkpoint worktree mounted read-only, so it can open any
+	// file it needs; the diff only has to make each hunk judgeable in place.
+	// Wide context multiplies the packet size without adding anything the
+	// reviewer could not already read.
+	reviewDiffContextLines = 10
 )
 
 // roleHandoffFromReport converts the report protocol's completed handoff into
@@ -198,7 +207,7 @@ func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, invocati
 	result, err := s.deps.Worker.RunCommand(ctx, worker.CommandRequest{
 		RunID:             run.ID,
 		WorkerID:          workerIDForInvocation(invocation),
-		Command:           fmt.Sprintf("git diff --no-ext-diff --binary --unified=80 %s %s -- .", base, run.CheckpointSHA),
+		Command:           fmt.Sprintf("git diff --no-ext-diff --binary --unified=%d %s %s -- .", reviewDiffContextLines, base, run.CheckpointSHA),
 		EnvironmentPolicy: worker.EnvironmentPolicyClean,
 		Role:              invocation.Role,
 	})
