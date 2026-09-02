@@ -532,19 +532,26 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		return store.Invocation{}, run, err
 	}
 	craftSourcePath, craftSHA256 := craftMetadataForInvocation(repositoryCraft)
+	repairSpecification, err := promptSpecification(packet)
+	if err != nil {
+		return store.Invocation{}, run, err
+	}
 	promptText, err := prompt.Build(prompt.Request{
 		InvocationID:        invocationID,
 		RunID:               run.ID,
 		Role:                previous.Role,
 		Stage:               string(store.StageImplementation),
-		SpecificationPacket: run.SpecificationPacket,
-		RepositoryGuidance:  packet.RepositoryGuidance,
-		RepositoryCraft:     repositoryCraftContent(repositoryCraft),
-		PromptVersion:       promptVersion,
-		TestPolicyMode:      string(packet.RepositoryConfig.TestPolicy.Mode),
-		Route:               packet.Route,
-		CheckRepairAttempt:  repairPacket.Attempt,
-		CheckRepairBudget:   repairPacket.Budget,
+		SpecificationPacket: repairSpecification,
+		// A check repair only exists as a resumed session, refused above when
+		// the previous invocation has no native session to continue.
+		Continuation:       true,
+		RepositoryGuidance: packet.RepositoryGuidance,
+		RepositoryCraft:    repositoryCraftContent(repositoryCraft),
+		PromptVersion:      promptVersion,
+		TestPolicyMode:     string(packet.RepositoryConfig.TestPolicy.Mode),
+		Route:              packet.Route,
+		CheckRepairAttempt: repairPacket.Attempt,
+		CheckRepairBudget:  repairPacket.Budget,
 	})
 	if err != nil {
 		return store.Invocation{}, run, err
@@ -563,6 +570,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		Route:                 packet.Route,
 		PermittedPaths:        append([]string(nil), previous.PermittedPaths...),
 		CheckRepair:           &repairPacket,
+		Continuation:          true,
 	}); err != nil {
 		return store.Invocation{}, run, err
 	}

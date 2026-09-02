@@ -208,6 +208,10 @@ type InvocationPacket struct {
 	// ReviewContext contains the exact checkpoint and bounded review inputs for
 	// an isolated review invocation.
 	ReviewContext *prompt.ReviewContext `json:"review_context,omitempty"`
+	// Continuation records that this invocation continued a harness session that
+	// already held the role's first prompt, so a rebuilt prompt keeps carrying
+	// only what changed.
+	Continuation bool `json:"continuation,omitempty"`
 }
 
 const (
@@ -215,8 +219,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version nine adds the frozen repository-craft identity.
-	invocationPacketVersion = 9
+	// Version ten records whether the prompt continued an existing session.
+	invocationPacketVersion = 10
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )

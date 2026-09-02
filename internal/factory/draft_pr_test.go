@@ -422,6 +422,22 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	if len(harnessRuntime.resumes) != 1 || harnessRuntime.resumes[0].ResumeSessionID != "session-initial" || harnessRuntime.resumes[0].Surface.ID != "surface-implementation" {
 		t.Fatalf("resume requests = %#v, want native session and existing surface", harnessRuntime.resumes)
 	}
+	// The repair turn enters a session that already read the first prompt, so it
+	// carries the repair packet without replaying the specification, the
+	// repository guidance, or the role body.
+	repairPrompt := harnessRuntime.resumes[0].Prompt
+	if !strings.Contains(repairPrompt, "(continuation)") || strings.Contains(repairPrompt, "--- BEGIN SPECIFICATION PACKET ---") || strings.Contains(repairPrompt, "--- BEGIN REPOSITORY GUIDANCE ---") {
+		t.Fatalf("resumed repair prompt is not a continuation:\n%s", repairPrompt)
+	}
+	if !strings.Contains(repairPrompt, "repair attempt 1 of 3") || !strings.Contains(repairPrompt, "Completion gate:") {
+		t.Fatalf("resumed repair prompt missing repair context or completion gate:\n%s", repairPrompt)
+	}
+	if len(harnessRuntime.starts) == 0 || strings.Contains(harnessRuntime.starts[0].Prompt, "(continuation)") {
+		t.Fatalf("first prompt = %#v, want a complete prompt rather than a continuation", harnessRuntime.starts)
+	}
+	if !strings.Contains(harnessRuntime.starts[0].Prompt, "--- BEGIN SPECIFICATION PACKET ---") {
+		t.Fatalf("first prompt missing the fenced specification:\n%s", harnessRuntime.starts[0].Prompt)
+	}
 	if !strings.Contains(githubAdapter.editedComments[len(githubAdapter.editedComments)-1].body, "check-repair attempts: 1/3") || !strings.Contains(githubAdapter.editedComments[len(githubAdapter.editedComments)-1].body, "check-repair remaining: 2") {
 		t.Fatalf("repair status comment = %q, want visible attempt budget", githubAdapter.editedComments[len(githubAdapter.editedComments)-1].body)
 	}

@@ -181,6 +181,9 @@ func (f *continuationFixture) assertUnattendedReviewRepairHappened(t *testing.T)
 	if !f.humanRepairPacketSeen {
 		t.Fatal("no implementation invocation received the human review repair packet")
 	}
+	if !f.reviewRepairPromptContinued {
+		t.Fatal("a resumed review repair replayed the complete first prompt instead of continuing the session")
+	}
 	// The human repair must not advance, reset, or record a bounded factory
 	// round; only the one agent-found blocker consumed the budget.
 	terminal := f.firstTerminalRun(t)
@@ -256,7 +259,10 @@ type continuationFixture struct {
 	firstRunID            string
 	blockingReviewServed  bool
 	humanRepairPacketSeen bool
-	checkpointsReviewed   map[string]struct{}
+	// reviewRepairPromptContinued records that a resumed review repair carried
+	// only the changed context rather than a second copy of the first prompt.
+	reviewRepairPromptContinued bool
+	checkpointsReviewed         map[string]struct{}
 }
 
 // newContinuationFixture builds an advisory-policy repository that declares
@@ -616,6 +622,11 @@ func (f *continuationFixture) observeImplementationPacket(request harness.StartR
 	defer f.mu.Unlock()
 	if strings.Contains(request.Prompt, string(store.ReviewRepairSourceHuman)) && strings.Contains(request.Prompt, "4001") {
 		f.humanRepairPacketSeen = true
+	}
+	// A repair turn resumes the implementation session that already read the
+	// first prompt, so it must not replay the fenced specification.
+	if request.ResumeSessionID != "" && strings.Contains(request.Prompt, "Review-repair packet") {
+		f.reviewRepairPromptContinued = strings.Contains(request.Prompt, "(continuation)") && !strings.Contains(request.Prompt, "--- BEGIN SPECIFICATION PACKET ---")
 	}
 }
 
