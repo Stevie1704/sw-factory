@@ -352,6 +352,21 @@ func TestConcurrentReviewBlockersBecomeOneRepairPacket(t *testing.T) {
 	if len(current.ActiveInvocationIDs) != 1 {
 		t.Fatalf("repair active invocations = %#v, want one implementation invocation", current.ActiveInvocationIDs)
 	}
+	// This run has no earlier implementation invocation to resume, so the repair
+	// starts a fresh session and must receive the complete prompt rather than a
+	// continuation of a session that was never opened.
+	if len(fixture.harness.resumes) != 0 {
+		t.Fatalf("repair resumes = %#v, want a fresh session when no native session exists", fixture.harness.resumes)
+	}
+	repairPrompt := fixture.harness.starts[len(fixture.harness.starts)-1].Prompt
+	for _, present := range []string{"--- BEGIN SPECIFICATION PACKET ---", "--- BEGIN REPOSITORY GUIDANCE ---", "Review-repair packet (coordinator-owned):", "specification blocker"} {
+		if !strings.Contains(repairPrompt, present) {
+			t.Fatalf("fresh repair prompt missing %q:\n%s", present, repairPrompt)
+		}
+	}
+	if strings.Contains(repairPrompt, "(continuation)") {
+		t.Fatalf("fresh repair prompt is a continuation:\n%s", repairPrompt)
+	}
 }
 
 // TestReviewRejectsAStaleCheckpointWithATypedFailure verifies a result cannot
@@ -430,6 +445,7 @@ type reviewFixture struct {
 	worker       *agentWorker
 	statuses     *gateStatuses
 	pullRequests *fakePullRequests
+	harness      *agentHarness
 }
 
 // newReviewFixture creates a draft-PR run with a valid baseline and checkpoint.
@@ -520,7 +536,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		{RunID: run.ID, CheckpointSHA: factoryGateCheckpoint, Phase: store.GatePhaseBaseline, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
 		{RunID: run.ID, CheckpointSHA: reviewCheckpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
 	}
-	return reviewFixture{service: service, runStore: runStore, worker: runtime, statuses: statuses, pullRequests: pullRequests}
+	return reviewFixture{service: service, runStore: runStore, worker: runtime, statuses: statuses, pullRequests: pullRequests, harness: harnessRuntime}
 }
 
 // reviewReport creates a valid completed review report for a launched session.
