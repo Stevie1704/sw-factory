@@ -244,13 +244,14 @@ func (m *LocalWorktreeManager) ReadRepositoryGuidance(ctx context.Context, workt
 	if err := ref.ValidatePart(checkpointSHA); err != nil {
 		return nil, fmt.Errorf("guidance checkpoint SHA: %w", err)
 	}
-	pathsOutput, err := m.runner().Run(ctx, worktreePath, []string{"ls-tree", "--full-tree", "-r", "--name-only", "-z", checkpointSHA, "--"})
+	pathsOutput, err := m.runner().Run(ctx, worktreePath, []string{"ls-tree", "--full-tree", "-r", "-z", checkpointSHA, "--"})
 	if err != nil {
 		return nil, fmt.Errorf("list repository guidance at checkpoint %q: %w", checkpointSHA, err)
 	}
 	paths := make([]string, 0)
-	for _, candidate := range strings.Split(string(pathsOutput), "\x00") {
-		if candidate != "" && IsRepositoryGuidancePath(candidate) {
+	for _, entry := range strings.Split(string(pathsOutput), "\x00") {
+		candidate, ok := regularFileEntryPath(entry)
+		if ok && IsRepositoryGuidancePath(candidate) {
 			paths = append(paths, candidate)
 		}
 	}
@@ -295,6 +296,25 @@ func (m *LocalWorktreeManager) ReadRepositoryCraft(ctx context.Context, worktree
 		return GuidanceDocument{}, fmt.Errorf("read repository craft %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
 	}
 	return GuidanceDocument{Path: cleanPath, Content: string(content)}, nil
+}
+
+// regularFileEntryPath returns the path of one `git ls-tree -z` entry when the
+// entry is a regular file blob. A symbolic link is stored as a blob holding its
+// target path, so reading one would present the link target as guidance prose;
+// links, submodules, and trees are therefore reported as unusable.
+func regularFileEntryPath(entry string) (string, bool) {
+	metadata, path, found := strings.Cut(entry, "\t")
+	if !found || path == "" {
+		return "", false
+	}
+	mode, _, found := strings.Cut(metadata, " ")
+	if !found {
+		return "", false
+	}
+	if mode != "100644" && mode != "100755" {
+		return "", false
+	}
+	return path, true
 }
 
 // IsRepositoryGuidancePath reports whether a tracked path is a conventional
