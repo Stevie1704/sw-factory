@@ -47,6 +47,25 @@ func TestReviewSkillsContainOnlyTheirAssignedAxis(t *testing.T) {
 	}
 }
 
+// TestRoleSkillsLeaveCoordinatorProtocolToThePrompt verifies Docker-baked
+// craft does not absorb the factory-owned result-file completion contract.
+func TestRoleSkillsLeaveCoordinatorProtocolToThePrompt(t *testing.T) {
+	for _, path := range []string{
+		"skills/implement/SKILL.md",
+		"skills/specification-review/SKILL.md",
+		"skills/standards-review/SKILL.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			body := readSkill(t, path)
+			for _, protocol := range []string{"/usr/local/bin/factory-report", "The coordinator advances only from that file"} {
+				if strings.Contains(body, protocol) {
+					t.Fatalf("role skill contains factory-owned protocol %q:\n%s", protocol, body)
+				}
+			}
+		})
+	}
+}
+
 // readSkill returns one checked-in worker skill body for a contract test.
 func readSkill(t *testing.T, path string) string {
 	t.Helper()

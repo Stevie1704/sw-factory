@@ -41,6 +41,47 @@ func TestBuildImplementationPromptKeepsFactoryRulesAuthoritative(t *testing.T) {
 	}
 }
 
+// TestBuildEndsEveryRoleWithTheStructuredResultCompletionGate verifies the
+// coordinator-consumed result file is the final, factory-owned done bound for
+// every role rather than optional craft guidance.
+func TestBuildEndsEveryRoleWithTheStructuredResultCompletionGate(t *testing.T) {
+	roles := []struct {
+		name  string
+		role  string
+		stage string
+	}{
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation)},
+		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest)},
+		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture)},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview)},
+		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview)},
+	}
+	wantFinalRule := "- The role is complete only after factory-report succeeds and writes the structured result file for this invocation. The coordinator advances only from that file."
+	for _, role := range roles {
+		t.Run(role.name, func(t *testing.T) {
+			value, err := prompt.Build(prompt.Request{
+				InvocationID:        "inv-completion-" + role.role,
+				RunID:               "run-completion",
+				Role:                role.role,
+				Stage:               role.stage,
+				SpecificationPacket: `{}`,
+			})
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if !strings.Contains(value, "Completion gate:") {
+				t.Fatalf("%s prompt missing completion gate:\n%s", role.name, value)
+			}
+			if strings.Index(value, "Completion gate:") < strings.Index(value, "Factory-owned rules:") {
+				t.Fatalf("%s completion gate does not follow factory rules:\n%s", role.name, value)
+			}
+			if !strings.HasSuffix(strings.TrimSpace(value), wantFinalRule) {
+				t.Fatalf("%s prompt does not end with structured-result completion rule:\n%s", role.name, value)
+			}
+		})
+	}
+}
+
 // TestBuildAdvisoryImplementationPromptAssignsTheCompleteTDDLoop verifies the
 // implementation role receives explicit red/green/refactor ownership in the
 // advisory path without an independent test handoff.
