@@ -47,6 +47,30 @@ func TestReviewSkillsContainOnlyTheirAssignedAxis(t *testing.T) {
 	}
 }
 
+// TestRoleSkillsMakeTheStructuredResultACompletionGate verifies every adapted
+// role skill makes the coordinator-consumed result file a visible done bound.
+func TestRoleSkillsMakeTheStructuredResultACompletionGate(t *testing.T) {
+	for _, path := range []string{
+		"skills/implement/SKILL.md",
+		"skills/specification-review/SKILL.md",
+		"skills/standards-review/SKILL.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			body := readSkill(t, path)
+			normalized := strings.Join(strings.Fields(body), " ")
+			for _, marker := range []string{
+				"## Completion gate",
+				"/usr/local/bin/factory-report",
+				"The coordinator advances only from that file",
+			} {
+				if !strings.Contains(normalized, marker) {
+					t.Fatalf("role skill missing completion-gate marker %q:\n%s", marker, body)
+				}
+			}
+		})
+	}
+}
+
 // readSkill returns one checked-in worker skill body for a contract test.
 func readSkill(t *testing.T, path string) string {
 	t.Helper()

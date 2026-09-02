@@ -61,7 +61,7 @@ caches:
     read_only: false
 worker_build:
   image: ghcr.io/stevie1704/sw-factory-worker
-  digest: sha256:57b860a2c81dc250f5889ec32aa0d3ae8c0aed5ba1c38e16d94620caa14e1929
+  digest: sha256:a698804ab25bb2197b10bc59ff3543647b48f61b07a26a3a169b657eb9df5e19
   definition: worker/Dockerfile
 base_synchronization:
   mode: never
