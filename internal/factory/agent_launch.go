@@ -366,22 +366,32 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 		if returnErr == nil || !invocationPersisted || preserveInvocation {
 			return
 		}
+		pendingIndeterminate := false
 		if journal, journaled := runStore.(PendingEffectStore); journaled {
 			pending, pendingErr := journal.PendingEffect(context.WithoutCancel(ctx), run.ID)
-			if pendingErr == nil && pending != nil {
+			switch {
+			case pendingErr != nil:
+				// The durable effect state is unknown, so the void rule must not
+				// discard an invocation whose reserved effect a later
+				// reconciliation may still own.
+				pendingIndeterminate = true
+				returnErr = fmt.Errorf("%w; durable pending-effect lookup was indeterminate; invocation kept protected: %v", returnErr, pendingErr)
+			case pending != nil:
 				// Leave the active invocation and its reserved effect intact. A
 				// restart must replay the exact worker boundary before deciding
 				// whether the native session can be resumed or needs human review.
 				return
 			}
 		}
-		var evidenceErr error
-		voidedLaunch, evidenceErr = failedLaunchHasNoEvidence(invocation)
-		if evidenceErr != nil {
-			returnErr = fmt.Errorf("%w; failed launch report presence was indeterminate; invocation kept protected: %v", returnErr, evidenceErr)
-		}
-		if voidedLaunch && !strings.Contains(returnErr.Error(), failedLaunchVoidMarker) {
-			returnErr = fmt.Errorf("%w; %s", returnErr, failedLaunchRetryGuidance(invocation))
+		if !pendingIndeterminate {
+			var evidenceErr error
+			voidedLaunch, evidenceErr = failedLaunchHasNoEvidence(invocation)
+			if evidenceErr != nil {
+				returnErr = fmt.Errorf("%w; failed launch report presence was indeterminate; invocation kept protected: %v", returnErr, evidenceErr)
+			}
+			if voidedLaunch && !strings.Contains(returnErr.Error(), failedLaunchVoidMarker) {
+				returnErr = fmt.Errorf("%w; %s", returnErr, failedLaunchRetryGuidance(invocation))
+			}
 		}
 		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()

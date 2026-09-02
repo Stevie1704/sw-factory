@@ -481,6 +481,35 @@ func TestStartAgentPreservesAnIndeterminateReportPath(t *testing.T) {
 	}
 }
 
+// TestStartAgentPreservesAnIndeterminatePendingEffect verifies a launch is kept
+// protected when the durable journal cannot prove the run reserved no effect.
+func TestStartAgentPreservesAnIndeterminatePendingEffect(t *testing.T) {
+	_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	run := *runStore.current
+	worktree := &inspectingWorktree{
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
+		state:        gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA},
+	}
+	journal := &journaledAgentRunStore{agentRunStore: runStore, armPendingErr: errors.New("effect journal unavailable")}
+	fresh := newFreshAgentServiceWithStore(t, runStore, journal, worktree, runtime, terminalRuntime, harnessRuntime)
+	harnessRuntime.startErr = errors.New("prompt exceeds launch limit")
+
+	_, err := fresh.StartAgent(context.Background(), factory.AgentRequest{})
+	if err == nil {
+		t.Fatal("StartAgent() succeeded while the harness launch was unavailable")
+	}
+	if !strings.Contains(err.Error(), "invocation kept protected") {
+		t.Fatalf("StartAgent() error = %v, want the recorded pending-effect discrepancy", err)
+	}
+	if strings.Contains(err.Error(), "use `/factory retry`") {
+		t.Fatalf("StartAgent() exposed retry guidance for an indeterminate effect journal: %v", err)
+	}
+	invocation, ok := runStore.invocations["inv-generated"]
+	if !ok || invocation.Status != store.InvocationStatusCannotProceed || invocation.LaunchVoided {
+		t.Fatalf("indeterminate launch = %#v, want protected cannot_proceed invocation", invocation)
+	}
+}
+
 // TestHandleCommandRetriesAWaitingRunAfterFailedLaunch verifies a launch that
 // never produced a session can be retried without changing the specification
 // packet or repeating the upstream stage.
@@ -1097,6 +1126,14 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 // tests exercise the cross-process startup seam rather than cached service state.
 func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspectingWorktree, runtime *agentWorker, terminalRuntime *agentTerminal, harnessRuntime *agentHarness) *factory.Service {
 	t.Helper()
+	return newFreshAgentServiceWithStore(t, runStore, runStore, worktree, runtime, terminalRuntime, harnessRuntime)
+}
+
+// newFreshAgentServiceWithStore rebuilds the same coordinator around an
+// explicit operational store, so a journal-capable wrapper can take part in
+// the launch seam while the fixture keeps its in-memory run view.
+func newFreshAgentServiceWithStore(t *testing.T, runStore *agentRunStore, operational factory.OperationalStore, worktree *inspectingWorktree, runtime *agentWorker, terminalRuntime *agentTerminal, harnessRuntime *agentHarness) *factory.Service {
+	t.Helper()
 	if runStore.current == nil {
 		t.Fatal("fresh coordinator fixture requires a persisted run")
 	}
@@ -1115,7 +1152,7 @@ func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspe
 	}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
-		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return operational, nil },
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil },
 		Worker:         runtime,
 		Terminal:       terminalRuntime,
@@ -1152,6 +1189,52 @@ func (w *inspectingWorktree) Inspect(context.Context, string) (gitadapter.Worktr
 // githubIssueFixture returns the frozen issue used by agent tests.
 func githubIssueFixture() github.Issue {
 	return github.Issue{Number: 6, Title: "Visible implementation", Body: "Repository guidance", State: "open"}
+}
+
+// journaledAgentRunStore adds the durable pending-effect journal to the agent
+// store fake, so the launch seam can be exercised on the journaled path with
+// an injectable lookup failure.
+type journaledAgentRunStore struct {
+	*agentRunStore
+	pending *store.PendingEffect
+	// pendingErr fails every journal lookup while it is set.
+	pendingErr error
+	// armPendingErr becomes pendingErr once one invocation is persisted, so a
+	// pre-launch recovery diagnosis still reads a healthy journal.
+	armPendingErr error
+}
+
+// SaveInvocation persists the invocation and arms the pending journal failure
+// the launch rollback must meet.
+func (s *journaledAgentRunStore) SaveInvocation(ctx context.Context, invocation store.Invocation) error {
+	if err := s.agentRunStore.SaveInvocation(ctx, invocation); err != nil {
+		return err
+	}
+	if s.armPendingErr != nil {
+		s.pendingErr, s.armPendingErr = s.armPendingErr, nil
+	}
+	return nil
+}
+
+// PendingEffect returns the reserved effect, or the injected failure that
+// leaves the coordinator unable to prove the run reserved nothing.
+func (s *journaledAgentRunStore) PendingEffect(context.Context, string) (*store.PendingEffect, error) {
+	if s.pendingErr != nil {
+		return nil, s.pendingErr
+	}
+	return s.pending, nil
+}
+
+// SavePendingEffect reserves one effect before its external mutation.
+func (s *journaledAgentRunStore) SavePendingEffect(_ context.Context, effect store.PendingEffect) error {
+	s.pending = &effect
+	return nil
+}
+
+// ClearPendingEffect releases the reserved effect after it completed.
+func (s *journaledAgentRunStore) ClearPendingEffect(context.Context, string, string) error {
+	s.pending = nil
+	return nil
 }
 
 // agentRunStore is an in-memory invocation-capable operational-store fake.
