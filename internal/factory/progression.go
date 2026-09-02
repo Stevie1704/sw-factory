@@ -138,6 +138,15 @@ func (e *progressionActionError) Error() string {
 	return fmt.Sprintf("invalid progression action %q: %s", e.Action.kind, e.Reason)
 }
 
+// validateNoAgentOperands rejects operands that belong only to agent-launch
+// or report-acceptance commands.
+func (a progressionAction) validateNoAgentOperands() error {
+	if a.role != "" || a.stage != "" || a.invocationID != "" {
+		return &progressionActionError{Action: a, Reason: "unexpected role, stage, or invocation operands"}
+	}
+	return nil
+}
+
 // validate checks that a typed command has exactly the operands its dispatch
 // arm accepts. A malformed command therefore cannot reach an adapter seam.
 func (a progressionAction) validate() error {
@@ -146,13 +155,6 @@ func (a progressionAction) validate() error {
 	}
 	if strings.TrimSpace(a.runID) == "" {
 		return &progressionActionError{Action: a, Reason: "run id is required"}
-	}
-
-	noAgentOperands := func() error {
-		if a.role != "" || a.stage != "" || a.invocationID != "" {
-			return &progressionActionError{Action: a, Reason: "unexpected role, stage, or invocation operands"}
-		}
-		return nil
 	}
 
 	switch a.kind {
@@ -177,7 +179,7 @@ func (a progressionAction) validate() error {
 		}
 	case progressionActionRunBaseline, progressionActionCreateDraftPullRequest,
 		progressionActionStartReviewRound, progressionActionRetryReviewReadiness:
-		if err := noAgentOperands(); err != nil {
+		if err := a.validateNoAgentOperands(); err != nil {
 			return err
 		}
 	default:
