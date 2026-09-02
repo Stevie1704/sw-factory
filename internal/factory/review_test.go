@@ -39,6 +39,22 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if len(fixture.worker.starts) != 1 || len(fixture.worker.commands) != 1 || !strings.Contains(fixture.worker.commands[0].Command, reviewCheckpoint) {
 		t.Fatalf("review worker effects = starts %#v commands %#v, want one exact-diff command", fixture.worker.starts, fixture.worker.commands)
 	}
+	// A review role reads the checkpoint worktree for wider context, so the
+	// captured diff carries only enough to judge each hunk in place. Wide
+	// context multiplied the packet size without adding anything readable.
+	if !strings.Contains(fixture.worker.commands[0].Command, "--unified=10") {
+		t.Fatalf("review diff command = %q, want the bounded context width", fixture.worker.commands[0].Command)
+	}
+	// The prompt names the diff's location instead of carrying a second copy.
+	// The launch prompt travels as one command argument, so a prompt that grows
+	// with the reviewed change cannot be executed at all.
+	reviewPrompt := fixture.harness.starts[len(fixture.harness.starts)-1].Prompt
+	if strings.Contains(reviewPrompt, "diff --git") {
+		t.Fatalf("review prompt repeats the mounted diff:\n%s", reviewPrompt)
+	}
+	if !strings.Contains(reviewPrompt, "review_context.current_diff") {
+		t.Fatalf("review prompt does not name the mounted diff:\n%s", reviewPrompt)
+	}
 	if !fixture.worker.starts[0].WorktreeReadOnly {
 		t.Fatal("review worker worktree is writable, want a read-only checkpoint mount")
 	}
@@ -96,6 +112,22 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 // TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates
 // verifies a blocker-free review cannot mark a pull request ready when the
 // final checkpoint gate projection is missing success.
+// TestSpecificationReviewRefusesAnUnreadableDiff verifies a checkpoint whose
+// diff exceeds the reviewer's reading budget stops the run with a named reason
+// instead of sending a reviewer into a packet it cannot work through.
+func TestSpecificationReviewRefusesAnUnreadableDiff(t *testing.T) {
+	fixture := newReviewFixture(t)
+	fixture.worker.results = []worker.CommandResult{{ExitCode: 0, Stdout: strings.Repeat("-\tremoved line\n", 20000)}}
+
+	_, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err == nil || !strings.Contains(err.Error(), "packet limit") {
+		t.Fatalf("StartAgent() error = %v, want the diff bound named", err)
+	}
+	if len(fixture.harness.starts) != 0 {
+		t.Fatalf("harness starts = %#v, want no reviewer launched for an unreadable diff", fixture.harness.starts)
+	}
+}
+
 func TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates(t *testing.T) {
 	fixture := newReviewFixture(t)
 	run := fixture.runStore.current
