@@ -36,14 +36,33 @@ func TestImplementationCraftContainsOneRouteSelectedSubBlock(t *testing.T) {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	value := string(body)
-	craftStart := strings.Index(value, craftStartMarker)
-	craftEnd := strings.Index(value, craftEndMarker)
-	tddStart := strings.Index(value, "<!-- implementation-owned-tdd:start -->")
-	tddElse := strings.Index(value, "<!-- implementation-owned-tdd:else -->")
-	tddEnd := strings.Index(value, "<!-- implementation-owned-tdd:end -->")
-	if craftStart < 0 || craftEnd < 0 || tddStart < 0 || tddElse < 0 || tddEnd < 0 || !(craftStart < tddStart && tddStart < tddElse && tddElse < tddEnd && tddEnd < craftEnd) {
+	routeMarkers := []string{
+		"<!-- implementation-owned-tdd:start -->",
+		"<!-- implementation-owned-tdd:else -->",
+		"<!-- implementation-owned-tdd:end -->",
+	}
+	containsOneNestedTDDBlock := func(body string) bool {
+		for _, marker := range routeMarkers {
+			if strings.Count(body, marker) != 1 {
+				return false
+			}
+		}
+		craftStart := strings.Index(body, craftStartMarker)
+		craftEnd := strings.Index(body, craftEndMarker)
+		tddStart := strings.Index(body, routeMarkers[0])
+		tddElse := strings.Index(body, routeMarkers[1])
+		tddEnd := strings.Index(body, routeMarkers[2])
+		return craftStart >= 0 && craftEnd >= 0 && tddStart >= 0 && tddElse >= 0 && tddEnd >= 0 && craftStart < tddStart && tddStart < tddElse && tddElse < tddEnd && tddEnd < craftEnd
+	}
+	if !containsOneNestedTDDBlock(value) {
 		t.Fatalf("implementation-owned TDD block is not nested in craft section:\n%s", value)
 	}
+	t.Run("rejects duplicate TDD markers", func(t *testing.T) {
+		duplicateTDDStart := value + "\n" + routeMarkers[0]
+		if containsOneNestedTDDBlock(duplicateTDDStart) {
+			t.Fatalf("duplicate TDD marker was accepted:\n%s", duplicateTDDStart)
+		}
+	})
 	if strings.Contains(value, "<!-- implementation-craft-independent-test-handoff:") {
 		t.Fatalf("implementation craft contains a second route-selected block:\n%s", value)
 	}
