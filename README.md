@@ -668,7 +668,8 @@ the coordinator.
 The packet is the complete frozen claim; the prompt is a projection of it. The
 prompt fences the claimed issue, the accepted clarifications, and the frozen
 run parameters the role acts on, and points at the mounted packet for the rest,
-so repository guidance reaches the role once inside its own untrusted fence. A
+so repository guidance appears in the prompt once, inside its own untrusted
+fence. A
 repair or objection revision that resumes an existing harness session receives
 a continuation prompt carrying only the changed coordinator-owned context and
 the factory-owned rules; a repair that cannot resume a session receives the

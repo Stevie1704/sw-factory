@@ -166,13 +166,26 @@ therefore reaches the role once, inside its own untrusted fence, and
 coordinator-owned configuration such as declared cache paths, worker build,
 and harness or model policy stays out of the context window.
 
-The prompt is the only guidance channel. A harness otherwise discovers
-`AGENTS.md` from its working root, which is the mounted worktree, and loads it
-as unlabelled instructions: a second copy that is mutable during the run and
-that an implementation role could rewrite for itself. The Codex adapter
-therefore launches with `-c project_doc_max_bytes=0`, which bounds project
-documents only. The pinned worker skill set lives in the role home
-(`$CODEX_HOME/skills`, `$HOME/.claude/skills`) and stays available.
+A harness also discovers its own project instruction file from its working
+root, which is the mounted worktree, and loads it as unlabelled instructions: a
+second copy that is mutable during the run and that an implementation role
+could rewrite for itself.
+
+The Codex adapter closes that channel. It launches with
+`-c project_doc_max_bytes=0`, which suppresses `AGENTS.md` at the workspace
+root and in nested directories. The override bounds project documents only; the
+pinned worker skill set lives in the role home (`$CODEX_HOME/skills`,
+`$HOME/.claude/skills`) and stays available.
+
+The Claude adapter does not close it yet, so a Claude invocation still
+auto-discovers `CLAUDE.md` and its local variants from the worktree. The
+harness offers only `--bare` and `--safe-mode`, and neither is usable here:
+`--safe-mode` disables the pinned worker skills along with the project file,
+and `--bare` additionally drops hooks, plugins, and every credential source
+except `ANTHROPIC_API_KEY`, which the factory-managed credential store does not
+supply. Until the harness exposes a narrower control, a Claude role can read
+mutable worktree guidance that the factory did not freeze, and the prompt's
+precedence rule is the only bound on it.
 
 A check repair, a review repair, and a test-objection revision resume the
 harness session that already read the role's first prompt. Such a launch builds
