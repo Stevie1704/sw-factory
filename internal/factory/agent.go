@@ -1171,8 +1171,11 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 	return nil
 }
 
-// writeInvocationPacket atomically writes the worker-readable packet and
-// leaves credentials and host paths outside its contents.
+// writeInvocationPacket atomically writes the worker-readable packet and leaves
+// credentials outside its contents. The packet carries the frozen claim
+// unchanged, so a repository-declared host path such as a cache location stays
+// in it; the coordinator resolves those paths and the role prompt renders a
+// projection that omits them.
 func writeInvocationPacket(directory string, packet InvocationPacket) error {
 	data, err := json.MarshalIndent(packet, "", "  ")
 	if err != nil {

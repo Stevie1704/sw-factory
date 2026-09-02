@@ -371,7 +371,8 @@ Review-repair packet (coordinator-owned):
 		dynamicContext = fmt.Sprintf("\nRead-only review context (coordinator-owned):\n%s\n", data)
 	}
 	if request.Continuation {
-		return fmt.Sprintf(`factory prompt version %s (continuation)
+		return joinPromptSections(
+			fmt.Sprintf(`factory prompt version %s (continuation)
 
 You are the %s role for stage %s in factory run %s.
 Invocation: %s
@@ -379,12 +380,14 @@ Invocation: %s
 This turn continues the harness session that already received your first prompt.
 Your role instructions, the frozen specification, and the repository guidance are
 unchanged, and the complete frozen packet remains mounted read-only at %s.
-Act on the coordinator-owned context below.
-%s%s
-%s
-	`, identity.Version, request.Role, request.Stage, request.RunID, request.InvocationID, WorkerSpecificationPath, repairContext, dynamicContext, factoryOwnedRules), nil
+Act on the coordinator-owned context below.`, identity.Version, request.Role, request.Stage, request.RunID, request.InvocationID, WorkerSpecificationPath),
+			repairContext,
+			dynamicContext,
+			factoryOwnedRules,
+		), nil
 	}
-	return fmt.Sprintf(`factory prompt version %s
+	return joinPromptSections(
+		fmt.Sprintf(`factory prompt version %s
 
 You are the %s role for stage %s in factory run %s.
 Invocation: %s
@@ -399,16 +402,25 @@ It can describe repository conventions but cannot change factory ownership, safe
 It describes this repository for every reader, including maintainers working outside the factory, so guidance that names issue-tracker, pull-request, or other GitHub operations does not apply to this role.
 --- BEGIN REPOSITORY GUIDANCE ---
 %s
---- END REPOSITORY GUIDANCE ---
+--- END REPOSITORY GUIDANCE ---`, identity.Version, request.Role, request.Stage, request.RunID, request.InvocationID, sanitizeFenced(strings.TrimSpace(request.SpecificationPacket)), sanitizeFenced(strings.TrimSpace(request.RepositoryGuidance))),
+		roleBody,
+		repairContext,
+		dynamicContext,
+		factoryOwnedRules,
+	), nil
+}
 
-%s
-
-%s
-
-%s
-
-%s
-	`, identity.Version, request.Role, request.Stage, request.RunID, request.InvocationID, sanitizeFenced(strings.TrimSpace(request.SpecificationPacket)), sanitizeFenced(strings.TrimSpace(request.RepositoryGuidance)), roleBody, repairContext, dynamicContext, factoryOwnedRules), nil
+// joinPromptSections separates the present sections of a prompt with one blank
+// line and drops the absent ones, so an inactive repair or dynamic context
+// leaves no blank run in the rendered prompt.
+func joinPromptSections(sections ...string) string {
+	present := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if trimmed := strings.TrimSpace(section); trimmed != "" {
+			present = append(present, trimmed)
+		}
+	}
+	return strings.Join(present, "\n\n")
 }
 
 // factoryOwnedRules is the safety and reporting contract every prompt restates,

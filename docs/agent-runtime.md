@@ -157,6 +157,24 @@ on the `design-acceptance` route also receives `design_handoff`, the accepted
 architecture design it must exercise. The worker receives a separate writable `/results` mount
 containing only that invocation's result directory.
 
+The packet is the complete frozen claim; the prompt is a projection of it. A
+role prompt fences the claimed issue, the accepted clarifications, and the
+frozen run parameters the role acts on - target branch, route, test policy
+mode, declared gates, and the captured guidance paths - and points at
+`/invocation/specification.json` for everything else. Repository guidance
+therefore reaches the role once, inside its own untrusted fence, and
+coordinator-owned configuration such as declared cache paths, worker build,
+and harness or model policy stays out of the context window.
+
+A check repair, a review repair, and a test-objection revision resume the
+harness session that already read the role's first prompt. Such a launch builds
+a continuation prompt: the invocation identity, the coordinator-owned repair or
+objection context, and the factory-owned rules. It repeats neither the frozen
+specification, the repository guidance, nor the role body, because the resumed
+session already holds them. A repair that cannot resume a native session starts
+a fresh session and receives the complete prompt. The packet records
+`continuation`, so restart recovery rebuilds the same prompt shape.
+
 Only a required-mode implementation report may include one structured
 `test_objection` entry. It identifies the protected test, the claim under
 dispute, and observable evidence; it does not authorize an implementation edit
