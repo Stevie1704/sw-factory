@@ -138,7 +138,7 @@ const MaxCheckRepairAttempts = 3
 // MaxReviewRepairAttempts is the hard safety ceiling for automated review
 // repair rounds. Repository policy may choose a lower value, but never a
 // higher one.
-const MaxReviewRepairAttempts = 2
+const MaxReviewRepairAttempts = 4
 
 // MaxTestRevisionAttempts is the hard safety ceiling for automated disputes
 // between implementation-owned behavior and protected tests.

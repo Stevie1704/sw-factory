@@ -45,9 +45,9 @@ timeouts:
   gate: 10m
   review: 30m
 retry_limits:
-  check_repair:6 
-  review_repair: 5
-  test_revision: 5
+  check_repair: 3
+  review_repair: 4
+  test_revision: 2
 test_policy:
   mode: advisory
   allow_human_exemption: true
