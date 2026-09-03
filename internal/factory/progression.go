@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -76,6 +77,12 @@ type progressionState struct {
 	// ReadyInvocationIDs records the report-readiness observation made while
 	// reading each active invocation. The planner must not repeat that I/O.
 	ReadyInvocationIDs map[string]bool
+	// AgentTimeout is the parsed agent deadline from the frozen specification
+	// packet. A zero value preserves the no-deadline behavior of legacy packets
+	// that predate the required timeout field.
+	AgentTimeout time.Duration
+	// Now is the coordinator clock observation paired with AgentTimeout.
+	Now time.Time
 }
 
 // progressionActionKind identifies one coordinator seam that can advance a
@@ -418,6 +425,15 @@ func progressionStep(state progressionState, registry workflow.Registry) (progre
 				invocationID: active.ID,
 			}, nil
 		}
+		for _, active := range activeInvocations {
+			if elapsed, expired := agentInvocationExpired(*active, state.Now, state.AgentTimeout); expired {
+				return progressionAction{}, &progressionResult{
+					Outcome: progressionWaiting,
+					Step:    "agent deadline",
+					Reason:  fmt.Sprintf("invocation %q exceeded agent timeout of %s (elapsed %s)", active.ID, state.AgentTimeout, elapsed),
+				}
+			}
+		}
 		ids := make([]string, 0, len(activeInvocations))
 		for _, active := range activeInvocations {
 			ids = append(ids, active.ID)
@@ -570,6 +586,15 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 		state.ActiveInvocations = []*store.Invocation{state.Active}
 	}
 	state.ReadyInvocationIDs = make(map[string]bool, len(state.ActiveInvocations))
+	if len(state.ActiveInvocations) > 0 {
+		state.AgentTimeout, err = agentTimeoutForProgression(*run)
+		if err != nil {
+			return progressionState{}, err
+		}
+		if state.AgentTimeout > 0 {
+			state.Now = s.deps.Now().UTC()
+		}
+	}
 	for _, invocation := range state.ActiveInvocations {
 		if invocation == nil {
 			continue
@@ -580,6 +605,42 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 		return progressionState{}, fmt.Errorf("read latest invocation for progression: %w", err)
 	}
 	return state, nil
+}
+
+// agentTimeoutForProgression reads the agent deadline from the frozen
+// specification packet. A missing value is retained as an unconfigured
+// deadline for packets created before the timeout was consumed by progression.
+func agentTimeoutForProgression(run store.Run) (time.Duration, error) {
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return 0, fmt.Errorf("decode specification packet for agent deadline: %w", err)
+	}
+	serialized := strings.TrimSpace(packet.RepositoryConfig.Timeouts.Agent)
+	if serialized == "" {
+		return 0, nil
+	}
+	timeout, err := time.ParseDuration(serialized)
+	if err != nil || timeout <= 0 {
+		if err == nil {
+			err = errors.New("duration must be positive")
+		}
+		return 0, fmt.Errorf("parse frozen agent timeout %q: %w", serialized, err)
+	}
+	return timeout, nil
+}
+
+// agentInvocationExpired reports whether an active invocation has reached its
+// frozen agent deadline and returns the observed age for operator-facing
+// evidence. Missing timestamps, clocks, or deadlines cannot prove expiry.
+func agentInvocationExpired(invocation store.Invocation, now time.Time, timeout time.Duration) (time.Duration, bool) {
+	if timeout <= 0 || invocation.CreatedAt.IsZero() || now.IsZero() {
+		return 0, false
+	}
+	elapsed := now.Sub(invocation.CreatedAt)
+	if elapsed < timeout {
+		return elapsed, false
+	}
+	return elapsed, true
 }
 
 // progressionAdvanced reports whether a transition changed durable run state.

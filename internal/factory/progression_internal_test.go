@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,130 @@ func TestProgressionStepPlansReportAcceptanceFromObservedReadiness(t *testing.T)
 	}
 	if action.runID != run.ID || action.invocationID != invocation.ID {
 		t.Fatalf("planned action operands = %#v, want run %q and invocation %q", action, run.ID, invocation.ID)
+	}
+}
+
+// TestDriveRunPausesAnExpiredActiveInvocation verifies unattended progression
+// pauses a report-less invocation after the frozen agent deadline instead of
+// continuing to publish that the invocation is executing.
+func TestDriveRunPausesAnExpiredActiveInvocation(t *testing.T) {
+	now := time.Date(2026, 9, 3, 13, 30, 0, 0, time.UTC)
+	createdAt := now.Add(-2 * time.Hour)
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		RepositoryConfig: config.RepositoryConfig{
+			Timeouts: config.TimeoutConfig{Agent: "1h"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal deadline packet: %v", err)
+	}
+	invocation := store.Invocation{
+		ID:              "inv-expired",
+		RunID:           "run-expired",
+		Role:            workflow.RoleImplementation,
+		Stage:           store.StageImplementation,
+		Status:          store.InvocationStatusActive,
+		ResultDirectory: t.TempDir(),
+		CreatedAt:       createdAt,
+		UpdatedAt:       createdAt,
+	}
+	run := store.Run{
+		ID:                  invocation.RunID,
+		Stage:               store.StageImplementation,
+		Status:              store.StatusActive,
+		ActiveInvocationIDs: []string{invocation.ID},
+		SpecificationPacket: string(packetData),
+		CreatedAt:           createdAt,
+		UpdatedAt:           createdAt,
+	}
+	runStore := &progressionDispatchStore{run: run, active: []store.Invocation{invocation}}
+	registration := config.RepositoryRegistration{OperationalDataPath: "/state/factory.db"}
+	service := &Service{
+		deps: Dependencies{
+			OpenStore: func(context.Context, string) (OperationalStore, error) {
+				return runStore, nil
+			},
+			GitHub: progressionDispatchGitHub{},
+			Now: func() time.Time {
+				return now
+			},
+		},
+	}
+
+	result, err := service.driveRun(context.Background(), registration)
+	if err != nil {
+		t.Fatalf("driveRun() error = %v", err)
+	}
+	if result.Outcome != progressionWaiting {
+		t.Fatalf("driveRun() outcome = %q, want waiting after the deadline", result.Outcome)
+	}
+	if result.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("driveRun() status = %q, want waiting_for_human", result.Run.Status)
+	}
+	for _, reason := range []string{result.Reason, result.Run.LifecycleReason} {
+		if !strings.Contains(reason, invocation.ID) || !strings.Contains(reason, "2h0m0s") {
+			t.Fatalf("pause reason = %q, want invocation %q and elapsed time", reason, invocation.ID)
+		}
+	}
+}
+
+// TestDriveRunKeepsAnActiveInvocationInsideItsDeadline verifies a report-less
+// invocation remains active while its frozen agent deadline has not elapsed.
+func TestDriveRunKeepsAnActiveInvocationInsideItsDeadline(t *testing.T) {
+	now := time.Date(2026, 9, 3, 13, 30, 0, 0, time.UTC)
+	createdAt := now.Add(-30 * time.Minute)
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		RepositoryConfig: config.RepositoryConfig{
+			Timeouts: config.TimeoutConfig{Agent: "1h"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal deadline packet: %v", err)
+	}
+	invocation := store.Invocation{
+		ID:              "inv-within-deadline",
+		RunID:           "run-within-deadline",
+		Role:            workflow.RoleImplementation,
+		Stage:           store.StageImplementation,
+		Status:          store.InvocationStatusActive,
+		ResultDirectory: t.TempDir(),
+		CreatedAt:       createdAt,
+		UpdatedAt:       createdAt,
+	}
+	run := store.Run{
+		ID:                  invocation.RunID,
+		Stage:               store.StageImplementation,
+		Status:              store.StatusActive,
+		ActiveInvocationIDs: []string{invocation.ID},
+		SpecificationPacket: string(packetData),
+		CreatedAt:           createdAt,
+		UpdatedAt:           createdAt,
+	}
+	runStore := &progressionDispatchStore{run: run, active: []store.Invocation{invocation}}
+	registration := config.RepositoryRegistration{OperationalDataPath: "/state/factory.db"}
+	service := &Service{
+		deps: Dependencies{
+			OpenStore: func(context.Context, string) (OperationalStore, error) {
+				return runStore, nil
+			},
+			GitHub: progressionDispatchGitHub{},
+			Now: func() time.Time {
+				return now
+			},
+		},
+	}
+
+	result, err := service.driveRun(context.Background(), registration)
+	if err != nil {
+		t.Fatalf("driveRun() error = %v", err)
+	}
+	if result.Outcome != progressionInvocationActive {
+		t.Fatalf("driveRun() outcome = %q, want invocation_active before the deadline", result.Outcome)
+	}
+	if result.Run.Status != store.StatusActive {
+		t.Fatalf("driveRun() status = %q, want active before the deadline", result.Run.Status)
 	}
 }
 
