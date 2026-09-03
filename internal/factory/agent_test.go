@@ -896,6 +896,96 @@ func TestRefreshCommandReReadsTheIssueAndInvalidatesCheckpointResults(t *testing
 	}
 }
 
+// TestRefreshAfterAnAcceptedImplementationCheckpointRestartsFromTheCheckpoint
+// verifies the exact recovery sequence for an unchanged specification: an
+// accepted implementation checkpoint is treated as the new baseline before
+// the implementation session is resumed, and its next report remains active.
+func TestRefreshAfterAnAcceptedImplementationCheckpointRestartsFromTheCheckpoint(t *testing.T) {
+	service, runStore, workspace, workerRuntime, harnessRuntime := newCheckpointRefreshService(t)
+
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	if _, err := writeAgentTestReport(t, launch, "internal/factory/agent.go"); err != nil {
+		t.Fatalf("write initial implementation report: %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID}); err != nil {
+		t.Fatalf("AcceptAgentReport() error = %v", err)
+	}
+
+	checkpointed, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: launch.Invocation.RunID})
+	if err != nil {
+		t.Fatalf("CreateDraftPullRequest() error = %v", err)
+	}
+	if checkpointed.Run.Stage != store.StageDraftPR || checkpointed.Run.CheckpointSHA != implementationCheckpoint {
+		t.Fatalf("checkpointed run = %#v, want draft_pr at the implementation checkpoint", checkpointed.Run)
+	}
+	if len(workspace.state.ChangedPaths) != 0 {
+		t.Fatalf("checkpoint worktree changes = %#v, want clean worktree", workspace.state.ChangedPaths)
+	}
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: runStore.current.IssueNumber,
+		Comment:     github.Comment{ID: "refresh-checkpoint", Author: "alice", Body: "/factory refresh"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() refresh error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive || result.Run.Stage != store.StageImplementation || result.Run.BaseCheckpointSHA != implementationCheckpoint {
+		t.Fatalf("refresh result = %#v, want accepted active implementation restart", result)
+	}
+	if !strings.Contains(result.Run.LifecycleReason, "/factory refresh") || !strings.Contains(factory.StatusCommentBody(result.Run), "/factory refresh") {
+		t.Fatalf("refresh lifecycle projection = %q, want the applying command in the status comment", result.Run.LifecycleReason)
+	}
+	if len(harnessRuntime.resumes) != 1 {
+		t.Fatalf("native resumes = %d, want one revision-style implementation resume", len(harnessRuntime.resumes))
+	}
+	if len(harnessRuntime.starts) != 1 {
+		t.Fatalf("fresh harness starts after refresh = %d, want only the initial session", len(harnessRuntime.starts))
+	}
+	var baselineAtCheckpoint bool
+	for _, gateResult := range runStore.gateResults[launch.Invocation.RunID] {
+		if gateResult.Phase == store.GatePhaseBaseline && gateResult.CheckpointSHA == implementationCheckpoint {
+			baselineAtCheckpoint = true
+		}
+	}
+	if !baselineAtCheckpoint {
+		t.Fatalf("gate results = %#v, want a baseline result for the accepted implementation checkpoint", runStore.gateResults[launch.Invocation.RunID])
+	}
+	if len(workerRuntime.commands) < 4 {
+		t.Fatalf("worker commands = %#v, want checkpoint gates and refreshed baseline gates", workerRuntime.commands)
+	}
+
+	refreshed := runStore.invocations[result.Run.ActiveInvocationIDs[0]]
+	value := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  refreshed.ID,
+		RunID:         refreshed.RunID,
+		Harness:       refreshed.Harness,
+		Role:          refreshed.Role,
+		Stage:         string(refreshed.Stage),
+		Outcome:       report.OutcomeCompleted,
+		Summary:       "verified the unchanged issue against the accepted checkpoint",
+		Handoff: &report.Handoff{
+			ChangeSummary:     "verified the accepted implementation checkpoint",
+			AcceptanceMapping: []report.AcceptanceMapping{{Criterion: "unchanged issue", Evidence: "checkpoint baseline and focused verification"}},
+			FocusedCommands:   []string{"go test ./internal/factory"},
+		},
+		NativeSessionID: refreshed.NativeSessionID,
+		ReportedAt:      time.Now().UTC(),
+	}
+	if _, err := report.WriteAtomicForInvocation(refreshed.ResultDirectory, refreshed.ID, value); err != nil {
+		t.Fatalf("write refreshed implementation report: %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: refreshed.ID}); err != nil {
+		t.Fatalf("AcceptAgentReport() refreshed error = %v", err)
+	}
+	if runStore.current.Status != store.StatusActive {
+		t.Fatalf("run after refreshed report = %#v, want active rather than waiting", runStore.current)
+	}
+}
+
 // TestAcceptAgentReportTrustsThePersistedNativeSession verifies a report
 // cannot replace the native session identity already bound to the invocation.
 func TestAcceptAgentReportTrustsThePersistedNativeSession(t *testing.T) {
@@ -1120,6 +1210,114 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
 	}}
 	return service, runStore, runtime, terminalRuntime, harnessRuntime
+}
+
+// newCheckpointRefreshService creates an advisory implementation run with a
+// real checkpoint/draft-PR boundary so refresh can be exercised from the same
+// clean committed state that caused the production failure.
+func newCheckpointRefreshService(t *testing.T) (*factory.Service, *agentRunStore, *draftGitWorkspace, *agentWorker, *agentHarness) {
+	t.Helper()
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(filepath.Join(repositoryPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repositoryPath, ".git", "HEAD"), []byte("ref: refs/heads/factory/run-refresh-checkpoint\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	policy := validRepositoryConfig()
+	policy.TestPolicy.Mode = config.TestModeAdvisory
+	delete(policy.RoleHarnessDefaults, workflow.RoleTest)
+	delete(policy.ModelOptions, workflow.RoleTest)
+	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
+	workerRuntime := &agentWorker{}
+	terminalRuntime := &agentTerminal{}
+	harnessRuntime := &agentHarness{}
+	issue := github.Issue{Number: 6, Title: "Unchanged implementation", Body: "The accepted implementation already satisfies this issue.", State: "open", Labels: []string{github.LabelAgentReady}}
+	githubRuntime := &fakeGitHubWithPullRequests{fakeGitHub: &fakeGitHub{issueValue: issue}}
+	workspace := &draftGitWorkspace{
+		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-refresh-checkpoint", Worktree: worktreePath},
+		state: gitadapter.WorktreeState{
+			RepositoryPath: repositoryPath,
+			Branch:         "factory/run-refresh-checkpoint",
+			HeadSHA:        factoryGateCheckpoint,
+			ChangedPaths:   []string{"internal/factory/agent.go"},
+		},
+	}
+	pullRequests := &fakePullRequests{created: github.PullRequest{
+		Number: 17, URL: "https://github.com/example/project/pull/17", State: "open", Draft: true,
+		HeadBranch: "factory/run-refresh-checkpoint", BaseBranch: "main",
+	}}
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Path:                 repositoryPath,
+		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+		AuthorizedUsers:      []string{"alice"},
+		OperationalDataPath:  operationalPath,
+		RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+		Cmux:                 config.CmuxConfig{ControlWorkspace: "factory-control"},
+	}}}
+	ids := []string{"run-refresh-checkpoint", "initial-implementation", "refreshed-implementation"}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config: &fakeConfig{value: host},
+		OpenStore: func(context.Context, string) (factory.OperationalStore, error) {
+			return runStore, nil
+		},
+		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:         githubRuntime,
+		PullRequests:   pullRequests,
+		Worktree:       workspace,
+		GitWorkspace:   workspace,
+		Worker:         workerRuntime,
+		Terminal:       terminalRuntime,
+		Harness:        harnessRuntime,
+		CommitStatuses: &gateStatuses{},
+		Now:            func() time.Time { return time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC) },
+		NewRunID: func() (string, error) {
+			if len(ids) == 0 {
+				return "", errors.New("refresh checkpoint test identifiers exhausted")
+			}
+			id := ids[0]
+			ids = ids[1:]
+			return id, nil
+		},
+	})
+	claimed, err := service.ClaimIssue(context.Background(), issue.Number)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	run := claimed.Run
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatal(err)
+	}
+	packet.RepositoryConfig.TestPolicy.Mode = config.TestModeAdvisory
+	delete(packet.RepositoryConfig.RoleHarnessDefaults, workflow.RoleTest)
+	delete(packet.RepositoryConfig.ModelOptions, workflow.RoleTest)
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.SpecificationPacket = string(packetData)
+	run.Stage = store.StageImplementation
+	run.Status = store.StatusActive
+	run.TestStageSkipped = false
+	run.TestExemption = nil
+	run.TestHandoff = nil
+	runStore.gateResults[run.ID] = []store.GateResult{{
+		RunID: run.ID, CheckpointSHA: factoryGateCheckpoint, Phase: store.GatePhaseBaseline,
+		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
+		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+	}}
+	if err := runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	return service, runStore, workspace, workerRuntime, harnessRuntime
 }
 
 // newFreshAgentService recreates a coordinator around the persisted claim so

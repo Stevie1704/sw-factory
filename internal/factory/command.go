@@ -327,6 +327,10 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 		rejection := &PolicyRejection{Code: PolicyRejectionRefreshState, Problem: fmt.Sprintf("cannot refresh a %s issue", defaultString(issue.State, "non-open"))}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
+	restartFromCheckpoint, err := s.shouldRestartFromAcceptedImplementationCheckpoint(ctx, run)
+	if err != nil {
+		return CommandResult{}, err
+	}
 	refreshedPacket := oldPacket
 	refreshedPacket.Version++
 	refreshedPacket.Issue = cloneIssue(issue)
@@ -345,6 +349,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
+	markAcceptedCheckpointPacketRestart(&next, run, restartFromCheckpoint)
 	next.UpdatedAt = s.deps.Now().UTC()
 	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
 	processedCommentID := next.ProcessedCommentID
@@ -588,6 +593,9 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
+	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecycleReason) {
+		return s.resumeAfterRevision(ctx, registration, runStore, run)
+	}
 	// The coordinator's progression pass owns the baseline, so a run that has
 	// not passed it yet must not launch a role here.
 	if awaitingBaseline(run) {
@@ -607,6 +615,59 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 		return *current, nil
 	}
 	return run, nil
+}
+
+// acceptedCheckpointRefreshLifecycleReason identifies the durable refresh
+// transition that must run baseline before launching implementation.
+const acceptedCheckpointRefreshLifecycleReason = "accepted /factory refresh; restarting from accepted implementation checkpoint"
+
+// markAcceptedCheckpointPacketRestart makes a checkpoint restart durable in
+// the packet-change projection before baseline work or native resume begins.
+func markAcceptedCheckpointPacketRestart(next *store.Run, previous store.Run, restart bool) {
+	if next == nil || !restart {
+		return
+	}
+	next.BaseCheckpointSHA = previous.CheckpointSHA
+	next.Stage = store.StageClaim
+	next.Status = store.StatusActive
+	next.LifecycleReason = acceptedCheckpointRefreshLifecycleReason
+}
+
+// baselineLifecycleReason keeps the command that selected a checkpoint
+// restart visible after the baseline transition replaces the packet-change
+// reason with its normal stage-ready explanation.
+func baselineLifecycleReason(run store.Run, reason string) string {
+	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecycleReason) {
+		return "accepted /factory refresh; " + reason
+	}
+	return reason
+}
+
+// shouldRestartFromAcceptedImplementationCheckpoint identifies the clean
+// committed implementation boundary that a packet refresh can safely reuse.
+// The protected test checkpoint is excluded: it is an implementation input,
+// not an accepted implementation checkpoint.
+func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.Context, run store.Run) (bool, error) {
+	if run.CheckpointSHA == "" || run.BaseCheckpointSHA == "" || run.CheckpointSHA == run.BaseCheckpointSHA {
+		return false, nil
+	}
+	// A test-stage run's current checkpoint is protected test work, even if an
+	// older store did not retain the separate test-checkpoint marker.
+	if run.Stage == store.StageTest {
+		return false, nil
+	}
+	if run.TestCheckpointSHA != "" && run.TestCheckpointSHA == run.CheckpointSHA {
+		return false, nil
+	}
+	inspector := s.worktreeInspector()
+	if inspector == nil {
+		return false, nil
+	}
+	state, err := inspector.Inspect(ctx, run.Worktree)
+	if err != nil {
+		return false, fmt.Errorf("inspect implementation checkpoint before refresh resumption: %w", err)
+	}
+	return state.HeadSHA == run.CheckpointSHA && len(state.ChangedPaths) == 0, nil
 }
 
 // awaitingBaseline reports whether a run has not yet passed its frozen
