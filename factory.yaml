@@ -37,8 +37,8 @@ model_options:
   standards_review: [gpt-5.6-luna]
 reasoning_effort_options:
   implementation: [max]
-  spec_review: [max]
-  standards_review: [max]
+  spec_review: [high]
+  standards_review: [high]
 timeouts:
   setup: 10m
   agent: 90m
