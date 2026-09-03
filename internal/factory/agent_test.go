@@ -1204,6 +1204,102 @@ func TestAcceptAgentReportRejectsAPermittedPathRequestMismatch(t *testing.T) {
 	}
 }
 
+// TestAcceptAgentReportRejectsAnEmptyProductionFileListBeforeEffects verifies
+// the coordinator report-acceptance seam keeps an implementation run and its
+// invocation active when a dirty worktree exposes an unpersistable handoff.
+func TestAcceptAgentReportRejectsAnEmptyProductionFileListBeforeEffects(t *testing.T) {
+	service, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	run := *runStore.current
+	invocationBefore := runStore.invocations[launch.Invocation.ID]
+	finishedBefore := len(harnessRuntime.finished)
+	stopsBefore := runtime.stops
+	invocationBefore.NativeSessionID = "session-empty-production-files"
+	// Model an invocation that already crossed the bounded recovery resume so
+	// the fresh coordinator can inspect it without launching a second session.
+	invocationBefore.RecoveryResumeCount = 1
+	if err := runStore.SaveInvocation(context.Background(), invocationBefore); err != nil {
+		t.Fatalf("persist native session identity: %v", err)
+	}
+	runStore.worktree.state.RepositoryPath = run.RepositoryPath
+	workerRequest := runtime.starts[len(runtime.starts)-1]
+	runtime.inspectResult = &worker.Inspection{
+		Exists:           true,
+		Running:          true,
+		Image:            workerRequest.Image + "@" + workerRequest.ImageDigest,
+		MountFingerprint: worker.MountContractFingerprint(workerRequest),
+	}
+	githubRuntime := &fakeGitHub{
+		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+	}
+	journal := &journaledAgentRunStore{agentRunStore: runStore}
+	terminalForRecovery := &inspectingAgentTerminal{
+		agentTerminal: terminalRuntime,
+		inspection: terminal.WorkspaceInspection{
+			Exists:      true,
+			WorkspaceID: terminal.WorkspaceID(invocationBefore.WorkspaceID),
+			Surfaces: []terminal.Surface{
+				{ID: terminal.SurfaceID(invocationBefore.StatusSurfaceID), WorkspaceID: terminal.WorkspaceID(invocationBefore.WorkspaceID)},
+				{ID: terminal.SurfaceID(invocationBefore.ImplementationSurfaceID), WorkspaceID: terminal.WorkspaceID(invocationBefore.WorkspaceID)},
+				{ID: terminal.SurfaceID(invocationBefore.ChecksSurfaceID), WorkspaceID: terminal.WorkspaceID(invocationBefore.WorkspaceID)},
+			},
+		},
+	}
+	harnessForRecovery := &inspectingAgentHarness{
+		agentHarness:  harnessRuntime,
+		nativeSession: invocationBefore.NativeSessionID,
+	}
+	fresh := newFreshAgentServiceWithStoreAndGitHub(t, runStore, journal, runStore.worktree, runtime, terminalForRecovery, harnessForRecovery, githubRuntime)
+	value := report.Report{
+		SchemaVersion: report.SchemaVersion,
+		InvocationID:  launch.Invocation.ID,
+		RunID:         launch.Invocation.RunID,
+		Harness:       launch.Invocation.Harness,
+		Role:          launch.Invocation.Role,
+		Stage:         string(launch.Invocation.Stage),
+		Outcome:       report.OutcomeCompleted,
+		Summary:       "implementation completed without a newly changed path",
+		Handoff: &report.Handoff{
+			ChangeSummary:     "verified the implementation checkpoint",
+			AcceptanceMapping: []report.AcceptanceMapping{{Criterion: "criterion", Evidence: "focused test"}},
+			FocusedCommands:   []string{"go test ./internal/factory"},
+		},
+		NativeSessionID: invocationBefore.NativeSessionID,
+		ReportedAt:      time.Now().UTC(),
+	}
+	if value.NativeSessionID == "" {
+		value.NativeSessionID = "session-empty-production-files"
+	}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	if _, err := fresh.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID}); err == nil || !strings.Contains(err.Error(), "production_files_changed") {
+		t.Fatalf("AcceptAgentReport() error = %v, want empty production-file rejection", err)
+	}
+	if runStore.current.Status != store.StatusActive || runStore.current.Stage != store.StageImplementation {
+		t.Fatalf("run after rejected report = %#v, want active implementation run", runStore.current)
+	}
+	invocationAfter, ok := runStore.invocations[launch.Invocation.ID]
+	if !ok || invocationAfter.Status != store.InvocationStatusActive {
+		t.Fatalf("invocation after rejected report = %#v, want active invocation", invocationAfter)
+	}
+	if pending, err := journal.PendingEffect(context.Background(), run.ID); err != nil {
+		t.Fatalf("PendingEffect() error = %v", err)
+	} else if pending != nil {
+		t.Fatalf("pending effect after rejected report = %#v, want none", pending)
+	}
+	if len(githubRuntime.replacedLabels) != 0 || len(githubRuntime.createdComments) != 0 || len(githubRuntime.editedComments) != 0 {
+		t.Fatalf("GitHub mutations after rejected report = labels=%d creates=%d edits=%d, want all zero", len(githubRuntime.replacedLabels), len(githubRuntime.createdComments), len(githubRuntime.editedComments))
+	}
+	if len(harnessRuntime.finished) != finishedBefore || runtime.stops != stopsBefore {
+		t.Fatalf("runtime effects after rejected report = finishes=%d stops=%d, want %d/%d", len(harnessRuntime.finished), runtime.stops, finishedBefore, stopsBefore)
+	}
+}
+
 // TestAcceptAgentReportRejectsATerminalInvocation verifies a completed
 // invocation cannot be accepted again or finish its harness twice.
 func TestAcceptAgentReportRejectsATerminalInvocation(t *testing.T) {
@@ -1436,6 +1532,13 @@ func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspe
 // explicit operational store, so a journal-capable wrapper can take part in
 // the launch seam while the fixture keeps its in-memory run view.
 func newFreshAgentServiceWithStore(t *testing.T, runStore *agentRunStore, operational factory.OperationalStore, worktree *inspectingWorktree, runtime *agentWorker, terminalRuntime *agentTerminal, harnessRuntime *agentHarness) *factory.Service {
+	return newFreshAgentServiceWithStoreAndGitHub(t, runStore, operational, worktree, runtime, terminalRuntime, harnessRuntime, nil)
+}
+
+// newFreshAgentServiceWithStoreAndGitHub rebuilds a coordinator with an
+// injectable GitHub fake so public report acceptance tests can assert that an
+// invalid projection crossed no external mutation boundary.
+func newFreshAgentServiceWithStoreAndGitHub(t *testing.T, runStore *agentRunStore, operational factory.OperationalStore, worktree *inspectingWorktree, runtime *agentWorker, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, githubRuntime *fakeGitHub) *factory.Service {
 	t.Helper()
 	if runStore.current == nil {
 		t.Fatal("fresh coordinator fixture requires a persisted run")
@@ -1449,9 +1552,11 @@ func newFreshAgentServiceWithStore(t *testing.T, runStore *agentRunStore, operat
 		OperationalDataPath:  filepath.Join(filepath.Dir(run.RepositoryPath), "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(run.RepositoryPath, "factory.yaml"),
 	}}}
-	githubRuntime := &fakeGitHub{
-		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+	if githubRuntime == nil {
+		githubRuntime = &fakeGitHub{
+			issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+			statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+		}
 	}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:         &fakeConfig{value: host},
@@ -1465,6 +1570,30 @@ func newFreshAgentServiceWithStore(t *testing.T, runStore *agentRunStore, operat
 		Now:            func() time.Time { return time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC) },
 		NewRunID:       func() (string, error) { return "generated", nil },
 	})
+}
+
+// inspectingAgentTerminal supplies the read-only topology required by a fresh
+// journal-capable coordinator before it reaches public report acceptance.
+type inspectingAgentTerminal struct {
+	*agentTerminal
+	inspection terminal.WorkspaceInspection
+}
+
+// InspectWorkspace returns the persisted run workspace and role surfaces.
+func (t *inspectingAgentTerminal) InspectWorkspace(context.Context, terminal.WorkspaceID) (terminal.WorkspaceInspection, error) {
+	return t.inspection, nil
+}
+
+// inspectingAgentHarness supplies the native session identity required by a
+// fresh coordinator before it reaches public report acceptance.
+type inspectingAgentHarness struct {
+	*agentHarness
+	nativeSession string
+}
+
+// NativeSessionID returns the persisted identity from the recovery fixture.
+func (h *inspectingAgentHarness) NativeSessionID(context.Context, harness.NativeSessionRequest) (string, error) {
+	return h.nativeSession, nil
 }
 
 // eventIndex returns the first position of one recorded test effect.
