@@ -151,8 +151,8 @@ a protected test path is rejected. Instead, implementation can submit a
 structured objection naming the test, disputed claim, and observable evidence.
 Before pilot authorization the objection is preserved for human disposition; an
 authorized run can resume the original test session for as many independently
-verified revision attempts as the repository's <code>retry_limits.test_revision</code>
-value allows.
+verified revision attempts as the repository's
+<code>retry_limits.test_revision</code> value allows.
 
 ### Workflow routes
 

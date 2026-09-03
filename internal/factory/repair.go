@@ -96,7 +96,7 @@ const (
 	CheckRepairWaitingForHarness CheckRepairOutcome = "waiting_for_harness"
 	// CheckRepairWaitingForHuman means the coordinator cannot safely continue.
 	CheckRepairWaitingForHuman CheckRepairOutcome = "waiting_for_human"
-	// CheckRepairExhausted means the configured repair ceiling was reached.
+	// CheckRepairExhausted means the configured repair budget was reached.
 	CheckRepairExhausted CheckRepairOutcome = "exhausted"
 )
 
@@ -112,7 +112,7 @@ type CheckRepairResult struct {
 	Invocation store.Invocation
 	// Attempt is the current one-based consumed attempt count.
 	Attempt int
-	// Budget is the configured repair ceiling.
+	// Budget is the frozen repair budget the repository configured.
 	Budget int
 	// Remaining is the number of attempts still available after the decision.
 	Remaining int
@@ -139,7 +139,7 @@ const (
 	checkRepairStartDecision checkRepairDecisionKind = "start"
 	// checkRepairWaitDecision pauses until the harness can be retried.
 	checkRepairWaitDecision checkRepairDecisionKind = "wait"
-	// checkRepairExhaustDecision escalates after the frozen repair ceiling.
+	// checkRepairExhaustDecision escalates after the frozen repair budget.
 	checkRepairExhaustDecision checkRepairDecisionKind = "exhaust"
 )
 
