@@ -117,6 +117,9 @@ func (s *Service) ensureClarificationPublication(ctx context.Context, registrati
 			target = run.PullRequestNumber
 		}
 		body := clarificationCommentBody(run, packet.Version, run.PendingQuestions)
+		if err := validateRunBeforeEffect(store.PendingEffectKindClarificationComment, run); err != nil {
+			return run, err
+		}
 		payload := clarificationCommentEffectPayload{
 			Repository: commandRepository(registration), Target: target, Body: body,
 			PacketVersion: packet.Version,

@@ -191,6 +191,26 @@ func (s *Service) newPendingEffect(runID string, kind store.PendingEffectKind, i
 	return effectkernel.NewPendingEffect(s.deps.Now().UTC(), runID, kind, identity, payload)
 }
 
+// validateRunBeforeEffect rejects a run projection before its external effect
+// is reserved, keeping operational-store validation ahead of the journal and
+// every mutation that the journal protects.
+func validateRunBeforeEffect(kind store.PendingEffectKind, run store.Run) error {
+	if err := store.ValidateRun(run); err != nil {
+		return fmt.Errorf("validate run before reserving %s effect: %w", kind, err)
+	}
+	return nil
+}
+
+// validateRunBeforeReplay rejects an invalid durable run projection before a
+// replay can repeat any external mutation. Workflow classification preserves
+// the refusal as the cause of reconciliation rather than infrastructure drift.
+func validateRunBeforeReplay(kind store.PendingEffectKind, run store.Run) error {
+	if err := store.ValidateRun(run); err != nil {
+		return workflowProjectionFailuref("validate %s run projection before replay: %v", kind, err)
+	}
+	return nil
+}
+
 // decodePendingEffect decodes one bounded replay payload and reports malformed
 // journal data as an infrastructure discrepancy rather than a workflow result.
 func decodePendingEffect(effect store.PendingEffect, destination any) error {
@@ -365,6 +385,9 @@ func (s *Service) replayPendingClarificationComment(ctx context.Context, runStor
 	if current == nil {
 		return store.Run{}, fmt.Errorf("run %q disappeared during clarification replay", effect.RunID)
 	}
+	if err := validateRunBeforeReplay(store.PendingEffectKindClarificationComment, *current); err != nil {
+		return store.Run{}, err
+	}
 	comment, err := s.findOrCreateClarificationComment(ctx, payload.Repository, payload.Target, effect.RunID, payload.PacketVersion, payload.Body)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("replay clarification comment: %w", err)
@@ -389,6 +412,9 @@ func (s *Service) replayPendingClarificationComment(ctx context.Context, runStor
 // the action so a process stop between the two writes leaves a replayable
 // intent instead of an apparently processed but stale command.
 func (s *Service) persistCommandProjectionWithEffect(ctx context.Context, runStore RunStore, repository github.Repository, previous, next store.Run) (store.Run, error) {
+	if err := validateRunBeforeEffect(store.PendingEffectKindStatusComment, next); err != nil {
+		return next, err
+	}
 	payload := statusCommentEffectPayload{Repository: repository, Previous: previous, Next: next}
 	effect, err := s.newPendingEffect(next.ID, store.PendingEffectKindStatusComment, fmt.Sprintf("revision=%d\x00comment=%s", next.Revision, next.ProcessedCommentID), payload)
 	if err != nil {
@@ -433,6 +459,9 @@ func (s *Service) persistCommandProjectionWithEffect(ctx context.Context, runSto
 func (s *Service) replayPendingStatusComment(ctx context.Context, runStore RunStore, effect store.PendingEffect) (store.Run, error) {
 	var payload statusCommentEffectPayload
 	if err := decodePendingEffect(effect, &payload); err != nil {
+		return store.Run{}, err
+	}
+	if err := validateRunBeforeReplay(store.PendingEffectKindStatusComment, payload.Next); err != nil {
 		return store.Run{}, err
 	}
 	current, err := readReconciliationRun(ctx, runStore)
@@ -1002,6 +1031,9 @@ func (s *Service) publishStatusCheckpoint(ctx context.Context, run store.Run, sh
 // acceptResultWithEffect journals harness finalization, invocation state, and
 // the resulting workflow projection as one replayable acceptance operation.
 func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore, invocationStore InvocationStore, registration config.RepositoryRegistration, harnessRuntime harness.Runtime, session harness.Session, invocation store.Invocation, previous, next store.Run, stopWorker bool, acceptedReport report.Report) (store.Invocation, store.Run, error) {
+	if err := validateRunBeforeEffect(store.PendingEffectKindResultAcceptance, next); err != nil {
+		return invocation, next, err
+	}
 	// Encode the accepted report once for durable replay
 	acceptedReportJSON, err := json.Marshal(acceptedReport)
 	if err != nil {
@@ -1099,6 +1131,9 @@ func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore,
 func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore RunStore, effect store.PendingEffect) (store.Run, error) {
 	var payload resultAcceptanceEffectPayload
 	if err := decodePendingEffect(effect, &payload); err != nil {
+		return store.Run{}, err
+	}
+	if err := validateRunBeforeReplay(store.PendingEffectKindResultAcceptance, payload.Next); err != nil {
 		return store.Run{}, err
 	}
 	currentRun, err := readReconciliationRun(ctx, runStore)
@@ -1237,6 +1272,9 @@ func samePullRequestRequest(existing github.PullRequest, request github.PullRequ
 // discover a created PR and finish the missing durable state without creating a
 // second PR.
 func (s *Service) upsertPullRequestAndPersistWithEffect(ctx context.Context, runStore RunStore, client github.PullRequestClient, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
+	if err := validateRunBeforeEffect(store.PendingEffectKindPullRequest, next); err != nil {
+		return github.PullRequest{}, next, err
+	}
 	payload := pullRequestEffectPayload{Repository: repository, Number: expectedNumber, Request: request, PersistRun: true, Issue: issue, Previous: previous, Next: next}
 	effect, err := s.newPendingEffect(next.ID, store.PendingEffectKindPullRequest, request.HeadBranch+"\x00"+request.BaseBranch+"\x00"+request.Body, payload)
 	if err != nil {
@@ -1295,6 +1333,11 @@ func (s *Service) replayPendingPullRequest(ctx context.Context, runStore RunStor
 	var payload pullRequestEffectPayload
 	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
+	}
+	if payload.PersistRun {
+		if err := validateRunBeforeReplay(store.PendingEffectKindPullRequest, payload.Next); err != nil {
+			return store.Run{}, err
+		}
 	}
 	client := s.pullRequestClient()
 	if client == nil {
@@ -1390,6 +1433,9 @@ func checkpointRequest(value checkpointRequestJSON) gitadapter.CheckpointRequest
 // run projection one restart-safe operation. The marker in the Git adapter
 // handles a commit that was created just before the process stopped.
 func (s *Service) checkpointAndPersistWithEffect(ctx context.Context, runStore RunStore, workspace gitadapter.GitWorkspace, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
+	if err := validateRunBeforeEffect(store.PendingEffectKindCheckpoint, nextTemplate); err != nil {
+		return gitadapter.CheckpointResult{}, nextTemplate, err
+	}
 	payload := checkpointEffectPayload{
 		Request: checkpointRequestJSON{
 			RunID:        request.RunID,
@@ -1423,6 +1469,9 @@ func (s *Service) checkpointAndPersistWithEffect(ctx context.Context, runStore R
 		if request.Kind == gitadapter.CheckpointKindTest {
 			next.TestCheckpointSHA = checkpoint.SHA
 		}
+		if err := validateRunBeforeEffect(store.PendingEffectKindCheckpoint, next); err != nil {
+			return err
+		}
 		if err := s.applyStateTransitionEffects(ctx, &next, stateTransition{
 			Repository: repository,
 			Issue:      issue,
@@ -1453,6 +1502,9 @@ func (s *Service) checkpointAndPersistWithEffect(ctx context.Context, runStore R
 func (s *Service) replayPendingCheckpoint(ctx context.Context, runStore RunStore, effect store.PendingEffect) (store.Run, error) {
 	var payload checkpointEffectPayload
 	if err := decodePendingEffect(effect, &payload); err != nil {
+		return store.Run{}, err
+	}
+	if err := validateRunBeforeReplay(store.PendingEffectKindCheckpoint, payload.Next); err != nil {
 		return store.Run{}, err
 	}
 	workspace := s.gitWorkspace()
@@ -1488,6 +1540,9 @@ func (s *Service) replayPendingCheckpoint(ctx context.Context, runStore RunStore
 	if request.Kind == gitadapter.CheckpointKindTest {
 		next.TestCheckpointSHA = checkpoint.SHA
 	}
+	if err := validateRunBeforeReplay(store.PendingEffectKindCheckpoint, next); err != nil {
+		return store.Run{}, err
+	}
 	if err := s.applyStateTransitionEffects(ctx, &next, stateTransition{
 		Repository: payload.Repository,
 		Issue:      payload.Issue,
@@ -1519,6 +1574,9 @@ func (s *Service) replayPendingStateTransition(ctx context.Context, runStore Run
 	}
 	if payload.Next.ID == "" || payload.Next.ID != effect.RunID {
 		return store.Run{}, errors.New("pending state transition run identity does not match its journal")
+	}
+	if err := validateRunBeforeReplay(store.PendingEffectKindStateTransition, payload.Next); err != nil {
+		return store.Run{}, err
 	}
 	current, err := readReconciliationRun(ctx, runStore)
 	if err != nil {

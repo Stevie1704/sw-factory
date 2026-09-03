@@ -1077,6 +1077,14 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	return nil
 }
 
+// ValidateRun applies the operational-store run rules without persisting the
+// projection. Coordinator effect paths use it before reserving an external
+// mutation so an unpersistable run cannot cross that effect boundary.
+func ValidateRun(run Run) error {
+	_, err := normalizeRun(run)
+	return err
+}
+
 // PendingEffect returns the one durable external-effect reservation for a run,
 // or nil when the run has no mutation awaiting reconciliation.
 func (s *Store) PendingEffect(ctx context.Context, runID string) (*PendingEffect, error) {

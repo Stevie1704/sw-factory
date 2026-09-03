@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/report"
+	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
 // TestWriteAtomicWritesOneInvocationReport verifies that a valid report is
@@ -85,11 +86,13 @@ func TestValidateRejectsAReportThatDoesNotMatchTheInvocation(t *testing.T) {
 	value := completedReport()
 	value.InvocationID = "stale-invocation"
 	err := report.Validate(value, report.ValidationContext{
-		InvocationID: "inv-1",
-		RunID:        "run-1",
-		Harness:      "codex",
-		Role:         "implementation",
-		Stage:        "implementation",
+		InvocationID:     "inv-1",
+		RunID:            "run-1",
+		Harness:          "codex",
+		Role:             "implementation",
+		Stage:            "implementation",
+		WorktreeObserved: true,
+		ObservedChanges:  []string{"internal/factory/agent.go"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "invocation_id") {
 		t.Fatalf("Validate() error = %v, want invocation identity error", err)
@@ -506,6 +509,58 @@ func TestValidateRejectsAProductionFileFromAnInspectedCleanWorktree(t *testing.T
 	})
 	if err == nil || !strings.Contains(err.Error(), "was not observed") {
 		t.Fatalf("Validate() error = %v, want clean-worktree mismatch", err)
+	}
+}
+
+// TestValidateRejectsACompletedHandoffWithoutProductionFiles verifies that a
+// completed handoff names at least one repository file changed by the role.
+func TestValidateRejectsACompletedHandoffWithoutProductionFiles(t *testing.T) {
+	value := completedReport()
+	value.Handoff.ProductionFilesChanged = nil
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID:     "inv-1",
+		RunID:            "run-1",
+		Harness:          "codex",
+		Role:             "implementation",
+		Stage:            "implementation",
+		WorktreeObserved: true,
+		ObservedChanges:  []string{"internal/factory/agent.go"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "production_files_changed") {
+		t.Fatalf("Validate() error = %v, want missing-production-files rejection", err)
+	}
+}
+
+// TestReportAndStoreValidatorsAgreeOnCompletedHandoffFiles verifies both
+// validation seams reject the same incomplete completed handoff.
+func TestReportAndStoreValidatorsAgreeOnCompletedHandoffFiles(t *testing.T) {
+	value := completedReport()
+	value.Handoff.ProductionFilesChanged = nil
+	reportErr := report.Validate(value, report.ValidationContext{
+		InvocationID:     "inv-1",
+		RunID:            "run-1",
+		Harness:          "codex",
+		Role:             "implementation",
+		Stage:            "implementation",
+		WorktreeObserved: true,
+		ObservedChanges:  []string{"internal/factory/agent.go"},
+	})
+	storeErr := store.ValidateRun(store.Run{
+		ID:             "run-1",
+		RepositoryPath: "/work/repository",
+		Status:         store.StatusActive,
+		RoleHandoff: &store.RoleHandoff{
+			ChangeSummary:          value.Handoff.ChangeSummary,
+			AcceptanceMapping:      []store.HandoffAcceptance{{Criterion: "criterion", Evidence: "test"}},
+			ProductionFilesChanged: nil,
+			FocusedCommands:        []string{"go test ./internal/factory"},
+		},
+	})
+	if (reportErr == nil) != (storeErr == nil) {
+		t.Fatalf("validator agreement = report error %v, store error %v", reportErr, storeErr)
+	}
+	if reportErr == nil {
+		t.Fatal("report and store validators accepted an empty production-file list")
 	}
 }
 

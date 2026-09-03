@@ -417,6 +417,9 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 	if !store.IsTerminalStatus(next.Status) {
 		next.TerminalAt = time.Time{}
 	}
+	if err := validateRunBeforeEffect(store.PendingEffectKindStateTransition, next); err != nil {
+		return next, err
+	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		return s.applyJournaledStateTransition(ctx, runStore, transition, next)
 	}

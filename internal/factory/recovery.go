@@ -1393,12 +1393,25 @@ func (s *Service) pauseRunLocally(ctx context.Context, runStore RunStore, run st
 	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
+	reason := recoveryDiscrepancyReason(diagnosis)
 	if isRestartReconciliationPause(run) {
-		return run, nil
+		if run.LifecycleReason == reason {
+			return run, nil
+		}
+		// Repeated reconciliation must refresh a stale local diagnosis without
+		// advancing the pending effect's revision or crossing an external
+		// boundary a second time.
+		next := run
+		next.LifecycleReason = reason
+		next.UpdatedAt = s.deps.Now().UTC()
+		if err := saveRunWithRetry(ctx, runStore, next); err != nil {
+			return next, fmt.Errorf("refresh local restart reconciliation pause: %w", err)
+		}
+		return next, nil
 	}
 	next := run
 	next.Status = store.StatusWaitingForHuman
-	next.LifecycleReason = recoveryDiscrepancyReason(diagnosis)
+	next.LifecycleReason = reason
 	next.Revision = run.Revision + 1
 	next.UpdatedAt = s.deps.Now().UTC()
 	if err := saveRunWithRetry(ctx, runStore, next); err != nil {
@@ -1537,16 +1550,36 @@ func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.
 }
 
 // recoveryDiscrepancyReason renders a bounded single-line workflow reason so
-// the human can identify exactly which projection prevented continuation.
+// the human can identify exactly which projection prevented continuation. A
+// deterministic workflow refusal takes precedence over infrastructure
+// observations, because those observations may be consequences of the same
+// failed transition rather than its cause.
 func recoveryDiscrepancyReason(diagnosis RecoveryDiagnosis) string {
-	parts := make([]string, 0, len(diagnosis.Discrepancies))
-	for _, discrepancy := range diagnosis.Discrepancies {
-		parts = append(parts, fmt.Sprintf("%s.%s expected=%q observed=%q", discrepancy.Source, discrepancy.Field, safeStatusCommentValue(discrepancy.Expected), safeStatusCommentValue(discrepancy.Observed)))
+	discrepancies := diagnosis.Discrepancies
+	if hasWorkflowDiscrepancy(diagnosis) {
+		discrepancies = make([]RecoveryDiscrepancy, 0, len(diagnosis.Discrepancies))
+		for _, discrepancy := range diagnosis.Discrepancies {
+			if discrepancy.Kind == RecoveryDiscrepancyWorkflow {
+				discrepancies = append(discrepancies, discrepancy)
+			}
+		}
+	}
+	parts := make([]string, 0, len(discrepancies))
+	for _, discrepancy := range discrepancies {
+		parts = append(parts, fmt.Sprintf("%s.%s expected=%q observed=%q", discrepancy.Source, discrepancy.Field, recoveryReasonValue(discrepancy.Expected), recoveryReasonValue(discrepancy.Observed)))
 	}
 	if len(parts) == 0 {
 		return "restart reconciliation paused: unresolved discrepancy"
 	}
 	return "restart reconciliation paused: " + strings.Join(parts, "; ")
+}
+
+// recoveryReasonValue keeps a prior reconciliation pause from becoming part
+// of the next pause's nested lifecycle reason while retaining the observation
+// that it was a previous coordinator diagnosis.
+func recoveryReasonValue(value string) string {
+	value = safeStatusCommentValue(value)
+	return strings.ReplaceAll(value, restartReconciliationPausePrefix, "prior reconciliation pause:")
 }
 
 // newRecoveryDiagnosis creates the read-only comparison envelope and operator
