@@ -984,6 +984,44 @@ func TestRefreshAfterAnAcceptedImplementationCheckpointRestartsFromTheCheckpoint
 	if runStore.current.Status != store.StatusActive {
 		t.Fatalf("run after refreshed report = %#v, want active rather than waiting", runStore.current)
 	}
+
+	secondResult, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: runStore.current.IssueNumber,
+		Comment:     github.Comment{ID: "refresh-checkpoint-again", Author: "alice", Body: "/factory refresh"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() second refresh error = %v", err)
+	}
+	if secondResult.Outcome != factory.CommandAccepted || secondResult.Run.Status != store.StatusActive || secondResult.Run.Stage != store.StageImplementation || secondResult.Run.BaseCheckpointSHA != implementationCheckpoint {
+		t.Fatalf("second refresh result = %#v, want accepted active implementation restart", secondResult)
+	}
+	if len(harnessRuntime.resumes) != 2 {
+		t.Fatalf("native resumes after second refresh = %d, want two revision-style implementation resumes", len(harnessRuntime.resumes))
+	}
+	if len(harnessRuntime.starts) != 1 {
+		t.Fatalf("fresh harness starts after second refresh = %d, want only the initial session", len(harnessRuntime.starts))
+	}
+	secondRefreshed := runStore.invocations[secondResult.Run.ActiveInvocationIDs[0]]
+	if secondRefreshed.ID == refreshed.ID {
+		t.Fatalf("second refresh reused invocation %q, want a new resumed invocation", secondRefreshed.ID)
+	}
+	secondValue := value
+	secondValue.InvocationID = secondRefreshed.ID
+	secondValue.RunID = secondRefreshed.RunID
+	secondValue.Harness = secondRefreshed.Harness
+	secondValue.Role = secondRefreshed.Role
+	secondValue.Stage = string(secondRefreshed.Stage)
+	secondValue.NativeSessionID = secondRefreshed.NativeSessionID
+	secondValue.ReportedAt = time.Now().UTC()
+	if _, err := report.WriteAtomicForInvocation(secondRefreshed.ResultDirectory, secondRefreshed.ID, secondValue); err != nil {
+		t.Fatalf("write second refreshed implementation report: %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: secondRefreshed.ID}); err != nil {
+		t.Fatalf("AcceptAgentReport() second refreshed error = %v", err)
+	}
+	if runStore.current.Status != store.StatusActive {
+		t.Fatalf("run after second refreshed report = %#v, want active rather than waiting", runStore.current)
+	}
 }
 
 // TestAcceptAgentReportTrustsThePersistedNativeSession verifies a report
@@ -1262,7 +1300,7 @@ func newCheckpointRefreshService(t *testing.T) (*factory.Service, *agentRunStore
 		RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 		Cmux:                 config.CmuxConfig{ControlWorkspace: "factory-control"},
 	}}}
-	ids := []string{"run-refresh-checkpoint", "initial-implementation", "refreshed-implementation"}
+	ids := []string{"run-refresh-checkpoint", "initial-implementation", "refreshed-implementation", "second-refreshed-implementation"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config: &fakeConfig{value: host},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) {

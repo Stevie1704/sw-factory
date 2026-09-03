@@ -593,7 +593,7 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
-	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecycleReason) {
+	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
 		return s.resumeAfterRevision(ctx, registration, runStore, run)
 	}
 	// The coordinator's progression pass owns the baseline, so a run that has
@@ -617,9 +617,16 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	return run, nil
 }
 
-// acceptedCheckpointRefreshLifecycleReason identifies the durable refresh
-// transition that must run baseline before launching implementation.
-const acceptedCheckpointRefreshLifecycleReason = "accepted /factory refresh; restarting from accepted implementation checkpoint"
+const (
+	// acceptedCheckpointRefreshLifecyclePrefix identifies the durable refresh
+	// transition that must run baseline before launching implementation. The
+	// prefix survives the baseline's more specific lifecycle explanation so a
+	// later clean refresh can recognize the same checkpoint again.
+	acceptedCheckpointRefreshLifecyclePrefix = "accepted /factory refresh; "
+	// acceptedCheckpointRefreshLifecycleReason identifies the durable refresh
+	// transition before the baseline has supplied its result.
+	acceptedCheckpointRefreshLifecycleReason = acceptedCheckpointRefreshLifecyclePrefix + "restarting from accepted implementation checkpoint"
+)
 
 // markAcceptedCheckpointPacketRestart makes a checkpoint restart durable in
 // the packet-change projection before baseline work or native resume begins.
@@ -637,8 +644,8 @@ func markAcceptedCheckpointPacketRestart(next *store.Run, previous store.Run, re
 // restart visible after the baseline transition replaces the packet-change
 // reason with its normal stage-ready explanation.
 func baselineLifecycleReason(run store.Run, reason string) string {
-	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecycleReason) {
-		return "accepted /factory refresh; " + reason
+	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
+		return acceptedCheckpointRefreshLifecyclePrefix + reason
 	}
 	return reason
 }
@@ -648,7 +655,7 @@ func baselineLifecycleReason(run store.Run, reason string) string {
 // The protected test checkpoint is excluded: it is an implementation input,
 // not an accepted implementation checkpoint.
 func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.Context, run store.Run) (bool, error) {
-	if run.CheckpointSHA == "" || run.BaseCheckpointSHA == "" || run.CheckpointSHA == run.BaseCheckpointSHA {
+	if run.CheckpointSHA == "" || run.BaseCheckpointSHA == "" {
 		return false, nil
 	}
 	// A test-stage run's current checkpoint is protected test work, even if an
@@ -657,6 +664,14 @@ func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.
 		return false, nil
 	}
 	if run.TestCheckpointSHA != "" && run.TestCheckpointSHA == run.CheckpointSHA {
+		return false, nil
+	}
+	// A checkpoint promoted as the packet baseline is still an accepted
+	// implementation checkpoint when the run already owns a draft or later
+	// pull-request projection. The lifecycle marker covers the same durable
+	// restart state before a pull request exists, so BaseCheckpointSHA equality
+	// cannot make a later clean refresh fall back to a fresh session.
+	if run.CheckpointSHA == run.BaseCheckpointSHA && run.PullRequestNumber == 0 && !strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
 		return false, nil
 	}
 	inspector := s.worktreeInspector()
