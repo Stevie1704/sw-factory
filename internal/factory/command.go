@@ -640,6 +640,7 @@ func markAcceptedCheckpointPacketRestart(next *store.Run, previous store.Run, re
 		return
 	}
 	next.BaseCheckpointSHA = previous.CheckpointSHA
+	next.AcceptedImplementationCheckpointSHA = previous.CheckpointSHA
 	next.Stage = store.StageClaim
 	next.Status = store.StatusActive
 	next.LifecycleReason = acceptedCheckpointRefreshLifecycleReason
@@ -728,7 +729,11 @@ func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.
 			return false, nil
 		}
 	case store.StageImplementation:
-		if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
+		// The packet transition invalidates downstream gate rows, and a rejected
+		// implementation report can replace the lifecycle marker with its
+		// waiting reason. The dedicated provenance remains the acceptance proof
+		// for the unchanged clean checkpoint across both transitions.
+		if run.AcceptedImplementationCheckpointSHA == run.CheckpointSHA || strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
 			break
 		}
 		// A failed check can route back to implementation while an older PR is
@@ -803,6 +808,9 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
 	run.TestStageSkipped = false
+	// Every invocation for the superseded packet is no longer current, even if
+	// its report later causes the coordinator to park the run while accepting it.
+	clearActiveInvocations(run)
 	// The healthy baseline result selects the entry stage, not the packet
 	// change itself. A packet the baseline could never leave still parks
 	// visibly, because advanceAfterBaseline rejects it after every pass.

@@ -173,6 +173,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		if !github.ValidCommitSHA(checkpoint.SHA) {
 			return DraftPullRequestResult{}, errors.New("GitWorkspace returned an invalid implementation checkpoint SHA")
 		}
+		next.AcceptedImplementationCheckpointSHA = ""
 		if run.CheckRepairAttempts > 0 && checkpoint.SHA == run.CheckpointSHA {
 			return DraftPullRequestResult{}, fmt.Errorf("check-repair attempt %d did not produce a new checkpoint SHA", run.CheckRepairAttempts)
 		}

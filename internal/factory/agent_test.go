@@ -933,7 +933,7 @@ func TestRefreshAfterAnAcceptedImplementationCheckpointRestartsFromTheCheckpoint
 	if err != nil {
 		t.Fatalf("HandleCommand() refresh error = %v", err)
 	}
-	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive || result.Run.Stage != store.StageImplementation || result.Run.BaseCheckpointSHA != implementationCheckpoint {
+	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive || result.Run.Stage != store.StageImplementation || result.Run.BaseCheckpointSHA != implementationCheckpoint || result.Run.AcceptedImplementationCheckpointSHA != implementationCheckpoint {
 		t.Fatalf("refresh result = %#v, want accepted active implementation restart", result)
 	}
 	if !strings.Contains(result.Run.LifecycleReason, "/factory refresh") || !strings.Contains(factory.StatusCommentBody(result.Run), "/factory refresh") {
@@ -976,14 +976,24 @@ func TestRefreshAfterAnAcceptedImplementationCheckpointRestartsFromTheCheckpoint
 		NativeSessionID: refreshed.NativeSessionID,
 		ReportedAt:      time.Now().UTC(),
 	}
-	if _, err := report.WriteAtomicForInvocation(refreshed.ResultDirectory, refreshed.ID, value); err != nil {
-		t.Fatalf("write refreshed implementation report: %v", err)
+	invalid := value
+	invalid.Handoff = &report.Handoff{
+		ChangeSummary:          value.Handoff.ChangeSummary,
+		AcceptanceMapping:      append([]report.AcceptanceMapping(nil), value.Handoff.AcceptanceMapping...),
+		ProductionFilesChanged: []string{"internal/factory/agent.go"},
+		FocusedCommands:        append([]string(nil), value.Handoff.FocusedCommands...),
 	}
-	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: refreshed.ID}); err != nil {
-		t.Fatalf("AcceptAgentReport() refreshed error = %v", err)
+	if _, err := report.WriteAtomicForInvocation(refreshed.ResultDirectory, refreshed.ID, invalid); err != nil {
+		t.Fatalf("write invalid refreshed implementation report: %v", err)
 	}
-	if runStore.current.Status != store.StatusActive {
-		t.Fatalf("run after refreshed report = %#v, want active rather than waiting", runStore.current)
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: refreshed.ID}); err == nil || !strings.Contains(err.Error(), "was not observed in the worktree") {
+		t.Fatalf("AcceptAgentReport() invalid refreshed error = %v, want unobserved production path rejection", err)
+	}
+	paused := *runStore.current
+	paused.Status = store.StatusWaitingForHuman
+	paused.LifecycleReason = "unattended progression stopped at accept agent report: production_files_changed[0] was not observed in the worktree"
+	if err := runStore.SaveRun(context.Background(), paused); err != nil {
+		t.Fatalf("save invalid-report waiting state: %v", err)
 	}
 
 	secondResult, err := service.HandleCommand(context.Background(), factory.CommandRequest{
@@ -993,18 +1003,18 @@ func TestRefreshAfterAnAcceptedImplementationCheckpointRestartsFromTheCheckpoint
 	if err != nil {
 		t.Fatalf("HandleCommand() second refresh error = %v", err)
 	}
-	if secondResult.Outcome != factory.CommandAccepted || secondResult.Run.Status != store.StatusActive || secondResult.Run.Stage != store.StageImplementation || secondResult.Run.BaseCheckpointSHA != implementationCheckpoint {
+	if secondResult.Outcome != factory.CommandAccepted || secondResult.Run.Status != store.StatusActive || secondResult.Run.Stage != store.StageImplementation || secondResult.Run.BaseCheckpointSHA != implementationCheckpoint || secondResult.Run.AcceptedImplementationCheckpointSHA != implementationCheckpoint {
 		t.Fatalf("second refresh result = %#v, want accepted active implementation restart", secondResult)
 	}
 	if len(harnessRuntime.resumes) != 2 {
-		t.Fatalf("native resumes after second refresh = %d, want two revision-style implementation resumes", len(harnessRuntime.resumes))
+		t.Fatalf("native resumes after rejected-report refresh = %d, want two revision-style implementation resumes", len(harnessRuntime.resumes))
 	}
 	if len(harnessRuntime.starts) != 1 {
-		t.Fatalf("fresh harness starts after second refresh = %d, want only the initial session", len(harnessRuntime.starts))
+		t.Fatalf("fresh harness starts after rejected-report refresh = %d, want only the initial session", len(harnessRuntime.starts))
 	}
 	secondRefreshed := runStore.invocations[secondResult.Run.ActiveInvocationIDs[0]]
 	if secondRefreshed.ID == refreshed.ID {
-		t.Fatalf("second refresh reused invocation %q, want a new resumed invocation", secondRefreshed.ID)
+		t.Fatalf("rejected-report refresh reused invocation %q, want a new resumed invocation", secondRefreshed.ID)
 	}
 	secondValue := value
 	secondValue.InvocationID = secondRefreshed.ID

@@ -81,6 +81,12 @@ func TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice(t *testin
 			t.Fatalf("remove schema 34 launch-voided column from schema 32 fixture: %v", err)
 		}
 	}
+	if testOperationalRunsColumnExists(t, database, "accepted_implementation_checkpoint_sha") {
+		if _, err := database.ExecContext(t.Context(), "ALTER TABLE operational_runs DROP COLUMN accepted_implementation_checkpoint_sha"); err != nil {
+			_ = database.Close()
+			t.Fatalf("remove schema 35 accepted-checkpoint column from schema 32 fixture: %v", err)
+		}
+	}
 	_, err = database.ExecContext(t.Context(), `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status,
@@ -685,18 +691,19 @@ func TestRunPersistsTheProtectedTestHandoffProjection(t *testing.T) {
 	}
 	defer func() { _ = opened.Close() }()
 	want := store.Run{
-		ID:                 "run-test-projection",
-		RepositoryPath:     "/work/repository",
-		Stage:              store.StageImplementation,
-		Status:             store.StatusActive,
-		CheckpointSHA:      strings.Repeat("b", 64),
-		BaseCheckpointSHA:  strings.Repeat("a", 64),
-		TestCheckpointSHA:  strings.Repeat("b", 64),
-		TestHandoff:        &store.TestHandoff{AcceptanceCoverage: []store.TestAcceptanceCoverage{{Criterion: "criterion", Evidence: "red test"}}, ChangedFiles: []string{"internal/factory/agent_test.go"}, FocusedTestCommand: "go test ./internal/factory -run TestBehavior", ExpectedFailureReason: "expected behavior assertion", ObservedFailureEvidence: []store.TestFailureEvidence{{Kind: "exit_code", Detail: "1"}}},
-		TestExemption:      &store.TestExemption{Kind: "technical", Justification: "test runtime unavailable during pilot"},
-		ProtectedTestPaths: []store.ProtectedTestPath{{Path: "internal/factory/agent_test.go", SHA256: strings.Repeat("c", 64)}},
-		TestStageSkipped:   true,
-		CheckRepairBudget:  1,
+		ID:                                  "run-test-projection",
+		RepositoryPath:                      "/work/repository",
+		Stage:                               store.StageImplementation,
+		Status:                              store.StatusActive,
+		CheckpointSHA:                       strings.Repeat("b", 64),
+		BaseCheckpointSHA:                   strings.Repeat("a", 64),
+		AcceptedImplementationCheckpointSHA: strings.Repeat("d", 64),
+		TestCheckpointSHA:                   strings.Repeat("b", 64),
+		TestHandoff:                         &store.TestHandoff{AcceptanceCoverage: []store.TestAcceptanceCoverage{{Criterion: "criterion", Evidence: "red test"}}, ChangedFiles: []string{"internal/factory/agent_test.go"}, FocusedTestCommand: "go test ./internal/factory -run TestBehavior", ExpectedFailureReason: "expected behavior assertion", ObservedFailureEvidence: []store.TestFailureEvidence{{Kind: "exit_code", Detail: "1"}}},
+		TestExemption:                       &store.TestExemption{Kind: "technical", Justification: "test runtime unavailable during pilot"},
+		ProtectedTestPaths:                  []store.ProtectedTestPath{{Path: "internal/factory/agent_test.go", SHA256: strings.Repeat("c", 64)}},
+		TestStageSkipped:                    true,
+		CheckRepairBudget:                   1,
 	}
 	if err := opened.SaveRun(context.Background(), want); err != nil {
 		t.Fatalf("SaveRun() error = %v", err)
@@ -705,7 +712,7 @@ func TestRunPersistsTheProtectedTestHandoffProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestRun() error = %v", err)
 	}
-	if got == nil || got.BaseCheckpointSHA != want.BaseCheckpointSHA || got.TestCheckpointSHA != want.TestCheckpointSHA || got.TestHandoff == nil || got.TestExemption == nil || len(got.ProtectedTestPaths) != 1 || !got.TestStageSkipped {
+	if got == nil || got.BaseCheckpointSHA != want.BaseCheckpointSHA || got.AcceptedImplementationCheckpointSHA != want.AcceptedImplementationCheckpointSHA || got.TestCheckpointSHA != want.TestCheckpointSHA || got.TestHandoff == nil || got.TestExemption == nil || len(got.ProtectedTestPaths) != 1 || !got.TestStageSkipped {
 		t.Fatalf("LatestRun() = %#v, want persisted test projection", got)
 	}
 }
