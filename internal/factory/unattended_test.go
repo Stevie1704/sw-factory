@@ -133,7 +133,7 @@ func TestStartEmitsProgressionRetryAttempts(t *testing.T) {
 
 	fixture := newUnattendedFixture(t)
 	dependencies := fixture.dependencies()
-	remainingFailures := 2
+	remainingFailures := 3
 	dependencies.OpenStore = func(ctx context.Context, path string) (factory.OperationalStore, error) {
 		opened, err := store.Open(ctx, path)
 		if err != nil {

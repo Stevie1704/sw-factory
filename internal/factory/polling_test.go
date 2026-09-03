@@ -418,6 +418,56 @@ func TestStartEmitsSwallowedCommandFailure(t *testing.T) {
 	}
 }
 
+// TestStartEmitsACommandStageTransitionAfterRestart verifies that the live
+// stage tracker is seeded from persisted state before the first command poll.
+func TestStartEmitsACommandStageTransitionAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	var persisted store.Run
+	available := false
+	runStore := &fakeRunStore{currentRun: func(context.Context) (*store.Run, error) {
+		if !available {
+			return nil, nil
+		}
+		copy := persisted
+		return &copy, nil
+	}}
+	githubAdapter := &pollingGitHub{
+		fakeGitHub: &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open"}},
+		issues:     []github.Issue{{Number: 42, State: "open"}},
+	}
+	comments := &pollingCommentReader{onList: func(int) {
+		persisted.Stage = store.StageClaim
+	}}
+	var cancel context.CancelFunc
+	lease := &pollingLease{}
+	lease.onRenew = func(github.Lease) {
+		if len(lease.calls) == 1 {
+			available = true
+		}
+		if len(lease.calls) >= 2 && cancel != nil {
+			cancel()
+		}
+	}
+	var events pollingEventSink
+	service := newPollingService(root, githubAdapter, githubAdapter, lease, runStore, &fakeWorktree{}, comments)
+	persisted = store.Run{ID: "run-restarted", IssueNumber: 42, Stage: store.StageDraftPR, Status: store.StatusActive}
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	for _, event := range events.events {
+		if event.Kind == factory.EventStageTransition && event.RunID == persisted.ID && event.FromStage == store.StageDraftPR && event.ToStage == store.StageClaim {
+			return
+		}
+	}
+	t.Fatalf("events = %#v, want restart command transition %s -> %s for %s", events.events, store.StageDraftPR, store.StageClaim, persisted.ID)
+}
+
 // pollingEventSink records coordinator events without rendering them.
 type pollingEventSink struct {
 	events []factory.CoordinatorEvent

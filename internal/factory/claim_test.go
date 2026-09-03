@@ -708,10 +708,14 @@ type fakeRunStore struct {
 	saved           []store.Run
 	saveErrors      []error
 	lifecycleClaims map[string]map[store.Status]bool
+	currentRun      func(context.Context) (*store.Run, error)
 }
 
 // CurrentRun returns the newest non-terminal record.
-func (f *fakeRunStore) CurrentRun(context.Context) (*store.Run, error) {
+func (f *fakeRunStore) CurrentRun(ctx context.Context) (*store.Run, error) {
+	if f.currentRun != nil {
+		return f.currentRun(ctx)
+	}
 	for index := len(f.saved) - 1; index >= 0; index-- {
 		run := f.saved[index]
 		if run.Status == store.StatusComplete || run.Status == store.StatusCancelled || run.Status == store.StatusFailed {

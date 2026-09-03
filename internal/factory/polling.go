@@ -87,6 +87,8 @@ func (e *StartupBlockedError) Error() string {
 // those observations for compatibility with non-verbose embedders.
 func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	events := coordinatorEventSink(eventSinks)
+	stageTracker := newCoordinatorStageTracker(s, events)
+	events = stageTracker
 	diagnosis, err := s.startupDiagnosis(ctx)
 	if err != nil {
 		return fmt.Errorf("run startup diagnosis: %w", err)
@@ -113,9 +115,12 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		return err
 	}
 	defer func() { _ = lock.release() }()
+	s.seedCoordinatorStageFromStore(ctx, registration, stageTracker)
 	if err := s.reconcileRegisteredRun(ctx, registration); err != nil {
+		s.observeCoordinatorStageFromStore(ctx, registration, events)
 		return fmt.Errorf("reconcile persisted run at startup: %w", err)
 	}
+	s.observeCoordinatorStageFromStore(ctx, registration, events)
 
 	pollContext, cancel := context.WithCancel(ctx)
 	if !s.setPollCancel(cancel) {
@@ -127,7 +132,6 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	leaseRunID := ""
-	leaseRunStage := store.Stage("")
 	delay := time.Duration(0)
 	consecutiveLeaseFailures := 0
 	consecutiveQueueFailures := 0
@@ -174,19 +178,19 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		consecutiveLeaseFailures = 0
 
 		if err := s.retryWaitingForHarness(pollContext, registration); err != nil {
+			s.observeCoordinatorStageFromStore(pollContext, registration, events)
 			if pollingContextDone(err) {
 				return nil
 			}
 			return err
 		}
+		s.observeCoordinatorStageFromStore(pollContext, registration, events)
+		s.seedCoordinatorStageFromStore(pollContext, registration, stageTracker)
 		commandResults, commandErr := s.pollLoopCommandResults(pollContext)
 		for _, commandResult := range commandResults {
 			if commandResult.Run.ID != "" {
-				if commandResult.Run.ID == leaseRunID {
-					s.emitStageTransition(events, commandResult.Run.ID, leaseRunStage, commandResult.Run.Stage)
-				}
+				stageTracker.observe(&commandResult.Run)
 				leaseRunID = commandResult.Run.ID
-				leaseRunStage = commandResult.Run.Stage
 			}
 			if commandResult.Outcome == CommandRejected && commandResult.Rejection != nil {
 				runID := commandResult.Run.ID
@@ -230,6 +234,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 			// may stop an unattended coordinator, so the queue observation
 			// below still runs.
 		}
+		s.observeCoordinatorStageFromStore(pollContext, registration, events)
 		if commandErr == nil {
 			consecutiveCommandFailures = 0
 		}
@@ -255,13 +260,8 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		consecutiveQueueFailures = 0
 		if result.Run.ID == "" {
 			leaseRunID = ""
-			leaseRunStage = ""
 		} else {
-			if result.Run.ID == leaseRunID {
-				s.emitStageTransition(events, result.Run.ID, leaseRunStage, result.Run.Stage)
-			}
 			leaseRunID = result.Run.ID
-			leaseRunStage = result.Run.Stage
 		}
 		delay = interval
 		s.emitCoordinatorEvent(events, CoordinatorEvent{
@@ -276,16 +276,21 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 				RunID:       result.Run.ID,
 				IssueNumber: result.IssueNumber,
 			})
-			s.emitStageTransition(events, result.Run.ID, "", result.Run.Stage)
+		}
+		if result.Run.ID == "" {
+			stageTracker.observe(nil)
+		} else {
+			stageTracker.observe(&result.Run)
 		}
 		if result.Outcome == PollClaimed || result.Outcome == PollActiveRun {
 			progression, err := s.driveRun(pollContext, registration, events)
+			s.observeCoordinatorStageFromStore(pollContext, registration, events)
 			progressionRunID := progression.Run.ID
 			if progressionRunID == "" {
 				progressionRunID = result.Run.ID
 			}
 			if progression.Run.ID == result.Run.ID && progression.Run.Stage != "" {
-				leaseRunStage = progression.Run.Stage
+				stageTracker.observe(&progression.Run)
 			}
 			s.emitCoordinatorEvent(events, CoordinatorEvent{
 				Kind:    EventProgressionPass,
@@ -321,10 +326,52 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 			// release, so it keeps the ordinary interval.
 			if progression.Outcome == progressionTerminal || (progression.Outcome == progressionIdle && progression.Steps > 0) {
 				leaseRunID = ""
-				leaseRunStage = ""
+				stageTracker.reset()
 				delay = 0
 			}
 		}
+	}
+}
+
+// readCoordinatorRunForEvents reads the active run or latest terminal run
+// solely for live stage tracking. Its best-effort nature keeps observability
+// from changing coordinator ownership when the operational store is unavailable.
+func (s *Service) readCoordinatorRunForEvents(ctx context.Context, registration config.RepositoryRegistration) (*store.Run, error) {
+	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
+	if err != nil {
+		return nil, err
+	}
+	run, readErr := readReconciliationRun(ctx, opened)
+	closeErr := opened.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return run, nil
+}
+
+// seedCoordinatorStageFromStore snapshots the persisted stage before an
+// operation such as command polling can mutate it.
+func (s *Service) seedCoordinatorStageFromStore(ctx context.Context, registration config.RepositoryRegistration, tracker *coordinatorStageTracker) {
+	run, err := s.readCoordinatorRunForEvents(ctx, registration)
+	if err == nil {
+		tracker.seed(run)
+	}
+}
+
+// observeCoordinatorStageFromStore compares the persisted stage after an
+// operation that may have mutated it. Store-read failures are intentionally
+// ignored because event delivery is not workflow authority.
+func (s *Service) observeCoordinatorStageFromStore(ctx context.Context, registration config.RepositoryRegistration, sink EventSink) {
+	observer, ok := sink.(interface{ observeStage(*store.Run) })
+	if !ok {
+		return
+	}
+	run, err := s.readCoordinatorRunForEvents(ctx, registration)
+	if err == nil {
+		observer.observeStage(run)
 	}
 }
 

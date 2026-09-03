@@ -90,6 +90,88 @@ type DiscardEventSink struct{}
 // Emit discards one coordinator event.
 func (DiscardEventSink) Emit(CoordinatorEvent) {}
 
+// coordinatorStageTracker keeps the last persisted stage at the coordinator
+// seam while forwarding every typed event to the caller's sink. Seeding is
+// deliberately silent; only a subsequent observed change is a live
+// transition.
+type coordinatorStageTracker struct {
+	service     *Service
+	sink        EventSink
+	initialized bool
+	runID       string
+	stage       store.Stage
+}
+
+// newCoordinatorStageTracker wraps a sink with persisted-stage tracking.
+func newCoordinatorStageTracker(service *Service, sink EventSink) *coordinatorStageTracker {
+	return &coordinatorStageTracker{service: service, sink: sink}
+}
+
+// Emit forwards an event and keeps tracker state aligned with stage events
+// emitted by progression itself.
+func (t *coordinatorStageTracker) Emit(event CoordinatorEvent) {
+	if event.Kind == EventStageTransition {
+		t.initialized = true
+		t.runID = event.RunID
+		t.stage = event.ToStage
+	}
+	if t.sink != nil {
+		t.sink.Emit(event)
+	}
+}
+
+// seed installs a persisted snapshot without manufacturing a transition for
+// state that predates this coordinator process.
+func (t *coordinatorStageTracker) seed(run *store.Run) {
+	t.initialized = true
+	if run == nil {
+		t.runID = ""
+		t.stage = ""
+		return
+	}
+	t.runID = run.ID
+	t.stage = run.Stage
+}
+
+// reset clears the snapshot after queue release so the next claimed run is
+// represented as a new run's initial stage.
+func (t *coordinatorStageTracker) reset() {
+	t.initialized = false
+	t.runID = ""
+	t.stage = ""
+}
+
+// observe compares a post-operation persisted snapshot with the last known
+// snapshot and emits a transition only for the same run's changed stage.
+func (t *coordinatorStageTracker) observe(run *store.Run) {
+	if run == nil {
+		t.seed(nil)
+		return
+	}
+	if !t.initialized {
+		t.seed(run)
+		return
+	}
+	if t.runID == run.ID {
+		if t.stage != run.Stage {
+			t.service.emitStageTransition(t, run.ID, t.stage, run.Stage)
+		}
+	} else if run.Stage != "" {
+		// A different run is a queue release followed by a new claim, not a
+		// stage transition between two run identities.
+		t.service.emitStageTransition(t, run.ID, "", run.Stage)
+	}
+	t.initialized = true
+	t.runID = run.ID
+	t.stage = run.Stage
+}
+
+// observeStage lets the poll loop inspect a persisted run around operations
+// that do not return their final run projection directly.
+func (t *coordinatorStageTracker) observeStage(run *store.Run) {
+	t.observe(run)
+}
+
 // NewTextEventSink creates a sink that renders safe coordinator events to a
 // writer. The renderer is intentionally kept at the edge so other consumers
 // can observe the same structured values without parsing text.

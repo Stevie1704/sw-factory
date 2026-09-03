@@ -206,6 +206,7 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 	events := coordinatorEventSink(eventSinks)
 	result := progressionResult{Outcome: progressionIdle}
 	lifecycle, err := s.observePullRequestEvents(ctx, registration)
+	s.observeCoordinatorStageFromStore(ctx, registration, events)
 	if err != nil {
 		if pollingContextDone(err) || ctx.Err() != nil {
 			return result, err
