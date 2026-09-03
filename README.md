@@ -817,8 +817,8 @@ If a gate fails, the checkpoint remains pushed on the run branch and
 or updating the draft pull request. The next implementation invocation reuses
 the worker role volume and implementation surface, subject to the frozen repair
 budget. After an accepted repair report, run <code>factory draft-pr</code> again.
-Infrastructure waits do not spend the check-repair budget; the hard ceiling is
-three attempts.
+Infrastructure waits do not spend the check-repair budget; the repository's
+<code>retry_limits.check_repair</code> value is the only bound.
 
 ### 6. Run the concurrent isolated reviews
 

@@ -173,9 +173,6 @@ func decideCheckRepair(run store.Run, kind checkRepairFailureKind) (checkRepairD
 	if run.CheckRepairBudget <= 0 {
 		return checkRepairDecision{}, errors.New("check repair budget must be positive")
 	}
-	if run.CheckRepairBudget > config.MaxCheckRepairAttempts {
-		return checkRepairDecision{}, fmt.Errorf("check repair budget must not exceed %d", config.MaxCheckRepairAttempts)
-	}
 	if run.CheckRepairAttempts < 0 || run.CheckRepairAttempts > run.CheckRepairBudget {
 		return checkRepairDecision{}, fmt.Errorf("check repair attempts %d are outside budget %d", run.CheckRepairAttempts, run.CheckRepairBudget)
 	}

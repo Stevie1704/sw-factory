@@ -289,10 +289,11 @@ permitted scope. Deterministic gates and exact-checkpoint specification review
 remain unchanged in both modes.
 
 `retry_limits.review_repair` bounds automatic implementation repairs caused by
-blocking review findings and may not exceed four. Findings from the configured
-specification and standards reviewers are delivered together. If a materially
-same blocker survives an attempted repair, or the ceiling is exhausted, the
-run waits for a human. A successful repair creates a new checkpoint and the
+blocking review findings. The repository owns the value and the factory applies
+no upper limit of its own. Findings from the configured specification and
+standards reviewers are delivered together. If a materially same blocker
+survives an attempted repair, or the budget is exhausted, the run waits for a
+human. A successful repair creates a new checkpoint and the
 coordinator reruns the complete configured gate suite and both reviewers in
 fresh sessions.
 

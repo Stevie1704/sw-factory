@@ -123,14 +123,6 @@ func TestDecideCheckRepairTable(t *testing.T) {
 			kind:    checkRepairDeterministicFailure,
 			wantErr: true,
 		},
-		{
-			name: "budget above hard ceiling",
-			run: store.Run{
-				Stage: store.StageCheck, Status: store.StatusActive, CheckRepairBudget: config.MaxCheckRepairAttempts + 1,
-			},
-			kind:    checkRepairDeterministicFailure,
-			wantErr: true,
-		},
 	}
 	for _, test := range tests {
 		test := test
