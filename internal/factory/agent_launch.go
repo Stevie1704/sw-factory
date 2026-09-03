@@ -927,7 +927,7 @@ func checkRepairAttempt(packet *CheckRepairPacket) int {
 	return packet.Attempt
 }
 
-// checkRepairBudget extracts the configured repair ceiling from a persisted
+// checkRepairBudget extracts the configured repair budget from a persisted
 // invocation packet.
 func checkRepairBudget(packet *CheckRepairPacket) int {
 	if packet == nil {

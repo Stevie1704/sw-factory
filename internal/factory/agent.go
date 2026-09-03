@@ -193,7 +193,7 @@ type InvocationPacket struct {
 	TestObjection *store.TestObjection `json:"test_objection,omitempty"`
 	// TestRevisionAttempt identifies the active objection cycle.
 	TestRevisionAttempt int `json:"test_revision_attempt,omitempty"`
-	// TestRevisionBudget is the frozen objection-cycle ceiling.
+	// TestRevisionBudget is the frozen objection-cycle budget.
 	TestRevisionBudget int `json:"test_revision_budget,omitempty"`
 	// ProtectedTestPaths records test files implementation must not edit.
 	ProtectedTestPaths []store.ProtectedTestPath `json:"protected_test_paths,omitempty"`

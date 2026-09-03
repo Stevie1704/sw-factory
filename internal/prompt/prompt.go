@@ -176,7 +176,7 @@ type Request struct {
 	// prompt is repairing a failed deterministic checkpoint. Zero means a fresh
 	// implementation prompt.
 	CheckRepairAttempt int
-	// CheckRepairBudget is the run's configured repair ceiling when a repair is
+	// CheckRepairBudget is the run's configured repair budget when a repair is
 	// active.
 	CheckRepairBudget int
 	// ReviewRepair carries the complete blocking-review packet to an
@@ -190,7 +190,7 @@ type Request struct {
 	TestObjection *store.TestObjection
 	// TestRevisionAttempt is the one-based objection cycle being reviewed.
 	TestRevisionAttempt int
-	// TestRevisionBudget is the frozen objection-cycle ceiling.
+	// TestRevisionBudget is the frozen objection-cycle budget.
 	TestRevisionBudget int
 	// ProtectedTestPaths identifies test files implementation must preserve.
 	ProtectedTestPaths []store.ProtectedTestPath

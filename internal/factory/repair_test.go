@@ -69,6 +69,17 @@ func TestDecideCheckRepairTable(t *testing.T) {
 			wantRemain:  0,
 		},
 		{
+			name:         "repository-chosen budget above the removed ceiling",
+			run:          store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairBudget: 7},
+			kind:         checkRepairDeterministicFailure,
+			wantKind:     checkRepairStartDecision,
+			wantStage:    store.StageImplementation,
+			wantStatus:   store.StatusActive,
+			wantAttempt:  1,
+			wantRemain:   6,
+			wantConsumed: true,
+		},
+		{
 			name:        "infrastructure does not consume budget",
 			run:         store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 1, CheckRepairBudget: 3},
 			kind:        checkRepairInfrastructureFailure,
@@ -119,14 +130,6 @@ func TestDecideCheckRepairTable(t *testing.T) {
 			run: store.Run{
 				Stage: store.StageCheck, Status: store.StatusActive,
 				CheckRepairAttempts: 1, CheckRepairBudget: 3, CheckRepairPendingAttempt: 2,
-			},
-			kind:    checkRepairDeterministicFailure,
-			wantErr: true,
-		},
-		{
-			name: "budget above hard ceiling",
-			run: store.Run{
-				Stage: store.StageCheck, Status: store.StatusActive, CheckRepairBudget: config.MaxCheckRepairAttempts + 1,
 			},
 			kind:    checkRepairDeterministicFailure,
 			wantErr: true,

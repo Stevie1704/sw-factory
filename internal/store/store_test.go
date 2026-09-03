@@ -824,7 +824,7 @@ func TestRunRejectsAReviewProjectionForAnOlderCheckpoint(t *testing.T) {
 	}
 }
 
-// TestStorePersistsCheckRepairBudget verifies the retry ceiling, consumed
+// TestStorePersistsCheckRepairBudget verifies the retry budget, consumed
 // attempt count, and in-flight reservation survive the restart boundary.
 func TestStorePersistsCheckRepairBudget(t *testing.T) {
 	t.Parallel()
@@ -912,6 +912,62 @@ func TestStorePersistsReviewRepairState(t *testing.T) {
 	}
 	if got == nil || got.ReviewRepairAttempts != 1 || got.ReviewRepairBudget != 2 || got.ReviewRepairPendingAttempt != 2 || len(got.ReviewRepairHistory) != 1 || got.ReviewRepairPacket == nil || got.ReviewRepairPacket.Findings[0].ReviewerRole != "spec_review" {
 		t.Fatalf("CurrentRun() = %#v, want review-repair state preserved", got)
+	}
+}
+
+// TestStorePersistsRepositoryChosenRetryBudgets verifies the frozen per-run
+// budgets are the only bound the store applies. Review-repair and
+// test-revision budgets, and both attempt histories, far above every
+// previously hard-coded ceiling must survive a restart unchanged.
+func TestStorePersistsRepositoryChosenRetryBudgets(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	history := make([]store.ReviewRepairAttempt, 0, 6)
+	for attempt := 1; attempt <= 6; attempt++ {
+		history = append(history, store.ReviewRepairAttempt{Attempt: attempt, Outcome: store.ReviewRepairStarted})
+	}
+	revisions := make([]store.TestRevision, 0, 4)
+	for attempt := 1; attempt <= 4; attempt++ {
+		revisions = append(revisions, store.TestRevision{Attempt: attempt, Outcome: store.TestRevisionRejected})
+	}
+	run := store.Run{
+		ID:                   "run-repository-budgets",
+		RepositoryPath:       "/work/repository",
+		Stage:                store.StageImplementation,
+		Status:               store.StatusActive,
+		CheckRepairBudget:    7,
+		ReviewRepairAttempts: 6,
+		ReviewRepairBudget:   12,
+		ReviewRepairHistory:  history,
+		TestRevisionAttempts: 4,
+		TestRevisionBudget:   9,
+		TestRevisionHistory:  revisions,
+		CheckpointSHA:        strings.Repeat("b", 64),
+		BaseCheckpointSHA:    strings.Repeat("c", 64),
+		CreatedAt:            time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.CheckRepairBudget != 7 || got.ReviewRepairBudget != 12 || got.TestRevisionBudget != 9 || len(got.ReviewRepairHistory) != 6 || len(got.TestRevisionHistory) != 4 {
+		t.Fatalf("CurrentRun() = %#v, want repository-chosen budgets preserved", got)
 	}
 }
 

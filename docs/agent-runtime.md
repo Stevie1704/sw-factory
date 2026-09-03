@@ -415,7 +415,7 @@ counter advances only after resume and the final run-state write succeed; an
 interrupted reservation is marked for reconciliation and blocks blind
 relaunch. Setup, worker, GitHub status, harness, and other transport failures
 roll back before resume and move the run to `waiting_for_harness` without
-consuming the budget. Once the ceiling is reached, the run moves to
+consuming the budget. Once the budget is exhausted, the run moves to
 `check/waiting_for_human` and receives the `agent-needs-input` label. The
 single status comment always shows consumed, pending, and remaining attempts.
 After a repair report is accepted, the next checkpoint must have a new SHA and

@@ -198,8 +198,9 @@ The validator checks the schema version, target branch, setup, optional reposito
 implementation-to-test objection cycle. Keep it `false` until the measured
 pilot in issue #26 records `proceed`; while disabled, a structured objection is
 persisted and the run waits for a human. When enabled, the coordinator resumes
-the original test session, permits at most two revision attempts, and reruns the
-revised focused command independently before implementation can continue.
+the original test session, permits the repository's `retry_limits.test_revision`
+revision attempts, and reruns the revised focused command independently before
+implementation can continue.
 The coordinator also verifies the latest decision comment on #26 from an
 authorized maintainer. Use either `Decision: proceed` or
 `<!-- factory-pilot-decision: proceed -->` to open the gate. Use either
@@ -289,12 +290,12 @@ permitted scope. Deterministic gates and exact-checkpoint specification review
 remain unchanged in both modes.
 
 `retry_limits.review_repair` bounds automatic implementation repairs caused by
-blocking review findings and may not exceed two. Findings from the configured
-specification and standards reviewers are delivered together. If a materially
-same blocker survives an attempted repair, or the ceiling is exhausted, the
-run waits for a human. A successful repair creates a new checkpoint and the
-coordinator reruns the complete configured gate suite and both reviewers in
-fresh sessions.
+blocking review findings. The repository owns the value and the factory applies
+no upper limit of its own. Findings from the configured specification and
+standards reviewers are delivered together. If a materially same blocker
+survives an attempted repair, or the budget is exhausted, the run waits for a
+human. A successful repair creates a new checkpoint and the coordinator reruns
+the complete configured gate suite and both reviewers in fresh sessions.
 
 When `base_synchronization.mode` is `before_ready`, the coordinator fetches the
 configured target branch and merges it into the factory branch immediately

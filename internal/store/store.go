@@ -21,14 +21,6 @@ import (
 // CurrentSchemaVersion is the supported operational-store schema version.
 const CurrentSchemaVersion = 34
 
-// MaxTestRevisionAttempts is the hard safety ceiling for automated
-// implementation-versus-test objection cycles.
-const MaxTestRevisionAttempts = 2
-
-// MaxReviewRepairAttempts is the hard safety ceiling for automated review
-// repair rounds.
-const MaxReviewRepairAttempts = 2
-
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
 var ErrRevisionConflict = errors.New("run revision conflict")
@@ -364,7 +356,7 @@ const (
 	ReviewRepairStarted ReviewRepairOutcome = "started"
 	// ReviewRepairRepeated means a materially identical blocker returned.
 	ReviewRepairRepeated ReviewRepairOutcome = "repeated"
-	// ReviewRepairExhausted means the configured review-repair ceiling was used.
+	// ReviewRepairExhausted means the configured review-repair budget was used.
 	ReviewRepairExhausted ReviewRepairOutcome = "exhausted"
 	// ReviewRepairWaitingForHuman means the repair could not safely continue.
 	ReviewRepairWaitingForHuman ReviewRepairOutcome = "waiting_for_human"
@@ -1292,9 +1284,6 @@ func normalizeRun(run Run) (Run, error) {
 	if run.ReviewRepairBudget < 0 {
 		return Run{}, errors.New("run review-repair budget must not be negative")
 	}
-	if run.ReviewRepairBudget > MaxReviewRepairAttempts {
-		return Run{}, fmt.Errorf("run review-repair budget must not exceed %d", MaxReviewRepairAttempts)
-	}
 	if run.ReviewRepairAttempts > run.ReviewRepairBudget {
 		return Run{}, errors.New("run review-repair attempts must not exceed budget")
 	}
@@ -1312,9 +1301,6 @@ func normalizeRun(run Run) (Run, error) {
 	}
 	if run.TestRevisionBudget < 0 {
 		return Run{}, errors.New("run test-revision budget must not be negative")
-	}
-	if run.TestRevisionBudget > MaxTestRevisionAttempts {
-		return Run{}, fmt.Errorf("run test-revision budget must not exceed %d", MaxTestRevisionAttempts)
 	}
 	if run.TestRevisionAttempts > run.TestRevisionBudget {
 		return Run{}, errors.New("run test-revision attempts must not exceed budget")
@@ -1388,9 +1374,6 @@ func validateTestProjection(run Run) error {
 	}
 	if run.TestInvocationID != "" && !safeQuestionIdentifier(run.TestInvocationID) {
 		return errors.New("run test invocation id is unsafe")
-	}
-	if len(run.TestRevisionHistory) > MaxTestRevisionAttempts {
-		return fmt.Errorf("run test revision history exceeds %d entries", MaxTestRevisionAttempts)
 	}
 	seenAttempts := make(map[int]struct{}, len(run.TestRevisionHistory))
 	disputeKey := ""
@@ -1502,9 +1485,6 @@ func validateTestProjection(run Run) error {
 // validateReviewRepairProjection checks the bounded review-repair state before
 // it is serialized into the operational store.
 func validateReviewRepairProjection(run Run) error {
-	if len(run.ReviewRepairHistory) > MaxReviewRepairAttempts {
-		return fmt.Errorf("run review repair history exceeds %d entries", MaxReviewRepairAttempts)
-	}
 	seenAttempts := make(map[int]struct{}, len(run.ReviewRepairHistory))
 	for index, revision := range run.ReviewRepairHistory {
 		if revision.Attempt < 1 || revision.Attempt > run.ReviewRepairBudget {

@@ -96,7 +96,7 @@ const (
 	CheckRepairWaitingForHarness CheckRepairOutcome = "waiting_for_harness"
 	// CheckRepairWaitingForHuman means the coordinator cannot safely continue.
 	CheckRepairWaitingForHuman CheckRepairOutcome = "waiting_for_human"
-	// CheckRepairExhausted means the configured repair ceiling was reached.
+	// CheckRepairExhausted means the configured repair budget was reached.
 	CheckRepairExhausted CheckRepairOutcome = "exhausted"
 )
 
@@ -112,7 +112,7 @@ type CheckRepairResult struct {
 	Invocation store.Invocation
 	// Attempt is the current one-based consumed attempt count.
 	Attempt int
-	// Budget is the configured repair ceiling.
+	// Budget is the frozen repair budget the repository configured.
 	Budget int
 	// Remaining is the number of attempts still available after the decision.
 	Remaining int
@@ -139,7 +139,7 @@ const (
 	checkRepairStartDecision checkRepairDecisionKind = "start"
 	// checkRepairWaitDecision pauses until the harness can be retried.
 	checkRepairWaitDecision checkRepairDecisionKind = "wait"
-	// checkRepairExhaustDecision escalates after the frozen repair ceiling.
+	// checkRepairExhaustDecision escalates after the frozen repair budget.
 	checkRepairExhaustDecision checkRepairDecisionKind = "exhaust"
 )
 
@@ -172,9 +172,6 @@ func decideCheckRepair(run store.Run, kind checkRepairFailureKind) (checkRepairD
 	}
 	if run.CheckRepairBudget <= 0 {
 		return checkRepairDecision{}, errors.New("check repair budget must be positive")
-	}
-	if run.CheckRepairBudget > config.MaxCheckRepairAttempts {
-		return checkRepairDecision{}, fmt.Errorf("check repair budget must not exceed %d", config.MaxCheckRepairAttempts)
 	}
 	if run.CheckRepairAttempts < 0 || run.CheckRepairAttempts > run.CheckRepairBudget {
 		return checkRepairDecision{}, fmt.Errorf("check repair attempts %d are outside budget %d", run.CheckRepairAttempts, run.CheckRepairBudget)

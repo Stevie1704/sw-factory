@@ -131,19 +131,6 @@ type RetryLimits struct {
 	TestRevision int `yaml:"test_revision"`
 }
 
-// MaxCheckRepairAttempts is the hard safety ceiling for deterministic repairs.
-// Repository policy may choose a lower value, but never a higher one.
-const MaxCheckRepairAttempts = 3
-
-// MaxReviewRepairAttempts is the hard safety ceiling for automated review
-// repair rounds. Repository policy may choose a lower value, but never a
-// higher one.
-const MaxReviewRepairAttempts = 2
-
-// MaxTestRevisionAttempts is the hard safety ceiling for automated disputes
-// between implementation-owned behavior and protected tests.
-const MaxTestRevisionAttempts = 2
-
 type TestMode string
 
 const (
@@ -541,15 +528,6 @@ func ValidateRepository(config RepositoryConfig) error {
 	} {
 		if value < 1 {
 			return validation(field, "must be greater than zero")
-		}
-		if field == "retry_limits.check_repair" && value > MaxCheckRepairAttempts {
-			return validation(field, fmt.Sprintf("must not exceed %d", MaxCheckRepairAttempts))
-		}
-		if field == "retry_limits.review_repair" && value > MaxReviewRepairAttempts {
-			return validation(field, fmt.Sprintf("must not exceed %d", MaxReviewRepairAttempts))
-		}
-		if field == "retry_limits.test_revision" && value > MaxTestRevisionAttempts {
-			return validation(field, fmt.Sprintf("must not exceed %d", MaxTestRevisionAttempts))
 		}
 	}
 	if err := validateTestPolicyPaths("test_policy.test_paths", config.TestPolicy.TestPaths); err != nil {

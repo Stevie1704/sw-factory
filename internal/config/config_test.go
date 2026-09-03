@@ -584,6 +584,19 @@ func TestValidateRepositoryAcceptsAnEmptyAllowedOverridesList(t *testing.T) {
 	}
 }
 
+// TestValidateRepositoryAcceptsRepositoryChosenRetryLimits verifies the
+// repository owns its retry limits outright. Values far above every previously
+// hard-coded ceiling must still validate; only a value below one is rejected.
+func TestValidateRepositoryAcceptsRepositoryChosenRetryLimits(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.RetryLimits = config.RetryLimits{CheckRepair: 7, ReviewRepair: 12, TestRevision: 9}
+	if err := config.ValidateRepository(policy); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want no error for repository-chosen retry limits", err)
+	}
+}
+
 func TestValidateRepositoryRejectsInvalidFieldsOneAtATime(t *testing.T) {
 	t.Parallel()
 
@@ -698,30 +711,6 @@ func TestValidateRepositoryRejectsInvalidFieldsOneAtATime(t *testing.T) {
 				return c
 			},
 			field: "retry_limits.check_repair",
-		},
-		{
-			name: "check repair limit above hard ceiling",
-			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
-				c.RetryLimits.CheckRepair = config.MaxCheckRepairAttempts + 1
-				return c
-			},
-			field: "retry_limits.check_repair",
-		},
-		{
-			name: "test revision limit above hard ceiling",
-			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
-				c.RetryLimits.TestRevision = config.MaxTestRevisionAttempts + 1
-				return c
-			},
-			field: "retry_limits.test_revision",
-		},
-		{
-			name: "review repair limit above hard ceiling",
-			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
-				c.RetryLimits.ReviewRepair = config.MaxReviewRepairAttempts + 1
-				return c
-			},
-			field: "retry_limits.review_repair",
 		},
 		{
 			name: "invalid test policy mode",
