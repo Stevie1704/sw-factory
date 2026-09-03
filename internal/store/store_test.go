@@ -915,6 +915,56 @@ func TestStorePersistsReviewRepairState(t *testing.T) {
 	}
 }
 
+// TestStorePersistsRepositoryChosenRetryBudgets verifies the frozen per-run
+// budgets are the only bound the store applies. A review-repair budget and
+// history far above every previously hard-coded ceiling must survive a
+// restart unchanged.
+func TestStorePersistsRepositoryChosenRetryBudgets(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	history := make([]store.ReviewRepairAttempt, 0, 6)
+	for attempt := 1; attempt <= 6; attempt++ {
+		history = append(history, store.ReviewRepairAttempt{Attempt: attempt, Outcome: store.ReviewRepairStarted})
+	}
+	run := store.Run{
+		ID:                   "run-repository-budgets",
+		RepositoryPath:       "/work/repository",
+		Stage:                store.StageImplementation,
+		Status:               store.StatusActive,
+		CheckRepairBudget:    7,
+		ReviewRepairAttempts: 6,
+		ReviewRepairBudget:   12,
+		ReviewRepairHistory:  history,
+		TestRevisionBudget:   9,
+		CheckpointSHA:        strings.Repeat("b", 64),
+		BaseCheckpointSHA:    strings.Repeat("c", 64),
+		CreatedAt:            time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.CheckRepairBudget != 7 || got.ReviewRepairBudget != 12 || got.TestRevisionBudget != 9 || len(got.ReviewRepairHistory) != 6 {
+		t.Fatalf("CurrentRun() = %#v, want repository-chosen budgets preserved", got)
+	}
+}
+
 // TestStoreRejectsIncompleteReviewRepairFindings verifies repair packets use
 // the same complete nested finding contract as exact-checkpoint reviews.
 func TestStoreRejectsIncompleteReviewRepairFindings(t *testing.T) {

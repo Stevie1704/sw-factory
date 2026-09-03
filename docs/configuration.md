@@ -198,8 +198,9 @@ The validator checks the schema version, target branch, setup, optional reposito
 implementation-to-test objection cycle. Keep it `false` until the measured
 pilot in issue #26 records `proceed`; while disabled, a structured objection is
 persisted and the run waits for a human. When enabled, the coordinator resumes
-the original test session, permits at most two revision attempts, and reruns the
-revised focused command independently before implementation can continue.
+the original test session, permits the repository's `retry_limits.test_revision`
+revision attempts, and reruns the revised focused command independently before
+implementation can continue.
 The coordinator also verifies the latest decision comment on #26 from an
 authorized maintainer. Use either `Decision: proceed` or
 `<!-- factory-pilot-decision: proceed -->` to open the gate. Use either

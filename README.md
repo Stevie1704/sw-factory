@@ -96,7 +96,7 @@ operational store, GitHub comments, and the documentation.
 | **Gate**                 | A deterministic repository command, such as formatting, vetting, testing, or building, run in the policy-defined environment.                                  |
 | **Operational store**    | A private SQLite database that records run state, identities, effects, reports, gate results, and content-free evaluation summaries.                           |
 | **Baseline**             | The pre-edit setup and gate result for the frozen packet. It proves what the repository looked like before agent edits.                                        |
-| **Test objection cycle** | A bounded implementation-to-test dispute: implementation supplies a test claim and evidence, the original test session accepts or rejects it, and an accepted revision must pass independent red verification. Automation is pilot-gated and capped at two attempts. |
+| **Test objection cycle** | A bounded implementation-to-test dispute: implementation supplies a test claim and evidence, the original test session accepts or rejects it, and an accepted revision must pass independent red verification. Automation is pilot-gated and bounded by the repository's `retry_limits.test_revision` value. |
 | **Recovery diagnosis**   | A read-only comparison of durable state against Git, GitHub, the worktree, worker, terminal, harness, and operational store.                                   |
 | **Reconciliation**       | A deliberate restart pass that replays an exact pending effect or pauses for human inspection when external state is ambiguous.                                |
 
@@ -150,8 +150,9 @@ paths are carried into implementation, and an implementation report that changes
 a protected test path is rejected. Instead, implementation can submit a
 structured objection naming the test, disputed claim, and observable evidence.
 Before pilot authorization the objection is preserved for human disposition; an
-authorized run can resume the original test session for at most two independently
-verified revision attempts.
+authorized run can resume the original test session for as many independently
+verified revision attempts as the repository's <code>retry_limits.test_revision</code>
+value allows.
 
 ### Workflow routes
 
@@ -865,9 +866,9 @@ combined from both reviewers into one implementation repair packet. A finding
 that suggests test ownership must use the existing structured test-objection
 protocol; implementation never edits protected tests directly. An accepted
 repair creates a new checkpoint, reruns every configured gate, and starts both
-review roles in fresh sessions against that new SHA. The review-repair budget
-is capped at two attempts, and a materially repeated blocker escalates
-immediately to a human. Taste and scope findings remain advisory.
+review roles in fresh sessions against that new SHA. The repository's
+<code>retry_limits.review_repair</code> value bounds the budget, and a
+materially repeated blocker escalates immediately to a human. Taste and scope findings remain advisory.
 
 The run moves to <code>ready</code> only after both configured reviews succeed,
 the configured target branch has been merged into the factory branch when

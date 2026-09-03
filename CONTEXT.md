@@ -48,7 +48,8 @@ A bounded implementation-to-test dispute in which implementation submits the
 protected test's claim and observable evidence, the original test session may
 accept or reject that objection, and an accepted revision must pass independent
 red verification before implementation resumes. Automation is gated by the
-measured pilot and permits at most two revision attempts before human review.
+measured pilot and permits the repository's `retry_limits.test_revision`
+revision attempts before human review.
 _Avoid_: Test rewrite, implementation-owned test edit, unbounded repair
 
 **Workflow route**:

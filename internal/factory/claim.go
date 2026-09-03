@@ -321,9 +321,9 @@ func testRevisionBudgetForPacket(packet SpecificationPacket) int {
 	return 0
 }
 
-// reviewRepairBudgetForPacket returns the frozen review-repair ceiling for a
-// packet. The repository policy owns the value; the coordinator enforces the
-// hard maximum before persisting or launching a repair.
+// reviewRepairBudgetForPacket returns the frozen review-repair budget for a
+// packet. The repository policy owns the value and the factory imposes no
+// bound of its own.
 func reviewRepairBudgetForPacket(packet SpecificationPacket) int {
 	return packet.RepositoryConfig.RetryLimits.ReviewRepair
 }
