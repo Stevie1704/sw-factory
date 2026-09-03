@@ -72,6 +72,104 @@ func TestStartDrivesAnAdvisoryIssueFromQueueToDraftPullRequest(t *testing.T) {
 	}
 }
 
+// TestStartEmitsProgressionStepsAndStageTransitions verifies that the
+// unattended progression seam reports its named transitions and resulting
+// workflow stages as typed values.
+func TestStartEmitsProgressionStepsAndStageTransitions(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnattendedFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture.stopWhenPullRequestExists(cancel)
+	var events pollingEventSink
+
+	if err := fixture.service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	wantSteps := map[string]bool{
+		"run baseline":              false,
+		"start agent":               false,
+		"accept agent report":       false,
+		"create draft pull request": false,
+	}
+	transitions := make(map[[2]store.Stage]bool)
+	progressionPasses := 0
+	for _, event := range events.events {
+		switch event.Kind {
+		case factory.EventProgressionStep:
+			if _, ok := wantSteps[event.Step]; ok {
+				wantSteps[event.Step] = true
+			}
+		case factory.EventProgressionPass:
+			progressionPasses++
+		case factory.EventStageTransition:
+			transitions[[2]store.Stage{event.FromStage, event.ToStage}] = true
+		}
+	}
+	for step, seen := range wantSteps {
+		if !seen {
+			t.Errorf("progression step %q was not emitted; events = %#v", step, events.events)
+		}
+	}
+	if progressionPasses == 0 {
+		t.Fatalf("progression events = %#v, want at least one progression pass", events.events)
+	}
+	for _, transition := range [][2]store.Stage{
+		{store.StageClaim, store.StageImplementation},
+		{store.StageImplementation, store.StageDraftPR},
+	} {
+		if !transitions[transition] {
+			t.Errorf("stage transition %q -> %q was not emitted; events = %#v", transition[0], transition[1], events.events)
+		}
+	}
+}
+
+// TestStartEmitsProgressionRetryAttempts verifies that an unreadable run
+// progression pass reports its retry number before the next polling delay.
+func TestStartEmitsProgressionRetryAttempts(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUnattendedFixture(t)
+	dependencies := fixture.dependencies()
+	remainingFailures := 2
+	dependencies.OpenStore = func(ctx context.Context, path string) (factory.OperationalStore, error) {
+		opened, err := store.Open(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return &progressionFailureStore{
+			Store:             opened,
+			RemainingFailures: &remainingFailures,
+			Claimed:           func() bool { return fixture.commands.claimed != 0 },
+		}, nil
+	}
+	fixture.service = factory.NewWithDependencies(fixture.configPath, dependencies)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture.stopAfterLeaseRenewals(cancel, 2)
+	var events pollingEventSink
+
+	if err := fixture.service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	var retry *factory.CoordinatorEvent
+	for index := range events.events {
+		if events.events[index].Kind == factory.EventRetry && events.events[index].Operation == "progression" {
+			retry = &events.events[index]
+			break
+		}
+	}
+	if retry == nil {
+		t.Fatalf("events = %#v, want a progression retry event", events.events)
+	}
+	if retry.RunID != "run-unattended" || retry.Attempt != 1 || retry.MaxAttempts != 5 {
+		t.Fatalf("progression retry event = %#v, want run-unattended attempt 1/5", retry)
+	}
+}
+
 // TestUnattendedProgressionStopsAtAWaitingStateAndPublishesIt verifies that a
 // run parked in a human waiting state stops unattended progression instead of
 // relaunching a role, and that the published status distinguishes it from a
@@ -615,6 +713,23 @@ func (w *unattendedWorkspace) RemoteBranchHead(context.Context, gitadapter.PushR
 type unattendedWorker struct {
 	agentWorker
 	resultPath string
+}
+
+// progressionFailureStore injects bounded run-read failures after the issue
+// has been claimed, leaving the polling observation itself recoverable.
+type progressionFailureStore struct {
+	*store.Store
+	RemainingFailures *int
+	Claimed           func() bool
+}
+
+// CurrentRun fails the configured number of post-claim progression reads.
+func (s *progressionFailureStore) CurrentRun(ctx context.Context) (*store.Run, error) {
+	if s.Claimed != nil && s.Claimed() && s.RemainingFailures != nil && *s.RemainingFailures > 0 {
+		*s.RemainingFailures--
+		return nil, errors.New("progression state unavailable")
+	}
+	return s.Store.CurrentRun(ctx)
 }
 
 // Start records the mounted result directory before delegating.

@@ -31,8 +31,9 @@ type Factory interface {
 	// can be claimed safely.
 	Doctor(context.Context) (DoctorResult, error)
 	// Start runs the supervised polling coordinator until its context is
-	// cancelled or a separate Stop command signals it.
-	Start(context.Context) error
+	// cancelled or a separate Stop command signals it. An optional event sink
+	// receives typed coordinator observations.
+	Start(context.Context, ...EventSink) error
 	// Stop asks a running coordinator to stop polling without changing the
 	// state of its active run.
 	Stop(context.Context) (StopResult, error)

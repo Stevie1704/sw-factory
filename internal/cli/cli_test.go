@@ -91,6 +91,33 @@ base_synchronization:
 	}
 }
 
+// TestRunStartVerboseFlagKeepsCommandOutputSeparate verifies the start flag
+// is accepted and the legacy lifecycle line remains on stdout when startup
+// diagnosis stops the coordinator before any live event exists.
+func TestRunStartVerboseFlagKeepsCommandOutputSeparate(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	var defaultOutput, defaultErrors bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"start", "--config", configPath}, &defaultOutput, &defaultErrors); code != 1 {
+		t.Fatalf("default start exit code = %d, want startup failure, stdout=%q stderr=%q", code, defaultOutput.String(), defaultErrors.String())
+	}
+	if defaultOutput.String() != "factory polling starting\n" {
+		t.Fatalf("default start stdout = %q, want the unchanged lifecycle line", defaultOutput.String())
+	}
+	var output, errorsOutput bytes.Buffer
+	code := cli.Run(context.Background(), []string{"start", "--config", configPath, "--verbose"}, &output, &errorsOutput)
+	if code != 1 {
+		t.Fatalf("start exit code = %d, want startup failure, stdout=%q stderr=%q", code, output.String(), errorsOutput.String())
+	}
+	if output.String() != "factory polling starting\n" {
+		t.Fatalf("start stdout = %q, want the unchanged lifecycle line", output.String())
+	}
+	if !strings.Contains(errorsOutput.String(), "error:") {
+		t.Fatalf("start stderr = %q, want the startup error on stderr", errorsOutput.String())
+	}
+}
+
 func TestRunRejectsAnUnknownCommand(t *testing.T) {
 	t.Parallel()
 

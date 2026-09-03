@@ -156,8 +156,9 @@ func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	cancel = stop
 	started := time.Now()
+	var events pollingEventSink
 
-	if err := service.Start(ctx); err != nil {
+	if err := service.Start(ctx, &events); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	if reader.calls != 2 {
@@ -168,6 +169,16 @@ func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
 	}
 	if len(runStore.saved) != 0 {
 		t.Fatalf("runs saved after queue transport failures = %#v, want none", runStore.saved)
+	}
+	var retry *factory.CoordinatorEvent
+	for index := range events.events {
+		if events.events[index].Kind == factory.EventRetry && events.events[index].Operation == "queue polling" {
+			retry = &events.events[index]
+			break
+		}
+	}
+	if retry == nil || retry.Attempt != 1 {
+		t.Fatalf("queue retry event = %#v, want attempt 1", retry)
 	}
 }
 
@@ -255,6 +266,166 @@ func TestStartBacksOffCommandTransportFailures(t *testing.T) {
 	if savedCommandWatermark(runStore.saved, "15", "status") {
 		t.Fatal("a queued command was applied although every comment listing failed")
 	}
+}
+
+// TestStartEmitsTypedPollAndClaimEvents verifies that the persistent
+// coordinator exposes a successful queue observation through its event seam.
+func TestStartEmitsTypedPollAndClaimEvents(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}, issues: issues}
+	runStore := &fakeRunStore{}
+	var cancel context.CancelFunc
+	lease := &pollingLease{onRenew: func(value github.Lease) {
+		if value.RunID == "run-fixed" && cancel != nil {
+			cancel()
+		}
+	}}
+	var events pollingEventSink
+	service := newPollingService(root, githubAdapter, githubAdapter, lease, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}, nil)
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	var poll, claim, stage *factory.CoordinatorEvent
+	for index := range events.events {
+		event := &events.events[index]
+		switch event.Kind {
+		case factory.EventPollPass:
+			poll = event
+		case factory.EventClaim:
+			claim = event
+		case factory.EventStageTransition:
+			if event.FromStage == "" && event.ToStage == store.StageClaim {
+				stage = event
+			}
+		}
+	}
+	if poll == nil || poll.Outcome != string(factory.PollClaimed) || poll.RunID != "run-fixed" || poll.IssueNumber != 7 {
+		t.Fatalf("poll event = %#v, want claimed issue 7/run-fixed", poll)
+	}
+	if claim == nil || claim.RunID != "run-fixed" || claim.IssueNumber != 7 {
+		t.Fatalf("claim event = %#v, want issue 7/run-fixed", claim)
+	}
+	if stage == nil || stage.RunID != "run-fixed" || stage.ToStage != store.StageClaim {
+		t.Fatalf("claim stage transition = %#v, want empty -> claim for run-fixed", stage)
+	}
+	if poll.Timestamp.IsZero() || claim.Timestamp.IsZero() {
+		t.Fatalf("events = %#v, want timestamps", events.events)
+	}
+}
+
+// TestStartEmitsLeaseRetryAttempts verifies that each retryable lease failure
+// is observable before the coordinator backs off.
+func TestStartEmitsLeaseRetryAttempts(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	reader := &pollingIssueReader{}
+	runStore := &fakeRunStore{}
+	var cancel context.CancelFunc
+	lease := &pollingLease{renewErrors: []error{errors.New("lease unavailable")}}
+	lease.onRenew = func(github.Lease) {
+		if len(lease.calls) >= 2 && cancel != nil {
+			cancel()
+		}
+	}
+	var events pollingEventSink
+	service := newPollingService(root, &fakeGitHub{}, reader, lease, runStore, &fakeWorktree{}, nil)
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	var retry *factory.CoordinatorEvent
+	for index := range events.events {
+		if events.events[index].Kind == factory.EventRetry && events.events[index].Operation == "lease renewal" {
+			retry = &events.events[index]
+			break
+		}
+	}
+	if retry == nil {
+		t.Fatalf("events = %#v, want a lease retry event", events.events)
+	}
+	if retry.Attempt != 1 || retry.MaxAttempts != 5 || !retry.Timestamp.Equal(time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("lease retry event = %#v, want attempt 1/5 with coordinator timestamp", retry)
+	}
+}
+
+// TestStartEmitsSwallowedCommandFailure verifies that a rejected structured
+// command is reported while the polling loop continues to own the run.
+func TestStartEmitsSwallowedCommandFailure(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
+	runStore := &fakeRunStore{}
+	var commandSeen bool
+	comments := &pollingCommentReader{
+		commentBatches: [][]github.Comment{
+			{{ID: "14", Author: "alice", Body: "/factory status"}},
+			{
+				{ID: "14", Author: "alice", Body: "/factory status"},
+				{ID: "15", Author: "mallory", Body: "/factory status"},
+			},
+		},
+		onList: func(call int) {
+			if call >= 2 {
+				commandSeen = true
+			}
+		},
+	}
+	var cancel context.CancelFunc
+	lease := &pollingLease{}
+	lease.onRenew = func(github.Lease) {
+		if len(lease.calls) >= 2 && commandSeen && cancel != nil {
+			cancel()
+		}
+	}
+	var events pollingEventSink
+	service := newPollingService(root, githubAdapter, githubAdapter, lease, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}, comments)
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	var failure *factory.CoordinatorEvent
+	for index := range events.events {
+		if events.events[index].Kind == factory.EventCommandFailure {
+			failure = &events.events[index]
+			break
+		}
+	}
+	if failure == nil {
+		t.Fatalf("events = %#v, comments calls=%d commandSeen=%t, want a swallowed command failure event", events.events, comments.calls, commandSeen)
+	}
+	if failure.RunID != "run-fixed" || failure.Code != string(factory.PolicyRejectionUnauthorized) {
+		t.Fatalf("command failure event = %#v, want unauthorized failure for run-fixed", failure)
+	}
+}
+
+// pollingEventSink records coordinator events without rendering them.
+type pollingEventSink struct {
+	events []factory.CoordinatorEvent
+}
+
+// Emit records one coordinator event for typed seam assertions.
+func (s *pollingEventSink) Emit(event factory.CoordinatorEvent) {
+	s.events = append(s.events, event)
 }
 
 // savedCommandWatermark reports whether any persisted run recorded the named
@@ -357,8 +528,9 @@ func (f *pollingIssueReader) ListEligibleIssues(_ context.Context, _ github.Repo
 
 // pollingLease records visible lease renewals for start-loop assertions.
 type pollingLease struct {
-	calls   []github.Lease
-	onRenew func(github.Lease)
+	calls       []github.Lease
+	renewErrors []error
+	onRenew     func(github.Lease)
 }
 
 // RenewLease records the lease and invokes its optional test hook.
@@ -366,6 +538,11 @@ func (f *pollingLease) RenewLease(_ context.Context, _ github.Repository, lease 
 	f.calls = append(f.calls, lease)
 	if f.onRenew != nil {
 		f.onRenew(lease)
+	}
+	if len(f.renewErrors) > 0 {
+		err := f.renewErrors[0]
+		f.renewErrors = f.renewErrors[1:]
+		return err
 	}
 	return nil
 }
