@@ -202,9 +202,11 @@ func (a progressionAction) validate() error {
 // same coordinator seam the matching one-shot command uses, so a repeated pass
 // or a coordinator restart reuses their exactly-once effect journal instead of
 // creating a second invocation, checkpoint, push, comment, or pull request.
-func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRegistration) (progressionResult, error) {
+func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRegistration, eventSinks ...EventSink) (progressionResult, error) {
+	events := coordinatorEventSink(eventSinks)
 	result := progressionResult{Outcome: progressionIdle}
 	lifecycle, err := s.observePullRequestEvents(ctx, registration)
+	s.observeCoordinatorStageFromStore(ctx, registration, events)
 	if err != nil {
 		if pollingContextDone(err) || ctx.Err() != nil {
 			return result, err
@@ -242,6 +244,11 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 		if err := step.validate(); err != nil {
 			return result, err
 		}
+		s.emitCoordinatorEvent(events, CoordinatorEvent{
+			Kind:  EventProgressionStep,
+			RunID: step.runID,
+			Step:  step.name,
+		})
 		var stepErr error
 		switch step.kind {
 		case progressionActionStartAgent:
@@ -260,6 +267,9 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			stepErr = &progressionActionError{Action: step, Reason: "kind is not declared for dispatch"}
 		}
 		if stepErr != nil {
+			if after, readErr := s.readProgressionState(ctx, registration); readErr == nil && after.Run != nil {
+				s.emitStageTransition(events, state.Run.ID, state.Run.Stage, after.Run.Stage)
+			}
 			return s.stopProgressionAfterFailure(ctx, registration, *state.Run, step.name, stepErr, result.Steps)
 		}
 		result.Steps++
@@ -271,6 +281,7 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			return progressionResult{Outcome: progressionIdle, Steps: result.Steps, Reason: "run disappeared after " + step.name}, nil
 		}
 		result.Run = *advanced.Run
+		s.emitStageTransition(events, state.Run.ID, state.Run.Stage, advanced.Run.Stage)
 		if !progressionAdvancedMany(*state.Run, state.ActiveInvocations, *advanced.Run, advanced.ActiveInvocations) {
 			return s.publishProgressionStop(ctx, registration, *advanced.Run, progressionResult{
 				Outcome: progressionWaiting,

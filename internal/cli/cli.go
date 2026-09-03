@@ -161,6 +161,7 @@ func runStart(ctx context.Context, args []string, defaultConfigPath string, outp
 	flags := flag.NewFlagSet("start", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	verbose := flags.Bool("verbose", false, "report coordinator progress")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -171,7 +172,11 @@ func runStart(ctx context.Context, args []string, defaultConfigPath string, outp
 	if !writeOutput(output, errorsOutput, "factory polling starting\n") {
 		return 1
 	}
-	if err := factory.New(*configPath).Start(ctx); err != nil {
+	events := factory.EventSink(factory.DiscardEventSink{})
+	if *verbose {
+		events = factory.NewTextEventSink(errorsOutput)
+	}
+	if err := factory.New(*configPath).Start(ctx, events); err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}

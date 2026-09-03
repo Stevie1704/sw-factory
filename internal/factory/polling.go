@@ -82,8 +82,13 @@ func (e *StartupBlockedError) Error() string {
 // budgets. After every observation that found or claimed a run it drives that
 // run toward its draft pull request, so the routine path needs no
 // stage-driving CLI command. Claim failures are returned because the claim
-// state machine may already have performed compensating effects.
-func (s *Service) Start(ctx context.Context) error {
+// state machine may already have performed compensating effects. An optional
+// event sink receives typed coordinator observations; omitting it discards
+// those observations for compatibility with non-verbose embedders.
+func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
+	events := coordinatorEventSink(eventSinks)
+	stageTracker := newCoordinatorStageTracker(s, events)
+	events = stageTracker
 	diagnosis, err := s.startupDiagnosis(ctx)
 	if err != nil {
 		return fmt.Errorf("run startup diagnosis: %w", err)
@@ -110,9 +115,12 @@ func (s *Service) Start(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = lock.release() }()
+	s.seedCoordinatorStageFromStore(ctx, registration, stageTracker)
 	if err := s.reconcileRegisteredRun(ctx, registration); err != nil {
+		s.observeCoordinatorStageFromStore(ctx, registration, events)
 		return fmt.Errorf("reconcile persisted run at startup: %w", err)
 	}
+	s.observeCoordinatorStageFromStore(ctx, registration, events)
 
 	pollContext, cancel := context.WithCancel(ctx)
 	if !s.setPollCancel(cancel) {
@@ -126,6 +134,8 @@ func (s *Service) Start(ctx context.Context) error {
 	leaseRunID := ""
 	delay := time.Duration(0)
 	consecutiveLeaseFailures := 0
+	consecutiveQueueFailures := 0
+	consecutiveCommandFailures := 0
 	consecutiveProgressionFailures := 0
 	for {
 		if err := waitPolling(pollContext, delay); err != nil {
@@ -152,6 +162,13 @@ func (s *Service) Start(ctx context.Context) error {
 				return nil
 			}
 			consecutiveLeaseFailures++
+			s.emitCoordinatorEvent(events, CoordinatorEvent{
+				Kind:        EventRetry,
+				RunID:       leaseRunID,
+				Operation:   "lease renewal",
+				Attempt:     consecutiveLeaseFailures,
+				MaxAttempts: maxConsecutiveLeaseFailures,
+			})
 			if consecutiveLeaseFailures > maxConsecutiveLeaseFailures {
 				return fmt.Errorf("lease renewal failed after %d consecutive attempts: %w", maxConsecutiveLeaseFailures, err)
 			}
@@ -161,25 +178,65 @@ func (s *Service) Start(ctx context.Context) error {
 		consecutiveLeaseFailures = 0
 
 		if err := s.retryWaitingForHarness(pollContext, registration); err != nil {
+			s.observeCoordinatorStageFromStore(pollContext, registration, events)
 			if pollingContextDone(err) {
 				return nil
 			}
 			return err
 		}
-		if err := s.pollLoopCommands(pollContext); err != nil {
+		s.observeCoordinatorStageFromStore(pollContext, registration, events)
+		s.seedCoordinatorStageFromStore(pollContext, registration, stageTracker)
+		commandResults, commandErr := s.pollLoopCommandResults(pollContext)
+		for _, commandResult := range commandResults {
+			if commandResult.Run.ID != "" {
+				stageTracker.observe(&commandResult.Run)
+				leaseRunID = commandResult.Run.ID
+			}
+			if commandResult.Outcome == CommandRejected && commandResult.Rejection != nil {
+				runID := commandResult.Run.ID
+				if runID == "" {
+					runID = leaseRunID
+				}
+				s.emitCoordinatorEvent(events, CoordinatorEvent{
+					Kind:  EventCommandFailure,
+					RunID: runID,
+					Code:  string(commandResult.Rejection.Code),
+				})
+			}
+		}
+		if commandErr != nil {
+			err := commandErr
 			if pollingContextDone(err) {
 				return nil
 			}
+			s.emitCoordinatorEvent(events, CoordinatorEvent{
+				Kind:  EventCommandFailure,
+				RunID: leaseRunID,
+				Code:  commandFailureCode(err),
+			})
 			var transportErr *pollingTransportError
 			if errors.As(err, &transportErr) {
+				consecutiveCommandFailures++
+				s.emitCoordinatorEvent(events, CoordinatorEvent{
+					Kind:        EventRetry,
+					RunID:       leaseRunID,
+					Operation:   "command polling",
+					Attempt:     consecutiveCommandFailures,
+					MaxAttempts: 0,
+				})
 				delay = backoff
 				continue
 			}
+			consecutiveCommandFailures = 0
 			// Every remaining command failure, from a rejected comment to an
 			// unreadable command store, leaves the run untouched and is
 			// retried by the next pass over the same comments. None of them
 			// may stop an unattended coordinator, so the queue observation
 			// below still runs.
+		}
+		s.observeCoordinatorStageFromStore(pollContext, registration, events)
+		if commandErr == nil {
+			consecutiveCommandFailures = 0
 		}
 		result, err := s.pollOnce(pollContext, registration)
 		if err != nil {
@@ -188,20 +245,73 @@ func (s *Service) Start(ctx context.Context) error {
 			}
 			var transportErr *pollingTransportError
 			if errors.As(err, &transportErr) {
+				consecutiveQueueFailures++
+				s.emitCoordinatorEvent(events, CoordinatorEvent{
+					Kind:      EventRetry,
+					RunID:     leaseRunID,
+					Operation: "queue polling",
+					Attempt:   consecutiveQueueFailures,
+				})
 				delay = backoff
 				continue
 			}
 			return err
 		}
-		leaseRunID = result.Run.ID
+		consecutiveQueueFailures = 0
+		if result.Run.ID == "" {
+			leaseRunID = ""
+		} else {
+			leaseRunID = result.Run.ID
+		}
 		delay = interval
+		s.emitCoordinatorEvent(events, CoordinatorEvent{
+			Kind:        EventPollPass,
+			Outcome:     string(result.Outcome),
+			RunID:       result.Run.ID,
+			IssueNumber: result.IssueNumber,
+		})
+		if result.Outcome == PollClaimed {
+			s.emitCoordinatorEvent(events, CoordinatorEvent{
+				Kind:        EventClaim,
+				RunID:       result.Run.ID,
+				IssueNumber: result.IssueNumber,
+			})
+		}
+		if result.Run.ID == "" {
+			stageTracker.observe(nil)
+		} else {
+			stageTracker.observe(&result.Run)
+		}
 		if result.Outcome == PollClaimed || result.Outcome == PollActiveRun {
-			progression, err := s.driveRun(pollContext, registration)
+			progression, err := s.driveRun(pollContext, registration, events)
+			s.observeCoordinatorStageFromStore(pollContext, registration, events)
+			progressionRunID := progression.Run.ID
+			if progressionRunID == "" {
+				progressionRunID = result.Run.ID
+			}
+			if progression.Run.ID == result.Run.ID && progression.Run.Stage != "" {
+				stageTracker.observe(&progression.Run)
+			}
+			s.emitCoordinatorEvent(events, CoordinatorEvent{
+				Kind:    EventProgressionPass,
+				Outcome: progressionOutcomeForEvent(progression, err),
+				RunID:   progressionRunID,
+				Step:    progression.Step,
+				Steps:   progression.Steps,
+				Reason:  progressionReasonForEvent(progression),
+			})
 			if err != nil {
 				if pollingContextDone(err) {
 					return nil
 				}
 				consecutiveProgressionFailures++
+				s.emitCoordinatorEvent(events, CoordinatorEvent{
+					Kind:        EventRetry,
+					RunID:       progressionRunID,
+					Operation:   "progression",
+					Attempt:     consecutiveProgressionFailures,
+					MaxAttempts: maxConsecutiveProgressionFailures,
+				})
 				if consecutiveProgressionFailures > maxConsecutiveProgressionFailures {
 					return fmt.Errorf("drive run %s after %d consecutive attempts: %w", result.Run.ID, maxConsecutiveProgressionFailures, err)
 				}
@@ -216,9 +326,52 @@ func (s *Service) Start(ctx context.Context) error {
 			// release, so it keeps the ordinary interval.
 			if progression.Outcome == progressionTerminal || (progression.Outcome == progressionIdle && progression.Steps > 0) {
 				leaseRunID = ""
+				stageTracker.reset()
 				delay = 0
 			}
 		}
+	}
+}
+
+// readCoordinatorRunForEvents reads the active run or latest terminal run
+// solely for live stage tracking. Its best-effort nature keeps observability
+// from changing coordinator ownership when the operational store is unavailable.
+func (s *Service) readCoordinatorRunForEvents(ctx context.Context, registration config.RepositoryRegistration) (*store.Run, error) {
+	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
+	if err != nil {
+		return nil, err
+	}
+	run, readErr := readReconciliationRun(ctx, opened)
+	closeErr := opened.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return run, nil
+}
+
+// seedCoordinatorStageFromStore snapshots the persisted stage before an
+// operation such as command polling can mutate it.
+func (s *Service) seedCoordinatorStageFromStore(ctx context.Context, registration config.RepositoryRegistration, tracker *coordinatorStageTracker) {
+	run, err := s.readCoordinatorRunForEvents(ctx, registration)
+	if err == nil {
+		tracker.seed(run)
+	}
+}
+
+// observeCoordinatorStageFromStore compares the persisted stage after an
+// operation that may have mutated it. Store-read failures are intentionally
+// ignored because event delivery is not workflow authority.
+func (s *Service) observeCoordinatorStageFromStore(ctx context.Context, registration config.RepositoryRegistration, sink EventSink) {
+	observer, ok := sink.(interface{ observeStage(*store.Run) })
+	if !ok {
+		return
+	}
+	run, err := s.readCoordinatorRunForEvents(ctx, registration)
+	if err == nil {
+		observer.observeStage(run)
 	}
 }
 
@@ -227,17 +380,26 @@ func (s *Service) Start(ctx context.Context) error {
 // ordinary idle case of an unattended coordinator, not a failure, so it
 // reports no error.
 func (s *Service) pollLoopCommands(ctx context.Context) error {
+	_, err := s.pollLoopCommandResults(ctx)
+	return err
+}
+
+// pollLoopCommandResults preserves command decisions that PollCommands
+// intentionally returns as typed rejections, allowing the live event stream
+// to report them without changing the unattended failure policy.
+func (s *Service) pollLoopCommandResults(ctx context.Context) ([]CommandResult, error) {
 	if s.deps.Comments == nil {
-		return nil
+		return nil, nil
 	}
-	if _, err := s.PollCommands(ctx, CommandPollRequest{}); err != nil {
+	results, err := s.PollCommands(ctx, CommandPollRequest{})
+	if err != nil {
 		var rejection *PolicyRejection
 		if errors.As(err, &rejection) && rejection.Code == PolicyRejectionNoRun {
-			return nil
+			return nil, nil
 		}
-		return err
+		return results, err
 	}
-	return nil
+	return results, nil
 }
 
 // reconcileRegisteredRun opens the operational store once after the polling
