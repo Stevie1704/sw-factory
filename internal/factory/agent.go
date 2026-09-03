@@ -777,7 +777,7 @@ func agentReportRunProjection(previous store.Run, invocationStage store.Stage, v
 	case report.OutcomeCannotProceed:
 		next.PendingQuestions = nil
 	default:
-		if value.Handoff != nil {
+		if value.Handoff != nil && len(value.Handoff.ProductionFilesChanged) != 0 {
 			next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
 		}
 		next.PendingQuestions = nil

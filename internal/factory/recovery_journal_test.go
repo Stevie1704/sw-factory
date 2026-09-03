@@ -25,6 +25,138 @@ import (
 // journaled restart fixture.
 const journalRecoveryImageDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+// TestRecoveryPauseReasonPrioritizesTheBlockingWorkflowRefusal verifies a
+// deterministic projection refusal is visible even when recovery also saw a
+// worker discrepancy from the prior external cleanup.
+func TestRecoveryPauseReasonPrioritizesTheBlockingWorkflowRefusal(t *testing.T) {
+	reason := recoveryDiscrepancyReason(RecoveryDiagnosis{Discrepancies: []RecoveryDiscrepancy{
+		{
+			Kind:     RecoveryDiscrepancyInfrastructure,
+			Source:   "worker",
+			Field:    "lifecycle",
+			Expected: "running",
+			Observed: "stopped",
+		},
+		{
+			Kind:     RecoveryDiscrepancyWorkflow,
+			Source:   "pending effect",
+			Field:    "result_acceptance",
+			Expected: "persistable run projection",
+			Observed: "role handoff is incomplete; restart reconciliation paused: previous refusal",
+		},
+	}})
+	if !strings.Contains(reason, "role handoff is incomplete") {
+		t.Fatalf("recovery pause reason = %q, want the blocking workflow refusal", reason)
+	}
+	if strings.Contains(reason, "worker.lifecycle") {
+		t.Fatalf("recovery pause reason = %q, want no self-inflicted worker diagnosis", reason)
+	}
+	if strings.Count(reason, restartReconciliationPausePrefix) != 1 {
+		t.Fatalf("recovery pause reason = %q, want one reconciliation pause prefix", reason)
+	}
+}
+
+// TestReconcilePausesOnAnInvalidPendingRunProjection verifies an old pending
+// result-acceptance payload is refused before replay can repeat worker or
+// GitHub effects, while the operator-visible pause identifies the store rule.
+func TestReconcilePausesOnAnInvalidPendingRunProjection(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(worktreePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	checkpoint := strings.Repeat("a", 40)
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		Issue:   github.Issue{Number: 42, Title: "Invalid handoff", Body: "reconcile the persisted effect"},
+		RepositoryConfig: config.RepositoryConfig{
+			TargetBranch: "main",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := store.Run{
+		ID: "run-invalid-pending", RepositoryPath: root, IssueNumber: 42,
+		Stage: store.StageImplementation, Status: store.StatusWaitingForHuman,
+		Branch: "factory/run-invalid-pending", Worktree: worktreePath,
+		CheckpointSHA: checkpoint, StatusCommentID: "status-invalid-pending",
+		LifecycleReason:     "restart reconciliation paused: worker.lifecycle expected=\"running\" observed=\"stopped\"",
+		SpecificationPacket: string(packetData), CreatedAt: now, UpdatedAt: now,
+	}
+	databasePath := filepath.Join(root, "state", "factory.db")
+	opened, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	if err := opened.SaveRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	githubRuntime := &effectMatrixGitHub{
+		issue:         github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+	}
+	workspace := &journalRecoveryWorkspace{state: gitadapter.WorktreeState{
+		RepositoryPath: root, Branch: run.Branch, HeadSHA: run.CheckpointSHA,
+	}}
+	service := newEffectMatrixService(githubRuntime, nil, workspace, nil)
+	next := run
+	next.Revision++
+	next.RoleHandoff = &store.RoleHandoff{
+		ChangeSummary:     "completed implementation",
+		AcceptanceMapping: []store.HandoffAcceptance{{Criterion: "criterion", Evidence: "focused test"}},
+		FocusedCommands:   []string{"go test ./internal/factory"},
+	}
+	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindResultAcceptance, "invalid-handoff", resultAcceptanceEffectPayload{
+		Repository: github.Repository{Owner: "example", Name: "project"},
+		Issue:      github.Issue{Number: run.IssueNumber},
+		Previous:   run,
+		Next:       next,
+		StopWorker: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SavePendingEffect(ctx, effect); err != nil {
+		t.Fatal(err)
+	}
+	updated, diagnosis, outcome, reconcileErr := service.reconcileInterruptedRun(ctx, config.RepositoryRegistration{
+		Path: root, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+	}, opened, run)
+	if reconcileErr == nil {
+		t.Fatal("reconcileInterruptedRun() = nil, want workflow refusal")
+	}
+	var workflowErr *WorkflowFailureError
+	if !errors.As(reconcileErr, &workflowErr) {
+		t.Fatalf("reconcileInterruptedRun() error = %v, want WorkflowFailureError", reconcileErr)
+	}
+	if outcome != RecoveryOutcomeWaitingForHuman || updated.Status != store.StatusWaitingForHuman {
+		t.Fatalf("reconciliation result = status %q outcome %q, want waiting_for_human", updated.Status, outcome)
+	}
+	if !strings.Contains(updated.LifecycleReason, "role handoff is incomplete") || !strings.Contains(updated.LifecycleReason, "pending effect.result_acceptance") {
+		t.Fatalf("lifecycle reason = %q, want the blocking store refusal", updated.LifecycleReason)
+	}
+	if strings.Contains(updated.LifecycleReason, "worker.lifecycle") {
+		t.Fatalf("lifecycle reason = %q, want no worker discrepancy", updated.LifecycleReason)
+	}
+	if diagnosis.SourcesAgree || !hasWorkflowDiscrepancy(diagnosis) {
+		t.Fatalf("recovery diagnosis = %#v, want a workflow disagreement", diagnosis)
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending == nil {
+		t.Fatal("pending effect was cleared, want fail-closed reservation")
+	}
+	if githubRuntime.replaceLabelCalls != 0 || githubRuntime.createCommentCalls != 0 || githubRuntime.editCommentCalls != 0 {
+		t.Fatalf("GitHub mutations during invalid replay = labels=%d creates=%d edits=%d, want all zero", githubRuntime.replaceLabelCalls, githubRuntime.createCommentCalls, githubRuntime.editCommentCalls)
+	}
+}
+
 // TestRecoveryTargetsOnlyTheReviewerWithARecoverableProjection verifies that
 // one failed reviewer cannot make the coordinator resume a healthy concurrent
 // reviewer after restart.

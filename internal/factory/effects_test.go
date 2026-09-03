@@ -607,6 +607,106 @@ func TestResultAcceptanceEffectReplaysTheActualFinish(t *testing.T) {
 	}
 }
 
+// TestResultAcceptanceRejectsAnUnpersistableHandoffBeforeTheEffect verifies a
+// completed implementation projection is validated before harness, worker, or
+// GitHub effects can cross their external boundaries.
+func TestResultAcceptanceRejectsAnUnpersistableHandoffBeforeTheEffect(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	githubRuntime := &effectMatrixGitHub{
+		issue:         github.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+	}
+	harnessRuntime := &effectMatrixHarness{}
+	workerRuntime := &effectMatrixWorker{started: true}
+	service := newEffectMatrixService(githubRuntime, nil, nil, nil)
+	service.deps.Harness = harnessRuntime
+	service.deps.Worker = workerRuntime
+	invocation := store.Invocation{
+		ID: "inv-invalid-handoff", RunID: run.ID, Harness: harness.NameCodex,
+		Role: "implementation", Stage: store.StageImplementation,
+		NativeSessionID: "session-invalid-handoff", Status: store.InvocationStatusActive,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	accepted := invocation
+	accepted.Status = store.InvocationStatusCompleted
+	previous := run
+	next := run
+	next.Revision++
+	next.RoleHandoff = &store.RoleHandoff{
+		ChangeSummary:     "completed implementation",
+		AcceptanceMapping: []store.HandoffAcceptance{{Criterion: "criterion", Evidence: "focused test"}},
+		FocusedCommands:   []string{"go test ./internal/factory"},
+	}
+	acceptedReport := report.Report{
+		SchemaVersion: report.SchemaVersion, InvocationID: invocation.ID, RunID: run.ID,
+		Harness: invocation.Harness, Role: invocation.Role, Stage: string(invocation.Stage),
+		Outcome: report.OutcomeCompleted, Summary: "completed implementation",
+		Handoff: &report.Handoff{
+			ChangeSummary:     "completed implementation",
+			AcceptanceMapping: []report.AcceptanceMapping{{Criterion: "criterion", Evidence: "focused test"}},
+			FocusedCommands:   []string{"go test ./internal/factory"},
+		},
+	}
+	if _, _, err := service.acceptResultWithEffect(ctx, opened, opened, effectMatrixRegistration(), harnessRuntime, harness.Session{
+		InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID,
+	}, accepted, previous, next, true, acceptedReport); err == nil {
+		t.Fatal("acceptResultWithEffect() = nil, want invalid run projection refusal")
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != nil {
+		t.Fatalf("pending result acceptance = %#v, want no journal reservation", pending)
+	}
+	if harnessRuntime.finishCalls != 0 || workerRuntime.stopCalls != 0 || githubRuntime.replaceLabelCalls != 0 || githubRuntime.createCommentCalls != 0 || githubRuntime.editCommentCalls != 0 {
+		t.Fatalf("effects before invalid projection refusal = finish=%d stop=%d labels=%d creates=%d edits=%d, want all zero", harnessRuntime.finishCalls, workerRuntime.stopCalls, githubRuntime.replaceLabelCalls, githubRuntime.createCommentCalls, githubRuntime.editCommentCalls)
+	}
+}
+
+// TestStateTransitionRejectsAnUnpersistableRunBeforeTheEffect verifies the
+// shared state-transition seam applies the same pre-journal store validation.
+func TestStateTransitionRejectsAnUnpersistableRunBeforeTheEffect(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	githubRuntime := &effectMatrixGitHub{
+		issue:         github.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+	}
+	service := newEffectMatrixService(githubRuntime, nil, nil, nil)
+	next := run
+	next.Revision++
+	next.RoleHandoff = &store.RoleHandoff{
+		ChangeSummary:     "completed implementation",
+		AcceptanceMapping: []store.HandoffAcceptance{{Criterion: "criterion", Evidence: "focused test"}},
+		FocusedCommands:   []string{"go test ./internal/factory"},
+	}
+	if _, err := service.applyStateTransition(ctx, opened, stateTransition{
+		Repository: github.Repository{Owner: "example", Name: "project"},
+		Issue:      githubRuntime.issue,
+		Previous:   run,
+		Next:       next,
+	}); err == nil {
+		t.Fatal("applyStateTransition() = nil, want invalid run projection refusal")
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != nil {
+		t.Fatalf("pending state transition = %#v, want no journal reservation", pending)
+	}
+	if githubRuntime.replaceLabelCalls != 0 || githubRuntime.createCommentCalls != 0 || githubRuntime.editCommentCalls != 0 {
+		t.Fatalf("GitHub mutations before invalid projection refusal = labels=%d creates=%d edits=%d, want all zero", githubRuntime.replaceLabelCalls, githubRuntime.createCommentCalls, githubRuntime.editCommentCalls)
+	}
+}
+
 // TestRepeatedTestAcceptanceResumesAnUnfinishedStageProjection verifies a
 // terminal invocation is not mistaken for a fully projected test-stage result
 // when the durable run still points at that stage.

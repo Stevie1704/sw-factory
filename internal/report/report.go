@@ -394,13 +394,17 @@ type ValidationContext struct {
 	// deferTestPathPolicy defers repository-specific ownership checks until the
 	// coordinator supplies the frozen configuration during report acceptance.
 	deferTestPathPolicy bool
+	// allowEmptyProductionFiles allows the worker-side envelope writer and
+	// reader to defer the completed-handoff file check until the coordinator has
+	// inspected the worktree.
+	allowEmptyProductionFiles bool
 }
 
 // WriteAtomic validates and publishes a report as report.json below the
 // invocation-specific result directory. A temporary file is synced and
 // renamed so readers never observe a partial JSON document.
 func WriteAtomic(resultDirectory string, value Report) (string, error) {
-	if err := Validate(value, identityFrom(value, value.InvocationID)); err != nil {
+	if err := validate(value, identityFrom(value, value.InvocationID), true); err != nil {
 		return "", err
 	}
 	if err := validateInvocationDirectory(resultDirectory, value.InvocationID); err != nil {
@@ -414,7 +418,7 @@ func WriteAtomic(resultDirectory string, value Report) (string, error) {
 // identity parameter keeps the protocol safe even though the in-worker mount
 // itself is named /results rather than after the host invocation id.
 func WriteAtomicForInvocation(resultDirectory, invocationID string, value Report) (string, error) {
-	if err := Validate(value, identityFrom(value, invocationID)); err != nil {
+	if err := validate(value, identityFrom(value, invocationID), true); err != nil {
 		return "", err
 	}
 	if !filepath.IsAbs(resultDirectory) {
@@ -492,7 +496,7 @@ func Read(path string) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	if err := Validate(value, identityFrom(value, value.InvocationID)); err != nil {
+	if err := validate(value, identityFrom(value, value.InvocationID), true); err != nil {
 		return Report{}, err
 	}
 	return value, nil
@@ -556,6 +560,14 @@ func ReadEnvelope(path string) (Report, error) {
 // Validate checks identity, outcome shape, path safety, and observed worktree
 // containment before a coordinator accepts a report.
 func Validate(value Report, context ValidationContext) error {
+	return validate(value, context, false)
+}
+
+// validate applies report rules with an explicit worker-envelope mode. The
+// worker can only publish the report shape; the coordinator owns the exact
+// worktree observation needed to decide whether an empty file list is honest.
+func validate(value Report, context ValidationContext, allowEmptyProductionFiles bool) error {
+	context.allowEmptyProductionFiles = allowEmptyProductionFiles
 	if value.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported report schema_version %d", value.SchemaVersion)
 	}
@@ -761,6 +773,13 @@ func validateHandoff(value Handoff, context ValidationContext) error {
 		if err := validateText(fmt.Sprintf("acceptance_mapping[%d].evidence", index), mapping.Evidence, maxTextRunes, true); err != nil {
 			return err
 		}
+	}
+	// A clean, coordinator-inspected worktree is the one honest exception for
+	// a rerun against an already-committed checkpoint: there are no new paths
+	// for the role to name. Any observed change still requires the handoff to
+	// name at least one production file.
+	if len(value.ProductionFilesChanged) == 0 && !context.allowEmptyProductionFiles && (!context.WorktreeObserved || len(context.ObservedChanges) != 0) {
+		return errors.New("completed handoff production_files_changed is required")
 	}
 	observed := make(map[string]struct{}, len(context.ObservedChanges))
 	for _, path := range context.ObservedChanges {
