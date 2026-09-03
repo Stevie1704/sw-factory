@@ -214,17 +214,30 @@ func (s *Service) runBaselineProjection(ctx context.Context, registration config
 // agent can start. It checks the frozen gate set, exact checkpoint, and current
 // dependency-input fingerprint so an old baseline cannot authorize new edits.
 func (s *Service) ensureBaselineReady(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) error {
+	return ensureBaselineReadyForLaunch(ctx, runStore, run, packet)
+}
+
+// ensureBaselineReadyForLaunch is the read-only baseline gate used by launch
+// gather. It has no Service receiver so admission can consume its snapshot
+// without inheriting coordinator dependencies.
+func ensureBaselineReadyForLaunch(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) error {
 	checkpoint := run.BaseCheckpointSHA
 	if checkpoint == "" {
 		checkpoint = run.CheckpointSHA
 	}
-	return s.ensureBaselineReadyAtCheckpoint(ctx, runStore, run, packet, checkpoint)
+	return ensureBaselineReadyAtCheckpointForLaunch(ctx, runStore, run, packet, checkpoint)
 }
 
 // ensureBaselineReadyAtCheckpoint validates a baseline projection at an
 // explicit checkpoint for check-stage transitions that intentionally require
 // the current implementation checkpoint rather than the immutable base.
 func (s *Service) ensureBaselineReadyAtCheckpoint(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket, checkpoint string) error {
+	return ensureBaselineReadyAtCheckpointForLaunch(ctx, runStore, run, packet, checkpoint)
+}
+
+// ensureBaselineReadyAtCheckpointForLaunch verifies the durable gate projection
+// and setup fingerprint for one exact checkpoint using read-only seams.
+func ensureBaselineReadyAtCheckpointForLaunch(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket, checkpoint string) error {
 	resultStore, ok := runStore.(GateResultStore)
 	if !ok {
 		return errors.New("operational store does not support baseline gate results")

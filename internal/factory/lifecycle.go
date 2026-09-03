@@ -313,18 +313,6 @@ func (s *Service) ensureTerminalNotification(ctx context.Context, registration c
 	return run, nil
 }
 
-// stopRunWorker stops an existing worker without removing its persistent
-// container, role volume, worktree, or logs.
-func (s *Service) stopRunWorker(ctx context.Context, runID string) error {
-	if s.deps.Worker == nil {
-		return nil
-	}
-	if err := s.deps.Worker.Stop(ctx, runID); err != nil {
-		return fmt.Errorf("stop worker for run %q: %w", runID, err)
-	}
-	return nil
-}
-
 // notifyTerminal sends one concise cmux notification while retaining all run
 // surfaces for later inspection or explicit resume.
 func (s *Service) notifyTerminal(ctx context.Context, registration config.RepositoryRegistration, run store.Run) error {

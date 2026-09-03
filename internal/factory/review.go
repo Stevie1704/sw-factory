@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -113,6 +116,12 @@ func (s *Service) ensureReviewStart(ctx context.Context, run store.Run) error {
 // ensureReviewStartForRole verifies one reviewer receives a clean immutable
 // checkpoint. A second reviewer may join an already active review round.
 func (s *Service) ensureReviewStartForRole(ctx context.Context, run store.Run, role string) error {
+	return ensureReviewStartForRoleWithInspector(ctx, run, role, s.worktreeInspector())
+}
+
+// ensureReviewStartForRoleWithInspector verifies one reviewer receives a clean
+// immutable checkpoint using only the supplied read-only worktree seam.
+func ensureReviewStartForRoleWithInspector(ctx context.Context, run store.Run, role string, inspector gitadapter.WorktreeInspector) error {
 	if run.Stage != store.StageDraftPR && run.Stage != store.StageReview {
 		return fmt.Errorf("%s requires draft_pr or review stage, not %q", role, run.Stage)
 	}
@@ -132,7 +141,6 @@ func (s *Service) ensureReviewStartForRole(ctx context.Context, run store.Run, r
 	if review := reviewResultForRole(run, role); review != nil && review.CheckpointSHA == run.CheckpointSHA {
 		return fmt.Errorf("%s already has a result for this checkpoint", role)
 	}
-	inspector := s.worktreeInspector()
 	if inspector == nil {
 		return fmt.Errorf("worktree runtime is required for immutable %s", role)
 	}
@@ -191,18 +199,42 @@ func reviewRoundComplete(run store.Run) bool {
 	return standards != nil && standards.CheckpointSHA == run.CheckpointSHA
 }
 
-// captureReviewDiff obtains the exact base-to-checkpoint diff inside the
-// pinned worker after its review role mount has been established.
+// captureReviewDiff obtains the exact base-to-checkpoint diff from the pinned
+// worktree during gather, falling back to the worker seam for compatibility
+// with embedders whose worktree is not a host Git checkout.
 func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, invocation store.Invocation) (string, error) {
-	if s.deps.Worker == nil {
-		return "", errors.New("worker runtime is required to capture the review diff")
-	}
 	base := run.BaseCheckpointSHA
 	if base == "" {
 		base = run.CheckpointSHA
 	}
 	if !github.ValidCommitSHA(base) || !github.ValidCommitSHA(run.CheckpointSHA) {
 		return "", errors.New("review diff requires valid immutable base and checkpoint SHAs")
+	}
+	if result, err := captureReviewDiffFromWorktree(ctx, run.Worktree, base, run.CheckpointSHA); err == nil {
+		return validateReviewDiffResult(result)
+	}
+	return s.captureReviewDiffFromWorker(ctx, run, invocation, base)
+}
+
+// captureReviewDiffFromWorktree reads the immutable diff without requiring a
+// worker to exist, which keeps review context inside gather.
+func captureReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoint string) (string, error) {
+	command := exec.CommandContext(ctx, "git", "-C", worktree, "diff", "--no-ext-diff", "--binary", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", ".")
+	// The factory worker environment may provide a coordinator-level Git
+	// projection. Review gather must inspect the claimed worktree itself.
+	command.Env = append(os.Environ(), "GIT_DIR=", "GIT_WORK_TREE=")
+	output, err := command.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
+}
+
+// captureReviewDiffFromWorker preserves the older embedding seam when a
+// supplied worktree inspector is a test double or a non-Git host projection.
+func (s *Service) captureReviewDiffFromWorker(ctx context.Context, run store.Run, invocation store.Invocation, base string) (string, error) {
+	if s.deps.Worker == nil {
+		return "", errors.New("worker runtime is required to capture the review diff")
 	}
 	result, err := s.deps.Worker.RunCommand(ctx, worker.CommandRequest{
 		RunID:             run.ID,
@@ -214,13 +246,18 @@ func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, invocati
 	if err != nil {
 		return "", fmt.Errorf("capture exact review diff: %w", err)
 	}
-	if result.ExitCode != 0 {
-		return "", fmt.Errorf("capture exact review diff exited with code %d", result.ExitCode)
+	return validateReviewDiffResult(result.Stdout, result.ExitCode)
+}
+
+// validateReviewDiffResult applies the packet-size bound to either diff source.
+func validateReviewDiffResult(output string, exitCodes ...int) (string, error) {
+	if len(exitCodes) > 0 && exitCodes[0] != 0 {
+		return "", fmt.Errorf("capture exact review diff exited with code %d", exitCodes[0])
 	}
-	if len([]byte(result.Stdout)) > maxReviewDiffBytes {
+	if len([]byte(output)) > maxReviewDiffBytes {
 		return "", fmt.Errorf("review diff exceeds %d-byte packet limit", maxReviewDiffBytes)
 	}
-	return result.Stdout, nil
+	return output, nil
 }
 
 // publishSpecificationReviewStatus publishes one exact-SHA reviewer status.

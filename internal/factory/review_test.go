@@ -536,6 +536,32 @@ func TestStandardsReviewLaunchCanRetryFromDraftPullRequest(t *testing.T) {
 	}
 }
 
+// TestReviewLaunchDoesNotPublishPendingStatusBeforeMaterialisation verifies
+// the lifecycle ordering carve-out: a packet-directory failure leaves GitHub
+// untouched because status publication belongs to activation.
+func TestReviewLaunchDoesNotPublishPendingStatusBeforeMaterialisation(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	blockedParent := filepath.Join(filepath.Dir(run.Worktree), "blocked-materialisation")
+	if err := os.WriteFile(blockedParent, []byte("directory blocker"), 0o600); err != nil {
+		t.Fatalf("create materialisation blocker: %v", err)
+	}
+	run.Worktree = filepath.Join(blockedParent, "worktree")
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save blocked review run: %v", err)
+	}
+	before := len(fixture.statuses.values)
+	_, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview,
+	})
+	if err == nil || !strings.Contains(err.Error(), "create invocation packet directory") {
+		t.Fatalf("StartAgent() error = %v, want materialisation failure", err)
+	}
+	if got := len(fixture.statuses.values); got != before {
+		t.Fatalf("commit statuses = %d, want unchanged at %d", got, before)
+	}
+}
+
 // reviewFixture bundles the Factory seam and all isolated review projections.
 type reviewFixture struct {
 	service      *factory.Service
