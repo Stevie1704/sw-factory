@@ -30,7 +30,7 @@ type ReviewRepairResult struct {
 	Outcome store.ReviewRepairOutcome
 	// Attempt is the current or newly reserved repair round.
 	Attempt int
-	// Budget is the frozen repair ceiling.
+	// Budget is the frozen repair budget.
 	Budget int
 	// Remaining is the unused budget after a start decision.
 	Remaining int

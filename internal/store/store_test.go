@@ -824,7 +824,7 @@ func TestRunRejectsAReviewProjectionForAnOlderCheckpoint(t *testing.T) {
 	}
 }
 
-// TestStorePersistsCheckRepairBudget verifies the retry ceiling, consumed
+// TestStorePersistsCheckRepairBudget verifies the retry budget, consumed
 // attempt count, and in-flight reservation survive the restart boundary.
 func TestStorePersistsCheckRepairBudget(t *testing.T) {
 	t.Parallel()

@@ -356,7 +356,7 @@ const (
 	ReviewRepairStarted ReviewRepairOutcome = "started"
 	// ReviewRepairRepeated means a materially identical blocker returned.
 	ReviewRepairRepeated ReviewRepairOutcome = "repeated"
-	// ReviewRepairExhausted means the configured review-repair ceiling was used.
+	// ReviewRepairExhausted means the configured review-repair budget was used.
 	ReviewRepairExhausted ReviewRepairOutcome = "exhausted"
 	// ReviewRepairWaitingForHuman means the repair could not safely continue.
 	ReviewRepairWaitingForHuman ReviewRepairOutcome = "waiting_for_human"

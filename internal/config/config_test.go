@@ -586,7 +586,7 @@ func TestValidateRepositoryAcceptsAnEmptyAllowedOverridesList(t *testing.T) {
 
 // TestValidateRepositoryAcceptsRepositoryChosenRetryLimits verifies the
 // repository owns its retry limits outright. Values far above every previously
-// hard-coded ceiling must validate; only a value below one is rejected.
+// hard-coded ceiling must still validate; only a value below one is rejected.
 func TestValidateRepositoryAcceptsRepositoryChosenRetryLimits(t *testing.T) {
 	t.Parallel()
 
