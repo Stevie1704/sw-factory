@@ -198,7 +198,7 @@ func (s *Service) advanceAfterBaseline(ctx context.Context, registration config.
 		next.ProtectedTestPaths = nil
 		next.TestExemption = nil
 		next.TestStageSkipped = false
-		next.LifecycleReason = "baseline passed; " + postBaselineReason(entry)
+		next.LifecycleReason = baselineLifecycleReason(run, "baseline passed; "+postBaselineReason(entry))
 		next.UpdatedAt = s.deps.Now().UTC()
 		if err := s.persistAgentRunState(ctx, registration, runStore, run, next); err != nil {
 			return run, fmt.Errorf("persist post-baseline %q transition: %w", entry, err)
@@ -216,14 +216,14 @@ func (s *Service) advanceAfterBaseline(ctx context.Context, registration config.
 		next.Stage = store.StageImplementation
 		if justification == "" {
 			next.TestExemption = nil
-			next.LifecycleReason = "test stage skip requires an authorized human exemption"
+			next.LifecycleReason = baselineLifecycleReason(run, "test stage skip requires an authorized human exemption")
 		} else {
-			next.LifecycleReason = "test stage skipped by human exemption"
+			next.LifecycleReason = baselineLifecycleReason(run, "test stage skipped by human exemption")
 		}
 	} else {
 		next.Stage = store.StageTest
 		next.TestStageSkipped = false
-		next.LifecycleReason = "baseline passed; test stage ready"
+		next.LifecycleReason = baselineLifecycleReason(run, "baseline passed; test stage ready")
 	}
 	next.Status = store.StatusActive
 	next.UpdatedAt = s.deps.Now().UTC()
@@ -962,6 +962,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		*run = next
 	} else {
+		next.AcceptedImplementationCheckpointSHA = ""
 		next.TestCheckpointSHA = checkpoint.SHA
 		next.CheckpointSHA = checkpoint.SHA
 		if err := s.persistAgentRunState(ctx, registration, runStore, previous, next); err != nil {
@@ -1150,6 +1151,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint returned an invalid commit identity")
 	}
 	if _, journaled := runStore.(PendingEffectStore); !journaled {
+		next.AcceptedImplementationCheckpointSHA = ""
 		next.TestCheckpointSHA = checkpoint.SHA
 		next.CheckpointSHA = checkpoint.SHA
 		if err := s.persistAgentRunState(ctx, registration, runStore, previous, next); err != nil {

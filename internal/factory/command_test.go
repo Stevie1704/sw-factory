@@ -204,6 +204,53 @@ func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
 	}
 }
 
+// TestHandleCommandRefreshDemotesAReadyPullRequest verifies a checkpoint
+// refresh cannot leave a tracked pull request mergeable while its new packet
+// is being re-established and implemented.
+func TestHandleCommandRefreshDemotesAReadyPullRequest(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusActive)
+	run.Stage = store.StageReady
+	run.Branch = "factory/run-command"
+	run.Worktree = "/worktree/run-command"
+	run.BaseCheckpointSHA = strings.Repeat("b", 64)
+	run.CheckpointSHA = strings.Repeat("a", 64)
+	run.PullRequestNumber = 17
+	run.PullRequestURL = "https://github.com/example/project/pull/17"
+	githubAdapter := &commandGitHub{
+		issue:         github.Issue{Number: 42, Title: "Refreshed issue", Body: "unchanged requirements", State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: "status-1"},
+		pullRequest: github.PullRequest{
+			Number: 17, URL: run.PullRequestURL, State: "open", Draft: false,
+			HeadBranch: run.Branch, BaseBranch: "main",
+		},
+	}
+	worktree := &inspectingWorktree{
+		fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: run.CheckpointSHA, Branch: run.Branch, Worktree: run.Worktree}},
+		state:        gitadapter.WorktreeState{Branch: run.Branch, HeadSHA: run.CheckpointSHA},
+	}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	service := newCommandServiceWithStoreAndWorktree(runStore, githubAdapter, nil, worktree)
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 42,
+		Comment:     github.Comment{ID: "refresh-ready", Author: "alice", Body: "/factory refresh"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() refresh error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Stage != store.StageClaim || result.Run.Status != store.StatusActive {
+		t.Fatalf("refresh result = %#v, want accepted active checkpoint restart", result)
+	}
+	if !githubAdapter.pullRequest.Draft || len(githubAdapter.draftChanges) != 1 || !githubAdapter.draftChanges[0] {
+		t.Fatalf("pull request draft transition = %#v/%#v, want one demotion before restart", githubAdapter.draftChanges, githubAdapter.pullRequest)
+	}
+	if result.Run.PullRequestNumber != run.PullRequestNumber || result.Run.PullRequestURL != run.PullRequestURL {
+		t.Fatalf("refresh lost tracked pull request = %#v, want #%d", result.Run, run.PullRequestNumber)
+	}
+}
+
 // TestHandleCommandPersistsAClaudeHarnessConfiguration verifies an authorized
 // issue comment can select Claude Code now that the adapter exists, and that
 // the run records the choice for the next invocation.

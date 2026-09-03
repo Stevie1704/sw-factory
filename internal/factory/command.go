@@ -327,12 +327,21 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 		rejection := &PolicyRejection{Code: PolicyRejectionRefreshState, Problem: fmt.Sprintf("cannot refresh a %s issue", defaultString(issue.State, "non-open"))}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
+	restartFromCheckpoint, err := s.shouldRestartFromAcceptedImplementationCheckpoint(ctx, runStore, run, oldPacket)
+	if err != nil {
+		return CommandResult{}, err
+	}
 	refreshedPacket := oldPacket
 	refreshedPacket.Version++
 	refreshedPacket.Issue = cloneIssue(issue)
 	encodedPacket, err := json.Marshal(refreshedPacket)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("encode refreshed specification packet: %w", err)
+	}
+	if restartFromCheckpoint || (run.Stage == store.StageReady && run.PullRequestNumber > 0) {
+		if err := s.demotePullRequestForCheckpointRefresh(ctx, registration, run, oldPacket); err != nil {
+			return CommandResult{}, err
+		}
 	}
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
@@ -345,6 +354,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
 	next.ClarificationNotificationSent = false
+	markAcceptedCheckpointPacketRestart(&next, run, restartFromCheckpoint)
 	next.UpdatedAt = s.deps.Now().UTC()
 	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
 	processedCommentID := next.ProcessedCommentID
@@ -588,6 +598,9 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
+	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
+		return s.resumeAfterRevision(ctx, registration, runStore, run)
+	}
 	// The coordinator's progression pass owns the baseline, so a run that has
 	// not passed it yet must not launch a role here.
 	if awaitingBaseline(run) {
@@ -607,6 +620,143 @@ func (s *Service) resumeAfterPacketChange(ctx context.Context, registration conf
 		return *current, nil
 	}
 	return run, nil
+}
+
+const (
+	// acceptedCheckpointRefreshLifecyclePrefix identifies the durable refresh
+	// transition that must run baseline before launching implementation. The
+	// prefix survives the baseline's more specific lifecycle explanation so a
+	// later clean refresh can recognize the same checkpoint again.
+	acceptedCheckpointRefreshLifecyclePrefix = "accepted /factory refresh; "
+	// acceptedCheckpointRefreshLifecycleReason identifies the durable refresh
+	// transition before the baseline has supplied its result.
+	acceptedCheckpointRefreshLifecycleReason = acceptedCheckpointRefreshLifecyclePrefix + "restarting from accepted implementation checkpoint"
+)
+
+// markAcceptedCheckpointPacketRestart makes a checkpoint restart durable in
+// the packet-change projection before baseline work or native resume begins.
+func markAcceptedCheckpointPacketRestart(next *store.Run, previous store.Run, restart bool) {
+	if next == nil || !restart {
+		return
+	}
+	next.BaseCheckpointSHA = previous.CheckpointSHA
+	next.AcceptedImplementationCheckpointSHA = previous.CheckpointSHA
+	next.Stage = store.StageClaim
+	next.Status = store.StatusActive
+	next.LifecycleReason = acceptedCheckpointRefreshLifecycleReason
+}
+
+// baselineLifecycleReason keeps the command that selected a checkpoint
+// restart visible after the baseline transition replaces the packet-change
+// reason with its normal stage-ready explanation.
+func baselineLifecycleReason(run store.Run, reason string) string {
+	if strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
+		return acceptedCheckpointRefreshLifecyclePrefix + reason
+	}
+	return reason
+}
+
+// demotePullRequestForCheckpointRefresh verifies the tracked pull request is
+// open and draft before a refreshed packet can restart implementation. A
+// failed or ambiguous external mutation leaves the packet transition
+// unapplied, so replaying the command safely re-reads the current PR state.
+func (s *Service) demotePullRequestForCheckpointRefresh(ctx context.Context, registration config.RepositoryRegistration, run store.Run, packet SpecificationPacket) error {
+	if run.PullRequestNumber <= 0 {
+		return nil
+	}
+	client := s.pullRequestClient()
+	if client == nil {
+		return errors.New("checkpoint refresh with a tracked pull request requires pull-request operations")
+	}
+	repository := commandRepository(registration)
+	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
+	if err != nil {
+		return fmt.Errorf("find pull request for checkpoint refresh: %w", err)
+	}
+	if existing.Number == 0 || existing.Number != run.PullRequestNumber {
+		return fmt.Errorf("tracked pull request #%d was not found for checkpoint refresh", run.PullRequestNumber)
+	}
+	if existing.Merged || !strings.EqualFold(strings.TrimSpace(existing.State), "open") {
+		return fmt.Errorf("pull request #%d is not open for checkpoint refresh", run.PullRequestNumber)
+	}
+	updated, err := s.setPullRequestDraft(ctx, repository, existing, true)
+	if err != nil {
+		return err
+	}
+	if updated.Number != run.PullRequestNumber {
+		return fmt.Errorf("checkpoint refresh returned pull request #%d, want tracked pull request #%d", updated.Number, run.PullRequestNumber)
+	}
+	if updated.Merged || !strings.EqualFold(strings.TrimSpace(updated.State), "open") {
+		return fmt.Errorf("pull request #%d is no longer open after checkpoint refresh", run.PullRequestNumber)
+	}
+	if !updated.Draft {
+		return fmt.Errorf("pull request #%d was not confirmed as draft before checkpoint refresh", run.PullRequestNumber)
+	}
+	return nil
+}
+
+// shouldRestartFromAcceptedImplementationCheckpoint identifies the clean
+// committed implementation boundary that a packet refresh can safely reuse.
+// A check-stage boundary must have exact passed checkpoint gates; a draft-PR
+// or later boundary must retain its tracked PR. An implementation-stage
+// boundary must have either the durable refresh marker or exact passed gates,
+// so a failed checkpoint cannot be promoted merely because an older PR exists.
+// The protected test checkpoint is excluded because it is implementation
+// input, not an accepted implementation checkpoint.
+func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) (bool, error) {
+	if run.CheckpointSHA == "" || run.BaseCheckpointSHA == "" {
+		return false, nil
+	}
+	// A test-stage run's current checkpoint is protected test work, even if an
+	// older store did not retain the separate test-checkpoint marker.
+	if run.Stage == store.StageTest {
+		return false, nil
+	}
+	if run.TestCheckpointSHA != "" && run.TestCheckpointSHA == run.CheckpointSHA {
+		return false, nil
+	}
+	switch run.Stage {
+	case store.StageCheck:
+		// CreateDraftPullRequest records the checkpoint before its gates run, so
+		// StageCheck alone does not prove the checkpoint was accepted.
+		if err := ensureFinalCheckpointGatesPassed(ctx, runStore, run, packet); err != nil {
+			return false, nil
+		}
+	case store.StageDraftPR, store.StageReview, store.StageReady:
+		// These stages are reached only after the checkpoint boundary and retain
+		// the PR identity that proves the boundary was published.
+		if run.PullRequestNumber == 0 {
+			return false, nil
+		}
+	case store.StageImplementation:
+		// The packet transition invalidates downstream gate rows, and a rejected
+		// implementation report can replace the lifecycle marker with its
+		// waiting reason. The dedicated provenance remains the acceptance proof
+		// for the unchanged clean checkpoint across both transitions.
+		if run.AcceptedImplementationCheckpointSHA == run.CheckpointSHA || strings.HasPrefix(run.LifecycleReason, acceptedCheckpointRefreshLifecyclePrefix) {
+			break
+		}
+		// A failed check can route back to implementation while an older PR is
+		// still tracked. Require the current checkpoint's exact gate results in
+		// that state rather than treating the old PR as acceptance evidence.
+		if run.PullRequestNumber == 0 {
+			return false, nil
+		}
+		if err := ensureFinalCheckpointGatesPassed(ctx, runStore, run, packet); err != nil {
+			return false, nil
+		}
+	default:
+		return false, nil
+	}
+	inspector := s.worktreeInspector()
+	if inspector == nil {
+		return false, nil
+	}
+	state, err := inspector.Inspect(ctx, run.Worktree)
+	if err != nil {
+		return false, fmt.Errorf("inspect implementation checkpoint before refresh resumption: %w", err)
+	}
+	return state.HeadSHA == run.CheckpointSHA && len(state.ChangedPaths) == 0, nil
 }
 
 // awaitingBaseline reports whether a run has not yet passed its frozen
@@ -658,6 +808,9 @@ func resetTestProjectionForPacketChange(run *store.Run, packet SpecificationPack
 	run.TestCheckpointSHA = ""
 	run.TestExemption = nil
 	run.TestStageSkipped = false
+	// Every invocation for the superseded packet is no longer current, even if
+	// its report later causes the coordinator to park the run while accepting it.
+	clearActiveInvocations(run)
 	// The healthy baseline result selects the entry stage, not the packet
 	// change itself. A packet the baseline could never leave still parks
 	// visibly, because advanceAfterBaseline rejects it after every pass.

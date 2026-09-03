@@ -1418,6 +1418,7 @@ func (s *Service) checkpointAndPersistWithEffect(ctx context.Context, runStore R
 		if !github.ValidCommitSHA(checkpoint.SHA) {
 			return errors.New("GitWorkspace returned an invalid checkpoint SHA")
 		}
+		next.AcceptedImplementationCheckpointSHA = ""
 		next.CheckpointSHA = checkpoint.SHA
 		if request.Kind == gitadapter.CheckpointKindTest {
 			next.TestCheckpointSHA = checkpoint.SHA
@@ -1482,6 +1483,7 @@ func (s *Service) replayPendingCheckpoint(ctx context.Context, runStore RunStore
 		return store.Run{}, errors.New("replayed checkpoint returned an invalid SHA")
 	}
 	next := payload.Next
+	next.AcceptedImplementationCheckpointSHA = ""
 	next.CheckpointSHA = checkpoint.SHA
 	if request.Kind == gitadapter.CheckpointKindTest {
 		next.TestCheckpointSHA = checkpoint.SHA

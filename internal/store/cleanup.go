@@ -252,7 +252,7 @@ func (t *cleanupTransaction) Rollback() error { return t.tx.Rollback() }
 func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
+		       checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, test_invocation_id, test_revision_attempts,
 		       test_revision_budget, test_revision_history, test_objection,
 		       test_revision_base_changed_paths,

@@ -495,8 +495,15 @@ authorized answer in a new specification-packet version and resumes a fresh
 implementation invocation with that packet. Clarification pauses do not
 consume retry budget. `/factory refresh` re-reads the issue into another packet
 version, preserves resolved answers, invalidates superseded downstream
-invocations and checkpoint results, and resumes implementation against the new
-snapshot. `/factory revision` is the authorized ready-PR amendment command: it
+invocations and checkpoint results, and resumes the role selected by the new
+packet. If an accepted implementation checkpoint already exists and the run
+worktree is clean, refresh instead treats that checkpoint as the new packet
+baseline, reruns the baseline gates there, and restarts the workflow from that
+checkpoint, reusing the prior implementation session when native resume is
+available. This checkpoint behavior also applies when the refreshed issue text
+is unchanged; it does not require fabricating an uncommitted worktree change.
+The lifecycle reason names `/factory refresh` while that restart is being
+established. `/factory revision` is the authorized ready-PR amendment command: it
 creates a new packet version from the current open issue, drafts the tracked PR,
 invalidates all prior gate and review results, treats the current clean
 checkpoint as the new amendment baseline, preserves the existing

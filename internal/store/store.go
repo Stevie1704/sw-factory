@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 34
+const CurrentSchemaVersion = 35
 
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
@@ -454,6 +454,10 @@ type Run struct {
 	// specification version. An authorized revision promotes its clean current
 	// checkpoint to establish a new amendment baseline.
 	BaseCheckpointSHA string
+	// AcceptedImplementationCheckpointSHA records the implementation checkpoint
+	// accepted before a refresh restart. It remains valid while packet changes
+	// invalidate the checkpoint's gate-result rows and lifecycle reason.
+	AcceptedImplementationCheckpointSHA string
 	// TestCheckpointSHA identifies the separate protected test checkpoint.
 	TestCheckpointSHA string
 	// TestHandoff is the accepted structured test-stage transfer packet.
@@ -827,7 +831,7 @@ func (s *Store) SchemaVersion() int { return s.schemaVersion }
 func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
+		       checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, test_invocation_id, test_revision_attempts,
 		       test_revision_budget, test_revision_history, test_objection,
 		       test_revision_base_changed_paths,
@@ -858,7 +862,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
+		       checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
 		       test_handoff, test_invocation_id, test_revision_attempts,
 		       test_revision_budget, test_revision_history, test_objection,
 		       test_revision_base_changed_paths,
@@ -886,7 +890,7 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 // scanRun decodes one operational run row and its RFC3339 timestamps.
 func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
-	var baseCheckpointSHA, testCheckpointSHA string
+	var baseCheckpointSHA, acceptedImplementationCheckpointSHA, testCheckpointSHA string
 	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON, standardsReviewJSON string
 	var reviewRepairHistoryJSON, reviewRepairPacketJSON string
 	var testRevisionHistoryJSON, testObjectionJSON, testRevisionBaseChangedPathsJSON string
@@ -905,6 +909,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 		&run.Worktree,
 		&run.CheckpointSHA,
 		&baseCheckpointSHA,
+		&acceptedImplementationCheckpointSHA,
 		&testCheckpointSHA,
 		&testHandoffJSON,
 		&run.TestInvocationID,
@@ -968,6 +973,7 @@ func scanRun(row *sql.Row) (*Run, error) {
 	if run.BaseCheckpointSHA == "" {
 		run.BaseCheckpointSHA = run.CheckpointSHA
 	}
+	run.AcceptedImplementationCheckpointSHA = acceptedImplementationCheckpointSHA
 	run.TestCheckpointSHA = testCheckpointSHA
 	if testHandoffJSON != "" {
 		run.TestHandoff = &TestHandoff{}
@@ -1759,6 +1765,7 @@ func runValues(run Run) ([]any, error) {
 		run.Worktree,
 		run.CheckpointSHA,
 		run.BaseCheckpointSHA,
+		run.AcceptedImplementationCheckpointSHA,
 		run.TestCheckpointSHA,
 		testHandoff,
 		run.TestInvocationID,
@@ -1822,7 +1829,7 @@ func terminalAtValue(value time.Time) string {
 const saveRunStatement = `
 		INSERT INTO operational_runs (
 			id, repository_path, issue_number, stage, status, branch, worktree,
-			checkpoint_sha, base_checkpoint_sha, test_checkpoint_sha,
+			checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
 			test_handoff, test_invocation_id, test_revision_attempts,
 			test_revision_budget, test_revision_history, test_objection,
 			test_revision_base_changed_paths, implementation_handoff,
@@ -1842,7 +1849,7 @@ const saveRunStatement = `
 			pending_questions, clarification_comment_id,
 			clarification_notification_sent, terminal_at, created_at, updated_at
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -1858,6 +1865,7 @@ const saveRunStatement = `
 			worktree = excluded.worktree,
 			checkpoint_sha = excluded.checkpoint_sha,
 			base_checkpoint_sha = excluded.base_checkpoint_sha,
+			accepted_implementation_checkpoint_sha = excluded.accepted_implementation_checkpoint_sha,
 			test_checkpoint_sha = excluded.test_checkpoint_sha,
 			test_handoff = excluded.test_handoff,
 			test_invocation_id = excluded.test_invocation_id,
@@ -1909,7 +1917,7 @@ const saveRunStatement = `
 const saveRunIfRevisionStatement = `
 		UPDATE operational_runs SET
 			repository_path = ?, issue_number = ?, stage = ?, status = ?, branch = ?, worktree = ?,
-			checkpoint_sha = ?, base_checkpoint_sha = ?, test_checkpoint_sha = ?,
+			checkpoint_sha = ?, base_checkpoint_sha = ?, accepted_implementation_checkpoint_sha = ?, test_checkpoint_sha = ?,
 			test_handoff = ?, test_invocation_id = ?, test_revision_attempts = ?,
 			test_revision_budget = ?, test_revision_history = ?, test_objection = ?,
 			test_revision_base_changed_paths = ?, implementation_handoff = ?,
@@ -3139,6 +3147,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 34:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN launch_voided INTEGER NOT NULL DEFAULT 0"); err != nil {
 				return fmt.Errorf("apply store migration 34: %w", err)
+			}
+		case 35:
+			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN accepted_implementation_checkpoint_sha TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("apply store migration 35: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
