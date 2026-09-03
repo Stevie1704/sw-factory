@@ -868,7 +868,8 @@ protocol; implementation never edits protected tests directly. An accepted
 repair creates a new checkpoint, reruns every configured gate, and starts both
 review roles in fresh sessions against that new SHA. The repository's
 <code>retry_limits.review_repair</code> value bounds the budget, and a
-materially repeated blocker escalates immediately to a human. Taste and scope findings remain advisory.
+materially repeated blocker escalates immediately to a human. Taste and scope
+findings remain advisory.
 
 The run moves to <code>ready</code> only after both configured reviews succeed,
 the configured target branch has been merged into the factory branch when

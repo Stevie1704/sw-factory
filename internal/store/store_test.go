@@ -916,9 +916,9 @@ func TestStorePersistsReviewRepairState(t *testing.T) {
 }
 
 // TestStorePersistsRepositoryChosenRetryBudgets verifies the frozen per-run
-// budgets are the only bound the store applies. A review-repair budget and
-// history far above every previously hard-coded ceiling must survive a
-// restart unchanged.
+// budgets are the only bound the store applies. Review-repair and
+// test-revision budgets, and both attempt histories, far above every
+// previously hard-coded ceiling must survive a restart unchanged.
 func TestStorePersistsRepositoryChosenRetryBudgets(t *testing.T) {
 	t.Parallel()
 
@@ -931,6 +931,10 @@ func TestStorePersistsRepositoryChosenRetryBudgets(t *testing.T) {
 	for attempt := 1; attempt <= 6; attempt++ {
 		history = append(history, store.ReviewRepairAttempt{Attempt: attempt, Outcome: store.ReviewRepairStarted})
 	}
+	revisions := make([]store.TestRevision, 0, 4)
+	for attempt := 1; attempt <= 4; attempt++ {
+		revisions = append(revisions, store.TestRevision{Attempt: attempt, Outcome: store.TestRevisionRejected})
+	}
 	run := store.Run{
 		ID:                   "run-repository-budgets",
 		RepositoryPath:       "/work/repository",
@@ -940,7 +944,9 @@ func TestStorePersistsRepositoryChosenRetryBudgets(t *testing.T) {
 		ReviewRepairAttempts: 6,
 		ReviewRepairBudget:   12,
 		ReviewRepairHistory:  history,
+		TestRevisionAttempts: 4,
 		TestRevisionBudget:   9,
+		TestRevisionHistory:  revisions,
 		CheckpointSHA:        strings.Repeat("b", 64),
 		BaseCheckpointSHA:    strings.Repeat("c", 64),
 		CreatedAt:            time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(200, 0).UTC(),
@@ -960,7 +966,7 @@ func TestStorePersistsRepositoryChosenRetryBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentRun() error = %v", err)
 	}
-	if got == nil || got.CheckRepairBudget != 7 || got.ReviewRepairBudget != 12 || got.TestRevisionBudget != 9 || len(got.ReviewRepairHistory) != 6 {
+	if got == nil || got.CheckRepairBudget != 7 || got.ReviewRepairBudget != 12 || got.TestRevisionBudget != 9 || len(got.ReviewRepairHistory) != 6 || len(got.TestRevisionHistory) != 4 {
 		t.Fatalf("CurrentRun() = %#v, want repository-chosen budgets preserved", got)
 	}
 }

@@ -311,7 +311,7 @@ func (s *Service) claimCommentWatermark(ctx context.Context, repository github.R
 	return latestCommentID, nil
 }
 
-// testRevisionBudgetForPacket returns a revision ceiling only for runs that
+// testRevisionBudgetForPacket returns a revision budget only for runs that
 // actually have an independently owned test stage. Advisory implementation
 // runs do not expose the protected-test objection protocol.
 func testRevisionBudgetForPacket(packet SpecificationPacket) int {
