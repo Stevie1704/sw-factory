@@ -19,6 +19,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // effectTestStore injects a reservation failure while retaining the real
@@ -755,6 +756,120 @@ func TestRepeatedTestAcceptanceResumesAnUnfinishedStageProjection(t *testing.T) 
 	}
 }
 
+// TestReviewResultAcceptanceReplayResumesReviewRouting verifies a response-loss
+// boundary after harness finalization still replays the accepted review result
+// through the review coordinator instead of leaving the run in its old status.
+func TestReviewResultAcceptanceReplayResumesReviewRouting(t *testing.T) {
+	ctx := context.Background()
+	opened, _, run := openEffectMatrixStore(t, ctx)
+	defer func() { _ = opened.Close() }()
+	checkpoint := strings.Repeat("a", 40)
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		Issue:   github.Issue{Number: run.IssueNumber, Title: "Replay review result"},
+		RepositoryConfig: config.RepositoryConfig{
+			TargetBranch:        "main",
+			RoleHarnessDefaults: map[string]config.Harness{workflow.RoleSpecificationReview: config.HarnessCodex},
+			ModelOptions:        map[string][]string{workflow.RoleSpecificationReview: {"gpt-5"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Stage = store.StageReview
+	run.Status = store.StatusActive
+	run.Branch = "factory/run-effects"
+	run.Worktree = t.TempDir()
+	run.BaseCheckpointSHA = checkpoint
+	run.CheckpointSHA = checkpoint
+	run.PullRequestNumber = 17
+	run.PullRequestURL = "https://github.com/example/project/pull/17"
+	run.SpecificationPacket = string(packetData)
+	if err := opened.SaveRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+
+	githubRuntime := &effectMatrixGitHub{
+		issue:         github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		statusComment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+	}
+	statuses := &effectMatrixCommitStatus{}
+	pullRequests := &effectMatrixPullRequests{existing: github.PullRequest{
+		Number: 17, URL: run.PullRequestURL, Title: "Replay review result", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->",
+		State: "open", Draft: true, HeadBranch: run.Branch, BaseBranch: "main", HeadSHA: checkpoint,
+	}}
+	workspace := &effectMatrixGitWorkspace{
+		checkpointSHA: checkpoint, remoteHead: checkpoint, expectedRemoteHead: checkpoint,
+		repositoryPath: run.RepositoryPath, branch: run.Branch,
+	}
+	workerRuntime := &effectMatrixWorker{}
+	harnessRuntime := &effectMatrixHarness{failFinishOnce: true}
+	terminalRuntime := &journalRecoveryTerminal{inspection: terminal.WorkspaceInspection{
+		Exists: true, WorkspaceID: "workspace-review-replay",
+	}}
+	service := newEffectMatrixService(githubRuntime, statuses, workspace, pullRequests)
+	service.deps.Worker = workerRuntime
+	service.deps.Terminal = terminalRuntime
+	service.deps.Harness = harnessRuntime
+	registration := effectMatrixRegistration()
+	registration.Path = run.RepositoryPath
+
+	invocation := store.Invocation{
+		ID: "inv-review-replay", RunID: run.ID, Harness: harness.NameCodex,
+		Role: workflow.RoleSpecificationReview, Stage: store.StageReview,
+		NativeSessionID: "session-review-replay", WorkspaceID: "workspace-review-replay",
+		StatusSurfaceID: "surface-status-review-replay", RoleSurfaceID: "surface-role-review-replay",
+		ChecksSurfaceID: "surface-checks-review-replay", Status: store.InvocationStatusActive,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	if err := opened.SaveInvocation(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	terminalRuntime.inspection.Surfaces = []terminal.Surface{
+		{ID: terminal.SurfaceID(invocation.StatusSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+		{ID: terminal.SurfaceID(invocation.RoleSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+		{ID: terminal.SurfaceID(invocation.ChecksSurfaceID), WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID)},
+	}
+	next := run
+	releaseActiveInvocation(&next, invocation.ID)
+	acceptedReport := report.Report{
+		SchemaVersion: report.SchemaVersion, InvocationID: invocation.ID, RunID: run.ID,
+		Harness: invocation.Harness, Role: invocation.Role, Stage: string(invocation.Stage),
+		Outcome: report.OutcomeCannotProceed, Summary: "review stopped after the required artifact became unavailable",
+		Evidence:        []report.Evidence{{Kind: "artifact", Detail: "the required artifact is unavailable"}},
+		NativeSessionID: invocation.NativeSessionID, ReportedAt: time.Unix(2, 0).UTC(),
+	}
+	if err := applyReviewResultProjection(&next, invocation.Role, acceptedReport); err != nil {
+		t.Fatal(err)
+	}
+	acceptedInvocation := invocation
+	acceptedInvocation.Status = acceptedInvocationStatus(acceptedReport.Outcome)
+	acceptedInvocation.UpdatedAt = time.Unix(2, 0).UTC()
+	if _, _, err := service.acceptResultWithEffect(ctx, opened, opened, registration, harnessRuntime, harness.Session{
+		InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID,
+	}, acceptedInvocation, run, next, true, acceptedReport); err == nil {
+		t.Fatal("acceptResultWithEffect() = nil, want response-loss error")
+	}
+	pending, err := opened.PendingEffect(ctx, run.ID)
+	if err != nil || pending == nil {
+		t.Fatalf("pending review result acceptance = %#v, error = %v", pending, err)
+	}
+
+	updated, _, outcome, err := service.reconcileInterruptedRun(ctx, registration, opened, run)
+	if err != nil {
+		t.Fatalf("reconcileInterruptedRun() error = %v", err)
+	}
+	if outcome != RecoveryOutcomeReconciled || updated.Status != store.StatusWaitingForHuman || updated.Stage != store.StageReview {
+		t.Fatalf("replayed review run = %#v outcome=%q, want review/waiting_for_human", updated, outcome)
+	}
+	if updated.SpecificationReview == nil || updated.SpecificationReview.Outcome != string(report.OutcomeCannotProceed) || len(updated.SpecificationReview.Evidence) != 1 {
+		t.Fatalf("replayed review projection = %#v, want durable cannot_proceed evidence", updated.SpecificationReview)
+	}
+	if pending, err := opened.PendingEffect(ctx, run.ID); err != nil || pending != nil {
+		t.Fatalf("pending review result acceptance after replay = %#v, error = %v; want cleared", pending, err)
+	}
+}
+
 // TestResultAcceptanceReplayRejectsNewerPersistedRevisionBeforeSideEffects
 // verifies a response-loss replay refuses a stale run before reserving or
 // repeating harness finalization and worker shutdown.
@@ -1351,6 +1466,8 @@ type effectMatrixGitWorkspace struct {
 	checkpointSHA       string
 	failCheckpointOnce  bool
 	checkpointMutations int
+	repositoryPath      string
+	branch              string
 }
 
 // Create creates no worktree in this focused effect fake.
@@ -1365,7 +1482,7 @@ func (*effectMatrixGitWorkspace) Remove(context.Context, string, gitadapter.Work
 
 // Inspect returns the parent checkpoint as the stable worktree projection.
 func (w *effectMatrixGitWorkspace) Inspect(context.Context, string) (gitadapter.WorktreeState, error) {
-	return gitadapter.WorktreeState{HeadSHA: w.checkpointSHA}, nil
+	return gitadapter.WorktreeState{RepositoryPath: w.repositoryPath, Branch: w.branch, HeadSHA: w.checkpointSHA}, nil
 }
 
 // CreateCheckpoint creates one semantic checkpoint and returns it on every

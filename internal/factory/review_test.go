@@ -65,7 +65,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if packet.TestHandoff != nil || packet.TestObjection != nil || packet.TestExemption != nil || len(packet.ProtectedTestPaths) != 0 {
 		t.Fatalf("review packet inherited test context: %#v", packet)
 	}
-	for _, marker := range []string{"specification-review-v4", "exact checkpoint", "--finding", "no upstream harness transcript"} {
+	for _, marker := range []string{workflow.PromptVersionSpecificationReview, "exact checkpoint", "--finding", "no upstream harness transcript"} {
 		if !strings.Contains(strings.ToLower(launch.Prompt), strings.ToLower(marker)) {
 			t.Errorf("review prompt missing %q:\n%s", marker, launch.Prompt)
 		}
@@ -345,6 +345,125 @@ func TestConcurrentReviewRolesUseIndependentCheckpointSessions(t *testing.T) {
 	}
 	if fixture.runStore.current.Stage != store.StageReady || fixture.runStore.current.Status != store.StatusActive || fixture.runStore.current.StandardsReview == nil {
 		t.Fatalf("completed review round = %#v, want ready with standards result", fixture.runStore.current)
+	}
+}
+
+// TestIncompleteReviewFindingRoutesAfterTheOtherAxisTerminates verifies a
+// blocking finding survives a non-completed review outcome and enters the same
+// bounded repair path after the concurrent axis reports.
+func TestIncompleteReviewFindingRoutesAfterTheOtherAxisTerminates(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode review packet: %v", err)
+	}
+	packet.RepositoryConfig.RoleHarnessDefaults[workflow.RoleStandardsReview] = config.HarnessCodex
+	packet.RepositoryConfig.ModelOptions[workflow.RoleStandardsReview] = []string{"gpt-5"}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("encode review packet: %v", err)
+	}
+	run.SpecificationPacket = string(packetData)
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save concurrent review packet: %v", err)
+	}
+	specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview})
+	if err != nil {
+		t.Fatalf("start specification reviewer: %v", err)
+	}
+	standards, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: workflow.RoleStandardsReview, Stage: workflow.StageStandardsReview})
+	if err != nil {
+		t.Fatalf("start standards reviewer: %v", err)
+	}
+	value := reviewReport(specification, []report.ReviewFinding{{
+		Location: "internal/factory/review.go:42", Claim: "the behavior is incorrect", Evidence: "the observed behavior fails",
+		Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryCorrectness,
+		SuggestedResolution: "repair the behavior", SuggestedOwner: workflow.RoleImplementation,
+	}})
+	value.Outcome = report.OutcomeCannotProceed
+	value.ReviewHandoff = &report.ReviewHandoff{ReviewedSHA: reviewCheckpoint, Findings: value.ReviewHandoff.Findings}
+	value.Evidence = []report.Evidence{{Kind: "artifact", Detail: "the required artifact is unavailable"}}
+	if _, err := report.WriteAtomicForInvocation(specification.Invocation.ResultDirectory, specification.Invocation.ID, value); err != nil {
+		t.Fatalf("write incomplete specification review: %v", err)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: specification.Invocation.ID}); err != nil {
+		t.Fatalf("accept incomplete specification review: %v", err)
+	}
+	if fixture.runStore.current.SpecificationReview == nil || fixture.runStore.current.SpecificationReview.Outcome != string(report.OutcomeCannotProceed) || len(fixture.runStore.current.SpecificationReview.Findings) != 1 || fixture.runStore.current.Stage != store.StageReview {
+		t.Fatalf("incomplete specification review = %#v, want durable finding while other axis is active", fixture.runStore.current)
+	}
+	standardsValue := reviewReport(standards, nil)
+	standardsValue.Outcome = report.OutcomeNeedsClarification
+	standardsValue.ReviewHandoff = nil
+	standardsValue.Questions = []report.Question{{ID: "missing-artifact", Prompt: "Which artifact should be reviewed by the standards axis?"}}
+	if _, err := report.WriteAtomicForInvocation(standards.Invocation.ResultDirectory, standards.Invocation.ID, standardsValue); err != nil {
+		t.Fatalf("write standards review: %v", err)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: standards.Invocation.ID}); err != nil {
+		t.Fatalf("accept standards review: %v", err)
+	}
+	if fixture.runStore.current.Stage != store.StageImplementation || fixture.runStore.current.Status != store.StatusActive || fixture.runStore.current.ReviewRepairPacket == nil || len(fixture.runStore.current.ReviewRepairPacket.Findings) != 1 {
+		t.Fatalf("repair projection = %#v, want one finding from incomplete review", fixture.runStore.current)
+	}
+}
+
+// TestIncompleteReviewWithoutFindingsWaitsForHumanDisposition verifies an
+// incomplete no-finding axis does not become a passing review or trigger repair.
+func TestIncompleteReviewWithoutFindingsWaitsForHumanDisposition(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatalf("decode review packet: %v", err)
+	}
+	packet.RepositoryConfig.RoleHarnessDefaults[workflow.RoleStandardsReview] = config.HarnessCodex
+	packet.RepositoryConfig.ModelOptions[workflow.RoleStandardsReview] = []string{"gpt-5"}
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("encode review packet: %v", err)
+	}
+	run.SpecificationPacket = string(packetData)
+	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("save concurrent review packet: %v", err)
+	}
+	specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview})
+	if err != nil {
+		t.Fatalf("start specification reviewer: %v", err)
+	}
+	standards, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: workflow.RoleStandardsReview, Stage: workflow.StageStandardsReview})
+	if err != nil {
+		t.Fatalf("start standards reviewer: %v", err)
+	}
+	value := reviewReport(specification, nil)
+	value.Outcome = report.OutcomeNeedsClarification
+	value.ReviewHandoff = nil
+	value.Questions = []report.Question{{ID: "missing-artifact", Prompt: "Which artifact should be reviewed?"}}
+	if _, err := report.WriteAtomicForInvocation(specification.Invocation.ResultDirectory, specification.Invocation.ID, value); err != nil {
+		t.Fatalf("write incomplete specification review: %v", err)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: specification.Invocation.ID}); err != nil {
+		t.Fatalf("accept incomplete specification review: %v", err)
+	}
+	standardsValue := reviewReport(standards, nil)
+	standardsValue.Outcome = report.OutcomeNeedsClarification
+	standardsValue.ReviewHandoff = nil
+	standardsValue.Questions = []report.Question{{ID: "missing-artifact", Prompt: "Which artifact should be reviewed by the standards axis?"}}
+	if _, err := report.WriteAtomicForInvocation(standards.Invocation.ResultDirectory, standards.Invocation.ID, standardsValue); err != nil {
+		t.Fatalf("write standards review: %v", err)
+	}
+	if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: standards.Invocation.ID}); err != nil {
+		t.Fatalf("accept standards review: %v", err)
+	}
+	current := fixture.runStore.current
+	if current.Stage != store.StageReview || current.Status != store.StatusWaitingForHuman || current.ReviewRepairPacket != nil || current.SpecificationReview == nil || current.SpecificationReview.Outcome != string(report.OutcomeNeedsClarification) {
+		t.Fatalf("incomplete no-finding review = %#v, want explicit human wait without repair", current)
+	}
+	status := factory.StatusCommentBody(*current)
+	for _, marker := range []string{"needs_clarification", "Which artifact should be reviewed?", "missing-artifact"} {
+		if !strings.Contains(status, marker) {
+			t.Errorf("status comment missing %q: %s", marker, status)
+		}
 	}
 }
 

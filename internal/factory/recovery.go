@@ -1061,6 +1061,20 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			return run, diagnosis, RecoveryOutcomeWaitingForHuman, recoveryErrorWithCause(diagnosis, replayErr)
 		}
 		run = updated
+		if pending.Kind == store.PendingEffectKindResultAcceptance {
+			acceptedInvocation, acceptedReport, isReview, reviewErr := readAcceptedReviewReportFromEffect(*pending)
+			if reviewErr != nil {
+				return s.pauseAfterReplayedReviewProjectionError(ctx, registration, runStore, run, reviewErr)
+			}
+			if isReview {
+				if acceptedInvocation.RunID != run.ID {
+					return s.pauseAfterReplayedReviewProjectionError(ctx, registration, runStore, run, fmt.Errorf("accepted review invocation belongs to run %q, current run is %q", acceptedInvocation.RunID, run.ID))
+				}
+				if _, reviewErr := s.acceptReviewReport(ctx, registration, runStore, &run, &acceptedInvocation, acceptedReport); reviewErr != nil {
+					return s.pauseAfterReplayedReviewProjectionError(ctx, registration, runStore, run, reviewErr)
+				}
+			}
+		}
 		if resumeWasAlreadyReserved {
 			// The reservation was persisted before the native command, so a
 			// pending row with the reservation already consumed is ambiguous:
@@ -1242,6 +1256,28 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 		return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
 	}
 	return run, diagnosis, RecoveryOutcomeReconciled, nil
+}
+
+// pauseAfterReplayedReviewProjectionError records a bounded workflow discrepancy
+// when the journaled harness boundary completed but the review-specific
+// coordinator projection could not be resumed. The accepted invocation and
+// its durable result remain available for human inspection; no second report
+// effect is attempted from this failure path.
+func (s *Service) pauseAfterReplayedReviewProjectionError(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, cause error) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error) {
+	diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
+	addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+		Kind:     RecoveryDiscrepancyWorkflow,
+		Source:   "pending effect",
+		Field:    "review result projection",
+		Expected: "replayed review result routed through the coordinator",
+		Observed: cause.Error(),
+	})
+	diagnosis.SourcesAgree = false
+	paused, pauseErr := s.pauseRunLocally(ctx, runStore, run, diagnosis)
+	if pauseErr != nil {
+		return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(recoveryErrorWithCause(diagnosis, cause), pauseErr)
+	}
+	return paused, diagnosis, RecoveryOutcomeWaitingForHuman, recoveryErrorWithCause(diagnosis, cause)
 }
 
 // pauseForCredentialProjection records a bounded credential discrepancy and

@@ -230,3 +230,73 @@ func TestRunWritesTheSpecificationReviewFindingContract(t *testing.T) {
 		t.Fatalf("review handoff = %#v, want exact SHA and two findings", value.ReviewHandoff)
 	}
 }
+
+// TestRunCarriesFindingsForIncompleteReviewOutcomes verifies the CLI keeps
+// structured findings when the reviewer also reports a bounded interruption.
+func TestRunCarriesFindingsForIncompleteReviewOutcomes(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		outcome    string
+		contextArg string
+	}{
+		{name: "needs clarification", outcome: "needs_clarification", contextArg: "--question=artifact=which artifact should be reviewed"},
+		{name: "cannot proceed", outcome: "cannot_proceed", contextArg: "--evidence=artifact=the required artifact is unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resultDirectory := t.TempDir()
+			var errorsOutput bytes.Buffer
+			status := reportcli.Run(reportcli.Request{
+				Args: []string{
+					"--outcome", test.outcome, "--summary", "review stopped after establishing a finding",
+					"--finding", "internal/factory/review.go:42|the checkpoint violates the requirement|the observed behavior is incorrect|blocker|correctness|repair the behavior|implementation",
+					test.contextArg,
+				},
+				Environment: map[string]string{
+					"FACTORY_INVOCATION_ID":  "inv-incomplete-review",
+					"FACTORY_RUN_ID":         "run-incomplete-review",
+					"FACTORY_HARNESS":        "codex",
+					"FACTORY_ROLE":           "spec_review",
+					"FACTORY_STAGE":          "review",
+					"FACTORY_CHECKPOINT_SHA": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					"FACTORY_RESULT_DIR":     resultDirectory,
+				},
+				Output: &bytes.Buffer{}, ErrorsOutput: &errorsOutput,
+			})
+			if status != 0 {
+				t.Fatalf("Run() status = %d, stderr = %s", status, errorsOutput.String())
+			}
+			value, err := report.Read(resultDirectory + "/report.json")
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if value.ReviewHandoff == nil || len(value.ReviewHandoff.Findings) != 1 {
+				t.Fatalf("review handoff = %#v, want one finding for %s", value.ReviewHandoff, test.outcome)
+			}
+		})
+	}
+}
+
+// TestRunRejectsReviewFindingsForNonReviewOutcomes verifies outcome-inapplicable
+// finding flags fail explicitly instead of disappearing from the report.
+func TestRunRejectsReviewFindingsForNonReviewOutcomes(t *testing.T) {
+	var errorsOutput bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{
+			"--outcome", "cannot_proceed", "--summary", "implementation stopped",
+			"--evidence", "command=the command cannot run",
+			"--finding", "internal/factory/agent.go:42|the behavior is wrong|the test demonstrates it|blocker|correctness|repair it|implementation",
+		},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID": "inv-implementation",
+			"FACTORY_RUN_ID":        "run-implementation",
+			"FACTORY_HARNESS":       "codex",
+			"FACTORY_ROLE":          "implementation",
+			"FACTORY_STAGE":         "implementation",
+			"FACTORY_RESULT_DIR":    t.TempDir(),
+		},
+		Output: &bytes.Buffer{}, ErrorsOutput: &errorsOutput,
+	})
+	if status == 0 || !strings.Contains(errorsOutput.String(), "--finding") {
+		t.Fatalf("Run() status = %d, stderr = %q, want explicit finding rejection", status, errorsOutput.String())
+	}
+}

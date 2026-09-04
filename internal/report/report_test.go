@@ -387,6 +387,77 @@ func TestValidateAcceptsACompleteSpecificationReview(t *testing.T) {
 	}
 }
 
+// TestValidateAcceptsFindingsOnIncompleteReviewOutcomes verifies a reviewer can
+// preserve an established finding while its top-level assignment remains
+// incomplete.
+func TestValidateAcceptsFindingsOnIncompleteReviewOutcomes(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		outcome report.Outcome
+		payload func(*report.Report)
+	}{
+		{
+			name:    "needs clarification",
+			outcome: report.OutcomeNeedsClarification,
+			payload: func(value *report.Report) {
+				value.Questions = []report.Question{{ID: "missing-artifact", Prompt: "Which artifact should be reviewed?"}}
+			},
+		},
+		{
+			name:    "cannot proceed",
+			outcome: report.OutcomeCannotProceed,
+			payload: func(value *report.Report) {
+				value.Evidence = []report.Evidence{{Kind: "artifact", Detail: "the required artifact is unavailable"}}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := specificationReviewReport()
+			value.Outcome = test.outcome
+			value.ReviewHandoff.Findings = value.ReviewHandoff.Findings[:1]
+			value.ReviewHandoff.ReviewedSHA = strings.Repeat("a", 40)
+			value.Handoff = nil
+			value.Questions = nil
+			value.Evidence = nil
+			test.payload(&value)
+			if err := report.Validate(value, report.ValidationContext{
+				InvocationID: "inv-review", RunID: "run-review", Harness: "codex", Role: "spec_review", Stage: "review",
+				CheckpointSHA: value.ReviewHandoff.ReviewedSHA,
+			}); err != nil {
+				t.Fatalf("Validate() error = %v, want incomplete review finding accepted", err)
+			}
+		})
+	}
+}
+
+// TestValidateAcceptsAnIncompleteReviewWithoutFindings verifies an incomplete
+// review remains valid without inventing an empty handoff.
+func TestValidateAcceptsAnIncompleteReviewWithoutFindings(t *testing.T) {
+	value := specificationReviewReport()
+	value.Outcome = report.OutcomeCannotProceed
+	value.ReviewHandoff = nil
+	value.Evidence = []report.Evidence{{Kind: "artifact", Detail: "the required artifact is unavailable"}}
+	if err := report.Validate(value, report.ValidationContext{
+		InvocationID: "inv-review", RunID: "run-review", Harness: "codex", Role: "spec_review", Stage: "review",
+		CheckpointSHA: strings.Repeat("a", 40),
+	}); err != nil {
+		t.Fatalf("Validate() error = %v, want no-finding incomplete review accepted", err)
+	}
+}
+
+// TestValidateKeepsIncompleteNonReviewReportsStrict verifies the review-only
+// exception does not permit a handoff on an implementation outcome.
+func TestValidateKeepsIncompleteNonReviewReportsStrict(t *testing.T) {
+	value := completedReport()
+	value.Outcome = report.OutcomeCannotProceed
+	value.Evidence = []report.Evidence{{Kind: "command", Detail: "the command cannot run"}}
+	if err := report.Validate(value, report.ValidationContext{
+		InvocationID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: "implementation",
+	}); err == nil || !strings.Contains(err.Error(), "only evidence") {
+		t.Fatalf("Validate() error = %v, want non-review handoff rejection", err)
+	}
+}
+
 // TestValidateRequiresStandardsFindingProvenance verifies each standards-axis
 // finding names a guidance document or heuristic and binds that source to its
 // exact reported hunk.

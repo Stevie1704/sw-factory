@@ -807,6 +807,51 @@ func TestRunPersistsRoleAndSpecificationReviewProjections(t *testing.T) {
 	}
 }
 
+// TestRunPersistsIncompleteReviewDispositionAndFindingsAcrossRestart verifies
+// an interrupted review axis retains its outcome context and findings in the
+// durable projection.
+func TestRunPersistsIncompleteReviewDispositionAndFindingsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := strings.Repeat("c", 64)
+	want := store.Run{
+		ID: "run-incomplete-review", RepositoryPath: "/work/repository", Stage: store.StageReview,
+		Status: store.StatusWaitingForHuman, CheckpointSHA: checkpoint,
+		SpecificationReview: &store.SpecificationReview{
+			CheckpointSHA: checkpoint,
+			Outcome:       "cannot_proceed",
+			Summary:       "review stopped after establishing a blocker",
+			Evidence:      []store.ReviewEvidence{{Kind: "artifact", Detail: "the required artifact is unavailable"}},
+			Findings: []store.ReviewFinding{{
+				Location: "internal/factory/review.go:42", Claim: "the behavior is incorrect", Evidence: "the observed behavior fails",
+				Severity: "blocker", Category: "correctness", SuggestedResolution: "repair the behavior", SuggestedOwner: "implementation",
+			}},
+		},
+	}
+	if err := opened.SaveRun(context.Background(), want); err != nil {
+		_ = opened.Close()
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.SpecificationReview == nil || got.SpecificationReview.Outcome != "cannot_proceed" || got.SpecificationReview.Summary != want.SpecificationReview.Summary || len(got.SpecificationReview.Findings) != 1 || len(got.SpecificationReview.Evidence) != 1 {
+		t.Fatalf("CurrentRun() = %#v, want incomplete review disposition and finding", got)
+	}
+}
+
 // TestRunRejectsAReviewProjectionForAnOlderCheckpoint verifies stale findings
 // cannot be persisted or reused after a new immutable checkpoint is selected.
 func TestRunRejectsAReviewProjectionForAnOlderCheckpoint(t *testing.T) {

@@ -84,6 +84,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"specification-review-v1":                 "prompts/legacy/specification-review-v1.md",
 		"specification-review-v2":                 "prompts/legacy/specification-review-v2.md",
 		"specification-review-v3":                 "prompts/legacy/specification-review-v3.md",
+		"specification-review-v4":                 "prompts/legacy/specification-review-v4.md",
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
@@ -91,6 +92,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"standards-review-v2":                 "prompts/legacy/standards-review-v2.md",
 		"standards-review-v3":                 "prompts/legacy/standards-review-v3.md",
 		"standards-review-v4":                 "prompts/legacy/standards-review-v4.md",
+		"standards-review-v5":                 "prompts/legacy/standards-review-v5.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 }
@@ -102,8 +104,10 @@ var expectedPromptSHA256 = map[string]string{
 	workflow.PromptVersionImplementation:      "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd",
 	workflow.PromptVersionTest:                "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5",
 	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
-	workflow.PromptVersionSpecificationReview: "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773",
-	workflow.PromptVersionStandardsReview:     "f6c848e43eba598767911ba91e73b9372bd2c82d2a9d0729f79ec7e6a6a6fddb",
+	"specification-review-v4":                 "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773",
+	workflow.PromptVersionSpecificationReview: "b8f39cd13be19fbb71878f30bd8354a64e28a766e557b5e967f643a4974ce3e5",
+	"standards-review-v5":                     "f6c848e43eba598767911ba91e73b9372bd2c82d2a9d0729f79ec7e6a6a6fddb",
+	workflow.PromptVersionStandardsReview:     "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",

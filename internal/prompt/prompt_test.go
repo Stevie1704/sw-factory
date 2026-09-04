@@ -414,10 +414,35 @@ func TestBuildIncludesIndependentReviewRules(t *testing.T) {
 		"no upstream harness transcript",
 		"--finding location|claim|evidence|severity|category|resolution|owner",
 		"Taste and scope concerns are visible advisory findings",
+		"`completed` means the review assignment finished",
+		"`needs_clarification` or `cannot_proceed` means the review assignment is incomplete",
+		"Submit every established blocker or advisory through `--finding`",
 	} {
 		if !strings.Contains(value, marker) {
 			t.Fatalf("review prompt missing %q:\n%s", marker, value)
 		}
+	}
+}
+
+// TestBuildKeepsLegacyReviewRulesVersioned verifies a historical review prompt
+// is not silently augmented with the current outcome-and-finding contract.
+func TestBuildKeepsLegacyReviewRulesVersioned(t *testing.T) {
+	value, err := prompt.Build(prompt.Request{
+		InvocationID:        "inv-legacy-review",
+		RunID:               "run-legacy-review",
+		Role:                workflow.RoleSpecificationReview,
+		Stage:               string(store.StageReview),
+		PromptVersion:       "specification-review-v4",
+		SpecificationPacket: `{}`,
+		ReviewContext: &prompt.ReviewContext{
+			CheckpointSHA: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if strings.Contains(value, "Review outcome and finding contract:") {
+		t.Fatalf("legacy review prompt received current review contract:\n%s", value)
 	}
 }
 
@@ -734,8 +759,8 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5"},
 		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74"},
-		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773"},
-		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "f6c848e43eba598767911ba91e73b9372bd2c82d2a9d0729f79ec7e6a6a6fddb"},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "b8f39cd13be19fbb71878f30bd8354a64e28a766e557b5e967f643a4974ce3e5"},
+		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

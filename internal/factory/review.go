@@ -38,6 +38,10 @@ const (
 	reviewDiffContextLines = 10
 )
 
+// reviewAxisRoles lists the reviewer roles that own a per-axis durable result
+// for one checkpoint, in the order their projections are read.
+var reviewAxisRoles = []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview}
+
 // roleHandoffFromReport converts the report protocol's completed handoff into
 // the durable reviewer-facing role projection.
 func roleHandoffFromReport(value report.Handoff) *store.RoleHandoff {
@@ -179,8 +183,8 @@ func concurrentReviewsConfigured(run store.Run) bool {
 }
 
 // reviewRoundComplete reports whether every reviewer configured for the frozen
-// packet has produced an exact-checkpoint result. A result from another
-// checkpoint never completes the round.
+// packet has produced an exact-checkpoint result, regardless of disposition. A
+// result from another checkpoint never completes the round.
 func reviewRoundComplete(run store.Run) bool {
 	if reviewRoleConfigured(run, workflow.RoleSpecificationReview) {
 		specification := reviewResultForRole(run, workflow.RoleSpecificationReview)
@@ -419,31 +423,141 @@ func reviewHasBlockingFindingForRole(role string, findings []store.ReviewFinding
 	return false
 }
 
-// specificationReviewFromReport converts a validated completed review into a
-// durable exact-checkpoint projection.
-func specificationReviewFromReport(value report.ReviewHandoff) *store.SpecificationReview {
-	return reviewResultFromReport(value)
-}
-
-// reviewResultFromReport converts a validated review handoff into a durable
-// exact-checkpoint result shared by both reviewer roles.
-func reviewResultFromReport(value report.ReviewHandoff) *store.ReviewResult {
+// reviewResultProjectionFromReport retains every durable review-axis field,
+// including an incomplete disposition, its operator-visible reason, and any
+// findings established before the reviewer stopped.
+func reviewResultProjectionFromReport(value report.Report, checkpoint string) *store.ReviewResult {
 	result := &store.ReviewResult{
-		CheckpointSHA: value.ReviewedSHA,
-		Findings:      make([]store.ReviewFinding, 0, len(value.Findings)),
+		CheckpointSHA: checkpoint,
+		Outcome:       string(value.Outcome),
+		Summary:       value.Summary,
+		Findings:      make([]store.ReviewFinding, 0),
 	}
-	for _, finding := range value.Findings {
-		result.Findings = append(result.Findings, store.ReviewFinding{
-			Location:            finding.Location,
-			Claim:               finding.Claim,
-			Evidence:            finding.Evidence,
-			Severity:            string(finding.Severity),
-			Category:            string(finding.Category),
-			SuggestedResolution: finding.SuggestedResolution,
-			SuggestedOwner:      finding.SuggestedOwner,
-		})
+	if value.ReviewHandoff != nil {
+		result.CheckpointSHA = value.ReviewHandoff.ReviewedSHA
+		result.Findings = make([]store.ReviewFinding, 0, len(value.ReviewHandoff.Findings))
+		for _, finding := range value.ReviewHandoff.Findings {
+			result.Findings = append(result.Findings, store.ReviewFinding{
+				Location:            finding.Location,
+				Claim:               finding.Claim,
+				Evidence:            finding.Evidence,
+				Severity:            string(finding.Severity),
+				Category:            string(finding.Category),
+				SuggestedResolution: finding.SuggestedResolution,
+				SuggestedOwner:      finding.SuggestedOwner,
+			})
+		}
+	}
+	if len(value.Questions) > 0 {
+		result.Questions = make([]store.ReviewQuestion, 0, len(value.Questions))
+		for _, question := range value.Questions {
+			result.Questions = append(result.Questions, store.ReviewQuestion{
+				ID:     question.ID,
+				Prompt: question.Prompt,
+			})
+		}
+	}
+	if len(value.Evidence) > 0 {
+		result.Evidence = make([]store.ReviewEvidence, 0, len(value.Evidence))
+		for _, evidence := range value.Evidence {
+			result.Evidence = append(result.Evidence, store.ReviewEvidence{
+				Kind:   evidence.Kind,
+				Detail: evidence.Detail,
+			})
+		}
 	}
 	return result
+}
+
+// effectiveReviewOutcome returns the current disposition while treating an
+// empty outcome as the completed value used by pre-disposition store rows.
+func effectiveReviewOutcome(review *store.ReviewResult) string {
+	if review == nil || review.Outcome == "" {
+		return string(report.OutcomeCompleted)
+	}
+	return review.Outcome
+}
+
+// reviewIsIncomplete reports whether a durable review result still requires a
+// human disposition rather than having finished its assignment.
+func reviewIsIncomplete(review *store.ReviewResult) bool {
+	return effectiveReviewOutcome(review) != string(report.OutcomeCompleted)
+}
+
+// checkpointReviewForRole returns the durable result owned by one reviewer
+// role only when it was recorded against the run's exact checkpoint.
+func checkpointReviewForRole(run store.Run, role string) *store.ReviewResult {
+	review := reviewResultForRole(run, role)
+	if review == nil || review.CheckpointSHA != run.CheckpointSHA {
+		return nil
+	}
+	return review
+}
+
+// reviewHasIncompleteResult reports whether any exact-checkpoint reviewer
+// result still requires a human disposition. It deliberately distinguishes a
+// durable incomplete result without findings from a completed clean result.
+func reviewHasIncompleteResult(run store.Run) bool {
+	for _, role := range reviewAxisRoles {
+		review := checkpointReviewForRole(run, role)
+		if review != nil && reviewIsIncomplete(review) {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewQuestionsForRun rebuilds the operational question projection from
+// each exact-checkpoint review result so a later axis cannot erase an earlier
+// axis's clarification request.
+func reviewQuestionsForRun(run store.Run) []store.PendingQuestion {
+	var questions []store.PendingQuestion
+	for _, role := range reviewAxisRoles {
+		review := checkpointReviewForRole(run, role)
+		if review == nil {
+			continue
+		}
+		for _, question := range review.Questions {
+			// Review questions are independent per axis. Namespace their
+			// flattened command IDs so two valid reports may use the same local
+			// identifier without making the second reviewer unfinishable.
+			questions = append(questions, store.PendingQuestion{
+				ID:     role + "." + question.ID,
+				Prompt: question.Prompt,
+			})
+		}
+	}
+	return questions
+}
+
+// reviewWaitingReason identifies the bounded review disposition that keeps a
+// complete round from becoming ready. Detailed questions and evidence remain
+// in the per-axis projection and supervision surfaces.
+func reviewWaitingReason(run store.Run) string {
+	for _, role := range reviewAxisRoles {
+		review := checkpointReviewForRole(run, role)
+		if review != nil && reviewIsIncomplete(review) {
+			return fmt.Sprintf("%s reported %s; human disposition required", role, effectiveReviewOutcome(review))
+		}
+	}
+	return "review round remains waiting for human disposition"
+}
+
+// reviewProjectionDetails renders the bounded metadata retained with one
+// review result. The same lines feed the issue status and pull-request
+// projections so an incomplete axis cannot disappear from either surface.
+func reviewProjectionDetails(review store.ReviewResult) []string {
+	lines := []string{fmt.Sprintf("- disposition: `%s`", safeStatusCommentValue(effectiveReviewOutcome(&review)))}
+	if strings.TrimSpace(review.Summary) != "" {
+		lines = append(lines, fmt.Sprintf("- summary: %s", safeStatusCommentValue(review.Summary)))
+	}
+	for _, question := range review.Questions {
+		lines = append(lines, fmt.Sprintf("- question `%s`: %s", safeStatusCommentValue(question.ID), safeStatusCommentValue(question.Prompt)))
+	}
+	for _, evidence := range review.Evidence {
+		lines = append(lines, fmt.Sprintf("- evidence `%s`: %s", safeStatusCommentValue(evidence.Kind), safeStatusCommentValue(evidence.Detail)))
+	}
+	return lines
 }
 
 // reviewResultForRole returns the durable result owned by one reviewer role.
@@ -475,6 +589,20 @@ func setReviewResultForRole(run *store.Run, role string, result *store.ReviewRes
 	return nil
 }
 
+// applyReviewResultProjection records the exact-checkpoint result before an
+// acceptance effect crosses its restart boundary. The effect payload therefore
+// cannot replay a terminal reviewer invocation while losing its findings.
+func applyReviewResultProjection(run *store.Run, role string, value report.Report) error {
+	if err := setReviewResultForRole(run, role, reviewResultProjectionFromReport(value, run.CheckpointSHA)); err != nil {
+		return err
+	}
+	run.Stage = store.StageReview
+	run.PendingQuestions = reviewQuestionsForRun(*run)
+	run.ClarificationCommentID = ""
+	run.ClarificationNotificationSent = false
+	return nil
+}
+
 // acceptSpecificationReviewReport preserves the original specification-review
 // seam while routing through the concurrent review-round implementation.
 func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
@@ -492,87 +620,60 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	if err != nil {
 		return AgentResult{}, err
 	}
+	if roleDefinition.Kind != workflow.RoleKindReview {
+		return AgentResult{}, fmt.Errorf("invocation %q is not a review role", invocation.ID)
+	}
 	previous := *run
-	humanReviewWaiting := run.Stage == store.StageReview && run.Status == store.StatusWaitingForHuman && (len(run.PendingQuestions) > 0 || strings.Contains(run.LifecycleReason, "requested clarification") || strings.Contains(run.LifecycleReason, "cannot proceed"))
-	statusState := github.CommitStatusError
-	statusDescription := fmt.Sprintf("%s requires human disposition", invocation.Role)
-	switch value.Outcome {
-	case report.OutcomeCompleted:
-		review := reviewResultFromReport(*value.ReviewHandoff)
-		if err := setReviewResultForRole(run, invocation.Role, review); err != nil {
-			return AgentResult{}, err
-		}
-		blocking := reviewHasBlockingResult(*run)
-		complete := reviewRoundComplete(*run)
-		if blocking && complete {
-			run.Stage = store.StageReview
-			run.Status = store.StatusActive
-			run.LifecycleReason = fmt.Sprintf("review round has blocking violations; routing repair (%s)", invocation.Role)
+	if err := applyReviewResultProjection(run, invocation.Role, value); err != nil {
+		return AgentResult{}, err
+	}
+	review := reviewResultForRole(*run, invocation.Role)
+	blocking := reviewHasBlockingResult(*run)
+	complete := reviewRoundComplete(*run)
+	incomplete := reviewHasIncompleteResult(*run)
+	ownBlocking := reviewHasBlockingFindingForRole(invocation.Role, review.Findings)
+	statusState := github.CommitStatusSuccess
+	statusDescription := fmt.Sprintf("%s passed; %d advisory findings", invocation.Role, len(review.Findings))
+	switch {
+	case complete && blocking:
+		run.Status = store.StatusActive
+		run.LifecycleReason = fmt.Sprintf("review round has blocking violations; routing repair (%s)", invocation.Role)
+		if ownBlocking {
 			statusState = github.CommitStatusFailure
-			if !reviewHasBlockingFindingForRole(invocation.Role, review.Findings) {
-				statusState = github.CommitStatusSuccess
-				statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
-			} else {
-				statusDescription = fmt.Sprintf("%s found blocking findings", invocation.Role)
-			}
-		} else if blocking {
-			run.Stage = store.StageReview
-			run.Status = store.StatusActive
-			run.LifecycleReason = fmt.Sprintf("%s found blocking findings; waiting for the other review", invocation.Role)
-			if reviewHasBlockingFindingForRole(invocation.Role, review.Findings) {
-				statusState = github.CommitStatusFailure
-				statusDescription = fmt.Sprintf("%s found blocking findings; waiting for the other review", invocation.Role)
-			} else {
-				statusState = github.CommitStatusSuccess
-				statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
-			}
-		} else if humanReviewWaiting {
-			run.Stage = store.StageReview
-			run.Status = store.StatusWaitingForHuman
-			run.LifecycleReason = fmt.Sprintf("review round remains waiting for human disposition after %s", invocation.Role)
-			statusState = github.CommitStatusSuccess
-			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
-		} else if reviewRoundComplete(*run) {
-			// Keep readiness provisional until the coordinator has revalidated
-			// final-SHA gates, synchronized the target when configured, removed
-			// the draft flag, and persisted the ready projection.
-			run.Stage = store.StageReview
-			run.Status = store.StatusActive
-			run.LifecycleReason = "all configured reviews passed; finalizing pull-request readiness"
-			statusState = github.CommitStatusSuccess
-			statusDescription = fmt.Sprintf("%s passed; review round complete", invocation.Role)
+			statusDescription = fmt.Sprintf("%s found blocking findings", invocation.Role)
 		} else {
-			run.Stage = store.StageReview
-			run.Status = store.StatusActive
-			run.LifecycleReason = fmt.Sprintf("%s passed; waiting for the other review", invocation.Role)
-			statusState = github.CommitStatusSuccess
-			statusDescription = fmt.Sprintf("%s passed; %d advisory findings", invocation.Role, len(review.Findings))
+			statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
 		}
-		run.PendingQuestions = nil
-		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
-	case report.OutcomeNeedsClarification:
-		if err := setReviewResultForRole(run, invocation.Role, nil); err != nil {
-			return AgentResult{}, err
+	case blocking:
+		run.Status = store.StatusActive
+		if ownBlocking {
+			run.LifecycleReason = fmt.Sprintf("%s reported %s with blocking findings; waiting for the other review", invocation.Role, effectiveReviewOutcome(review))
+			statusState = github.CommitStatusFailure
+			statusDescription = fmt.Sprintf("%s reported %s with blocking findings; waiting for the other review", invocation.Role, effectiveReviewOutcome(review))
+		} else {
+			run.LifecycleReason = fmt.Sprintf("%s reported %s; another review has blocking findings", invocation.Role, effectiveReviewOutcome(review))
+			statusDescription = fmt.Sprintf("%s reported %s; another review has blocking findings", invocation.Role, effectiveReviewOutcome(review))
 		}
-		run.Stage = store.StageReview
+	case incomplete:
 		run.Status = store.StatusWaitingForHuman
-		run.LifecycleReason = fmt.Sprintf("%s requested clarification", invocation.Role)
-		run.PendingQuestions = pendingQuestionsFromReport(value.Questions)
-		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
-	case report.OutcomeCannotProceed:
-		if err := setReviewResultForRole(run, invocation.Role, nil); err != nil {
-			return AgentResult{}, err
+		run.LifecycleReason = reviewWaitingReason(*run)
+		if !reviewIsIncomplete(review) {
+			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
+		} else {
+			statusState = github.CommitStatusError
+			statusDescription = fmt.Sprintf("%s reported %s; human disposition required", invocation.Role, effectiveReviewOutcome(review))
 		}
-		run.Stage = store.StageReview
-		run.Status = store.StatusWaitingForHuman
-		run.LifecycleReason = fmt.Sprintf("%s cannot proceed", invocation.Role)
-		run.PendingQuestions = nil
-		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
+	case complete:
+		// Keep readiness provisional until the coordinator has revalidated
+		// final-SHA gates, synchronized the target when configured, removed
+		// the draft flag, and persisted the ready projection.
+		run.Status = store.StatusActive
+		run.LifecycleReason = "all configured reviews passed; finalizing pull-request readiness"
+		statusDescription = fmt.Sprintf("%s passed; review round complete", invocation.Role)
 	default:
-		return AgentResult{}, fmt.Errorf("unsupported %s outcome %q", invocation.Role, value.Outcome)
+		run.Status = store.StatusActive
+		run.LifecycleReason = fmt.Sprintf("%s passed; waiting for the other review", invocation.Role)
+		statusDescription = fmt.Sprintf("%s passed; waiting for the other review", invocation.Role)
 	}
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.publishReviewStatus(ctx, registration, runStore, *run, invocation.Role, statusState, statusDescription); err != nil {
@@ -581,27 +682,25 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist %s state: %w", invocation.Role, err)
 	}
-	if value.Outcome == report.OutcomeCompleted && roleDefinition.Kind == workflow.RoleKindReview {
-		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
-			return AgentResult{}, fmt.Errorf("refresh pull request after %s: %w", invocation.Role, err)
-		}
-		if reviewRoundComplete(*run) {
-			if reviewHasBlockingResult(*run) {
-				repair, repairErr := s.routeReviewRepair(ctx, registration, runStore, *run)
-				if repairErr != nil {
-					return AgentResult{}, repairErr
-				}
-				*run = repair.Run
-			} else {
-				ready, readyErr := s.finalizeReviewReadiness(ctx, registration, runStore, *run)
-				if readyErr != nil {
-					return AgentResult{}, readyErr
-				}
-				*run = ready
+	if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
+		return AgentResult{}, fmt.Errorf("refresh pull request after %s: %w", invocation.Role, err)
+	}
+	if complete {
+		if blocking {
+			repair, repairErr := s.routeReviewRepair(ctx, registration, runStore, *run)
+			if repairErr != nil {
+				return AgentResult{}, repairErr
 			}
+			*run = repair.Run
+		} else if !incomplete {
+			ready, readyErr := s.finalizeReviewReadiness(ctx, registration, runStore, *run)
+			if readyErr != nil {
+				return AgentResult{}, readyErr
+			}
+			*run = ready
 		}
 	}
-	if value.Outcome == report.OutcomeNeedsClarification {
+	if len(run.PendingQuestions) > 0 {
 		published, err := s.ensureClarificationPublication(ctx, registration, runStore, *run)
 		if err != nil {
 			return AgentResult{}, err
