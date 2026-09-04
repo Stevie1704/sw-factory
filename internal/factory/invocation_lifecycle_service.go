@@ -48,7 +48,7 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
-	result, err := s.lifecycleModule().Launch(ctx, InvocationLaunchRequest{Registration: registration, RunStore: runStore, Run: run, Request: request, InvocationID: invocationID, StartedHere: s.invocationStartedHere})
+	result, err := s.lifecycleModule().Launch(ctx, InvocationLaunchRequest{Registration: registration, RunStore: runStore, Run: run, Request: request, InvocationID: invocationID, StartedHere: s.invocationStartedHere, EvaluationRecorder: launchEvaluationRecorderForRunStore(runStore)})
 	if err == nil {
 		s.markInvocationStarted(result.Invocation.ID)
 	}
@@ -91,7 +91,7 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 	if request.RunID != "" && request.RunID != run.ID {
 		return ResumeResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	result, err := s.lifecycleModule().Resume(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run, NewInvocationID: s.newInvocationID})
+	result, err := s.lifecycleModule().Resume(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run, NewInvocationID: s.newInvocationID, EvaluationRecorder: launchEvaluationRecorderForRunStore(runStore)})
 	if err == nil && result.Invocation.ID != "" {
 		s.markInvocationStarted(result.Invocation.ID)
 	}
@@ -176,18 +176,22 @@ func (s *Service) retryWaitingForHarness(ctx context.Context, registration confi
 		return nil
 	}
 	launch := func(launchRun store.Run) (AgentLaunchResult, error) {
-		if s.deps.NewRunID == nil {
-			return AgentLaunchResult{}, errors.New("generate invocation identifier: run id generator is required")
-		}
-		runID, err := s.deps.NewRunID()
+		invocationID, err := s.newInvocationID()
 		if err != nil {
-			return AgentLaunchResult{}, fmt.Errorf("generate invocation identifier: %w", err)
+			return AgentLaunchResult{}, err
 		}
-		result, err := s.lifecycleModule().Launch(ctx, InvocationLaunchRequest{Registration: registration, RunStore: runStore, Run: &launchRun, Request: normalizeAgentRequest(agentRequestForRun(launchRun)), InvocationID: "inv-" + runID, StartedHere: s.invocationStartedHere})
+		result, err := s.lifecycleModule().Launch(ctx, InvocationLaunchRequest{Registration: registration, RunStore: runStore, Run: &launchRun, Request: normalizeAgentRequest(agentRequestForRun(launchRun)), InvocationID: invocationID, StartedHere: s.invocationStartedHere, EvaluationRecorder: launchEvaluationRecorderForRunStore(runStore)})
 		if err == nil {
 			s.markInvocationStarted(result.Invocation.ID)
 		}
 		return result, err
 	}
 	return s.lifecycleModule().retryWaitingForHarness(ctx, registration, runStore, *run, launch)
+}
+
+// launchEvaluationRecorderForRunStore narrows a coordinator-owned store to
+// the content-free evaluation projection needed by lifecycle activation.
+func launchEvaluationRecorderForRunStore(runStore RunStore) launchEvaluationRecorder {
+	recorder, _ := runStore.(launchEvaluationRecorder)
+	return recorder
 }

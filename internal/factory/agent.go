@@ -1073,7 +1073,7 @@ func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStor
 		return fmt.Errorf("validate baseline before %q transition: %w", request.Stage, err)
 	}
 	if run.Stage == store.StageClaim && request.Stage == store.StageImplementation && !independentTestStageDeclared(packet) {
-		if err := s.ensureBaselineReady(ctx, runStore, run, packet); err != nil {
+		if err := ensureBaselineReadyForLaunch(ctx, runStore, run, packet); err != nil {
 			return fmt.Errorf("cannot transition from claim to implementation without complete baseline results: %w", err)
 		}
 		return nil
@@ -1081,7 +1081,7 @@ func (s *Service) ensureTransitionBaseline(ctx context.Context, runStore RunStor
 	if run.Stage != store.StageCheck {
 		return nil
 	}
-	if err := s.ensureBaselineReadyAtCheckpoint(ctx, runStore, run, packet, run.CheckpointSHA); err != nil {
+	if err := ensureBaselineReadyAtCheckpointForLaunch(ctx, runStore, run, packet, run.CheckpointSHA); err != nil {
 		return fmt.Errorf("cannot transition from check to %q at checkpoint %q without complete baseline results: %w", request.Stage, run.CheckpointSHA, err)
 	}
 	return nil

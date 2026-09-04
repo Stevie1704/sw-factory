@@ -113,6 +113,9 @@ type InvocationLaunchRequest struct {
 	InvocationID string
 	// StartedHere observes process-local launch ownership during gather.
 	StartedHere func(string) bool
+	// EvaluationRecorder records content-free evaluation invocation metadata
+	// after the invocation has been persisted.
+	EvaluationRecorder launchEvaluationRecorder
 }
 
 // InvocationRecoveryRequest supplies one already-open run to a recovery
@@ -129,6 +132,17 @@ type InvocationRecoveryRequest struct {
 	// NewInvocationID resolves an ID only when this recovery needs a fresh
 	// launch; it keeps the generator outside the lifecycle module.
 	NewInvocationID func() (string, error)
+	// EvaluationRecorder records content-free evaluation invocation metadata
+	// for a fresh launch created during recovery.
+	EvaluationRecorder launchEvaluationRecorder
+}
+
+// launchEvaluationRecorder is the narrow evaluation projection required by
+// launch activation. The lifecycle module receives it explicitly instead of
+// discovering the coordinator's broader store capability itself.
+type launchEvaluationRecorder interface {
+	EnsureEvaluationSummary(context.Context, store.Run) error
+	RecordEvaluationInvocation(context.Context, string, store.Invocation, string, int) error
 }
 
 // InvocationStopRequest selects the active workers delegated to a run.
@@ -259,7 +273,7 @@ func (l *invocationLifecycle) resumeWithoutActiveInvocation(ctx context.Context,
 	}
 	launchRun := run
 	launchRun.Status = store.StatusActive
-	launch, err := l.Launch(ctx, InvocationLaunchRequest{Registration: request.Registration, RunStore: request.RunStore, Run: &launchRun, Request: normalizeAgentRequest(agentRequestForRun(run)), InvocationID: invocationID})
+	launch, err := l.Launch(ctx, InvocationLaunchRequest{Registration: request.Registration, RunStore: request.RunStore, Run: &launchRun, Request: normalizeAgentRequest(agentRequestForRun(run)), InvocationID: invocationID, EvaluationRecorder: request.EvaluationRecorder})
 	if err != nil {
 		return ResumeResult{Run: run, Invocation: launch.Invocation}, err
 	}
@@ -975,7 +989,7 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 		return AgentLaunchResult{}, fmt.Errorf("persist visible invocation: %w", err)
 	}
 	invocationPersisted = true
-	if err := l.recordLaunchEvaluation(ctx, request.RunStore, *request.Run, invocation); err != nil {
+	if err := l.recordLaunchEvaluation(ctx, request.EvaluationRecorder, *request.Run, invocation); err != nil {
 		return AgentLaunchResult{}, err
 	}
 	if l.hooks.startWorker == nil {
@@ -1031,9 +1045,8 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 
 // recordLaunchEvaluation records only the content-free invocation metadata when
 // the open store exposes the optional evaluation recorder seam.
-func (l *invocationLifecycle) recordLaunchEvaluation(ctx context.Context, runStore RunStore, run store.Run, invocation store.Invocation) error {
-	recorder, ok := runStore.(evaluationRecorder)
-	if !ok {
+func (l *invocationLifecycle) recordLaunchEvaluation(ctx context.Context, recorder launchEvaluationRecorder, run store.Run, invocation store.Invocation) error {
+	if recorder == nil {
 		return nil
 	}
 	if err := recorder.EnsureEvaluationSummary(ctx, run); err != nil {
@@ -1059,14 +1072,21 @@ func (l *invocationLifecycle) ensureLaunchTerminal(ctx context.Context, registra
 	if err != nil {
 		return launchWorkspace{}, terminal.Surface{}, err
 	}
-	agentSurface := runWorkspace.Implementation
+	agentSurface := roleSurfaceForWorkspace(runWorkspace, role)
+	return launchWorkspace{control: control, run: runWorkspace}, agentSurface, nil
+}
+
+// roleSurfaceForWorkspace selects the terminal surface declared by a workflow
+// role, keeping fresh launches and recovery restoration on the same topology.
+func roleSurfaceForWorkspace(runWorkspace terminal.RunWorkspace, role workflow.RoleDefinition) terminal.Surface {
 	switch role.Surface {
 	case workflow.SurfaceChecks:
-		agentSurface = runWorkspace.Checks
+		return runWorkspace.Checks
 	case workflow.SurfaceRole:
-		agentSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: role.Name}
+		return terminal.Surface{WorkspaceID: runWorkspace.ID, Name: role.Name}
+	default:
+		return runWorkspace.Implementation
 	}
-	return launchWorkspace{control: control, run: runWorkspace}, agentSurface, nil
 }
 
 // applyLaunchSurfaces projects terminal handles onto the persisted invocation.
@@ -1277,6 +1297,15 @@ func (l *invocationLifecycle) ensureAgentRuntime(socketPath string, selected con
 	if cached, exists := l.harnessRuntimes[selected]; exists {
 		return terminalRuntime, cached, nil
 	}
+	if l.harnessCapabilities != nil {
+		capabilities, err := l.harnessCapabilities(string(selected))
+		if err != nil {
+			return nil, nil, err
+		}
+		if capabilities.Name != string(selected) {
+			return nil, nil, fmt.Errorf("harness %q resolved to %q", selected, capabilities.Name)
+		}
+	}
 	harnessRuntime, err := harness.New(string(selected), l.worker, terminalRuntime)
 	if err != nil {
 		return nil, nil, err
@@ -1445,14 +1474,7 @@ func (l *invocationLifecycle) restoreInvocationTerminal(ctx context.Context, ter
 		return workspaceID, roleSurface, status, checks, false, fmt.Errorf("restore run terminal workspace: %w", err)
 	}
 	workspaceID, status, checks = runWorkspace.ID, runWorkspace.Status, runWorkspace.Checks
-	switch roleDefinition.Surface {
-	case workflow.SurfaceChecks:
-		roleSurface = runWorkspace.Checks
-	case workflow.SurfaceRole:
-		roleSurface = terminal.Surface{WorkspaceID: runWorkspace.ID, Name: invocation.Role}
-	default:
-		roleSurface = runWorkspace.Implementation
-	}
+	roleSurface = roleSurfaceForWorkspace(runWorkspace, roleDefinition)
 	return workspaceID, roleSurface, status, checks, true, nil
 }
 
