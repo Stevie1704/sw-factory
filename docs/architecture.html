@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Software Factory — Architecture Building Blocks</title>
+<style>
+:root{
+  --bg:#fbfaf8; --panel:#ffffff; --ink:#1b1a17; --muted:#5f5b53; --faint:#8a8479;
+  --line:#e3ded4; --line2:#cfc8ba;
+  --accent:#8a5a2b; --accent-soft:#f5ece1;
+  --entry:#2f6f6b; --entry-soft:#e4f0ef;
+  --coord:#8a5a2b; --coord-soft:#f5ece1;
+  --policy:#4a5a86; --policy-soft:#e8ecf6;
+  --adapter:#6b6030; --adapter-soft:#f2eede;
+  --found:#6a5a72; --found-soft:#efeaf2;
+  --ext:#7a4444; --ext-soft:#f6e9e9;
+  --code-bg:#f4f1ea;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#16161a; --panel:#1d1e23; --ink:#e9e6df; --muted:#a8a296; --faint:#7d776c;
+    --line:#2f3037; --line2:#3f4048;
+    --accent:#d9a05f; --accent-soft:#2c241a;
+    --entry:#6fc0b8; --entry-soft:#172a29;
+    --coord:#d9a05f; --coord-soft:#2c241a;
+    --policy:#93a6d8; --policy-soft:#1c2030;
+    --adapter:#c4b673; --adapter-soft:#26241a;
+    --found:#b6a0c2; --found-soft:#241f28;
+    --ext:#d59292; --ext-soft:#2b1e1e;
+    --code-bg:#24252b;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{display:grid; grid-template-columns:264px minmax(0,1fr); gap:0; max-width:1500px; margin:0 auto}
+nav{
+  position:sticky; top:0; align-self:start; max-height:100vh; overflow-y:auto;
+  padding:28px 18px 60px; border-right:1px solid var(--line); font-size:13.5px;
+}
+nav .navtitle{font-weight:700; letter-spacing:.02em; font-size:12px; text-transform:uppercase; color:var(--faint); margin:0 0 12px}
+nav ol{list-style:none; margin:0; padding:0}
+nav li{margin:1px 0}
+nav a{display:block; padding:4px 8px; border-radius:5px; color:var(--muted); text-decoration:none}
+nav a:hover{background:var(--accent-soft); color:var(--accent)}
+nav .sub{padding-left:16px; font-size:12.8px; color:var(--faint)}
+main{padding:34px 40px 120px; min-width:0}
+header.page{border-bottom:1px solid var(--line); padding-bottom:22px; margin-bottom:34px}
+h1{font-size:31px; line-height:1.22; margin:0 0 8px; letter-spacing:-.015em}
+.sub1{color:var(--muted); font-size:16px; margin:0 0 16px; max-width:76ch}
+.meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:14px}
+.chip{
+  font:12px/1 var(--mono); padding:6px 9px; border:1px solid var(--line2);
+  border-radius:5px; color:var(--muted); background:var(--panel);
+}
+h2{font-size:23px; margin:52px 0 6px; letter-spacing:-.01em; scroll-margin-top:20px}
+h2 .num{color:var(--faint); font:14px/1 var(--mono); margin-right:10px}
+h3{font-size:17px; margin:32px 0 6px; letter-spacing:-.005em}
+h4{font-size:14.5px; margin:22px 0 4px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em}
+p{margin:10px 0; max-width:88ch}
+ul,ol{max-width:88ch}
+li{margin:5px 0}
+code{font:13px/1.4 var(--mono); background:var(--code-bg); padding:1.5px 5px; border-radius:4px; white-space:nowrap}
+.lede{color:var(--muted); max-width:88ch}
+a{color:var(--accent)}
+hr{border:0; border-top:1px solid var(--line); margin:38px 0}
+
+/* tables */
+.tablewrap{overflow-x:auto; margin:16px 0; border:1px solid var(--line); border-radius:9px; background:var(--panel)}
+table{border-collapse:collapse; width:100%; font-size:14px}
+th,td{text-align:left; padding:9px 13px; border-bottom:1px solid var(--line); vertical-align:top}
+th{background:var(--code-bg); font-weight:650; font-size:12.5px; text-transform:uppercase; letter-spacing:.045em; color:var(--muted); white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td code{white-space:normal}
+.nowrap{white-space:nowrap}
+
+/* cards */
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:14px; margin:18px 0}
+.card{border:1px solid var(--line); border-left:3px solid var(--line2); border-radius:9px; background:var(--panel); padding:14px 16px}
+.card h5{margin:0 0 2px; font:600 15px/1.3 var(--mono)}
+.card .role{font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin-bottom:7px}
+.card p{margin:6px 0; font-size:13.6px; color:var(--muted); max-width:none}
+.card dl{margin:9px 0 0; font-size:12.8px}
+.card dt{color:var(--faint); text-transform:uppercase; letter-spacing:.05em; font-size:10.5px; margin-top:8px}
+.card dd{margin:2px 0 0; color:var(--ink)}
+.card dd code{font-size:12px; background:transparent; padding:0}
+.card.l-entry{border-left-color:var(--entry)} .card.l-entry h5{color:var(--entry)}
+.card.l-coord{border-left-color:var(--coord)} .card.l-coord h5{color:var(--coord)}
+.card.l-policy{border-left-color:var(--policy)} .card.l-policy h5{color:var(--policy)}
+.card.l-adapter{border-left-color:var(--adapter)} .card.l-adapter h5{color:var(--adapter)}
+.card.l-found{border-left-color:var(--found)} .card.l-found h5{color:var(--found)}
+
+/* callouts */
+.note{border:1px solid var(--line); border-left:3px solid var(--accent); background:var(--accent-soft); border-radius:8px; padding:12px 16px; margin:18px 0}
+.note strong{color:var(--accent)}
+.note p{margin:4px 0; font-size:14.2px}
+
+/* figures */
+figure{margin:20px 0; border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:16px 16px 10px; overflow-x:auto}
+figure svg{display:block; margin:0 auto; max-width:100%; height:auto}
+figcaption{margin-top:10px; padding-top:9px; border-top:1px solid var(--line); font-size:12.5px; color:var(--faint)}
+.legend{display:flex; flex-wrap:wrap; gap:14px; font-size:12px; color:var(--muted); margin-top:10px}
+.legend span{display:inline-flex; align-items:center; gap:6px}
+.swatch{width:11px; height:11px; border-radius:3px; display:inline-block; border:1px solid var(--line2)}
+
+/* svg text */
+svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif; fill:var(--ink)}
+svg .t-lbl{font-size:12.5px; font-weight:600}
+svg .t-sm{font-size:10.5px; fill:var(--muted)}
+svg .t-xs{font-size:9.5px; fill:var(--faint)}
+svg .t-hd{font-size:11px; font-weight:700; letter-spacing:.06em; fill:var(--faint)}
+svg .edge{stroke:var(--line2); stroke-width:1.4; fill:none}
+svg .edge-a{stroke:var(--accent); stroke-width:1.6; fill:none}
+svg .box{stroke:var(--line2); stroke-width:1.2; rx:7; ry:7}
+
+/* term list */
+dl.terms{margin:14px 0; font-size:14.4px}
+dl.terms dt{font:600 13.5px/1.4 var(--mono); margin-top:14px; color:var(--ink)}
+dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
+
+.pill{display:inline-block; font:600 10.5px/1 var(--mono); padding:4px 7px; border-radius:4px; letter-spacing:.03em; white-space:nowrap}
+.p-entry{background:var(--entry-soft); color:var(--entry)}
+.p-coord{background:var(--coord-soft); color:var(--coord)}
+.p-policy{background:var(--policy-soft); color:var(--policy)}
+.p-adapter{background:var(--adapter-soft); color:var(--adapter)}
+.p-found{background:var(--found-soft); color:var(--found)}
+.p-ext{background:var(--ext-soft); color:var(--ext)}
+
+@media (max-width:1000px){
+  .wrap{grid-template-columns:1fr}
+  nav{position:static; max-height:none; border-right:0; border-bottom:1px solid var(--line)}
+  main{padding:24px 20px 80px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <p class="navtitle">Contents</p>
+  <ol>
+    <li><a href="#overview">1 · Overview</a></li>
+    <li><a href="#context">2 · System context</a></li>
+    <li><a href="#layers">3 · Layer map</a></li>
+    <li><a href="#blocks">4 · Building blocks</a></li>
+    <li class="sub"><a href="#b-entry">4.1 Entry points</a></li>
+    <li class="sub"><a href="#b-coord">4.2 Coordinator</a></li>
+    <li class="sub"><a href="#b-policy">4.3 Policy</a></li>
+    <li class="sub"><a href="#b-adapter">4.4 Adapters</a></li>
+    <li class="sub"><a href="#b-found">4.5 Foundation</a></li>
+    <li class="sub"><a href="#b-assets">4.6 Non-Go assets</a></li>
+    <li><a href="#seams">5 · Seams</a></li>
+    <li><a href="#lifecycle">6 · Run lifecycle</a></li>
+    <li class="sub"><a href="#l-stages">6.1 Stages and status</a></li>
+    <li class="sub"><a href="#l-roles">6.2 Roles and routes</a></li>
+    <li class="sub"><a href="#l-progress">6.3 Unattended progression</a></li>
+    <li class="sub"><a href="#l-repair">6.4 Bounded repair loops</a></li>
+    <li><a href="#durability">7 · Durability</a></li>
+    <li><a href="#worker">8 · Worker anatomy</a></li>
+    <li><a href="#cross">9 · Cross-cutting</a></li>
+    <li><a href="#decisions">10 · Decisions</a></li>
+    <li><a href="#reading">11 · Further reading</a></li>
+  </ol>
+</nav>
+<main>
+<header class="page">
+  <h1>Software Factory — Architecture Building Blocks</h1>
+  <p class="sub1">The software factory turns an explicitly authorized GitHub issue into a supervised, review-ready pull request while keeping workflow authority in a deterministic coordinator. This page maps the code that does it.</p>
+  <div class="meta">
+    <span class="chip">module github.com/Stevie1704/sw-factory</span>
+    <span class="chip">Go 1.25.0</span>
+    <span class="chip">3 commands</span>
+    <span class="chip">18 internal packages</span>
+    <span class="chip">~73k lines of Go, tests included</span>
+  </div>
+</header>
+
+<h2 id="overview"><span class="num">01</span>Overview</h2>
+<p>The factory is a host-local Go program. One operator runs it against one registered repository. It claims an authorized issue, freezes a specification packet, and then drives that work through fixed workflow stages. Interactive coding harnesses do the craft; the factory keeps every decision.</p>
+
+<p>Three architectural rules explain most of the code shape:</p>
+<ol>
+  <li><strong>The coordinator owns workflow authority.</strong> Roles, stages, prompts, and transitions are declared in <code>internal/workflow</code> and compiled into the binary. Repository configuration selects policy inside those declarations; it can never add a stage or move authority.</li>
+  <li><strong>Every external system sits behind a narrow seam.</strong> Docker, cmux, Git, the GitHub CLI, and the harnesses are adapters. Coordinator code never sees a container name, a pane identifier, or a <code>gh</code> argument.</li>
+  <li><strong>Every external mutation is journaled before it happens.</strong> A durable pending-effect record lets a restarted coordinator tell "not done" from "done but unrecorded", so recovery never guesses.</li>
+</ol>
+
+<div class="note">
+  <p><strong>Vocabulary.</strong> This page uses the glossary in <a href="../CONTEXT.md"><code>CONTEXT.md</code></a> exactly: <em>run</em>, <em>invocation</em>, <em>checkpoint</em>, <em>gate</em>, <em>surface</em>, <em>worker</em>, <em>effect</em>, <em>specification packet</em>. Read that file first when a term here is unfamiliar.</p>
+</div>
+
+<h4>Reading the source</h4>
+<p>Package boundaries are the real building blocks. Sizes below are non-test source only, and give a fair sense of where the complexity lives.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Package</th><th>Layer</th><th>Files</th><th>Responsibility in one line</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>internal/factory</code></td><td><span class="pill p-coord">coordinator</span></td><td class="nowrap">34</td><td>The complete run coordinator: claim, stages, gates, effects, repair, recovery.</td></tr>
+<tr><td class="nowrap"><code>internal/store</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">4</td><td>SQLite operational store, effect journal, and evaluation summaries.</td></tr>
+<tr><td class="nowrap"><code>internal/worker</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Docker-backed isolated execution environment for one run.</td></tr>
+<tr><td class="nowrap"><code>internal/cli</code></td><td><span class="pill p-entry">entry</span></td><td class="nowrap">1</td><td>Command table, flag parsing, and operator-facing rendering.</td></tr>
+<tr><td class="nowrap"><code>internal/github</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Issue, comment, commit-status, and pull-request access through <code>gh</code>.</td></tr>
+<tr><td class="nowrap"><code>internal/config</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">2</td><td>Host YAML and checked-in repository YAML, with validation.</td></tr>
+<tr><td class="nowrap"><code>internal/report</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">1</td><td>The structured report envelope exchanged between harness and coordinator.</td></tr>
+<tr><td class="nowrap"><code>internal/prompt</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Embedded versioned role prompts and craft substitution.</td></tr>
+<tr><td class="nowrap"><code>internal/harness</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">6</td><td>Codex and Claude Code adapters behind one lifecycle seam.</td></tr>
+<tr><td class="nowrap"><code>internal/git</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Host Git: worktrees, checkpoints, base sync, push, guidance reads.</td></tr>
+<tr><td class="nowrap"><code>internal/terminal</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>cmux workspaces and operator-visible surfaces.</td></tr>
+<tr><td class="nowrap"><code>internal/gate</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Ordered setup-and-gate suite execution against an exact checkpoint.</td></tr>
+<tr><td class="nowrap"><code>internal/workflow</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">2</td><td>Factory-owned role, stage, and route registry.</td></tr>
+<tr><td class="nowrap"><code>internal/effect</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Durable effect journal protocol and replay dispatcher.</td></tr>
+<tr><td class="nowrap"><code>internal/reportcli</code></td><td><span class="pill p-entry">entry</span></td><td class="nowrap">1</td><td>The <code>factory-report</code> command that runs inside the worker.</td></tr>
+<tr><td class="nowrap"><code>internal/command</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Grammar for structured <code>/factory</code> supervision comments.</td></tr>
+<tr><td class="nowrap"><code>internal/doctor</code></td><td><span class="pill p-found">foundation</span></td><td class="nowrap">1</td><td>Neutral startup-diagnosis result type and composition.</td></tr>
+<tr><td class="nowrap"><code>internal/ref</code></td><td><span class="pill p-found">foundation</span></td><td class="nowrap">1</td><td>Git ref-fragment validation shared by host adapters.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="context"><span class="num">02</span>System context</h2>
+<p class="lede">The factory is one host process plus the things it drives. Nothing runs in the cloud, and no data leaves the workstation except the GitHub writes the operator authorized.</p>
+
+<figure>
+<svg viewBox="0 0 1000 516" role="img" aria-label="System context: operator, host coordinator process, adapters, GitHub, and the worker container">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,1 L8,4.5 L0,8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <!-- operator -->
+  <rect class="box" x="45" y="8" width="250" height="30" fill="var(--panel)"/>
+  <text class="t-lbl" x="170" y="28" text-anchor="middle">Operator</text>
+
+  <!-- host frame -->
+  <rect x="20" y="52" width="600" height="450" rx="10" fill="none" stroke="var(--line2)" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text class="t-hd" x="34" y="70">HOST PROCESS AND HOST BINARIES</text>
+
+  <!-- left column -->
+  <rect class="box" x="45" y="86" width="250" height="52" fill="var(--entry-soft)" stroke="var(--entry)"/>
+  <text class="t-lbl" x="170" y="107" text-anchor="middle" fill="var(--entry)">factory (CLI)</text>
+  <text class="t-sm" x="170" y="123" text-anchor="middle">cmd/factory · internal/cli · 20 commands</text>
+
+  <rect class="box" x="45" y="160" width="250" height="96" fill="var(--coord-soft)" stroke="var(--coord)"/>
+  <text class="t-lbl" x="170" y="182" text-anchor="middle" fill="var(--coord)">factory.Service</text>
+  <text class="t-sm" x="170" y="199" text-anchor="middle">claim · baseline · stages · gates</text>
+  <text class="t-sm" x="170" y="214" text-anchor="middle">effects · repair · review · draft PR</text>
+  <text class="t-sm" x="170" y="229" text-anchor="middle">polling · reconciliation · cleanup</text>
+  <text class="t-xs" x="170" y="246" text-anchor="middle">the only place workflow decisions are made</text>
+
+  <rect class="box" x="45" y="278" width="250" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="170" y="299" text-anchor="middle" fill="var(--adapter)">operational store</text>
+  <text class="t-sm" x="170" y="315" text-anchor="middle">SQLite file · runs, invocations, effects</text>
+
+  <rect class="box" x="45" y="352" width="250" height="52" fill="var(--entry-soft)" stroke="var(--entry)"/>
+  <text class="t-lbl" x="170" y="373" text-anchor="middle" fill="var(--entry)">factory-worker-attach</text>
+  <text class="t-sm" x="170" y="389" text-anchor="middle">host helper a surface runs to enter a worker</text>
+
+  <!-- right column: adapters -->
+  <text class="t-hd" x="325" y="80">SEAMS AND THEIR HOST ADAPTERS</text>
+  <rect class="box" x="325" y="86" width="270" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="340" y="107">terminal.TerminalRuntime</text>
+  <text class="t-sm" x="340" y="123">CmuxRuntime → cmux workspaces and surfaces</text>
+
+  <rect class="box" x="325" y="152" width="270" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="340" y="173">git.GitWorkspace</text>
+  <text class="t-sm" x="340" y="189">git binary → branch, worktree, checkpoint, push</text>
+
+  <rect class="box" x="325" y="218" width="270" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="340" y="239">github.Client and siblings</text>
+  <text class="t-sm" x="340" y="255">gh binary → issue, comment, status, pull request</text>
+
+  <rect class="box" x="325" y="284" width="270" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="340" y="305">worker.WorkerRuntime</text>
+  <text class="t-sm" x="340" y="321">DockerRuntime → one isolated worker per run</text>
+
+  <rect class="box" x="325" y="350" width="270" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="340" y="371">harness.Runtime</text>
+  <text class="t-sm" x="340" y="387">Codex · Claude Code · start, resume, finish</text>
+
+  <rect class="box" x="325" y="416" width="270" height="52" fill="var(--policy-soft)" stroke="var(--policy)"/>
+  <text class="t-lbl" x="340" y="437">workflow · config · gate · prompt · effect</text>
+  <text class="t-sm" x="340" y="453">compiled-in policy, no external system</text>
+
+  <!-- external frame -->
+  <rect x="656" y="52" width="326" height="450" rx="10" fill="none" stroke="var(--line2)" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text class="t-hd" x="670" y="70">OUTSIDE THE HOST PROCESS</text>
+
+  <rect class="box" x="676" y="86" width="286" height="160" fill="var(--ext-soft)" stroke="var(--ext)"/>
+  <text class="t-lbl" x="819" y="108" text-anchor="middle" fill="var(--ext)">GitHub</text>
+  <text class="t-sm" x="692" y="130">· claimed issue, labels, status comment</text>
+  <text class="t-sm" x="692" y="148">· structured /factory supervision comments</text>
+  <text class="t-sm" x="692" y="166">· exact-SHA commit statuses</text>
+  <text class="t-sm" x="692" y="184">· one draft pull request per run</text>
+  <text class="t-sm" x="692" y="202">· completed human reviews (read-only)</text>
+  <text class="t-xs" x="692" y="226">reached only through the local gh process,</text>
+  <text class="t-xs" x="692" y="239">which keeps the credential out of the factory</text>
+
+  <rect class="box" x="676" y="270" width="286" height="212" fill="var(--found-soft)" stroke="var(--found)"/>
+  <text class="t-lbl" x="819" y="292" text-anchor="middle" fill="var(--found)">Worker (Docker, digest-pinned)</text>
+  <text class="t-sm" x="692" y="314">/work</text><text class="t-sm" x="800" y="314">worktree, read-write</text>
+  <text class="t-sm" x="692" y="332">/git</text><text class="t-sm" x="800" y="332">metadata, read-only</text>
+  <text class="t-sm" x="692" y="350">/invocation</text><text class="t-sm" x="800" y="350">packet, read-only</text>
+  <text class="t-sm" x="692" y="368">/results</text><text class="t-sm" x="800" y="368">report, read-write</text>
+  <text class="t-sm" x="692" y="386">/cache/&lt;name&gt;</text><text class="t-sm" x="800" y="386">as declared</text>
+  <text class="t-sm" x="692" y="404">/run/factory-auth</text><text class="t-sm" x="820" y="404">credentials</text>
+  <text class="t-xs" x="692" y="428">runs the harness, the gate commands, and</text>
+  <text class="t-xs" x="692" y="441">factory-report; user 10001, never root</text>
+  <text class="t-xs" x="692" y="462">role home carries the pinned worker skill set</text>
+
+  <!-- edges -->
+  <g color="var(--line2)">
+    <path class="edge" d="M170,38 L170,84" marker-end="url(#ah)"/>
+    <path class="edge" d="M170,138 L170,158" marker-end="url(#ah)"/>
+    <path class="edge" d="M170,256 L170,276" marker-end="url(#ah)"/>
+    <path class="edge" d="M305,208 L312,208 L312,112 L323,112" marker-end="url(#ah)"/>
+    <path class="edge" d="M312,208 L312,178 L323,178" marker-end="url(#ah)"/>
+    <path class="edge" d="M312,208 L323,208" marker-end="url(#ah)"/>
+    <path class="edge" d="M312,208 L312,244 L323,244" marker-end="url(#ah)"/>
+    <path class="edge" d="M312,208 L312,310 L323,310" marker-end="url(#ah)"/>
+    <path class="edge" d="M312,208 L312,376 L323,376" marker-end="url(#ah)"/>
+    <path class="edge" d="M312,208 L312,442 L323,442" marker-end="url(#ah)"/>
+  </g>
+  <g color="var(--accent)">
+    <path class="edge-a" d="M595,244 L636,244 L636,166 L674,166" marker-end="url(#ah)"/>
+    <path class="edge-a" d="M595,310 L636,310 L636,330 L674,330" marker-end="url(#ah)"/>
+    <path class="edge-a" d="M595,376 L636,376 L636,392 L674,392" marker-end="url(#ah)"/>
+  </g>
+</svg>
+<div class="legend">
+  <span><i class="swatch" style="background:var(--entry-soft);border-color:var(--entry)"></i>entry point</span>
+  <span><i class="swatch" style="background:var(--coord-soft);border-color:var(--coord)"></i>coordinator</span>
+  <span><i class="swatch" style="background:var(--policy-soft);border-color:var(--policy)"></i>policy</span>
+  <span><i class="swatch" style="background:var(--adapter-soft);border-color:var(--adapter)"></i>adapter</span>
+  <span><i class="swatch" style="background:var(--ext-soft);border-color:var(--ext)"></i>external system</span>
+</div>
+<figcaption>Figure 1 — The operator drives one CLI. The coordinator holds every workflow decision and reaches the world only through named seams. Grey arrows are in-process calls; brown arrows cross a process or machine boundary.</figcaption>
+</figure>
+
+<h3>The three commands</h3>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Binary</th><th>Runs on</th><th>Source</th><th>What it does</th></tr></thead>
+<tbody>
+<tr>
+  <td class="nowrap"><code>factory</code></td><td class="nowrap">host</td>
+  <td class="nowrap"><code>cmd/factory/main.go</code></td>
+  <td>The coordinator CLI. <code>main</code> wires operating-system cancellation into <code>cli.Run</code> and does nothing else. Every command is a row in <code>commandTable</code> at <code>internal/cli/cli.go:30</code>.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>factory-report</code></td><td class="nowrap">inside the worker</td>
+  <td class="nowrap"><code>cmd/factory-report/main.go</code></td>
+  <td>The only way a role proposes an outcome. It validates one report and writes <code>report.json</code> atomically into the coordinator-supplied result directory. It never reads or prints a credential.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>factory-worker-attach</code></td><td class="nowrap">host, inside a surface</td>
+  <td class="nowrap"><code>cmd/factory-worker-attach/main.go</code></td>
+  <td>Attaches a visible terminal to a worker selected by run identity. It parses only the opaque run identity and explicit environment; Docker naming and PTY attachment stay inside the worker adapter.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h3>External dependencies</h3>
+<div class="tablewrap">
+<table>
+<thead><tr><th>System</th><th>Reached through</th><th>Why it is a seam</th></tr></thead>
+<tbody>
+<tr><td class="nowrap">GitHub</td><td class="nowrap"><code>gh</code> binary</td><td>The credential stays inside the local <code>gh</code> process. The adapter returns workflow data, never raw API payloads.</td></tr>
+<tr><td class="nowrap">Docker</td><td class="nowrap"><code>docker</code> binary</td><td>Container names, volumes, and mounts are derived privately from the run identity and never appear in <code>WorkerRuntime</code>.</td></tr>
+<tr><td class="nowrap">Git</td><td class="nowrap"><code>git</code> binary</td><td>Branch, worktree, checkpoint, base sync, and push are task-shaped operations, not Git commands, in coordinator code.</td></tr>
+<tr><td class="nowrap">cmux</td><td class="nowrap"><code>cmux</code> binary</td><td>Surface handles are opaque. A screen is never a correctness protocol.</td></tr>
+<tr><td class="nowrap">Codex, Claude Code</td><td class="nowrap">worker exec</td><td>Harness selection is per role and fails closed. Both adapters implement one lifecycle.</td></tr>
+<tr><td class="nowrap">SQLite</td><td class="nowrap"><code>modernc.org/sqlite</code></td><td>Pure Go, so the factory builds without cgo and the store file stays a plain host file.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The complete third-party surface is four modules: <code>github.com/google/uuid</code>, <code>golang.org/x/sys</code>, <code>gopkg.in/yaml.v3</code>, and <code>modernc.org/sqlite</code>. Everything else is the standard library.</p>
+
+<h2 id="layers"><span class="num">03</span>Layer map</h2>
+<p class="lede">The import graph is acyclic and shallow. Every package depends downward only. <code>internal/factory</code> is the single package that may import from every layer below it, because it is the composition root.</p>
+
+<figure>
+<svg viewBox="0 0 1000 452" role="img" aria-label="Five architectural layers with the packages assigned to each">
+  <defs>
+    <marker id="ah2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,1 L8,4.5 L0,8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <!-- band 1 entry -->
+  <rect class="box" x="150" y="16" width="830" height="62" fill="var(--entry-soft)" stroke="var(--entry)"/>
+  <text class="t-hd" x="18" y="42">ENTRY</text>
+  <text class="t-xs" x="18" y="58">operator surface</text>
+  <text class="t-lbl" x="172" y="42">cmd/factory</text>
+  <text class="t-lbl" x="300" y="42">cmd/factory-report</text>
+  <text class="t-lbl" x="472" y="42">cmd/factory-worker-attach</text>
+  <text class="t-lbl" x="172" y="64" fill="var(--entry)">internal/cli</text>
+  <text class="t-lbl" x="300" y="64" fill="var(--entry)">internal/reportcli</text>
+  <text class="t-sm" x="472" y="64">flags, rendering, exit codes — no workflow logic</text>
+
+  <!-- band 2 coordinator -->
+  <rect class="box" x="150" y="92" width="830" height="62" fill="var(--coord-soft)" stroke="var(--coord)"/>
+  <text class="t-hd" x="18" y="118">COORDINATOR</text>
+  <text class="t-xs" x="18" y="134">workflow authority</text>
+  <text class="t-lbl" x="172" y="120" fill="var(--coord)">internal/factory</text>
+  <text class="t-sm" x="172" y="140">34 files · claim, baseline, agent lifecycle, gates, effects, repair, review, recovery, polling, cleanup</text>
+
+  <!-- band 3 policy -->
+  <rect class="box" x="150" y="168" width="830" height="62" fill="var(--policy-soft)" stroke="var(--policy)"/>
+  <text class="t-hd" x="18" y="194">POLICY</text>
+  <text class="t-xs" x="18" y="210">rules, no I/O of its own</text>
+  <text class="t-lbl" x="172" y="196" fill="var(--policy)">workflow</text>
+  <text class="t-lbl" x="272" y="196" fill="var(--policy)">config</text>
+  <text class="t-lbl" x="352" y="196" fill="var(--policy)">prompt</text>
+  <text class="t-lbl" x="438" y="196" fill="var(--policy)">gate</text>
+  <text class="t-lbl" x="504" y="196" fill="var(--policy)">effect</text>
+  <text class="t-lbl" x="580" y="196" fill="var(--policy)">harness</text>
+  <text class="t-lbl" x="668" y="196" fill="var(--policy)">command</text>
+  <text class="t-sm" x="172" y="216">what a role is · what is declared · what a gate means · what an effect must survive</text>
+
+  <!-- band 4 adapters -->
+  <rect class="box" x="150" y="244" width="830" height="62" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-hd" x="18" y="270">ADAPTERS</text>
+  <text class="t-xs" x="18" y="286">one external system each</text>
+  <text class="t-lbl" x="172" y="272" fill="var(--adapter)">store</text>
+  <text class="t-lbl" x="248" y="272" fill="var(--adapter)">github</text>
+  <text class="t-lbl" x="336" y="272" fill="var(--adapter)">git</text>
+  <text class="t-lbl" x="394" y="272" fill="var(--adapter)">worker</text>
+  <text class="t-lbl" x="478" y="272" fill="var(--adapter)">terminal</text>
+  <text class="t-lbl" x="572" y="272" fill="var(--adapter)">report</text>
+  <text class="t-sm" x="172" y="292">SQLite · gh · git · docker · cmux · the report file format</text>
+
+  <!-- band 5 foundation -->
+  <rect class="box" x="150" y="320" width="830" height="56" fill="var(--found-soft)" stroke="var(--found)"/>
+  <text class="t-hd" x="18" y="346">FOUNDATION</text>
+  <text class="t-xs" x="18" y="362">imported by anyone</text>
+  <text class="t-lbl" x="172" y="348" fill="var(--found)">doctor</text>
+  <text class="t-lbl" x="252" y="348" fill="var(--found)">ref</text>
+  <text class="t-sm" x="320" y="348">startup-diagnosis result type · Git ref validation · no dependency on any other factory package</text>
+
+  <!-- dependency arrows -->
+  <g color="var(--line2)">
+    <path class="edge" d="M108,80 L108,90" marker-end="url(#ah2)"/>
+    <path class="edge" d="M108,156 L108,166" marker-end="url(#ah2)"/>
+    <path class="edge" d="M108,232 L108,242" marker-end="url(#ah2)"/>
+    <path class="edge" d="M108,308 L108,318" marker-end="url(#ah2)"/>
+  </g>
+  <text class="t-xs" x="112" y="410" text-anchor="start">Arrows read "depends on". No arrow points upward anywhere in the tree.</text>
+  <text class="t-xs" x="112" y="426" text-anchor="start">internal/factory is the only package that reaches every layer below it.</text>
+</svg>
+<figcaption>Figure 2 — Five layers. Assignment follows the actual import graph, not intent.</figcaption>
+</figure>
+
+<h3>Verified dependency edges</h3>
+<p>Read this table as "imports". It is the whole internal graph.</p>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Package</th><th>Imports</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>cli</code></td><td><code>config</code>, <code>doctor</code>, <code>factory</code>, <code>store</code></td></tr>
+<tr><td class="nowrap"><code>factory</code></td><td><code>command</code>, <code>config</code>, <code>doctor</code>, <code>effect</code>, <code>gate</code>, <code>git</code>, <code>github</code>, <code>harness</code>, <code>prompt</code>, <code>report</code>, <code>store</code>, <code>terminal</code>, <code>worker</code>, <code>workflow</code></td></tr>
+<tr><td class="nowrap"><code>harness</code></td><td><code>config</code>, <code>doctor</code>, <code>report</code>, <code>terminal</code>, <code>worker</code></td></tr>
+<tr><td class="nowrap"><code>gate</code></td><td><code>config</code>, <code>github</code>, <code>worker</code></td></tr>
+<tr><td class="nowrap"><code>config</code></td><td><code>doctor</code>, <code>workflow</code></td></tr>
+<tr><td class="nowrap"><code>workflow</code></td><td><code>report</code>, <code>store</code></td></tr>
+<tr><td class="nowrap"><code>prompt</code></td><td><code>store</code>, <code>workflow</code></td></tr>
+<tr><td class="nowrap"><code>effect</code></td><td><code>store</code></td></tr>
+<tr><td class="nowrap"><code>report</code></td><td><code>store</code></td></tr>
+<tr><td class="nowrap"><code>reportcli</code></td><td><code>report</code></td></tr>
+<tr><td class="nowrap"><code>git</code>, <code>github</code></td><td><code>doctor</code>, <code>ref</code></td></tr>
+<tr><td class="nowrap"><code>store</code>, <code>terminal</code>, <code>worker</code></td><td><code>doctor</code></td></tr>
+<tr><td class="nowrap"><code>command</code>, <code>doctor</code>, <code>ref</code></td><td>nothing</td></tr>
+</tbody>
+</table>
+</div>
+<div class="note">
+  <p><strong>Two edges look surprising and are deliberate.</strong> <code>config</code> imports <code>workflow</code> so repository YAML can be validated against the declared role names it is allowed to configure. <code>workflow</code> imports <code>report</code> and <code>store</code> so a stage can map a report outcome onto a persisted stage and status without the coordinator restating the table.</p>
+</div>
+
+<h2 id="blocks"><span class="num">04</span>Building blocks</h2>
+<p class="lede">One card per package. <em>Owns</em> states the single responsibility. <em>Key types</em> names what a reader should open first. <em>Talks to</em> lists the direct dependencies.</p>
+
+<h3 id="b-entry">4.1 Entry points</h3>
+<div class="cards">
+  <div class="card l-entry">
+    <h5>internal/cli</h5>
+    <p class="role">entry · 1 file</p>
+    <p><strong>Owns</strong> the operator-facing command surface: the command table, flag parsing, and every rendering of a result. It holds no workflow logic, so a change to a stage never changes the CLI.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>commandTable</code> <span class="t-xs">cli.go:30</span>, <code>commandHandler</code>, <code>Run</code> <span class="t-xs">cli.go:56</span></dd>
+      <dt>Commands</dt><dd><code>init</code> · <code>register</code> · <code>bootstrap-labels</code> · <code>doctor</code> · <code>start</code> · <code>stop</code> · <code>resume</code> · <code>attach</code> · <code>auth</code> · <code>issue</code> · <code>agent</code> · <code>agent-report</code> · <code>draft-pr</code> · <code>poll</code> · <code>reconcile</code> · <code>status</code> · <code>evaluation</code> · <code>evaluation-delete</code> · <code>evaluation-disposition</code> · <code>cleanup</code></dd>
+      <dt>Talks to</dt><dd><code>config</code>, <code>doctor</code>, <code>factory</code>, <code>store</code></dd>
+      <dt>Exit codes</dt><dd>0 success · 1 operational error · 2 missing or unknown command</dd>
+    </dl>
+  </div>
+  <div class="card l-entry">
+    <h5>internal/reportcli</h5>
+    <p class="role">entry · 1 file · runs in the worker</p>
+    <p><strong>Owns</strong> the <code>factory-report</code> command. It builds exactly one outcome from flags plus the coordinator-supplied environment, then writes the report atomically into the invocation result directory.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>Request</code>, <code>Run</code> <span class="t-xs">reportcli.go:33</span></dd>
+      <dt>Talks to</dt><dd><code>report</code> only</dd>
+      <dt>Why separate</dt><dd>The worker binary must not link the coordinator. Keeping the report writer in its own package makes that boundary structural, not conventional.</dd>
+    </dl>
+  </div>
+</div>
+
+<h3 id="b-coord">4.2 Coordinator</h3>
+<p><code>internal/factory</code> is 34 source files and about 20,600 lines of source, matched by an equal weight of tests. It is one package on purpose: every file needs the same run projection and the same store transaction discipline, and splitting it would only move the coupling into exported types. The files below are the real sub-blocks.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>File</th><th>Owns</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>factory.go</code></td><td>The composition root. <code>Factory</code> interface <span class="t-xs">:26</span>, <code>Dependencies</code> <span class="t-xs">:137</span>, <code>Service</code> <span class="t-xs">:175</span>, and <code>New</code> <span class="t-xs">:275</span>. Every adapter enters here and nowhere else.</td></tr>
+<tr><td class="nowrap"><code>claim.go</code></td><td>Claiming an authorized issue and freezing the specification packet: issue snapshot, route, guidance, role craft, branch, worktree, worker image digest.</td></tr>
+<tr><td class="nowrap"><code>route.go</code></td><td>Reading the one bounded route marker from the frozen issue and recording the selected workflow route.</td></tr>
+<tr><td class="nowrap"><code>repository_guidance.go</code></td><td>Capturing <code>AGENTS.md</code>, <code>CONTEXT.md</code>, and <code>docs/agents/*</code> from the exact base checkpoint as untrusted input.</td></tr>
+<tr><td class="nowrap"><code>repository_craft.go</code></td><td>Freezing configured <code>role_craft</code> files and their SHA-256 identity at claim time.</td></tr>
+<tr><td class="nowrap"><code>specification_view.go</code></td><td>The read-only projection of the frozen packet handed to a role.</td></tr>
+<tr><td class="nowrap"><code>agent.go</code>, <code>agent_launch.go</code></td><td>Selecting a role, building its invocation packet, launching the harness, and accepting its structured report.</td></tr>
+<tr><td class="nowrap"><code>invocation_lifecycle.go</code>, <code>invocation_lifecycle_service.go</code></td><td>The immutable invocation record: creation, active set, result readiness, supersession, and native-session identity. The largest single file in the tree.</td></tr>
+<tr><td class="nowrap"><code>test_stage.go</code></td><td>The independent test role: protected test paths, the test-stage handoff, exemptions, and the bounded objection cycle.</td></tr>
+<tr><td class="nowrap"><code>gate.go</code></td><td>Binding a gate suite to an exact checkpoint, persisting results, and publishing commit statuses.</td></tr>
+<tr><td class="nowrap"><code>repair.go</code></td><td>The bounded check-repair loop after a failing gate.</td></tr>
+<tr><td class="nowrap"><code>draft_pr.go</code></td><td>Checkpoint, gates, push, and one idempotent draft pull request.</td></tr>
+<tr><td class="nowrap"><code>review.go</code>, <code>review_repair.go</code></td><td>The two concurrent review axes and the bounded review-repair loop that consumes their blockers.</td></tr>
+<tr><td class="nowrap"><code>human_review.go</code></td><td>Building a human repair packet from <code>CHANGES_REQUESTED</code> reviews or a <code>/factory repair</code> comment, outside the bounded budgets.</td></tr>
+<tr><td class="nowrap"><code>readiness.go</code></td><td>Moving a reviewed pull request out of draft.</td></tr>
+<tr><td class="nowrap"><code>effects.go</code>, <code>effect_replay.go</code></td><td>Every journaled external mutation and its replay handler.</td></tr>
+<tr><td class="nowrap"><code>recovery.go</code></td><td>Recovery diagnosis and reconciliation: comparing the persisted run with Git, GitHub, worker, and terminal projections.</td></tr>
+<tr><td class="nowrap"><code>progression.go</code></td><td>One unattended progression pass: a closed set of typed actions, bounded at 32 steps.</td></tr>
+<tr><td class="nowrap"><code>polling.go</code></td><td>The persistent coordinator loop, the issue queue, and the visible GitHub lease.</td></tr>
+<tr><td class="nowrap"><code>command.go</code></td><td>Applying one structured supervision comment exactly once, with a comment watermark.</td></tr>
+<tr><td class="nowrap"><code>clarification.go</code></td><td>Pending clarification questions and authorized answers.</td></tr>
+<tr><td class="nowrap"><code>lifecycle.go</code></td><td>GitHub lifecycle observation: merge completion, unmerged closure, new authorized review.</td></tr>
+<tr><td class="nowrap"><code>activity.go</code></td><td>Publishing run activity: active run, active invocation, or waiting.</td></tr>
+<tr><td class="nowrap"><code>events.go</code></td><td>The typed <code>EventSink</code> the coordinator writes structured observations to.</td></tr>
+<tr><td class="nowrap"><code>evaluation.go</code></td><td>Content-free local evaluation summaries and human dispositions.</td></tr>
+<tr><td class="nowrap"><code>doctor.go</code></td><td>Composing every subsystem startup check into one report.</td></tr>
+<tr><td class="nowrap"><code>lock.go</code></td><td>The single-coordinator guard.</td></tr>
+<tr><td class="nowrap"><code>interruption.go</code></td><td>Operator interruption of an active invocation.</td></tr>
+<tr><td class="nowrap"><code>cleanup.go</code></td><td>Previewing and, on explicit confirmation, removing local run artifacts. It never deletes a remote branch or an evaluation summary.</td></tr>
+<tr><td class="nowrap"><code>workflow_helpers.go</code></td><td>Small shared registry lookups.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="note">
+  <p><strong>The dependency-inversion rule inside <code>factory</code>.</strong> The package declares roughly twenty small consumer-side store interfaces — <code>RunStore</code>, <code>InvocationStore</code>, <code>GateResultStore</code>, <code>CleanupStore</code>, <code>LatestInvocationByRoleStore</code>, and so on. Each names only the methods one operation needs. <code>*store.Store</code> satisfies them all, but no coordinator operation can reach a capability it did not ask for, and every operation is testable with a few-method fake.</p>
+</div>
+
+<h3 id="b-policy">4.3 Policy</h3>
+<div class="cards">
+  <div class="card l-policy">
+    <h5>internal/workflow</h5>
+    <p class="role">policy · 2 files</p>
+    <p><strong>Owns</strong> the factory-owned registry of roles and stages, and the selectable workflow routes. Compiled in. Repository configuration selects policy inside these declarations and can never add one.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>RoleDefinition</code>, <code>StageDefinition</code>, <code>StageTransition</code>, <code>Registry</code> <span class="t-xs">registry.go:125</span>, <code>DefaultRegistry</code> <span class="t-xs">registry.go:191</span>, <code>Route</code> <span class="t-xs">route.go:16</span></dd>
+      <dt>Talks to</dt><dd><code>report</code> (outcomes), <code>store</code> (stage and status identities)</dd>
+      <dt>Decision</dt><dd><a href="adr/0003-factory-owned-workflow-registry.md">ADR 0003</a></dd>
+    </dl>
+  </div>
+  <div class="card l-policy">
+    <h5>internal/config</h5>
+    <p class="role">policy · 2 files</p>
+    <p><strong>Owns</strong> two schemas: host-local YAML that registers the one repository, and checked-in <code>factory.yaml</code> that declares gates, timeouts, retry ceilings, test policy, caches, and the pinned worker image.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>HostConfig</code>, <code>RepositoryConfig</code>, <code>GateConfig</code>, <code>TestPolicy</code>, <code>RetryLimits</code>, <code>WorkerBuildConfig</code>, <code>EnvironmentPolicy</code>, <code>LoadRepository</code> <span class="t-xs">config.go:290</span></dd>
+      <dt>Talks to</dt><dd><code>workflow</code> (valid role names), <code>doctor</code></dd>
+      <dt>Reference</dt><dd><a href="configuration.md">docs/configuration.md</a></dd>
+    </dl>
+  </div>
+  <div class="card l-policy">
+    <h5>internal/prompt</h5>
+    <p class="role">policy · 1 file + embedded Markdown</p>
+    <p><strong>Owns</strong> the versioned role bodies compiled into the binary with <code>go:embed</code>. A prompt has an authority section the factory keeps, and a craft section a repository may replace. Every version keeps its SHA-256 identity so an invocation records exactly which bytes it used.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>PromptIdentity</code>, <code>Registry</code> <span class="t-xs">prompt.go:270</span>, <code>Build</code> <span class="t-xs">prompt.go:282</span>, <code>rolePromptFiles</code></dd>
+      <dt>Current versions</dt><dd><code>test-v3</code> · <code>implementation-v8</code> · <code>architecture-v3</code> · <code>specification-review-v4</code> · <code>standards-review-v5</code>; superseded bodies stay in <code>prompts/legacy/</code> so a persisted run can still be read</dd>
+      <dt>Decisions</dt><dd><a href="adr/0005-embedded-role-prompts-and-two-axis-review.md">ADR 0005</a>, <a href="adr/0007-repository-selected-craft-frozen-at-claim.md">ADR 0007</a></dd>
+    </dl>
+  </div>
+  <div class="card l-policy">
+    <h5>internal/gate</h5>
+    <p class="role">policy · 1 file</p>
+    <p><strong>Owns</strong> the ordered setup-and-gate suite. It runs declared commands through the worker seam against an exact checkpoint and classifies each result deterministically. No model judgment enters here.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>Phase</code> (<code>baseline</code>, <code>checkpoint</code>), <code>Outcome</code> (<code>passed</code>, <code>failed</code>, <code>error</code>, <code>skipped</code>, <code>setup_failed</code>), <code>SuiteRequest</code> <span class="t-xs">runner.go:66</span>, <code>SuiteResult</code> <span class="t-xs">runner.go:120</span>, <code>Runner</code> <span class="t-xs">runner.go:250</span></dd>
+      <dt>Talks to</dt><dd><code>config</code>, <code>worker</code>, <code>github</code></dd>
+      <dt>Ordering</dt><dd><code>depends_on</code> in <code>factory.yaml</code> builds the suite order; a failed prerequisite skips its dependants rather than running them.</dd>
+    </dl>
+  </div>
+  <div class="card l-policy">
+    <h5>internal/effect</h5>
+    <p class="role">policy · 1 file</p>
+    <p><strong>Owns</strong> the durable effect journal protocol: reserve, apply, clear. It is a small kernel — effect-specific work stays outside it, behind <code>EffectApplier</code> and <code>ReplayHandler</code>.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>PendingEffectStore</code>, <code>EffectApplier</code>, <code>ReplayHandler</code>, <code>Dispatcher</code>, <code>PendingEffectID</code>, <code>UnknownKindError</code></dd>
+      <dt>Identity</dt><dd><code>sha256(runID \0 kind \0 identity)</code>, prefixed by kind. The NUL-delimited input is part of the persisted protocol and must stay byte-identical across upgrades.</dd>
+      <dt>Talks to</dt><dd><code>store</code></dd>
+    </dl>
+  </div>
+  <div class="card l-policy">
+    <h5>internal/harness</h5>
+    <p class="role">policy · 6 files</p>
+    <p><strong>Owns</strong> the interactive coding tools behind one lifecycle: <code>Capabilities</code>, <code>Start</code>, <code>Resume</code>, <code>Finish</code>. <code>New</code> <span class="t-xs">harness.go:135</span> is the only place a declared harness name becomes an implementation.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>Runtime</code>, <code>Capabilities</code>, <code>Session</code>, <code>LaunchFailure</code>, <code>NativeSessionInspector</code>, <code>NativeSessionLivenessInspector</code></dd>
+      <dt>Adapters</dt><dd><code>codex.go</code>, <code>claude.go</code></dd>
+      <dt>Native sessions</dt><dd>A fresh launch polls up to 60 s for the harness to persist its session file, then records the identifier so a later resume is exact rather than hopeful.</dd>
+      <dt>Diagnostics</dt><dd>A failed launch captures at most 200 lines of its surface. That transcript never reaches a GitHub projection.</dd>
+      <dt>Decision</dt><dd><a href="adr/0002-per-role-harness-selection-fails-closed.md">ADR 0002</a></dd>
+    </dl>
+  </div>
+  <div class="card l-policy">
+    <h5>internal/command</h5>
+    <p class="role">policy · 1 file · zero dependencies</p>
+    <p><strong>Owns</strong> the grammar for structured supervision comments. A comment is either ordinary discussion or exactly one recognized command on its own line. Ambiguity is an error, never a guess.</p>
+    <dl>
+      <dt>Verbs</dt><dd><code>status</code> · <code>retry</code> · <code>cancel</code> · <code>refresh</code> · <code>revision</code> · <code>answer</code> · <code>repair</code> · <code>configure_harness</code></dd>
+      <dt>Key types</dt><dd><code>Kind</code>, <code>Request</code>, <code>ParseResult</code>, <code>ParseErrorCode</code>, <code>Parse</code> <span class="t-xs">command.go:114</span></dd>
+      <dt>Errors are typed</dt><dd><code>empty_command</code>, <code>multiline_command</code>, <code>unknown_command</code>, <code>unexpected_argument</code>, <code>missing_harness</code>, <code>missing_answer</code>, <code>missing_instruction</code>, and the malformed-argument codes — so the coordinator can reply with a precise correction.</dd>
+    </dl>
+  </div>
+</div>
+
+<h3 id="b-adapter">4.4 Adapters</h3>
+<div class="cards">
+  <div class="card l-adapter">
+    <h5>internal/store</h5>
+    <p class="role">adapter · 4 files · ~5,500 lines</p>
+    <p><strong>Owns</strong> the host-local operational SQLite database: the run projection, invocation history, gate results, the pending-effect journal, lifecycle notifications, and content-free evaluation summaries. It also owns the migration ladder.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>Store</code> <span class="t-xs">store.go:721</span>, <code>Open</code> / <code>OpenReadOnly</code> <span class="t-xs">store.go:731, :802</span>, <code>Run</code>, <code>Invocation</code>, <code>PendingEffect</code>, <code>Stage</code>, <code>Status</code>, <code>GateResultTransaction</code>, <code>CleanupTransaction</code></dd>
+      <dt>Schema</dt><dd><code>CurrentSchemaVersion = 35</code> <span class="t-xs">store.go:22</span></dd>
+      <dt>Concurrency</dt><dd>Writes are compare-and-set on a monotonic <code>Revision</code>. <code>ErrRevisionConflict</code> and <code>ErrRevisionNotAdvanced</code> make a lost update loud rather than silent.</dd>
+      <dt>Timestamps</dt><dd>Fixed-width RFC 3339 with nanoseconds, so SQLite text ordering equals chronological ordering.</dd>
+    </dl>
+  </div>
+  <div class="card l-adapter">
+    <h5>internal/github</h5>
+    <p class="role">adapter · 2 files</p>
+    <p><strong>Owns</strong> every GitHub interaction, through the local <code>gh</code> process. The interface is split by authority so an issue adapter cannot gain pull-request or review powers by accident.</p>
+    <dl>
+      <dt>Seams</dt><dd><code>Client</code> · <code>IssuePoller</code> · <code>CommentReader</code> · <code>LeaseClient</code> · <code>CommitStatusPublisher</code> · <code>CommitStatusReader</code> · <code>PullRequestClient</code> · <code>PullRequestReviewReader</code> · <code>PullRequestDraftClient</code></dd>
+      <dt>Read-only by design</dt><dd><code>PullRequestReviewReader</code>. The factory never submits, approves, dismisses, or merges a review.</dd>
+      <dt>Review states</dt><dd><code>PENDING</code>, <code>COMMENTED</code>, <code>APPROVED</code>, <code>CHANGES_REQUESTED</code>, <code>DISMISSED</code>. Only <code>CHANGES_REQUESTED</code> starts factory work; <code>PENDING</code> is an unsubmitted draft and must never start any.</dd>
+    </dl>
+  </div>
+  <div class="card l-adapter">
+    <h5>internal/git</h5>
+    <p class="role">adapter · 2 files</p>
+    <p><strong>Owns</strong> host Git. <code>GitWorkspace</code> is task-shaped, so coordinator code says "create a checkpoint", never "commit with these flags".</p>
+    <dl>
+      <dt>Seams</dt><dd><code>WorktreeManager</code> · <code>WorktreeInspector</code> · <code>GitWorkspace</code> · <code>RepositoryGuidanceReader</code> · <code>RepositoryCraftReader</code> · <code>RemoteBranchInspector</code> · <code>AncestryInspector</code></dd>
+      <dt>Exact-checkpoint reads</dt><dd>Guidance and role craft are read from a commit, not from a live checkout, so a mid-run edit cannot change what a role was given.</dd>
+      <dt>Recovery support</dt><dd><code>AncestryInspector</code> lets reconciliation tell an unpushed local checkpoint from a genuinely diverged remote branch.</dd>
+      <dt>Safety</dt><dd>Ref fragments pass <code>ref.ValidatePart</code> before they become command arguments.</dd>
+    </dl>
+  </div>
+  <div class="card l-adapter">
+    <h5>internal/worker</h5>
+    <p class="role">adapter · 2 files · ~2,200 lines</p>
+    <p><strong>Owns</strong> the isolated per-run execution environment. <code>DockerRuntime</code> derives container names privately from the run identity; no runtime identifier crosses the interface.</p>
+    <dl>
+      <dt>Seams</dt><dd><code>WorkerRuntime</code> <span class="t-xs">runtime.go:293</span> · <code>InteractiveRuntime</code> · <code>CleanupRuntime</code> · <code>CredentialSeeder</code> · <code>ClaudeCredentialSeeder</code> · <code>NativeSessionProvider</code> · <code>NativeSessionSnapshotProvider</code></dd>
+      <dt>Mount contract</dt><dd><code>Inspection.MountContractStatus</code> reports only booleans, so a stale-mount check never leaks a host path or volume name.</dd>
+      <dt>Reference</dt><dd><a href="worker-runtime.md">docs/worker-runtime.md</a></dd>
+    </dl>
+  </div>
+  <div class="card l-adapter">
+    <h5>internal/terminal</h5>
+    <p class="role">adapter · 2 files</p>
+    <p><strong>Owns</strong> operator-visible workspaces and surfaces. All cmux vocabulary lives in <code>CmuxRuntime</code>; workflow code holds only opaque handles.</p>
+    <dl>
+      <dt>Seams</dt><dd><code>TerminalRuntime</code> <span class="t-xs">runtime.go:139</span> · <code>WorkspaceInspector</code> · <code>SurfaceReader</code> · <code>CommandRunner</code></dd>
+      <dt>Rule</dt><dd>A screen is never a correctness protocol. <code>SurfaceReader</code> exists for diagnostics after a failed launch, not for reading results.</dd>
+      <dt>Decision</dt><dd><a href="adr/0004-tmux-as-the-single-terminal-adapter.md">ADR 0004</a></dd>
+    </dl>
+  </div>
+  <div class="card l-adapter">
+    <h5>internal/report</h5>
+    <p class="role">adapter · 1 file · ~1,300 lines</p>
+    <p><strong>Owns</strong> the structured report envelope — the one channel from a harness to the coordinator. It carries summaries and evidence, never transcripts or private reasoning.</p>
+    <dl>
+      <dt>Contract</dt><dd><code>SchemaVersion = 1</code> · <code>MaxReportBytes = 256 KiB</code> · file name is always <code>report.json</code></dd>
+      <dt>Outcomes</dt><dd><code>completed</code> · <code>needs_clarification</code> · <code>cannot_proceed</code></dd>
+      <dt>Bounds</dt><dd>Every field has an explicit rune or count ceiling: 2,000-rune summary, 4,000-rune change summary, 64 acceptance mappings, 256 production files, 256 test files, 32 questions, 32 evidence entries.</dd>
+      <dt>Key functions</dt><dd><code>WriteAtomic</code> <span class="t-xs">report.go:406</span>, <code>WriteAtomicForInvocation</code> <span class="t-xs">:420</span>, <code>Read</code> <span class="t-xs">:494</span></dd>
+    </dl>
+  </div>
+</div>
+
+<h3 id="b-found">4.5 Foundation</h3>
+<div class="cards">
+  <div class="card l-found">
+    <h5>internal/doctor</h5>
+    <p class="role">foundation · 1 file · zero dependencies</p>
+    <p><strong>Owns</strong> the neutral startup-diagnosis vocabulary. It runs checks and reports; it knows nothing about any subsystem.</p>
+    <dl>
+      <dt>Key types</dt><dd><code>Status</code> (<code>passed</code>, <code>warning</code>, <code>failed</code>), <code>Result</code>, <code>Check</code>, <code>Report</code>, <code>Run</code> <span class="t-xs">doctor.go:62</span></dd>
+      <dt>Contract</dt><dd><code>Problem</code> and <code>Action</code> are separate fields, so a failure must state both what is wrong and how to correct it. Checks continue after a failure, so the operator sees every problem at once.</dd>
+    </dl>
+  </div>
+  <div class="card l-found">
+    <h5>internal/ref</h5>
+    <p class="role">foundation · 1 file · 17 lines</p>
+    <p><strong>Owns</strong> one rule: a Git ref fragment that becomes a command argument or a path fragment must not contain a newline, a leading dash, <code>..</code>, or the characters <code>space ~ ^ : ? * [ \</code>.</p>
+    <dl>
+      <dt>Used by</dt><dd><code>git</code> and <code>github</code></dd>
+      <dt>Why a package</dt><dd>Both adapters pass refs to external commands. One shared rule beats two drifting ones.</dd>
+    </dl>
+  </div>
+</div>
+
+<h3 id="b-assets">4.6 Non-Go building blocks</h3>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Asset</th><th>Owns</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>factory.yaml</code></td><td>The checked-in repository contract: target branch, setup command and its fingerprint files, the ordered gate suite, per-role harness and model options, timeouts, retry ceilings, test policy, caches, the pinned worker image digest, and base-synchronization mode.</td></tr>
+<tr><td class="nowrap"><code>worker/Dockerfile</code></td><td>The repository worker image: the pinned factory base image plus this repository's Go toolchain, exposed at a stable PATH location rather than through a login profile.</td></tr>
+<tr><td class="nowrap"><code>worker/base.Dockerfile</code></td><td>The shared factory base image both harnesses run in.</td></tr>
+<tr><td class="nowrap"><code>worker/skills/</code></td><td>The curated worker skill set baked into both role homes: <code>codebase-design</code>, <code>diagnosing-bugs</code>, <code>domain-modeling</code>, <code>implement</code>, <code>resolving-merge-conflicts</code>, <code>specification-review</code>, <code>standards-review</code>, <code>tdd</code>. Pinned by the worker image digest, scoped per role by the embedded prompts.</td></tr>
+<tr><td class="nowrap"><code>worker/SKILLS.md</code></td><td>Provenance and the curation rule for that set. <code>worker/skills_contract_test.go</code> keeps the set and the documentation in agreement.</td></tr>
+<tr><td class="nowrap"><code>internal/prompt/prompts/</code></td><td>The five current role bodies, plus <code>legacy/</code> holding every superseded version so a persisted invocation stays readable.</td></tr>
+<tr><td class="nowrap"><code>scripts/build-worker.sh</code></td><td>Builds and verifies the pinned worker images and prints the digest for <code>factory.yaml</code>.</td></tr>
+<tr><td class="nowrap"><code>scripts/worker-go.sh</code></td><td>The Go entry point the declared gates call inside the worker.</td></tr>
+<tr><td class="nowrap"><code>Makefile</code></td><td>Development commands. <code>make check</code> is the same suite the gates run: format check, vet, test, build.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="seams"><span class="num">05</span>Seams</h2>
+<p class="lede">A seam is an interface the coordinator depends on and an adapter implements. Each one hides a vocabulary the coordinator must never learn.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Seam</th><th>Implementation</th><th>What it hides</th></tr></thead>
+<tbody>
+<tr>
+  <td class="nowrap"><code>worker.WorkerRuntime</code></td>
+  <td class="nowrap"><code>DockerRuntime</code></td>
+  <td>Container names, image references, volume names, in-worker paths, role homes, invocation packet and result directories, process tracking. Extended by <code>InteractiveRuntime</code> for attach and <code>CleanupRuntime</code> for deletion, so run execution never implies delete authority.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>terminal.TerminalRuntime</code></td>
+  <td class="nowrap"><code>CmuxRuntime</code></td>
+  <td>cmux commands, socket paths, pane and window identifiers. Surface handles are opaque values.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>harness.Runtime</code></td>
+  <td class="nowrap"><code>codex</code>, <code>claude</code></td>
+  <td>Harness argument shapes, native session file formats, and resume semantics. <code>Finish</code> must be idempotent because reconciliation can replay it.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>git.GitWorkspace</code></td>
+  <td class="nowrap"><code>git</code> binary runner</td>
+  <td>Git plumbing. The coordinator asks for a checkpoint, a base synchronization, or a push.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>github.Client</code> + siblings</td>
+  <td class="nowrap"><code>gh</code> binary runner</td>
+  <td>REST and GraphQL shapes, and the credential itself, which stays inside the <code>gh</code> process.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>factory.OperationalStore</code> and its ~20 narrowings</td>
+  <td class="nowrap"><code>*store.Store</code></td>
+  <td>SQL, transactions, and the migration ladder. Each narrowing exposes only the methods one operation needs.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>effect.EffectApplier</code> / <code>ReplayHandler</code></td>
+  <td class="nowrap"><code>internal/factory</code> handlers</td>
+  <td>What a specific external mutation is. The journal kernel never interprets a payload.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>doctor.Check</code></td>
+  <td class="nowrap">every subsystem's <code>doctor.go</code></td>
+  <td>Subsystem internals. A check returns a bounded <code>Result</code>, never raw process output.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>factory.EventSink</code></td>
+  <td class="nowrap">CLI renderers</td>
+  <td>Presentation. Coordinator observations stay structured, which is what makes a later user interface possible without touching workflow code.</td>
+</tr>
+<tr>
+  <td class="nowrap"><code>git.CommandRunner</code>, <code>github.CommandRunner</code>, <code>terminal.CommandRunner</code></td>
+  <td class="nowrap">host <code>exec</code></td>
+  <td>Process launching. Each adapter takes an injectable runner, which is how contract tests avoid the real binary.</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<p>Optional capability interfaces are used throughout instead of one wide interface. <code>RemoteBranchInspector</code>, <code>AncestryInspector</code>, <code>SurfaceReader</code>, <code>NativeSessionSnapshotProvider</code>, <code>ClaudeCredentialSeeder</code>, and <code>CleanupRuntime</code> are each discovered with a type assertion. An adapter that cannot do the extra thing keeps working; the coordinator simply loses that recovery path and says so.</p>
+
+<h2 id="lifecycle"><span class="num">06</span>Run lifecycle</h2>
+
+<h3 id="l-stages">6.1 Stages and status</h3>
+<p>Stage and status are orthogonal. Stage says where the work is; status says whether anything is moving. A run never has more than one stage, and only one run is active at a time.</p>
+
+<figure>
+<svg viewBox="0 0 940 400" role="img" aria-label="Run stage graph from claim to ready, with the two bounded repair loops">
+  <defs>
+    <marker id="ah3" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,1 L8,4.5 L0,8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <!-- row 1 -->
+  <rect class="box" x="30" y="64" width="120" height="54" fill="var(--coord-soft)" stroke="var(--coord)"/>
+  <text class="t-lbl" x="90" y="86" text-anchor="middle">claim</text>
+  <text class="t-xs" x="90" y="102" text-anchor="middle">freeze the packet</text>
+
+  <rect class="box" x="178" y="64" width="130" height="54" fill="var(--coord-soft)" stroke="var(--coord)"/>
+  <text class="t-lbl" x="243" y="86" text-anchor="middle">preflight</text>
+  <text class="t-xs" x="243" y="102" text-anchor="middle">baseline gate suite</text>
+
+  <rect class="box" x="336" y="64" width="140" height="54" fill="var(--panel)" stroke="var(--line2)" stroke-dasharray="4 3"/>
+  <text class="t-lbl" x="406" y="86" text-anchor="middle">architecture</text>
+  <text class="t-xs" x="406" y="102" text-anchor="middle">design-acceptance only</text>
+
+  <rect class="box" x="504" y="64" width="120" height="54" fill="var(--panel)" stroke="var(--line2)" stroke-dasharray="4 3"/>
+  <text class="t-lbl" x="564" y="86" text-anchor="middle">test</text>
+  <text class="t-xs" x="564" y="102" text-anchor="middle">route or policy</text>
+
+  <rect class="box" x="652" y="64" width="160" height="54" fill="var(--coord-soft)" stroke="var(--coord)"/>
+  <text class="t-lbl" x="732" y="86" text-anchor="middle">implementation</text>
+  <text class="t-xs" x="732" y="102" text-anchor="middle">production paths only</text>
+
+  <!-- row 2 -->
+  <rect class="box" x="652" y="214" width="160" height="54" fill="var(--coord-soft)" stroke="var(--coord)"/>
+  <text class="t-lbl" x="732" y="236" text-anchor="middle">check</text>
+  <text class="t-xs" x="732" y="252" text-anchor="middle">gates at the checkpoint</text>
+
+  <rect class="box" x="464" y="214" width="160" height="54" fill="var(--coord-soft)" stroke="var(--coord)"/>
+  <text class="t-lbl" x="544" y="236" text-anchor="middle">draft_pr</text>
+  <text class="t-xs" x="544" y="252" text-anchor="middle">push + one draft PR</text>
+
+  <rect class="box" x="232" y="214" width="200" height="54" fill="var(--policy-soft)" stroke="var(--policy)"/>
+  <text class="t-lbl" x="332" y="234" text-anchor="middle">review · standards_review</text>
+  <text class="t-xs" x="332" y="250" text-anchor="middle">two concurrent axes, separate findings</text>
+
+  <rect class="box" x="30" y="214" width="170" height="54" fill="var(--entry-soft)" stroke="var(--entry)"/>
+  <text class="t-lbl" x="115" y="236" text-anchor="middle">ready</text>
+  <text class="t-xs" x="115" y="252" text-anchor="middle">PR leaves draft</text>
+
+  <!-- forward edges -->
+  <g color="var(--line2)">
+    <path class="edge" d="M150,91 L176,91" marker-end="url(#ah3)"/>
+    <path class="edge" d="M308,91 L334,91" marker-end="url(#ah3)"/>
+    <path class="edge" d="M476,91 L502,91" marker-end="url(#ah3)"/>
+    <path class="edge" d="M624,91 L650,91" marker-end="url(#ah3)"/>
+    <path class="edge" d="M652,240 L626,240" marker-end="url(#ah3)"/>
+    <path class="edge" d="M464,240 L434,240" marker-end="url(#ah3)"/>
+    <path class="edge" d="M232,240 L202,240" marker-end="url(#ah3)"/>
+  </g>
+  <path class="edge" d="M308,78 C 400,30 560,30 650,78" stroke="var(--line2)" stroke-dasharray="4 3" color="var(--line2)" marker-end="url(#ah3)"/>
+  <text class="t-xs" x="479" y="38" text-anchor="middle">advisory policy, no route marker: straight to implementation</text>
+
+  <path class="edge" d="M692,118 L692,212" color="var(--line2)" marker-end="url(#ah3)"/>
+  <text class="t-xs" x="686" y="170" text-anchor="end">checkpoint</text>
+
+  <!-- repair loops -->
+  <g color="var(--accent)">
+    <path class="edge-a" d="M772,214 L772,120" marker-end="url(#ah3)"/>
+    <path class="edge-a" d="M332,268 L332,312 L880,312 L880,91 L814,91" marker-end="url(#ah3)"/>
+  </g>
+  <text class="t-xs" x="780" y="170" text-anchor="start" fill="var(--accent)">check-repair ≤ 3</text>
+  <text class="t-xs" x="600" y="328" text-anchor="middle" fill="var(--accent)">review-repair, at most 4 · a human repair packet never uses this budget</text>
+
+  <!-- terminal note -->
+  <text class="t-hd" x="30" y="366">TERMINAL</text>
+  <text class="t-sm" x="30" y="384">merged pull request → complete and the queue releases · unmerged closure → cancelled · waiting states never release the queue</text>
+</svg>
+<figcaption>Figure 3 — The declared stage graph in <code>workflow.DefaultRegistry</code>. Dashed stages depend on the selected route or the repository test policy. Brown edges are the two bounded repair loops.</figcaption>
+</figure>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Stage</th><th>Owning role</th><th>Advances on</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>claim</code></td><td>—</td><td>A successful claim of an authorized issue.</td></tr>
+<tr><td class="nowrap"><code>preflight</code></td><td>—</td><td>A healthy baseline gate suite at the base checkpoint.</td></tr>
+<tr><td class="nowrap"><code>architecture</code></td><td class="nowrap"><code>architecture</code></td><td>A completed report. Permitted paths default to <code>docs/architecture</code> only.</td></tr>
+<tr><td class="nowrap"><code>test</code></td><td class="nowrap"><code>test</code></td><td>A completed report carrying verified red-test evidence.</td></tr>
+<tr><td class="nowrap"><code>implementation</code></td><td class="nowrap"><code>implementation</code></td><td>The <code>checkpoint</code> stage event, not a report outcome.</td></tr>
+<tr><td class="nowrap"><code>check</code></td><td>—</td><td>The <code>draft_pull_request</code> stage event after every blocking gate passes.</td></tr>
+<tr><td class="nowrap"><code>draft_pr</code></td><td>—</td><td>A created or updated draft pull request; the review round starts from here.</td></tr>
+<tr><td class="nowrap"><code>review</code></td><td class="nowrap"><code>spec_review</code></td><td>A completed report with no blocker.</td></tr>
+<tr><td class="nowrap"><code>standards_review</code></td><td class="nowrap"><code>standards_review</code></td><td>A completed report with no concrete violation of a named repository rule.</td></tr>
+<tr><td class="nowrap"><code>ready</code></td><td>—</td><td>Both axes clear. The pull request leaves draft and waits for a human.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>Status</h4>
+<p><code>active</code> · <code>waiting_for_human</code> · <code>waiting_for_harness</code> · <code>failed</code> · <code>cancelled</code> · <code>complete</code>. An invocation carries its own narrower status: <code>active</code>, <code>completed</code>, <code>waiting_for_human</code>, <code>cannot_proceed</code>, <code>superseded</code>.</p>
+
+<h3 id="l-roles">6.2 Roles and routes</h3>
+<p>A role couples a stage, an embedded prompt version, default permitted paths, a report contract, and a visible-surface strategy. All five are declared in <code>workflow.DefaultRegistry</code> <span class="t-xs">registry.go:191</span>.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Role</th><th>Stage</th><th>Prompt</th><th>Report kind</th><th>Surface</th><th>Default paths</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>test</code></td><td class="nowrap"><code>test</code></td><td class="nowrap"><code>test-v3</code></td><td class="nowrap">test</td><td class="nowrap">checks</td><td class="nowrap"><code>.</code></td></tr>
+<tr><td class="nowrap"><code>implementation</code></td><td class="nowrap"><code>implementation</code></td><td class="nowrap"><code>implementation-v8</code></td><td class="nowrap">handoff</td><td class="nowrap">implementation</td><td class="nowrap"><code>.</code></td></tr>
+<tr><td class="nowrap"><code>architecture</code></td><td class="nowrap"><code>architecture</code></td><td class="nowrap"><code>architecture-v3</code></td><td class="nowrap">handoff</td><td class="nowrap">role</td><td class="nowrap"><code>docs/architecture</code></td></tr>
+<tr><td class="nowrap"><code>spec_review</code></td><td class="nowrap"><code>review</code></td><td class="nowrap"><code>specification-review-v4</code></td><td class="nowrap">review</td><td class="nowrap">role</td><td class="nowrap"><code>.</code></td></tr>
+<tr><td class="nowrap"><code>standards_review</code></td><td class="nowrap"><code>standards_review</code></td><td class="nowrap"><code>standards-review-v5</code></td><td class="nowrap">review</td><td class="nowrap">role</td><td class="nowrap"><code>.</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>implementation</code> is the only role with <code>RequiresTestHandoff</code>. In required mode it cannot start before the test-stage handoff is accepted.</p>
+
+<h4>Routes</h4>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Route marker</th><th>Stage sequence</th><th>Selected by</th></tr></thead>
+<tbody>
+<tr><td class="nowrap">absent</td><td>Follows the frozen repository <code>test_policy</code>. In advisory mode the run goes straight to implementation-owned TDD.</td><td>The absence of a marker, which is itself a declared selection.</td></tr>
+<tr><td class="nowrap"><code>acceptance</code></td><td>test → implementation</td><td>An authorized issue author, with one bounded marker on the frozen issue.</td></tr>
+<tr><td class="nowrap"><code>design-acceptance</code></td><td>architecture → test → implementation</td><td>The same marker.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A route is a deliberate human decision. <code>ParseRoute</code> rejects every value outside the declared grammar, including the empty string, so an unrecognized marker fails rather than falling back to a default. The route is recorded in the specification packet and is immutable for the run. It is never inferred from changed files, issue prose, or model judgment.</p>
+
+<h3 id="l-progress">6.3 Unattended progression</h3>
+<p>One progression pass drives a claimed run as far as it can go without an operator running a stage command, then stops at the first human or infrastructure waiting state. The set of actions is closed, so a new transition cannot be added by accident.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Action</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>run_baseline</code></td><td>Evaluates the frozen pre-edit gate suite.</td></tr>
+<tr><td class="nowrap"><code>start_agent</code></td><td>Launches the role the registry selects for the current stage.</td></tr>
+<tr><td class="nowrap"><code>accept_agent_report</code></td><td>Validates and accepts one invocation's structured report.</td></tr>
+<tr><td class="nowrap"><code>create_draft_pull_request</code></td><td>Checkpoints, gates, pushes, and creates or updates the draft pull request.</td></tr>
+<tr><td class="nowrap"><code>start_review_round</code></td><td>Launches both review roles concurrently.</td></tr>
+<tr><td class="nowrap"><code>retry_review_readiness</code></td><td>Retries the final readiness transition after a recoverable failure.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>A pass reports why it stopped: <code>idle</code>, <code>invocation_active</code>, <code>waiting</code>, <code>draft_pull_request</code>, <code>terminal</code>, or <code>unsupported</code>. It is bounded at 32 steps, because a healthy run needs only a handful of transitions between two harness invocations — more than that is a coordinator defect, not ordinary work. Each pass also applies the structured commands an operator left on the issue or draft pull request, so no comment needs a separate polling command.</p>
+
+<h3 id="l-repair">6.4 Bounded repair loops</h3>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Loop</th><th>Trigger</th><th>Budget</th><th>Consumes budget</th><th>On exhaustion</th></tr></thead>
+<tbody>
+<tr><td class="nowrap">Check repair</td><td>A blocking gate fails at the checkpoint.</td><td class="nowrap"><code>retry_limits.check_repair</code> (3 here)</td><td>Yes</td><td>The run waits for a human.</td></tr>
+<tr><td class="nowrap">Review repair</td><td>A review axis records a concrete blocker.</td><td class="nowrap"><code>retry_limits.review_repair</code> (4 here)</td><td>Yes</td><td>The run waits for a human.</td></tr>
+<tr><td class="nowrap">Test objection</td><td>Implementation disputes a protected test with observable evidence.</td><td class="nowrap"><code>retry_limits.test_revision</code> (2 here)</td><td>Yes</td><td>The run waits for a human.</td></tr>
+<tr><td class="nowrap">Human repair packet</td><td>An authorized maintainer's <code>CHANGES_REQUESTED</code> review, or one <code>/factory repair</code> comment.</td><td>None</td><td class="nowrap">No</td><td>Not applicable.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The test objection cycle is gated twice. It requires <code>test_policy.allow_automated_objections</code>, which stays <code>false</code> until the measured pilot records a proceed decision, and an accepted revision must still pass independent red verification before implementation resumes.</p>
+<p>Concurrent applicable reviews form one human repair packet. Every packet records the maintainer surface and the event identity that produced it, and a review watermark makes repeated polling and a coordinator restart unable to apply the same review twice.</p>
+
+<h2 id="durability"><span class="num">07</span>Durability and recovery</h2>
+<p class="lede">The coordinator is a long-lived process that can be stopped at any instant, including between "I called GitHub" and "I recorded the answer". The durability design exists for exactly that instant.</p>
+
+<h3>The operational store</h3>
+<p>One host-local SQLite file, opened through <code>modernc.org/sqlite</code>, so the factory needs no cgo and the store stays a plain file the operator can copy. Schema version 35.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Table</th><th>Holds</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>schema_metadata</code></td><td>The migration ladder position.</td></tr>
+<tr><td class="nowrap"><code>operational_runs</code></td><td>The run projection: stage, status, branch, worktree, checkpoints, test handoff, review results, repair budgets and history, pull-request identity, watermarks, and the monotonic revision.</td></tr>
+<tr><td class="nowrap"><code>invocations</code></td><td>Every immutable harness attempt: role, stage, packet identity, prompt version, frozen craft identity, native session identifier, status.</td></tr>
+<tr><td class="nowrap"><code>gate_results</code></td><td>One row per gate per checkpoint, so a result is always tied to the exact commit it judged.</td></tr>
+<tr><td class="nowrap"><code>pending_effects</code></td><td>The effect journal: one reserved external mutation per run.</td></tr>
+<tr><td class="nowrap"><code>lifecycle_notifications</code></td><td>Claim rows that make an operator notification fire exactly once.</td></tr>
+<tr><td class="nowrap"><code>evaluation_summaries</code></td><td>Content-free run outcomes retained locally.</td></tr>
+<tr><td class="nowrap"><code>evaluation_usage</code></td><td>Content-free effort records.</td></tr>
+<tr><td class="nowrap"><code>evaluation_dispositions</code></td><td>Explicit human escalation dispositions.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>The effect journal</h3>
+<p>Every mutation the coordinator makes outside its own process is reserved before it is attempted and cleared after it is recorded. The reservation carries a stable identity, so a restarted coordinator asks a precise question — "did <em>this</em> effect happen?" — instead of retrying blindly.</p>
+
+<figure>
+<svg viewBox="0 0 940 226" role="img" aria-label="The reserve, apply, clear protocol and where a restart can interrupt it">
+  <defs>
+    <marker id="ah4" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,1 L8,4.5 L0,8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <rect class="box" x="24" y="48" width="200" height="58" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="124" y="72" text-anchor="middle">1 · reserve</text>
+  <text class="t-xs" x="124" y="90" text-anchor="middle">write pending_effects row</text>
+
+  <rect class="box" x="272" y="48" width="200" height="58" fill="var(--ext-soft)" stroke="var(--ext)"/>
+  <text class="t-lbl" x="372" y="72" text-anchor="middle">2 · apply</text>
+  <text class="t-xs" x="372" y="90" text-anchor="middle">the external mutation</text>
+
+  <rect class="box" x="520" y="48" width="200" height="58" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
+  <text class="t-lbl" x="620" y="72" text-anchor="middle">3 · clear</text>
+  <text class="t-xs" x="620" y="90" text-anchor="middle">record result, drop the row</text>
+
+  <rect class="box" x="768" y="48" width="150" height="58" fill="var(--entry-soft)" stroke="var(--entry)"/>
+  <text class="t-lbl" x="843" y="72" text-anchor="middle">done</text>
+  <text class="t-xs" x="843" y="90" text-anchor="middle">no pending row</text>
+
+  <g color="var(--line2)">
+    <path class="edge" d="M224,77 L270,77" marker-end="url(#ah4)"/>
+    <path class="edge" d="M472,77 L518,77" marker-end="url(#ah4)"/>
+    <path class="edge" d="M720,77 L766,77" marker-end="url(#ah4)"/>
+  </g>
+
+  <path d="M248,40 L248,116" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <path d="M496,40 L496,116" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text class="t-xs" x="248" y="134" text-anchor="middle" fill="var(--accent)">restart here: not applied</text>
+  <text class="t-xs" x="496" y="134" text-anchor="middle" fill="var(--accent)">restart here: applied, unrecorded</text>
+
+  <text class="t-hd" x="24" y="176">ON RESTART, RECONCILIATION READS THE ROW AND THE WORLD</text>
+  <text class="t-sm" x="24" y="196">agreement → consume the effect and repair the projections it owns · disagreement → pause the run with a typed discrepancy for a human</text>
+  <text class="t-sm" x="24" y="214">a journaled run may also recreate a missing worker from the frozen invocation identity, and take one coordinator-owned native harness resume</text>
+</svg>
+<figcaption>Figure 4 — Reserve, apply, clear. The two dashed lines are the only interruption points that matter, and each has a defined answer.</figcaption>
+</figure>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Effect kind</th><th>Reserves</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>state_transition</code></td><td>The paired issue-label and status update.</td></tr>
+<tr><td class="nowrap"><code>label_transition</code></td><td>A standalone issue-label change.</td></tr>
+<tr><td class="nowrap"><code>status_comment</code></td><td>A standalone status-comment write.</td></tr>
+<tr><td class="nowrap"><code>commit_status</code></td><td>One exact-SHA commit status.</td></tr>
+<tr><td class="nowrap"><code>checkpoint</code></td><td>One checkpoint commit.</td></tr>
+<tr><td class="nowrap"><code>push</code></td><td>One run-branch push.</td></tr>
+<tr><td class="nowrap"><code>pull_request</code></td><td>One draft pull-request mutation.</td></tr>
+<tr><td class="nowrap"><code>worker_launch</code></td><td>One worker creation or reuse.</td></tr>
+<tr><td class="nowrap"><code>harness_resume</code></td><td>One native-session resume.</td></tr>
+<tr><td class="nowrap"><code>result_acceptance</code></td><td>One accepted report and the transition it causes.</td></tr>
+<tr><td class="nowrap"><code>clarification_comment</code></td><td>One clarification question published to the issue.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Three recovery concepts, kept apart</h3>
+<dl class="terms">
+  <dt>Recovery diagnosis</dt>
+  <dd>A read-only comparison of one persisted non-terminal run with its registered repository, worktree, Git projection, and GitHub projections. It changes nothing. <code>internal/factory/recovery.go</code>.</dd>
+  <dt>Reconciliation</dt>
+  <dd>The restart pass that consumes one durable pending effect when safe, repairs the projections that effect owns, and otherwise pauses the run with a typed discrepancy. It may recreate a missing worker from the frozen invocation identity and permits one coordinator-owned native harness resume.</dd>
+  <dt>Recovery-required result</dt>
+  <dd>The typed result that reports the agreement state and the discovered discrepancies. Journaled runs reconcile safe effects automatically; unresolved disagreement pauses for a human. Legacy stores that predate the journal keep the fail-closed refusal.</dd>
+</dl>
+
+<h3>Exactly-once, three ways</h3>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Risk</th><th>Mechanism</th></tr></thead>
+<tbody>
+<tr><td class="nowrap">Two coordinators write the same run</td><td>Compare-and-set on the run's monotonic <code>Revision</code>, plus a single-coordinator lock. A lost update surfaces as <code>ErrRevisionConflict</code>.</td></tr>
+<tr><td class="nowrap">The same comment is applied twice</td><td>A processed-comment watermark on the run.</td></tr>
+<tr><td class="nowrap">The same human review is applied twice</td><td>A review watermark holding the immutable GitHub review identity.</td></tr>
+<tr><td class="nowrap">The same effect is applied twice</td><td>The pending-effect journal, keyed by <code>sha256(runID \0 kind \0 identity)</code>.</td></tr>
+<tr><td class="nowrap">A same-process command looks like a restart</td><td><code>Service.startedInvocations</code> records what this process launched, so a repeated command is rejected instead of being mistaken for recovery.</td></tr>
+<tr><td class="nowrap">A notification fires twice</td><td>Claim and release rows in <code>lifecycle_notifications</code>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="worker"><span class="num">08</span>Worker anatomy</h2>
+<p class="lede">A worker is the only place agent-authored code runs. It exposes the run worktree, read-only Git metadata, explicitly declared repository caches, and factory-managed credential copies — nothing else.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Path</th><th>Access</th><th>Contains</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>/work</code></td><td class="nowrap">read-write</td><td>The run worktree. The working directory for every command.</td></tr>
+<tr><td class="nowrap"><code>/git</code></td><td class="nowrap">read-only</td><td>Git metadata, so a role can read history but cannot rewrite the repository.</td></tr>
+<tr><td class="nowrap"><code>/invocation</code></td><td class="nowrap">read-only</td><td>The frozen invocation packet: specification, role identity, and any frozen role craft with its source identity.</td></tr>
+<tr><td class="nowrap"><code>/results</code></td><td class="nowrap">read-write</td><td>Where <code>factory-report</code> writes <code>report.json</code>. Exposed as <code>FACTORY_RESULT_DIR</code>.</td></tr>
+<tr><td class="nowrap"><code>/cache/&lt;name&gt;</code></td><td class="nowrap">as declared</td><td>Only the caches <code>factory.yaml</code> declares, with the declared access mode.</td></tr>
+<tr><td class="nowrap"><code>/run/factory-auth</code></td><td class="nowrap">read-write</td><td>Factory-managed harness credential copies, kept separate from role session state.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>Isolation</h4>
+<ul>
+  <li>Fixed non-root identity <code>10001:10001</code>. Root is used only for the narrow credential-seeding step, never for a role command.</li>
+  <li><code>--cap-drop ALL</code> and <code>--security-opt no-new-privileges</code>.</li>
+  <li>The image is pinned by <code>sha256</code> digest in <code>factory.yaml</code>, and the digest is recorded on the run.</li>
+  <li>Mounts are a contract. <code>MountContractStatus</code> compares the running container against the start request and reports only booleans, so a stale-mount check never leaks a host path.</li>
+</ul>
+
+<h4>Environment policy</h4>
+<p>Two values, both declared: <code>clean</code> gives a command no inherited environment, and <code>role</code> additionally identifies the workflow role that owns the invocation. Repository configuration selects the policy for setup and for each gate. This repository uses <code>clean</code> everywhere.</p>
+
+<h4>Credentials</h4>
+<p>Each harness reads its credential through a symbolic link in its own role home — <code>$HOME/.codex/auth.json</code> and <code>$HOME/.claude/claude-credentials.json</code> — pointing into the shared credential volume. The two harnesses share one volume and never share a file. The host harness directory is never mounted, because that would give a role the operator's own session state. <code>factory auth</code> reseeds one credential from its host source without modifying that source.</p>
+
+<h4>Skills</h4>
+<p>The worker image bakes the curated skill set into both role homes, so the agent-visible instruction set is pinned by the image digest rather than inherited from a personal host directory. The embedded role prompts scope which skills each role may use. See <a href="adr/0006-factory-owned-worker-skills.md">ADR 0006</a>.</p>
+
+<h2 id="cross"><span class="num">09</span>Cross-cutting concerns</h2>
+
+<h3>Startup diagnosis</h3>
+<p>Every subsystem owns its own checks in a <code>doctor.go</code> beside its implementation. <code>internal/doctor</code> only runs them and reports. Eight packages contribute: <code>config</code>, <code>git</code>, <code>github</code>, <code>harness</code>, <code>store</code>, <code>terminal</code>, <code>worker</code>, and <code>factory</code> which composes the rest.</p>
+<p>Three properties make this useful rather than decorative:</p>
+<ul>
+  <li>Checks run <strong>after</strong> a failure too, so <code>factory doctor</code> reports every problem in one pass instead of one problem per run.</li>
+  <li><code>Problem</code> and <code>Action</code> are separate required fields. A failure that cannot say how to fix itself is not a finished check.</li>
+  <li>Results are bounded. A check never returns raw process output, so a diagnosis cannot leak a credential or a transcript.</li>
+</ul>
+<p>Coverage includes host configuration, external access, the repository, the terminal, the worker, the harness, authentication, and operational-store readiness — plus one independent target-branch resolution check for every configured <code>role_craft</code> entry, so a misconfigured craft path fails at startup and not mid-run.</p>
+
+<h3>The trust model</h3>
+<p>Three kinds of text reach a role, and their authority is strictly ordered.</p>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Layer</th><th>Owner</th><th>Can</th><th>Cannot</th></tr></thead>
+<tbody>
+<tr>
+  <td class="nowrap">Authority section</td><td class="nowrap">factory, compiled in</td>
+  <td>Declare role ownership, permitted paths, workflow-stage boundaries, safety rules, report contracts.</td>
+  <td>Be replaced or overridden by anything.</td>
+</tr>
+<tr>
+  <td class="nowrap">Craft section</td><td class="nowrap">factory, replaceable via <code>role_craft</code></td>
+  <td>Advise how to do the work. Selected bytes are frozen at claim with their SHA-256 identity.</td>
+  <td>Widen the frozen specification, move a stage, change permitted paths, or alter the report contract.</td>
+</tr>
+<tr>
+  <td class="nowrap">Repository guidance</td><td class="nowrap">the repository, read from the base checkpoint</td>
+  <td>Explain repository conventions. An empty guidance set is valid.</td>
+  <td>Redefine factory ownership, workflow stages, safety rules, or report contracts. It is untrusted input.</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Both craft and guidance are read from an exact commit, never from a live checkout, so an edit made during a run cannot change what a role was given. See <a href="adr/0007-repository-selected-craft-frozen-at-claim.md">ADR 0007</a>.</p>
+
+<h3>Two-axis review</h3>
+<p>Specification review and documented-standards review are separate concurrent axes with separate durable findings and separate statuses. They are not two opinions merged into one verdict.</p>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Axis</th><th>Judges</th><th>Can block on</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><code>spec_review</code></td><td>Whether the exact-base-to-checkpoint diff satisfies the frozen specification.</td><td>A concrete correctness, security, or specification violation.</td></tr>
+<tr><td class="nowrap"><code>standards_review</code></td><td>Whether the diff follows this repository's documented rules.</td><td>Only a concrete violation of a named repository rule. A heuristic baseline finding is advisory and cannot block.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The review diff is copied into the invocation packet while it fits the packet bound. A larger diff is named by size and by the read-only commands that read it, and the reviewer reads it one path at a time in its own mounted checkpoint worktree. See <a href="adr/0005-embedded-role-prompts-and-two-axis-review.md">ADR 0005</a>.</p>
+
+<h3>Privacy and evaluation</h3>
+<p>The factory prohibits outbound telemetry. What it keeps instead is a content-free local evaluation summary: run outcomes, effort, escalations, and human dispositions, with no prompts, transcripts, diffs, source contents, logs, or credentials. Outcomes are the same closed set as run status. Deletion is an explicit operator command, never a background sweep. See <a href="adr/0001-local-evaluation-without-outbound-telemetry.md">ADR 0001</a>.</p>
+<p>The same boundary shapes error handling. A harness launch failure captures at most 200 lines of its surface for local diagnosis, and that transcript is deliberately absent from <code>Error()</code>, because launch errors reach operator-visible projections such as the run lifecycle reason and the GitHub status comment, which must stay free of work content.</p>
+
+<h3>Bounded content, everywhere</h3>
+<p>Nothing that crosses a boundary is unbounded. The report envelope caps at 256 KiB with per-field rune and count ceilings. A progression pass caps at 32 steps. Native session discovery caps at 60 seconds. Repair loops cap at their declared <code>retry_limits</code>. A ceiling that is hit is a reported state, not a silent truncation.</p>
+
+<h3>Testing seams</h3>
+<p>Roughly half the tree is tests, and the seams exist partly to make them cheap. Every host adapter takes an injectable <code>CommandRunner</code>, so a contract test never launches the real <code>git</code>, <code>gh</code>, <code>docker</code>, or <code>cmux</code>. <code>workflow.NewRegistry</code> is exported specifically so the extensibility seam can be tested with declarations that are not the default. <code>Factory.Dependencies.StartupDiagnosis</code> is injectable so polling tests stay deterministic. <code>worker/skills_contract_test.go</code> keeps the baked skill set and its documentation in agreement.</p>
+
+<h2 id="decisions"><span class="num">10</span>Recorded decisions</h2>
+<p class="lede">Each ADR in <code>docs/adr/</code> explains a constraint that shows up in the code above.</p>
+<div class="tablewrap">
+<table>
+<thead><tr><th>ADR</th><th>Decision</th><th>Status</th><th>Where it shows</th></tr></thead>
+<tbody>
+<tr>
+  <td class="nowrap"><a href="adr/0001-local-evaluation-without-outbound-telemetry.md">0001</a></td>
+  <td>Keep local evaluation summaries without outbound telemetry.</td>
+  <td class="nowrap">accepted</td>
+  <td class="nowrap"><code>store/evaluation.go</code>, <code>factory/evaluation.go</code></td>
+</tr>
+<tr>
+  <td class="nowrap"><a href="adr/0002-per-role-harness-selection-fails-closed.md">0002</a></td>
+  <td>Select harness, model, and reasoning effort per role from declared options; fail closed.</td>
+  <td class="nowrap">accepted</td>
+  <td class="nowrap"><code>internal/harness</code>, <code>config.RoleHarnessDefaults</code></td>
+</tr>
+<tr>
+  <td class="nowrap"><a href="adr/0003-factory-owned-workflow-registry.md">0003</a></td>
+  <td>The workflow registry is factory-owned; a repository configures inside it, never around it.</td>
+  <td class="nowrap">accepted</td>
+  <td class="nowrap"><code>internal/workflow</code></td>
+</tr>
+<tr>
+  <td class="nowrap"><a href="adr/0004-tmux-as-the-single-terminal-adapter.md">0004</a></td>
+  <td>One terminal adapter, one visible-surface vocabulary.</td>
+  <td class="nowrap">proposed</td>
+  <td class="nowrap"><code>terminal.CmuxRuntime</code></td>
+</tr>
+<tr>
+  <td class="nowrap"><a href="adr/0005-embedded-role-prompts-and-two-axis-review.md">0005</a></td>
+  <td>Embedded role prompts and separate review axes.</td>
+  <td class="nowrap">accepted</td>
+  <td class="nowrap"><code>internal/prompt</code>, <code>factory/review.go</code></td>
+</tr>
+<tr>
+  <td class="nowrap"><a href="adr/0006-factory-owned-worker-skills.md">0006</a></td>
+  <td>The worker image owns the skill set; no personal host skills leak into a run.</td>
+  <td class="nowrap">accepted</td>
+  <td class="nowrap"><code>worker/Dockerfile</code>, <code>worker/skills/</code></td>
+</tr>
+<tr>
+  <td class="nowrap"><a href="adr/0007-repository-selected-craft-frozen-at-claim.md">0007</a></td>
+  <td>Repository-selected role craft is frozen at claim, with its content identity recorded.</td>
+  <td class="nowrap">accepted</td>
+  <td class="nowrap"><code>factory/repository_craft.go</code>, <code>git.RepositoryCraftReader</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="reading"><span class="num">11</span>Further reading</h2>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Document</th><th>Read it for</th></tr></thead>
+<tbody>
+<tr><td class="nowrap"><a href="../CONTEXT.md">CONTEXT.md</a></td><td>The domain glossary. Every term on this page is defined there, with the wording each term replaces.</td></tr>
+<tr><td class="nowrap"><a href="configuration.md">docs/configuration.md</a></td><td>Host and repository configuration field by field, the authorized command grammar, and an end-to-end walkthrough.</td></tr>
+<tr><td class="nowrap"><a href="agent-runtime.md">docs/agent-runtime.md</a></td><td>Harness adapters, invocation packet and report, concurrent isolated reviews, authentication, and the check-repair loop.</td></tr>
+<tr><td class="nowrap"><a href="worker-runtime.md">docs/worker-runtime.md</a></td><td>Worker lifecycle, visible harness attach, and the recovery lifecycle.</td></tr>
+<tr><td class="nowrap"><a href="adr/">docs/adr/</a></td><td>The seven recorded decisions.</td></tr>
+<tr><td class="nowrap"><a href="agents/domain.md">docs/agents/domain.md</a></td><td>How to extend the glossary and when to write an ADR.</td></tr>
+<tr><td class="nowrap"><a href="spikes/0002-nested-harness-ttys.md">docs/spikes/</a></td><td>Investigation notes that predate a decision, kept for provenance.</td></tr>
+<tr><td class="nowrap"><a href="../README.md">README.md</a></td><td>The complete product statement.</td></tr>
+</tbody>
+</table>
+</div>
+
+<hr>
+<p class="t-xs" style="color:var(--faint); font-size:12.5px">Derived from the source tree, not from prose: package assignments follow the import graph, stage and role tables follow <code>workflow.DefaultRegistry</code>, and every named type, constant, and file exists in the repository. Line anchors point at the current tree and will drift; the type names will not.</p>
+
+</main>
+</div>
+</body>
+</html>
