@@ -95,6 +95,11 @@ type StartupRequest struct {
 	AuthenticationChecker worker.HarnessAuthenticationChecker
 	// Resolve supplies adapter capabilities; nil selects built-ins.
 	Resolve CapabilityResolver
+	// SkillChecker verifies the installed skill set inside the worker image.
+	SkillChecker worker.SkillContractChecker
+	// SkillEvidencePath is the host path of the recorded worker skill smoke
+	// evidence.
+	SkillEvidencePath string
 }
 
 // StartupChecks returns independent capability, executable, and authentication
@@ -105,6 +110,7 @@ func StartupChecks(request StartupRequest) []doctor.Check {
 	for _, name := range selected {
 		harnessName := name
 		checks = append(checks, executableCheck(request.Checker, request.Image, harnessName))
+		checks = append(checks, skillContractCheck(request, harnessName))
 	}
 	checks = append(checks,
 		credentialCheck(NameCodex, request.Authentication.CodexAuthPath, request.Image, request.AuthenticationChecker),
@@ -181,5 +187,31 @@ func credentialCheck(name, path string, image worker.ImageReference, checker wor
 			return doctor.Failure(name+" authentication", "the configured credential is not usable by the worker harness", "authenticate the "+name+" harness and provide a valid private credential source")
 		}
 		return doctor.Success(name + " authentication")
+	}
+}
+
+// skillContractCheck verifies one harness advertises every role-mandated skill
+// in the pinned worker image, and that a recorded smoke result proves a real
+// invocation of that exact image and harness build could use them. Startup
+// reads the recorded result rather than paying for a model call.
+func skillContractCheck(request StartupRequest, name string) doctor.Check {
+	return func(ctx context.Context) doctor.Result {
+		diagnosis := name + " worker skill contract"
+		if request.SkillChecker == nil {
+			return doctor.Failure(diagnosis, "the worker skill diagnosis adapter is unavailable", "configure the Docker worker runtime")
+		}
+		required := MandatorySkills()
+		contract, err := request.SkillChecker.CheckSkillContract(ctx, worker.SkillContractRequest{Image: request.Image, Harness: name, Skills: required})
+		if err != nil {
+			return doctor.Failure(diagnosis, "the pinned worker image does not advertise every role-mandated skill to "+name, "rebuild the worker image so each role-mandated skill is installed once per discovery root and left model-visible")
+		}
+		evidence, err := LoadSkillSmokeEvidence(request.SkillEvidencePath)
+		if err != nil {
+			return doctor.Failure(diagnosis, "the recorded worker skill smoke evidence is unavailable", "record a smoke result for the pinned worker digest with scripts/smoke-skills.sh")
+		}
+		if !evidence.Covers(request.Image.Digest, name, contract.Version, required) {
+			return doctor.Failure(diagnosis, "no recorded smoke result proves "+name+" can use the role-mandated skills in the pinned worker image", "record a smoke result for the pinned worker digest and harness version with scripts/smoke-skills.sh")
+		}
+		return doctor.Success(diagnosis)
 	}
 }
