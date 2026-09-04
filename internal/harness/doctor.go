@@ -193,7 +193,9 @@ func credentialCheck(name, path string, image worker.ImageReference, checker wor
 // skillContractCheck verifies one harness advertises every role-mandated skill
 // in the pinned worker image, and that a recorded smoke result proves a real
 // invocation of that exact image and harness build could use them. Startup
-// reads the recorded result rather than paying for a model call.
+// reads the recorded result rather than paying for a model call. Every shipped
+// harness must carry that evidence: a repository may assign any role to any
+// supported harness, so an unverified harness is not a safe run.
 func skillContractCheck(request StartupRequest, name string) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		diagnosis := name + " worker skill contract"

@@ -9,6 +9,100 @@ The set is factory-owned and pinned by the worker image digest recorded in
 an agent's visible instructions stay reproducible for the run's digest. See
 `docs/adr/0006-factory-owned-worker-skills.md` for the boundary this preserves.
 
+## Supported harnesses and discovery roots
+
+The worker image installs the harnesses pinned by `worker/base.Dockerfile`.
+Each one reads the skill set from its own role home, so the two installations
+are separate roots holding the same names rather than one shared root.
+
+| Harness | Installed root | Other roots it also reads |
+| --- | --- | --- |
+| `codex` | `$HOME/.codex/skills` | `$HOME/.agents/skills`, the project `.codex/skills`, the system cache root |
+| `claude` | `$HOME/.claude/skills` | the project `.claude/skills`, installed plugins |
+
+Pinned Codex still discovers the deprecated `$CODEX_HOME/skills` root, so the
+`.codex/skills` installation remains the supported location for that version.
+
+`$HOME/.agents/skills` is deliberately left empty and the checks assert it
+stays that way. A second root holding the same names would let one skill name
+resolve to two installations, and the worker must not ship that ambiguity.
+Migrating to `$HOME/.agents/skills` is a separate decision, not a repair for
+skill visibility.
+
+The mounted worktree is repository content and can hold its own project skill
+directory. That is untrusted input like the rest of the checkout; the factory
+never relies on it for a role-mandated skill.
+
+## Activation semantics
+
+Installing a skill is not the same as advertising it. Each harness has its own
+switch that removes an installed skill from the model-visible catalog:
+
+| Harness | Hidden by | Default |
+| --- | --- | --- |
+| `codex` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` | absent, so the skill is advertised |
+| `claude` | `disable-model-invocation: true` in the `SKILL.md` front matter | absent, so the skill is advertised |
+
+A hidden skill under pinned Codex is reachable only through an explicit
+`$skill-name` mention in the prompt text. The factory role prompts name a skill
+in backticks as prose, which is not an explicit mention, so a hidden skill
+would leave a role mandated to use guidance it cannot reach. Neither switch
+appears in this set: role prompts, not activation metadata, decide which role
+uses which skill.
+
+The role-mandated skills are `implement` for the implementation role,
+`specification-review` for the specification reviewer, and `standards-review`
+for the standards reviewer. Every shipped harness must advertise all three,
+because a repository may assign any role to any supported harness.
+
+## Verification
+
+Three layers verify the contract, and they stay separate because only the
+middle one costs a model call.
+
+1. Artifact contract, deterministic and offline:
+
+   ```sh
+   go test ./worker/...
+   ```
+
+   It fails when a role prompt names a skill the image does not install, when a
+   mandatory skill is hidden from either harness, or when the image definition
+   seeds a skill set into more than one discovery root per harness.
+
+2. Real invocation smoke, once per worker digest and harness version:
+
+   ```sh
+   make worker-build                 # prints the new digest
+   # record the digest in factory.yaml, then:
+   ./scripts/smoke-skills.sh
+   ```
+
+   The smoke asks each harness, inside the pinned image and with the exact
+   phrasing the role prompts use, to load each mandatory skill and quote a line
+   that exists only in that skill's body. It records the result in
+   `worker/skill-smoke.json`, keyed by image digest and harness version. It
+   needs a host credential for each harness it smokes and skips any harness
+   without one. Set `HARNESSES` to smoke a subset.
+
+3. Startup diagnosis, deterministic and offline:
+
+   ```sh
+   factory doctor
+   ```
+
+   For every shipped harness it probes the pinned image for the installed,
+   unduplicated, model-visible skill set, and then reads the recorded smoke
+   result for that exact digest and harness version. It never makes a model
+   call of its own. Both parts block for every shipped harness, not only for
+   the harness `role_harness_defaults` currently selects: a repository may
+   assign any role to any supported harness, so an unverified harness is not a
+   safe run.
+
+Rebuilding the image invalidates the recorded evidence, because the digest is
+part of the key. Rebuild, record the new digest, re-run the smoke, then run
+the startup diagnosis.
+
 ## Curation rule
 
 A skill belongs here only when it is craft guidance that applies inside the

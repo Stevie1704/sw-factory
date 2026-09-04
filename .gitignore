@@ -1,4 +1,5 @@
 .serena
+.worker-build.*
 /bin/
 target/
 .DS_Store

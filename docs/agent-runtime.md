@@ -42,7 +42,9 @@ MCP server, or setting. The only skills a session sees are the curated set the
 worker image installs into both role homes, which the worker image digest pins
 for the run; `worker/SKILLS.md` records the set and ADR 0006 records the
 boundary. Each role prompt names the skills that role may use, because both
-harnesses advertise every installed skill to every role. `DISABLE_AUTOUPDATER=1` keeps Claude Code on the
+harnesses advertise every installed skill to every role. A skill a role prompt
+mandates must therefore stay out of each harness's hidden-skill metadata;
+`worker/SKILLS.md` records that activation contract and how it is verified. `DISABLE_AUTOUPDATER=1` keeps Claude Code on the
 version pinned by the run's worker image digest, so a tool upgrade cannot
 change behavior halfway through a run.
 

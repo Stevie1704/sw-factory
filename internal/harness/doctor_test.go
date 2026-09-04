@@ -202,6 +202,7 @@ func TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill(t *testing.T) {
 	secret := "probe-output-secret"
 	checker := &harnessDoctorChecker{skillError: errors.New(secret)}
 	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy:            &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex}},
 		Image:             probedImage,
 		Checker:           &harnessDoctorChecker{},
 		SkillChecker:      checker,
@@ -219,7 +220,8 @@ func TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill(t *testing.T) {
 
 // TestStartupChecksRequireSmokeEvidenceForThePinnedDigestAndVersion verifies
 // startup refuses evidence recorded against a different worker image or a
-// different harness build, without making a model call of its own.
+// different harness build, without making a model call of its own. Every
+// shipped harness blocks, because a role may be assigned to any of them.
 func TestStartupChecksRequireSmokeEvidenceForThePinnedDigestAndVersion(t *testing.T) {
 	otherDigest := "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 	for name, path := range map[string]string{
@@ -230,6 +232,7 @@ func TestStartupChecksRequireSmokeEvidenceForThePinnedDigestAndVersion(t *testin
 	} {
 		t.Run(name, func(t *testing.T) {
 			report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+				Policy:            &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex}},
 				Image:             probedImage,
 				Checker:           &harnessDoctorChecker{},
 				SkillChecker:      &harnessDoctorChecker{},
