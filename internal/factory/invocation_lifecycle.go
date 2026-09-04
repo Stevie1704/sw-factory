@@ -675,6 +675,9 @@ func PlanLaunch(snapshot LaunchSnapshot, request AgentRequest) (LaunchPlan, erro
 	if len(request.PermittedPaths) == 0 {
 		request.PermittedPaths = append([]string(nil), roleDefinition.DefaultPermittedPaths...)
 	}
+	if err := report.ValidatePermittedPaths(request.PermittedPaths); err != nil {
+		return LaunchPlan{}, err
+	}
 	adopted, err := validateLaunchHistory(snapshot, request, testRevision, reviewRepair, implementationResume, roleDefinition)
 	if err != nil {
 		return LaunchPlan{}, err
@@ -813,8 +816,8 @@ func validateLaunchHistory(snapshot LaunchSnapshot, request AgentRequest, testRe
 	return nil, nil
 }
 
-// validateLaunchStagePolicy preserves the packet-only stage and path policy
-// guards that remain pure after gather.
+// validateLaunchStagePolicy preserves the packet-only stage policy guards that
+// remain pure after gather and adoption.
 func validateLaunchStagePolicy(run store.Run, packet SpecificationPacket, request AgentRequest, role workflow.RoleDefinition) error {
 	if role.Kind == workflow.RoleKindTest && !independentTestStageDeclared(packet) {
 		return errors.New("test role is unavailable in advisory mode without a selected route; implementation owns TDD")
@@ -822,7 +825,7 @@ func validateLaunchStagePolicy(run store.Run, packet SpecificationPacket, reques
 	if role.RequiresTestHandoff && independentTestStageDeclared(packet) && run.Stage == store.StageClaim && !run.TestStageSkipped {
 		return errors.New("implementation agent cannot bypass the configured test stage")
 	}
-	return report.ValidatePermittedPaths(request.PermittedPaths)
+	return nil
 }
 
 // launchMaterialisation contains the packet, prompt, invocation identity, and

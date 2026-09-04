@@ -66,6 +66,25 @@ func TestPlanLaunchAdoptsARecoveredInvocationAsItsThirdOutcome(t *testing.T) {
 	}
 }
 
+// TestPlanLaunchRejectsAdoptionWithInvalidPermittedPath verifies adoption still
+// validates the request's path policy before returning a successful plan.
+func TestPlanLaunchRejectsAdoptionWithInvalidPermittedPath(t *testing.T) {
+	run := store.Run{ID: "run-adoption-path", Status: store.StatusActive, Stage: store.StageImplementation, Worktree: "/worktree"}
+	snapshot := LaunchSnapshot{
+		Run:                        run,
+		Packet:                     launchPlanningPacket(),
+		ActiveInvocationsSupported: true,
+		ActiveInvocations: []ActiveLaunchObservation{{
+			Invocation:  store.Invocation{ID: "inv-recovered", RunID: run.ID, Role: workflow.RoleImplementation, Stage: store.StageImplementation, Status: store.InvocationStatusActive, RecoveryResumeCount: 1},
+			StartedHere: false,
+		}},
+	}
+	_, err := PlanLaunch(snapshot, AgentRequest{Role: workflow.RoleImplementation, Stage: store.StageImplementation, PermittedPaths: []string{"../outside"}})
+	if err == nil || !strings.Contains(err.Error(), "permitted_paths[0]: path escapes the repository or targets Git metadata") {
+		t.Fatalf("PlanLaunch() error = %v, want permitted-path rejection", err)
+	}
+}
+
 // launchPlanningPacket returns the smallest frozen policy that can admit an
 // implementation invocation in a pure planning test.
 func launchPlanningPacket() SpecificationPacket {
