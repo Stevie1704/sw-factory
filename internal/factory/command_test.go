@@ -391,8 +391,12 @@ func newCommandServiceWithStoreAndWorktree(runStore factory.OperationalStore, gi
 		GitHub:    githubAdapter,
 		Comments:  comments,
 		Terminal:  &lifecycleTerminal{},
-		Worktree:  worktree,
-		Now:       func() time.Time { return time.Date(2026, 8, 23, 10, 11, 12, 0, time.UTC) },
+		// A command test must never reach the real worker runtime: terminal
+		// lifecycle handling stops the run-scoped worker, and the default
+		// runtime would shell out to Docker on the developer's machine.
+		Worker:   &agentWorker{},
+		Worktree: worktree,
+		Now:      func() time.Time { return time.Date(2026, 8, 23, 10, 11, 12, 0, time.UTC) },
 	}
 	return factory.NewWithDependencies("/host/config.yaml", dependencies)
 }

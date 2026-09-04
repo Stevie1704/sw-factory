@@ -30,6 +30,9 @@ const (
 	firstRepairCheckpoint  = "1111111111111111111111111111111111111111111111111111111111111111"
 	secondRepairCheckpoint = "2222222222222222222222222222222222222222222222222222222222222222"
 	continuationMergeSHA   = "3333333333333333333333333333333333333333333333333333333333333333"
+	// maintainerRepairCommentID is the identity of the one supervision comment
+	// that dispositions a review parked for a human.
+	maintainerRepairCommentID = "7001"
 )
 
 // TestStartTraversesReviewRepairHumanRepairReadinessAndMergeBeforeTheNextClaim
@@ -67,6 +70,69 @@ func TestStartTraversesReviewRepairHumanRepairReadinessAndMergeBeforeTheNextClai
 		t.Fatal("review watermark has no run revision, so it is not restart-auditable")
 	}
 
+	fixture.assertNextIssueClaimed(t)
+}
+
+// TestStartResumesImplementationFromAMaintainerRepairComment is the end-to-end
+// proof that a single-account host can recover a review parked for human
+// disposition. One `factory start` process drives the first issue to a
+// specification review that cannot proceed, applies one authorized
+// `/factory repair` comment with no pull-request review submitted anywhere,
+// resumes implementation with a command-sourced repair packet, reruns both
+// reviews on the repaired checkpoint, and reaches readiness and merge.
+func TestStartResumesImplementationFromAMaintainerRepairComment(t *testing.T) {
+	t.Parallel()
+
+	fixture := newContinuationFixture(t)
+	fixture.parkForMaintainerRepair = true
+	// The agent-found blocker belongs to the automatic repair path; this test
+	// exercises the human disposition that follows a review which stopped.
+	fixture.blockingReviewServed = true
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	fixture.driveMaintainerRepairOutcome(t, cancel)
+
+	if err := fixture.service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	first := fixture.firstTerminalRun(t)
+	if first.Status != store.StatusComplete || first.MergeCommitSHA != continuationMergeSHA {
+		t.Fatalf("first run = %s/%q, want a merged complete run", first.Status, first.MergeCommitSHA)
+	}
+	if first.ProcessedCommentID != maintainerRepairCommentID {
+		t.Fatalf("command watermark = %q, want the applied repair comment", first.ProcessedCommentID)
+	}
+	if first.ProcessedReviewID != "" {
+		t.Fatalf("review watermark = %q, want no submitted review on a single-account host", first.ProcessedReviewID)
+	}
+	if reads := fixture.reviews.readCount(); reads != 0 {
+		t.Fatalf("pull-request review reads with content = %d, want none", reads)
+	}
+	fixture.mu.Lock()
+	packetSeen := fixture.commandRepairPacketSeen
+	fixture.mu.Unlock()
+	if !packetSeen {
+		t.Fatal("no implementation invocation received the command-sourced repair packet")
+	}
+	implementationStarts := 0
+	for _, role := range fixture.harness.roleStarts() {
+		if role == workflow.RoleImplementation {
+			implementationStarts++
+		}
+	}
+	if implementationStarts < 2 {
+		t.Fatalf("implementation starts = %d, want the repair to resume implementation", implementationStarts)
+	}
+	if reviewed := fixture.reviewedCheckpoints(); reviewed < 2 {
+		t.Fatalf("reviewed checkpoints = %d, want the repaired checkpoint reviewed again", reviewed)
+	}
+	// The review parked before readiness, so the pull request was still a draft
+	// when the instruction arrived: the idempotent draft return changes nothing
+	// and the only transition is the readiness the repaired checkpoint earns.
+	if transitions := fixture.pullRequests.draftTransitions(); len(transitions) != 1 || transitions[0] {
+		t.Fatalf("draft transitions = %v, want one transition to ready after the repair", transitions)
+	}
 	fixture.assertNextIssueClaimed(t)
 }
 
@@ -241,6 +307,7 @@ func (f *continuationFixture) assertGatesReranPerCheckpoint(t *testing.T) {
 type continuationFixture struct {
 	service         *factory.Service
 	commands        *continuationGitHub
+	supervision     *continuationComments
 	worker          *unattendedWorker
 	workspace       *unattendedWorkspace
 	pullRequests    *continuationPullRequests
@@ -259,6 +326,14 @@ type continuationFixture struct {
 	firstRunID            string
 	blockingReviewServed  bool
 	humanRepairPacketSeen bool
+	// parkForMaintainerRepair makes the first specification review stop for
+	// human disposition instead of judging the checkpoint, which is the state a
+	// maintainer repair command exists to recover.
+	parkForMaintainerRepair bool
+	cannotProceedServed     bool
+	// commandRepairPacketSeen records that a command-sourced repair packet
+	// reached an implementation invocation with its own provenance.
+	commandRepairPacketSeen bool
 	// reviewRepairPromptContinued records that a resumed review repair carried
 	// only the changed context rather than a second copy of the first prompt.
 	reviewRepairPromptContinued bool
@@ -313,6 +388,7 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 		checkpointsReviewed: map[string]struct{}{},
 	}
 	fixture.harness = &continuationHarness{fixture: fixture}
+	fixture.supervision = &continuationComments{}
 	fixture.terminal.onNotify = func() {
 		run := fixture.latestRun(t)
 		if run != nil && store.IsTerminalStatus(run.Status) {
@@ -336,7 +412,7 @@ func newContinuationFixture(t *testing.T) *continuationFixture {
 			LoadRepository:     func(string) (config.RepositoryConfig, error) { return policy, nil },
 			GitHub:             fixture.commands,
 			IssuePoller:        fixture.commands,
-			Comments:           emptyCommentReader{},
+			Comments:           fixture.supervision,
 			Lease:              fixture.lease,
 			PullRequests:       fixture.pullRequests,
 			PullRequestReviews: fixture.reviews,
@@ -365,13 +441,26 @@ func (f *continuationFixture) restart() *factory.Service {
 	return f.service
 }
 
-// emptyCommentReader keeps unattended continuation tests in the normal
-// command-enabled mode without introducing command traffic into the fixture.
-type emptyCommentReader struct{}
+// continuationComments keeps unattended continuation tests in the normal
+// command-enabled mode while letting one test post a supervision comment
+// mid-run. It serves no comments until a maintainer posts one.
+type continuationComments struct {
+	mu       sync.Mutex
+	comments []github.Comment
+}
 
-// IssueComments returns no human commands for the continuation fixture.
-func (emptyCommentReader) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
-	return nil, nil
+// IssueComments returns every supervision comment posted so far.
+func (c *continuationComments) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]github.Comment(nil), c.comments...), nil
+}
+
+// post records one maintainer comment for later polls.
+func (c *continuationComments) post(comment github.Comment) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.comments = append(c.comments, comment)
 }
 
 // continuationTerminal records the terminal state before the same polling
@@ -441,6 +530,40 @@ func (f *continuationFixture) driveTerminalOutcome(t *testing.T, cancel context.
 		case !terminalApplied:
 			terminalApplied = true
 			terminalAction()
+		}
+	}
+}
+
+// driveMaintainerRepairOutcome posts one authorized repair comment once the
+// review parks for human disposition, then merges the pull request the repaired
+// checkpoint produces. No pull-request review is ever submitted, which is the
+// state of a host whose coordinator account is its only authorized user.
+func (f *continuationFixture) driveMaintainerRepairOutcome(t *testing.T, cancel context.CancelFunc) {
+	t.Helper()
+	commentPosted := false
+	terminalApplied := false
+	f.lease.onRenew = func(github.Lease) {
+		run := f.latestRun(t)
+		switch {
+		case run == nil:
+			return
+		case run.IssueNumber == 9:
+			cancel()
+		case store.IsTerminalStatus(run.Status):
+			f.recordTerminalRun(*run)
+		case !commentPosted:
+			if run.Stage != store.StageReview || run.Status != store.StatusWaitingForHuman || len(run.ActiveInvocationIDs) != 0 {
+				return
+			}
+			commentPosted = true
+			f.supervision.post(github.Comment{
+				ID:     maintainerRepairCommentID,
+				Author: "alice",
+				Body:   "/factory repair release queue ownership on the terminal transition",
+			})
+		case !terminalApplied && run.Stage == store.StageReady:
+			terminalApplied = true
+			f.pullRequests.merge(continuationMergeSHA)
 		}
 	}
 }
@@ -597,6 +720,12 @@ func (f *continuationFixture) reportFor(request harness.StartRequest) (report.Re
 		}
 		return base, true
 	case workflow.RoleSpecificationReview, workflow.RoleStandardsReview:
+		if request.Role == workflow.RoleSpecificationReview && f.serveCannotProceed() {
+			base.Outcome = report.OutcomeCannotProceed
+			base.Summary = "the specification axis cannot be judged at this checkpoint"
+			base.Evidence = []report.Evidence{{Kind: "limitation", Detail: "the frozen packet does not state the expected queue ownership"}}
+			return base, true
+		}
 		base.ReviewHandoff = &report.ReviewHandoff{ReviewedSHA: f.observeReviewedCheckpoint(request)}
 		if request.Role == workflow.RoleSpecificationReview && f.serveBlockingFinding() {
 			base.ReviewHandoff.Findings = []report.ReviewFinding{{
@@ -623,6 +752,9 @@ func (f *continuationFixture) observeImplementationPacket(request harness.StartR
 	if strings.Contains(request.Prompt, string(store.ReviewRepairSourceHuman)) && strings.Contains(request.Prompt, "4001") {
 		f.humanRepairPacketSeen = true
 	}
+	if strings.Contains(request.Prompt, string(store.ReviewRepairEventSupervisionCommand)) && strings.Contains(request.Prompt, maintainerRepairCommentID) {
+		f.commandRepairPacketSeen = true
+	}
 	// A repair turn resumes the implementation session that already read the
 	// first prompt, so it must not replay the fenced specification.
 	if request.ResumeSessionID != "" && strings.Contains(request.Prompt, "Review-repair packet") {
@@ -639,6 +771,19 @@ func (f *continuationFixture) observeReviewedCheckpoint(request harness.StartReq
 	f.checkpointsReviewed[checkpoint] = struct{}{}
 	_ = request
 	return checkpoint
+}
+
+// serveCannotProceed returns true exactly once for a fixture that parks the
+// run, so the first specification review stops for human disposition and every
+// later round judges the checkpoint normally.
+func (f *continuationFixture) serveCannotProceed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.parkForMaintainerRepair || f.cannotProceedServed {
+		return false
+	}
+	f.cannotProceedServed = true
+	return true
 }
 
 // serveBlockingFinding returns true exactly once, so the first review round
