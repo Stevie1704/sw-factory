@@ -2,6 +2,7 @@ package worker_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -830,6 +831,59 @@ func TestDockerRuntimeRefusesMountContractMismatch(t *testing.T) {
 	}
 	if countLogLines(lines, " start ") != 0 {
 		t.Fatalf("Docker start calls = %d, want 0 (mount mismatches should not restart container); calls = %#v", countLogLines(lines, " start "), lines)
+	}
+}
+
+// TestDockerRuntimeRestartsAStoppedReviewWorker verifies a stopped worker
+// whose checkpoint is mounted read-only is started in place. The mount
+// contract required a read-write worktree whatever the request asked for, so
+// recovering any review invocation failed with a mount contract mismatch.
+func TestDockerRuntimeRestartsAStoppedReviewWorker(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	worktree := makeDirectory(t, "worktree")
+	gitMetadata := makeDirectory(t, "git-metadata")
+	request := worker.StartRequest{
+		RunID:            "run-contract-review-worker",
+		WorktreePath:     worktree,
+		WorktreeReadOnly: true,
+		GitMetadataPath:  gitMetadata,
+		Role:             "spec_review",
+		Image:            "ghcr.io/example/factory-worker",
+		ImageDigest:      testWorkerDigest,
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	inspection, err := json.Marshal(map[string]any{
+		"State":  map[string]bool{"Running": false},
+		"Config": map[string]string{"Image": request.Image + "@" + request.ImageDigest},
+		"Mounts": []map[string]any{
+			{"Type": "bind", "Source": worktree, "Destination": worker.WorktreePath, "RW": false},
+			{"Type": "bind", "Source": gitMetadata, "Destination": worker.GitMetadataPath, "RW": false},
+			{"Type": "volume", "Name": testRoleVolumeName(request.RunID, request.Role), "Destination": "/home/factory", "RW": true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectionPath := filepath.Join(t.TempDir(), "inspection.json")
+	if err := os.WriteFile(inspectionPath, inspection, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKER_DOCKER_INSPECT_JSON_FILE", inspectionPath)
+
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() restart error = %v, want the stopped review worker started in place", err)
+	}
+
+	lines := readStubLog(t, logPath)
+	if countLogLines(lines, " start ") != 1 {
+		t.Fatalf("Docker start calls = %d, want 1; calls = %#v", countLogLines(lines, " start "), lines)
+	}
+	if countLogLines(lines, " rm ") != 0 {
+		t.Fatalf("Docker rm calls = %d, want 0 (a matching review worker is not recreated); calls = %#v", countLogLines(lines, " rm "), lines)
 	}
 }
 
