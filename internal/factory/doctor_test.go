@@ -2,6 +2,7 @@ package factory_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -24,6 +26,7 @@ func TestDoctorComposesEverySubsystemAndKeepsOptionalAuthNonBlocking(t *testing.
 		t.Fatal(err)
 	}
 	writeRepositoryConfig(t, repositoryPath)
+	writeSkillSmokeEvidence(t, repositoryPath)
 	configPathOnDisk := filepath.Join(repositoryPath, config.RepositoryConfigFileName)
 	configData, err := os.ReadFile(configPathOnDisk)
 	if err != nil {
@@ -81,7 +84,9 @@ func TestDoctorComposesEverySubsystemAndKeepsOptionalAuthNonBlocking(t *testing.
 		"git role craft implementation", "git role craft standards_review",
 		"cmux executable", "cmux socket",
 		"docker daemon", "worker image",
-		"harness capability", "claude worker executable", "codex worker executable",
+		"harness capability",
+		"claude worker executable", "claude worker skill contract",
+		"codex worker executable", "codex worker skill contract",
 		"codex authentication", "claude authentication", "SQLite",
 	}
 	if len(result.Report.Results) != len(wantNames) {
@@ -199,6 +204,42 @@ func (w *factoryDoctorWorker) CheckHarness(context.Context, worker.HarnessCheckR
 // seam.
 func (*factoryDoctorWorker) CheckHarnessAuthentication(context.Context, worker.HarnessAuthenticationCheckRequest) error {
 	return nil
+}
+
+// CheckSkillContract implements the worker-owned skill contract probe seam.
+func (*factoryDoctorWorker) CheckSkillContract(_ context.Context, request worker.SkillContractRequest) (worker.SkillContract, error) {
+	return worker.SkillContract{Harness: request.Harness, Version: doctorHarnessVersion}, nil
+}
+
+// doctorHarnessVersion is the harness version the composition test's worker
+// probe reports and its recorded smoke evidence is keyed by.
+const doctorHarnessVersion = "1.2.3"
+
+// writeSkillSmokeEvidence records a smoke result for both shipped harnesses at
+// the repository's pinned worker digest.
+func writeSkillSmokeEvidence(t *testing.T, repositoryPath string) {
+	t.Helper()
+	path := filepath.Join(repositoryPath, filepath.FromSlash(harness.SkillEvidenceFile))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	evidence := harness.SkillSmokeEvidence{SchemaVersion: 1}
+	for _, name := range []string{harness.NameClaude, harness.NameCodex} {
+		evidence.Records = append(evidence.Records, harness.SkillSmokeRecord{
+			ImageDigest:    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			Harness:        name,
+			HarnessVersion: doctorHarnessVersion,
+			Skills:         harness.MandatorySkills(),
+			VerifiedAt:     "2026-09-04T00:00:00Z",
+		})
+	}
+	body, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // factoryDoctorTerminal implements terminal lifecycle and diagnosis seams for

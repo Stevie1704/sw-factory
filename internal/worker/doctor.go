@@ -218,3 +218,121 @@ func validateImageReference(image ImageReference) error {
 var _ DoctorChecker = (*DockerRuntime)(nil)
 var _ HarnessChecker = (*DockerRuntime)(nil)
 var _ HarnessAuthenticationChecker = (*DockerRuntime)(nil)
+var _ SkillContractChecker = (*DockerRuntime)(nil)
+
+// SkillContractRequest identifies the role-mandated skills one harness must
+// advertise to the model inside the immutable worker image.
+type SkillContractRequest struct {
+	// Image is the worker image to inspect.
+	Image ImageReference
+	// Harness is the built-in harness whose discovery root is inspected.
+	Harness string
+	// Skills are the role-mandated skill names that must be installed once and
+	// left visible to the model.
+	Skills []string
+}
+
+// SkillContract is the observed skill contract of one harness inside the
+// pinned worker image. Version keys recorded smoke evidence to the exact
+// harness build that produced it.
+type SkillContract struct {
+	// Harness is the inspected harness name.
+	Harness string
+	// Version is the harness's reported version line.
+	Version string
+}
+
+// SkillContractChecker is the worker execution seam used by the harness module
+// to verify the worker skill set inside the worker image.
+type SkillContractChecker interface {
+	CheckSkillContract(context.Context, SkillContractRequest) (SkillContract, error)
+}
+
+// duplicateSkillRoot is the additional discovery root a harness would also
+// read. The worker installs one skill set per harness root, so a skill set
+// here would let one name resolve to two installations.
+const duplicateSkillRoot = "/home/factory/.agents/skills"
+
+// maxHarnessVersionLength bounds the harness version line kept from a probe so
+// worker output cannot grow a diagnosis result without limit.
+const maxHarnessVersionLength = 120
+
+// CheckSkillContract verifies each role-mandated skill appears exactly once in
+// one harness's discovery root and is not hidden from that harness's
+// model-visible catalog, using a disposable network-isolated container. It
+// returns the harness version and never the probe's diagnostic output.
+func (r *DockerRuntime) CheckSkillContract(ctx context.Context, request SkillContractRequest) (SkillContract, error) {
+	if err := validateImageReference(request.Image); err != nil {
+		return SkillContract{}, err
+	}
+	root, err := harnessSkillRoot(request.Harness)
+	if err != nil {
+		return SkillContract{}, err
+	}
+	if len(request.Skills) == 0 {
+		return SkillContract{}, errors.New("at least one role-mandated skill is required")
+	}
+	probe, err := skillContractProbe(request.Harness, root, request.Skills)
+	if err != nil {
+		return SkillContract{}, err
+	}
+	result, err := r.runDocker(ctx, []string{
+		"run", "--rm", "--pull=never", "--user", WorkerUser,
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--network", "none",
+		"--entrypoint", "/bin/sh",
+		imageReference(request.Image.Name, request.Image.Digest), "-c", probe,
+	})
+	if err != nil {
+		return SkillContract{}, errors.New("the worker image does not satisfy the harness skill contract")
+	}
+	version := harnessVersionLine(result.Stdout)
+	if version == "" {
+		return SkillContract{}, errors.New("the worker harness did not report a version")
+	}
+	return SkillContract{Harness: request.Harness, Version: version}, nil
+}
+
+// harnessSkillRoot returns the fixed in-worker discovery root one harness
+// reads its skill set from. It never incorporates user text into a path.
+func harnessSkillRoot(name string) (string, error) {
+	switch name {
+	case "codex":
+		return "/home/factory/.codex/skills", nil
+	case "claude":
+		return "/home/factory/.claude/skills", nil
+	default:
+		return "", fmt.Errorf("unsupported harness skill probe %q", name)
+	}
+}
+
+// skillContractProbe builds the in-worker shell probe asserting each skill is
+// present, self-named, unduplicated, and model-visible under both harness
+// activation policies. Skill names are validated before they reach the shell.
+func skillContractProbe(harness, root string, skills []string) (string, error) {
+	probe := "set -eu\ntest ! -e " + duplicateSkillRoot + "\n"
+	for _, skill := range skills {
+		if !validName(skill) {
+			return "", errors.New("role-mandated skill name is unsafe")
+		}
+		directory := root + "/" + skill
+		probe += "test -f " + directory + "/SKILL.md\n"
+		probe += "grep -q '^name: " + skill + "$' " + directory + "/SKILL.md\n"
+		probe += "! grep -q 'disable-model-invocation' " + directory + "/SKILL.md\n"
+		probe += "! grep -rq 'allow_implicit_invocation' " + directory + "/agents\n"
+	}
+	return probe + harness + " --version\n", nil
+}
+
+// harnessVersionLine reduces a harness version command's output to one bounded
+// printable line usable as a smoke-evidence key.
+func harnessVersionLine(output string) string {
+	line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(output), "\n", 2)[0])
+	var kept strings.Builder
+	for _, character := range line {
+		if character < ' ' || character > '~' || kept.Len() >= maxHarnessVersionLength {
+			continue
+		}
+		kept.WriteRune(character)
+	}
+	return kept.String()
+}

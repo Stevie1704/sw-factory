@@ -356,6 +356,11 @@ pins the skills a role agent sees, exactly as it pins the harness versions. See
 `worker/SKILLS.md` for the set and its curation rule, and ADR 0006 for the
 boundary. Changing a skill needs a rebuild and a new digest.
 
+The recorded worker skill smoke evidence in `worker/skill-smoke.json` is keyed
+by this digest and by each harness's version, so a new digest invalidates it.
+Re-run `./scripts/smoke-skills.sh` after recording a new digest, or the startup
+diagnosis blocks every shipped harness.
+
 The checked-in `worker_build.image` is intentionally an image name without a
 mutable tag. The reported SHA-256 digest is appended by the worker adapter as
 `image@digest`, so a run never starts from a mutable tag and never pulls an

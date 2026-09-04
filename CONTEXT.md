@@ -80,7 +80,7 @@ A typed discrepancy result that reports the agreement state and discovered discr
 _Avoid_: Recovered run, implicit operator approval
 
 **Startup diagnosis**:
-A complete pre-claim report of host configuration, external access, repository, terminal, worker, harness, authentication, and operational-store readiness. Every subsystem contributes its own bounded check, including one independent target-branch resolution check for every configured `role_craft` entry, and the doctor reports all failures before a run can start.
+A complete pre-claim report of host configuration, external access, repository, terminal, worker, harness, authentication, and operational-store readiness. Every subsystem contributes its own bounded check, including one independent target-branch resolution check for every configured `role_craft` entry and one skill-contract check for every harness the worker image ships, and the doctor reports all failures before a run can start.
 _Avoid_: First failure, mid-run diagnosis
 
 **Gate**:
@@ -92,8 +92,12 @@ The per-run isolated execution environment that exposes only the run worktree, r
 _Avoid_: Container in workflow decisions
 
 **Worker skill set**:
-The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts.
+The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
 _Avoid_: Personal skill, installed skill
+
+**Worker skill smoke evidence**:
+The recorded result of a real worker invocation in which one harness loaded and used the role-mandated skills, keyed by the immutable worker image digest and the harness version observed in that image. Startup reads the record instead of repeating the paid, nondeterministic model call, and a rebuilt image invalidates every record keyed by the previous digest.
+_Avoid_: Skill test, live startup check
 
 **WorkerRuntime**:
 The portable seam that starts, resumes, commands, stops, and inspects a worker while hiding runtime identifiers, container paths, role homes, invocation packets, result files, and process tracking.

@@ -1,5 +1,3 @@
 interface:
   display_name: "Standards Review"
   short_description: "Review one checkpoint against repository standards"
-policy:
-  allow_implicit_invocation: false

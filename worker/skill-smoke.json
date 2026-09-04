@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "image_digest": "sha256:238d1ef93894612ab4caaa195b52ed88a67f4651c937e2ba9492fbf3d2f1ff58",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "implement",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-09-04T18:12:32Z"
+    }
+  ]
+}

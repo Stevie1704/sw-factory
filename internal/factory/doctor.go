@@ -2,6 +2,8 @@ package factory
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
@@ -70,6 +72,8 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		Checker:               s.doctorHarnessChecker(),
 		AuthenticationChecker: s.doctorHarnessAuthenticationChecker(),
 		Resolve:               s.deps.HarnessCapabilities,
+		SkillChecker:          s.doctorSkillContractChecker(),
+		SkillEvidencePath:     skillEvidencePath(registration.Path),
 	})...)
 	checks = append(checks, store.StartupCheck(registration.OperationalDataPath))
 
@@ -117,6 +121,23 @@ func (s *Service) doctorHarnessChecker() worker.HarnessChecker {
 func (s *Service) doctorHarnessAuthenticationChecker() worker.HarnessAuthenticationChecker {
 	checker, _ := s.deps.Worker.(worker.HarnessAuthenticationChecker)
 	return checker
+}
+
+// doctorSkillContractChecker resolves the worker-owned skill contract probe
+// seam.
+func (s *Service) doctorSkillContractChecker() worker.SkillContractChecker {
+	checker, _ := s.deps.Worker.(worker.SkillContractChecker)
+	return checker
+}
+
+// skillEvidencePath resolves the recorded worker skill smoke evidence inside
+// the registered repository, leaving the path empty when no repository is
+// registered so the diagnosis stays independent of configuration failures.
+func skillEvidencePath(repositoryPath string) string {
+	if strings.TrimSpace(repositoryPath) == "" {
+		return ""
+	}
+	return filepath.Join(repositoryPath, filepath.FromSlash(harness.SkillEvidenceFile))
 }
 
 // targetBranch extracts the checked-in branch while leaving dependent checks

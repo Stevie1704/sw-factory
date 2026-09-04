@@ -245,9 +245,10 @@ You need:
 
 The <code>factory doctor</code> command checks these prerequisites together. It
 also checks the repository remote and hooks, worker image, harness executables
-and capabilities, cmux, authentication sources, and SQLite readiness. Run it
-before claiming an issue rather than discovering a host problem after the
-issue has been relabeled.
+and capabilities, the role-mandated worker skill set each harness advertises,
+cmux, authentication sources, and SQLite readiness. Run it before claiming an
+issue rather than discovering a host problem after the issue has been
+relabeled.
 
 ## Build and install
 
@@ -1604,6 +1605,13 @@ causes are an unreachable Docker daemon, a missing pinned image digest, an
 unavailable cmux socket, missing <code>gh</code> permissions, an unsupported
 harness executable, or a repository/operational path that is not absolute and
 safely scoped.
+
+A blocked <code>worker skill contract</code> check means the pinned image does
+not advertise a role-mandated skill to that harness, or that no smoke result
+is recorded for the pinned digest and harness version. Every shipped harness
+must carry that evidence, not only the one the repository currently selects.
+Rebuilding the image invalidates the recorded evidence. See
+<code>worker/SKILLS.md</code> for the rebuild, record, and verify sequence.
 
 ### The issue was not claimed
 
