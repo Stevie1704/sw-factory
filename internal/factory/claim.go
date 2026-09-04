@@ -1226,6 +1226,9 @@ func renderReviewStatusComment(role, title string, review *store.ReviewResult, r
 	}
 	blocking, advisory := reviewFindingCountsForRole(role, review.Findings)
 	result := fmt.Sprintf("\n### %s\n\n- reviewed checkpoint: `%s`\n- outcome: %d blocking findings, %d advisory findings\n", title, safeStatusCommentValue(review.CheckpointSHA), blocking, advisory)
+	for _, line := range reviewProjectionDetails(*review) {
+		result += line + "\n"
+	}
 	for index, finding := range review.Findings {
 		result += fmt.Sprintf("\n#### Finding %d — %s/%s\n\n- location: `%s`\n- claim: %s\n- evidence: %s\n- suggested resolution: %s\n- suggested owner: `%s`\n", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category), safeStatusCommentValue(finding.Location), safeStatusCommentValue(finding.Claim), safeStatusCommentValue(finding.Evidence), safeStatusCommentValue(finding.SuggestedResolution), safeStatusCommentValue(finding.SuggestedOwner))
 	}

@@ -549,6 +549,10 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			if err != nil {
 				return AgentResult{}, err
 			}
+		} else if isReviewReport {
+			if err := applyReviewResultProjection(&nextRun, invocation.Role, value); err != nil {
+				return AgentResult{}, err
+			}
 		} else if !isTestReport && !isReviewReport {
 			nextRun = agentReportRunProjection(previousRun, invocation.Stage, value)
 		}
@@ -589,7 +593,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: nativeSessionID, Surface: invocationSurface(*invocation)}); err != nil {
 		return AgentResult{}, fmt.Errorf("finish accepted harness session: %w", err)
 	}
-	if value.Outcome == report.OutcomeNeedsClarification {
+	if value.Outcome == report.OutcomeNeedsClarification || isReviewInvocation {
 		if err := s.lifecycleModule().stopRunWorker(ctx, workerIDForInvocation(*invocation)); err != nil {
 			return AgentResult{}, err
 		}
@@ -640,7 +644,8 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 // left the durable run active at the same stage. A run that already moved away
 // from the invocation stage is the durable proof that no continuation remains.
 func (s *Service) resumeAcceptedStageProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, bool, error) {
-	if run == nil || run.Status != store.StatusActive || (run.Stage != invocation.Stage && !(roleIsKind(*invocation, workflow.RoleKindReview) && run.Stage == store.StageReview)) {
+	reviewInvocation := roleIsKind(*invocation, workflow.RoleKindReview)
+	if run == nil || (run.Status != store.StatusActive && !(reviewInvocation && run.Stage == store.StageReview && run.Status == store.StatusWaitingForHuman)) || (run.Stage != invocation.Stage && !(reviewInvocation && run.Stage == store.StageReview)) {
 		return AgentResult{}, false, nil
 	}
 	if roleIsKind(*invocation, workflow.RoleKindTest) {
@@ -804,14 +809,9 @@ func readAcceptedAgentReport(invocation store.Invocation) (report.Report, error)
 // acceptance pending effect payload. This provides the immutable snapshot that
 // was validated during acceptance, avoiding re-reading mutable report.json.
 func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, error) {
-	if pending.Kind != store.PendingEffectKindResultAcceptance {
-		return report.Report{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
-	}
-	var payload struct {
-		AcceptedReport string `json:"accepted_report"`
-	}
-	if err := json.Unmarshal([]byte(pending.Payload), &payload); err != nil {
-		return report.Report{}, fmt.Errorf("decode result acceptance payload: %w", err)
+	payload, err := readResultAcceptanceEffectPayload(pending)
+	if err != nil {
+		return report.Report{}, err
 	}
 	if strings.TrimSpace(payload.AcceptedReport) == "" {
 		return report.Report{}, errors.New("result acceptance payload has no accepted report")
@@ -821,6 +821,45 @@ func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, e
 		return report.Report{}, fmt.Errorf("decode accepted report from effect: %w", err)
 	}
 	return value, nil
+}
+
+// readResultAcceptanceEffectPayload decodes the complete immutable intent for
+// a result-acceptance effect. Callers use it when replay must continue the
+// coordinator projection after the journaled harness boundary has completed.
+func readResultAcceptanceEffectPayload(pending store.PendingEffect) (resultAcceptanceEffectPayload, error) {
+	if pending.Kind != store.PendingEffectKindResultAcceptance {
+		return resultAcceptanceEffectPayload{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
+	}
+	var payload resultAcceptanceEffectPayload
+	if err := decodePendingEffect(pending, &payload); err != nil {
+		return resultAcceptanceEffectPayload{}, fmt.Errorf("decode result acceptance payload: %w", err)
+	}
+	return payload, nil
+}
+
+// readAcceptedReviewReportFromEffect extracts the immutable review invocation
+// and report snapshot from a result-acceptance effect. Legacy payloads without
+// the snapshot fall back to the invocation artifact retained on disk.
+func readAcceptedReviewReportFromEffect(pending store.PendingEffect) (store.Invocation, report.Report, bool, error) {
+	payload, err := readResultAcceptanceEffectPayload(pending)
+	if err != nil {
+		return store.Invocation{}, report.Report{}, false, err
+	}
+	if !roleIsKind(payload.Invocation, workflow.RoleKindReview) {
+		return payload.Invocation, report.Report{}, false, nil
+	}
+	if strings.TrimSpace(payload.AcceptedReport) == "" {
+		value, readErr := readAcceptedAgentReport(payload.Invocation)
+		if readErr != nil {
+			return store.Invocation{}, report.Report{}, true, fmt.Errorf("read accepted review report from invocation artifact: %w", readErr)
+		}
+		return payload.Invocation, value, true, nil
+	}
+	var value report.Report
+	if err := json.Unmarshal([]byte(payload.AcceptedReport), &value); err != nil {
+		return store.Invocation{}, report.Report{}, true, fmt.Errorf("decode accepted review report from effect: %w", err)
+	}
+	return payload.Invocation, value, true, nil
 }
 
 // RunAgent launches the visible agent and accepts a report when one is already

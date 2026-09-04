@@ -24,9 +24,3 @@ Review-role ownership:
 Factory-owned precedence:
 
 - Craft guidance advises craft only and never widens the frozen specification, moves a workflow stage, changes permitted paths, or alters the report contract. It never overrides factory-owned rules or stage ownership; where craft guidance and factory-owned rules disagree, the factory-owned rules decide.
-
-Review outcome and finding contract:
-
-- `completed` means the review assignment finished and requires a structured review handoff.
-- `needs_clarification` or `cannot_proceed` means the review assignment is incomplete because a question or evidence-backed capability problem remains; include a review handoff when findings were established before stopping.
-- Submit every established blocker or advisory through `--finding`. Do not encode a finding only in questions, evidence, or free-text summary.

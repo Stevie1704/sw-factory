@@ -31,9 +31,9 @@ const (
 	// PromptVersionArchitecture identifies the immutable architecture prompt.
 	PromptVersionArchitecture = "architecture-v3"
 	// PromptVersionSpecificationReview identifies the immutable review prompt.
-	PromptVersionSpecificationReview = "specification-review-v4"
+	PromptVersionSpecificationReview = "specification-review-v5"
 	// PromptVersionStandardsReview identifies the immutable standards-review prompt.
-	PromptVersionStandardsReview = "standards-review-v5"
+	PromptVersionStandardsReview = "standards-review-v6"
 
 	// StageArchitecture identifies the optional architecture invocation stage.
 	StageArchitecture store.Stage = store.StageArchitecture

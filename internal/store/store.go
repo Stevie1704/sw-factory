@@ -21,6 +21,11 @@ import (
 // CurrentSchemaVersion is the supported operational-store schema version.
 const CurrentSchemaVersion = 35
 
+// maxPendingQuestions bounds the flattened operator question surface. Review
+// axes retain up to 32 questions independently, so the shared surface allows
+// both concurrent axes to remain visible without rejecting the second result.
+const maxPendingQuestions = 64
+
 // ErrRevisionConflict reports that another coordinator revision was persisted
 // after a command read the run and before it attempted its compare-and-set.
 var ErrRevisionConflict = errors.New("run revision conflict")
@@ -357,8 +362,36 @@ func (p ReviewRepairPacket) SourceEvent() (ReviewRepairSourceEvent, string) {
 type ReviewResult struct {
 	// CheckpointSHA identifies the exact commit reviewed.
 	CheckpointSHA string `json:"checkpoint_sha"`
-	// Findings contains every accepted complete finding.
+	// Outcome identifies whether the reviewer completed its assignment. An empty
+	// value is treated as completed for rows written before this field existed.
+	Outcome string `json:"outcome,omitempty"`
+	// Summary is the reviewer's bounded observable reason or completion summary.
+	Summary string `json:"summary,omitempty"`
+	// Questions retains clarification requests for this review axis.
+	Questions []ReviewQuestion `json:"questions,omitempty"`
+	// Evidence retains bounded evidence for a review that cannot proceed.
+	Evidence []ReviewEvidence `json:"evidence,omitempty"`
+	// Findings contains every accepted finding established before the review
+	// result was reported, including findings from incomplete outcomes.
 	Findings []ReviewFinding `json:"findings"`
+}
+
+// ReviewQuestion is one review-axis clarification request retained for operator
+// disposition and restart recovery.
+type ReviewQuestion struct {
+	// ID is the stable identifier for the question.
+	ID string `json:"id"`
+	// Prompt is the bounded question shown to the operator.
+	Prompt string `json:"prompt"`
+}
+
+// ReviewEvidence is one bounded observation retained when a review cannot
+// proceed.
+type ReviewEvidence struct {
+	// Kind identifies the evidence category.
+	Kind string `json:"kind"`
+	// Detail describes the observable evidence.
+	Detail string `json:"detail"`
 }
 
 // ReviewRepairOutcome is the bounded lifecycle of one review-repair round.
@@ -1624,6 +1657,52 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 	if !validGateCheckpointSHA(review.CheckpointSHA) {
 		return fmt.Errorf("%s review checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters", label)
 	}
+	outcome := review.Outcome
+	if outcome == "" {
+		// Rows written before incomplete review outcomes were represented have
+		// only a checkpoint and findings, which is the completed shape.
+		outcome = "completed"
+	}
+	switch outcome {
+	case "completed":
+		if len(review.Questions) != 0 || len(review.Evidence) != 0 {
+			return fmt.Errorf("%s completed review must not retain questions or evidence", label)
+		}
+	case "needs_clarification":
+		if len(review.Questions) == 0 || len(review.Evidence) != 0 {
+			return fmt.Errorf("%s needs_clarification review must retain questions only", label)
+		}
+	case "cannot_proceed":
+		if len(review.Evidence) == 0 || len(review.Questions) != 0 {
+			return fmt.Errorf("%s cannot_proceed review must retain evidence only", label)
+		}
+	default:
+		return fmt.Errorf("unsupported %s review outcome %q", label, review.Outcome)
+	}
+	if len(review.Summary) > 4000 || strings.ContainsAny(review.Summary, "\x00\r\n") {
+		return fmt.Errorf("%s review summary is invalid", label)
+	}
+	if len(review.Questions) > 32 {
+		return fmt.Errorf("%s review questions exceed 32 entries", label)
+	}
+	seenQuestions := make(map[string]struct{}, len(review.Questions))
+	for index, question := range review.Questions {
+		if !safeQuestionIdentifier(question.ID) || strings.TrimSpace(question.Prompt) == "" || strings.ContainsAny(question.Prompt, "\x00\r\n") {
+			return fmt.Errorf("%s review question %d is invalid", label, index)
+		}
+		if _, exists := seenQuestions[question.ID]; exists {
+			return fmt.Errorf("%s review question %q is duplicated", label, question.ID)
+		}
+		seenQuestions[question.ID] = struct{}{}
+	}
+	if len(review.Evidence) > 32 {
+		return fmt.Errorf("%s review evidence exceeds 32 entries", label)
+	}
+	for index, evidence := range review.Evidence {
+		if strings.TrimSpace(evidence.Kind) == "" || strings.TrimSpace(evidence.Detail) == "" || strings.ContainsAny(evidence.Kind+evidence.Detail, "\x00\r\n") {
+			return fmt.Errorf("%s review evidence %d is invalid", label, index)
+		}
+	}
 	if len(review.Findings) > 64 {
 		return fmt.Errorf("%s review findings exceed 64 entries", label)
 	}
@@ -1685,8 +1764,8 @@ func isLowerHex(value string) bool {
 // validatePendingQuestions checks the bounded workflow projection before it is
 // serialized into the operational store.
 func validatePendingQuestions(values []PendingQuestion) error {
-	if len(values) > 32 {
-		return errors.New("run pending questions exceed 32 entries")
+	if len(values) > maxPendingQuestions {
+		return fmt.Errorf("run pending questions exceed %d entries", maxPendingQuestions)
 	}
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {

@@ -654,21 +654,41 @@ func validate(value Report, context ValidationContext, allowEmptyProductionFiles
 		if len(value.Questions) == 0 {
 			return errors.New("needs_clarification report requires at least one question")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || value.TestObjectionResponse != nil || len(value.Evidence) != 0 {
-			return errors.New("needs_clarification report must contain only questions")
+		if value.Handoff != nil || value.TestHandoff != nil || value.TestObjectionResponse != nil || len(value.Evidence) != 0 {
+			return errors.New("needs_clarification report must contain only questions and, for review roles, findings")
 		}
 		if err := validateQuestions(value.Questions); err != nil {
 			return err
+		}
+		if isReviewReportForContext(value, context) && value.ReviewHandoff != nil {
+			if len(value.ReviewHandoff.Findings) == 0 {
+				return errors.New("incomplete review handoff requires at least one finding")
+			}
+			if err := validateReviewHandoff(*value.ReviewHandoff, context); err != nil {
+				return err
+			}
+		} else if value.ReviewHandoff != nil {
+			return errors.New("needs_clarification report must contain only questions")
 		}
 	case OutcomeCannotProceed:
 		if len(value.Evidence) == 0 {
 			return errors.New("cannot_proceed report requires evidence")
 		}
-		if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || value.TestObjectionResponse != nil || len(value.Questions) != 0 {
-			return errors.New("cannot_proceed report must contain only evidence")
+		if value.Handoff != nil || value.TestHandoff != nil || value.TestObjectionResponse != nil || len(value.Questions) != 0 {
+			return errors.New("cannot_proceed report must contain only evidence and, for review roles, findings")
 		}
 		if err := validateEvidence(value.Evidence); err != nil {
 			return err
+		}
+		if isReviewReportForContext(value, context) && value.ReviewHandoff != nil {
+			if len(value.ReviewHandoff.Findings) == 0 {
+				return errors.New("incomplete review handoff requires at least one finding")
+			}
+			if err := validateReviewHandoff(*value.ReviewHandoff, context); err != nil {
+				return err
+			}
+		} else if value.ReviewHandoff != nil {
+			return errors.New("cannot_proceed report must contain only evidence")
 		}
 	default:
 		return fmt.Errorf("unsupported report outcome %q", value.Outcome)

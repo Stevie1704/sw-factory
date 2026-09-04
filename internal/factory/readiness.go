@@ -20,7 +20,7 @@ func reviewReadinessEligible(run store.Run) bool {
 	if run.Status != store.StatusActive && run.Status != store.StatusWaitingForHuman {
 		return false
 	}
-	return reviewRoundComplete(run) && !reviewHasBlockingResult(run)
+	return reviewRoundComplete(run) && !reviewHasIncompleteResult(run) && !reviewHasBlockingResult(run)
 }
 
 // reviewReadinessSettled reports whether the final readiness boundary is

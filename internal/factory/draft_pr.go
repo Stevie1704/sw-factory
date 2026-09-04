@@ -494,6 +494,7 @@ func appendGeneratedReview(lines *[]string, role, title string, review *store.Re
 		fmt.Sprintf("- reviewed checkpoint: `%s`", safeStatusCommentValue(review.CheckpointSHA)),
 		fmt.Sprintf("- outcome: %d blocking findings, %d advisory findings", blockers, advisories),
 	)
+	*lines = append(*lines, reviewProjectionDetails(*review)...)
 	if len(review.Findings) == 0 {
 		*lines = append(*lines, "- findings: none")
 		return

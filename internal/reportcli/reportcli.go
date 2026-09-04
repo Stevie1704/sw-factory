@@ -118,6 +118,15 @@ func Run(request Request) int {
 		writeError(request.ErrorsOutput, errors.New("FACTORY_RESULT_DIR environment value is required"))
 		return 1
 	}
+	reviewIdentity := isReviewIdentity(identity["role"], identity["stage"])
+	if len(findings) > 0 && !reviewIdentity {
+		writeError(request.ErrorsOutput, errors.New("--finding is only valid for review roles"))
+		return 1
+	}
+	if reviewIdentity && hasReviewInapplicableFlags(flags) {
+		writeError(request.ErrorsOutput, errors.New("review reports do not accept implementation or test handoff flags"))
+		return 1
+	}
 	value := report.Report{
 		SchemaVersion:   report.SchemaVersion,
 		InvocationID:    identity["invocation_id"],
@@ -131,7 +140,7 @@ func Run(request Request) int {
 		NativeSessionID: *nativeSessionID,
 		ReportedAt:      request.Now().UTC(),
 	}
-	if isReviewIdentity(identity["role"], identity["stage"]) && value.Outcome == report.OutcomeCompleted {
+	if reviewIdentity && (value.Outcome == report.OutcomeCompleted || len(findings) > 0) {
 		value.ReviewHandoff = &report.ReviewHandoff{
 			ReviewedSHA: lookup("FACTORY_CHECKPOINT_SHA"),
 			Findings:    append([]report.ReviewFinding(nil), findings...),
@@ -225,6 +234,17 @@ func Run(request Request) int {
 func isReviewIdentity(role, stage string) bool {
 	return (role == "spec_review" && stage == "review") ||
 		(role == "standards_review" && stage == "standards_review")
+}
+
+// hasReviewInapplicableFlags reports whether a review invocation supplied a
+// payload flag owned by an implementation or test role. Rejecting the flags at
+// the CLI boundary prevents a valid-looking argument from disappearing.
+func hasReviewInapplicableFlags(flags *flag.FlagSet) bool {
+	return flagWasSet(flags,
+		"change-summary", "acceptance", "production-file", "focused-command", "known-limitation", "test-objection",
+		"test-file", "infrastructure-file", "focused-test-command", "expected-failure-reason", "observed-failure",
+		"uncovered-criterion", "objection-decision", "objection-reason",
+	)
 }
 
 // ensureHandoff returns a mutable handoff value for repeated completion flags.
