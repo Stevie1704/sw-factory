@@ -14,7 +14,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -204,12 +203,6 @@ func reviewDiffBase(run store.Run) string {
 	return run.CheckpointSHA
 }
 
-// reviewDiffCommand is the exact base-to-checkpoint diff command the
-// coordinator runs to fill the packet.
-func reviewDiffCommand(base, checkpoint string) string {
-	return fmt.Sprintf("git diff --no-ext-diff --binary --unified=%d %s %s -- .", reviewDiffContextLines, base, checkpoint)
-}
-
 // reviewChangedPathsCommand lists the changed paths, one per line. It is the
 // reviewer's entry point into a diff too large to copy into the packet: the
 // path list is small whatever the change size. Every line has to name one path
@@ -241,18 +234,30 @@ type reviewDiffCapture struct {
 	diffPathCommand     string
 }
 
+// reviewDiffReader is the optional read-only worktree seam used by embedders
+// whose Git projection is not available to the process running the factory.
+type reviewDiffReader interface {
+	ReadDiff(context.Context, string, string, string) (string, error)
+}
+
 // captureReviewDiff obtains the exact base-to-checkpoint diff from the pinned
-// worktree during gather, falling back to the worker seam for compatibility
-// with embedders whose worktree is not a host Git checkout.
-func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, invocation store.Invocation) (reviewDiffCapture, error) {
+// worktree during gather. It never starts or queries an activation-time worker.
+func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, _ store.Invocation) (reviewDiffCapture, error) {
 	base := reviewDiffBase(run)
 	if !github.ValidCommitSHA(base) || !github.ValidCommitSHA(run.CheckpointSHA) {
 		return reviewDiffCapture{}, errors.New("review diff requires valid immutable base and checkpoint SHAs")
 	}
+	if reader, ok := s.deps.Worktree.(reviewDiffReader); ok {
+		output, err := reader.ReadDiff(ctx, run.Worktree, base, run.CheckpointSHA)
+		if err != nil {
+			return reviewDiffCapture{}, fmt.Errorf("capture exact review diff: %w", err)
+		}
+		return reviewDiffCaptureFromOutput(output, base, run.CheckpointSHA), nil
+	}
 	if result, err := captureReviewDiffFromWorktree(ctx, run.Worktree, base, run.CheckpointSHA); err == nil {
 		return reviewDiffCaptureFromOutput(result, base, run.CheckpointSHA), nil
 	}
-	return s.captureReviewDiffFromWorker(ctx, run, invocation, base)
+	return reviewDiffCapture{}, errors.New("capture exact review diff from the pinned worktree")
 }
 
 // reviewDiffCaptureFromOutput keeps a small diff in the packet and describes
@@ -281,28 +286,6 @@ func captureReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoi
 		return "", err
 	}
 	return string(output), nil
-}
-
-// captureReviewDiffFromWorker preserves the older embedding seam when a
-// supplied worktree inspector is a test double or a non-Git host projection.
-func (s *Service) captureReviewDiffFromWorker(ctx context.Context, run store.Run, invocation store.Invocation, base string) (reviewDiffCapture, error) {
-	if s.deps.Worker == nil {
-		return reviewDiffCapture{}, errors.New("worker runtime is required to capture the review diff")
-	}
-	result, err := s.deps.Worker.RunCommand(ctx, worker.CommandRequest{
-		RunID:             run.ID,
-		WorkerID:          workerIDForInvocation(invocation),
-		Command:           reviewDiffCommand(base, run.CheckpointSHA),
-		EnvironmentPolicy: worker.EnvironmentPolicyClean,
-		Role:              invocation.Role,
-	})
-	if err != nil {
-		return reviewDiffCapture{}, fmt.Errorf("capture exact review diff: %w", err)
-	}
-	if result.ExitCode != 0 {
-		return reviewDiffCapture{}, fmt.Errorf("capture exact review diff exited with code %d", result.ExitCode)
-	}
-	return reviewDiffCaptureFromOutput(result.Stdout, base, run.CheckpointSHA), nil
 }
 
 // publishSpecificationReviewStatus publishes one exact-SHA reviewer status.

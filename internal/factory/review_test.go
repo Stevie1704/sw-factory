@@ -16,7 +16,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -37,13 +36,8 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if len(fixture.statuses.values) != 1 || fixture.statuses.values[0].State != github.CommitStatusPending || fixture.statuses.values[0].SHA != reviewCheckpoint || fixture.statuses.values[0].Context != factory.SpecificationReviewStatusContext {
 		t.Fatalf("review statuses after launch = %#v, want pending exact-checkpoint status", fixture.statuses.values)
 	}
-	if len(fixture.worker.starts) != 1 || len(fixture.worker.commands) != 1 || !strings.Contains(fixture.worker.commands[0].Command, reviewCheckpoint) {
-		t.Fatalf("review worker effects = starts %#v commands %#v, want one exact-diff command", fixture.worker.starts, fixture.worker.commands)
-	}
-	// The captured diff carries only enough to judge each hunk in place, for
-	// the reason recorded on reviewDiffContextLines.
-	if !strings.Contains(fixture.worker.commands[0].Command, "--unified=10") {
-		t.Fatalf("review diff command = %q, want the bounded context width", fixture.worker.commands[0].Command)
+	if len(fixture.worker.starts) != 1 || len(fixture.worker.commands) != 0 {
+		t.Fatalf("review worker effects = starts %#v commands %#v, want one start and no diff command", fixture.worker.starts, fixture.worker.commands)
 	}
 	// The prompt names the diff's location instead of carrying a second copy,
 	// so its size does not follow the reviewed change.
@@ -117,7 +111,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 // of the diff itself, and the run does not stop.
 func TestSpecificationReviewOmitsAnOversizedDiff(t *testing.T) {
 	fixture := newReviewFixture(t)
-	fixture.worker.results = []worker.CommandResult{{ExitCode: 0, Stdout: strings.Repeat("-\tremoved line\n", 20000)}}
+	fixture.worktree.diff = strings.Repeat("-\tremoved line\n", 20000)
 
 	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
 	if err != nil {
@@ -290,11 +284,6 @@ func TestConcurrentReviewRolesUseIndependentCheckpointSessions(t *testing.T) {
 	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("save concurrent review packet: %v", err)
 	}
-	fixture.worker.results = append(fixture.worker.results,
-		worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"},
-		worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"},
-	)
-
 	specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
 		RunID: run.ID, Role: "spec_review", Stage: store.StageReview,
 	})
@@ -379,8 +368,6 @@ func TestConcurrentReviewBlockersBecomeOneRepairPacket(t *testing.T) {
 	if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("save concurrent review packet: %v", err)
 	}
-	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"})
-
 	specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: "spec_review", Stage: store.StageReview})
 	if err != nil {
 		t.Fatalf("start specification reviewer: %v", err)
@@ -601,6 +588,7 @@ type reviewFixture struct {
 	service      *factory.Service
 	runStore     *agentRunStore
 	worker       *agentWorker
+	worktree     *reviewDiffWorktree
 	statuses     *gateStatuses
 	pullRequests *fakePullRequests
 	harness      *agentHarness
@@ -628,7 +616,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	githubAdapter := &fakeGitHub{issueValue: issue}
 	statuses := &gateStatuses{}
 	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
-	worktree := &inspectingWorktree{
+	baseWorktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{
 			workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-review", Worktree: worktreePath},
 			guidance: []gitadapter.GuidanceDocument{
@@ -638,8 +626,9 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		},
 		state: gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-review", HeadSHA: factoryGateCheckpoint},
 	}
-	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}, worktree: worktree}
-	runtime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0, Stdout: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"}}}
+	worktree := &reviewDiffWorktree{inspectingWorktree: baseWorktree, diff: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"}
+	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}, worktree: baseWorktree}
+	runtime := &agentWorker{}
 	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
 	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
@@ -694,7 +683,19 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		{RunID: run.ID, CheckpointSHA: factoryGateCheckpoint, Phase: store.GatePhaseBaseline, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
 		{RunID: run.ID, CheckpointSHA: reviewCheckpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
 	}
-	return reviewFixture{service: service, runStore: runStore, worker: runtime, statuses: statuses, pullRequests: pullRequests, harness: harnessRuntime}
+	return reviewFixture{service: service, runStore: runStore, worker: runtime, worktree: worktree, statuses: statuses, pullRequests: pullRequests, harness: harnessRuntime}
+}
+
+// reviewDiffWorktree supplies the explicit read-only diff projection used by
+// review tests without routing gather through the worker runtime.
+type reviewDiffWorktree struct {
+	*inspectingWorktree
+	diff string
+}
+
+// ReadDiff returns the exact bounded fixture diff for the requested checkpoint.
+func (w *reviewDiffWorktree) ReadDiff(context.Context, string, string, string) (string, error) {
+	return w.diff, nil
 }
 
 // reviewReport creates a valid completed review report for a launched session.
