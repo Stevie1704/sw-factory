@@ -72,3 +72,44 @@ func TestBuildReviewPromptSizeDoesNotFollowTheDiff(t *testing.T) {
 		t.Fatalf("prompt grew %d bytes with the diff, want a bounded reference", growth)
 	}
 }
+
+// TestBuildReviewPromptNamesAnOmittedDiff verifies a diff too large for the
+// packet is distinguished from a checkpoint that changed nothing: the prompt
+// names its size and the read-only commands that reproduce it, and never
+// claims the packet carries the diff.
+func TestBuildReviewPromptNamesAnOmittedDiff(t *testing.T) {
+	request := reviewRequestWithDiff("")
+	request.ReviewContext.OmittedDiffBytes = 209024
+	request.ReviewContext.ChangedPathsCommand = "git diff --no-ext-diff --no-renames --name-only -z base checkpoint -- . | tr '\\0' '\\n'"
+	request.ReviewContext.DiffPathCommand = "git diff --no-ext-diff --unified=10 base checkpoint --"
+	value, err := prompt.Build(request)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, present := range []string{
+		"is 209024 bytes",
+		"larger than the packet carries",
+		"changed_paths_command",
+		"diff_path_command",
+		prompt.WorkerSpecificationPath,
+	} {
+		if !strings.Contains(value, present) {
+			t.Fatalf("review prompt missing %q:\n%s", present, value)
+		}
+	}
+	if strings.Contains(value, "changed nothing against its base") {
+		t.Fatalf("omitted diff rendered as an unchanged checkpoint:\n%s", value)
+	}
+}
+
+// TestBuildReviewPromptReportsAnUnchangedCheckpoint verifies an empty diff with
+// no omitted size still reads as a checkpoint that changed nothing.
+func TestBuildReviewPromptReportsAnUnchangedCheckpoint(t *testing.T) {
+	value, err := prompt.Build(reviewRequestWithDiff(""))
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(value, "changed nothing against its base") {
+		t.Fatalf("unchanged checkpoint not named:\n%s", value)
+	}
+}

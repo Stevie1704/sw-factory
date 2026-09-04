@@ -296,9 +296,19 @@ mounted with the invocation packet and named in the prompt rather than repeated
 in it: a launch prompt travels as one command argument, and Linux refuses an
 argument longer than 32 pages, so a prompt that grew with the reviewed change
 could not be executed at all. Every adapter now refuses an oversized prompt
-before launch with a typed error naming the size, and a diff beyond the
-reviewer's reading budget stops the run at capture with a named reason instead
-of producing a packet no reviewer can work through.
+before launch with a typed error naming the size. A diff beyond the packet bound
+is left out of the packet rather than stopping the run: the packet records its
+size, a `git diff --name-only` that lists the changed paths, and a per-path
+`git diff` the reviewer completes with one path at a time. The listing adds
+`--no-renames`, so a rename's old path is listed rather than hidden behind its
+new one, and `-z`, so no path is C-quoted; the role body requires the reviewer
+to quote each path it appends. The per-path command omits `--binary`, because
+the reviewer reads hunks rather than applying a patch. The role body owns that
+procedure and the rule that reading the checkpoint is evidence, so both review
+prompt versions were bumped with it. The reviewer reads the change in its own
+read-only worktree, so neither the packet nor any single command grows with the
+checkpoint. Implementation is not bounded by checkpoint size, so review is not
+either.
 
 The reviewer publishes a completed report with repeated finding flags:
 

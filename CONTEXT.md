@@ -119,6 +119,13 @@ packet outside the bounded factory repair rounds and never consume the
 review-repair budget.
 _Avoid_: Comment command, review reply, advisory feedback
 
+**Review diff**:
+The exact base-to-checkpoint diff a review role judges. It is copied into the
+invocation packet while it fits the packet bound; a larger diff is named by
+size and by the read-only commands that read it, and the reviewer reads it one
+path at a time in its mounted checkpoint worktree.
+_Avoid_: Reading budget, diff limit
+
 **Review watermark**:
 The persisted identity of the last human review a run applied. It makes
 repeated polling and a coordinator restart unable to apply the same review

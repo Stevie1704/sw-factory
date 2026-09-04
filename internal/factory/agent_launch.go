@@ -445,15 +445,14 @@ func (s *Service) startAgentWithStore(ctx context.Context, registration config.R
 	}
 	workerStarted = true
 	if isReview {
-		reviewContext.CurrentDiff, err = s.captureReviewDiff(ctx, *run, invocation)
-		if err != nil {
+		if err := s.applyReviewDiff(ctx, *run, invocation, reviewContext); err != nil {
 			return AgentLaunchResult{}, err
 		}
-		invocationPacket.ReviewContext = reviewContext
+		// invocationPacket and promptRequest already hold this review context, so
+		// the captured diff only has to be republished and rerendered.
 		if err := writeInvocationPacket(packetDirectory, invocationPacket); err != nil {
 			return AgentLaunchResult{}, err
 		}
-		promptRequest.ReviewContext = reviewContext
 		promptText, err = prompt.Build(promptRequest)
 		if err != nil {
 			return AgentLaunchResult{}, err
