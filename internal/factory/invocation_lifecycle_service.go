@@ -11,6 +11,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
+// lifecycleModule returns the coordinator's lazily initialized invocation
+// lifecycle module and its explicit adapter and effect seams.
 func (s *Service) lifecycleModule() *invocationLifecycle {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
