@@ -2,8 +2,11 @@ package factory_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -22,8 +26,8 @@ import (
 const reviewCheckpoint = "fedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedcbafedc"
 
 // TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories verifies
-// the independent reviewer receives the exact diff without inheriting
-// implementation, test, or other-reviewer session context.
+// the independent reviewer receives the exact artifact identity without
+// inheriting implementation, test, or other-reviewer session context.
 func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.T) {
 	fixture := newReviewFixture(t)
 	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
@@ -45,7 +49,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if strings.Contains(reviewPrompt, "diff --git") {
 		t.Fatalf("review prompt repeats the mounted diff:\n%s", reviewPrompt)
 	}
-	if !strings.Contains(reviewPrompt, "review_context.current_diff") {
+	if !strings.Contains(reviewPrompt, prompt.WorkerReviewDiffPath) || !strings.Contains(reviewPrompt, "sed -n '1,200p'") {
 		t.Fatalf("review prompt does not name the mounted diff:\n%s", reviewPrompt)
 	}
 	if !fixture.worker.starts[0].WorktreeReadOnly {
@@ -59,8 +63,25 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if err := json.Unmarshal(packetData, &packet); err != nil {
 		t.Fatalf("decode review packet: %v", err)
 	}
-	if packet.ReviewContext == nil || packet.ReviewContext.CheckpointSHA != reviewCheckpoint || packet.ReviewContext.CurrentDiff != "diff --git a/internal/factory/review.go b/internal/factory/review.go\n" || packet.ReviewContext.ImplementationHandoff != nil || packet.ReviewContext.TestHandoff != nil || len(packet.ReviewContext.ProtectedTestPaths) != 0 || packet.ReviewContext.TestExemption != nil {
-		t.Fatalf("review context = %#v, want exact diff without implementation/test context", packet.ReviewContext)
+	diff := fixture.worktree.diff
+	digest := sha256.Sum256([]byte(diff))
+	if packet.ReviewContext == nil || packet.ReviewContext.CheckpointSHA != reviewCheckpoint || packet.ReviewContext.DiffPath != prompt.WorkerReviewDiffPath || packet.ReviewContext.DiffBytes != int64(len(diff)) || packet.ReviewContext.DiffSHA256 != hex.EncodeToString(digest[:]) || packet.ReviewContext.CurrentDiff != "" || packet.ReviewContext.OmittedDiffBytes != 0 || packet.ReviewContext.ChangedPathsCommand != "" || packet.ReviewContext.DiffPathCommand != "" || packet.ReviewContext.ImplementationHandoff != nil || packet.ReviewContext.TestHandoff != nil || len(packet.ReviewContext.ProtectedTestPaths) != 0 || packet.ReviewContext.TestExemption != nil {
+		t.Fatalf("review context = %#v, want artifact identity without historical or implementation/test context", packet.ReviewContext)
+	}
+	artifactPath := filepath.Join(launch.Invocation.InvocationDirectory, "review.diff")
+	artifactInfo, err := os.Lstat(artifactPath)
+	if err != nil {
+		t.Fatalf("stat review artifact: %v", err)
+	}
+	if !artifactInfo.Mode().IsRegular() || artifactInfo.Size() != int64(len(diff)) {
+		t.Fatalf("review artifact info = %#v, want regular file of %d bytes", artifactInfo, len(diff))
+	}
+	artifact, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("read review artifact: %v", err)
+	}
+	if string(artifact) != diff {
+		t.Fatalf("review artifact = %q, want %q", artifact, diff)
 	}
 	if packet.TestHandoff != nil || packet.TestObjection != nil || packet.TestExemption != nil || len(packet.ProtectedTestPaths) != 0 {
 		t.Fatalf("review packet inherited test context: %#v", packet)
@@ -105,11 +126,10 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 // TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates
 // verifies a blocker-free review cannot mark a pull request ready when the
 // final checkpoint gate projection is missing success.
-// TestSpecificationReviewOmitsAnOversizedDiff verifies a checkpoint whose diff
-// exceeds the packet bound still reaches a reviewer: the packet carries the
-// diff size and the command that regenerates it in the mounted worktree instead
-// of the diff itself, and the run does not stop.
-func TestSpecificationReviewOmitsAnOversizedDiff(t *testing.T) {
+// TestSpecificationReviewStreamsAnOversizedDiff verifies a checkpoint whose
+// diff exceeds the old packet bound still reaches a reviewer with the complete
+// artifact and bounded packet metadata.
+func TestSpecificationReviewStreamsAnOversizedDiff(t *testing.T) {
 	fixture := newReviewFixture(t)
 	fixture.worktree.diff = strings.Repeat("-\tremoved line\n", 20000)
 
@@ -121,9 +141,9 @@ func TestSpecificationReviewOmitsAnOversizedDiff(t *testing.T) {
 		t.Fatalf("harness starts = %#v, want one reviewer launched for an oversized diff", fixture.harness.starts)
 	}
 	if strings.Contains(launch.Prompt, "removed line") {
-		t.Error("review prompt repeated an omitted diff")
+		t.Error("review prompt repeated the mounted diff")
 	}
-	for _, marker := range []string{"larger than the packet carries", "changed_paths_command", "diff_path_command"} {
+	for _, marker := range []string{prompt.WorkerReviewDiffPath, "sed -n '1,200p'", "sed -n '201,400p'"} {
 		if !strings.Contains(launch.Prompt, marker) {
 			t.Errorf("review prompt missing %q: %s", marker, launch.Prompt)
 		}
@@ -136,22 +156,66 @@ func TestSpecificationReviewOmitsAnOversizedDiff(t *testing.T) {
 	if err := json.Unmarshal(packetData, &packet); err != nil {
 		t.Fatalf("decode invocation packet: %v", err)
 	}
-	if packet.ReviewContext == nil || packet.ReviewContext.CurrentDiff != "" {
-		t.Fatalf("packet review context = %#v, want an omitted diff", packet.ReviewContext)
+	diff := fixture.worktree.diff
+	digest := sha256.Sum256([]byte(diff))
+	if packet.ReviewContext == nil || packet.ReviewContext.DiffPath != prompt.WorkerReviewDiffPath || packet.ReviewContext.DiffBytes != int64(len(diff)) || packet.ReviewContext.DiffSHA256 != hex.EncodeToString(digest[:]) || packet.ReviewContext.CurrentDiff != "" || packet.ReviewContext.OmittedDiffBytes != 0 || packet.ReviewContext.ChangedPathsCommand != "" || packet.ReviewContext.DiffPathCommand != "" {
+		t.Fatalf("packet review context = %#v, want only streamed artifact metadata", packet.ReviewContext)
 	}
-	if packet.ReviewContext.OmittedDiffBytes != 20000*len("-\tremoved line\n") {
-		t.Fatalf("packet review context = %#v, want the omitted diff size", packet.ReviewContext)
+	artifact, err := os.ReadFile(filepath.Join(launch.Invocation.InvocationDirectory, "review.diff"))
+	if err != nil {
+		t.Fatalf("read streamed review artifact: %v", err)
 	}
-	// The listing has to name every changed path in a form the per-path command
-	// can read, so its shape is pinned: --no-renames keeps a rename's old path
-	// visible, and -z keeps Git from C-quoting a path.
-	for _, part := range []string{"--no-renames", "--name-only", "-z", reviewCheckpoint} {
-		if !strings.Contains(packet.ReviewContext.ChangedPathsCommand, part) {
-			t.Errorf("changed-paths command %q missing %q", packet.ReviewContext.ChangedPathsCommand, part)
-		}
+	if string(artifact) != diff {
+		t.Fatalf("streamed review artifact has %d bytes, want %d", len(artifact), len(diff))
 	}
-	if !strings.Contains(packet.ReviewContext.DiffPathCommand, "--unified=") || strings.HasSuffix(packet.ReviewContext.DiffPathCommand, "-- .") {
-		t.Errorf("per-path command %q must take an appended path", packet.ReviewContext.DiffPathCommand)
+}
+
+// TestSpecificationReviewMaterialisesAnEmptyDiff verifies unchanged
+// checkpoints still publish a regular zero-byte artifact with its identity.
+func TestSpecificationReviewMaterialisesAnEmptyDiff(t *testing.T) {
+	fixture := newReviewFixture(t)
+	fixture.worktree.diff = ""
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	artifactPath := filepath.Join(launch.Invocation.InvocationDirectory, "review.diff")
+	info, err := os.Lstat(artifactPath)
+	if err != nil {
+		t.Fatalf("stat empty review artifact: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() != 0 {
+		t.Fatalf("empty review artifact info = %#v, want regular zero-byte file", info)
+	}
+	packetData, err := os.ReadFile(filepath.Join(launch.Invocation.InvocationDirectory, "specification.json"))
+	if err != nil {
+		t.Fatalf("read empty review packet: %v", err)
+	}
+	var packet factory.InvocationPacket
+	if err := json.Unmarshal(packetData, &packet); err != nil {
+		t.Fatalf("decode empty review packet: %v", err)
+	}
+	emptyDigest := sha256.Sum256(nil)
+	if packet.ReviewContext == nil || packet.ReviewContext.DiffPath != prompt.WorkerReviewDiffPath || packet.ReviewContext.DiffBytes != 0 || packet.ReviewContext.DiffSHA256 != hex.EncodeToString(emptyDigest[:]) {
+		t.Fatalf("empty review context = %#v, want zero-byte artifact identity", packet.ReviewContext)
+	}
+}
+
+// TestSpecificationReviewCaptureFailureLeavesNoLaunch verifies a source error
+// removes its temporary file and prevents every activation side effect.
+func TestSpecificationReviewCaptureFailureLeavesNoLaunch(t *testing.T) {
+	fixture := newReviewFixture(t)
+	fixture.worktree.streamErr = errors.New("fixture stream failed")
+	_, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err == nil || !strings.Contains(err.Error(), "capture exact review diff") {
+		t.Fatalf("StartAgent() error = %v, want streamed capture failure", err)
+	}
+	if len(fixture.harness.starts) != 0 || len(fixture.worker.starts) != 0 || len(fixture.statuses.values) != 0 || len(fixture.runStore.invocations) != 0 {
+		t.Fatalf("capture failure activated effects: harness=%#v worker=%#v statuses=%#v invocations=%#v", fixture.harness.starts, fixture.worker.starts, fixture.statuses.values, fixture.runStore.invocations)
+	}
+	artifactPath := filepath.Join(fixture.root, ".factory-agents", "run-review", "review-session", "packet", "review.diff")
+	if _, statErr := os.Lstat(artifactPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("review artifact after capture failure: stat error = %v, want no published artifact", statErr)
 	}
 }
 
@@ -704,6 +768,7 @@ func TestReviewLaunchDoesNotPublishPendingStatusBeforeMaterialisation(t *testing
 
 // reviewFixture bundles the Factory seam and all isolated review projections.
 type reviewFixture struct {
+	root         string
 	service      *factory.Service
 	runStore     *agentRunStore
 	worker       *agentWorker
@@ -802,19 +867,25 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		{RunID: run.ID, CheckpointSHA: factoryGateCheckpoint, Phase: store.GatePhaseBaseline, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
 		{RunID: run.ID, CheckpointSHA: reviewCheckpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
 	}
-	return reviewFixture{service: service, runStore: runStore, worker: runtime, worktree: worktree, statuses: statuses, pullRequests: pullRequests, harness: harnessRuntime}
+	return reviewFixture{root: root, service: service, runStore: runStore, worker: runtime, worktree: worktree, statuses: statuses, pullRequests: pullRequests, harness: harnessRuntime}
 }
 
 // reviewDiffWorktree supplies the explicit read-only diff projection used by
 // review tests without routing gather through the worker runtime.
 type reviewDiffWorktree struct {
 	*inspectingWorktree
-	diff string
+	diff      string
+	streamErr error
 }
 
-// ReadDiff returns the exact bounded fixture diff for the requested checkpoint.
-func (w *reviewDiffWorktree) ReadDiff(context.Context, string, string, string) (string, error) {
-	return w.diff, nil
+// StreamDiff writes the exact fixture diff directly to the materialisation
+// destination without routing it through the worker runtime.
+func (w *reviewDiffWorktree) StreamDiff(_ context.Context, _, _, _ string, destination io.Writer) error {
+	if w.streamErr != nil {
+		return w.streamErr
+	}
+	_, err := io.WriteString(destination, w.diff)
+	return err
 }
 
 // reviewReport creates a valid completed review report for a launched session.

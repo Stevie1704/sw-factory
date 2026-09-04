@@ -86,6 +86,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"specification-review-v3":                 "prompts/legacy/specification-review-v3.md",
 		"specification-review-v4":                 "prompts/legacy/specification-review-v4.md",
 		"specification-review-v5":                 "prompts/legacy/specification-review-v5.md",
+		"specification-review-v6":                 "prompts/legacy/specification-review-v6.md",
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
@@ -94,6 +95,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"standards-review-v3":                 "prompts/legacy/standards-review-v3.md",
 		"standards-review-v4":                 "prompts/legacy/standards-review-v4.md",
 		"standards-review-v5":                 "prompts/legacy/standards-review-v5.md",
+		"standards-review-v6":                 "prompts/legacy/standards-review-v6.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 }
@@ -107,9 +109,11 @@ var expectedPromptSHA256 = map[string]string{
 	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
 	"specification-review-v4":                 "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773",
 	"specification-review-v5":                 "b8f39cd13be19fbb71878f30bd8354a64e28a766e557b5e967f643a4974ce3e5",
-	workflow.PromptVersionSpecificationReview: "6ae0e5d82480384e8c6bfb3bdc4e3f2c66b37f71f5501abf77029b53da07ad88",
+	"specification-review-v6":                 "6ae0e5d82480384e8c6bfb3bdc4e3f2c66b37f71f5501abf77029b53da07ad88",
+	workflow.PromptVersionSpecificationReview: "f127acc9fa3ad7d8c31a2944a418f601a9b6185f06fd7214eff3a4d30a16e318",
 	"standards-review-v5":                     "f6c848e43eba598767911ba91e73b9372bd2c82d2a9d0729f79ec7e6a6a6fddb",
-	workflow.PromptVersionStandardsReview:     "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469",
+	"standards-review-v6":                     "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469",
+	workflow.PromptVersionStandardsReview:     "b773948d204ff17301cde3663a8d449deef6a904560bc4dbdd9dd9f324457dcd",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
@@ -142,6 +146,10 @@ const (
 // the complete frozen packet. A prompt points at it instead of repeating the
 // packet's content in the context window.
 const WorkerSpecificationPath = "/invocation/specification.json"
+
+// WorkerReviewDiffPath is the stable read-only location where a review
+// invocation sees the exact base-to-checkpoint diff.
+const WorkerReviewDiffPath = "/invocation/review.diff"
 
 // fenceMarkers are the delimiters that untrusted prompt content must not contain.
 var fenceMarkers = []string{
@@ -233,24 +241,32 @@ type ReviewLog struct {
 }
 
 // ReviewContext is the immutable review input beyond the frozen issue packet.
-// It contains the exact diff and bounded coordinator observations, never
-// implementation/test handoffs or upstream harness transcripts.
+// New packets carry only the review artifact identity and bounded coordinator
+// observations, never the diff bytes, implementation/test handoffs, or
+// upstream harness transcripts.
 type ReviewContext struct {
 	// CheckpointSHA identifies the exact commit under review.
 	CheckpointSHA string `json:"checkpoint_sha"`
-	// CurrentDiff is the coordinator-captured diff from the base to checkpoint.
-	// It is omitted when empty so a prompt can carry the rest of the context
-	// while pointing at the mounted packet for the diff itself.
+	// DiffPath is the stable worker path of the exact review artifact. New
+	// packets set it to WorkerReviewDiffPath. It is required for new review
+	// packets but omitted by historical packets.
+	DiffPath string `json:"diff_path"`
+	// DiffBytes is the byte count of the exact review artifact. It is not omitted
+	// for a zero-byte artifact.
+	DiffBytes int64 `json:"diff_bytes"`
+	// DiffSHA256 is the hexadecimal SHA-256 identity of the exact review artifact.
+	DiffSHA256 string `json:"diff_sha256"`
+	// CurrentDiff is retained only so historical packet readers can decode the
+	// old packet shape. New packets never populate it.
 	CurrentDiff string `json:"current_diff,omitempty"`
-	// OmittedDiffBytes is the size of a diff too large to copy into the packet.
-	// It separates an omitted diff from a checkpoint that changed nothing.
+	// OmittedDiffBytes is retained only for historical packet readers. New packets
+	// never populate it.
 	OmittedDiffBytes int `json:"omitted_diff_bytes,omitempty"`
-	// ChangedPathsCommand lists the changed paths of an omitted diff, one per
-	// line, so each line works as a pathspec for DiffPathCommand.
+	// ChangedPathsCommand is retained only for historical packet readers. New
+	// packets never populate it.
 	ChangedPathsCommand string `json:"changed_paths_command,omitempty"`
-	// DiffPathCommand reads one path of an omitted diff. A reviewer appends a
-	// path from the changed-paths listing, so no single command returns the
-	// whole change.
+	// DiffPathCommand is retained only for historical packet readers. New packets
+	// never populate it.
 	DiffPathCommand string `json:"diff_path_command,omitempty"`
 	// TestHandoff is retained for compatibility with older packet readers and is
 	// omitted from new isolated review packets.
@@ -391,26 +407,42 @@ Review-repair packet (coordinator-owned):
 		dynamicContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n", data)
 	}
 	if definition.Kind == workflow.RoleKindReview && request.ReviewContext != nil {
-		// The diff grows with the reviewed change and is the one unbounded part
-		// of the context. It is already mounted with the packet, so the prompt
-		// carries the bounded observations and names where the diff is.
-		withoutDiff := *request.ReviewContext
-		withoutDiff.CurrentDiff = ""
-		data, err := marshalHandoff(withoutDiff)
-		if err != nil {
-			return "", fmt.Errorf("encode review context: %w", err)
-		}
-		location := "This checkpoint changed nothing against its base, so the context carries no diff."
-		if size := len(request.ReviewContext.CurrentDiff); size > 0 {
-			location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes. Read it in the mounted packet at\n%s under review_context.current_diff; it is not repeated here.", size, WorkerSpecificationPath)
-		} else if omitted := request.ReviewContext.OmittedDiffBytes; omitted > 0 {
-			location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes, larger than the packet carries. Its\nreview_context in %s names the diff size and the read-only commands that read it.", omitted, WorkerSpecificationPath)
-		}
-		dynamicContext = fmt.Sprintf(`
+		if identity.Version == definition.PromptVersion {
+			// Historical packet fields are deliberately cleared before the current
+			// context is rendered. New review prompts use one file procedure
+			// regardless of the artifact size, including a zero-byte artifact.
+			withoutDiff := *request.ReviewContext
+			withoutDiff.CurrentDiff = ""
+			withoutDiff.OmittedDiffBytes = 0
+			withoutDiff.ChangedPathsCommand = ""
+			withoutDiff.DiffPathCommand = ""
+			data, err := marshalHandoff(withoutDiff)
+			if err != nil {
+				return "", fmt.Errorf("encode review context: %w", err)
+			}
+			location := fmt.Sprintf("The exact review diff is mounted at %s. It contains %d bytes and has SHA-256 %s. Read it in bounded line windows, for example:\n`sed -n '1,200p' %s`\n`sed -n '201,400p' %s`\nUse `rg -n` or another line-numbered search against %s to find the next window.", WorkerReviewDiffPath, request.ReviewContext.DiffBytes, request.ReviewContext.DiffSHA256, WorkerReviewDiffPath, WorkerReviewDiffPath, WorkerReviewDiffPath)
+			dynamicContext = fmt.Sprintf(`
 Read-only review context (coordinator-owned):
 %s
 %s
 `, data, location)
+		} else {
+			data, err := marshalHandoff(request.ReviewContext)
+			if err != nil {
+				return "", fmt.Errorf("encode historical review context: %w", err)
+			}
+			location := "This checkpoint changed nothing against its base, so the context carries no diff."
+			if size := len([]byte(request.ReviewContext.CurrentDiff)); size > 0 {
+				location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes. Read it in the mounted packet at\n%s under review_context.current_diff; it is not repeated here.", size, WorkerSpecificationPath)
+			} else if omitted := request.ReviewContext.OmittedDiffBytes; omitted > 0 {
+				location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes, larger than the packet carries. Its\nreview_context in %s names the diff size and the read-only commands that read it.", omitted, WorkerSpecificationPath)
+			}
+			dynamicContext = fmt.Sprintf(`
+Read-only review context (coordinator-owned):
+%s
+%s
+`, data, location)
+		}
 	}
 	if request.Continuation {
 		return joinPromptSections(

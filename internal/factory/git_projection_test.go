@@ -72,7 +72,7 @@ func TestPrepareGitMetadataProjectionRefreshesCheckpointObjects(t *testing.T) {
 		t.Fatalf("repeated projection = %q, want stable path %q", repeatedProjection, projection)
 	}
 
-	command := exec.CommandContext(t.Context(), "git", "diff", "--no-ext-diff", "--binary", "--unified=80", baseSHA, checkpointSHA, "--", ".")
+	command := exec.CommandContext(t.Context(), "git", "diff", "--no-ext-diff", "--no-textconv", "--unified=80", baseSHA, checkpointSHA, "--", ".")
 	command.Dir = worktreePath
 	command.Env = projectionTestGitEnvironment(
 		"GIT_DIR="+refreshedProjection,

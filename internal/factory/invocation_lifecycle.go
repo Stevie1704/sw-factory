@@ -179,7 +179,7 @@ type invocationLifecycleHooks struct {
 	reconcileInterrupted     func(context.Context, config.RepositoryRegistration, RunStore, store.Run, bool) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error)
 	resumeRecoveredCheck     func(context.Context, config.RepositoryRegistration, RunStore, store.Run) (store.Run, error)
 	resetStartup             func()
-	captureReviewDiff        func(context.Context, store.Run, store.Invocation) (reviewDiffCapture, error)
+	materialiseReviewDiff    func(context.Context, store.Run, store.Invocation) (reviewDiffMetadata, error)
 }
 
 // invocationLifecycle owns the worker, harness, terminal, and capability
@@ -283,6 +283,11 @@ func (l *invocationLifecycle) resumeWithoutActiveInvocation(ctx context.Context,
 // resumeActiveInvocation handles the manual-resume branch of Resume, including
 // its typed waiting-state projections.
 func (l *invocationLifecycle) resumeActiveInvocation(ctx context.Context, request InvocationRecoveryRequest, run store.Run, active store.Invocation) (ResumeResult, error) {
+	if currentReviewInvocation(active) {
+		if err := validatePersistedReviewDiff(active); err != nil {
+			return ResumeResult{Run: run, Invocation: active}, fmt.Errorf("validate persisted review diff: %w", err)
+		}
+	}
 	if active.AttachRequired {
 		return ResumeResult{Run: run, Invocation: active, WaitingForAttach: true}, &ManualResumeRequiredError{RunID: run.ID}
 	}
@@ -642,8 +647,9 @@ func (l *invocationLifecycle) gatherActiveInvocations(ctx context.Context, invoc
 	return observations, supported, nil
 }
 
-// gatherReview reads the immutable review preconditions and exact review
-// context, including the bounded diff, before activation can publish status.
+// gatherReview reads the immutable review preconditions and bounded review
+// context before activation can publish status. Artifact materialisation stays
+// in materialiseLaunch so gather remains read-only.
 func (l *invocationLifecycle) gatherReview(ctx context.Context, runStore RunStore, run store.Run, role string, snapshot *LaunchSnapshot) error {
 	if err := ensureReviewStartForRoleWithInspector(ctx, run, role, l.worktree); err != nil {
 		return err
@@ -651,17 +657,6 @@ func (l *invocationLifecycle) gatherReview(ctx context.Context, runStore RunStor
 	reviewContext, err := reviewContextForRole(ctx, run, runStore, role)
 	if err != nil {
 		return err
-	}
-	invocation := store.Invocation{ID: snapshot.InvocationID, RunID: run.ID, Role: role, Stage: snapshot.Request.Stage}
-	if l.hooks.captureReviewDiff != nil {
-		capture, captureErr := l.hooks.captureReviewDiff(ctx, run, invocation)
-		if captureErr != nil {
-			return captureErr
-		}
-		reviewContext.CurrentDiff = capture.currentDiff
-		reviewContext.OmittedDiffBytes = capture.omittedDiffBytes
-		reviewContext.ChangedPathsCommand = capture.changedPathsCommand
-		reviewContext.DiffPathCommand = capture.diffPathCommand
 	}
 	snapshot.ReviewContext = reviewContext
 	return nil
@@ -914,6 +909,30 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 	}
 	contextValues := launchContextForPlan(plan)
 	invocation := newLaunchInvocation(plan, packetDirectory, resultDirectory, craft, l.clock().UTC())
+	if plan.RoleDefinition.Kind == workflow.RoleKindReview {
+		if plan.ReviewContext == nil {
+			return launchMaterialisation{}, fmt.Errorf("review context is required for %s", plan.Request.Role)
+		}
+		if l.hooks.materialiseReviewDiff == nil {
+			return launchMaterialisation{}, fmt.Errorf("review diff materialisation is required for %s", plan.Request.Role)
+		}
+		metadata, err := l.hooks.materialiseReviewDiff(ctx, plan.Run, invocation)
+		if err != nil {
+			return launchMaterialisation{}, err
+		}
+		reviewContext := *plan.ReviewContext
+		reviewContext.DiffPath = metadata.path
+		reviewContext.DiffBytes = metadata.bytes
+		reviewContext.DiffSHA256 = metadata.sha256
+		// These fields remain decodable for historical packets, but a newly
+		// written packet has one file artifact and never carries old delivery
+		// branches.
+		reviewContext.CurrentDiff = ""
+		reviewContext.OmittedDiffBytes = 0
+		reviewContext.ChangedPathsCommand = ""
+		reviewContext.DiffPathCommand = ""
+		plan.ReviewContext = &reviewContext
+	}
 	invocationPacket, promptText, err := buildLaunchPacket(plan, invocation, craft, contextValues)
 	if err != nil {
 		return launchMaterialisation{}, err
@@ -1404,6 +1423,11 @@ func (l *invocationLifecycle) restoreCredentialProjection(ctx context.Context, r
 // ensureWorkerForInvocation validates or recreates the pinned worker and
 // returns the exact request used by the durable worker-launch effect.
 func (l *invocationLifecycle) ensureWorkerForInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (worker.StartRequest, store.Invocation, error) {
+	if currentReviewInvocation(invocation) {
+		if err := validatePersistedReviewDiff(invocation); err != nil {
+			return worker.StartRequest{}, invocation, fmt.Errorf("validate persisted review diff: %w", err)
+		}
+	}
 	invocation, err := l.ensureCredentialStoreIdentity(ctx, registration, runStore, invocation)
 	if err != nil {
 		return worker.StartRequest{}, invocation, err

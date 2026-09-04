@@ -492,6 +492,18 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			addRepositoryCraftRecoveryDiscrepancy(diagnosis, *active, craftErr)
 		}
 	}
+	if currentReviewInvocation(*active) {
+		if diffErr := validatePersistedReviewDiff(*active); diffErr != nil {
+			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+				InvocationID: active.ID,
+				Kind:         RecoveryDiscrepancyInfrastructure,
+				Source:       "review diff",
+				Field:        "artifact",
+				Expected:     "regular review.diff matching persisted size and SHA-256",
+				Observed:     diffErr.Error(),
+			})
+		}
+	}
 	if invocationProjectionNeverEstablished(*active) {
 		// The launch boundary rolled this invocation back before its agent
 		// started, so it owns no live worker, terminal, or harness projection.

@@ -585,7 +585,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
     <p><strong>Owns</strong> the versioned role bodies compiled into the binary with <code>go:embed</code>. A prompt has an authority section the factory keeps, and a craft section a repository may replace. Every version keeps its SHA-256 identity so an invocation records exactly which bytes it used.</p>
     <dl>
       <dt>Key types</dt><dd><code>PromptIdentity</code>, <code>Registry</code> <span class="t-xs">prompt.go:270</span>, <code>Build</code> <span class="t-xs">prompt.go:282</span>, <code>rolePromptFiles</code></dd>
-      <dt>Current versions</dt><dd><code>test-v3</code> · <code>implementation-v8</code> · <code>architecture-v3</code> · <code>specification-review-v5</code> · <code>standards-review-v6</code>; superseded bodies stay in <code>prompts/legacy/</code> so a persisted run can still be read</dd>
+      <dt>Current versions</dt><dd><code>test-v3</code> · <code>implementation-v8</code> · <code>architecture-v3</code> · <code>specification-review-v7</code> · <code>standards-review-v7</code>; superseded bodies stay in <code>prompts/legacy/</code> so a persisted run can still be read</dd>
       <dt>Decisions</dt><dd><a href="adr/0005-embedded-role-prompts-and-two-axis-review.md">ADR 0005</a>, <a href="adr/0007-repository-selected-craft-frozen-at-claim.md">ADR 0007</a></dd>
     </dl>
   </div>
@@ -916,8 +916,8 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 <tr><td class="nowrap"><code>test</code></td><td class="nowrap"><code>test</code></td><td class="nowrap"><code>test-v3</code></td><td class="nowrap">test</td><td class="nowrap">checks</td><td class="nowrap"><code>.</code></td></tr>
 <tr><td class="nowrap"><code>implementation</code></td><td class="nowrap"><code>implementation</code></td><td class="nowrap"><code>implementation-v8</code></td><td class="nowrap">handoff</td><td class="nowrap">implementation</td><td class="nowrap"><code>.</code></td></tr>
 <tr><td class="nowrap"><code>architecture</code></td><td class="nowrap"><code>architecture</code></td><td class="nowrap"><code>architecture-v3</code></td><td class="nowrap">handoff</td><td class="nowrap">role</td><td class="nowrap"><code>docs/architecture</code></td></tr>
-<tr><td class="nowrap"><code>spec_review</code></td><td class="nowrap"><code>review</code></td><td class="nowrap"><code>specification-review-v5</code></td><td class="nowrap">review</td><td class="nowrap">role</td><td class="nowrap"><code>.</code></td></tr>
-<tr><td class="nowrap"><code>standards_review</code></td><td class="nowrap"><code>standards_review</code></td><td class="nowrap"><code>standards-review-v6</code></td><td class="nowrap">review</td><td class="nowrap">role</td><td class="nowrap"><code>.</code></td></tr>
+<tr><td class="nowrap"><code>spec_review</code></td><td class="nowrap"><code>review</code></td><td class="nowrap"><code>specification-review-v7</code></td><td class="nowrap">review</td><td class="nowrap">role</td><td class="nowrap"><code>.</code></td></tr>
+<tr><td class="nowrap"><code>standards_review</code></td><td class="nowrap"><code>standards_review</code></td><td class="nowrap"><code>standards-review-v7</code></td><td class="nowrap">review</td><td class="nowrap">role</td><td class="nowrap"><code>.</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -1164,7 +1164,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 </tbody>
 </table>
 </div>
-<p>The review diff is copied into the invocation packet while it fits the packet bound. A larger diff is named by size and by the read-only commands that read it, and the reviewer reads it one path at a time in its own mounted checkpoint worktree. See <a href="adr/0005-embedded-role-prompts-and-two-axis-review.md">ADR 0005</a>.</p>
+<p>Every review invocation mounts the exact base-to-checkpoint diff as the regular read-only <code>/invocation/review.diff</code> file beside <code>specification.json</code>, including a zero-byte artifact. <code>review_context</code> records its stable worker path, byte count, and SHA-256 identity. Reviewers page it with bounded line windows and line-numbered search; restart recovery requires a regular file matching the recorded size and identity and fails closed on a discrepancy. See <a href="adr/0005-embedded-role-prompts-and-two-axis-review.md">ADR 0005</a>.</p>
 
 <h3>Privacy and evaluation</h3>
 <p>The factory prohibits outbound telemetry. What it keeps instead is a content-free local evaluation summary: run outcomes, effort, escalations, and human dispositions, with no prompts, transcripts, diffs, source contents, logs, or credentials. Outcomes are the same closed set as run status. Deletion is an explicit operator command, never a background sweep. See <a href="adr/0001-local-evaluation-without-outbound-telemetry.md">ADR 0001</a>.</p>

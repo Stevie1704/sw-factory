@@ -59,6 +59,11 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 	if err := validatePersistedInvocationPacket(run, invocation, persisted); err != nil {
 		return "", err
 	}
+	if currentReviewInvocation(invocation) {
+		if err := validatePersistedReviewDiff(invocation); err != nil {
+			return "", fmt.Errorf("validate persisted review diff: %w", err)
+		}
+	}
 	var repositoryCraft *RepositoryCraftDocument
 	if persisted.SchemaVersion >= 9 || len(packet.RepositoryConfig.RoleCraft) > 0 || invocation.PromptCraftSourcePath != "" || invocation.PromptCraftSHA256 != "" {
 		repositoryCraft, err = validateInvocationCraftIdentity(packet, persisted, invocation)

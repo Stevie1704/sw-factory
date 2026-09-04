@@ -126,11 +126,15 @@ surface and event identity that produced it.
 _Avoid_: Review reply, advisory feedback
 
 **Review diff**:
-The exact base-to-checkpoint diff a review role judges. It is copied into the
-invocation packet while it fits the packet bound; a larger diff is named by
-size and by the read-only commands that read it, and the reviewer reads it one
-path at a time in its mounted checkpoint worktree.
-_Avoid_: Reading budget, diff limit
+The exact base-to-checkpoint diff a review role judges. Every new review
+invocation materialises it as the regular read-only `/invocation/review.diff`
+file beside `specification.json`, including a zero-byte artifact. `review_context`
+records only that stable worker path, the byte count, and the SHA-256 content
+identity. Reviewers page the file with bounded line windows and line-numbered
+search, so one very large changed file remains readable. Restart recovery
+requires a regular file with the recorded size and SHA-256; a missing or
+changed artifact is a recovery discrepancy and is not regenerated.
+_Avoid_: Inline diff, diff limit
 
 **Review watermark**:
 The persisted identity of the last human review a run applied. It makes

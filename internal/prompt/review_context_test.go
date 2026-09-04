@@ -9,8 +9,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// reviewRequestWithDiff builds a specification-review prompt request whose diff
-// is larger than every other part of the prompt combined.
+// reviewRequestWithDiff builds a specification-review prompt request with the
+// bounded identity metadata for its mounted review artifact.
 func reviewRequestWithDiff(diff string) prompt.Request {
 	return prompt.Request{
 		InvocationID:        "inv-review",
@@ -21,7 +21,9 @@ func reviewRequestWithDiff(diff string) prompt.Request {
 		RepositoryGuidance:  "### AGENTS.md\nUse the repository guidance.",
 		ReviewContext: &prompt.ReviewContext{
 			CheckpointSHA: "e7934d8d93b45db0e2cb89b5781fadb368ee8b58",
-			CurrentDiff:   diff,
+			DiffPath:      prompt.WorkerReviewDiffPath,
+			DiffBytes:     int64(len(diff)),
+			DiffSHA256:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			RelevantLogs:  []prompt.ReviewLog{{Source: "gate:test", Detail: "passed at the exact checkpoint"}},
 			PriorFindings: []store.ReviewFinding{{Location: "internal/store/store.go:1810", Claim: "the projection is still read"}},
 		},
@@ -29,8 +31,8 @@ func reviewRequestWithDiff(diff string) prompt.Request {
 }
 
 // TestBuildReviewPromptPointsAtTheMountedDiff verifies the prompt keeps the
-// bounded review observations and names where the exact diff is, rather than
-// carrying a second copy of content already mounted with the packet.
+// bounded review observations and names the immutable artifact without carrying
+// any diff-delivery branch in the packet context.
 func TestBuildReviewPromptPointsAtTheMountedDiff(t *testing.T) {
 	diff := "diff --git a/internal/store/store.go b/internal/store/store.go\n" + strings.Repeat("-\tremoved line\n", 8000)
 	value, err := prompt.Build(reviewRequestWithDiff(diff))
@@ -44,19 +46,25 @@ func TestBuildReviewPromptPointsAtTheMountedDiff(t *testing.T) {
 		"e7934d8d93b45db0e2cb89b5781fadb368ee8b58",
 		"passed at the exact checkpoint",
 		"the projection is still read",
-		fmt.Sprintf("is %d bytes", len(diff)),
-		prompt.WorkerSpecificationPath,
-		"review_context.current_diff",
+		fmt.Sprintf("%d bytes", len(diff)),
+		prompt.WorkerReviewDiffPath,
+		"diff_sha256",
+		"sed -n '1,200p' /invocation/review.diff",
+		"sed -n '201,400p' /invocation/review.diff",
 	} {
 		if !strings.Contains(value, present) {
 			t.Fatalf("review prompt missing %q:\n%s", present, value)
 		}
 	}
+	for _, absent := range []string{"removed line", "current_diff", "omitted_diff_bytes", "changed_paths_command", "diff_path_command", "changed nothing against its base"} {
+		if strings.Contains(value, absent) {
+			t.Fatalf("review prompt contains superseded delivery branch %q:\n%s", absent, value)
+		}
+	}
 }
 
 // TestBuildReviewPromptSizeDoesNotFollowTheDiff verifies a reviewed change can
-// grow without the prompt growing with it, which is what made a large
-// checkpoint impossible to launch.
+// grow without the prompt growing with it.
 func TestBuildReviewPromptSizeDoesNotFollowTheDiff(t *testing.T) {
 	small, err := prompt.Build(reviewRequestWithDiff("diff --git a/a b/a\n-one line\n"))
 	if err != nil {
@@ -73,43 +81,23 @@ func TestBuildReviewPromptSizeDoesNotFollowTheDiff(t *testing.T) {
 	}
 }
 
-// TestBuildReviewPromptNamesAnOmittedDiff verifies a diff too large for the
-// packet is distinguished from a checkpoint that changed nothing: the prompt
-// names its size and the read-only commands that reproduce it, and never
-// claims the packet carries the diff.
-func TestBuildReviewPromptNamesAnOmittedDiff(t *testing.T) {
+// TestBuildReviewPromptDescribesAnEmptyArtifactWithoutASeparateBranch verifies
+// a zero-byte review artifact still has one stable file-reading procedure.
+func TestBuildReviewPromptDescribesAnEmptyArtifactWithoutASeparateBranch(t *testing.T) {
 	request := reviewRequestWithDiff("")
-	request.ReviewContext.OmittedDiffBytes = 209024
-	request.ReviewContext.ChangedPathsCommand = "git diff --no-ext-diff --no-renames --name-only -z base checkpoint -- . | tr '\\0' '\\n'"
-	request.ReviewContext.DiffPathCommand = "git diff --no-ext-diff --unified=10 base checkpoint --"
+	request.ReviewContext.DiffBytes = 0
 	value, err := prompt.Build(request)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	for _, present := range []string{
-		"is 209024 bytes",
-		"larger than the packet carries",
-		"changed_paths_command",
-		"diff_path_command",
-		prompt.WorkerSpecificationPath,
-	} {
+	for _, present := range []string{"0 bytes", prompt.WorkerReviewDiffPath, "sed -n '1,200p' /invocation/review.diff"} {
 		if !strings.Contains(value, present) {
 			t.Fatalf("review prompt missing %q:\n%s", present, value)
 		}
 	}
-	if strings.Contains(value, "changed nothing against its base") {
-		t.Fatalf("omitted diff rendered as an unchanged checkpoint:\n%s", value)
-	}
-}
-
-// TestBuildReviewPromptReportsAnUnchangedCheckpoint verifies an empty diff with
-// no omitted size still reads as a checkpoint that changed nothing.
-func TestBuildReviewPromptReportsAnUnchangedCheckpoint(t *testing.T) {
-	value, err := prompt.Build(reviewRequestWithDiff(""))
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	if !strings.Contains(value, "changed nothing against its base") {
-		t.Fatalf("unchanged checkpoint not named:\n%s", value)
+	for _, absent := range []string{"changed nothing", "omitted", "present", "current_diff"} {
+		if strings.Contains(strings.ToLower(value), absent) {
+			t.Fatalf("empty review prompt contains delivery branch %q:\n%s", absent, value)
+		}
 	}
 }
