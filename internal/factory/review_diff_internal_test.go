@@ -2,12 +2,14 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // TestCaptureReviewDiffFromWorktreeIgnoresAnInheritedGitProjection verifies the
@@ -43,6 +45,67 @@ func TestCaptureReviewDiffFromWorktreeNamesWhyGitRefused(t *testing.T) {
 		t.Fatalf("captureReviewDiffFromWorktree() error = %q, want Git's own reason", err)
 	}
 }
+
+// TestReviewDiffCommandErrorHoldsTheBoundAcrossNewlineNormalisation verifies
+// the published detail never exceeds maxReviewDiffErrorBytes. Git's usage text
+// is thousands of bytes over dozens of lines, and each newline becomes the
+// two-byte "; " separator, so truncating before normalising doubled the bound.
+func TestReviewDiffCommandErrorHoldsTheBoundAcrossNewlineNormalisation(t *testing.T) {
+	t.Parallel()
+
+	command := exec.CommandContext(t.Context(), "git", "diff", "--no-such-option")
+	command.Dir = t.TempDir()
+	command.Env = environmentWithoutGitProjection()
+	_, raw := command.Output()
+	if raw == nil {
+		t.Fatal("git diff --no-such-option succeeded, want the usage refusal")
+	}
+	var exit *exec.ExitError
+	if !errors.As(raw, &exit) {
+		t.Fatalf("git diff --no-such-option error = %v, want an exit error carrying stderr", raw)
+	}
+	if len(exit.Stderr) <= maxReviewDiffErrorBytes {
+		t.Fatalf("git stderr is %d bytes, too short to exercise the bound", len(exit.Stderr))
+	}
+
+	detail := strings.TrimPrefix(reviewDiffCommandError(raw).Error(), raw.Error()+": ")
+	if len(detail) > maxReviewDiffErrorBytes {
+		t.Fatalf("detail = %d bytes, want at most %d", len(detail), maxReviewDiffErrorBytes)
+	}
+	if strings.Contains(detail, "\n") {
+		t.Fatalf("detail = %q, want newlines normalised", detail)
+	}
+	if !utf8.ValidString(detail) {
+		t.Fatalf("detail = %q, want valid UTF-8 after truncation", detail)
+	}
+}
+
+// TestReviewDiffCommandErrorDropsARuneSplitByTheBound verifies truncation ends
+// on a rune boundary when the stderr text is not ASCII.
+func TestReviewDiffCommandErrorDropsARuneSplitByTheBound(t *testing.T) {
+	t.Parallel()
+
+	stderr := strings.Repeat("…", maxReviewDiffErrorBytes)
+	detail := strings.TrimPrefix(reviewDiffCommandError(&reviewDiffExitError{stderr: []byte(stderr)}).Error(), "exit status 1: ")
+	if len(detail) > maxReviewDiffErrorBytes {
+		t.Fatalf("detail = %d bytes, want at most %d", len(detail), maxReviewDiffErrorBytes)
+	}
+	if !utf8.ValidString(detail) {
+		t.Fatalf("detail = %q, want valid UTF-8 after truncation", detail)
+	}
+}
+
+// reviewDiffExitError supplies exact stderr bytes without depending on a real
+// process, which cannot be made to emit a chosen encoding reliably.
+type reviewDiffExitError struct {
+	stderr []byte
+}
+
+// Error reports the fixed exit status the bound test strips.
+func (*reviewDiffExitError) Error() string { return "exit status 1" }
+
+// Unwrap exposes the exec error shape reviewDiffCommandError inspects.
+func (e *reviewDiffExitError) Unwrap() error { return &exec.ExitError{Stderr: e.stderr} }
 
 // reviewDiffRepository creates a two-commit repository and returns its path,
 // base commit, and checkpoint commit.

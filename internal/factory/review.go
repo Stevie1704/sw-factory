@@ -319,14 +319,16 @@ func reviewDiffCommandError(err error) error {
 	if !errors.As(err, &exit) {
 		return err
 	}
-	detail := strings.TrimSpace(string(exit.Stderr))
+	detail := strings.ReplaceAll(strings.TrimSpace(string(exit.Stderr)), "\n", "; ")
 	if detail == "" {
 		return err
 	}
 	if len(detail) > maxReviewDiffErrorBytes {
-		detail = detail[:maxReviewDiffErrorBytes]
+		// The bound is a byte count, so the cut can split a multi-byte rune.
+		// Dropping the incomplete sequence keeps the text printable.
+		detail = strings.ToValidUTF8(detail[:maxReviewDiffErrorBytes], "")
 	}
-	return fmt.Errorf("%w: %s", err, strings.ReplaceAll(detail, "\n", "; "))
+	return fmt.Errorf("%w: %s", err, detail)
 }
 
 // publishSpecificationReviewStatus publishes one exact-SHA reviewer status.
