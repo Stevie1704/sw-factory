@@ -487,7 +487,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if previous.WorkspaceID == "" || invocationSurface(*previous).ID == "" {
 		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no recoverable surface", ErrCheckRepairSessionUnavailable)
 	}
-	terminalRuntime, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(previous.Harness))
+	terminalRuntime, harnessRuntime, err := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(previous.Harness))
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("%w: %v", ErrCheckRepairSessionUnavailable, err)
 	}

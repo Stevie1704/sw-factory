@@ -645,7 +645,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 		inspectTerminalProjection(ctx, diagnosis, terminalInspector, *active)
 	}
 
-	_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
+	_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
 	if runtimeErr != nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 			Kind:     RecoveryDiscrepancyInfrastructure,

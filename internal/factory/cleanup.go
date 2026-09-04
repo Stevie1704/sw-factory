@@ -269,7 +269,7 @@ func (s *Service) closeRunWorkspaces(ctx context.Context, socketPath string, tar
 	terminalRuntime := s.deps.Terminal
 	if terminalRuntime == nil {
 		var err error
-		terminalRuntime, err = s.ensureTerminalRuntime(socketPath)
+		terminalRuntime, err = s.lifecycleModule().ensureTerminalRuntime(socketPath)
 		if err != nil {
 			retained := make([]CleanupRetainedWorkspace, 0, len(target.WorkspaceIDs))
 			reason := safeStatusCommentValue(fmt.Sprintf("ensure terminal runtime: %v", err))

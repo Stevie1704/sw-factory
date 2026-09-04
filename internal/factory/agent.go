@@ -519,7 +519,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 			}
 		}
 	}
-	_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+	_, harnessRuntime, err := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("ensure agent runtime: %w", err)
 	}

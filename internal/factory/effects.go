@@ -793,7 +793,7 @@ func (s *Service) replayPendingHarnessResume(ctx context.Context, runStore RunSt
 			if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
 				return store.Run{}, fmt.Errorf("reserve replayed manual native session resume: %w", err)
 			}
-			_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
+			_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
 			if runtimeErr != nil {
 				return store.Run{}, fmt.Errorf("ensure harness for manual native resume replay: %w", runtimeErr)
 			}
@@ -820,7 +820,7 @@ func (s *Service) replayPendingHarnessResume(ctx context.Context, runStore RunSt
 		if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
 			return store.Run{}, fmt.Errorf("reserve replayed native session resume: %w", err)
 		}
-		_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
+		_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
 		if runtimeErr != nil {
 			return store.Run{}, fmt.Errorf("ensure harness for native resume replay: %w", runtimeErr)
 		}
@@ -1171,7 +1171,7 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 		return store.Run{}, workflowProjectionFailuref("invocation %q changed during result acceptance replay", payload.Invocation.ID)
 	}
 	if finishNeeded {
-		_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
+		_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureAgentRuntime(payload.SocketPath, config.Harness(payload.Invocation.Harness))
 		if runtimeErr != nil {
 			return store.Run{}, fmt.Errorf("ensure harness for result acceptance replay: %w", runtimeErr)
 		}

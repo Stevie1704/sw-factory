@@ -1201,7 +1201,7 @@ func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, regis
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {
-		_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+		_, harnessRuntime, err := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test revision: %w", err)
 		}
@@ -1237,7 +1237,7 @@ func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration 
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {
-		_, harnessRuntime, err := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+		_, harnessRuntime, err := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test report: %w", err)
 		}

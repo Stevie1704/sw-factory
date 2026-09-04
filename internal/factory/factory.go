@@ -352,18 +352,6 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	return &Service{configPath: configPath, deps: dependencies}
 }
 
-// ensureTerminalRuntime delegates terminal ownership to the invocation
-// lifecycle module while retaining the coordinator compatibility seam.
-func (s *Service) ensureTerminalRuntime(socketPath string) (terminal.TerminalRuntime, error) {
-	return s.lifecycleModule().ensureTerminalRuntime(socketPath)
-}
-
-// ensureAgentRuntime delegates selected harness resolution to the lifecycle
-// module. An injected harness remains the module's explicit adapter.
-func (s *Service) ensureAgentRuntime(socketPath string, selected config.Harness) (terminal.TerminalRuntime, harness.Runtime, error) {
-	return s.lifecycleModule().ensureAgentRuntime(socketPath, selected)
-}
-
 func (s *Service) Init(_ context.Context) (InitResult, error) {
 	if s.configPath == "" {
 		return InitResult{}, errors.New("host configuration path is required")

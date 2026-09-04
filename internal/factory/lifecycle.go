@@ -331,7 +331,7 @@ func (s *Service) notifyWorkspace(ctx context.Context, registration config.Repos
 	terminalRuntime := s.deps.Terminal
 	if terminalRuntime == nil {
 		var err error
-		terminalRuntime, err = s.ensureTerminalRuntime(registration.Cmux.SocketPath)
+		terminalRuntime, err = s.lifecycleModule().ensureTerminalRuntime(registration.Cmux.SocketPath)
 		if err != nil {
 			return fmt.Errorf("ensure terminal runtime for notification: %w", err)
 		}
