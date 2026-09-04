@@ -463,12 +463,10 @@ func missingConcurrentReviewRole(state progressionState, registry workflow.Regis
 		return "", false
 	}
 	run := *state.Run
-	roles := []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview}
 	hasCurrentResult := false
 	missingRole := ""
-	for _, role := range roles {
-		result := reviewResultForRole(run, role)
-		if result != nil && result.CheckpointSHA == run.CheckpointSHA {
+	for _, role := range reviewAxisRoles {
+		if checkpointReviewForRole(run, role) != nil {
 			hasCurrentResult = true
 			continue
 		}

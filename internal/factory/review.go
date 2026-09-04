@@ -38,6 +38,10 @@ const (
 	reviewDiffContextLines = 10
 )
 
+// reviewAxisRoles lists the reviewer roles that own a per-axis durable result
+// for one checkpoint, in the order their projections are read.
+var reviewAxisRoles = []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview}
+
 // roleHandoffFromReport converts the report protocol's completed handoff into
 // the durable reviewer-facing role projection.
 func roleHandoffFromReport(value report.Handoff) *store.RoleHandoff {
@@ -419,21 +423,6 @@ func reviewHasBlockingFindingForRole(role string, findings []store.ReviewFinding
 	return false
 }
 
-// specificationReviewFromReport converts a validated completed review into a
-// durable exact-checkpoint projection.
-func specificationReviewFromReport(value report.ReviewHandoff) *store.SpecificationReview {
-	return reviewResultFromReport(value)
-}
-
-// reviewResultFromReport converts a validated review handoff into a durable
-// exact-checkpoint result shared by both reviewer roles.
-func reviewResultFromReport(value report.ReviewHandoff) *store.ReviewResult {
-	return reviewResultProjectionFromReport(report.Report{
-		Outcome:       report.OutcomeCompleted,
-		ReviewHandoff: &value,
-	}, value.ReviewedSHA)
-}
-
 // reviewResultProjectionFromReport retains every durable review-axis field,
 // including an incomplete disposition, its operator-visible reason, and any
 // findings established before the reviewer stopped.
@@ -489,13 +478,29 @@ func effectiveReviewOutcome(review *store.ReviewResult) string {
 	return review.Outcome
 }
 
+// reviewIsIncomplete reports whether a durable review result still requires a
+// human disposition rather than having finished its assignment.
+func reviewIsIncomplete(review *store.ReviewResult) bool {
+	return effectiveReviewOutcome(review) != string(report.OutcomeCompleted)
+}
+
+// checkpointReviewForRole returns the durable result owned by one reviewer
+// role only when it was recorded against the run's exact checkpoint.
+func checkpointReviewForRole(run store.Run, role string) *store.ReviewResult {
+	review := reviewResultForRole(run, role)
+	if review == nil || review.CheckpointSHA != run.CheckpointSHA {
+		return nil
+	}
+	return review
+}
+
 // reviewHasIncompleteResult reports whether any exact-checkpoint reviewer
 // result still requires a human disposition. It deliberately distinguishes a
 // durable incomplete result without findings from a completed clean result.
 func reviewHasIncompleteResult(run store.Run) bool {
-	for _, role := range []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview} {
-		review := reviewResultForRole(run, role)
-		if review != nil && review.CheckpointSHA == run.CheckpointSHA && effectiveReviewOutcome(review) != string(report.OutcomeCompleted) {
+	for _, role := range reviewAxisRoles {
+		review := checkpointReviewForRole(run, role)
+		if review != nil && reviewIsIncomplete(review) {
 			return true
 		}
 	}
@@ -507,9 +512,9 @@ func reviewHasIncompleteResult(run store.Run) bool {
 // axis's clarification request.
 func reviewQuestionsForRun(run store.Run) []store.PendingQuestion {
 	var questions []store.PendingQuestion
-	for _, role := range []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview} {
-		review := reviewResultForRole(run, role)
-		if review == nil || review.CheckpointSHA != run.CheckpointSHA {
+	for _, role := range reviewAxisRoles {
+		review := checkpointReviewForRole(run, role)
+		if review == nil {
 			continue
 		}
 		for _, question := range review.Questions {
@@ -529,9 +534,9 @@ func reviewQuestionsForRun(run store.Run) []store.PendingQuestion {
 // complete round from becoming ready. Detailed questions and evidence remain
 // in the per-axis projection and supervision surfaces.
 func reviewWaitingReason(run store.Run) string {
-	for _, role := range []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview} {
-		review := reviewResultForRole(run, role)
-		if review != nil && review.CheckpointSHA == run.CheckpointSHA && effectiveReviewOutcome(review) != string(report.OutcomeCompleted) {
+	for _, role := range reviewAxisRoles {
+		review := checkpointReviewForRole(run, role)
+		if review != nil && reviewIsIncomplete(review) {
 			return fmt.Sprintf("%s reported %s; human disposition required", role, effectiveReviewOutcome(review))
 		}
 	}
@@ -588,9 +593,6 @@ func setReviewResultForRole(run *store.Run, role string, result *store.ReviewRes
 // acceptance effect crosses its restart boundary. The effect payload therefore
 // cannot replay a terminal reviewer invocation while losing its findings.
 func applyReviewResultProjection(run *store.Run, role string, value report.Report) error {
-	if run == nil {
-		return errors.New("review projection run is required")
-	}
 	if err := setReviewResultForRole(run, role, reviewResultProjectionFromReport(value, run.CheckpointSHA)); err != nil {
 		return err
 	}
@@ -626,9 +628,6 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		return AgentResult{}, err
 	}
 	review := reviewResultForRole(*run, invocation.Role)
-	if review == nil {
-		return AgentResult{}, fmt.Errorf("review result for %s was not projected", invocation.Role)
-	}
 	blocking := reviewHasBlockingResult(*run)
 	complete := reviewRoundComplete(*run)
 	incomplete := reviewHasIncompleteResult(*run)
@@ -658,7 +657,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	case incomplete:
 		run.Status = store.StatusWaitingForHuman
 		run.LifecycleReason = reviewWaitingReason(*run)
-		if effectiveReviewOutcome(review) == string(report.OutcomeCompleted) {
+		if !reviewIsIncomplete(review) {
 			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
 		} else {
 			statusState = github.CommitStatusError
@@ -683,24 +682,22 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist %s state: %w", invocation.Role, err)
 	}
-	if roleDefinition.Kind == workflow.RoleKindReview {
-		if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
-			return AgentResult{}, fmt.Errorf("refresh pull request after %s: %w", invocation.Role, err)
-		}
-		if complete {
-			if blocking {
-				repair, repairErr := s.routeReviewRepair(ctx, registration, runStore, *run)
-				if repairErr != nil {
-					return AgentResult{}, repairErr
-				}
-				*run = repair.Run
-			} else if !incomplete {
-				ready, readyErr := s.finalizeReviewReadiness(ctx, registration, runStore, *run)
-				if readyErr != nil {
-					return AgentResult{}, readyErr
-				}
-				*run = ready
+	if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
+		return AgentResult{}, fmt.Errorf("refresh pull request after %s: %w", invocation.Role, err)
+	}
+	if complete {
+		if blocking {
+			repair, repairErr := s.routeReviewRepair(ctx, registration, runStore, *run)
+			if repairErr != nil {
+				return AgentResult{}, repairErr
 			}
+			*run = repair.Run
+		} else if !incomplete {
+			ready, readyErr := s.finalizeReviewReadiness(ctx, registration, runStore, *run)
+			if readyErr != nil {
+				return AgentResult{}, readyErr
+			}
+			*run = ready
 		}
 	}
 	if len(run.PendingQuestions) > 0 {

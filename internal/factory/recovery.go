@@ -1258,7 +1258,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 	return run, diagnosis, RecoveryOutcomeReconciled, nil
 }
 
-// pauseAfterReplayedReviewProjection records a bounded workflow discrepancy
+// pauseAfterReplayedReviewProjectionError records a bounded workflow discrepancy
 // when the journaled harness boundary completed but the review-specific
 // coordinator projection could not be resumed. The accepted invocation and
 // its durable result remain available for human inspection; no second report
