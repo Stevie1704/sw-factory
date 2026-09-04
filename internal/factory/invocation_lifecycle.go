@@ -524,44 +524,18 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 	}
 	run := *request.Run
 	agentRequest := request.Request
-	if agentRequest.RunID != "" && agentRequest.RunID != run.ID {
-		return LaunchSnapshot{}, fmt.Errorf("active run is %s, not %s", run.ID, agentRequest.RunID)
-	}
-	if run.CheckRepairPendingAttempt != 0 {
-		return LaunchSnapshot{}, fmt.Errorf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)
-	}
 	if agentRequest.Harness == "" && run.HarnessOverride != "" {
 		agentRequest.Harness = config.Harness(run.HarnessOverride)
-	}
-	if err := validateAgentRunState(run); err != nil {
-		return LaunchSnapshot{}, err
-	}
-	if !filepath.IsAbs(run.Worktree) {
-		return LaunchSnapshot{}, errors.New("active run worktree must be absolute")
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
 		return LaunchSnapshot{}, err
 	}
-	if !testRolePolicySatisfied(packet) {
-		return LaunchSnapshot{}, errors.New("frozen repository packet lacks the mandatory test-stage role policy")
-	}
-	agentRequest, err = selectAgentRole(run, agentRequest)
-	if err != nil {
-		return LaunchSnapshot{}, err
-	}
-	if err := validateAgentRequest(agentRequest); err != nil {
-		return LaunchSnapshot{}, err
-	}
-	roleDefinition, exists := workflow.DefaultRegistry().Role(agentRequest.Role)
-	if !exists {
-		return LaunchSnapshot{}, fmt.Errorf("agent role %q is not declared by the workflow registry", agentRequest.Role)
-	}
-	testRevision, reviewRepair, implementationResume, err := launchModes(run, agentRequest, roleDefinition)
-	if err != nil {
-		return LaunchSnapshot{}, err
-	}
+	agentRequest, roleDefinition := resolveLaunchRoleForGather(run, agentRequest)
+	testRevision, reviewRepair, implementationResume := launchModeHints(run, agentRequest, roleDefinition)
 	snapshot := LaunchSnapshot{Run: run, Packet: packet, Request: agentRequest, InvocationID: request.InvocationID}
+	// Source reads are selected only by immutable mode hints. Their ownership
+	// and validity remain admission decisions in PlanLaunch.
 	snapshot.ResumeSource, err = l.gatherResumeSource(ctx, request.RunStore, invocationStore, run, testRevision, reviewRepair, implementationResume)
 	if err != nil {
 		return LaunchSnapshot{}, err
@@ -587,6 +561,44 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 		return LaunchSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// resolveLaunchRoleForGather supplies only the role information needed to
+// choose read projections. It deliberately does not validate the request or
+// whether the role may start from the run; PlanLaunch owns those decisions.
+func resolveLaunchRoleForGather(run store.Run, request AgentRequest) (AgentRequest, workflow.RoleDefinition) {
+	registry := workflow.DefaultRegistry()
+	roleWasSpecified := request.Role != ""
+	if request.Role == "" && request.Stage == "" {
+		if definition, exists := registry.RoleForRunStage(run.Stage); exists {
+			request.Role = definition.Name
+			request.Stage = definition.Stage
+		}
+	}
+	if request.Role == "" && request.Stage != "" {
+		if definition, exists := registry.RoleForInvocationStage(request.Stage); exists {
+			request.Role = definition.Name
+		}
+	}
+	if request.Stage == "" && request.Role != "" {
+		if definition, exists := registry.Role(request.Role); exists {
+			request.Stage = definition.Stage
+		}
+	}
+	if !roleWasSpecified && request.Role == "" {
+		return request, workflow.RoleDefinition{}
+	}
+	definition, _ := registry.Role(request.Role)
+	return request, definition
+}
+
+// launchModeHints selects only the projections gather must read before pure
+// admission. Invalid mode combinations are rejected later by launchModes.
+func launchModeHints(run store.Run, request AgentRequest, role workflow.RoleDefinition) (bool, bool, bool) {
+	testRevision := role.Kind == workflow.RoleKindTest && run.Stage == store.StageTest && run.TestObjection != nil
+	reviewRepair := request.reviewRepair && request.Role == workflow.RoleImplementation && request.Stage == store.StageImplementation && run.Stage == store.StageImplementation
+	implementationResume := request.resumeImplementation && request.Role == workflow.RoleImplementation && request.Stage == store.StageImplementation && run.Stage == store.StageImplementation
+	return testRevision, reviewRepair, implementationResume
 }
 
 // gatherResumeSource reads the one native-session source selected by launch
