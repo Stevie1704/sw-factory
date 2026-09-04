@@ -645,7 +645,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 		inspectTerminalProjection(ctx, diagnosis, terminalInspector, *active)
 	}
 
-	_, harnessRuntime, runtimeErr := s.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
+	_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
 	if runtimeErr != nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 			Kind:     RecoveryDiscrepancyInfrastructure,
@@ -1037,7 +1037,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 					classified := harness.ClassifyError(replayErr, pendingHarnessName(*pending))
 					if harness.IsRateLimited(classified) {
 						diagnosis.PendingEffect = nil
-						paused, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, run, pendingHarnessName(*pending))
+						paused, waitErr := s.lifecycleModule().pauseForHarnessCapacity(ctx, registration, runStore, run, pendingHarnessName(*pending))
 						if waitErr != nil {
 							return paused, diagnosis, RecoveryOutcomeWaitingForHarness, errors.Join(classified, waitErr)
 						}
@@ -1045,7 +1045,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 					}
 					if harness.IsAuthenticationExpired(classified) {
 						diagnosis.PendingEffect = nil
-						paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, run, pendingHarnessName(*pending))
+						paused, pauseErr := s.lifecycleModule().pauseForAuthentication(ctx, registration, runStore, run, pendingHarnessName(*pending))
 						if pauseErr != nil {
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
 						}
@@ -1110,12 +1110,12 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 				diagnosis.SourcesAgree = false
 			} else if active := recoveryTargetActiveInvocation(diagnosis, activeValues); active != nil && (allowSameProcessRecovery || !s.invocationStartedHere(active.ID)) && active.Status == store.InvocationStatusActive && !active.AttachRequired && strings.TrimSpace(active.NativeSessionID) != "" {
 				if diagnosis.SourcesAgree && active.RecoveryResumeCount > 0 && !hasRecoverableInvocationLoss(diagnosis) {
-					if credentialErr := s.restoreCredentialProjection(ctx, registration, run, *active); credentialErr != nil {
+					if credentialErr := s.lifecycleModule().restoreCredentialProjection(ctx, registration, run, *active); credentialErr != nil {
 						return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
 					}
 				}
 				if active.RecoveryResumeCount > 0 && hasRecoverableInvocationLoss(diagnosis) {
-					_, repairedInvocation, repairErr := s.ensureWorkerForInvocation(ctx, registration, runStore, run, *active)
+					_, repairedInvocation, repairErr := s.lifecycleModule().ensureWorkerForInvocation(ctx, registration, runStore, run, *active)
 					if repairErr != nil {
 						if paused, pausedDiagnosis, outcome, credentialPauseErr, handled := s.pauseForCredentialProjectionError(ctx, registration, runStore, run, &diagnosis, active.Harness, repairErr); handled {
 							return paused, pausedDiagnosis, outcome, credentialPauseErr
@@ -1129,10 +1129,10 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 						})
 						diagnosis.SourcesAgree = false
 					} else {
-						if credentialErr := s.restoreCredentialProjection(ctx, registration, run, repairedInvocation); credentialErr != nil {
+						if credentialErr := s.lifecycleModule().restoreCredentialProjection(ctx, registration, run, repairedInvocation); credentialErr != nil {
 							return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
 						}
-						paused, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
+						paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
 						if pauseErr != nil {
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, pauseErr
 						}
@@ -1140,28 +1140,28 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 					}
 				}
 				if diagnosis.SourcesAgree && active.RecoveryResumeCount == 0 {
-					_, resumeErr := s.resumePersistedInvocation(ctx, registration, runStore, run, *active)
+					_, resumeErr := s.lifecycleModule().resumePersistedInvocation(ctx, registration, runStore, run, *active)
 					if resumeErr != nil {
 						if paused, pausedDiagnosis, outcome, credentialPauseErr, handled := s.pauseForCredentialProjectionError(ctx, registration, runStore, run, &diagnosis, active.Harness, resumeErr); handled {
 							return paused, pausedDiagnosis, outcome, credentialPauseErr
 						}
 						classified := harness.ClassifyError(resumeErr, active.Harness)
 						if harness.IsRateLimited(classified) {
-							paused, waitErr := s.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
+							paused, waitErr := s.lifecycleModule().pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
 							if waitErr != nil {
 								return paused, diagnosis, RecoveryOutcomeWaitingForHarness, errors.Join(classified, waitErr)
 							}
 							return paused, diagnosis, RecoveryOutcomeWaitingForHarness, nil
 						}
 						if harness.IsAuthenticationExpired(classified) {
-							paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
+							paused, pauseErr := s.lifecycleModule().pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
 							if pauseErr != nil {
 								return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
 							}
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, classified
 						}
 						if harness.IsUnexpectedExit(classified) {
-							paused, pauseErr := s.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, classified)
+							paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, classified)
 							if pauseErr != nil {
 								return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
 							}
@@ -1249,7 +1249,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 // used for an expired harness credential.
 func (s *Service) pauseForCredentialProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis *RecoveryDiagnosis, harnessName string, cause error) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error) {
 	recordCredentialProjectionDiscrepancy(diagnosis)
-	paused, pauseErr := s.pauseForAuthentication(ctx, registration, runStore, run, harnessName)
+	paused, pauseErr := s.lifecycleModule().pauseForAuthentication(ctx, registration, runStore, run, harnessName)
 	if diagnosis == nil {
 		return paused, RecoveryDiagnosis{}, RecoveryOutcomeWaitingForHuman, errors.Join(cause, pauseErr)
 	}
@@ -1390,7 +1390,7 @@ func reconciledRecoveryDiagnosis(runID string) RecoveryDiagnosis {
 // journal cannot be replayed safely, so that the one-effect invariant remains
 // intact for an operator to resolve.
 func (s *Service) pauseRunLocally(ctx context.Context, runStore RunStore, run store.Run, diagnosis RecoveryDiagnosis) (store.Run, error) {
-	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
+	if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	reason := recoveryDiscrepancyReason(diagnosis)
@@ -1426,7 +1426,7 @@ func (s *Service) pauseRunLocally(ctx context.Context, runStore RunStore, run st
 func (s *Service) pauseForRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis RecoveryDiagnosis) (store.Run, error) {
 	reason := recoveryDiscrepancyReason(diagnosis)
 	if isRestartReconciliationPause(run) && !hasGitHubStateProjectionDiscrepancy(diagnosis) {
-		if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
+		if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run); err != nil {
 			return run, err
 		}
 		return run, nil
@@ -1448,7 +1448,7 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 			return s.pauseRunLocally(ctx, runStore, run, diagnosis)
 		}
 	}
-	if err := s.stopActiveRunWorkers(ctx, runStore, run); err != nil {
+	if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	if s.deps.GitHub == nil || strings.TrimSpace(next.StatusCommentID) == "" {
@@ -1545,7 +1545,7 @@ func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.
 	if err := s.persistAgentRunState(ctx, registration, runStore, run, next); err != nil {
 		return run, fmt.Errorf("resume check evaluation after restart reconciliation: %w", err)
 	}
-	s.resetStartupState()
+	s.lifecycleModule().resetStartupState()
 	return next, nil
 }
 

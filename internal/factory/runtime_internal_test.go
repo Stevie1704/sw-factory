@@ -14,7 +14,7 @@ import (
 // and caching when the service starts without injected visible runtimes.
 func TestEnsureAgentRuntimeUsesTheRegisteredSocketPath(t *testing.T) {
 	service := NewWithDependencies("", Dependencies{Worker: worker.NewDockerRuntime()})
-	firstTerminal, firstHarness, err := service.ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessCodex)
+	firstTerminal, firstHarness, err := service.lifecycleModule().ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessCodex)
 	if err != nil {
 		t.Fatalf("ensureAgentRuntime() error = %v", err)
 	}
@@ -29,10 +29,10 @@ func TestEnsureAgentRuntimeUsesTheRegisteredSocketPath(t *testing.T) {
 		t.Fatalf("harness runtime = %T, want *harness.Codex", firstHarness)
 	}
 
-	if _, _, err := service.ensureAgentRuntime("/tmp/other-cmux.sock", config.HarnessCodex); err == nil || !strings.Contains(err.Error(), "conflicts with cached path") {
+	if _, _, err := service.lifecycleModule().ensureAgentRuntime("/tmp/other-cmux.sock", config.HarnessCodex); err == nil || !strings.Contains(err.Error(), "conflicts with cached path") {
 		t.Fatalf("ensureAgentRuntime() conflict error = %v, want cached-path rejection", err)
 	}
-	cachedTerminal, cachedHarness, err := service.ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessCodex)
+	cachedTerminal, cachedHarness, err := service.lifecycleModule().ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessCodex)
 	if err != nil {
 		t.Fatalf("ensureAgentRuntime() with original path error = %v", err)
 	}
@@ -48,11 +48,11 @@ func TestEnsureAgentRuntimeUsesTheRegisteredSocketPath(t *testing.T) {
 // harness resolves to its own adapter and that adapters are cached separately.
 func TestEnsureAgentRuntimeSelectsTheAdapterForEachHarness(t *testing.T) {
 	service := NewWithDependencies("", Dependencies{Worker: worker.NewDockerRuntime()})
-	_, codexRuntime, err := service.ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessCodex)
+	_, codexRuntime, err := service.lifecycleModule().ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessCodex)
 	if err != nil {
 		t.Fatalf("ensureAgentRuntime(codex) error = %v", err)
 	}
-	_, claudeRuntime, err := service.ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessClaude)
+	_, claudeRuntime, err := service.lifecycleModule().ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessClaude)
 	if err != nil {
 		t.Fatalf("ensureAgentRuntime(claude) error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestEnsureAgentRuntimeSelectsTheAdapterForEachHarness(t *testing.T) {
 	if codexRuntime.Capabilities().Name != harness.NameCodex || claudeRuntime.Capabilities().Name != harness.NameClaude {
 		t.Fatalf("capabilities = %q/%q, want distinct harness identities", codexRuntime.Capabilities().Name, claudeRuntime.Capabilities().Name)
 	}
-	_, cached, err := service.ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessClaude)
+	_, cached, err := service.lifecycleModule().ensureAgentRuntime("/tmp/factory-cmux.sock", config.HarnessClaude)
 	if err != nil {
 		t.Fatalf("ensureAgentRuntime(claude) repeat error = %v", err)
 	}
@@ -75,7 +75,7 @@ func TestEnsureAgentRuntimeSelectsTheAdapterForEachHarness(t *testing.T) {
 // harness never silently falls back to another adapter.
 func TestEnsureAgentRuntimeRefusesAnUnconfiguredHarness(t *testing.T) {
 	service := NewWithDependencies("", Dependencies{Worker: worker.NewDockerRuntime()})
-	if _, _, err := service.ensureAgentRuntime("/tmp/factory-cmux.sock", config.Harness("gemini")); err == nil || !strings.Contains(err.Error(), "gemini") {
+	if _, _, err := service.lifecycleModule().ensureAgentRuntime("/tmp/factory-cmux.sock", config.Harness("gemini")); err == nil || !strings.Contains(err.Error(), "gemini") {
 		t.Fatalf("ensureAgentRuntime() error = %v, want an unknown-harness refusal", err)
 	}
 }

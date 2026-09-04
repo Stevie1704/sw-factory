@@ -4,14 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -114,6 +116,12 @@ func (s *Service) ensureReviewStart(ctx context.Context, run store.Run) error {
 // ensureReviewStartForRole verifies one reviewer receives a clean immutable
 // checkpoint. A second reviewer may join an already active review round.
 func (s *Service) ensureReviewStartForRole(ctx context.Context, run store.Run, role string) error {
+	return ensureReviewStartForRoleWithInspector(ctx, run, role, s.worktreeInspector())
+}
+
+// ensureReviewStartForRoleWithInspector verifies one reviewer receives a clean
+// immutable checkpoint using only the supplied read-only worktree seam.
+func ensureReviewStartForRoleWithInspector(ctx context.Context, run store.Run, role string, inspector gitadapter.WorktreeInspector) error {
 	if run.Stage != store.StageDraftPR && run.Stage != store.StageReview {
 		return fmt.Errorf("%s requires draft_pr or review stage, not %q", role, run.Stage)
 	}
@@ -129,7 +137,6 @@ func (s *Service) ensureReviewStartForRole(ctx context.Context, run store.Run, r
 	if review := reviewResultForRole(run, role); review != nil && review.CheckpointSHA == run.CheckpointSHA {
 		return fmt.Errorf("%s already has a result for this checkpoint", role)
 	}
-	inspector := s.worktreeInspector()
 	if inspector == nil {
 		return fmt.Errorf("worktree runtime is required for immutable %s", role)
 	}
@@ -196,12 +203,6 @@ func reviewDiffBase(run store.Run) string {
 	return run.CheckpointSHA
 }
 
-// reviewDiffCommand is the exact base-to-checkpoint diff command the
-// coordinator runs to fill the packet.
-func reviewDiffCommand(base, checkpoint string) string {
-	return fmt.Sprintf("git diff --no-ext-diff --binary --unified=%d %s %s -- .", reviewDiffContextLines, base, checkpoint)
-}
-
 // reviewChangedPathsCommand lists the changed paths, one per line. It is the
 // reviewer's entry point into a diff too large to copy into the packet: the
 // path list is small whatever the change size. Every line has to name one path
@@ -223,41 +224,68 @@ func reviewDiffPathCommand(base, checkpoint string) string {
 	return fmt.Sprintf("git diff --no-ext-diff --unified=%d %s %s --", reviewDiffContextLines, base, checkpoint)
 }
 
-// applyReviewDiff captures the exact base-to-checkpoint diff inside the pinned
-// worker after its review role mount has been established and records it in the
-// review context. A diff past the packet bound is recorded by size and by the
-// commands that read it: the reviewer has the same worktree and Git metadata
-// mounted, so it reads the diff there rather than the run stopping over a copy
-// that does not fit.
-func (s *Service) applyReviewDiff(ctx context.Context, run store.Run, invocation store.Invocation, reviewContext *prompt.ReviewContext) error {
-	if s.deps.Worker == nil {
-		return errors.New("worker runtime is required to capture the review diff")
-	}
+// reviewDiffCapture contains the bounded review context gathered before
+// materialisation. Large diffs are represented by their size and read
+// commands instead of copied into the invocation packet.
+type reviewDiffCapture struct {
+	currentDiff         string
+	omittedDiffBytes    int
+	changedPathsCommand string
+	diffPathCommand     string
+}
+
+// reviewDiffReader is the optional read-only worktree seam used by embedders
+// whose Git projection is not available to the process running the factory.
+type reviewDiffReader interface {
+	ReadDiff(context.Context, string, string, string) (string, error)
+}
+
+// captureReviewDiff obtains the exact base-to-checkpoint diff from the pinned
+// worktree during gather. It never starts or queries an activation-time worker.
+func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, _ store.Invocation) (reviewDiffCapture, error) {
 	base := reviewDiffBase(run)
 	if !github.ValidCommitSHA(base) || !github.ValidCommitSHA(run.CheckpointSHA) {
-		return errors.New("review diff requires valid immutable base and checkpoint SHAs")
+		return reviewDiffCapture{}, errors.New("review diff requires valid immutable base and checkpoint SHAs")
 	}
-	result, err := s.deps.Worker.RunCommand(ctx, worker.CommandRequest{
-		RunID:             run.ID,
-		WorkerID:          workerIDForInvocation(invocation),
-		Command:           reviewDiffCommand(base, run.CheckpointSHA),
-		EnvironmentPolicy: worker.EnvironmentPolicyClean,
-		Role:              invocation.Role,
-	})
+	if reader, ok := s.deps.Worktree.(reviewDiffReader); ok {
+		output, err := reader.ReadDiff(ctx, run.Worktree, base, run.CheckpointSHA)
+		if err != nil {
+			return reviewDiffCapture{}, fmt.Errorf("capture exact review diff: %w", err)
+		}
+		return reviewDiffCaptureFromOutput(output, base, run.CheckpointSHA), nil
+	}
+	if result, err := captureReviewDiffFromWorktree(ctx, run.Worktree, base, run.CheckpointSHA); err == nil {
+		return reviewDiffCaptureFromOutput(result, base, run.CheckpointSHA), nil
+	}
+	return reviewDiffCapture{}, errors.New("capture exact review diff from the pinned worktree")
+}
+
+// reviewDiffCaptureFromOutput keeps a small diff in the packet and describes
+// a large diff with deterministic commands that operate on the mounted
+// checkpoint worktree.
+func reviewDiffCaptureFromOutput(output, base, checkpoint string) reviewDiffCapture {
+	if size := len([]byte(output)); size > maxPacketReviewDiffBytes {
+		return reviewDiffCapture{
+			omittedDiffBytes:    size,
+			changedPathsCommand: reviewChangedPathsCommand(base, checkpoint),
+			diffPathCommand:     reviewDiffPathCommand(base, checkpoint),
+		}
+	}
+	return reviewDiffCapture{currentDiff: output}
+}
+
+// captureReviewDiffFromWorktree reads the immutable diff without requiring a
+// worker to exist, which keeps review context inside gather.
+func captureReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoint string) (string, error) {
+	command := exec.CommandContext(ctx, "git", "-C", worktree, "diff", "--no-ext-diff", "--binary", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", ".")
+	// The factory worker environment may provide a coordinator-level Git
+	// projection. Review gather must inspect the claimed worktree itself.
+	command.Env = append(os.Environ(), "GIT_DIR=", "GIT_WORK_TREE=")
+	output, err := command.Output()
 	if err != nil {
-		return fmt.Errorf("capture exact review diff: %w", err)
+		return "", err
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("capture exact review diff exited with code %d", result.ExitCode)
-	}
-	if size := len(result.Stdout); size > maxPacketReviewDiffBytes {
-		reviewContext.OmittedDiffBytes = size
-		reviewContext.ChangedPathsCommand = reviewChangedPathsCommand(base, run.CheckpointSHA)
-		reviewContext.DiffPathCommand = reviewDiffPathCommand(base, run.CheckpointSHA)
-		return nil
-	}
-	reviewContext.CurrentDiff = result.Stdout
-	return nil
+	return string(output), nil
 }
 
 // publishSpecificationReviewStatus publishes one exact-SHA reviewer status.
