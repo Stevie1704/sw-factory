@@ -108,18 +108,26 @@ the startup diagnosis.
 
 ### Currently recorded
 
-`worker/skill-smoke.json` holds a `codex` record for the pinned digest only.
-The `claude` smoke has not been run, because it needs a Claude credential file
-at the configured `claude_auth_path` and none exists on the machine that
-recorded the codex result. Until someone runs
+`worker/skill-smoke.json` holds a `codex` record and a `claude` record for the
+pinned digest, so the startup diagnosis passes both `worker skill contract`
+checks.
+
+macOS keeps the Claude Code credential in the login Keychain rather than in a
+file, so the smoke finds no source at the default `CLAUDE_AUTH_PATH` and skips
+the `claude` harness. Export the credential to a temporary file, point the
+smoke at it, and delete it again:
 
 ```sh
-HARNESSES=claude ./scripts/smoke-skills.sh
+umask 077
+security find-generic-password -s "Claude Code-credentials" -w \
+  > "$TMPDIR/claude-credentials.json"
+HARNESSES=claude CLAUDE_AUTH_PATH="$TMPDIR/claude-credentials.json" \
+  ./scripts/smoke-skills.sh
+rm -f "$TMPDIR/claude-credentials.json"
 ```
 
-and commits the updated file, the startup diagnosis blocks on `claude worker
-skill contract`. That is the contract this document states, not an oversight in
-it.
+The export is a live credential. Keep it outside the repository, and delete it
+when the smoke is recorded.
 
 ## Curation rule
 
