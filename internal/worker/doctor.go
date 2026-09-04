@@ -243,7 +243,7 @@ type SkillContract struct {
 }
 
 // SkillContractChecker is the worker execution seam used by the harness module
-// to verify the installed skill set inside the worker image.
+// to verify the worker skill set inside the worker image.
 type SkillContractChecker interface {
 	CheckSkillContract(context.Context, SkillContractRequest) (SkillContract, error)
 }
@@ -257,8 +257,8 @@ const duplicateSkillRoot = "/home/factory/.agents/skills"
 // worker output cannot grow a diagnosis result without limit.
 const maxHarnessVersionLength = 120
 
-// CheckSkillContract verifies each role-mandated skill is installed exactly
-// once in one harness's discovery root and is not hidden from that harness's
+// CheckSkillContract verifies each role-mandated skill appears exactly once in
+// one harness's discovery root and is not hidden from that harness's
 // model-visible catalog, using a disposable network-isolated container. It
 // returns the harness version and never the probe's diagnostic output.
 func (r *DockerRuntime) CheckSkillContract(ctx context.Context, request SkillContractRequest) (SkillContract, error) {
@@ -306,7 +306,7 @@ func harnessSkillRoot(name string) (string, error) {
 }
 
 // skillContractProbe builds the in-worker shell probe asserting each skill is
-// installed, self-named, unduplicated, and model-visible under both harness
+// present, self-named, unduplicated, and model-visible under both harness
 // activation policies. Skill names are validated before they reach the shell.
 func skillContractProbe(harness, root string, skills []string) (string, error) {
 	probe := "set -eu\ntest ! -e " + duplicateSkillRoot + "\n"

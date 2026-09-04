@@ -35,8 +35,8 @@ never relies on it for a role-mandated skill.
 
 ## Activation semantics
 
-Installing a skill is not the same as advertising it. Each harness has its own
-switch that removes an installed skill from the model-visible catalog:
+Shipping a skill is not the same as advertising it. Each harness has its own
+switch that removes a shipped skill from the model-visible catalog:
 
 | Harness | Hidden by | Default |
 | --- | --- | --- |
@@ -99,9 +99,27 @@ middle one costs a model call.
    assign any role to any supported harness, so an unverified harness is not a
    safe run.
 
+The smoke exits non-zero when any harness it was asked to prove produced no
+record, so a skipped harness never reads as a pass.
+
 Rebuilding the image invalidates the recorded evidence, because the digest is
 part of the key. Rebuild, record the new digest, re-run the smoke, then run
 the startup diagnosis.
+
+### Currently recorded
+
+`worker/skill-smoke.json` holds a `codex` record for the pinned digest only.
+The `claude` smoke has not been run, because it needs a Claude credential file
+at the configured `claude_auth_path` and none exists on the machine that
+recorded the codex result. Until someone runs
+
+```sh
+HARNESSES=claude ./scripts/smoke-skills.sh
+```
+
+and commits the updated file, the startup diagnosis blocks on `claude worker
+skill contract`. That is the contract this document states, not an oversight in
+it.
 
 ## Curation rule
 

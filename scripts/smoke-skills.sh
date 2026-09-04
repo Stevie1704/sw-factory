@@ -38,9 +38,12 @@ harness_invocation() {
   esac
 }
 
-# skill_sentinel returns the first instruction line of one skill body. The line
-# exists only inside the installed SKILL.md, so a reply that quotes it could
-# not have been produced without loading the skill.
+# skill_sentinel returns the first instruction line of one skill body. A reply
+# that quotes it shows the harness surfaced that skill's body to the model in
+# this invocation. It is not proof the model could not have read the file
+# another way: the deterministic activation checks in worker/skills_contract_test.go
+# own the hidden-skill question, and this layer answers whether a real
+# invocation reaches the skill at all.
 skill_sentinel() {
   awk 'BEGIN { markers = 0 }
     /^---$/ { markers++; next }
@@ -88,17 +91,20 @@ record_evidence() {
 
 test -f "$EVIDENCE_FILE" || printf '{\n  "schema_version": 1,\n  "records": []\n}\n' > "$EVIDENCE_FILE"
 
+unrecorded=""
+
 for harness_name in $HARNESSES; do
   set -- $(credential_path "$harness_name")
   if [ ! -f "$1" ]; then
     echo "No $harness_name credential at $1; skipping its smoke." >&2
-    echo "Startup stays blocked for $harness_name until its result is recorded." >&2
+    unrecorded="$unrecorded $harness_name"
     continue
   fi
 
   version="$("$DOCKER" run --rm --pull=never --user 10001:10001 \
     --cap-drop ALL --security-opt no-new-privileges --network none \
-    --entrypoint /bin/sh "$WORKER_REFERENCE" -c "$harness_name --version" | head -n 1 | tr -d '\r')"
+    --entrypoint /bin/sh "$WORKER_REFERENCE" -c "$harness_name --version" \
+    | head -n 1 | tr -cd '\040-\176' | cut -c1-120)"
   echo "Smoking $harness_name $version in $WORKER_REFERENCE"
 
   verified='[]'
@@ -120,3 +126,9 @@ for harness_name in $HARNESSES; do
   record_evidence "$harness_name" "$version" "$verified"
   echo "Recorded $harness_name evidence for $WORKER_DIGEST in $EVIDENCE_FILE"
 done
+
+if [ -n "$unrecorded" ]; then
+  echo "No smoke result recorded for:$unrecorded" >&2
+  echo "Startup stays blocked for those harnesses until their result is recorded." >&2
+  exit 1
+fi

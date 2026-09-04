@@ -95,7 +95,7 @@ type StartupRequest struct {
 	AuthenticationChecker worker.HarnessAuthenticationChecker
 	// Resolve supplies adapter capabilities; nil selects built-ins.
 	Resolve CapabilityResolver
-	// SkillChecker verifies the installed skill set inside the worker image.
+	// SkillChecker verifies the worker skill set inside the worker image.
 	SkillChecker worker.SkillContractChecker
 	// SkillEvidencePath is the host path of the recorded worker skill smoke
 	// evidence.
@@ -205,7 +205,7 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		required := MandatorySkills()
 		contract, err := request.SkillChecker.CheckSkillContract(ctx, worker.SkillContractRequest{Image: request.Image, Harness: name, Skills: required})
 		if err != nil {
-			return doctor.Failure(diagnosis, "the pinned worker image does not advertise every role-mandated skill to "+name, "rebuild the worker image so each role-mandated skill is installed once per discovery root and left model-visible")
+			return doctor.Failure(diagnosis, "the pinned worker image does not satisfy the role-mandated skill contract for "+name, "rebuild the worker image so each role-mandated skill appears once per discovery root and stays model-visible, and verify the configured image digest")
 		}
 		evidence, err := LoadSkillSmokeEvidence(request.SkillEvidencePath)
 		if err != nil {
