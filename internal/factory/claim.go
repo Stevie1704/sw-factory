@@ -1117,8 +1117,9 @@ func statusCommentBody(run store.Run) string {
 	}
 	review := specificationReviewStatusComment(run)
 	reviewRepair := reviewRepairStatusComment(run)
+	disposition := humanDispositionStatusComment(run)
 	activity := activityStatusComment(run)
-	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, testRevision, pullRequest, lifecycle, harness, review, reviewRepair, questions, commandFeedback)
+	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, testRevision, pullRequest, lifecycle, harness, review, reviewRepair, disposition, questions, commandFeedback)
 }
 
 // testRevisionStatusComment renders the bounded objection-cycle projection
@@ -1145,6 +1146,26 @@ func testRevisionStatusComment(run store.Run) string {
 	return result
 }
 
+// humanDispositionStatusComment names the exact command that resumes a review
+// waiting for human disposition, and why it is not admissible when it is not.
+// A maintainer reading the supervision comment must not have to consult the
+// README to learn how to unblock the run.
+//
+// Two preconditions are absent from this projection: whether the tracked pull
+// request is still open, and whether the invocation history holds an active
+// session. The command handler verifies both, so an admissible run is reported
+// as subject to that confirmation rather than as a guarantee.
+func humanDispositionStatusComment(run store.Run) string {
+	if run.Stage != store.StageReview || run.Status != store.StatusWaitingForHuman {
+		return ""
+	}
+	result := "\n### Human disposition\n\n- command: `/factory repair <instruction>`\n"
+	if reason := repairAdmissionReason(run); reason != "" {
+		return result + fmt.Sprintf("- admissible: no (%s)\n", safeStatusCommentValue(reason))
+	}
+	return result + "- admissible: yes, once the coordinator confirms the pull request is open and no invocation is active\n"
+}
+
 // reviewRepairStatusComment renders only bounded repair accounting and opaque
 // blocker identities. Review prose remains in the reviewer result and packet,
 // while this local supervision projection stays content-free.
@@ -1158,7 +1179,12 @@ func reviewRepairStatusComment(run store.Run) string {
 		result += fmt.Sprintf("- pending: attempt %d\n", run.ReviewRepairPendingAttempt)
 	}
 	if packet := run.ReviewRepairPacket; packet != nil && packet.Source == store.ReviewRepairSourceHuman {
-		result += fmt.Sprintf("- human review: %s (does not consume the budget)\n", safeStatusCommentValue(packet.ReviewID))
+		kind, identity := packet.SourceEvent()
+		surface := "human review"
+		if kind == store.ReviewRepairEventSupervisionCommand {
+			surface = "maintainer instruction"
+		}
+		result += fmt.Sprintf("- %s: %s (does not consume the budget)\n", surface, safeStatusCommentValue(identity))
 	}
 	if len(run.ReviewRepairHistory) > 0 {
 		outcomes := make([]string, 0, len(run.ReviewRepairHistory))

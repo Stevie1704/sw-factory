@@ -337,6 +337,21 @@ type ReviewFinding struct {
 	SuggestedOwner string `json:"suggested_owner"`
 }
 
+// SourceEvent returns the maintainer surface and event identity behind a human
+// repair packet. A packet written before supervision commands existed recorded
+// only its GitHub review identity, so that shape reads as a pull-request review
+// event and remains replayable without a migration.
+func (p ReviewRepairPacket) SourceEvent() (ReviewRepairSourceEvent, string) {
+	kind := ReviewRepairSourceEvent(strings.TrimSpace(string(p.SourceEventKind)))
+	if identity := strings.TrimSpace(p.SourceEventID); kind != "" && identity != "" {
+		return kind, identity
+	}
+	if identity := strings.TrimSpace(p.ReviewID); identity != "" {
+		return ReviewRepairEventPullRequestReview, identity
+	}
+	return "", ""
+}
+
 // ReviewResult is one review role's latest exact-checkpoint result. A result
 // is stale as soon as the run checkpoint changes.
 type ReviewResult struct {
@@ -385,6 +400,19 @@ const (
 	ReviewRepairSourceHuman ReviewRepairSource = "human"
 )
 
+// ReviewRepairSourceEvent identifies the maintainer surface that produced one
+// human repair packet.
+type ReviewRepairSourceEvent string
+
+const (
+	// ReviewRepairEventPullRequestReview means a submitted CHANGES_REQUESTED
+	// pull-request review.
+	ReviewRepairEventPullRequestReview ReviewRepairSourceEvent = "pull_request_review"
+	// ReviewRepairEventSupervisionCommand means an authorized supervision
+	// comment addressed to the coordinator.
+	ReviewRepairEventSupervisionCommand ReviewRepairSourceEvent = "supervision_command"
+)
+
 // ReviewRepairPacket is the coordinator-owned combined blocking-review packet
 // mounted in the implementation repair invocation.
 type ReviewRepairPacket struct {
@@ -393,9 +421,17 @@ type ReviewRepairPacket struct {
 	// Source identifies who requested the repair. It is empty for packets
 	// written before human-requested repair existed, which means factory.
 	Source ReviewRepairSource `json:"source,omitempty"`
-	// ReviewID is the GitHub review identity of a human repair packet. It is
-	// empty for a factory packet.
+	// ReviewID is the GitHub review identity of a human repair packet written
+	// before supervision commands could produce one. It is empty for a factory
+	// packet and for a command-sourced packet; SourceEvent reads it so a packet
+	// persisted by an earlier coordinator stays replayable.
 	ReviewID string `json:"review_id,omitempty"`
+	// SourceEventKind identifies which maintainer surface produced a human
+	// packet. It is empty for a factory packet.
+	SourceEventKind ReviewRepairSourceEvent `json:"source_event_kind,omitempty"`
+	// SourceEventID is the identity of that surface's event, and is what makes
+	// a human packet replayable. It is empty for a factory packet.
+	SourceEventID string `json:"source_event_id,omitempty"`
 	// RunID identifies the owning factory run.
 	RunID string `json:"run_id"`
 	// CheckpointSHA identifies the exact checkpoint that produced the findings.
@@ -1533,12 +1569,16 @@ func validateReviewRepairProjection(run Run) error {
 		case ReviewRepairSourceHuman:
 			// A human-requested repair is not one of the bounded factory
 			// rounds, so it carries no attempt number and never exhausts the
-			// budget. Its GitHub review identity is what makes it replayable.
-			if packet.Attempt != 0 || strings.TrimSpace(packet.ReviewID) == "" {
-				return errors.New("human review repair packet must identify its GitHub review and carry no attempt")
+			// budget. Its maintainer event identity is what makes it replayable.
+			kind, identity := packet.SourceEvent()
+			if packet.Attempt != 0 || identity == "" {
+				return errors.New("human review repair packet must identify its maintainer event and carry no attempt")
+			}
+			if kind != ReviewRepairEventPullRequestReview && kind != ReviewRepairEventSupervisionCommand {
+				return fmt.Errorf("unsupported review repair source event %q", kind)
 			}
 		case "", ReviewRepairSourceFactory:
-			if packet.Attempt < 1 || packet.Attempt > run.ReviewRepairBudget || packet.ReviewID != "" {
+			if packet.Attempt < 1 || packet.Attempt > run.ReviewRepairBudget || packet.ReviewID != "" || strings.TrimSpace(packet.SourceEventID) != "" {
 				return errors.New("factory review repair packet attempt is invalid")
 			}
 		default:

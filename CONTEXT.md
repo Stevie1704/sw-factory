@@ -114,10 +114,11 @@ _Avoid_: Autonomous agent, agent-driven workflow, auto-merge
 **Human repair packet**:
 The coordinator-owned repair context built from an authorized maintainer's
 completed instructions: one or more applicable `CHANGES_REQUESTED` reviews,
-holding their review bodies and inline findings, or one `/factory changes`
+holding their review bodies and inline findings, or one `/factory repair`
 supervision comment holding its instruction. Concurrent applicable reviews form
 one packet. Every human repair packet sits outside the bounded factory repair
-rounds and never consumes the review-repair budget.
+rounds, never consumes the review-repair budget, and records the maintainer
+surface and event identity that produced it.
 _Avoid_: Review reply, advisory feedback
 
 **Review diff**:

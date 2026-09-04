@@ -26,9 +26,9 @@ const (
 	Revision Kind = "revision"
 	// Answer supplies an authorized answer to one pending clarification question.
 	Answer Kind = "answer"
-	// Changes supplies one maintainer instruction as a repair packet and
+	// Repair supplies one maintainer instruction as a repair packet and
 	// resumes implementation from the run's current checkpoint.
-	Changes Kind = "changes"
+	Repair Kind = "repair"
 	// ConfigureHarness changes the selected harness for a later invocation.
 	ConfigureHarness Kind = "configure_harness"
 )
@@ -53,7 +53,7 @@ type Request struct {
 	QuestionID string
 	// Answer is set only for Answer and contains the maintainer's response.
 	Answer string
-	// Instruction is set only for Changes and contains the requested change.
+	// Instruction is set only for Repair and contains the requested change.
 	Instruction string
 }
 
@@ -81,7 +81,7 @@ const (
 	ParseErrorMissingHarness ParseErrorCode = "missing_harness"
 	// ParseErrorMissingAnswer means an answer command omitted required content.
 	ParseErrorMissingAnswer ParseErrorCode = "missing_answer"
-	// ParseErrorMissingInstruction means a changes command omitted its instruction.
+	// ParseErrorMissingInstruction means a repair command omitted its instruction.
 	ParseErrorMissingInstruction ParseErrorCode = "missing_instruction"
 	// ParseErrorInvalidQuestionArgument means an answer question identifier was malformed.
 	ParseErrorInvalidQuestionArgument ParseErrorCode = "invalid_question_argument"
@@ -140,8 +140,8 @@ func Parse(body string) (ParseResult, error) {
 		return parseFixedArity(result, fields, Revision)
 	case string(Answer):
 		return parseAnswer(result, fields[2:])
-	case string(Changes):
-		return parseChanges(result, fields[2:])
+	case string(Repair):
+		return parseRepair(result, fields[2:])
 	case "config", "configure", "harness":
 		harness, parseErr := parseHarness(fields[2:])
 		if parseErr != nil {
@@ -184,17 +184,17 @@ func parseAnswer(result ParseResult, arguments []string) (ParseResult, error) {
 	return result, nil
 }
 
-// parseChanges parses one maintainer instruction from a changes command,
+// parseRepair parses one maintainer instruction from a repair command,
 // preserving its word boundaries for the repair finding it becomes.
-func parseChanges(result ParseResult, arguments []string) (ParseResult, error) {
+func parseRepair(result ParseResult, arguments []string) (ParseResult, error) {
 	instruction := strings.TrimSpace(strings.Join(arguments, " "))
 	if instruction == "" {
-		return result, &ParseError{Code: ParseErrorMissingInstruction, Problem: "changes requires the requested change as text"}
+		return result, &ParseError{Code: ParseErrorMissingInstruction, Problem: "repair requires the requested change as text"}
 	}
 	if strings.ContainsAny(instruction, "\x00\r\n") {
 		return result, &ParseError{Code: ParseErrorControlCharacter, Problem: "the instruction contains a control character"}
 	}
-	result.Command = Request{Kind: Changes, Instruction: instruction}
+	result.Command = Request{Kind: Repair, Instruction: instruction}
 	return result, nil
 }
 

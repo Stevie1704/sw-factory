@@ -155,31 +155,31 @@ func TestParseRecognizesTheAuthorizedRevisionCommand(t *testing.T) {
 	}
 }
 
-// TestChangesCommandCarriesTheMaintainerInstruction verifies the requested
+// TestRepairCommandCarriesTheMaintainerInstruction verifies the requested
 // change survives parsing with its word boundaries intact, because the text
 // becomes the claim of a repair finding.
-func TestChangesCommandCarriesTheMaintainerInstruction(t *testing.T) {
+func TestRepairCommandCarriesTheMaintainerInstruction(t *testing.T) {
 	t.Parallel()
 
-	parsed, err := command.Parse("/factory changes validate permitted paths before adoption")
+	parsed, err := command.Parse("/factory repair validate permitted paths before adoption")
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if !parsed.Recognized || parsed.Command.Kind != command.Changes {
-		t.Fatalf("Parse() = %#v, want recognized changes command", parsed)
+	if !parsed.Recognized || parsed.Command.Kind != command.Repair {
+		t.Fatalf("Parse() = %#v, want recognized repair command", parsed)
 	}
 	if parsed.Command.Instruction != "validate permitted paths before adoption" {
 		t.Fatalf("changes instruction = %q, want the complete requested change", parsed.Command.Instruction)
 	}
 }
 
-// TestChangesCommandRejectsAnEmptyInstruction verifies a changes command with
+// TestRepairCommandRejectsAnEmptyInstruction verifies a repair command with
 // no requested change fails closed instead of resuming implementation with an
 // empty finding.
-func TestChangesCommandRejectsAnEmptyInstruction(t *testing.T) {
+func TestRepairCommandRejectsAnEmptyInstruction(t *testing.T) {
 	t.Parallel()
 
-	parsed, err := command.Parse("/factory changes")
+	parsed, err := command.Parse("/factory repair")
 	if !parsed.Recognized || err == nil {
 		t.Fatalf("Parse() = %#v/%v, want recognized typed rejection", parsed, err)
 	}

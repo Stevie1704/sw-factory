@@ -737,31 +737,24 @@ func (s *commandInvocationRunStore) Invocation(_ context.Context, runID, invocat
 	return nil, nil
 }
 
-// TestHandleCommandChangesResumesImplementationFromAMaintainerComment verifies
-// an authorized changes comment dispositions a run parked for human input
-// without a second GitHub identity: the pull request returns to draft,
-// implementation resumes from the current checkpoint, and the instruction
-// becomes a blocking finding owned by implementation.
-func TestHandleCommandChangesResumesImplementationFromAMaintainerComment(t *testing.T) {
+// TestHandleCommandRepairResumesImplementationOnASingleAccountHost verifies the
+// disposition a maintainer has when GitHub refuses a CHANGES_REQUESTED review
+// on their own pull request: no pull-request review reader is wired at all, so
+// no submitted review can exist, and the instruction alone resumes
+// implementation from the current checkpoint.
+func TestHandleCommandRepairResumesImplementationOnASingleAccountHost(t *testing.T) {
 	t.Parallel()
 
-	run := commandRun(t, store.StatusWaitingForHuman)
-	run.Stage = store.StageReview
-	run.Branch = "factory/run-command"
-	run.CheckpointSHA = "0123456789abcdef0123456789abcdef01234567"
-	run.PullRequestNumber = 7
-	run.ReviewRepairBudget = 4
-	run.LifecycleReason = "spec_review cannot proceed"
-	run.StandardsReview = &store.StandardsReview{CheckpointSHA: run.CheckpointSHA}
+	run := repairRun(t)
 	githubAdapter := &commandGitHub{
 		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
 		statusComment: github.Comment{ID: "status-1"},
-		pullRequest:   github.PullRequest{Number: 7, Draft: false},
+		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: false},
 	}
-	runStore := &changesRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
+	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
 	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
 
-	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: github.Comment{ID: "21", Author: "alice", Body: "/factory changes validate permitted paths before adoption"}})
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: github.Comment{ID: "21", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}})
 	if err != nil {
 		t.Fatalf("HandleCommand() error = %v", err)
 	}
@@ -771,22 +764,29 @@ func TestHandleCommandChangesResumesImplementationFromAMaintainerComment(t *test
 	if result.Run.Stage != store.StageImplementation || result.Run.Status != store.StatusActive {
 		t.Fatalf("run = %s/%s, want implementation/active", result.Run.Stage, result.Run.Status)
 	}
-	if result.Run.ProcessedCommentID != "21" {
-		t.Fatalf("processed comment = %q, want the command watermark", result.Run.ProcessedCommentID)
+	if result.Run.ProcessedCommentID != "21" || len(result.Run.ActiveInvocationIDs) != 0 {
+		t.Fatalf("run = %#v, want the command watermark and no carried activity", result.Run)
 	}
 	packet := result.Run.ReviewRepairPacket
-	if packet == nil || packet.Source != store.ReviewRepairSourceHuman || packet.CheckpointSHA != run.CheckpointSHA || packet.ReviewID != "21" {
+	if packet == nil || packet.Source != store.ReviewRepairSourceHuman || packet.CheckpointSHA != run.CheckpointSHA {
 		t.Fatalf("repair packet = %#v, want a human packet for the current checkpoint", packet)
+	}
+	kind, identity := packet.SourceEvent()
+	if kind != store.ReviewRepairEventSupervisionCommand || identity != "21" {
+		t.Fatalf("SourceEvent() = %q/%q, want the supervision command provenance", kind, identity)
+	}
+	if packet.ReviewID != "" {
+		t.Fatalf("ReviewID = %q, want the legacy review field left empty", packet.ReviewID)
 	}
 	if len(packet.Findings) != 1 {
 		t.Fatalf("findings = %#v, want the single maintainer instruction", packet.Findings)
 	}
-	finding := packet.Findings[0]
-	if finding.Finding.Claim != "validate permitted paths before adoption" || finding.Finding.SuggestedOwner != workflow.RoleImplementation {
+	finding := packet.Findings[0].Finding
+	if finding.Claim != "validate permitted paths before adoption" || finding.SuggestedOwner != workflow.RoleImplementation {
 		t.Fatalf("finding = %#v, want the instruction owned by implementation", finding)
 	}
-	if finding.Finding.Severity != string(report.ReviewSeverityBlocker) {
-		t.Fatalf("severity = %q, want a blocking finding", finding.Finding.Severity)
+	if finding.Severity != string(report.ReviewSeverityBlocker) {
+		t.Fatalf("severity = %q, want a blocking finding", finding.Severity)
 	}
 	if result.Run.StandardsReview != nil || result.Run.SpecificationReview != nil {
 		t.Fatalf("reviews = %#v/%#v, want both superseded", result.Run.SpecificationReview, result.Run.StandardsReview)
@@ -796,49 +796,240 @@ func TestHandleCommandChangesResumesImplementationFromAMaintainerComment(t *test
 	}
 }
 
-// TestHandleCommandChangesRefusesWhileAnInvocationIsActive verifies a
-// maintainer instruction never interrupts a harness session that can still
-// write a structured result for the current checkpoint.
-func TestHandleCommandChangesRefusesWhileAnInvocationIsActive(t *testing.T) {
+// TestHandleCommandRepairRefusesAnUnauthorizedMaintainer verifies the
+// disposition surface is gated by the same authorization policy as every other
+// command, before any admission or pull-request work.
+func TestHandleCommandRepairRefusesAnUnauthorizedMaintainer(t *testing.T) {
 	t.Parallel()
 
-	run := commandRun(t, store.StatusActive)
-	run.Stage = store.StageReview
-	run.Branch = "factory/run-command"
-	run.CheckpointSHA = "0123456789abcdef0123456789abcdef01234567"
-	run.PullRequestNumber = 7
+	run := repairRun(t)
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}},
+		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
 		statusComment: github.Comment{ID: "status-1"},
-		pullRequest:   github.PullRequest{Number: 7, Draft: true},
+		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: true},
 	}
-	runStore := &changesRunStore{
-		commandRunStore: &commandRunStore{current: &run, latest: &run},
-		active:          []store.Invocation{{ID: "inv-1", RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview, Status: store.InvocationStatusActive}},
-	}
+	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
 	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
 
-	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: github.Comment{ID: "22", Author: "alice", Body: "/factory changes validate permitted paths before adoption"}})
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: github.Comment{ID: "61", Author: "mallory", Body: "/factory repair validate permitted paths before adoption"}})
 	var rejection *factory.PolicyRejection
-	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionChangesState {
-		t.Fatalf("HandleCommand() error = %v, want a typed changes rejection", err)
+	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionUnauthorized {
+		t.Fatalf("HandleCommand() error = %v, want unauthorized PolicyRejection", err)
 	}
-	if result.Outcome != factory.CommandRejected || result.Run.Stage != store.StageReview {
-		t.Fatalf("result = %#v, want a rejected command that left the run at review", result)
+	if result.Outcome != factory.CommandRejected || result.Run.Stage != store.StageReview || result.Run.ReviewRepairPacket != nil {
+		t.Fatalf("result = %#v, want the review left waiting without a repair packet", result)
 	}
 	if len(githubAdapter.draftChanges) != 0 {
 		t.Fatalf("draft changes = %#v, want no pull-request mutation", githubAdapter.draftChanges)
 	}
 }
 
-// changesRunStore adds the durable invocation projection a maintainer
+// TestHandleCommandRepairRefusesOutsideItsAdmissionContract verifies every
+// prerequisite fails closed with a typed rejection that mutates no workflow
+// state and no pull request.
+func TestHandleCommandRepairRefusesOutsideItsAdmissionContract(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		mutate      func(*store.Run)
+		active      []store.Invocation
+		pullRequest github.PullRequest
+	}{
+		{
+			name:   "stage is not review",
+			mutate: func(run *store.Run) { run.Stage = store.StageImplementation },
+		},
+		{
+			name:   "review is still active",
+			mutate: func(run *store.Run) { run.Status = store.StatusActive },
+		},
+		{
+			name:   "run is already ready",
+			mutate: func(run *store.Run) { run.Stage = store.StageReady },
+		},
+		{
+			name:   "no tracked pull request",
+			mutate: func(run *store.Run) { run.PullRequestNumber = 0 },
+		},
+		{
+			name:   "checkpoint is not a commit identity",
+			mutate: func(run *store.Run) { run.CheckpointSHA = "not-a-checkpoint" },
+		},
+		{
+			name:   "denormalized activity remains",
+			mutate: func(run *store.Run) { run.ActiveInvocationIDs = []string{"inv-1"} },
+		},
+		{
+			name:   "an invocation is still active",
+			mutate: func(*store.Run) {},
+			active: []store.Invocation{{ID: "inv-1", RunID: "run-command", Role: workflow.RoleSpecificationReview, Stage: store.StageReview, Status: store.InvocationStatusActive}},
+		},
+		{
+			name:        "tracked pull request was merged",
+			mutate:      func(*store.Run) {},
+			pullRequest: github.PullRequest{Number: 7, State: "closed", Merged: true},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			run := repairRun(t)
+			testCase.mutate(&run)
+			pullRequest := testCase.pullRequest
+			if pullRequest.Number == 0 {
+				pullRequest = github.PullRequest{Number: 7, State: "open", Draft: true}
+			}
+			githubAdapter := &commandGitHub{
+				issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
+				statusComment: github.Comment{ID: "status-1"},
+				pullRequest:   pullRequest,
+			}
+			runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}, active: testCase.active}
+			service := newCommandServiceWithStore(runStore, githubAdapter, nil)
+
+			result, err := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: github.Comment{ID: "31", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}})
+			var rejection *factory.PolicyRejection
+			if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionRepairState {
+				t.Fatalf("HandleCommand() error = %v, want a typed repair rejection", err)
+			}
+			if result.Outcome != factory.CommandRejected {
+				t.Fatalf("outcome = %q, want a rejected command", result.Outcome)
+			}
+			if result.Run.Stage != run.Stage || result.Run.Status != run.Status || result.Run.ReviewRepairPacket != nil {
+				t.Fatalf("run = %#v, want the workflow state left untouched", result.Run)
+			}
+			if len(githubAdapter.draftChanges) != 0 {
+				t.Fatalf("draft changes = %#v, want no pull-request mutation", githubAdapter.draftChanges)
+			}
+		})
+	}
+}
+
+// TestPollCommandsAppliesOneRepairInstructionExactlyOnce verifies the command
+// watermark makes a repeated poll, a duplicate across the issue and the
+// pull-request surface, and a coordinator restart inert.
+func TestPollCommandsAppliesOneRepairInstructionExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	run := repairRun(t)
+	githubAdapter := &commandGitHub{
+		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
+		statusComment: github.Comment{ID: "status-1"},
+		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: true, HeadSHA: strings.Repeat("a", 40)},
+		comments:      []github.Comment{{ID: "41", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}},
+	}
+	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
+	service := newCommandServiceWithStore(runStore, githubAdapter, githubAdapter)
+
+	first, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: run.ID})
+	if err != nil {
+		t.Fatalf("first PollCommands() error = %v", err)
+	}
+	accepted := 0
+	for _, result := range first {
+		if result.Outcome == factory.CommandAccepted {
+			accepted++
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("first PollCommands() = %#v, want the instruction applied once across both surfaces", first)
+	}
+	stored, err := runStore.CurrentRun(context.Background())
+	if err != nil || stored == nil || stored.ReviewRepairPacket == nil {
+		t.Fatalf("CurrentRun() = %#v/%v, want the persisted repair packet", stored, err)
+	}
+	if stored.Stage != store.StageImplementation || len(stored.ReviewRepairPacket.Findings) != 1 {
+		t.Fatalf("run = %#v, want one repair packet resuming implementation", stored)
+	}
+
+	second, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: run.ID})
+	if err != nil {
+		t.Fatalf("second PollCommands() error = %v", err)
+	}
+	for _, result := range second {
+		if result.Outcome != factory.CommandReplayed {
+			t.Fatalf("second PollCommands() = %#v, want every result replayed", second)
+		}
+	}
+	repeated, err := runStore.CurrentRun(context.Background())
+	if err != nil || repeated == nil || repeated.Revision != stored.Revision {
+		t.Fatalf("CurrentRun() = %#v/%v, want no second repair transition", repeated, err)
+	}
+}
+
+// TestPollCommandsPrefersPullRequestLifecycleOverARepairInstruction verifies a
+// merge observed in the same pass wins over a stale repair comment, so the
+// command cannot resurrect a completed run.
+func TestPollCommandsPrefersPullRequestLifecycleOverARepairInstruction(t *testing.T) {
+	t.Parallel()
+
+	run := repairRun(t)
+	githubAdapter := &commandGitHub{
+		issue:         github.Issue{Number: 42, State: "closed", Labels: []string{github.LabelAgentNeedsInput}},
+		statusComment: github.Comment{ID: "status-1"},
+		pullRequest:   github.PullRequest{Number: 7, State: "closed", Merged: true, MergeCommitSHA: strings.Repeat("d", 40)},
+		comments:      []github.Comment{{ID: "51", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}},
+	}
+	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
+	service := newCommandServiceWithStore(runStore, githubAdapter, githubAdapter)
+
+	results, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: run.ID})
+	if err != nil {
+		t.Fatalf("PollCommands() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("PollCommands() = %#v, want the lifecycle observation to end the pass", results)
+	}
+	stored, err := runStore.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if stored != nil && stored.ReviewRepairPacket != nil {
+		t.Fatalf("run = %#v, want no repair packet after the merge", stored)
+	}
+}
+
+// repairRun builds a run parked exactly where a maintainer repair is
+// admissible: a review waiting for human disposition over a tracked pull
+// request, with no active invocation.
+func repairRun(t *testing.T) store.Run {
+	t.Helper()
+	policy := commandRepositoryConfig()
+	policy.RoleHarnessDefaults[workflow.RoleSpecificationReview] = config.HarnessCodex
+	policy.RoleHarnessDefaults[workflow.RoleStandardsReview] = config.HarnessCodex
+	policy.ModelOptions = map[string][]string{
+		workflow.RoleSpecificationReview: {"gpt-5.6-luna"},
+		workflow.RoleStandardsReview:     {"gpt-5.6-luna"},
+	}
+	packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, RepositoryConfig: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := commandRun(t, store.StatusWaitingForHuman)
+	run.Stage = store.StageReview
+	run.Branch = "factory/run-command"
+	run.CheckpointSHA = strings.Repeat("a", 40)
+	run.PullRequestNumber = 7
+	run.ReviewRepairBudget = 4
+	run.SpecificationPacket = string(packet)
+	// The parked state a reviewer leaves behind: one axis produced a result for
+	// the checkpoint and the other did not, so the round is incomplete and
+	// readiness cannot be reached without a human.
+	run.StandardsReview = &store.StandardsReview{CheckpointSHA: run.CheckpointSHA}
+	run.LifecycleReason = "spec_review cannot proceed"
+	return run
+}
+
+// repairRunStore adds the durable invocation projection a maintainer
 // disposition needs to prove no harness session is running.
-type changesRunStore struct {
+type repairRunStore struct {
 	*commandRunStore
 	active []store.Invocation
 }
 
 // ActiveInvocations returns the run's active visible invocations.
-func (s *changesRunStore) ActiveInvocations(context.Context, string) ([]store.Invocation, error) {
+func (s *repairRunStore) ActiveInvocations(context.Context, string) ([]store.Invocation, error) {
 	return append([]store.Invocation(nil), s.active...), nil
 }

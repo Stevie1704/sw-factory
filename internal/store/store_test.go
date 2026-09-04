@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -1502,7 +1503,7 @@ func TestLatestRunIncludesTerminalState(t *testing.T) {
 }
 
 // TestStorePersistsTheHumanReviewWatermarkAndPacket verifies the replay-safe
-// GitHub review identity and the unbounded human repair packet survive a
+// maintainer event identity and the unbounded human repair packet survive a
 // coordinator restart, and that the packet still rejects a missing identity.
 func TestStorePersistsTheHumanReviewWatermarkAndPacket(t *testing.T) {
 	t.Parallel()
@@ -1562,7 +1563,113 @@ func TestStorePersistsTheHumanReviewWatermarkAndPacket(t *testing.T) {
 	packet.RunID = anonymous.ID
 	packet.ReviewID = ""
 	anonymous.ReviewRepairPacket = &packet
-	if err := reopened.SaveRun(context.Background(), anonymous); err == nil || !strings.Contains(err.Error(), "must identify its GitHub review") {
+	if err := reopened.SaveRun(context.Background(), anonymous); err == nil || !strings.Contains(err.Error(), "must identify its maintainer event") {
 		t.Fatalf("SaveRun() error = %v, want a refusal of an unidentified human repair packet", err)
+	}
+}
+
+// TestReviewRepairPacketSourceEventReadsEveryPersistedShape verifies durable
+// replay preserves provenance for a pull-request review, a supervision
+// command, and a packet written before supervision commands existed. The
+// legacy shape must keep replaying without a migration.
+func TestReviewRepairPacketSourceEventReadsEveryPersistedShape(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		encoded      string
+		wantKind     store.ReviewRepairSourceEvent
+		wantIdentity string
+	}{
+		{
+			name:         "legacy review identity only",
+			encoded:      `{"version":1,"source":"human","review_id":"4001"}`,
+			wantKind:     store.ReviewRepairEventPullRequestReview,
+			wantIdentity: "4001",
+		},
+		{
+			name:         "pull request review event",
+			encoded:      `{"version":1,"source":"human","review_id":"4001","source_event_kind":"pull_request_review","source_event_id":"4001"}`,
+			wantKind:     store.ReviewRepairEventPullRequestReview,
+			wantIdentity: "4001",
+		},
+		{
+			name:         "supervision command event",
+			encoded:      `{"version":1,"source":"human","source_event_kind":"supervision_command","source_event_id":"5539017380"}`,
+			wantKind:     store.ReviewRepairEventSupervisionCommand,
+			wantIdentity: "5539017380",
+		},
+		{
+			name:         "factory packet has no maintainer event",
+			encoded:      `{"version":1,"attempt":1}`,
+			wantKind:     "",
+			wantIdentity: "",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			var packet store.ReviewRepairPacket
+			if err := json.Unmarshal([]byte(testCase.encoded), &packet); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			kind, identity := packet.SourceEvent()
+			if kind != testCase.wantKind || identity != testCase.wantIdentity {
+				t.Fatalf("SourceEvent() = %q/%q, want %q/%q", kind, identity, testCase.wantKind, testCase.wantIdentity)
+			}
+		})
+	}
+}
+
+// TestStorePersistsACommandSourcedHumanRepairPacket verifies a packet whose
+// provenance is a supervision comment survives a coordinator restart with its
+// source kind and identity, and without borrowing the legacy review field.
+func TestStorePersistsACommandSourcedHumanRepairPacket(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	finding := store.ReviewRepairFinding{ReviewerRole: "human", Finding: store.ReviewFinding{
+		Location: "pull request #140", Claim: "validate permitted paths before adoption",
+		Evidence: "GitHub comment 5539017380 submitted by alice", Severity: "blocker", Category: "specification",
+		SuggestedResolution: "validate permitted paths before adoption", SuggestedOwner: "implementation",
+	}}
+	run := store.Run{
+		ID:                 "run-command-repair",
+		RepositoryPath:     "/work/repository",
+		Stage:              store.StageImplementation,
+		Status:             store.StatusActive,
+		ReviewRepairBudget: 2,
+		Revision:           3,
+		ReviewRepairPacket: &store.ReviewRepairPacket{
+			Version: 1, Source: store.ReviewRepairSourceHuman,
+			SourceEventKind: store.ReviewRepairEventSupervisionCommand, SourceEventID: "5539017380",
+			RunID: "run-command-repair", CheckpointSHA: strings.Repeat("c", 64), Budget: 2,
+			Findings: []store.ReviewRepairFinding{finding},
+		},
+		CheckpointSHA: strings.Repeat("c", 64),
+		CreatedAt:     time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(200, 0).UTC(),
+	}
+	if err := opened.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	got, err := opened.CurrentRun(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentRun() error = %v", err)
+	}
+	if got == nil || got.ReviewRepairPacket == nil {
+		t.Fatalf("CurrentRun() = %#v, want the persisted command repair packet", got)
+	}
+	kind, identity := got.ReviewRepairPacket.SourceEvent()
+	if kind != store.ReviewRepairEventSupervisionCommand || identity != "5539017380" {
+		t.Fatalf("SourceEvent() = %q/%q, want the supervision command provenance", kind, identity)
+	}
+	if got.ReviewRepairPacket.ReviewID != "" {
+		t.Fatalf("ReviewID = %q, want the legacy review field left empty", got.ReviewRepairPacket.ReviewID)
 	}
 }

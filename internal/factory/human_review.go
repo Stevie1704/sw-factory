@@ -86,7 +86,7 @@ func (s *Service) applyHumanRepair(ctx context.Context, registration config.Repo
 		return err
 	}
 	watermark := applicable[len(applicable)-1].ID
-	next := humanRepairProjection(run, watermark, fmt.Sprintf("authorized human review %s requested changes; resuming implementation from checkpoint %s", watermark, run.CheckpointSHA), findings)
+	next := humanRepairProjection(run, store.ReviewRepairEventPullRequestReview, watermark, fmt.Sprintf("authorized human review %s requested changes; resuming implementation from checkpoint %s", watermark, run.CheckpointSHA), findings)
 	next.ProcessedReviewID = watermark
 	next.Revision = run.Revision + 1
 	next.ProcessedReviewRevision = next.Revision
@@ -102,20 +102,28 @@ func (s *Service) applyHumanRepair(ctx context.Context, registration config.Repo
 // checkpoint against the supplied findings. The caller owns the watermark that
 // admits its own trigger exactly once, because a submitted review and a
 // supervision comment are watermarked separately.
-func humanRepairProjection(run store.Run, watermark, reason string, findings []store.ReviewRepairFinding) store.Run {
+func humanRepairProjection(run store.Run, event store.ReviewRepairSourceEvent, identity, reason string, findings []store.ReviewRepairFinding) store.Run {
 	next := run
 	next.Stage = store.StageImplementation
 	next.Status = store.StatusActive
 	next.LifecycleReason = reason
-	next.ReviewRepairPacket = &store.ReviewRepairPacket{
-		Version:       1,
-		Source:        store.ReviewRepairSourceHuman,
-		ReviewID:      watermark,
-		RunID:         run.ID,
-		CheckpointSHA: run.CheckpointSHA,
-		Budget:        run.ReviewRepairBudget,
-		Findings:      findings,
+	packet := &store.ReviewRepairPacket{
+		Version:         1,
+		Source:          store.ReviewRepairSourceHuman,
+		SourceEventKind: event,
+		SourceEventID:   identity,
+		RunID:           run.ID,
+		CheckpointSHA:   run.CheckpointSHA,
+		Budget:          run.ReviewRepairBudget,
+		Findings:        findings,
 	}
+	if event == store.ReviewRepairEventPullRequestReview {
+		// Mirror the legacy review field so a packet written here stays
+		// readable by a coordinator built before source events existed. A
+		// command-sourced packet has no legacy equivalent and never borrows it.
+		packet.ReviewID = identity
+	}
+	next.ReviewRepairPacket = packet
 	// The reviewed checkpoint is superseded, so every result derived from it
 	// stops being evidence for readiness.
 	next.SpecificationReview = nil
@@ -146,6 +154,26 @@ func humanReviewEligible(run store.Run) bool {
 	default:
 		return false
 	}
+}
+
+// repairAdmissionReason explains why an authorized maintainer repair command
+// is not admissible for a run projection, and is empty when every
+// run-derivable precondition holds. The command handler additionally confirms
+// against GitHub and the invocation history that no harness session is running
+// and that the tracked pull request is still open; those two facts are not in
+// the projection, so the status comment names them as separately verified.
+func repairAdmissionReason(run store.Run) string {
+	switch {
+	case run.Stage != store.StageReview || run.Status != store.StatusWaitingForHuman:
+		return fmt.Sprintf("repair is only allowed while a review waits for human disposition, not stage %q/status %q", run.Stage, run.Status)
+	case run.PullRequestNumber <= 0:
+		return "repair requires a tracked pull request"
+	case !github.ValidCommitSHA(run.CheckpointSHA):
+		return "repair requires a valid review checkpoint"
+	case len(run.ActiveInvocationIDs) != 0:
+		return "repair requires a run with no active invocation"
+	}
+	return ""
 }
 
 // applicableHumanReviews returns every submitted `CHANGES_REQUESTED` review

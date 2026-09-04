@@ -1026,7 +1026,7 @@ Authorized users can control the current run with exact, single-line comments:
 /factory status
 /factory refresh
 /factory answer clarification-1 use the existing JSON format
-/factory changes validate permitted paths before the adoption return
+/factory repair validate permitted paths before the adoption return
 /factory revision
 /factory retry
 /factory cancel
@@ -1048,7 +1048,7 @@ workflow state. Comments are processed once using a persisted watermark.
 | <code>/factory status</code>                                    | Re-renders the current status projection.                                                                                                                                          |
 | <code>/factory refresh</code>                                   | Re-reads the issue into a new packet version, preserves resolved answers, and invalidates downstream work that no longer matches.                                                  |
 | <code>/factory answer &lt;question-id&gt; &lt;answer&gt;</code> | Answers one pending question and starts a fresh invocation against the new packet. <code>question=</code>, <code>question-id=</code>, or <code>id=</code> forms are also accepted. |
-| <code>/factory changes &lt;instruction&gt;</code>              | Supplies one maintainer instruction for the tracked pull request and resumes implementation from the current checkpoint. The supervision-comment equivalent of a <code>CHANGES_REQUESTED</code> review, and likewise unbudgeted. |
+| <code>/factory repair &lt;instruction&gt;</code>               | Supplies one maintainer instruction for a review waiting on human disposition and resumes implementation from the current checkpoint. The supervision-comment equivalent of a <code>CHANGES_REQUESTED</code> review, and likewise unbudgeted. |
 | <code>/factory retry</code>                                     | Reopens the current failed or explicitly cancelled stage when policy permits.                                                                                                      |
 | <code>/factory cancel</code>                                    | Stops the worker and cancels the run while retaining artifacts.                                                                                                                    |
 | <code>/factory config harness=codex</code>                      | Selects a permitted harness for a later invocation only.                                                                                                                           |
@@ -1230,15 +1230,23 @@ downstream results for the superseded checkpoint are invalidated, so every gate
 and both fresh reviewers must pass again before the pull request can become
 ready a second time.
 
-An authorized <code>/factory changes &lt;instruction&gt;</code> comment is the same
+An authorized <code>/factory repair &lt;instruction&gt;</code> comment is the same
 progression event expressed as a supervision comment. It exists because GitHub
 refuses a <code>CHANGES_REQUESTED</code> decision from a pull request's own
 author, so a host whose coordinator account is also its only authorized user
-has no submitted review to give. The comment is admitted on the same stages and
-statuses as a submitted review, and only while the run has no active
-invocation, so it never interrupts a harness session that can still write a
-structured result. The instruction becomes one blocking finding owned by
-implementation, carrying the same provenance as a review body.
+has no submitted review to give. It may be posted on the run issue or on the
+tracked pull request, and is admitted only when the run is at stage
+<code>review</code> with status <code>waiting_for_human</code>, the review
+checkpoint is a valid commit identity, the tracked pull request is still open,
+and no invocation is active. Pull-request lifecycle is observed before commands
+in the same pass, so a merge or a closure wins over a repair comment. Every
+other state is a typed rejection that changes no workflow state.
+
+The instruction becomes one blocking finding owned by implementation, and the
+packet records which surface produced it, so a review-sourced and a
+command-sourced repair stay distinguishable after a restart. While a review
+waits for disposition, the supervision comment names the exact command and
+whether it is currently admissible.
 
 A human-requested repair is not one of the bounded factory repair rounds and
 never consumes the <code>review_repair</code> budget. The editable status

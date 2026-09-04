@@ -212,6 +212,13 @@ func (s *Service) trackedPullRequest(ctx context.Context, registration config.Re
 	return pullRequest, true, nil
 }
 
+// pullRequestIsOpen reports whether a tracked pull request can still receive
+// work. A merged pull request is reported by GitHub as closed, so the merge
+// flag is checked before the lifecycle state.
+func pullRequestIsOpen(pullRequest github.PullRequest, found bool) bool {
+	return found && !pullRequest.Merged && strings.EqualFold(strings.TrimSpace(pullRequest.State), "open")
+}
+
 // retryTargetIsOpen confirms that a cancelled run has an explicitly reopened
 // GitHub target before the retry command reactivates its persisted state.
 func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.RepositoryRegistration, run store.Run, issue github.Issue) (bool, error) {
@@ -223,7 +230,7 @@ func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.Rep
 	if err != nil {
 		return false, err
 	}
-	pullRequestOpen := found && !pullRequest.Merged && strings.EqualFold(strings.TrimSpace(pullRequest.State), "open")
+	pullRequestOpen := pullRequestIsOpen(pullRequest, found)
 	if strings.HasPrefix(strings.TrimSpace(run.LifecycleReason), "pull request #") {
 		return pullRequestOpen, nil
 	}
