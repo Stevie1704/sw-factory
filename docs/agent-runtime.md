@@ -320,9 +320,11 @@ factory-report \
 ```
 
 Every finding must include a location, claim, evidence, severity, category,
-suggested resolution, and suggested owner. Only blocker findings classified as
-correctness, security, specification, or documented-standards violations gate
-readiness. Taste and scope findings remain visible advisories. The coordinator
+suggested resolution, and suggested owner. A blocker finding gates readiness
+only on the axis that owns its category: the specification reviewer gates on
+correctness, security, and specification violations, and the standards
+reviewer gates on documented-standards violations. Taste and scope findings,
+and any finding that crosses into the other axis, remain visible advisories. The coordinator
 attaches the stable `factory/review/specification` and
 `factory/review/standards` Commit Status contexts to the exact reviewed SHA,
 and invalidates both durable review projections when the checkpoint changes.

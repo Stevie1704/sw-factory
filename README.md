@@ -861,8 +861,10 @@ factory agent-report \
   --invocation-id <review-invocation-id>
 ~~~
 
-Correctness, security, specification, and documented-standards blockers are
-combined from both reviewers into one implementation repair packet. A finding
+Correctness, security, and specification blockers from the specification
+reviewer and documented-standards blockers from the standards reviewer are
+combined into one implementation repair packet. Neither reviewer gates on the
+other's categories. A finding
 that suggests test ownership must use the existing structured test-objection
 protocol; implementation never edits protected tests directly. An accepted
 repair creates a new checkpoint, reruns every configured gate, and starts both

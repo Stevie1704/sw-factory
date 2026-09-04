@@ -15,3 +15,5 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
 ### Documentation
 
 During coding create docstrings for functions and definitions.
+
+A missing or incomplete docstring is an advisory finding, never a blocker. It does not gate a checkpoint on its own.

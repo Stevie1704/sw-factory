@@ -368,10 +368,19 @@ func reviewFindingBlocks(finding store.ReviewFinding) bool {
 }
 
 // reviewFindingBlocksForRole applies the role-specific review boundary. The
-// standards axis can block only on a concrete documented-standards finding;
-// its heuristic or cross-axis observations remain advisory.
+// two axes are disjoint in what they may gate on: the specification axis owns
+// correctness, security, and the frozen specification, while the standards
+// axis owns documented repository standards. A finding that crosses into the
+// other axis is a visible advisory, so neither reviewer can gate readiness on
+// ground the other one owns. An empty role is a supervision projection over a
+// result whose axis is not in hand and keeps the report contract's policy.
 func reviewFindingBlocksForRole(role string, finding store.ReviewFinding) bool {
-	if role == workflow.RoleStandardsReview {
+	switch role {
+	case workflow.RoleSpecificationReview:
+		if finding.Category == string(report.ReviewCategoryDocumentedStandards) {
+			return false
+		}
+	case workflow.RoleStandardsReview:
 		if finding.Category != string(report.ReviewCategoryDocumentedStandards) {
 			return false
 		}
