@@ -150,6 +150,49 @@ func TestStandardsReviewKeepsCrossAxisAndHeuristicFindingsAdvisory(t *testing.T)
 	}
 }
 
+// TestSpecificationReviewKeepsDocumentedStandardsFindingsAdvisory verifies the
+// specification reviewer cannot gate readiness on the standards axis. A
+// documented-standards violation is owned by the standards reviewer, so the
+// specification axis reports it as a visible advisory and blocks only on the
+// categories it owns.
+func TestSpecificationReviewKeepsDocumentedStandardsFindingsAdvisory(t *testing.T) {
+	checkpoint := "checkpoint"
+	packetData, err := json.Marshal(SpecificationPacket{
+		Version: specificationPacketVersion,
+		RepositoryConfig: config.RepositoryConfig{
+			RoleHarnessDefaults: map[string]config.Harness{workflow.RoleSpecificationReview: config.HarnessCodex},
+			ModelOptions:        map[string][]string{workflow.RoleSpecificationReview: {"gpt-5"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		category report.ReviewCategory
+		want     bool
+	}{
+		{name: "cross-axis documented standard", category: report.ReviewCategoryDocumentedStandards, want: false},
+		{name: "taste", category: report.ReviewCategoryTaste, want: false},
+		{name: "correctness", category: report.ReviewCategoryCorrectness, want: true},
+		{name: "security", category: report.ReviewCategorySecurity, want: true},
+		{name: "specification", category: report.ReviewCategorySpecification, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			run := store.Run{
+				CheckpointSHA:       checkpoint,
+				SpecificationPacket: string(packetData),
+				SpecificationReview: &store.ReviewResult{CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
+					Severity: string(report.ReviewSeverityBlocker), Category: string(test.category),
+				}}},
+			}
+			if got := reviewHasBlockingResult(run); got != test.want {
+				t.Fatalf("reviewHasBlockingResult() = %t, want %t for %s", got, test.want, test.category)
+			}
+		})
+	}
+}
+
 // TestMissingConcurrentReviewRoleResumesTheUnlaunchedReviewer verifies a
 // partial concurrent launch can continue after the completed review result is
 // accepted, regardless of which reviewer finished first.

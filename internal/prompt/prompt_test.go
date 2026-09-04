@@ -759,7 +759,7 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5"},
 		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74"},
-		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "b8f39cd13be19fbb71878f30bd8354a64e28a766e557b5e967f643a4974ce3e5"},
+		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "6ae0e5d82480384e8c6bfb3bdc4e3f2c66b37f71f5501abf77029b53da07ad88"},
 		{name: "standards review", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: workflow.PromptVersionStandardsReview, sha256: "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469"},
 	}
 	for _, test := range tests {

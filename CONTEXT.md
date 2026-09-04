@@ -180,7 +180,7 @@ A factory-managed, harness-specific credential copy kept separate from role sess
 _Avoid_: Host auth mount
 
 **Review blocker**:
-A concrete correctness, security, specification, or documented-standards violation that prevents readiness. A standards-review heuristic baseline finding is advisory and cannot block; only a concrete violation of a named repository rule can block on that axis.
+A concrete violation that prevents readiness, on the axis that owns it. The specification axis blocks on correctness, security, and frozen-specification violations; the standards axis blocks on documented-standards violations. A finding that crosses into the other axis is advisory, as is a standards-review heuristic baseline finding: only a concrete violation of a named repository rule can block on the standards axis.
 _Avoid_: Suggestion, preference, advisory finding
 
 **Local evaluation summary**:

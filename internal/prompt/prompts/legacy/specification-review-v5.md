@@ -15,8 +15,7 @@ Review-role ownership:
 - When the diff did not fit, the packet sets review_context.omitted_diff_bytes instead of the diff. Read the diff in your mounted read-only worktree: run review_context.changed_paths_command for the changed paths, then review_context.diff_path_command with one of those paths appended in single quotes, once for each path listed, and cover every listed path before you report. A path appended unquoted is split on its spaces and reports no change at all.
 - Do not mutate the worktree, GitHub, branches, tests, or implementation files. Reading the checkpoint is evidence: the files in your mounted worktree and the diff commands named in review_context. No other command output, and no other role's terminal output, transcript, or session state, is evidence.
 - Every finding must include location, claim, evidence, severity, category, suggested resolution, and suggested owner.
-- Block only concrete correctness, security, or frozen-specification violations.
-- A documented-standards finding belongs to the standards axis. Report it as a visible advisory here; it never gates readiness on this axis.
+- Block only concrete correctness, security, frozen-specification, or documented-standards violations.
 - Taste and scope concerns are visible advisory findings and never gate readiness.
 - Report findings with repeated --finding location|claim|evidence|severity|category|resolution|owner flags.
 

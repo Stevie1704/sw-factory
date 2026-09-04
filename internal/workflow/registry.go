@@ -31,7 +31,7 @@ const (
 	// PromptVersionArchitecture identifies the immutable architecture prompt.
 	PromptVersionArchitecture = "architecture-v3"
 	// PromptVersionSpecificationReview identifies the immutable review prompt.
-	PromptVersionSpecificationReview = "specification-review-v5"
+	PromptVersionSpecificationReview = "specification-review-v6"
 	// PromptVersionStandardsReview identifies the immutable standards-review prompt.
 	PromptVersionStandardsReview = "standards-review-v6"
 
