@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -29,6 +30,46 @@ func TestGatherLaunchPerformsNoMutation(t *testing.T) {
 	}
 	if storeValue.saveRuns != 0 || storeValue.saveInvocations != 0 || storeValue.saveGates != 0 || storeValue.claimNotifications != 0 {
 		t.Fatalf("gather mutations = runs:%d invocations:%d gates:%d notifications:%d, want none", storeValue.saveRuns, storeValue.saveInvocations, storeValue.saveGates, storeValue.claimNotifications)
+	}
+	if storeValue.gateResultReads != 1 {
+		t.Fatalf("baseline gate reads = %d, want one read", storeValue.gateResultReads)
+	}
+}
+
+// TestGatherReviewLaunchReadsGatesAndWorktreeWithoutMutation verifies review
+// gather observes both gate projections and the clean checkpoint worktree while
+// keeping every mutation-capable seam untouched.
+func TestGatherReviewLaunchReadsGatesAndWorktreeWithoutMutation(t *testing.T) {
+	packet := launchPlanningPacket()
+	packetData, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatalf("marshal review planning packet: %v", err)
+	}
+	checkpoint := strings.Repeat("a", 40)
+	storeValue := &gatherReadOnlyStore{}
+	worktree := &gatherReadOnlyWorktree{state: gitadapter.WorktreeState{HeadSHA: checkpoint}}
+	run := &store.Run{
+		ID: "run-gather-review", Status: store.StatusActive, Stage: store.StageReview,
+		Worktree: "/worktree", SpecificationPacket: string(packetData), PullRequestNumber: 17,
+		CheckpointSHA: checkpoint, BaseCheckpointSHA: checkpoint, TestStageSkipped: true,
+	}
+	module := newInvocationLifecycle(nil, nil, nil, nil, worktree, nil, invocationLifecycleHooks{})
+	_, err = module.gatherLaunch(context.Background(), InvocationLaunchRequest{
+		RunStore: storeValue, Run: run,
+		Request:      AgentRequest{Role: workflow.RoleSpecificationReview, Stage: store.StageReview},
+		InvocationID: "inv-gather-review",
+	})
+	if err != nil {
+		t.Fatalf("gatherLaunch() error = %v", err)
+	}
+	if storeValue.gateResultReads != 2 {
+		t.Fatalf("review gate reads = %d, want checkpoint and baseline reads", storeValue.gateResultReads)
+	}
+	if worktree.inspectCalls != 1 || worktree.inspectedPath != "/worktree" {
+		t.Fatalf("worktree inspections = %d at %q, want one inspection at /worktree", worktree.inspectCalls, worktree.inspectedPath)
+	}
+	if storeValue.saveRuns != 0 || storeValue.saveInvocations != 0 || storeValue.saveGates != 0 || storeValue.claimNotifications != 0 {
+		t.Fatalf("review gather mutations = runs:%d invocations:%d gates:%d notifications:%d, want none", storeValue.saveRuns, storeValue.saveInvocations, storeValue.saveGates, storeValue.claimNotifications)
 	}
 }
 
@@ -105,34 +146,71 @@ func launchPlanningPacket() SpecificationPacket {
 // prove that gather only invokes read seams.
 type gatherReadOnlyStore struct {
 	saveRuns, saveInvocations, saveGates, claimNotifications int
+	gateResultReads                                          int
 }
 
+// gatherReadOnlyWorktree records read-only review worktree observations.
+type gatherReadOnlyWorktree struct {
+	state         gitadapter.WorktreeState
+	inspectCalls  int
+	inspectedPath string
+}
+
+// Inspect returns the configured clean checkpoint state without mutating it.
+func (w *gatherReadOnlyWorktree) Inspect(_ context.Context, path string) (gitadapter.WorktreeState, error) {
+	w.inspectCalls++
+	w.inspectedPath = path
+	return w.state, nil
+}
+
+// CurrentRun provides the empty current-run projection required by RunStore.
 func (*gatherReadOnlyStore) CurrentRun(context.Context) (*store.Run, error) { return nil, nil }
-func (*gatherReadOnlyStore) Close() error                                   { return nil }
+
+// Close leaves the read-only store double unchanged.
+func (*gatherReadOnlyStore) Close() error { return nil }
+
+// SaveRun records an attempted run mutation for the gather assertion.
 func (s *gatherReadOnlyStore) SaveRun(context.Context, store.Run) error {
 	s.saveRuns++
 	return nil
 }
+
+// ClaimLifecycleNotification records an attempted notification mutation for
+// the gather assertion.
 func (s *gatherReadOnlyStore) ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error) {
 	s.claimNotifications++
 	return true, nil
 }
+
+// ReleaseLifecycleNotification leaves the read-only store double unchanged.
 func (*gatherReadOnlyStore) ReleaseLifecycleNotification(context.Context, string, store.Status) error {
 	return nil
 }
+
+// SaveInvocation records an attempted invocation mutation for the gather
+// assertion.
 func (s *gatherReadOnlyStore) SaveInvocation(context.Context, store.Invocation) error {
 	s.saveInvocations++
 	return nil
 }
+
+// Invocation returns no persisted invocation for the gather projection.
 func (*gatherReadOnlyStore) Invocation(context.Context, string, string) (*store.Invocation, error) {
 	return nil, nil
 }
+
+// ActiveInvocations returns an empty active-invocation projection.
 func (*gatherReadOnlyStore) ActiveInvocations(context.Context, string) ([]store.Invocation, error) {
 	return nil, nil
 }
-func (*gatherReadOnlyStore) GateResults(context.Context, string, store.GatePhase, string) ([]store.GateResult, error) {
+
+// GateResults records each read of a gate projection and returns no mutations.
+func (s *gatherReadOnlyStore) GateResults(context.Context, string, store.GatePhase, string) ([]store.GateResult, error) {
+	s.gateResultReads++
 	return nil, nil
 }
+
+// SaveGateResults records an attempted gate mutation for the gather assertion.
 func (s *gatherReadOnlyStore) SaveGateResults(context.Context, []store.GateResult) error {
 	s.saveGates++
 	return nil
