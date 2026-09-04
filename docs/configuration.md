@@ -444,6 +444,7 @@ mention of “retry” or “refresh” cannot control a run:
 /factory status
 /factory refresh
 /factory answer clarification-1 use the existing JSON format
+/factory changes validate permitted paths before the adoption return
 /factory retry
 /factory cancel
 /factory config harness=codex
@@ -456,8 +457,11 @@ comments.
 The author must be present in the registered `authorized_users` list. A status
 or refresh command re-renders the existing supervision comment; an answer
 command is accepted only from an authorized user while the referenced question
-is pending; retry reopens a failed or explicitly cancelled run at its current
-stage; cancel stops active worker activity while retaining the run artifacts;
+is pending; a changes command supplies one maintainer instruction as an
+unbudgeted human repair packet and resumes implementation from the current
+checkpoint, and is admitted only for a run with a tracked pull request and no
+active invocation; retry reopens a failed or explicitly cancelled run at its
+current stage; cancel stops active worker activity while retaining the run artifacts;
 and harness configuration records a later invocation override only when the
 frozen repository configuration permits it. A recognized command from an
 unauthorized author or a malformed command is a

@@ -112,12 +112,13 @@ issue queue after a terminal pull-request outcome.
 _Avoid_: Autonomous agent, agent-driven workflow, auto-merge
 
 **Human repair packet**:
-The coordinator-owned repair context built from one or more applicable
-`CHANGES_REQUESTED` reviews by authorized maintainers, holding their completed
-review bodies and inline findings. Concurrent applicable reviews form one
-packet outside the bounded factory repair rounds and never consume the
-review-repair budget.
-_Avoid_: Comment command, review reply, advisory feedback
+The coordinator-owned repair context built from an authorized maintainer's
+completed instructions: one or more applicable `CHANGES_REQUESTED` reviews,
+holding their review bodies and inline findings, or one `/factory changes`
+supervision comment holding its instruction. Concurrent applicable reviews form
+one packet. Every human repair packet sits outside the bounded factory repair
+rounds and never consumes the review-repair budget.
+_Avoid_: Review reply, advisory feedback
 
 **Review diff**:
 The exact base-to-checkpoint diff a review role judges. It is copied into the
