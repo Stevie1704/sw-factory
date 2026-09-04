@@ -522,7 +522,7 @@ func (s *Service) resumeAfterRevision(ctx context.Context, registration config.R
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
 	}
-	if err := s.ensureInvocationAttached(ctx, runStore, run); err != nil {
+	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, run); err != nil {
 		return run, err
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
@@ -864,7 +864,7 @@ func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, 
 	if !supported || len(activeValues) == 0 {
 		return nil
 	}
-	return s.stopActiveRunWorkers(ctx, runStore, run)
+	return s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run)
 }
 
 // applyPacketChangeTransition atomically applies the state transition and

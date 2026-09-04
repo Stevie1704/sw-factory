@@ -349,7 +349,7 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	if request.RunID != "" && request.RunID != run.ID {
 		return store.Run{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	if err := s.ensureInvocationAttached(ctx, runStore, *run); err != nil {
+	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, *run); err != nil {
 		return store.Run{}, err
 	}
 	if request.Stage == store.StageTest || request.Stage == store.StageImplementation {
@@ -446,7 +446,7 @@ func (s *Service) applyJournaledStateTransition(ctx context.Context, runStore Ru
 	}
 	apply := func() error {
 		if transition.StopWorker {
-			if err := s.stopActiveRunWorkers(ctx, runStore, transition.Previous); err != nil {
+			if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, transition.Previous); err != nil {
 				return err
 			}
 		}
@@ -762,7 +762,7 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 		return s.startupErr
 	}
 	*run = updated
-	if err := s.ensureInvocationAttached(ctx, runStore, *run); err != nil {
+	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, *run); err != nil {
 		s.startupErr = err
 		return s.startupErr
 	}

@@ -139,7 +139,7 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 			}
 			continue
 		}
-		if !writeOutput(output, errorsOutput, "doctor: %s: %s\nproblem: %s\naction: %s\n", check.Name, check.Status, check.Problem, check.Action) {
+		if !writeCheckDiagnosis(output, errorsOutput, check) {
 			return 1
 		}
 	}
@@ -153,6 +153,12 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 		return 1
 	}
 	return 1
+}
+
+// writeCheckDiagnosis renders one non-passing startup check with its
+// corrective action so every caller of the diagnosis reports it identically.
+func writeCheckDiagnosis(output, errorsOutput io.Writer, check doctor.Result) bool {
+	return writeOutput(output, errorsOutput, "doctor: %s: %s\nproblem: %s\naction: %s\n", check.Name, check.Status, check.Problem, check.Action)
 }
 
 // runStart starts the persistent polling coordinator and returns when its
@@ -177,6 +183,14 @@ func runStart(ctx context.Context, args []string, defaultConfigPath string, outp
 		events = factory.NewTextEventSink(errorsOutput)
 	}
 	if err := factory.New(*configPath).Start(ctx, events); err != nil {
+		var blocked *factory.StartupBlockedError
+		if errors.As(err, &blocked) {
+			for _, check := range blocked.Diagnosis.Report.Failures() {
+				if !writeCheckDiagnosis(errorsOutput, errorsOutput, check) {
+					return 1
+				}
+			}
+		}
 		writeError(errorsOutput, err)
 		return 1
 	}

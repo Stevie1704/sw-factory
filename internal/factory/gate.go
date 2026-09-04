@@ -81,7 +81,7 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 	if request.RunID != "" && request.RunID != run.ID {
 		return gate.Result{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	if err := s.ensureInvocationAttached(ctx, runStore, *run); err != nil {
+	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, *run); err != nil {
 		return gate.Result{}, err
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
@@ -128,7 +128,7 @@ func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (Bas
 	if request.RunID != "" && request.RunID != run.ID {
 		return BaselineResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	if err := s.ensureInvocationAttached(ctx, runStore, *run); err != nil {
+	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, *run); err != nil {
 		return BaselineResult{}, err
 	}
 	baselineReady := run.Stage == store.StageClaim

@@ -1095,7 +1095,7 @@ func (s *Service) acceptResultWithEffect(ctx context.Context, runStore RunStore,
 			if workerID == "" {
 				workerID = previous.ID
 			}
-			if err := s.stopRunWorker(ctx, workerID); err != nil {
+			if err := s.lifecycleModule().stopRunWorker(ctx, workerID); err != nil {
 				return err
 			}
 		}
@@ -1192,7 +1192,7 @@ func (s *Service) replayPendingResultAcceptance(ctx context.Context, runStore Ru
 		if workerID == "" {
 			workerID = effect.RunID
 		}
-		if err := s.stopRunWorker(ctx, workerID); err != nil {
+		if err := s.lifecycleModule().stopRunWorker(ctx, workerID); err != nil {
 			return store.Run{}, err
 		}
 	}
@@ -1603,7 +1603,7 @@ func (s *Service) replayPendingStateTransition(ctx context.Context, runStore Run
 		}
 	}
 	if payload.StopWorker {
-		if err := s.stopActiveRunWorkers(ctx, runStore, payload.Previous); err != nil {
+		if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, payload.Previous); err != nil {
 			return store.Run{}, fmt.Errorf("stop worker during state-transition replay: %w", err)
 		}
 	}

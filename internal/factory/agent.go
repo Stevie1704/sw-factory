@@ -590,7 +590,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		return AgentResult{}, fmt.Errorf("finish accepted harness session: %w", err)
 	}
 	if value.Outcome == report.OutcomeNeedsClarification {
-		if err := s.stopRunWorker(ctx, workerIDForInvocation(*invocation)); err != nil {
+		if err := s.lifecycleModule().stopRunWorker(ctx, workerIDForInvocation(*invocation)); err != nil {
 			return AgentResult{}, err
 		}
 	}

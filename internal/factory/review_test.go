@@ -71,7 +71,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if packet.TestHandoff != nil || packet.TestObjection != nil || packet.TestExemption != nil || len(packet.ProtectedTestPaths) != 0 {
 		t.Fatalf("review packet inherited test context: %#v", packet)
 	}
-	for _, marker := range []string{"specification-review-v3", "exact checkpoint", "--finding", "no upstream harness transcript"} {
+	for _, marker := range []string{"specification-review-v4", "exact checkpoint", "--finding", "no upstream harness transcript"} {
 		if !strings.Contains(strings.ToLower(launch.Prompt), strings.ToLower(marker)) {
 			t.Errorf("review prompt missing %q:\n%s", marker, launch.Prompt)
 		}
@@ -111,19 +111,53 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 // TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates
 // verifies a blocker-free review cannot mark a pull request ready when the
 // final checkpoint gate projection is missing success.
-// TestSpecificationReviewRefusesAnUnreadableDiff verifies a checkpoint whose
-// diff exceeds the reviewer's reading budget stops the run with a named reason
-// instead of sending a reviewer into a packet it cannot work through.
-func TestSpecificationReviewRefusesAnUnreadableDiff(t *testing.T) {
+// TestSpecificationReviewOmitsAnOversizedDiff verifies a checkpoint whose diff
+// exceeds the packet bound still reaches a reviewer: the packet carries the
+// diff size and the command that regenerates it in the mounted worktree instead
+// of the diff itself, and the run does not stop.
+func TestSpecificationReviewOmitsAnOversizedDiff(t *testing.T) {
 	fixture := newReviewFixture(t)
 	fixture.worker.results = []worker.CommandResult{{ExitCode: 0, Stdout: strings.Repeat("-\tremoved line\n", 20000)}}
 
-	_, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
-	if err == nil || !strings.Contains(err.Error(), "packet limit") {
-		t.Fatalf("StartAgent() error = %v, want the diff bound named", err)
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v, want an oversized diff to launch a reviewer", err)
 	}
-	if len(fixture.harness.starts) != 0 {
-		t.Fatalf("harness starts = %#v, want no reviewer launched for an unreadable diff", fixture.harness.starts)
+	if len(fixture.harness.starts) != 1 {
+		t.Fatalf("harness starts = %#v, want one reviewer launched for an oversized diff", fixture.harness.starts)
+	}
+	if strings.Contains(launch.Prompt, "removed line") {
+		t.Error("review prompt repeated an omitted diff")
+	}
+	for _, marker := range []string{"larger than the packet carries", "changed_paths_command", "diff_path_command"} {
+		if !strings.Contains(launch.Prompt, marker) {
+			t.Errorf("review prompt missing %q: %s", marker, launch.Prompt)
+		}
+	}
+	packetData, err := os.ReadFile(filepath.Join(launch.Invocation.InvocationDirectory, "specification.json"))
+	if err != nil {
+		t.Fatalf("read invocation packet: %v", err)
+	}
+	var packet factory.InvocationPacket
+	if err := json.Unmarshal(packetData, &packet); err != nil {
+		t.Fatalf("decode invocation packet: %v", err)
+	}
+	if packet.ReviewContext == nil || packet.ReviewContext.CurrentDiff != "" {
+		t.Fatalf("packet review context = %#v, want an omitted diff", packet.ReviewContext)
+	}
+	if packet.ReviewContext.OmittedDiffBytes != 20000*len("-\tremoved line\n") {
+		t.Fatalf("packet review context = %#v, want the omitted diff size", packet.ReviewContext)
+	}
+	// The listing has to name every changed path in a form the per-path command
+	// can read, so its shape is pinned: --no-renames keeps a rename's old path
+	// visible, and -z keeps Git from C-quoting a path.
+	for _, part := range []string{"--no-renames", "--name-only", "-z", reviewCheckpoint} {
+		if !strings.Contains(packet.ReviewContext.ChangedPathsCommand, part) {
+			t.Errorf("changed-paths command %q missing %q", packet.ReviewContext.ChangedPathsCommand, part)
+		}
+	}
+	if !strings.Contains(packet.ReviewContext.DiffPathCommand, "--unified=") || strings.HasSuffix(packet.ReviewContext.DiffPathCommand, "-- .") {
+		t.Errorf("per-path command %q must take an appended path", packet.ReviewContext.DiffPathCommand)
 	}
 }
 

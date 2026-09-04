@@ -498,7 +498,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if capabilities.Name != previous.Harness {
 		return store.Invocation{}, run, fmt.Errorf("%w: harness %q cannot resume a %q session", ErrCheckRepairSessionUnavailable, capabilities.Name, previous.Harness)
 	}
-	seedCredentials, configuredCredentialStoreID, credentialErr := s.credentialSeeding(registration, AgentRequest{}, config.Harness(previous.Harness))
+	seedCredentials, configuredCredentialStoreID, credentialErr := s.lifecycleModule().credentialSeeding(registration, AgentRequest{}, config.Harness(previous.Harness))
 	if credentialErr != nil || (strings.TrimSpace(previous.CredentialStoreID) != "" && seedCredentials == nil) {
 		return store.Invocation{}, run, newCredentialProjectionError(previous.Harness)
 	}

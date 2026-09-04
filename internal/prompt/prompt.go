@@ -83,12 +83,14 @@ var rolePromptVersions = map[string]map[string]string{
 	workflow.RoleSpecificationReview: {
 		"specification-review-v1":                 "prompts/legacy/specification-review-v1.md",
 		"specification-review-v2":                 "prompts/legacy/specification-review-v2.md",
+		"specification-review-v3":                 "prompts/legacy/specification-review-v3.md",
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
 		"standards-review-v1":                 "prompts/legacy/standards-review-v1.md",
 		"standards-review-v2":                 "prompts/legacy/standards-review-v2.md",
 		"standards-review-v3":                 "prompts/legacy/standards-review-v3.md",
+		"standards-review-v4":                 "prompts/legacy/standards-review-v4.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 }
@@ -100,8 +102,8 @@ var expectedPromptSHA256 = map[string]string{
 	workflow.PromptVersionImplementation:      "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd",
 	workflow.PromptVersionTest:                "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5",
 	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
-	workflow.PromptVersionSpecificationReview: "ea66e87d7f144bbc12c63ba2a2d6bb40c05aaef7112cb12d7cb626c858f2c204",
-	workflow.PromptVersionStandardsReview:     "007370ac417296565ab8c5ae6e009e6a39591c2a0122acb669f348ceaef9bebb",
+	workflow.PromptVersionSpecificationReview: "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773",
+	workflow.PromptVersionStandardsReview:     "f6c848e43eba598767911ba91e73b9372bd2c82d2a9d0729f79ec7e6a6a6fddb",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
@@ -114,9 +116,11 @@ var expectedPromptSHA256 = map[string]string{
 	"test-v2":                                 "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
 	"specification-review-v1":                 "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
 	"specification-review-v2":                 "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed",
+	"specification-review-v3":                 "ea66e87d7f144bbc12c63ba2a2d6bb40c05aaef7112cb12d7cb626c858f2c204",
 	"standards-review-v1":                     "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472",
 	"standards-review-v2":                     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
 	"standards-review-v3":                     "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c",
+	"standards-review-v4":                     "007370ac417296565ab8c5ae6e009e6a39591c2a0122acb669f348ceaef9bebb",
 }
 
 const (
@@ -232,6 +236,16 @@ type ReviewContext struct {
 	// It is omitted when empty so a prompt can carry the rest of the context
 	// while pointing at the mounted packet for the diff itself.
 	CurrentDiff string `json:"current_diff,omitempty"`
+	// OmittedDiffBytes is the size of a diff too large to copy into the packet.
+	// It separates an omitted diff from a checkpoint that changed nothing.
+	OmittedDiffBytes int `json:"omitted_diff_bytes,omitempty"`
+	// ChangedPathsCommand lists the changed paths of an omitted diff, one per
+	// line, so each line works as a pathspec for DiffPathCommand.
+	ChangedPathsCommand string `json:"changed_paths_command,omitempty"`
+	// DiffPathCommand reads one path of an omitted diff. A reviewer appends a
+	// path from the changed-paths listing, so no single command returns the
+	// whole change.
+	DiffPathCommand string `json:"diff_path_command,omitempty"`
 	// TestHandoff is retained for compatibility with older packet readers and is
 	// omitted from new isolated review packets.
 	TestHandoff *store.TestHandoff `json:"test_handoff,omitempty"`
@@ -378,6 +392,8 @@ Review-repair packet (coordinator-owned):
 		location := "This checkpoint changed nothing against its base, so the context carries no diff."
 		if size := len(request.ReviewContext.CurrentDiff); size > 0 {
 			location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes. Read it in the mounted packet at\n%s under review_context.current_diff; it is not repeated here.", size, WorkerSpecificationPath)
+		} else if omitted := request.ReviewContext.OmittedDiffBytes; omitted > 0 {
+			location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes, larger than the packet carries. Its\nreview_context in %s names the diff size and the read-only commands that read it.", omitted, WorkerSpecificationPath)
 		}
 		dynamicContext = fmt.Sprintf(`
 Read-only review context (coordinator-owned):

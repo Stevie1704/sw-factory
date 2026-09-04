@@ -564,7 +564,7 @@ func testRevisionHistoryMatchesDispute(history []store.TestRevision, disputeKey 
 // publishes the human pause when no revision budget remains.
 func (s *Service) finishImplementationTestObjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
 	if _, journaled := runStore.(PendingEffectStore); !journaled {
-		if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		if err := s.lifecycleModule().stopRunWorker(ctx, run.ID); err != nil {
 			return AgentResult{}, err
 		}
 	}
@@ -820,7 +820,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 		return s.acceptTestRevisionReport(ctx, registration, runStore, run, invocation, value, state)
 	}
 	if err := validateTestChangedPaths(state.ChangedPaths, decodeTestPolicy(run.SpecificationPacket)); err != nil {
-		if stopErr := s.stopRunWorker(ctx, run.ID); stopErr != nil {
+		if stopErr := s.lifecycleModule().stopRunWorker(ctx, run.ID); stopErr != nil {
 			return AgentResult{}, stopErr
 		}
 		return s.pauseTestForHuman(ctx, registration, runStore, run, invocation, value, "test-stage path ownership dispute")
@@ -846,14 +846,14 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	}
 
 	if value.Outcome == report.OutcomeCannotProceed {
-		if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		if err := s.lifecycleModule().stopRunWorker(ctx, run.ID); err != nil {
 			return AgentResult{}, err
 		}
 		return s.pauseTestForHuman(ctx, registration, runStore, run, invocation, value, "test agent cannot proceed")
 	}
 
 	if containsReportExemption(value.Exemptions, report.ExemptionTechnical) {
-		if err := s.stopRunWorker(ctx, run.ID); err != nil {
+		if err := s.lifecycleModule().stopRunWorker(ctx, run.ID); err != nil {
 			return AgentResult{}, err
 		}
 		run.TestExemption = &store.TestExemption{Kind: "technical", Justification: value.Summary}
@@ -874,7 +874,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 		EnvironmentPolicy: worker.EnvironmentPolicyRole,
 		Role:              workflow.RoleTest,
 	})
-	stopErr := s.stopRunWorker(ctx, run.ID)
+	stopErr := s.lifecycleModule().stopRunWorker(ctx, run.ID)
 	output := result.Stdout + "\n" + result.Stderr
 	if err != nil || stopErr != nil || result.ExitCode == 0 || !strings.Contains(output, value.TestHandoff.ExpectedFailureReason) {
 		if stopErr != nil && err == nil {
@@ -1052,7 +1052,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 		EnvironmentPolicy: worker.EnvironmentPolicyRole,
 		Role:              workflow.RoleTest,
 	})
-	stopErr := s.stopRunWorker(ctx, run.ID)
+	stopErr := s.lifecycleModule().stopRunWorker(ctx, run.ID)
 	output := result.Stdout + "\n" + result.Stderr
 	if commandErr != nil || stopErr != nil || result.ExitCode == 0 || !strings.Contains(output, value.TestHandoff.ExpectedFailureReason) {
 		if stopErr != nil && commandErr == nil {
@@ -1172,7 +1172,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 // pauseTestRevisionForHuman records a bounded objection-cycle outcome and
 // leaves the implementation changes available for explicit human review.
 func (s *Service) pauseTestRevisionForHuman(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report, outcome store.TestRevisionOutcome, reason string) (AgentResult, error) {
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.lifecycleModule().stopRunWorker(ctx, run.ID); err != nil {
 		return AgentResult{}, err
 	}
 	previous := *run
@@ -1197,7 +1197,7 @@ func (s *Service) pauseTestRevisionForHuman(ctx context.Context, registration co
 // identity-bound revision report into a durable human pause before the normal
 // result-acceptance effect can mark its invocation complete.
 func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.lifecycleModule().stopRunWorker(ctx, run.ID); err != nil {
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {
@@ -1233,7 +1233,7 @@ func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, regis
 // pauseUnverifiableTestReport stops the visible test execution before placing
 // a structurally invalid completed test report in human disposition.
 func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
-	if err := s.stopRunWorker(ctx, run.ID); err != nil {
+	if err := s.lifecycleModule().stopRunWorker(ctx, run.ID); err != nil {
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {

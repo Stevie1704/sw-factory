@@ -142,9 +142,13 @@ type InvocationStopRequest struct {
 // InvocationLifecycle is the small seam used by the coordinator for launching,
 // recovering, attaching, and stopping visible invocations.
 type InvocationLifecycle interface {
+	// Launch admits, materialises, and activates one visible invocation.
 	Launch(context.Context, InvocationLaunchRequest) (AgentLaunchResult, error)
+	// Resume recovers the persisted invocation or launches the next role.
 	Resume(context.Context, InvocationRecoveryRequest) (ResumeResult, error)
+	// Attach restores the visible session and releases its attach gate.
 	Attach(context.Context, InvocationRecoveryRequest) (AttachResult, error)
+	// Stop stops every worker currently delegated to a run.
 	Stop(context.Context, InvocationStopRequest) error
 }
 
@@ -161,7 +165,7 @@ type invocationLifecycleHooks struct {
 	reconcileInterrupted     func(context.Context, config.RepositoryRegistration, RunStore, store.Run, bool) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error)
 	resumeRecoveredCheck     func(context.Context, config.RepositoryRegistration, RunStore, store.Run) (store.Run, error)
 	resetStartup             func()
-	captureReviewDiff        func(context.Context, store.Run, store.Invocation) (string, error)
+	captureReviewDiff        func(context.Context, store.Run, store.Invocation) (reviewDiffCapture, error)
 }
 
 // invocationLifecycle owns the worker, harness, terminal, and capability
@@ -624,10 +628,14 @@ func (l *invocationLifecycle) gatherReview(ctx context.Context, runStore RunStor
 	}
 	invocation := store.Invocation{ID: snapshot.InvocationID, RunID: run.ID, Role: role, Stage: snapshot.Request.Stage}
 	if l.hooks.captureReviewDiff != nil {
-		reviewContext.CurrentDiff, err = l.hooks.captureReviewDiff(ctx, run, invocation)
-		if err != nil {
-			return err
+		capture, captureErr := l.hooks.captureReviewDiff(ctx, run, invocation)
+		if captureErr != nil {
+			return captureErr
 		}
+		reviewContext.CurrentDiff = capture.currentDiff
+		reviewContext.OmittedDiffBytes = capture.omittedDiffBytes
+		reviewContext.ChangedPathsCommand = capture.changedPathsCommand
+		reviewContext.DiffPathCommand = capture.diffPathCommand
 	}
 	snapshot.ReviewContext = reviewContext
 	return nil

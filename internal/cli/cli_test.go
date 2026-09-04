@@ -118,6 +118,25 @@ func TestRunStartVerboseFlagKeepsCommandOutputSeparate(t *testing.T) {
 	}
 }
 
+// TestRunStartReportsBlockingStartupChecks verifies a blocked startup
+// diagnosis names every failing check with its corrective action instead of
+// reporting only the number of blocking checks.
+func TestRunStartReportsBlockingStartupChecks(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	var output, errorsOutput bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"start", "--config", configPath}, &output, &errorsOutput); code != 1 {
+		t.Fatalf("start exit code = %d, want startup failure, stdout=%q stderr=%q", code, output.String(), errorsOutput.String())
+	}
+	reported := errorsOutput.String()
+	for _, want := range []string{"doctor: configuration: failed", "problem: ", "action: ", "startup diagnosis blocked"} {
+		if !strings.Contains(reported, want) {
+			t.Fatalf("start stderr = %q, want it to contain %q", reported, want)
+		}
+	}
+}
+
 func TestRunRejectsAnUnknownCommand(t *testing.T) {
 	t.Parallel()
 

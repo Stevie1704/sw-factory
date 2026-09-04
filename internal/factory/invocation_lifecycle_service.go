@@ -7,8 +7,6 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
-	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
 // lifecycleModule returns the coordinator's lazily initialized invocation
@@ -155,100 +153,6 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 	return s.lifecycleModule().refreshAuth(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run}, request.Harness)
 }
 
-// resetStartupState delegates startup-cache invalidation after an explicit
-// attach releases the manual-resume gate.
-func (s *Service) resetStartupState() {
-	s.lifecycleModule().resetStartupState()
-}
-
-// resumePersistedInvocation delegates automatic native recovery to the module.
-func (s *Service) resumePersistedInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (store.Invocation, error) {
-	return s.lifecycleModule().resumePersistedInvocation(ctx, registration, runStore, run, invocation)
-}
-
-// resumePersistedInvocationManually delegates explicit native recovery to the
-// module while retaining the coordinator's existing call seam.
-func (s *Service) resumePersistedInvocationManually(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (store.Invocation, error) {
-	return s.lifecycleModule().resumePersistedInvocationManually(ctx, registration, runStore, run, invocation)
-}
-
-// resumePersistedInvocationWithMode delegates the shared recovery seam while
-// preserving the automatic/manual selector used by older coordinator callers.
-func (s *Service) resumePersistedInvocationWithMode(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation, automatic bool) (store.Invocation, error) {
-	return s.lifecycleModule().resumePersistedInvocationWithMode(ctx, registration, runStore, run, invocation, automatic)
-}
-
-// credentialSeeding delegates harness-specific credential projection to the
-// lifecycle module.
-func (s *Service) credentialSeeding(registration config.RepositoryRegistration, request AgentRequest, harnessName config.Harness) (func(context.Context, string, string) error, string, error) {
-	return s.lifecycleModule().credentialSeeding(registration, request, harnessName)
-}
-
-// ensureCredentialStoreIdentity delegates persisted credential identity repair
-// to the lifecycle module.
-func (s *Service) ensureCredentialStoreIdentity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, invocation store.Invocation) (store.Invocation, error) {
-	return s.lifecycleModule().ensureCredentialStoreIdentity(ctx, registration, runStore, invocation)
-}
-
-// restoreCredentialProjection delegates managed credential restoration to the
-// lifecycle module.
-func (s *Service) restoreCredentialProjection(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) error {
-	return s.lifecycleModule().restoreCredentialProjection(ctx, registration, run, invocation)
-}
-
-// ensureWorkerForInvocation delegates worker inspection and recreation to the
-// lifecycle module.
-func (s *Service) ensureWorkerForInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (worker.StartRequest, store.Invocation, error) {
-	return s.lifecycleModule().ensureWorkerForInvocation(ctx, registration, runStore, run, invocation)
-}
-
-// restoreInvocationTerminal delegates terminal topology restoration to the
-// lifecycle module.
-func (s *Service) restoreInvocationTerminal(ctx context.Context, terminalRuntime terminal.TerminalRuntime, run store.Run, invocation store.Invocation) (terminal.WorkspaceID, terminal.Surface, terminal.Surface, terminal.Surface, bool, error) {
-	return s.lifecycleModule().restoreInvocationTerminal(ctx, terminalRuntime, run, invocation)
-}
-
-// supersedeInvocation delegates incomplete invocation cleanup to the module.
-func (s *Service) supersedeInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, invocation store.Invocation) error {
-	return s.lifecycleModule().supersedeInvocation(ctx, registration, runStore, invocation)
-}
-
-// ensureInvocationAttached delegates the durable attach gate to the module.
-func (s *Service) ensureInvocationAttached(ctx context.Context, runStore RunStore, run store.Run) error {
-	return s.lifecycleModule().ensureInvocationAttached(ctx, runStore, run)
-}
-
-// stopActiveRunWorkers delegates run-level worker shutdown to the module.
-func (s *Service) stopActiveRunWorkers(ctx context.Context, runStore RunStore, run store.Run) error {
-	return s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run)
-}
-
-// stopRunWorker delegates one worker shutdown to the module.
-func (s *Service) stopRunWorker(ctx context.Context, runID string) error {
-	return s.lifecycleModule().stopRunWorker(ctx, runID)
-}
-
-// recordSessionExitDiagnostic delegates bounded terminal capture to the module.
-func (s *Service) recordSessionExitDiagnostic(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) string {
-	return s.lifecycleModule().recordSessionExitDiagnostic(ctx, registration, run, invocation)
-}
-
-// pauseForHarnessCapacity delegates a temporary capacity wait to the module.
-func (s *Service) pauseForHarnessCapacity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	return s.lifecycleModule().pauseForHarnessCapacity(ctx, registration, runStore, run, harnessName)
-}
-
-// pauseForAuthentication delegates a credential wait to the module.
-func (s *Service) pauseForAuthentication(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	return s.lifecycleModule().pauseForAuthentication(ctx, registration, runStore, run, harnessName)
-}
-
-// pauseForManualRecovery delegates the bounded manual-recovery wait to the
-// module.
-func (s *Service) pauseForManualRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string, cause error) (store.Run, error) {
-	return s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, harnessName, cause)
-}
-
 // retryWaitingForHarness opens the operational store as a coordinator entry
 // point, then delegates the recovery decision and effects to the module.
 func (s *Service) retryWaitingForHarness(ctx context.Context, registration config.RepositoryRegistration) error {
@@ -286,10 +190,4 @@ func (s *Service) retryWaitingForHarness(ctx context.Context, registration confi
 		return result, err
 	}
 	return s.lifecycleModule().retryWaitingForHarness(ctx, registration, runStore, *run, launch)
-}
-
-// reconcileActiveHarnessLiveness delegates the polling liveness pass to the
-// lifecycle module.
-func (s *Service) reconcileActiveHarnessLiveness(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) error {
-	return s.lifecycleModule().reconcileActiveHarnessLiveness(ctx, registration, runStore, run)
 }

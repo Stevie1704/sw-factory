@@ -1031,7 +1031,7 @@ func TestManualHarnessResumeSetsAnAttachGateWithoutConsumingAutomaticBudget(t *t
 	if !updated.AttachRequired || updated.RecoveryResumeCount != 0 {
 		t.Fatalf("manual resume = %#v, want attach gate and unchanged automatic count", updated)
 	}
-	if err := service.ensureInvocationAttached(ctx, opened, run); err == nil {
+	if err := service.lifecycleModule().ensureInvocationAttached(ctx, opened, run); err == nil {
 		t.Fatal("ensureInvocationAttached() = nil, want manual attach gate")
 	} else {
 		var gateErr *ManualResumeRequiredError
