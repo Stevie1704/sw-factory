@@ -222,3 +222,68 @@ func TestHumanReviewEligibleCoversOnlyRunsWithAPendingPullRequestDecision(t *tes
 		})
 	}
 }
+
+// TestHumanRepairProjectionRecordsTheSurfaceThatRequestedIt proves both
+// disposition surfaces write their own provenance, and that a review-sourced
+// packet keeps mirroring the legacy review field so a coordinator built before
+// source events existed still reads it.
+func TestHumanRepairProjectionRecordsTheSurfaceThatRequestedIt(t *testing.T) {
+	t.Parallel()
+
+	run := store.Run{ID: "run-provenance", CheckpointSHA: strings.Repeat("a", 40), ReviewRepairBudget: 3, ActiveInvocationIDs: []string{"inv-stale"}}
+	finding := humanRepairFinding("pull request #7", "validate permitted paths", "GitHub comment 21 submitted by alice")
+
+	review := humanRepairProjection(run, store.ReviewRepairEventPullRequestReview, "4001", "review requested changes", []store.ReviewRepairFinding{finding})
+	kind, identity := review.ReviewRepairPacket.SourceEvent()
+	if kind != store.ReviewRepairEventPullRequestReview || identity != "4001" {
+		t.Fatalf("review SourceEvent() = %q/%q, want the pull-request review provenance", kind, identity)
+	}
+	if review.ReviewRepairPacket.ReviewID != "4001" {
+		t.Fatalf("review ReviewID = %q, want the legacy field mirrored", review.ReviewRepairPacket.ReviewID)
+	}
+
+	command := humanRepairProjection(run, store.ReviewRepairEventSupervisionCommand, "21", "comment requested changes", []store.ReviewRepairFinding{finding})
+	kind, identity = command.ReviewRepairPacket.SourceEvent()
+	if kind != store.ReviewRepairEventSupervisionCommand || identity != "21" {
+		t.Fatalf("command SourceEvent() = %q/%q, want the supervision command provenance", kind, identity)
+	}
+	if command.ReviewRepairPacket.ReviewID != "" {
+		t.Fatalf("command ReviewID = %q, want the legacy review field left empty", command.ReviewRepairPacket.ReviewID)
+	}
+	if command.Stage != store.StageImplementation || command.Status != store.StatusActive {
+		t.Fatalf("command projection = %s/%s, want implementation/active", command.Stage, command.Status)
+	}
+	if len(review.ActiveInvocationIDs) != 0 || len(command.ActiveInvocationIDs) != 0 {
+		t.Fatalf("activity = %#v/%#v, want the stale denormalized list dropped by both surfaces", review.ActiveInvocationIDs, command.ActiveInvocationIDs)
+	}
+}
+
+// TestHumanDispositionStatusCommentNamesTheCommandAndItsAdmissibility proves a
+// maintainer reading the supervision comment learns the exact command while a
+// review waits for them, and learns why it is refused when a run-derivable
+// precondition is absent.
+func TestHumanDispositionStatusCommentNamesTheCommandAndItsAdmissibility(t *testing.T) {
+	t.Parallel()
+
+	waiting := store.Run{
+		Stage: store.StageReview, Status: store.StatusWaitingForHuman,
+		CheckpointSHA: strings.Repeat("a", 40), PullRequestNumber: 7,
+	}
+	admissible := humanDispositionStatusComment(waiting)
+	if !strings.Contains(admissible, "/factory repair <instruction>") || !strings.Contains(admissible, "admissible: yes") {
+		t.Fatalf("status = %q, want the exact command reported as admissible", admissible)
+	}
+
+	blocked := waiting
+	blocked.ActiveInvocationIDs = []string{"inv-1"}
+	refused := humanDispositionStatusComment(blocked)
+	if !strings.Contains(refused, "admissible: no") || !strings.Contains(refused, "no active invocation") {
+		t.Fatalf("status = %q, want the refusal and its reason", refused)
+	}
+
+	running := waiting
+	running.Status = store.StatusActive
+	if rendered := humanDispositionStatusComment(running); rendered != "" {
+		t.Fatalf("status = %q, want no disposition section while the run is active", rendered)
+	}
+}

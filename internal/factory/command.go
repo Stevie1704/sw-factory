@@ -66,6 +66,8 @@ const (
 	PolicyRejectionCancelState PolicyRejectionCode = "cancel_state"
 	// PolicyRejectionAnswerState means the run is not waiting for clarification.
 	PolicyRejectionAnswerState PolicyRejectionCode = "answer_state"
+	// PolicyRejectionRepairState means the run cannot accept a maintainer repair.
+	PolicyRejectionRepairState PolicyRejectionCode = "repair_state"
 	// PolicyRejectionAnswerQuestion means an answer referenced no pending question.
 	PolicyRejectionAnswerQuestion PolicyRejectionCode = "answer_question"
 	// PolicyRejectionRefreshState means refresh is not legal for the run.
@@ -208,6 +210,8 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		return s.handleRevisionCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Answer:
 		return s.handleAnswerCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
+	case commandlanguage.Repair:
+		return s.handleRepairCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Cancel:
 		return s.handleCancelCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.ConfigureHarness:
@@ -296,6 +300,76 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 		return CommandResult{}, fmt.Errorf("persist answer command watermark: %w", err)
 	}
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
+}
+
+// handleRepairCommand applies one authorized maintainer instruction as a human
+// repair packet, so a review that genuinely needs human disposition can be
+// resumed without a second GitHub identity. It is the supervision-comment
+// equivalent of a submitted CHANGES_REQUESTED review and is likewise unbudgeted.
+//
+// The draft change comes first and is idempotent, while the command watermark
+// advances only with the durable transition. An interrupted pass therefore
+// repeats the draft change instead of losing the instruction.
+//
+// An explicit command refuses a store without durable invocation history,
+// where the equivalent submitted review is silently left unread: a maintainer
+// who addressed the coordinator directly is owed the refusal.
+func (s *Service) handleRepairCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+	if reason := repairAdmissionReason(run); reason != "" {
+		rejection := &PolicyRejection{Code: PolicyRejectionRepairState, Problem: reason}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	// The projection above reads the denormalized activity list, which can
+	// drift. The invocation history is authoritative before a write.
+	active, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("look up active invocations before maintainer repair: %w", err)
+	}
+	if !supported {
+		rejection := &PolicyRejection{Code: PolicyRejectionRepairState, Problem: "repair requires an operational store with durable invocation history"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if len(active) != 0 {
+		// A maintainer instruction must never interrupt a harness session that
+		// can still write a structured result for the current checkpoint.
+		rejection := &PolicyRejection{Code: PolicyRejectionRepairState, Problem: "repair requires a run with no active invocation"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	// Pull-request lifecycle is observed before commands in the same pass, so
+	// a merge or closure already wins over a repair comment. This read defends
+	// against a stale projection rather than ordering the two observations.
+	pullRequest, found, err := s.trackedPullRequest(ctx, registration, run)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if !pullRequestIsOpen(pullRequest, found) {
+		rejection := &PolicyRejection{Code: PolicyRejectionRepairState, Problem: fmt.Sprintf("repair requires pull request #%d to still be open", run.PullRequestNumber)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	repository := commandRepository(registration)
+	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read issue for maintainer repair: %w", err)
+	}
+	if err := s.returnPullRequestToDraft(ctx, registration, run); err != nil {
+		return CommandResult{}, err
+	}
+	findings := []store.ReviewRepairFinding{humanRepairFinding(
+		fmt.Sprintf("pull request #%d", run.PullRequestNumber),
+		parsed.Instruction,
+		fmt.Sprintf("GitHub comment %s submitted by %s", comment.ID, comment.Author),
+	)}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; resuming implementation with the requested repair")
+	next = humanRepairProjection(next, store.ReviewRepairEventSupervisionCommand, comment.ID, fmt.Sprintf("authorized maintainer comment %s requested changes; resuming implementation from checkpoint %s", comment.ID, run.CheckpointSHA), findings)
+	next.UpdatedAt = s.deps.Now().UTC()
+	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
+		Repository:           repository,
+		Issue:                issue,
+		Previous:             run,
+		Next:                 next,
+		PersistBeforeEffects: true,
+	})
+	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
 }
 
 // handleRefreshCommand re-reads the issue, creates a new packet version, and

@@ -327,7 +327,12 @@ Check-repair context:
 		}
 		scope := fmt.Sprintf("bounded review-repair attempt %d of %d", request.ReviewRepair.Attempt, request.ReviewRepair.Budget)
 		if request.ReviewRepair.Source == store.ReviewRepairSourceHuman {
-			scope = fmt.Sprintf("authorized maintainer review: %s (outside the bounded factory repair budget)", request.ReviewRepair.ReviewID)
+			kind, identity := request.ReviewRepair.SourceEvent()
+			surface := "review"
+			if kind == store.ReviewRepairEventSupervisionCommand {
+				surface = "instruction"
+			}
+			scope = fmt.Sprintf("authorized maintainer %s: %s (outside the bounded factory repair budget)", surface, identity)
 		}
 		repairContext += fmt.Sprintf(`
 Review-repair context:
