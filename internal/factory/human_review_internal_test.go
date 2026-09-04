@@ -230,7 +230,7 @@ func TestHumanReviewEligibleCoversOnlyRunsWithAPendingPullRequestDecision(t *tes
 func TestHumanRepairProjectionRecordsTheSurfaceThatRequestedIt(t *testing.T) {
 	t.Parallel()
 
-	run := store.Run{ID: "run-provenance", CheckpointSHA: strings.Repeat("a", 40), ReviewRepairBudget: 3}
+	run := store.Run{ID: "run-provenance", CheckpointSHA: strings.Repeat("a", 40), ReviewRepairBudget: 3, ActiveInvocationIDs: []string{"inv-stale"}}
 	finding := humanRepairFinding("pull request #7", "validate permitted paths", "GitHub comment 21 submitted by alice")
 
 	review := humanRepairProjection(run, store.ReviewRepairEventPullRequestReview, "4001", "review requested changes", []store.ReviewRepairFinding{finding})
@@ -252,6 +252,9 @@ func TestHumanRepairProjectionRecordsTheSurfaceThatRequestedIt(t *testing.T) {
 	}
 	if command.Stage != store.StageImplementation || command.Status != store.StatusActive {
 		t.Fatalf("command projection = %s/%s, want implementation/active", command.Stage, command.Status)
+	}
+	if len(review.ActiveInvocationIDs) != 0 || len(command.ActiveInvocationIDs) != 0 {
+		t.Fatalf("activity = %#v/%#v, want the stale denormalized list dropped by both surfaces", review.ActiveInvocationIDs, command.ActiveInvocationIDs)
 	}
 }
 

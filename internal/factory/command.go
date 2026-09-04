@@ -361,9 +361,6 @@ func (s *Service) handleRepairCommand(ctx context.Context, registration config.R
 	)}
 	next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; resuming implementation with the requested repair")
 	next = humanRepairProjection(next, store.ReviewRepairEventSupervisionCommand, comment.ID, fmt.Sprintf("authorized maintainer comment %s requested changes; resuming implementation from checkpoint %s", comment.ID, run.CheckpointSHA), findings)
-	// The invocation projection is authoritative for the admission above; a
-	// stale denormalized identity must not follow the run into implementation.
-	next.ActiveInvocationIDs = nil
 	next.UpdatedAt = s.deps.Now().UTC()
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository:           repository,
