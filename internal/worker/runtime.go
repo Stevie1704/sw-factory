@@ -1503,7 +1503,10 @@ func validateMountContract(existingMounts []ContainerMount, request StartRequest
 	requiredMounts[WorktreePath] = ContainerMount{
 		Source:      request.WorktreePath,
 		Destination: WorktreePath,
-		ReadOnly:    false,
+		// A review worker mounts the checkpoint worktree read-only, so the
+		// access mode belongs to the request. Requiring read-write here made
+		// every stopped review worker unrecoverable.
+		ReadOnly: request.WorktreeReadOnly,
 	}
 	requiredMounts[GitMetadataPath] = ContainerMount{
 		Source:      request.GitMetadataPath,
