@@ -2,6 +2,8 @@ package factory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +30,19 @@ const RecoveryRequiredCode = "recovery-required"
 // itself, which is the only waiting-for-human state eligible for check-stage
 // re-entry without a new agent invocation.
 const restartReconciliationPausePrefix = "restart reconciliation paused:"
+
+const (
+	// maxRecoveryReasonValueBytes bounds one observation inside a pause reason.
+	maxRecoveryReasonValueBytes = 512
+	// maxRecoveryReasonBytes bounds the assembled pause reason. The reason is
+	// published as a GitHub comment and stored in a bounded pending-effect
+	// payload, so an unbounded reason stops the coordinator from reporting why
+	// it paused.
+	maxRecoveryReasonBytes = 4096
+	// lifecycleReasonLinePrefix is the status-comment line that states why a
+	// run is waiting.
+	lifecycleReasonLinePrefix = "- lifecycle reason: "
+)
 
 // RecoveryDiscrepancyKind identifies whether a restart disagreement is an
 // infrastructure observation or a workflow-owned failure.
@@ -1619,7 +1634,7 @@ func recoveryDiscrepancyReason(diagnosis RecoveryDiagnosis) string {
 	if len(parts) == 0 {
 		return "restart reconciliation paused: unresolved discrepancy"
 	}
-	return "restart reconciliation paused: " + strings.Join(parts, "; ")
+	return boundedText("restart reconciliation paused: "+strings.Join(parts, "; "), maxRecoveryReasonBytes)
 }
 
 // recoveryReasonValue keeps a prior reconciliation pause from becoming part
@@ -1627,7 +1642,31 @@ func recoveryDiscrepancyReason(diagnosis RecoveryDiagnosis) string {
 // that it was a previous coordinator diagnosis.
 func recoveryReasonValue(value string) string {
 	value = safeStatusCommentValue(value)
-	return strings.ReplaceAll(value, restartReconciliationPausePrefix, "prior reconciliation pause:")
+	value = strings.ReplaceAll(value, restartReconciliationPausePrefix, "prior reconciliation pause:")
+	return boundedText(value, maxRecoveryReasonValueBytes)
+}
+
+// statusCommentIdentity describes a status comment by size and content
+// identity. A body is unbounded and carries the run's own lifecycle reason, so
+// recording one verbatim would make each pause quote the pause before it.
+func statusCommentIdentity(body string) string {
+	digest := sha256.Sum256([]byte(body))
+	return fmt.Sprintf("%d bytes, sha256 %s", len(body), hex.EncodeToString(digest[:]))
+}
+
+// statusCommentComparable drops the lifecycle-reason line before comparing two
+// status comments. That line states the result of this comparison, so
+// comparing it makes every pause an input to the next one.
+func statusCommentComparable(body string) string {
+	lines := strings.Split(body, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.HasPrefix(line, lifecycleReasonLinePrefix) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // newRecoveryDiagnosis creates the read-only comparison envelope and operator
@@ -1761,8 +1800,8 @@ func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, 
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment", Expected: run.StatusCommentID, Observed: "missing"})
 	} else if !strings.Contains(comment.Body, marker) {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment marker", Expected: marker, Observed: "marker missing"})
-	} else if comment.Body != statusCommentBody(run) {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment", Expected: statusCommentBody(run), Observed: comment.Body})
+	} else if statusCommentComparable(comment.Body) != statusCommentComparable(statusCommentBody(run)) {
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment", Expected: statusCommentIdentity(statusCommentBody(run)), Observed: statusCommentIdentity(comment.Body)})
 	} else if strings.TrimSpace(run.StatusCommentID) == "" {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment", Expected: "persisted comment " + comment.ID, Observed: "persisted identity missing"})
 	} else if comment.ID != run.StatusCommentID {
