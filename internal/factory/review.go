@@ -36,6 +36,9 @@ const (
 	// Wide context multiplies the packet size without adding anything the
 	// reviewer could not already read.
 	reviewDiffContextLines = 10
+	// maxReviewDiffErrorBytes bounds the Git standard-error text carried into a
+	// lifecycle reason, which is published as a GitHub comment.
+	maxReviewDiffErrorBytes = 512
 )
 
 // reviewAxisRoles lists the reviewer roles that own a per-axis durable result
@@ -258,10 +261,11 @@ func (s *Service) captureReviewDiff(ctx context.Context, run store.Run, _ store.
 		}
 		return reviewDiffCaptureFromOutput(output, base, run.CheckpointSHA), nil
 	}
-	if result, err := captureReviewDiffFromWorktree(ctx, run.Worktree, base, run.CheckpointSHA); err == nil {
-		return reviewDiffCaptureFromOutput(result, base, run.CheckpointSHA), nil
+	output, err := captureReviewDiffFromWorktree(ctx, run.Worktree, base, run.CheckpointSHA)
+	if err != nil {
+		return reviewDiffCapture{}, fmt.Errorf("capture exact review diff from the pinned worktree: %w", err)
 	}
-	return reviewDiffCapture{}, errors.New("capture exact review diff from the pinned worktree")
+	return reviewDiffCaptureFromOutput(output, base, run.CheckpointSHA), nil
 }
 
 // reviewDiffCaptureFromOutput keeps a small diff in the packet and describes
@@ -284,12 +288,47 @@ func captureReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoi
 	command := exec.CommandContext(ctx, "git", "-C", worktree, "diff", "--no-ext-diff", "--binary", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", ".")
 	// The factory worker environment may provide a coordinator-level Git
 	// projection. Review gather must inspect the claimed worktree itself.
-	command.Env = append(os.Environ(), "GIT_DIR=", "GIT_WORK_TREE=")
+	command.Env = environmentWithoutGitProjection()
 	output, err := command.Output()
 	if err != nil {
-		return "", err
+		return "", reviewDiffCommandError(err)
 	}
 	return string(output), nil
+}
+
+// environmentWithoutGitProjection removes inherited repository overrides
+// instead of blanking them. Git reads an empty GIT_DIR as a repository path of
+// "" and refuses every command, so an empty value is not an unset value.
+func environmentWithoutGitProjection() []string {
+	environment := os.Environ()
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+// reviewDiffCommandError names why Git refused the capture. The bare exit
+// status reaches a person as an unactionable lifecycle reason, so the bounded
+// standard-error text travels with it.
+func reviewDiffCommandError(err error) error {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return err
+	}
+	detail := strings.ReplaceAll(strings.TrimSpace(string(exit.Stderr)), "\n", "; ")
+	if detail == "" {
+		return err
+	}
+	if len(detail) > maxReviewDiffErrorBytes {
+		// The bound is a byte count, so the cut can split a multi-byte rune.
+		// Dropping the incomplete sequence keeps the text printable.
+		detail = strings.ToValidUTF8(detail[:maxReviewDiffErrorBytes], "")
+	}
+	return fmt.Errorf("%w: %s", err, detail)
 }
 
 // publishSpecificationReviewStatus publishes one exact-SHA reviewer status.
