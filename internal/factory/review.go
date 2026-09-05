@@ -323,12 +323,7 @@ func reviewDiffCommandError(err error) error {
 	if detail == "" {
 		return err
 	}
-	if len(detail) > maxReviewDiffErrorBytes {
-		// The bound is a byte count, so the cut can split a multi-byte rune.
-		// Dropping the incomplete sequence keeps the text printable.
-		detail = strings.ToValidUTF8(detail[:maxReviewDiffErrorBytes], "")
-	}
-	return fmt.Errorf("%w: %s", err, detail)
+	return fmt.Errorf("%w: %s", err, boundedText(detail, maxReviewDiffErrorBytes))
 }
 
 // publishSpecificationReviewStatus publishes one exact-SHA reviewer status.
