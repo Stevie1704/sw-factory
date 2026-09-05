@@ -1251,6 +1251,17 @@ func safeStatusCommentValue(value string) string {
 	return strings.TrimSpace(value)
 }
 
+// boundedText truncates value to at most limit bytes and marks the cut. The
+// limit counts bytes, so the cut can split a multi-byte rune; the incomplete
+// sequence is dropped to keep the result printable.
+func boundedText(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	const cut = "\u2026"
+	return strings.ToValidUTF8(value[:limit-len(cut)], "") + cut
+}
+
 // statusCommentMarker identifies the one editable status comment for a run.
 func statusCommentMarker(runID string) string {
 	return fmt.Sprintf("<!-- factory-status: %s -->", runID)
