@@ -19,6 +19,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
+// reviewDiffFileName is the invocation-local name of the review artifact.
 const reviewDiffFileName = "review.diff"
 
 // reviewDiffMetadata is the bounded identity persisted in a new review packet.
@@ -141,12 +142,24 @@ func environmentWithoutGitProjection() []string {
 	return filtered
 }
 
-// currentReviewInvocation reports whether the invocation uses the current
-// review packet contract. Historical review packets remain readable without
-// requiring an artifact they could not have persisted.
-func currentReviewInvocation(invocation store.Invocation) bool {
+// reviewRoleInvocation reports whether a versioned invocation belongs to
+// either review axis. Isolated legacy projections may omit the prompt
+// version; the persisted packet schema determines whether every other review
+// requires an artifact, rather than equality with a mutable current prompt
+// version.
+func reviewRoleInvocation(invocation store.Invocation) bool {
 	definition, ok := workflow.DefaultRegistry().Role(invocation.Role)
-	return ok && definition.Kind == workflow.RoleKindReview && invocation.PromptVersion == definition.PromptVersion
+	return ok && definition.Kind == workflow.RoleKindReview && strings.TrimSpace(invocation.PromptVersion) != ""
+}
+
+// packetUsesReviewDiffArtifact distinguishes artifact-backed reviews from
+// historical inline packets. Metadata also recognizes packets written by the
+// first artifact implementation before the packet schema advanced to eleven.
+func packetUsesReviewDiffArtifact(packet InvocationPacket) bool {
+	if packet.SchemaVersion >= reviewDiffArtifactPacketVersion {
+		return true
+	}
+	return packet.ReviewContext != nil && (packet.ReviewContext.DiffPath != "" || packet.ReviewContext.DiffSHA256 != "")
 }
 
 // validatePersistedReviewDiff verifies the review artifact recorded by a new
@@ -159,6 +172,9 @@ func validatePersistedReviewDiff(invocation store.Invocation) error {
 	packet, err := decodePersistedInvocationPacket(packetData)
 	if err != nil {
 		return fmt.Errorf("decode persisted invocation packet: %w", err)
+	}
+	if !packetUsesReviewDiffArtifact(packet) {
+		return nil
 	}
 	if packet.ReviewContext == nil {
 		return errors.New("persisted review packet has no review context")

@@ -511,7 +511,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			addRepositoryCraftRecoveryDiscrepancy(diagnosis, *active, craftErr)
 		}
 	}
-	if currentReviewInvocation(*active) {
+	if reviewRoleInvocation(*active) {
 		if diffErr := validatePersistedReviewDiff(*active); diffErr != nil {
 			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 				InvocationID: active.ID,

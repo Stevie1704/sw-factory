@@ -87,6 +87,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"specification-review-v4":                 "prompts/legacy/specification-review-v4.md",
 		"specification-review-v5":                 "prompts/legacy/specification-review-v5.md",
 		"specification-review-v6":                 "prompts/legacy/specification-review-v6.md",
+		"specification-review-v7":                 "prompts/legacy/specification-review-v7.md",
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
@@ -96,6 +97,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"standards-review-v4":                 "prompts/legacy/standards-review-v4.md",
 		"standards-review-v5":                 "prompts/legacy/standards-review-v5.md",
 		"standards-review-v6":                 "prompts/legacy/standards-review-v6.md",
+		"standards-review-v7":                 "prompts/legacy/standards-review-v7.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 }
@@ -110,10 +112,12 @@ var expectedPromptSHA256 = map[string]string{
 	"specification-review-v4":                 "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773",
 	"specification-review-v5":                 "b8f39cd13be19fbb71878f30bd8354a64e28a766e557b5e967f643a4974ce3e5",
 	"specification-review-v6":                 "6ae0e5d82480384e8c6bfb3bdc4e3f2c66b37f71f5501abf77029b53da07ad88",
-	workflow.PromptVersionSpecificationReview: "f127acc9fa3ad7d8c31a2944a418f601a9b6185f06fd7214eff3a4d30a16e318",
+	"specification-review-v7":                 "f127acc9fa3ad7d8c31a2944a418f601a9b6185f06fd7214eff3a4d30a16e318",
+	workflow.PromptVersionSpecificationReview: "9f07951a1a8ef748f8e4ef01032383b3191376fa5a321d8f460d425d8d7990a8",
 	"standards-review-v5":                     "f6c848e43eba598767911ba91e73b9372bd2c82d2a9d0729f79ec7e6a6a6fddb",
 	"standards-review-v6":                     "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469",
-	workflow.PromptVersionStandardsReview:     "b773948d204ff17301cde3663a8d449deef6a904560bc4dbdd9dd9f324457dcd",
+	"standards-review-v7":                     "b773948d204ff17301cde3663a8d449deef6a904560bc4dbdd9dd9f324457dcd",
+	workflow.PromptVersionStandardsReview:     "b55ea69e303fbbde83931681a7fb2691849030afe43e975e4f57c69f87f731a0",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
@@ -437,9 +441,9 @@ Review-repair packet (coordinator-owned):
 		dynamicContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n", data)
 	}
 	if definition.Kind == workflow.RoleKindReview && request.ReviewContext != nil {
-		if identity.Version == definition.PromptVersion {
-			// Historical packet fields are deliberately cleared before the current
-			// context is rendered. New review prompts use one file procedure
+		if request.ReviewContext.DiffPath != "" {
+			// Historical packet fields are deliberately cleared before an artifact-
+			// backed context is rendered. File-backed review prompts use one procedure
 			// regardless of the artifact size, including a zero-byte artifact.
 			withoutDiff := *request.ReviewContext
 			withoutDiff.CurrentDiff = ""

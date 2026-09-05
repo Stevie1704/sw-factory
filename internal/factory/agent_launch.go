@@ -58,7 +58,7 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 	if err := validatePersistedInvocationPacket(run, invocation, persisted); err != nil {
 		return "", err
 	}
-	if currentReviewInvocation(invocation) {
+	if reviewRoleInvocation(invocation) {
 		if err := validatePersistedReviewDiff(invocation); err != nil {
 			return "", fmt.Errorf("validate persisted review diff: %w", err)
 		}
