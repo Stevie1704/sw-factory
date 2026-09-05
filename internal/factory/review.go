@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -24,17 +22,11 @@ const (
 	// StandardsReviewStatusContext is the stable exact-SHA status context used
 	// by every documented-standards review invocation.
 	StandardsReviewStatusContext = "factory/review/standards"
-	// maxPacketReviewDiffBytes bounds the copy of the review diff a packet
-	// carries, not the review diff itself. Past it the packet names the diff
-	// size and the commands that read it, and the reviewer reads the diff in its
-	// mounted worktree one path at a time, so no checkpoint size stops a review
-	// round.
-	maxPacketReviewDiffBytes = 128 << 10
 	// reviewDiffContextLines is the context width of the captured diff. A review
 	// role has the checkpoint worktree mounted read-only, so it can open any
 	// file it needs; the diff only has to make each hunk judgeable in place.
-	// Wide context multiplies the packet size without adding anything the
-	// reviewer could not already read.
+	// The artifact is paged by the reviewer, so its size does not affect packet
+	// size.
 	reviewDiffContextLines = 10
 	// maxReviewDiffErrorBytes bounds the Git standard-error text carried into a
 	// lifecycle reason, which is published as a GitHub comment.

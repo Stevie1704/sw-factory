@@ -292,25 +292,24 @@ technical test exemption is provisional evidence for the standards reviewer,
 not an automatic waiver. Both reviewers inspect the same immutable
 base-to-checkpoint diff and must report that checkpoint SHA.
 
-The diff is captured with a bounded context width, because a review role has
-the checkpoint worktree mounted read-only and can open any file it needs. It is
-mounted with the invocation packet and named in the prompt rather than repeated
-in it: a launch prompt travels as one command argument, and Linux refuses an
-argument longer than 32 pages, so a prompt that grew with the reviewed change
-could not be executed at all. Every adapter now refuses an oversized prompt
-before launch with a typed error naming the size. A diff beyond the packet bound
-is left out of the packet rather than stopping the run: the packet records its
-size, a `git diff --name-only` that lists the changed paths, and a per-path
-`git diff` the reviewer completes with one path at a time. The listing adds
-`--no-renames`, so a rename's old path is listed rather than hidden behind its
-new one, and `-z`, so no path is C-quoted; the role body requires the reviewer
-to quote each path it appends. The per-path command omits `--binary`, because
-the reviewer reads hunks rather than applying a patch. The role body owns that
-procedure and the rule that reading the checkpoint is evidence, so both review
-prompt versions were bumped with it. The reviewer reads the change in its own
-read-only worktree, so neither the packet nor any single command grows with the
-checkpoint. Implementation is not bounded by checkpoint size, so review is not
-either.
+The exact base-to-checkpoint diff is streamed into an invocation-owned
+temporary file, synced, and atomically renamed to `review.diff` before packet
+metadata is written. Every review invocation therefore mounts the regular
+read-only file `/invocation/review.diff` beside `specification.json`, including
+when the diff has zero bytes. `review_context` carries only the stable worker
+path, byte count, and SHA-256 content identity; the diff bytes are not retained
+in JSON or in a command result. Git disables text conversion, so binary changes
+render as a short readable summary rather than a patch payload.
+
+The review role owns bounded paging: it reads windows such as
+`sed -n '1,200p' /invocation/review.diff` and
+`sed -n '201,400p' /invocation/review.diff`, then uses `rg -n` or another
+line-numbered search to select successive windows until the whole artifact is
+covered. This procedure also covers one very large changed file. On restart,
+recovery requires `review.diff` to remain regular and to match the recorded
+size and SHA-256. Missing, replaced, truncated, or otherwise mismatched content
+is a recovery discrepancy; the coordinator fails closed and does not regenerate
+the artifact.
 
 The reviewer publishes a completed report with repeated finding flags:
 

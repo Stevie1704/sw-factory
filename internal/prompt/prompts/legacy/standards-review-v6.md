@@ -14,8 +14,8 @@ Standards-review scope:
 Review-role ownership:
 
 - Review only the exact checkpoint named in the read-only review_context in /invocation/specification.json.
-- The packet contains bounded review_context metadata, relevant logs, and prior findings from this role only; it contains no diff bytes, no implementation/test handoff, no upstream harness transcript, and no specification reviewer's conclusions.
-- Read the exact review diff from the mounted read-only file `/invocation/review.diff`. Page it in bounded line windows such as `sed -n '1,200p' /invocation/review.diff` and `sed -n '201,400p' /invocation/review.diff`. Use `rg -n` or another line-numbered search to select each next window, and continue until the entire artifact has been covered, including a checkpoint with one very large changed file.
+- The packet contains the current diff when it fits the packet bound, bounded relevant logs, and prior findings from this role only; it contains no implementation/test handoff, no upstream harness transcript, and no specification reviewer's conclusions.
+- When the diff did not fit, the packet sets review_context.omitted_diff_bytes instead of the diff. Read the diff in your mounted read-only worktree: run review_context.changed_paths_command for the changed paths, then review_context.diff_path_command with one of those paths appended in single quotes, once for each path listed, and cover every listed path before you report. A path appended unquoted is split on its spaces and reports no change at all.
 - Do not mutate the worktree, GitHub, branches, tests, or implementation files. Reading the checkpoint is evidence: the files in your mounted worktree and the diff commands named in review_context. No other command output, and no other role's terminal output, transcript, or session state, is evidence.
 - Every finding must include location, claim, evidence, severity, category, suggested resolution, and suggested owner.
 - Keep standards findings on this axis. Do not merge them with specification findings or re-rank the two axes into one verdict.

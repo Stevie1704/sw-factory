@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -700,11 +701,12 @@ type unattendedWorkspace struct {
 	*draftGitWorkspace
 }
 
-// ReadDiff returns the immutable diff projection used by review gather. The
-// in-memory continuation workspace has no host Git checkout, so it provides
-// the same read-only seam as the production worktree adapter.
-func (*unattendedWorkspace) ReadDiff(context.Context, string, string, string) (string, error) {
-	return "", nil
+// StreamDiff returns the immutable diff projection used by review
+// materialisation. The in-memory continuation workspace has no host Git
+// checkout, so it provides the same read-only seam as the production worktree
+// adapter.
+func (*unattendedWorkspace) StreamDiff(context.Context, string, string, string, io.Writer) error {
+	return nil
 }
 
 // RemoteBranchHead reports the last checkpoint the branch push published.

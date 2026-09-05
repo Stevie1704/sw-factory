@@ -35,7 +35,7 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 			reconcileInterrupted:     s.reconcileInterruptedRunWithMode,
 			resumeRecoveredCheck:     s.resumeRecoveredCheck,
 			resetStartup:             s.resetStartupStateProjection,
-			captureReviewDiff:        s.captureReviewDiff,
+			materialiseReviewDiff:    s.materialiseReviewDiff,
 		},
 	)
 	return s.lifecycle
