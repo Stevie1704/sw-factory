@@ -1555,7 +1555,8 @@ cmd/factory                 host CLI entrypoint
 cmd/factory-report          worker report entrypoint
 cmd/factory-worker-attach   worker PTY attachment entrypoint
 internal/cli                command parsing and rendering
-internal/factory            orchestration and lifecycle transitions
+internal/factory            workflow coordination and lifecycle transitions
+internal/effect             durable effect journal and kind-specific handlers
 internal/config             host/repository policy loading and validation
 internal/store              private SQLite operational state
 internal/git                worktrees, checkpoints, push, and cleanup seams
@@ -1566,6 +1567,13 @@ internal/harness             Codex and Claude Code adapters
 internal/report              structured report schema and validation
 internal/workflow            factory-owned roles, stages, and transitions
 ~~~
+
+The effect module's callable interface is fourteen `Journal` methods (thirteen
+typed apply operations plus `Replay`), its constructor, and four package
+functions used by compatibility and recovery paths. Including its input and
+store-seam types, it has twenty-nine caller-visible named declarations; a
+source-level contract test keeps that surface below the thirty coordinator
+methods the module replaced.
 
 Run the standard local checks before submitting a change:
 

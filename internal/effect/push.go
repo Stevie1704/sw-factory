@@ -16,14 +16,15 @@ import (
 type pushHandler struct {
 	now       func() time.Time
 	workspace gitadapter.GitWorkspace
-	projector RunProjector
+	projector runProjector
 }
 
 // Push publishes one run branch while recognizing an already matching remote
 // head. A repeated Git push is transport-safe, but the remote head read makes
 // the semantic effect exactly-once at the coordinator seam.
 func (j *Journal) Push(ctx context.Context, runStore RunStore, runID string, request gitadapter.PushRequest, expectedSHA string) error {
-	return j.push.publish(ctx, runStore, runID, request, expectedSHA)
+	handler := mustApplyHandler[pushHandler](j.dispatcher, store.PendingEffectKindPush)
+	return handler.publish(ctx, runStore, runID, request, expectedSHA)
 }
 
 // publish reserves and performs one branch push.
@@ -36,7 +37,7 @@ func (h pushHandler) publish(ctx context.Context, runStore RunStore, runID strin
 	if err != nil {
 		return err
 	}
-	return WithPendingEffect(ctx, runStore, effect, applier(func() error {
+	return withPendingEffect(ctx, runStore, effect, applier(func() error {
 		return pushOnce(ctx, h.workspace, request, expectedSHA)
 	}))
 }
@@ -71,14 +72,14 @@ func pushOnce(ctx context.Context, workspace gitadapter.GitWorkspace, request gi
 
 // Replay completes or recognizes a branch push recorded before a process
 // interruption.
-func (h pushHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h pushHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload pushEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if h.workspace == nil {

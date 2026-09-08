@@ -15,20 +15,21 @@ import (
 // the run identity projection that records it.
 type clarificationHandler struct {
 	now          func() time.Time
-	issues       IssueClient
-	presentation RunPresentation
-	projector    RunProjector
+	issues       issueClient
+	presentation runPresentation
+	projector    runProjector
 }
 
 // PublishClarificationComment reserves one clarification publication before
 // the comment reaches GitHub, then records the comment identity on the run.
 func (j *Journal) PublishClarificationComment(ctx context.Context, runStore RunStore, repository github.Repository, target int, run store.Run, packetVersion int, body string) (store.Run, error) {
-	return j.clarification.publish(ctx, runStore, repository, target, run, packetVersion, body)
+	handler := mustApplyHandler[clarificationHandler](j.dispatcher, store.PendingEffectKindClarificationComment)
+	return handler.publish(ctx, runStore, repository, target, run, packetVersion, body)
 }
 
 // publish reserves and performs one clarification publication.
 func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, repository github.Repository, target int, run store.Run, packetVersion int, body string) (store.Run, error) {
-	if err := ValidateRunBeforeEffect(store.PendingEffectKindClarificationComment, run); err != nil {
+	if err := validateRunBeforeEffect(store.PendingEffectKindClarificationComment, run); err != nil {
 		return run, err
 	}
 	payload := clarificationCommentEffectPayload{
@@ -52,7 +53,7 @@ func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, re
 		}
 		return nil
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(action)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(action)); err != nil {
 		return updated, err
 	}
 	return updated, nil
@@ -90,14 +91,14 @@ func (h clarificationHandler) findOrCreateComment(ctx context.Context, repositor
 
 // Replay completes a question publication after a response-loss boundary by
 // finding the marker before creating anything.
-func (h clarificationHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h clarificationHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload clarificationCommentEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	current, err := h.projector.Read(ctx, runStore)

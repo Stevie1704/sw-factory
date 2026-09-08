@@ -18,19 +18,20 @@ type checkpointHandler struct {
 	now       func() time.Time
 	workspace gitadapter.GitWorkspace
 	labels    issueProjection
-	projector RunProjector
+	projector runProjector
 }
 
 // Checkpoint makes a checkpoint commit and the immediate run projection one
 // restart-safe operation. The marker in the Git adapter handles a commit that
 // was created just before the process stopped.
 func (j *Journal) Checkpoint(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
-	return j.checkpoint.commit(ctx, runStore, request, repository, issue, previous, nextTemplate)
+	handler := mustApplyHandler[checkpointHandler](j.dispatcher, store.PendingEffectKindCheckpoint)
+	return handler.commit(ctx, runStore, request, repository, issue, previous, nextTemplate)
 }
 
 // commit reserves the checkpoint, creates it, and persists its projection.
 func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
-	if err := ValidateRunBeforeEffect(store.PendingEffectKindCheckpoint, nextTemplate); err != nil {
+	if err := validateRunBeforeEffect(store.PendingEffectKindCheckpoint, nextTemplate); err != nil {
 		return gitadapter.CheckpointResult{}, nextTemplate, err
 	}
 	payload := checkpointEffectPayload{
@@ -66,7 +67,7 @@ func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, reques
 		if request.Kind == gitadapter.CheckpointKindTest {
 			next.TestCheckpointSHA = checkpoint.SHA
 		}
-		if err := ValidateRunBeforeEffect(store.PendingEffectKindCheckpoint, next); err != nil {
+		if err := validateRunBeforeEffect(store.PendingEffectKindCheckpoint, next); err != nil {
 			return err
 		}
 		if err := h.labels.applyStateTransition(ctx, &next, StateTransition{
@@ -86,7 +87,7 @@ func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, reques
 		}
 		return nil
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(action)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(action)); err != nil {
 		return checkpoint, next, err
 	}
 	return checkpoint, next, nil
@@ -94,14 +95,14 @@ func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, reques
 
 // Replay completes a checkpoint reservation by replaying the idempotent Git
 // marker and its persisted run transition.
-func (h checkpointHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h checkpointHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload checkpointEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if err := validateRunBeforeReplay(store.PendingEffectKindCheckpoint, payload.Next); err != nil {

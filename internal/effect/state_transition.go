@@ -14,15 +14,16 @@ import (
 type stateTransitionHandler struct {
 	now       func() time.Time
 	labels    issueProjection
-	projector RunProjector
-	lifecycle Lifecycle
+	projector runProjector
+	lifecycle lifecycle
 }
 
 // ApplyStateTransition reserves the complete label and comment transition
 // before crossing GitHub's mutation boundary. The reservation remains until
 // both the projection and the durable run state are complete.
 func (j *Journal) ApplyStateTransition(ctx context.Context, runStore RunStore, transition StateTransition, next store.Run) (store.Run, error) {
-	return j.stateTransition.apply(ctx, runStore, transition, next)
+	handler := mustApplyHandler[stateTransitionHandler](j.dispatcher, store.PendingEffectKindStateTransition)
+	return handler.apply(ctx, runStore, transition, next)
 }
 
 // apply reserves and performs one journaled state transition.
@@ -74,7 +75,7 @@ func (h stateTransitionHandler) apply(ctx context.Context, runStore RunStore, tr
 		}
 		return nil
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
 		return next, err
 	}
 	return next, nil
@@ -147,14 +148,14 @@ func scopeFor(invalidateAll, invalidate bool) invalidationScope {
 
 // Replay restores the complete persisted run revision associated with a
 // label/comment effect and then acknowledges its journal.
-func (h stateTransitionHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h stateTransitionHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload stateTransitionEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if payload.Next.ID == "" || payload.Next.ID != effect.RunID {

@@ -26,9 +26,9 @@ type InvocationStore interface {
 	Invocation(context.Context, string, string) (*store.Invocation, error)
 }
 
-// IssueClient is the GitHub issue and comment seam used by the label,
+// issueClient is the GitHub issue and comment seam used by the label,
 // status-comment, clarification, and state-transition kinds.
-type IssueClient interface {
+type issueClient interface {
 	Issue(context.Context, github.Repository, int) (github.Issue, error)
 	ReplaceIssueLabels(context.Context, github.Repository, int, []string) error
 	CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error)
@@ -36,10 +36,10 @@ type IssueClient interface {
 	EditIssueComment(context.Context, github.Repository, string, string) error
 }
 
-// RunPresentation renders the coordinator-owned issue projection of a run.
+// runPresentation renders the coordinator-owned issue projection of a run.
 // Status-comment wording and factory-label policy stay with the coordinator;
 // the journal only decides when to apply them.
-type RunPresentation interface {
+type runPresentation interface {
 	// StatusCommentMarker identifies the one editable status comment of a run.
 	StatusCommentMarker(runID string) string
 	// StatusCommentBody renders that comment for the supplied run projection.
@@ -51,10 +51,10 @@ type RunPresentation interface {
 	StateLabels(existing []string, status store.Status) []string
 }
 
-// RunProjector persists the durable run projection an effect produces. Retry,
+// runProjector persists the durable run projection an effect produces. Retry,
 // compare-and-set, result invalidation, and evaluation recording are
 // coordinator policy; the journal only decides which of them an effect needs.
-type RunProjector interface {
+type runProjector interface {
 	// Read returns the reconciliation run: the active run, or the latest
 	// terminal run when no active run exists.
 	Read(context.Context, RunStore) (*store.Run, error)
@@ -79,10 +79,10 @@ type RunProjector interface {
 	RecordTransition(context.Context, RunStore, store.Run, store.Run, time.Time) error
 }
 
-// Lifecycle is the invocation-lifecycle behaviour the journal needs: worker
+// lifecycle is the invocation-lifecycle behaviour the journal needs: worker
 // shutdown owned by a terminal transition, and harness runtime resolution for
 // a replayed native command.
-type Lifecycle interface {
+type lifecycle interface {
 	// StopWorker stops one worker by its identity.
 	StopWorker(context.Context, string) error
 	// StopActiveWorkers stops every worker delegated to a run.
@@ -91,9 +91,9 @@ type Lifecycle interface {
 	HarnessRuntime(socketPath, harnessName string) (harness.Runtime, error)
 }
 
-// WorkerLauncher is the worker seam used by the worker-launch kind. Launching
+// workerLauncher is the worker seam used by the worker-launch kind. Launching
 // is the only worker authority this journal holds.
-type WorkerLauncher interface {
+type workerLauncher interface {
 	Start(context.Context, worker.StartRequest) error
 }
 
@@ -103,11 +103,11 @@ type Adapters struct {
 	// Now is the coordinator clock applied to every journal record.
 	Now func() time.Time
 	// Issues publishes issue labels and coordinator-owned comments.
-	Issues IssueClient
+	Issues issueClient
 	// Presentation renders the coordinator-owned issue projection.
-	Presentation RunPresentation
+	Presentation runPresentation
 	// Projector persists the durable run projection.
-	Projector RunProjector
+	Projector runProjector
 	// Workspace owns checkpoint and push effects on the host.
 	Workspace gitadapter.GitWorkspace
 	// PullRequests owns idempotent draft pull-request mutation.
@@ -115,72 +115,48 @@ type Adapters struct {
 	// CommitStatuses publishes exact-SHA commit statuses.
 	CommitStatuses github.CommitStatusPublisher
 	// Worker launches the per-run isolated execution environment.
-	Worker WorkerLauncher
+	Worker workerLauncher
 	// Lifecycle stops workers and resolves harness runtimes during replay.
-	Lifecycle Lifecycle
+	Lifecycle lifecycle
 }
 
-// Journal is the coordinator's durable-effect seam. It owns one handler per
-// pending-effect kind and routes replay through the protocol kernel.
+// Journal is the coordinator's durable-effect seam. It owns exactly one apply
+// and one replay implementation per pending-effect kind.
 type Journal struct {
-	dispatcher       *Dispatcher
-	stateTransition  stateTransitionHandler
-	statusComment    statusCommentHandler
-	clarification    clarificationHandler
-	labelTransition  labelTransitionHandler
-	commitStatus     commitStatusHandler
-	push             pushHandler
-	checkpoint       checkpointHandler
-	pullRequest      pullRequestHandler
-	workerLaunch     workerLaunchHandler
-	harnessResume    harnessResumeHandler
-	resultAcceptance resultAcceptanceHandler
+	dispatcher *dispatcher
 }
 
 // New builds one handler per kind from the supplied adapters and registers its
-// replay path. Registration failures are programmer errors: the kinds are
-// constants and cannot collide.
+// apply and replay implementations. Registration failures are programmer
+// errors: the kinds are constants and cannot collide.
 func New(adapters Adapters) *Journal {
 	clock := adapters.Now
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	labels := issueProjection{issues: adapters.Issues, presentation: adapters.Presentation}
-	journal := &Journal{
-		dispatcher:      NewDispatcher(),
-		stateTransition: stateTransitionHandler{now: clock, labels: labels, projector: adapters.Projector, lifecycle: adapters.Lifecycle},
-		statusComment:   statusCommentHandler{now: clock, labels: labels, projector: adapters.Projector},
-		clarification:   clarificationHandler{now: clock, issues: adapters.Issues, presentation: adapters.Presentation, projector: adapters.Projector},
-		labelTransition: labelTransitionHandler{issues: adapters.Issues, projector: adapters.Projector},
-		commitStatus:    commitStatusHandler{now: clock, statuses: adapters.CommitStatuses, workspace: adapters.Workspace, projector: adapters.Projector},
-		push:            pushHandler{now: clock, workspace: adapters.Workspace, projector: adapters.Projector},
-		checkpoint:      checkpointHandler{now: clock, workspace: adapters.Workspace, labels: labels, projector: adapters.Projector},
-		pullRequest:     pullRequestHandler{now: clock, clients: adapters.PullRequests, labels: labels, projector: adapters.Projector},
-		workerLaunch:    workerLaunchHandler{now: clock, worker: adapters.Worker, projector: adapters.Projector},
-		harnessResume:   harnessResumeHandler{now: clock, lifecycle: adapters.Lifecycle, projector: adapters.Projector},
-		resultAcceptance: resultAcceptanceHandler{
-			now: clock, issues: adapters.Issues, labels: labels,
-			projector: adapters.Projector, lifecycle: adapters.Lifecycle,
-		},
-	}
-	register(journal.dispatcher, store.PendingEffectKindStateTransition, journal.stateTransition)
-	register(journal.dispatcher, store.PendingEffectKindStatusComment, journal.statusComment)
-	register(journal.dispatcher, store.PendingEffectKindClarificationComment, journal.clarification)
-	register(journal.dispatcher, store.PendingEffectKindLabelTransition, journal.labelTransition)
-	register(journal.dispatcher, store.PendingEffectKindCommitStatus, journal.commitStatus)
-	register(journal.dispatcher, store.PendingEffectKindPush, journal.push)
-	register(journal.dispatcher, store.PendingEffectKindCheckpoint, journal.checkpoint)
-	register(journal.dispatcher, store.PendingEffectKindPullRequest, journal.pullRequest)
-	register(journal.dispatcher, store.PendingEffectKindWorkerLaunch, journal.workerLaunch)
-	register(journal.dispatcher, store.PendingEffectKindHarnessResume, journal.harnessResume)
-	register(journal.dispatcher, store.PendingEffectKindResultAcceptance, journal.resultAcceptance)
+	journal := &Journal{dispatcher: newDispatcher()}
+	register(journal.dispatcher, store.PendingEffectKindStateTransition, stateTransitionHandler{now: clock, labels: labels, projector: adapters.Projector, lifecycle: adapters.Lifecycle})
+	register(journal.dispatcher, store.PendingEffectKindStatusComment, statusCommentHandler{now: clock, labels: labels, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindClarificationComment, clarificationHandler{now: clock, issues: adapters.Issues, presentation: adapters.Presentation, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindLabelTransition, labelTransitionHandler{now: clock, issues: adapters.Issues, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindCommitStatus, commitStatusHandler{now: clock, statuses: adapters.CommitStatuses, workspace: adapters.Workspace, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindPush, pushHandler{now: clock, workspace: adapters.Workspace, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindCheckpoint, checkpointHandler{now: clock, workspace: adapters.Workspace, labels: labels, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindPullRequest, pullRequestHandler{now: clock, clients: adapters.PullRequests, labels: labels, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindWorkerLaunch, workerLaunchHandler{now: clock, worker: adapters.Worker, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindHarnessResume, harnessResumeHandler{now: clock, lifecycle: adapters.Lifecycle, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindResultAcceptance, resultAcceptanceHandler{
+		now: clock, issues: adapters.Issues, labels: labels,
+		projector: adapters.Projector, lifecycle: adapters.Lifecycle,
+	})
 	return journal
 }
 
-// register makes a registration failure a programmer error, because every
-// kind is a package constant that can neither collide nor be empty.
-func register(dispatcher *Dispatcher, kind store.PendingEffectKind, handler ReplayHandler) {
-	if err := dispatcher.Register(kind, handler); err != nil {
+// register binds both paths of a package-owned handler. A registration failure
+// is a programmer error because every kind is a non-empty package constant.
+func register(dispatcher *dispatcher, kind store.PendingEffectKind, handler replayHandler) {
+	if err := dispatcher.register(kind, handler, handler); err != nil {
 		panic(err)
 	}
 }
@@ -189,5 +165,5 @@ func register(dispatcher *Dispatcher, kind store.PendingEffectKind, handler Repl
 // before the journal could be cleared. An unregistered kind is rejected with
 // the kernel's typed error.
 func (j *Journal) Replay(ctx context.Context, runStore RunStore, pending store.PendingEffect) (store.Run, error) {
-	return j.dispatcher.Replay(ctx, runStore, pending)
+	return j.dispatcher.replay(ctx, runStore, pending)
 }

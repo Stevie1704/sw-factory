@@ -42,16 +42,17 @@ type ResultAcceptance struct {
 // resulting workflow projection as one replayable acceptance operation.
 type resultAcceptanceHandler struct {
 	now       func() time.Time
-	issues    IssueClient
+	issues    issueClient
 	labels    issueProjection
-	projector RunProjector
-	lifecycle Lifecycle
+	projector runProjector
+	lifecycle lifecycle
 }
 
 // AcceptResult journals harness finalization, invocation state, and the
 // resulting workflow projection as one replayable acceptance operation.
 func (j *Journal) AcceptResult(ctx context.Context, runStore RunStore, invocationStore InvocationStore, request ResultAcceptance) (store.Invocation, store.Run, error) {
-	return j.resultAcceptance.accept(ctx, runStore, invocationStore, request)
+	handler := mustApplyHandler[resultAcceptanceHandler](j.dispatcher, store.PendingEffectKindResultAcceptance)
+	return handler.accept(ctx, runStore, invocationStore, request)
 }
 
 // accept reserves and performs one report acceptance.
@@ -59,7 +60,7 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 	invocation := request.Invocation
 	next := request.Next
 	previous := request.Previous
-	if err := ValidateRunBeforeEffect(store.PendingEffectKindResultAcceptance, next); err != nil {
+	if err := validateRunBeforeEffect(store.PendingEffectKindResultAcceptance, next); err != nil {
 		return invocation, next, err
 	}
 	// Encode the accepted report once for durable replay
@@ -144,7 +145,7 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 		}
 		return nil
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
 		return invocation, next, err
 	}
 	return invocation, next, nil
@@ -154,14 +155,14 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 // after its terminal invocation reservation. The external exit command has no
 // observable idempotency key, so an ambiguous prior attempt is safely
 // abandoned while the durable projections converge.
-func (h resultAcceptanceHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h resultAcceptanceHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload resultAcceptanceEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if err := validateRunBeforeReplay(store.PendingEffectKindResultAcceptance, payload.Next); err != nil {
@@ -250,10 +251,10 @@ func (h resultAcceptanceHandler) Replay(ctx context.Context, request ReplayReque
 	return next, nil
 }
 
-// ResultAcceptanceRecord is the durable intent recorded for one accepted
+// resultAcceptanceRecord is the durable intent recorded for one accepted
 // report. Recovery reads it to continue the coordinator projection after the
 // journaled harness boundary has completed.
-type ResultAcceptanceRecord struct {
+type resultAcceptanceRecord struct {
 	// Invocation is the terminal invocation the acceptance reserved.
 	Invocation store.Invocation
 	// AcceptedReport is the JSON-encoded report snapshot. A journal entry
@@ -262,13 +263,13 @@ type ResultAcceptanceRecord struct {
 }
 
 // ReadResultAcceptance decodes one result-acceptance journal entry.
-func ReadResultAcceptance(pending store.PendingEffect) (ResultAcceptanceRecord, error) {
+func ReadResultAcceptance(pending store.PendingEffect) (resultAcceptanceRecord, error) {
 	if pending.Kind != store.PendingEffectKindResultAcceptance {
-		return ResultAcceptanceRecord{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
+		return resultAcceptanceRecord{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
 	}
 	var payload resultAcceptanceEffectPayload
-	if err := DecodePendingEffect(pending, &payload); err != nil {
-		return ResultAcceptanceRecord{}, fmt.Errorf("decode result acceptance payload: %w", err)
+	if err := decodePendingEffect(pending, &payload); err != nil {
+		return resultAcceptanceRecord{}, fmt.Errorf("decode result acceptance payload: %w", err)
 	}
-	return ResultAcceptanceRecord{Invocation: payload.Invocation, AcceptedReport: payload.AcceptedReport}, nil
+	return resultAcceptanceRecord{Invocation: payload.Invocation, AcceptedReport: payload.AcceptedReport}, nil
 }

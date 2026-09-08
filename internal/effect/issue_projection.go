@@ -13,8 +13,8 @@ import (
 // and its editable status comment — converge on a persisted run revision. It
 // is the shared apply path behind every kind that advances workflow state.
 type issueProjection struct {
-	issues       IssueClient
-	presentation RunPresentation
+	issues       issueClient
+	presentation runPresentation
 }
 
 // applyStateTransition makes the two GitHub projections converge on a

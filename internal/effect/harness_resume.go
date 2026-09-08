@@ -14,8 +14,8 @@ import (
 // harness command crosses into a visible terminal.
 type harnessResumeHandler struct {
 	now       func() time.Time
-	lifecycle Lifecycle
-	projector RunProjector
+	lifecycle lifecycle
+	projector runProjector
 }
 
 // ResumeHarness journals a native-session continuation before the harness
@@ -23,14 +23,16 @@ type harnessResumeHandler struct {
 // before the native command, so an ambiguous post-launch failure is never
 // replayed as a second visible session.
 func (j *Journal) ResumeHarness(ctx context.Context, runStore RunStore, invocationStore InvocationStore, socketPath string, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
-	return j.harnessResume.resume(ctx, runStore, invocationStore, socketPath, runtime, invocation, request)
+	handler := mustApplyHandler[harnessResumeHandler](j.dispatcher, store.PendingEffectKindHarnessResume)
+	return handler.resume(ctx, runStore, invocationStore, socketPath, runtime, invocation, request)
 }
 
 // ResumeHarnessManually performs an explicit operator resume. The native
 // command is journaled, but the automatic recovery counter is left unchanged
 // because manual intervention is outside that bounded policy.
 func (j *Journal) ResumeHarnessManually(ctx context.Context, runStore RunStore, invocationStore InvocationStore, socketPath string, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
-	return j.harnessResume.resumeManually(ctx, runStore, invocationStore, socketPath, runtime, invocation, request)
+	handler := mustApplyHandler[harnessResumeHandler](j.dispatcher, store.PendingEffectKindHarnessResume)
+	return handler.resumeManually(ctx, runStore, invocationStore, socketPath, runtime, invocation, request)
 }
 
 // resume reserves and performs one automatic native-session continuation.
@@ -100,7 +102,7 @@ func (h harnessResumeHandler) resume(ctx context.Context, runStore RunStore, inv
 		}
 		return nil
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
 		// A journaled resume is never rolled back after reservation is
 		// attempted. Returning the reserved projection makes callers retain
 		// the one-resume ceiling even when the journal or native adapter fails.
@@ -163,7 +165,7 @@ func (h harnessResumeHandler) resumeManually(ctx context.Context, runStore RunSt
 		}
 		return nil
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
 		return updated, err
 	}
 	if waitingFailure != nil {
@@ -205,14 +207,14 @@ func classifyHarnessRuntimeError(runtime harness.Runtime, err error) error {
 // treated as an already-crossed boundary; a missing reservation is recorded
 // before replay so a second restart cannot launch a duplicate session after an
 // ambiguous native command.
-func (h harnessResumeHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h harnessResumeHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload harnessResumeEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	invocationStore, ok := runStore.(InvocationStore)
@@ -310,10 +312,10 @@ func rollbackReplayedHarnessResume(ctx context.Context, runStore RunStore, effec
 	return classified
 }
 
-// HarnessResumeRecord is the durable intent recorded for one native-session
+// harnessResumeRecord is the durable intent recorded for one native-session
 // resume. Recovery reads it to decide whether the one-resume ceiling was
 // already consumed before a restart.
-type HarnessResumeRecord struct {
+type harnessResumeRecord struct {
 	// InvocationID identifies the invocation the resume belongs to.
 	InvocationID string
 	// Harness is the non-secret adapter identity for a bounded wait message.
@@ -325,15 +327,15 @@ type HarnessResumeRecord struct {
 }
 
 // ReadHarnessResume decodes one harness-resume journal entry.
-func ReadHarnessResume(pending store.PendingEffect) (HarnessResumeRecord, error) {
+func ReadHarnessResume(pending store.PendingEffect) (harnessResumeRecord, error) {
 	if pending.Kind != store.PendingEffectKindHarnessResume {
-		return HarnessResumeRecord{}, fmt.Errorf("expected harness_resume effect, got %s", pending.Kind)
+		return harnessResumeRecord{}, fmt.Errorf("expected harness_resume effect, got %s", pending.Kind)
 	}
 	var payload harnessResumeEffectPayload
-	if err := DecodePendingEffect(pending, &payload); err != nil {
-		return HarnessResumeRecord{}, err
+	if err := decodePendingEffect(pending, &payload); err != nil {
+		return harnessResumeRecord{}, err
 	}
-	return HarnessResumeRecord{
+	return harnessResumeRecord{
 		InvocationID:      payload.Invocation.ID,
 		Harness:           payload.Invocation.Harness,
 		TargetResumeCount: payload.TargetResumeCount,

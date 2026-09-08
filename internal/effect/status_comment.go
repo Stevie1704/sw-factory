@@ -14,7 +14,7 @@ import (
 type statusCommentHandler struct {
 	now       func() time.Time
 	labels    issueProjection
-	projector RunProjector
+	projector runProjector
 }
 
 // PersistCommandProjection journals a command's local watermark together with
@@ -22,12 +22,13 @@ type statusCommentHandler struct {
 // process stop between the two writes leaves a replayable intent instead of an
 // apparently processed but stale command.
 func (j *Journal) PersistCommandProjection(ctx context.Context, runStore RunStore, repository github.Repository, previous, next store.Run) (store.Run, error) {
-	return j.statusComment.persist(ctx, runStore, repository, previous, next)
+	handler := mustApplyHandler[statusCommentHandler](j.dispatcher, store.PendingEffectKindStatusComment)
+	return handler.persist(ctx, runStore, repository, previous, next)
 }
 
 // persist reserves the watermark and its status-comment edit as one effect.
 func (h statusCommentHandler) persist(ctx context.Context, runStore RunStore, repository github.Repository, previous, next store.Run) (store.Run, error) {
-	if err := ValidateRunBeforeEffect(store.PendingEffectKindStatusComment, next); err != nil {
+	if err := validateRunBeforeEffect(store.PendingEffectKindStatusComment, next); err != nil {
 		return next, err
 	}
 	payload := statusCommentEffectPayload{Repository: repository, Previous: previous, Next: next}
@@ -62,7 +63,7 @@ func (h statusCommentHandler) persist(ctx context.Context, runStore RunStore, re
 		}
 		return h.labels.applyStatusComment(ctx, payload)
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(action)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(action)); err != nil {
 		return next, err
 	}
 	return next, nil
@@ -71,14 +72,14 @@ func (h statusCommentHandler) persist(ctx context.Context, runStore RunStore, re
 // Replay finishes a command projection after a process boundary. It persists
 // the watermark only when it is still missing, then recognizes or applies the
 // exact status-comment body before clearing intent.
-func (h statusCommentHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h statusCommentHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload statusCommentEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if err := validateRunBeforeReplay(store.PendingEffectKindStatusComment, payload.Next); err != nil {

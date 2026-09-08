@@ -1047,8 +1047,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
 			diagnosis.PendingEffect = pending
 			replayKind := RecoveryDiscrepancyInfrastructure
-			var workflowErr *effectkernel.WorkflowProjectionError
-			if errors.As(replayErr, &workflowErr) {
+			if effectkernel.IsWorkflowProjectionError(replayErr) {
 				replayKind = RecoveryDiscrepancyWorkflow
 			}
 			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{

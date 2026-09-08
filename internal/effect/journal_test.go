@@ -2,6 +2,8 @@ package effect_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -39,6 +41,7 @@ type journalStoreForTest struct {
 	run        store.Run
 	invocation store.Invocation
 	reserved   []store.PendingEffect
+	cleared    []string
 }
 
 // CurrentRun returns the fixed run projection.
@@ -74,8 +77,11 @@ func (s *journalStoreForTest) SavePendingEffect(_ context.Context, pending store
 	return nil
 }
 
-// ClearPendingEffect acknowledges a reservation without removing the record.
-func (s *journalStoreForTest) ClearPendingEffect(context.Context, string, string) error { return nil }
+// ClearPendingEffect records the acknowledged effect identity.
+func (s *journalStoreForTest) ClearPendingEffect(_ context.Context, _ string, effectID string) error {
+	s.cleared = append(s.cleared, effectID)
+	return nil
+}
 
 // journalPresentationForTest renders bounded, deterministic projections.
 type journalPresentationForTest struct{}
@@ -151,49 +157,99 @@ var errExternal = errors.New("external mutation unavailable")
 // journalIssuesForTest fails every issue mutation after reservation.
 type journalIssuesForTest struct{}
 
+// Issue returns the injected external failure.
 func (journalIssuesForTest) Issue(context.Context, github.Repository, int) (github.Issue, error) {
 	return github.Issue{}, errExternal
 }
 
+// ReplaceIssueLabels returns the injected external failure.
 func (journalIssuesForTest) ReplaceIssueLabels(context.Context, github.Repository, int, []string) error {
 	return errExternal
 }
 
+// CreateIssueComment returns the injected external failure.
 func (journalIssuesForTest) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
 	return github.Comment{}, errExternal
 }
 
+// FindStatusComment returns the injected external failure.
 func (journalIssuesForTest) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
 	return github.Comment{}, errExternal
 }
 
+// EditIssueComment returns the injected external failure.
 func (journalIssuesForTest) EditIssueComment(context.Context, github.Repository, string, string) error {
 	return errExternal
+}
+
+// recoveringLabelIssuesForTest mutates its label projection before returning
+// one lost-response error.
+type recoveringLabelIssuesForTest struct {
+	issue        github.Issue
+	failOnce     bool
+	replacements int
+}
+
+// Issue returns the current label projection.
+func (i *recoveringLabelIssuesForTest) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+	return i.issue, nil
+}
+
+// ReplaceIssueLabels applies labels and optionally loses the first response.
+func (i *recoveringLabelIssuesForTest) ReplaceIssueLabels(_ context.Context, _ github.Repository, _ int, labels []string) error {
+	i.issue.Labels = append([]string(nil), labels...)
+	i.replacements++
+	if i.failOnce {
+		i.failOnce = false
+		return errExternal
+	}
+	return nil
+}
+
+// CreateIssueComment is unused by the label handler.
+func (*recoveringLabelIssuesForTest) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+	return github.Comment{}, errors.New("unexpected comment creation")
+}
+
+// FindStatusComment is unused by the label handler.
+func (*recoveringLabelIssuesForTest) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+	return github.Comment{}, errors.New("unexpected status-comment read")
+}
+
+// EditIssueComment is unused by the label handler.
+func (*recoveringLabelIssuesForTest) EditIssueComment(context.Context, github.Repository, string, string) error {
+	return errors.New("unexpected status-comment edit")
 }
 
 // journalWorkspaceForTest fails every Git mutation after reservation.
 type journalWorkspaceForTest struct{}
 
+// Create returns the injected external failure.
 func (journalWorkspaceForTest) Create(context.Context, string, string, string) (gitadapter.Workspace, error) {
 	return gitadapter.Workspace{}, errExternal
 }
 
+// Remove returns the injected external failure.
 func (journalWorkspaceForTest) Remove(context.Context, string, gitadapter.Workspace) error {
 	return errExternal
 }
 
+// Inspect returns the injected external failure.
 func (journalWorkspaceForTest) Inspect(context.Context, string) (gitadapter.WorktreeState, error) {
 	return gitadapter.WorktreeState{}, errExternal
 }
 
+// CreateCheckpoint returns the injected external failure.
 func (journalWorkspaceForTest) CreateCheckpoint(context.Context, gitadapter.CheckpointRequest) (gitadapter.CheckpointResult, error) {
 	return gitadapter.CheckpointResult{}, errExternal
 }
 
+// Push returns the injected external failure.
 func (journalWorkspaceForTest) Push(context.Context, gitadapter.PushRequest) error {
 	return errExternal
 }
 
+// SynchronizeBase returns the injected external failure.
 func (journalWorkspaceForTest) SynchronizeBase(context.Context, gitadapter.BaseSyncRequest) error {
 	return errExternal
 }
@@ -201,14 +257,17 @@ func (journalWorkspaceForTest) SynchronizeBase(context.Context, gitadapter.BaseS
 // journalPullRequestsForTest fails every pull-request mutation.
 type journalPullRequestsForTest struct{}
 
+// FindPullRequest returns the injected external failure.
 func (journalPullRequestsForTest) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
 	return github.PullRequest{}, errExternal
 }
 
+// CreatePullRequest returns the injected external failure.
 func (journalPullRequestsForTest) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, errExternal
 }
 
+// UpdatePullRequest returns the injected external failure.
 func (journalPullRequestsForTest) UpdatePullRequest(context.Context, github.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, errExternal
 }
@@ -216,6 +275,7 @@ func (journalPullRequestsForTest) UpdatePullRequest(context.Context, github.Repo
 // journalStatusesForTest fails every commit-status publication.
 type journalStatusesForTest struct{}
 
+// CreateCommitStatus returns the injected external failure.
 func (journalStatusesForTest) CreateCommitStatus(context.Context, github.Repository, github.CommitStatus) error {
 	return errExternal
 }
@@ -223,34 +283,42 @@ func (journalStatusesForTest) CreateCommitStatus(context.Context, github.Reposit
 // journalWorkerForTest fails every worker launch.
 type journalWorkerForTest struct{}
 
+// Start returns the injected external failure.
 func (journalWorkerForTest) Start(context.Context, worker.StartRequest) error { return errExternal }
 
 // journalHarnessForTest fails every native resume.
 type journalHarnessForTest struct{}
 
+// Capabilities identifies the deterministic test harness.
 func (journalHarnessForTest) Capabilities() harness.Capabilities {
 	return harness.Capabilities{Name: "codex"}
 }
 
+// Start returns the injected external failure.
 func (journalHarnessForTest) Start(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, errExternal
 }
 
+// Resume returns the injected external failure.
 func (journalHarnessForTest) Resume(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, errExternal
 }
 
+// Finish returns the injected external failure.
 func (journalHarnessForTest) Finish(context.Context, harness.Session) error { return errExternal }
 
 // journalLifecycleForTest refuses every lifecycle operation.
 type journalLifecycleForTest struct{}
 
+// StopWorker returns the injected external failure.
 func (journalLifecycleForTest) StopWorker(context.Context, string) error { return errExternal }
 
+// StopActiveWorkers returns the injected external failure.
 func (journalLifecycleForTest) StopActiveWorkers(context.Context, effect.RunStore, store.Run) error {
 	return errExternal
 }
 
+// HarnessRuntime returns the deterministic test harness.
 func (journalLifecycleForTest) HarnessRuntime(string, string) (harness.Runtime, error) {
 	return journalHarnessForTest{}, nil
 }
@@ -309,6 +377,41 @@ func TestJournalRegistersEveryPendingEffectKind(t *testing.T) {
 	}
 }
 
+// TestJournalLabelApplyReplaysALostResponse verifies the formerly replay-only
+// kind now reserves through the public apply interface and recognizes the
+// completed label replacement during replay.
+func TestJournalLabelApplyReplaysALostResponse(t *testing.T) {
+	ctx := context.Background()
+	run := journalRunForTest()
+	runStore := &journalStoreForTest{run: run}
+	issues := &recoveringLabelIssuesForTest{
+		issue:    github.Issue{Number: run.IssueNumber, Labels: []string{"old"}},
+		failOnce: true,
+	}
+	journal := effect.New(effect.Adapters{
+		Now:       func() time.Time { return time.Unix(10, 0).UTC() },
+		Issues:    issues,
+		Projector: journalProjectorForTest{run: run},
+	})
+	repository := github.Repository{Owner: "example", Name: "project"}
+	labels := []string{"ordinary", "agent-failed"}
+	if err := journal.ApplyLabels(ctx, runStore, run.ID, repository, run.IssueNumber, labels); !errors.Is(err, errExternal) {
+		t.Fatalf("ApplyLabels() error = %v, want lost response", err)
+	}
+	if len(runStore.reserved) != 1 || runStore.reserved[0].Kind != store.PendingEffectKindLabelTransition {
+		t.Fatalf("label reservation = %#v, want one label_transition", runStore.reserved)
+	}
+	if _, err := journal.Replay(ctx, runStore, runStore.reserved[0]); err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if issues.replacements != 1 {
+		t.Fatalf("label replacements = %d, want one", issues.replacements)
+	}
+	if len(runStore.cleared) != 1 || runStore.cleared[0] != runStore.reserved[0].ID {
+		t.Fatalf("cleared effects = %#v, want the label reservation", runStore.cleared)
+	}
+}
+
 // TestJournalReservesByteIdenticalEffectIdentities protects the durable
 // identity of every apply path. A changed identity string would make an
 // in-flight journal entry written by the previous build unrecognisable, so
@@ -347,6 +450,13 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 				_, _ = journal.ApplyStateTransition(ctx, runStore, effect.StateTransition{
 					Repository: repository, Issue: issue, Previous: run, Next: next,
 				}, next)
+			},
+		},
+		{
+			name: "label transition", kind: store.PendingEffectKindLabelTransition,
+			identity: "issue=42\x00labels=ordinary\x00agent-failed",
+			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
+				_ = journal.ApplyLabels(ctx, runStore, run.ID, repository, 42, []string{"ordinary", "agent-failed"})
 			},
 		},
 		{
@@ -445,10 +555,18 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 			if reserved.Kind != test.kind {
 				t.Fatalf("reserved kind = %q, want %q", reserved.Kind, test.kind)
 			}
-			want := effect.PendingEffectID(run.ID, test.kind, test.identity)
+			want := legacyPendingEffectID(run.ID, test.kind, test.identity)
 			if reserved.ID != want {
 				t.Fatalf("reserved identity = %q, want %q derived from %q", reserved.ID, want, test.identity)
 			}
 		})
 	}
+}
+
+// legacyPendingEffectID independently derives the persisted journal identity
+// so the external-interface test does not require the kernel helper to remain
+// exported.
+func legacyPendingEffectID(runID string, kind store.PendingEffectKind, identity string) string {
+	digest := sha256.Sum256([]byte(runID + "\x00" + string(kind) + "\x00" + identity))
+	return string(kind) + ":" + hex.EncodeToString(digest[:])
 }

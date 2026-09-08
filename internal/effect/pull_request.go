@@ -16,7 +16,7 @@ type pullRequestHandler struct {
 	now       func() time.Time
 	clients   github.PullRequestClient
 	labels    issueProjection
-	projector RunProjector
+	projector runProjector
 }
 
 // UpsertPullRequest performs a branch-scoped, idempotent pull-request
@@ -65,18 +65,20 @@ func UpsertPullRequest(ctx context.Context, client github.PullRequestClient, rep
 // discover a created pull request and finish the missing durable state without
 // creating a second one.
 func (j *Journal) UpsertPullRequestAndPersist(ctx context.Context, runStore RunStore, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
-	return j.pullRequest.upsertAndPersist(ctx, runStore, repository, issue, previous, next, request, expectedNumber)
+	handler := mustApplyHandler[pullRequestHandler](j.dispatcher, store.PendingEffectKindPullRequest)
+	return handler.upsertAndPersist(ctx, runStore, repository, issue, previous, next, request, expectedNumber)
 }
 
 // UpdatePullRequest journals a standalone generated-body update, such as
 // review regeneration, when no run-state change accompanies it.
 func (j *Journal) UpdatePullRequest(ctx context.Context, runStore RunStore, runID string, repository github.Repository, number int, request github.PullRequestRequest) error {
-	return j.pullRequest.update(ctx, runStore, runID, repository, number, request)
+	handler := mustApplyHandler[pullRequestHandler](j.dispatcher, store.PendingEffectKindPullRequest)
+	return handler.update(ctx, runStore, runID, repository, number, request)
 }
 
 // upsertAndPersist reserves the pull-request mutation and its run projection.
 func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunStore, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
-	if err := ValidateRunBeforeEffect(store.PendingEffectKindPullRequest, next); err != nil {
+	if err := validateRunBeforeEffect(store.PendingEffectKindPullRequest, next); err != nil {
 		return github.PullRequest{}, next, err
 	}
 	payload := pullRequestEffectPayload{Repository: repository, Number: expectedNumber, Request: request, PersistRun: true, Issue: issue, Previous: previous, Next: next}
@@ -109,7 +111,7 @@ func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunSt
 		}
 		return nil
 	}
-	if err := WithPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
+	if err := withPendingEffect(ctx, runStore, effect, applier(apply)); err != nil {
 		return pullRequest, next, err
 	}
 	return pullRequest, next, nil
@@ -122,7 +124,7 @@ func (h pullRequestHandler) update(ctx context.Context, runStore RunStore, runID
 	if err != nil {
 		return err
 	}
-	return WithPendingEffect(ctx, runStore, effect, applier(func() error {
+	return withPendingEffect(ctx, runStore, effect, applier(func() error {
 		_, err := UpsertPullRequest(ctx, h.clients, repository, number, request)
 		return err
 	}))
@@ -131,14 +133,14 @@ func (h pullRequestHandler) update(ctx context.Context, runStore RunStore, runID
 // Replay finishes a pull-request mutation and its run projection from the
 // persisted request, recognizing an already-created pull request by branch
 // identity.
-func (h pullRequestHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h pullRequestHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload pullRequestEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if payload.PersistRun {

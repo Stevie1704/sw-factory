@@ -18,13 +18,14 @@ type commitStatusHandler struct {
 	now       func() time.Time
 	statuses  github.CommitStatusPublisher
 	workspace gitadapter.GitWorkspace
-	projector RunProjector
+	projector runProjector
 }
 
 // CommitStatusPublisher wraps a commit-status seam with durable idempotency,
 // so an ambiguous response cannot create a second semantic status.
 func (j *Journal) CommitStatusPublisher(runStore RunStore, runID string, delegate github.CommitStatusPublisher) github.CommitStatusPublisher {
-	return journaledCommitStatus{handler: j.commitStatus, runStore: runStore, runID: runID, delegate: delegate}
+	handler := mustApplyHandler[commitStatusHandler](j.dispatcher, store.PendingEffectKindCommitStatus)
+	return journaledCommitStatus{handler: handler, runStore: runStore, runID: runID, delegate: delegate}
 }
 
 // journaledCommitStatus reserves each status before publishing it.
@@ -43,7 +44,7 @@ func (p journaledCommitStatus) CreateCommitStatus(ctx context.Context, repositor
 	if err != nil {
 		return err
 	}
-	return WithPendingEffect(ctx, p.runStore, effect, applier(func() error {
+	return withPendingEffect(ctx, p.runStore, effect, applier(func() error {
 		if reader, ok := p.delegate.(github.CommitStatusReader); ok {
 			statuses, err := reader.ListCommitStatuses(ctx, repository, status.SHA)
 			if err != nil {
@@ -62,14 +63,14 @@ func (p journaledCommitStatus) CreateCommitStatus(ctx context.Context, repositor
 // Replay recognizes or republishes one exact-SHA status and then clears its
 // durable reservation. A reader is required during recovery so an adapter
 // cannot blindly create a duplicate after an ambiguous response.
-func (h commitStatusHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h commitStatusHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload commitStatusEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if h.statuses == nil {

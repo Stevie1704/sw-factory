@@ -14,15 +14,16 @@ import (
 // coordinator crosses into Docker.
 type workerLaunchHandler struct {
 	now       func() time.Time
-	worker    WorkerLauncher
-	projector RunProjector
+	worker    workerLauncher
+	projector runProjector
 }
 
 // StartWorker reserves a worker launch before crossing into Docker.
 // DockerRuntime makes Start itself idempotent for an exact run/image/mount
 // identity, so replaying a completed launch is safe.
 func (j *Journal) StartWorker(ctx context.Context, runStore RunStore, request worker.StartRequest) error {
-	return j.workerLaunch.start(ctx, runStore, request)
+	handler := mustApplyHandler[workerLaunchHandler](j.dispatcher, store.PendingEffectKindWorkerLaunch)
+	return handler.start(ctx, runStore, request)
 }
 
 // start reserves and performs one worker launch.
@@ -32,7 +33,7 @@ func (h workerLaunchHandler) start(ctx context.Context, runStore RunStore, reque
 	if err != nil {
 		return err
 	}
-	return WithPendingEffect(ctx, runStore, effect, applier(func() error {
+	return withPendingEffect(ctx, runStore, effect, applier(func() error {
 		if h.worker == nil {
 			return errors.New("worker runtime is required")
 		}
@@ -42,14 +43,14 @@ func (h workerLaunchHandler) start(ctx context.Context, runStore RunStore, reque
 
 // Replay completes a worker reservation from its portable start request and
 // leaves the durable run projection unchanged.
-func (h workerLaunchHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h workerLaunchHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload workerLaunchEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if h.worker == nil {

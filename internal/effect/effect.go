@@ -29,71 +29,100 @@ type PendingEffectAbandoner interface {
 	AbandonPendingEffect(context.Context, string, string, string) error
 }
 
-// EffectApplier performs the effect-specific external mutation wrapped by the
-// journal protocol. Implementations stay outside the kernel.
-type EffectApplier interface {
+// effectApplier performs the effect-specific external mutation wrapped by the
+// journal protocol.
+type effectApplier interface {
 	Apply() error
 }
 
 var _ PendingEffectStore = (*store.Store)(nil)
 var _ PendingEffectAbandoner = (*store.Store)(nil)
 
-// ReplayRequest carries the opaque store value needed by an effect handler and
+// replayRequest carries the opaque store value needed by an effect handler and
 // the durable effect being replayed. The kernel does not interpret the store
 // or the payload.
-type ReplayRequest struct {
+type replayRequest struct {
 	// Store is the caller's operational-store value.
 	Store any
 	// Effect is the durable effect selected for replay.
 	Effect store.PendingEffect
 }
 
-// ReplayHandler is the adapter at the replay seam. Effect-specific policy
-// implements this interface and remains outside the kernel.
-type ReplayHandler interface {
-	Replay(context.Context, ReplayRequest) (store.Run, error)
+// replayHandler is the adapter at the replay seam.
+type replayHandler interface {
+	Replay(context.Context, replayRequest) (store.Run, error)
 }
 
-// Dispatcher routes each pending-effect kind to its registered replay
-// handler.
-type Dispatcher struct {
-	handlers map[store.PendingEffectKind]ReplayHandler
+// handlerRegistration binds one kind's typed apply implementation to its
+// replay implementation. The apply value is recovered by the journal's typed
+// operation, so the registry does not merge the kinds into a generic effect.
+type handlerRegistration struct {
+	apply  any
+	replay replayHandler
 }
 
-// NewDispatcher creates an empty replay dispatcher.
-func NewDispatcher() *Dispatcher {
-	return &Dispatcher{handlers: make(map[store.PendingEffectKind]ReplayHandler)}
+// dispatcher routes each pending-effect kind through its one registered apply
+// implementation and one registered replay implementation.
+type dispatcher struct {
+	handlers map[store.PendingEffectKind]handlerRegistration
 }
 
-// Register associates one pending-effect kind with its replay handler.
-func (d *Dispatcher) Register(kind store.PendingEffectKind, handler ReplayHandler) error {
+// newDispatcher creates an empty apply/replay dispatcher.
+func newDispatcher() *dispatcher {
+	return &dispatcher{handlers: make(map[store.PendingEffectKind]handlerRegistration)}
+}
+
+// register associates one pending-effect kind with exactly one apply and one
+// replay implementation.
+func (d *dispatcher) register(kind store.PendingEffectKind, apply any, replay replayHandler) error {
 	if d == nil {
 		return errors.New("effect dispatcher is required")
 	}
 	if strings.TrimSpace(string(kind)) == "" {
 		return errors.New("pending effect kind is required")
 	}
-	if handler == nil {
+	if apply == nil {
+		return errors.New("pending effect apply handler is required")
+	}
+	if replay == nil {
 		return errors.New("pending effect replay handler is required")
 	}
 	if d.handlers == nil {
-		d.handlers = make(map[store.PendingEffectKind]ReplayHandler)
+		d.handlers = make(map[store.PendingEffectKind]handlerRegistration)
 	}
 	if _, exists := d.handlers[kind]; exists {
-		return fmt.Errorf("pending effect kind %q already has a replay handler", kind)
+		return fmt.Errorf("pending effect kind %q already has handlers", kind)
 	}
-	d.handlers[kind] = handler
+	d.handlers[kind] = handlerRegistration{apply: apply, replay: replay}
 	return nil
 }
 
-// Replay dispatches one durable effect to the handler registered for its kind.
-func (d *Dispatcher) Replay(ctx context.Context, runStore any, pending store.PendingEffect) (store.Run, error) {
+// replay dispatches one durable effect to the handler registered for its kind.
+func (d *dispatcher) replay(ctx context.Context, runStore any, pending store.PendingEffect) (store.Run, error) {
 	if d != nil {
-		if handler, exists := d.handlers[pending.Kind]; exists {
-			return handler.Replay(ctx, ReplayRequest{Store: runStore, Effect: pending})
+		if handlers, exists := d.handlers[pending.Kind]; exists {
+			return handlers.replay.Replay(ctx, replayRequest{Store: runStore, Effect: pending})
 		}
 	}
 	return store.Run{}, &UnknownKindError{Kind: pending.Kind}
+}
+
+// mustApplyHandler returns the typed apply implementation registered for a
+// package-owned kind. A mismatch is a construction bug and therefore panics at
+// the same boundary as a duplicate registration.
+func mustApplyHandler[T any](d *dispatcher, kind store.PendingEffectKind) T {
+	if d == nil {
+		panic("effect dispatcher is required")
+	}
+	handlers, ok := d.handlers[kind]
+	if !ok {
+		panic(fmt.Sprintf("pending effect kind %q has no apply handler", kind))
+	}
+	handler, ok := handlers.apply.(T)
+	if !ok {
+		panic(fmt.Sprintf("pending effect kind %q has the wrong apply handler", kind))
+	}
+	return handler
 }
 
 // UnknownKindError reports that no replay handler is registered for a pending
@@ -111,17 +140,17 @@ func (e *UnknownKindError) Error() string {
 	return fmt.Sprintf("unsupported pending effect kind %q", e.Kind)
 }
 
-// PendingEffectID derives the stable identity used to recognize one semantic
+// pendingEffectID derives the stable identity used to recognize one semantic
 // effect after a coordinator restart. The NUL-delimited input is part of the
 // persisted protocol and must remain byte-identical across upgrades.
-func PendingEffectID(runID string, kind store.PendingEffectKind, identity string) string {
+func pendingEffectID(runID string, kind store.PendingEffectKind, identity string) string {
 	digest := sha256.Sum256([]byte(runID + "\x00" + string(kind) + "\x00" + identity))
 	return string(kind) + ":" + hex.EncodeToString(digest[:])
 }
 
-// NewPendingEffect encodes one replay intent and assigns the supplied
+// newPendingEffect encodes one replay intent and assigns the supplied
 // coordinator time to both journal timestamps.
-func NewPendingEffect(now time.Time, runID string, kind store.PendingEffectKind, identity string, payload any) (store.PendingEffect, error) {
+func newPendingEffect(now time.Time, runID string, kind store.PendingEffectKind, identity string, payload any) (store.PendingEffect, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return store.PendingEffect{}, fmt.Errorf("encode %s effect: %w", kind, err)
@@ -132,7 +161,7 @@ func NewPendingEffect(now time.Time, runID string, kind store.PendingEffectKind,
 	when := now.UTC()
 	return store.PendingEffect{
 		RunID:     runID,
-		ID:        PendingEffectID(runID, kind, identity),
+		ID:        pendingEffectID(runID, kind, identity),
 		Kind:      kind,
 		Payload:   string(data),
 		CreatedAt: when,
@@ -140,9 +169,9 @@ func NewPendingEffect(now time.Time, runID string, kind store.PendingEffectKind,
 	}, nil
 }
 
-// DecodePendingEffect decodes one bounded replay payload and reports malformed
+// decodePendingEffect decodes one bounded replay payload and reports malformed
 // journal data as an infrastructure discrepancy rather than a workflow result.
-func DecodePendingEffect(pending store.PendingEffect, destination any) error {
+func decodePendingEffect(pending store.PendingEffect, destination any) error {
 	if strings.TrimSpace(pending.Payload) == "" {
 		return errors.New("pending effect payload is empty")
 	}
@@ -152,10 +181,10 @@ func DecodePendingEffect(pending store.PendingEffect, destination any) error {
 	return nil
 }
 
-// WithPendingEffect reserves one external mutation before applying it and
+// withPendingEffect reserves one external mutation before applying it and
 // completes the reservation only after the mutation succeeds. A store without
 // the optional journal retains the legacy direct-execution behavior.
-func WithPendingEffect(ctx context.Context, runStore any, pending store.PendingEffect, applier EffectApplier) error {
+func withPendingEffect(ctx context.Context, runStore any, pending store.PendingEffect, applier effectApplier) error {
 	journal, ok := runStore.(PendingEffectStore)
 	if !ok {
 		return applier.Apply()

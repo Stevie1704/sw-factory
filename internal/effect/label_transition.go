@@ -4,16 +4,41 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
 // labelTransitionHandler owns the standalone complete issue-label replacement.
-// The kind is replay-only: no current apply path reserves it, but a journal
-// entry written by an earlier build must still replay.
 type labelTransitionHandler struct {
-	issues    IssueClient
-	projector RunProjector
+	now       func() time.Time
+	issues    issueClient
+	projector runProjector
+}
+
+// ApplyLabels reserves and applies one complete issue-label replacement.
+func (j *Journal) ApplyLabels(ctx context.Context, runStore RunStore, runID string, repository github.Repository, issueNumber int, labels []string) error {
+	handler := mustApplyHandler[labelTransitionHandler](j.dispatcher, store.PendingEffectKindLabelTransition)
+	return handler.applyJournaled(ctx, runStore, runID, labelTransitionEffectPayload{
+		Repository:  repository,
+		IssueNumber: issueNumber,
+		Labels:      append([]string(nil), labels...),
+	})
+}
+
+// applyJournaled reserves one label replacement before crossing the GitHub
+// mutation seam.
+func (h labelTransitionHandler) applyJournaled(ctx context.Context, runStore RunStore, runID string, payload labelTransitionEffectPayload) error {
+	identity := fmt.Sprintf("issue=%d\x00labels=%s", payload.IssueNumber, strings.Join(payload.Labels, "\x00"))
+	effect, err := reserve(h.now, runID, store.PendingEffectKindLabelTransition, identity, payload)
+	if err != nil {
+		return err
+	}
+	return withPendingEffect(ctx, runStore, effect, applier(func() error {
+		return h.apply(ctx, payload)
+	}))
 }
 
 // apply observes the complete factory-owned label set before replacing it,
@@ -38,14 +63,14 @@ func (h labelTransitionHandler) apply(ctx context.Context, payload labelTransiti
 
 // Replay completes a standalone label reservation and leaves workflow state
 // untouched.
-func (h labelTransitionHandler) Replay(ctx context.Context, request ReplayRequest) (store.Run, error) {
+func (h labelTransitionHandler) Replay(ctx context.Context, request replayRequest) (store.Run, error) {
 	runStore, err := replayStore(request)
 	if err != nil {
 		return store.Run{}, err
 	}
 	effect := request.Effect
 	var payload labelTransitionEffectPayload
-	if err := DecodePendingEffect(effect, &payload); err != nil {
+	if err := decodePendingEffect(effect, &payload); err != nil {
 		return store.Run{}, err
 	}
 	if err := h.apply(ctx, payload); err != nil {

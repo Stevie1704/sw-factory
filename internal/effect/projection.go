@@ -10,15 +10,15 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// WorkflowProjectionError marks a deterministic conflict between a replay
+// workflowProjectionError marks a deterministic conflict between a replay
 // payload and the newer persisted workflow projection. It lets reconciliation
 // distinguish workflow ownership from external infrastructure uncertainty.
-type WorkflowProjectionError struct {
+type workflowProjectionError struct {
 	cause error
 }
 
 // Error returns the deterministic workflow conflict.
-func (e *WorkflowProjectionError) Error() string {
+func (e *workflowProjectionError) Error() string {
 	if e == nil || e.cause == nil {
 		return "deterministic workflow projection conflict"
 	}
@@ -26,7 +26,7 @@ func (e *WorkflowProjectionError) Error() string {
 }
 
 // Unwrap exposes the underlying bounded workflow conflict.
-func (e *WorkflowProjectionError) Unwrap() error {
+func (e *workflowProjectionError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
@@ -35,13 +35,20 @@ func (e *WorkflowProjectionError) Unwrap() error {
 
 // workflowProjectionFailuref creates a typed deterministic replay conflict.
 func workflowProjectionFailuref(format string, arguments ...any) error {
-	return &WorkflowProjectionError{cause: fmt.Errorf(format, arguments...)}
+	return &workflowProjectionError{cause: fmt.Errorf(format, arguments...)}
 }
 
-// ValidateRunBeforeEffect rejects a run projection before its external effect
+// IsWorkflowProjectionError reports whether replay failed because its durable
+// payload conflicts with the current workflow projection.
+func IsWorkflowProjectionError(err error) bool {
+	var conflict *workflowProjectionError
+	return errors.As(err, &conflict)
+}
+
+// validateRunBeforeEffect rejects a run projection before its external effect
 // is reserved, keeping operational-store validation ahead of the journal and
 // every mutation that the journal protects.
-func ValidateRunBeforeEffect(kind store.PendingEffectKind, run store.Run) error {
+func validateRunBeforeEffect(kind store.PendingEffectKind, run store.Run) error {
 	if err := store.ValidateRun(run); err != nil {
 		return fmt.Errorf("validate run before reserving %s effect: %w", kind, err)
 	}
@@ -61,7 +68,7 @@ func validateRunBeforeReplay(kind store.PendingEffectKind, run store.Run) error 
 // reserve encodes one replay intent with the journal clock so every record
 // shares the run's operational time source.
 func reserve(now func() time.Time, runID string, kind store.PendingEffectKind, identity string, payload any) (store.PendingEffect, error) {
-	return NewPendingEffect(now().UTC(), runID, kind, identity, payload)
+	return newPendingEffect(now().UTC(), runID, kind, identity, payload)
 }
 
 // applier adapts a handler's effect action to the kernel's interface-valued
@@ -73,7 +80,7 @@ func (a applier) Apply() error { return a() }
 
 // replayStore narrows the kernel's opaque store value back to the run
 // projection seam every handler needs.
-func replayStore(request ReplayRequest) (RunStore, error) {
+func replayStore(request replayRequest) (RunStore, error) {
 	runStore, ok := request.Store.(RunStore)
 	if !ok {
 		return nil, errors.New("pending effect replay requires a run store")
@@ -96,7 +103,7 @@ func clearReplayedEffect(ctx context.Context, runStore RunStore, pending store.P
 
 // readRunAfterReplay returns the durable run projection a replay leaves
 // unchanged, refusing a run that disappeared mid-recovery.
-func readRunAfterReplay(ctx context.Context, projector RunProjector, runStore RunStore, runID, activity string) (store.Run, error) {
+func readRunAfterReplay(ctx context.Context, projector runProjector, runStore RunStore, runID, activity string) (store.Run, error) {
 	run, err := projector.Read(ctx, runStore)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("read run after %s: %w", activity, err)
