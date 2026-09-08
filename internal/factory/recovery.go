@@ -988,7 +988,7 @@ func (s *Service) AbandonPendingEffect(ctx context.Context, request AbandonPendi
 // when no active run exists. The latter matters because result acceptance can
 // persist its terminal projection immediately before the journal clear; a
 // restart must still drain that one pending effect.
-func readReconciliationRun(ctx context.Context, runStore OperationalStore) (*store.Run, error) {
+func readReconciliationRun(ctx context.Context, runStore currentRunReader) (*store.Run, error) {
 	run, err := runStore.CurrentRun(ctx)
 	if err != nil || run != nil {
 		return run, err
@@ -1042,13 +1042,12 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 		return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
 	} else if pending != nil {
 		resumeWasAlreadyReserved := harnessResumeWasAlreadyReserved(ctx, runStore, *pending)
-		updated, replayErr := s.replayPendingEffect(ctx, runStore, *pending)
+		updated, replayErr := s.journal().Replay(ctx, runStore, *pending)
 		if replayErr != nil {
 			diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
 			diagnosis.PendingEffect = pending
 			replayKind := RecoveryDiscrepancyInfrastructure
-			var workflowErr *workflowProjectionError
-			if errors.As(replayErr, &workflowErr) {
+			if effectkernel.IsWorkflowProjectionError(replayErr) {
 				replayKind = RecoveryDiscrepancyWorkflow
 			}
 			addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
@@ -1358,32 +1357,32 @@ func harnessResumeWasAlreadyReserved(ctx context.Context, runStore RunStore, eff
 	if effect.Kind != store.PendingEffectKindHarnessResume {
 		return false
 	}
-	var payload harnessResumeEffectPayload
-	if err := decodePendingEffect(effect, &payload); err != nil {
+	record, err := effectkernel.ReadHarnessResume(effect)
+	if err != nil {
 		return false
 	}
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
 		return false
 	}
-	invocation, err := invocationStore.Invocation(ctx, effect.RunID, payload.Invocation.ID)
-	if err != nil || invocation == nil {
+	invocation, invocationErr := invocationStore.Invocation(ctx, effect.RunID, record.InvocationID)
+	if invocationErr != nil || invocation == nil {
 		return false
 	}
-	if payload.Manual {
+	if record.Manual {
 		return invocation.AttachRequired
 	}
-	return invocation.RecoveryResumeCount >= payload.TargetResumeCount
+	return invocation.RecoveryResumeCount >= record.TargetResumeCount
 }
 
 // pendingHarnessName extracts the non-secret adapter identity from a pending
 // harness-resume payload for a bounded waiting-state message.
 func pendingHarnessName(effect store.PendingEffect) string {
-	var payload harnessResumeEffectPayload
-	if err := decodePendingEffect(effect, &payload); err != nil || strings.TrimSpace(payload.Invocation.Harness) == "" {
+	record, err := effectkernel.ReadHarnessResume(effect)
+	if err != nil || strings.TrimSpace(record.Harness) == "" {
 		return "harness"
 	}
-	return payload.Invocation.Harness
+	return record.Harness
 }
 
 // waitingForHarnessDiagnosis describes an intentional capacity wait without

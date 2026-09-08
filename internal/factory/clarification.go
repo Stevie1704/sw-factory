@@ -8,7 +8,6 @@ import (
 	"unicode"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
@@ -117,30 +116,10 @@ func (s *Service) ensureClarificationPublication(ctx context.Context, registrati
 			target = run.PullRequestNumber
 		}
 		body := clarificationCommentBody(run, packet.Version, run.PendingQuestions)
-		if err := validateRunBeforeEffect(store.PendingEffectKindClarificationComment, run); err != nil {
-			return run, err
-		}
-		payload := clarificationCommentEffectPayload{
-			Repository: commandRepository(registration), Target: target, Body: body,
-			PacketVersion: packet.Version,
-		}
-		effect, effectErr := s.newPendingEffect(run.ID, store.PendingEffectKindClarificationComment, fmt.Sprintf("target=%d\x00version=%d", target, packet.Version), payload)
-		if effectErr != nil {
-			return run, effectErr
-		}
-		if effectErr := s.withPendingEffect(ctx, runStore, effect, func() error {
-			comment, findErr := s.findOrCreateClarificationComment(ctx, payload.Repository, target, run.ID, packet.Version, body)
-			if findErr != nil {
-				return findErr
-			}
-			run.ClarificationCommentID = comment.ID
-			run.UpdatedAt = s.deps.Now().UTC()
-			if err := saveRunWithRetry(ctx, runStore, run); err != nil {
-				return fmt.Errorf("persist clarification comment identity: %w", err)
-			}
-			return nil
-		}); effectErr != nil {
-			return run, effectErr
+		published, publishErr := s.journal().PublishClarificationComment(ctx, runStore, commandRepository(registration), target, run, packet.Version, body)
+		run = published
+		if publishErr != nil {
+			return run, publishErr
 		}
 	}
 	if !run.ClarificationNotificationSent {
@@ -154,36 +133,6 @@ func (s *Service) ensureClarificationPublication(ctx context.Context, registrati
 		}
 	}
 	return run, nil
-}
-
-// findOrCreateClarificationComment observes the coordinator-owned marker and
-// repairs its body before creating a question comment, making publication
-// safe across response loss and stale question edits.
-func (s *Service) findOrCreateClarificationComment(ctx context.Context, repository github.Repository, target int, runID string, packetVersion int, body string) (github.Comment, error) {
-	if s.deps.GitHub == nil {
-		return github.Comment{}, errors.New("GitHub client is required for clarification publication")
-	}
-	comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, target, clarificationCommentMarker(runID, packetVersion))
-	if err != nil {
-		return github.Comment{}, fmt.Errorf("find existing clarification questions on #%d: %w", target, err)
-	}
-	if strings.TrimSpace(comment.ID) != "" {
-		if comment.Body != body {
-			if err := s.deps.GitHub.EditIssueComment(ctx, repository, comment.ID, body); err != nil {
-				return github.Comment{}, fmt.Errorf("repair clarification questions on #%d: %w", target, err)
-			}
-			comment.Body = body
-		}
-		return comment, nil
-	}
-	created, err := s.deps.GitHub.CreateIssueComment(ctx, repository, target, body)
-	if err != nil {
-		return github.Comment{}, fmt.Errorf("post clarification questions on #%d: %w", target, err)
-	}
-	if strings.TrimSpace(created.ID) == "" {
-		return github.Comment{}, fmt.Errorf("post clarification questions on #%d returned an empty comment id", target)
-	}
-	return created, nil
 }
 
 // clarificationCommentMarker identifies the coordinator-authored clarification

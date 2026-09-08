@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -102,30 +103,6 @@ var factoryLabelByStatus = map[store.Status]string{
 var validStatuses = map[store.Status]struct{}{
 	store.StatusActive: {}, store.StatusWaitingForHuman: {}, store.StatusWaitingForHarness: {},
 	store.StatusFailed: {}, store.StatusCancelled: {}, store.StatusComplete: {},
-}
-
-// stateTransition is the shared state-machine input used by initial claims
-// and later transitions. The only difference is whether a status comment is
-// created or edited.
-type stateTransition struct {
-	Repository    github.Repository
-	Issue         github.Issue
-	Previous      store.Run
-	Next          store.Run
-	CreateComment bool
-	// StopWorker makes terminal transitions keep worker shutdown inside the
-	// same durable effect as the GitHub and run projections.
-	StopWorker bool
-	// PersistBeforeEffects is used by replay-sensitive commands so the
-	// processed-comment watermark is durable before GitHub mutation.
-	PersistBeforeEffects bool
-	// InvalidateResults makes a packet revision boundary invalidate prior
-	// invocation and gate projections atomically with the run update.
-	InvalidateResults bool
-	// InvalidateAllResults makes an authorized specification amendment invalidate
-	// every prior gate result, including the baseline result for the superseded
-	// packet version.
-	InvalidateAllResults bool
 }
 
 // BootstrapLabels explicitly creates or updates the factory-owned labels for
@@ -417,99 +394,13 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 	if !store.IsTerminalStatus(next.Status) {
 		next.TerminalAt = time.Time{}
 	}
-	if err := validateRunBeforeEffect(store.PendingEffectKindStateTransition, next); err != nil {
-		return next, err
+	if err := store.ValidateRun(next); err != nil {
+		return next, fmt.Errorf("validate run before reserving %s effect: %w", store.PendingEffectKindStateTransition, err)
 	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		return s.applyJournaledStateTransition(ctx, runStore, transition, next)
+		return s.journal().ApplyStateTransition(ctx, runStore, transition, next)
 	}
 	return s.applyLegacyStateTransition(ctx, runStore, transition, next)
-}
-
-// applyJournaledStateTransition reserves the complete label/comment transition
-// before crossing GitHub's mutation boundary. The reservation remains until
-// both the projection and durable run state are complete.
-func (s *Service) applyJournaledStateTransition(ctx context.Context, runStore RunStore, transition stateTransition, next store.Run) (store.Run, error) {
-	payload := stateTransitionEffectPayload{
-		Repository:           transition.Repository,
-		Issue:                transition.Issue,
-		Previous:             transition.Previous,
-		Next:                 next,
-		CreateComment:        transition.CreateComment,
-		StopWorker:           transition.StopWorker,
-		InvalidateResults:    transition.InvalidateResults,
-		InvalidateAllResults: transition.InvalidateAllResults,
-	}
-	effect, err := s.newPendingEffect(next.ID, store.PendingEffectKindStateTransition, fmt.Sprintf("revision=%d", next.Revision), payload)
-	if err != nil {
-		return next, err
-	}
-	apply := func() error {
-		if transition.StopWorker {
-			if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, transition.Previous); err != nil {
-				return err
-			}
-		}
-		if transition.PersistBeforeEffects {
-			next.UpdatedAt = s.deps.Now().UTC()
-			if transition.CreateComment {
-				return errors.New("cannot persist a command before creating its status comment")
-			}
-			if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
-				return fmt.Errorf("persist state transition before GitHub effects: %w", err)
-			}
-			if recorder, ok := runStore.(evaluationRecorder); ok {
-				if err := recordEvaluationTransition(ctx, recorder, transition.Previous, next, next.UpdatedAt); err != nil {
-					return fmt.Errorf("record evaluation state transition: %w", err)
-				}
-			}
-		}
-		if err := s.applyStateTransitionEffects(ctx, &next, transition); err != nil {
-			return err
-		}
-		next.UpdatedAt = s.deps.Now().UTC()
-		if !transition.PersistBeforeEffects {
-			if transition.InvalidateAllResults {
-				if atomicStore, ok := runStore.(atomicAllPacketTransitionStore); ok {
-					if err := atomicStore.SaveRunAndInvalidateAllResults(ctx, transition.Previous.Revision, next); err != nil {
-						return fmt.Errorf("persist state transition and invalidate all results: %w", err)
-					}
-				} else {
-					if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
-						return fmt.Errorf("persist state transition: %w", err)
-					}
-					if err := invalidateAllRunResults(ctx, runStore, next.ID); err != nil {
-						return err
-					}
-				}
-			} else if transition.InvalidateResults {
-				if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
-					if err := atomicStore.SaveRunAndInvalidateResults(ctx, transition.Previous.Revision, next); err != nil {
-						return fmt.Errorf("persist state transition and invalidate results: %w", err)
-					}
-				} else {
-					if err := saveCommandRun(ctx, runStore, transition.Previous.Revision, next); err != nil {
-						return fmt.Errorf("persist state transition: %w", err)
-					}
-					if err := invalidateRunResults(ctx, runStore, next.ID); err != nil {
-						return err
-					}
-				}
-			} else if err := saveRunWithRetry(ctx, runStore, next); err != nil {
-				return fmt.Errorf("persist state transition: %w", err)
-			}
-			if recorder, ok := runStore.(evaluationRecorder); ok {
-				if err := recordEvaluationTransition(ctx, recorder, transition.Previous, next, next.UpdatedAt); err != nil {
-					return fmt.Errorf("record evaluation state transition: %w", err)
-				}
-			}
-		}
-		return nil
-	}
-	if err := s.withPendingEffect(ctx, runStore, effect, apply); err != nil {
-		return next, err
-	}
-	return next, nil
 }
 
 // applyLegacyStateTransition retains the pre-journal behavior for embedders
@@ -584,7 +475,7 @@ func (s *Service) applyLegacyStateTransition(ctx context.Context, runStore RunSt
 // saveRunWithRetry retries one failed persistence operation after a short,
 // cancellable delay so transient SQLite contention can clear without delaying
 // a cancelled transition.
-func saveRunWithRetry(ctx context.Context, runStore RunStore, run store.Run) error {
+func saveRunWithRetry(ctx context.Context, runStore effectkernel.RunStore, run store.Run) error {
 	err := runStore.SaveRun(ctx, run)
 	if err == nil {
 		return nil

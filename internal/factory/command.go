@@ -12,6 +12,7 @@ import (
 
 	commandlanguage "github.com/Stevie1704/sw-factory/internal/command"
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -1040,7 +1041,7 @@ func (s *Service) persistPacketChangeWatermark(ctx context.Context, runStore Run
 
 // invalidateRunResults makes the packet revision boundary visible to the
 // operational store before a new invocation is launched.
-func invalidateRunResults(ctx context.Context, runStore RunStore, runID string) error {
+func invalidateRunResults(ctx context.Context, runStore effectkernel.RunStore, runID string) error {
 	invalidator, ok := runStore.(runResultInvalidator)
 	if !ok {
 		return errors.New("operational store does not support specification result invalidation")
@@ -1054,7 +1055,7 @@ func invalidateRunResults(ctx context.Context, runStore RunStore, runID string) 
 // invalidateAllRunResults removes every gate result for a superseded packet
 // version while retaining the content-free evaluation history and invocation
 // artifacts needed for restart diagnosis.
-func invalidateAllRunResults(ctx context.Context, runStore RunStore, runID string) error {
+func invalidateAllRunResults(ctx context.Context, runStore effectkernel.RunStore, runID string) error {
 	invalidator, ok := runStore.(interface {
 		InvalidateAllRunResults(context.Context, string) error
 	})
@@ -1396,7 +1397,7 @@ func (s *Service) persistCommandProjectionWithRun(ctx context.Context, registrat
 		next.StatusCommentID = recovered.StatusCommentID
 	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		return s.persistCommandProjectionWithEffect(ctx, runStore, commandRepository(registration), previous, next)
+		return s.journal().PersistCommandProjection(ctx, runStore, commandRepository(registration), previous, next)
 	}
 	if err := saveCommandRun(ctx, runStore, previous.Revision, next); err != nil {
 		return next, fmt.Errorf("persist command watermark: %w", err)
@@ -1410,7 +1411,7 @@ func (s *Service) persistCommandProjectionWithRun(ctx context.Context, registrat
 
 // saveCommandRun uses compare-and-set persistence when the store supports it,
 // preventing a stale concurrent command from taking the same revision.
-func saveCommandRun(ctx context.Context, runStore RunStore, expectedRevision int64, next store.Run) error {
+func saveCommandRun(ctx context.Context, runStore effectkernel.RunStore, expectedRevision int64, next store.Run) error {
 	if revisionStore, ok := runStore.(commandRevisionStore); ok {
 		return revisionStore.SaveRunIfRevision(ctx, expectedRevision, next)
 	}
