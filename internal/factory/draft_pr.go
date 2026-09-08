@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
@@ -163,7 +164,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		next.Revision = run.Revision + 1
 		next.UpdatedAt = s.deps.Now().UTC()
 		if _, journaled := runStore.(PendingEffectStore); journaled {
-			checkpoint, next, checkpointErr = s.checkpointAndPersistWithEffect(ctx, runStore, workspace, checkpointRequest, repository, issue, *run, next)
+			checkpoint, next, checkpointErr = s.journal().Checkpoint(ctx, runStore, workspace, checkpointRequest, repository, issue, *run, next)
 		} else {
 			checkpoint, checkpointErr = workspace.CreateCheckpoint(ctx, checkpointRequest)
 		}
@@ -232,7 +233,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		next.Status = draftTransition.Status
 		next.Revision = result.Run.Revision + 1
 		next.UpdatedAt = s.deps.Now().UTC()
-		pullRequest, next, err = s.upsertPullRequestAndPersistWithEffect(ctx, runStore, pullRequests, repository, issue, result.Run, next, plannedRequest, expectedNumber)
+		pullRequest, next, err = s.journal().UpsertPullRequestAndPersist(ctx, runStore, pullRequests, repository, issue, result.Run, next, plannedRequest, expectedNumber)
 	} else {
 		pullRequest, err = s.upsertDraftPullRequest(ctx, pullRequests, repository, next, packet, gates, request.Intervention)
 		if err != nil {
@@ -261,7 +262,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 func (s *Service) publishCheckpointBranch(ctx context.Context, runStore RunStore, workspace gitadapter.GitWorkspace, run store.Run) error {
 	request := gitadapter.PushRequest{WorktreePath: run.Worktree, Branch: run.Branch}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		return s.pushWithEffect(ctx, runStore, run.ID, workspace, request, run.CheckpointSHA)
+		return s.journal().Push(ctx, runStore, run.ID, workspace, request, run.CheckpointSHA)
 	}
 	return workspace.Push(ctx, request)
 }
@@ -286,7 +287,7 @@ func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.Pull
 	if err != nil {
 		return github.PullRequest{}, err
 	}
-	return s.upsertPullRequestRequest(ctx, client, repository, expectedNumber, request)
+	return effectkernel.UpsertPullRequest(ctx, client, repository, expectedNumber, request)
 }
 
 // planDraftPullRequest reads the current branch PR once and freezes the exact
@@ -333,7 +334,7 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 	}
 	updated := existing
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		err = s.updatePullRequestWithEffect(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest)
+		err = s.journal().UpdatePullRequest(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest)
 	} else {
 		updated, err = client.UpdatePullRequest(ctx, repository, existing.Number, updateRequest)
 	}
@@ -366,45 +367,6 @@ func ensureIssueIdentity(issue, fallback github.Issue, issueNumber int) github.I
 		issue.Number = issueNumber
 	}
 	return issue
-}
-
-// gitWorkspace resolves the new task-oriented seam while retaining the
-// foundation Worktree adapter as a compatibility fallback.
-func (s *Service) gitWorkspace() gitadapter.GitWorkspace {
-	if s.deps.GitWorkspace != nil {
-		return s.deps.GitWorkspace
-	}
-	workspace, _ := s.deps.Worktree.(gitadapter.GitWorkspace)
-	return workspace
-}
-
-// worktreeManager resolves the task-oriented Git workspace for the existing
-// claim/cleanup operations while keeping foundation adapters compatible.
-func (s *Service) worktreeManager() gitadapter.WorktreeManager {
-	if s.deps.GitWorkspace != nil {
-		return s.deps.GitWorkspace
-	}
-	return s.deps.Worktree
-}
-
-// worktreeInspector resolves the read-only validation seam used by report
-// acceptance.
-func (s *Service) worktreeInspector() gitadapter.WorktreeInspector {
-	if s.deps.GitWorkspace != nil {
-		return s.deps.GitWorkspace
-	}
-	inspector, _ := s.deps.Worktree.(gitadapter.WorktreeInspector)
-	return inspector
-}
-
-// pullRequestClient resolves the dedicated pull-request adapter or a GitHub
-// client that implements it directly.
-func (s *Service) pullRequestClient() github.PullRequestClient {
-	if s.deps.PullRequests != nil {
-		return s.deps.PullRequests
-	}
-	client, _ := s.deps.GitHub.(github.PullRequestClient)
-	return client
 }
 
 // generatedPullRequestBody renders the complete coordinator-owned PR section.

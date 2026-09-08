@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -88,7 +89,7 @@ func TestStateTransitionEffectReplaysTheActualCommentAndLabelMutation(t *testing
 	}
 	defer func() { _ = reopened.Close() }()
 	restarted := newEffectMatrixService(githubRuntime, nil, nil, nil)
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v, want existing GitHub projections to complete the effect", err)
 	}
 	if githubRuntime.createCommentCalls != 1 || githubRuntime.replaceLabelCalls != 1 {
@@ -109,17 +110,17 @@ func TestLabelEffectReplaysTheActualIssueLabelMutation(t *testing.T) {
 		failLabelOnce: true,
 	}
 	service := newEffectMatrixService(githubRuntime, nil, nil, nil)
-	payload := labelTransitionEffectPayload{
+	payload := journalLabelPayload{
 		Repository:  github.Repository{Owner: "example", Name: "project"},
 		IssueNumber: run.IssueNumber,
 		Labels:      []string{"ordinary", github.LabelAgentFailed},
 	}
-	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindLabelTransition, "labels", payload)
+	effect, err := journalEntry(service, run.ID, store.PendingEffectKindLabelTransition, "labels", payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if err := service.withPendingEffect(ctx, blocked, effect, func() error {
+	if err := reserveThen(ctx, blocked, effect, func() error {
 		return githubRuntime.ReplaceIssueLabels(ctx, payload.Repository, payload.IssueNumber, payload.Labels)
 	}); err == nil {
 		t.Fatal("label mutation before reservation = nil, want reservation failure")
@@ -127,7 +128,7 @@ func TestLabelEffectReplaysTheActualIssueLabelMutation(t *testing.T) {
 	if githubRuntime.replaceLabelCalls != 0 {
 		t.Fatalf("issue label mutations before reservation = %d, want zero", githubRuntime.replaceLabelCalls)
 	}
-	if err := service.withPendingEffect(ctx, opened, effect, func() error {
+	if err := reserveThen(ctx, opened, effect, func() error {
 		return githubRuntime.ReplaceIssueLabels(ctx, payload.Repository, payload.IssueNumber, payload.Labels)
 	}); err == nil {
 		t.Fatal("label mutation = nil, want response-loss error")
@@ -145,7 +146,7 @@ func TestLabelEffectReplaysTheActualIssueLabelMutation(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Fatalf("pending label effect = %#v, error = %v", pending, err)
 	}
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if githubRuntime.replaceLabelCalls != 1 {
@@ -160,10 +161,9 @@ func TestCommitStatusEffectReplaysTheActualStatusMutation(t *testing.T) {
 	opened, databasePath, run := openEffectMatrixStore(t, ctx)
 	statusRuntime := &effectMatrixCommitStatus{failOnce: true}
 	service := newEffectMatrixService(nil, statusRuntime, nil, nil)
-	publisher := commitStatusPublisher{service: service, runStore: opened, runID: run.ID, delegate: statusRuntime}
+	publisher := service.journal().CommitStatusPublisher(opened, run.ID, statusRuntime)
 	status := github.CommitStatus{SHA: "checkpoint", State: github.CommitStatusSuccess, Context: "factory/test", Description: "passed"}
-	blocked := publisher
-	blocked.runStore = &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
+	blocked := service.journal().CommitStatusPublisher(&effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}, run.ID, statusRuntime)
 	if err := blocked.CreateCommitStatus(ctx, github.Repository{Owner: "example", Name: "project"}, status); err == nil {
 		t.Fatal("CreateCommitStatus() before reservation = nil, want reservation failure")
 	}
@@ -189,7 +189,7 @@ func TestCommitStatusEffectReplaysTheActualStatusMutation(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Fatalf("pending commit status = %#v, error = %v", pending, err)
 	}
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if statusRuntime.createCalls != 1 {
@@ -212,7 +212,7 @@ func TestCommitStatusEffectReplayPublishesAnUnpushedCheckpoint(t *testing.T) {
 	workspace := &effectMatrixGitWorkspace{expectedRemoteHead: checkpoint, checkpointSHA: checkpoint}
 	statusRuntime := &unresolvableCommitStatus{workspace: workspace}
 	service := newEffectMatrixService(nil, statusRuntime, workspace, nil)
-	publisher := commitStatusPublisher{service: service, runStore: opened, runID: run.ID, delegate: statusRuntime}
+	publisher := service.journal().CommitStatusPublisher(opened, run.ID, statusRuntime)
 	status := github.CommitStatus{SHA: checkpoint, State: github.CommitStatusSuccess, Context: "factory/gate/format", Description: "factory gate passed"}
 	if err := publisher.CreateCommitStatus(ctx, github.Repository{Owner: "example", Name: "project"}, status); err == nil {
 		t.Fatal("CreateCommitStatus() = nil, want an unresolved-commit rejection")
@@ -233,7 +233,7 @@ func TestCommitStatusEffectReplayPublishesAnUnpushedCheckpoint(t *testing.T) {
 		t.Fatalf("pending commit status = %#v, error = %v", pending, err)
 	}
 	restarted := newEffectMatrixService(nil, statusRuntime, workspace, nil)
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if workspace.pushMutations != 1 {
@@ -288,13 +288,13 @@ func TestPushEffectReplaysTheActualRemoteMutation(t *testing.T) {
 	service := newEffectMatrixService(nil, nil, workspace, nil)
 	request := gitadapter.PushRequest{WorktreePath: "/worktree", Branch: run.Branch}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if err := service.pushWithEffect(ctx, blocked, run.ID, workspace, request, workspace.expectedRemoteHead); err == nil {
+	if err := service.journal().Push(ctx, blocked, run.ID, workspace, request, workspace.expectedRemoteHead); err == nil {
 		t.Fatal("pushWithEffect() before reservation = nil, want reservation failure")
 	}
 	if workspace.pushMutations != 0 {
 		t.Fatalf("push mutations before reservation = %d, want zero", workspace.pushMutations)
 	}
-	if err := service.pushWithEffect(ctx, opened, run.ID, workspace, request, workspace.expectedRemoteHead); err == nil {
+	if err := service.journal().Push(ctx, opened, run.ID, workspace, request, workspace.expectedRemoteHead); err == nil {
 		t.Fatal("pushWithEffect() = nil, want response-loss error")
 	}
 	if workspace.pushMutations != 1 {
@@ -313,7 +313,7 @@ func TestPushEffectReplaysTheActualRemoteMutation(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Fatalf("pending push = %#v, error = %v", pending, err)
 	}
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if workspace.pushMutations != 1 {
@@ -331,7 +331,7 @@ func TestPushEffectRejectsAChangedLocalHead(t *testing.T) {
 	service := newEffectMatrixService(nil, nil, workspace, nil)
 	request := gitadapter.PushRequest{WorktreePath: run.Worktree, Branch: run.Branch}
 
-	err := service.pushWithEffect(ctx, opened, run.ID, workspace, request, workspace.expectedRemoteHead)
+	err := service.journal().Push(ctx, opened, run.ID, workspace, request, workspace.expectedRemoteHead)
 	if err == nil || !strings.Contains(err.Error(), "local worktree HEAD") {
 		t.Fatalf("pushWithEffect() error = %v, want changed-local-HEAD refusal", err)
 	}
@@ -348,14 +348,14 @@ func TestPullRequestEffectReplaysTheActualCreation(t *testing.T) {
 	pullRequests := &effectMatrixPullRequests{failCreateOnce: true}
 	service := newEffectMatrixService(nil, nil, nil, pullRequests)
 	request := github.PullRequestRequest{Title: "Factory PR", Body: "body", HeadBranch: run.Branch, BaseBranch: "main", Draft: true}
-	payload := pullRequestEffectPayload{Repository: github.Repository{Owner: "example", Name: "project"}, Request: request}
-	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindPullRequest, "create", payload)
+	payload := journalPullRequestPayload{Repository: github.Repository{Owner: "example", Name: "project"}, Request: request}
+	effect, err := journalEntry(service, run.ID, store.PendingEffectKindPullRequest, "create", payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if err := service.withPendingEffect(ctx, blocked, effect, func() error {
-		_, err := service.upsertPullRequestRequest(ctx, pullRequests, payload.Repository, 0, request)
+	if err := reserveThen(ctx, blocked, effect, func() error {
+		_, err := effectkernel.UpsertPullRequest(ctx, pullRequests, payload.Repository, 0, request)
 		return err
 	}); err == nil {
 		t.Fatal("pull-request creation before reservation = nil, want reservation failure")
@@ -363,8 +363,8 @@ func TestPullRequestEffectReplaysTheActualCreation(t *testing.T) {
 	if pullRequests.createCalls != 0 {
 		t.Fatalf("pull-request creations before reservation = %d, want zero", pullRequests.createCalls)
 	}
-	if err := service.withPendingEffect(ctx, opened, effect, func() error {
-		_, err := service.upsertPullRequestRequest(ctx, pullRequests, payload.Repository, 0, request)
+	if err := reserveThen(ctx, opened, effect, func() error {
+		_, err := effectkernel.UpsertPullRequest(ctx, pullRequests, payload.Repository, 0, request)
 		return err
 	}); err == nil {
 		t.Fatal("pull-request creation = nil, want response-loss error")
@@ -385,7 +385,7 @@ func TestPullRequestEffectReplaysTheActualCreation(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Fatalf("pending pull request = %#v, error = %v", pending, err)
 	}
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if pullRequests.createCalls != 1 {
@@ -406,7 +406,7 @@ func TestPullRequestReplayRejectsNewerPersistedRevisionBeforeMutation(t *testing
 	next := run
 	next.Revision++
 	request := github.PullRequestRequest{Title: "Factory PR", Body: "body", HeadBranch: run.Branch, BaseBranch: "main", Draft: true}
-	if _, _, err := service.upsertPullRequestAndPersistWithEffect(ctx, opened, pullRequests, repository, github.Issue{Number: run.IssueNumber}, previous, next, request, 0); err == nil {
+	if _, _, err := service.journal().UpsertPullRequestAndPersist(ctx, opened, pullRequests, repository, github.Issue{Number: run.IssueNumber}, previous, next, request, 0); err == nil {
 		t.Fatal("upsertPullRequestAndPersistWithEffect() = nil, want response-loss error")
 	}
 	if pullRequests.createCalls != 1 {
@@ -423,7 +423,7 @@ func TestPullRequestReplayRejectsNewerPersistedRevisionBeforeMutation(t *testing
 		t.Fatalf("persist newer run revision: %v", err)
 	}
 	pullRequests.existing.Body = "operator changed body"
-	if _, err := service.replayPendingEffect(ctx, opened, *pending); err == nil || !strings.Contains(err.Error(), "older than current revision") {
+	if _, err := service.journal().Replay(ctx, opened, *pending); err == nil || !strings.Contains(err.Error(), "older than current revision") {
 		t.Fatalf("replayPendingEffect() error = %v, want newer-revision refusal", err)
 	}
 	if pullRequests.findCalls != 1 || pullRequests.updateCalls != 0 || pullRequests.createCalls != 1 {
@@ -446,19 +446,19 @@ func TestCheckpointEffectReplaysTheActualCommit(t *testing.T) {
 	workspace := &effectMatrixGitWorkspace{failCheckpointOnce: true}
 	service := newEffectMatrixService(githubRuntime, nil, workspace, nil)
 	request := gitadapter.CheckpointRequest{RunID: run.ID, WorktreePath: run.Worktree, ParentSHA: "parent", Kind: gitadapter.CheckpointKindImplementation, Message: "checkpoint"}
-	payload := checkpointEffectPayload{
-		Request:    checkpointRequestJSON{RunID: request.RunID, WorktreePath: request.WorktreePath, ParentSHA: request.ParentSHA, Kind: string(request.Kind), Message: request.Message},
+	payload := journalCheckpointPayload{
+		Request:    journalCheckpointRequest{RunID: request.RunID, WorktreePath: request.WorktreePath, ParentSHA: request.ParentSHA, Kind: string(request.Kind), Message: request.Message},
 		Repository: github.Repository{Owner: "example", Name: "project"},
 		Issue:      githubRuntime.issue,
 		Previous:   run,
 		Next:       next,
 	}
-	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindCheckpoint, "checkpoint", payload)
+	effect, err := journalEntry(service, run.ID, store.PendingEffectKindCheckpoint, "checkpoint", payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if err := service.withPendingEffect(ctx, blocked, effect, func() error {
+	if err := reserveThen(ctx, blocked, effect, func() error {
 		_, err := workspace.CreateCheckpoint(ctx, request)
 		return err
 	}); err == nil {
@@ -467,7 +467,7 @@ func TestCheckpointEffectReplaysTheActualCommit(t *testing.T) {
 	if workspace.checkpointMutations != 0 {
 		t.Fatalf("checkpoint commits before reservation = %d, want zero", workspace.checkpointMutations)
 	}
-	if err := service.withPendingEffect(ctx, opened, effect, func() error {
+	if err := reserveThen(ctx, opened, effect, func() error {
 		_, err := workspace.CreateCheckpoint(ctx, request)
 		return err
 	}); err == nil {
@@ -489,7 +489,7 @@ func TestCheckpointEffectReplaysTheActualCommit(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Fatalf("pending checkpoint = %#v, error = %v", pending, err)
 	}
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if workspace.checkpointMutations != 1 {
@@ -507,13 +507,13 @@ func TestWorkerLaunchEffectReplaysTheActualWorkerStart(t *testing.T) {
 	service.deps.Worker = workerRuntime
 	request := worker.StartRequest{RunID: run.ID, WorktreePath: run.Worktree, GitMetadataPath: "/git", Image: "worker", ImageDigest: "digest", Role: "implementation"}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if err := service.startWorkerWithEffect(ctx, blocked, request); err == nil {
+	if err := service.journal().StartWorker(ctx, blocked, request); err == nil {
 		t.Fatal("startWorkerWithEffect() before reservation = nil, want reservation failure")
 	}
 	if workerRuntime.startMutations != 0 {
 		t.Fatalf("worker creations before reservation = %d, want zero", workerRuntime.startMutations)
 	}
-	if err := service.startWorkerWithEffect(ctx, opened, request); err == nil {
+	if err := service.journal().StartWorker(ctx, opened, request); err == nil {
 		t.Fatal("startWorkerWithEffect() = nil, want response-loss error")
 	}
 	if workerRuntime.startMutations != 1 {
@@ -533,7 +533,7 @@ func TestWorkerLaunchEffectReplaysTheActualWorkerStart(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Fatalf("pending worker launch = %#v, error = %v", pending, err)
 	}
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if workerRuntime.startMutations != 1 {
@@ -600,7 +600,7 @@ func TestResultAcceptanceEffectReplaysTheActualFinish(t *testing.T) {
 	if err != nil || pending == nil {
 		t.Fatalf("pending result acceptance = %#v, error = %v", pending, err)
 	}
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if harnessRuntime.finishMutations != 1 || harnessRuntime.finishCalls != 1 {
@@ -916,7 +916,7 @@ func TestResultAcceptanceReplayRejectsNewerPersistedRevisionBeforeSideEffects(t 
 	if err := opened.SaveRun(ctx, newer); err != nil {
 		t.Fatalf("persist newer run revision: %v", err)
 	}
-	if _, err := service.replayPendingEffect(ctx, opened, *pending); err == nil || !strings.Contains(err.Error(), "older than current revision") {
+	if _, err := service.journal().Replay(ctx, opened, *pending); err == nil || !strings.Contains(err.Error(), "older than current revision") {
 		t.Fatalf("replayPendingEffect() error = %v, want newer-revision refusal", err)
 	}
 	if harnessRuntime.finishCalls != 1 || harnessRuntime.finishMutations != 1 || workerRuntime.stopCalls != 0 {
@@ -944,7 +944,7 @@ func TestHarnessResumeEffectDoesNotDuplicateAfterResponseLoss(t *testing.T) {
 	runtime := &journalRecoveryHarness{nativeSessionID: invocation.NativeSessionID, failResumeOnce: true}
 	service := newEffectMatrixService(nil, nil, nil, nil)
 	request := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role, Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID}
-	if _, err := service.resumeHarnessWithEffect(ctx, opened, opened, "", runtime, invocation, request); err == nil {
+	if _, err := service.journal().ResumeHarness(ctx, opened, opened, "", runtime, invocation, request); err == nil {
 		t.Fatal("resumeHarnessWithEffect() = nil, want response-loss error")
 	}
 	if runtime.resumeCalls != 1 {
@@ -968,7 +968,7 @@ func TestHarnessResumeEffectDoesNotDuplicateAfterResponseLoss(t *testing.T) {
 	defer func() { _ = reopened.Close() }()
 	restarted := newEffectMatrixService(nil, nil, nil, nil)
 	restarted.deps.Harness = runtime
-	if _, err := restarted.replayPendingHarnessResume(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingHarnessResume() = %v", err)
 	}
 	if runtime.resumeCalls != 1 {
@@ -1002,7 +1002,7 @@ func TestHarnessResumeRateLimitRollsBackTheAutomaticReservation(t *testing.T) {
 		InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
 		Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
 	}
-	if _, err := service.resumeHarnessWithEffect(ctx, opened, opened, "", runtime, invocation, request); !harness.IsRateLimited(err) {
+	if _, err := service.journal().ResumeHarness(ctx, opened, opened, "", runtime, invocation, request); !harness.IsRateLimited(err) {
 		t.Fatalf("resumeHarnessWithEffect() error = %v, want typed rate limit", err)
 	}
 	persisted, err := opened.Invocation(ctx, run.ID, invocation.ID)
@@ -1044,7 +1044,7 @@ func TestHarnessResumeAuthenticationFailureIsTypedAndRedacted(t *testing.T) {
 		Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
 	}
 	err := error(nil)
-	_, err = service.resumeHarnessWithEffect(ctx, opened, opened, "", runtime, invocation, request)
+	_, err = service.journal().ResumeHarness(ctx, opened, opened, "", runtime, invocation, request)
 	if !harness.IsAuthenticationExpired(err) {
 		t.Fatalf("resumeHarnessWithEffect() error = %v, want typed authentication failure", err)
 	}
@@ -1080,7 +1080,7 @@ func TestPendingHarnessResumeReplayPreservesAuthenticationClassification(t *test
 		t.Fatal(err)
 	}
 	service := newEffectMatrixService(nil, nil, nil, nil)
-	payload := harnessResumeEffectPayload{
+	payload := journalHarnessResumePayload{
 		SocketPath: "",
 		Request: harness.StartRequest{
 			InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
@@ -1088,7 +1088,7 @@ func TestPendingHarnessResumeReplayPreservesAuthenticationClassification(t *test
 		},
 		Invocation: invocation, TargetResumeCount: 1,
 	}
-	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindHarnessResume, "pending-auth", payload)
+	effect, err := journalEntry(service, run.ID, store.PendingEffectKindHarnessResume, "pending-auth", payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1098,7 +1098,7 @@ func TestPendingHarnessResumeReplayPreservesAuthenticationClassification(t *test
 	secret := "token=super-secret"
 	runtime := &effectMatrixHarness{resumeErr: errors.New("HTTP 401: " + secret)}
 	service.deps.Harness = runtime
-	_, err = service.replayPendingHarnessResume(ctx, opened, effect)
+	_, err = service.journal().Replay(ctx, opened, effect)
 	if !harness.IsAuthenticationExpired(err) {
 		t.Fatalf("replayPendingHarnessResume() error = %v, want typed authentication failure", err)
 	}
@@ -1139,7 +1139,7 @@ func TestManualHarnessResumeSetsAnAttachGateWithoutConsumingAutomaticBudget(t *t
 		InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
 		Stage: string(invocation.Stage), ResumeSessionID: invocation.NativeSessionID,
 	}
-	updated, err := service.resumeHarnessManuallyWithEffect(ctx, opened, opened, "", runtime, invocation, request)
+	updated, err := service.journal().ResumeHarnessManually(ctx, opened, opened, "", runtime, invocation, request)
 	if err != nil {
 		t.Fatalf("resumeHarnessManuallyWithEffect() error = %v", err)
 	}
@@ -1181,13 +1181,13 @@ func TestCommandProjectionEffectReplaysTheWatermarkAndComment(t *testing.T) {
 	next.LastCommandOutcome = string(CommandAccepted)
 	next.LastCommandMessage = "clarification accepted"
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if _, err := service.persistCommandProjectionWithEffect(ctx, blocked, repository, previous, next); err == nil {
+	if _, err := service.journal().PersistCommandProjection(ctx, blocked, repository, previous, next); err == nil {
 		t.Fatal("persistCommandProjectionWithEffect() before reservation = nil, want reservation failure")
 	}
 	if githubRuntime.editCommentCalls != 0 {
 		t.Fatalf("comment edits before command reservation = %d, want zero", githubRuntime.editCommentCalls)
 	}
-	if _, err := service.persistCommandProjectionWithEffect(ctx, opened, repository, previous, next); err == nil {
+	if _, err := service.journal().PersistCommandProjection(ctx, opened, repository, previous, next); err == nil {
 		t.Fatal("persistCommandProjectionWithEffect() = nil, want response-loss error")
 	}
 	if githubRuntime.editCommentCalls != 1 {
@@ -1206,7 +1206,7 @@ func TestCommandProjectionEffectReplaysTheWatermarkAndComment(t *testing.T) {
 	}
 	defer func() { _ = reopened.Close() }()
 	restarted := newEffectMatrixService(githubRuntime, nil, nil, nil)
-	if _, err := restarted.replayPendingEffect(ctx, reopened, *pending); err != nil {
+	if _, err := restarted.journal().Replay(ctx, reopened, *pending); err != nil {
 		t.Fatalf("replayPendingEffect() = %v", err)
 	}
 	if githubRuntime.editCommentCalls != 1 {

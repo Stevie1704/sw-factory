@@ -223,7 +223,7 @@ func (s *Service) publishReviewStatus(ctx context.Context, registration config.R
 	}
 	description = reviewStatusDescription(description)
 	statuses := github.CommitStatusPublisher(s.deps.CommitStatuses)
-	statuses = commitStatusPublisher{service: s, runStore: runStore, runID: run.ID, delegate: statuses}
+	statuses = s.journal().CommitStatusPublisher(runStore, run.ID, statuses)
 	return statuses.CreateCommitStatus(ctx, github.Repository{
 		Owner: registration.GitHub.Owner,
 		Name:  registration.GitHub.Repository,
@@ -655,7 +655,7 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 	}
 	updated := existing
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		if err := s.updatePullRequestWithEffect(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest); err != nil {
+		if err := s.journal().UpdatePullRequest(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest); err != nil {
 			return fmt.Errorf("update pull request with specification review: %w", err)
 		}
 		updated.Body = updateRequest.Body

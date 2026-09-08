@@ -18,6 +18,7 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 		return s.lifecycle
 	}
 	s.lifecycle = newInvocationLifecycle(
+		serviceJournal{service: s},
 		s.deps.Worker,
 		s.deps.Terminal,
 		s.deps.Harness,
@@ -25,9 +26,6 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 		s.worktreeInspector(),
 		s.deps.Now,
 		invocationLifecycleHooks{
-			startWorker:              s.startWorkerWithEffect,
-			resumeHarness:            s.resumeHarnessWithEffect,
-			resumeHarnessManually:    s.resumeHarnessManuallyWithEffect,
 			persistRun:               s.persistAgentRunState,
 			notifyWorkspace:          s.notifyWorkspace,
 			publishReviewStatus:      s.publishReviewStatus,

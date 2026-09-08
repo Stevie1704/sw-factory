@@ -94,6 +94,12 @@ type ConfigRepository interface {
 	Create(string) (config.HostConfig, error)
 }
 
+// currentRunReader is the narrowest store seam that can answer which run a
+// coordinator operation is about.
+type currentRunReader interface {
+	CurrentRun(context.Context) (*store.Run, error)
+}
+
 type OperationalStore interface {
 	CurrentRun(context.Context) (*store.Run, error)
 	Close() error

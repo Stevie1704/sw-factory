@@ -110,7 +110,7 @@ func TestReconcilePausesOnAnInvalidPendingRunProjection(t *testing.T) {
 		AcceptanceMapping: []store.HandoffAcceptance{{Criterion: "criterion", Evidence: "focused test"}},
 		FocusedCommands:   []string{"go test ./internal/factory"},
 	}
-	effect, err := service.newPendingEffect(run.ID, store.PendingEffectKindResultAcceptance, "invalid-handoff", resultAcceptanceEffectPayload{
+	effect, err := journalEntry(service, run.ID, store.PendingEffectKindResultAcceptance, "invalid-handoff", journalResultAcceptancePayload{
 		Repository: github.Repository{Owner: "example", Name: "project"},
 		Issue:      github.Issue{Number: run.IssueNumber},
 		Previous:   run,

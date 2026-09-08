@@ -380,13 +380,13 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 		Caches:          workerCaches(packet.RepositoryConfig.Caches),
 		Role:            "gate",
 	}
-	if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {
+	if err := s.journal().StartWorker(ctx, runStore, workerRequest); err != nil {
 		return gate.SuiteResult{}, err
 	}
 	skipSetup := setupAlreadySucceeded(ctx, runStore, run, phase, fingerprint)
 	statuses := s.deps.CommitStatuses
 	if statuses != nil {
-		statuses = commitStatusPublisher{service: s, runStore: runStore, runID: run.ID, delegate: statuses}
+		statuses = s.journal().CommitStatusPublisher(runStore, run.ID, statuses)
 	}
 	return (gate.Runner{
 		Runtime:    s.deps.Worker,

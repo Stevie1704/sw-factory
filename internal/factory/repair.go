@@ -692,7 +692,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		CredentialStoreID: credentialStoreID,
 		Role:              previous.Role,
 	}
-	if err := s.startWorkerWithEffect(ctx, runStore, workerRequest); err != nil {
+	if err := s.journal().StartWorker(ctx, runStore, workerRequest); err != nil {
 		return store.Invocation{}, run, fmt.Errorf("start worker for check repair: %w", err)
 	}
 	workerStarted = true
@@ -727,7 +727,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		ReasoningEffort: previous.ReasoningEffort,
 		ResumeSessionID: previous.NativeSessionID,
 	}
-	resumedInvocation, resumeErr := s.resumeHarnessWithEffect(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	resumedInvocation, resumeErr := s.journal().ResumeHarness(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
 	if resumedInvocation.RecoveryResumeCount > invocation.RecoveryResumeCount {
 		resumeStarted = true
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
@@ -305,7 +306,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 				}
 			}
 			if pending != nil {
-				updatedRun, replayErr := s.replayPendingEffect(ctx, runStore, *pending)
+				updatedRun, replayErr := s.journal().Replay(ctx, runStore, *pending)
 				if replayErr != nil {
 					return AgentResult{}, fmt.Errorf("replay pending effect before repeated report acceptance: %w", replayErr)
 				}
@@ -562,11 +563,22 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		}
 		nextRun.UpdatedAt = s.deps.Now().UTC()
 		stopWorkerAfterReport := value.Outcome == report.OutcomeNeedsClarification || isReviewReport || implementationObjection
-		acceptedInvocation, nextRun, err = s.acceptResultWithEffect(ctx, runStore, invocationStore, registration, harnessRuntime, harness.Session{
-			InvocationID:    acceptedInvocation.ID,
-			NativeSessionID: nativeSessionID,
-			Surface:         invocationSurface(acceptedInvocation),
-		}, acceptedInvocation, previousRun, nextRun, stopWorkerAfterReport, value)
+		acceptedInvocation, nextRun, err = s.journal().AcceptResult(ctx, runStore, invocationStore, effectkernel.ResultAcceptance{
+			Repository: commandRepository(registration),
+			SocketPath: registration.Cmux.SocketPath,
+			WorkerID:   workerIDForInvocation(acceptedInvocation),
+			Harness:    harnessRuntime,
+			Session: harness.Session{
+				InvocationID:    acceptedInvocation.ID,
+				NativeSessionID: nativeSessionID,
+				Surface:         invocationSurface(acceptedInvocation),
+			},
+			Invocation: acceptedInvocation,
+			Previous:   previousRun,
+			Next:       nextRun,
+			StopWorker: stopWorkerAfterReport,
+			Report:     value,
+		})
 		if err != nil {
 			return AgentResult{}, err
 		}
@@ -809,7 +821,7 @@ func readAcceptedAgentReport(invocation store.Invocation) (report.Report, error)
 // acceptance pending effect payload. This provides the immutable snapshot that
 // was validated during acceptance, avoiding re-reading mutable report.json.
 func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, error) {
-	payload, err := readResultAcceptanceEffectPayload(pending)
+	payload, err := effectkernel.ReadResultAcceptance(pending)
 	if err != nil {
 		return report.Report{}, err
 	}
@@ -823,25 +835,11 @@ func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, e
 	return value, nil
 }
 
-// readResultAcceptanceEffectPayload decodes the complete immutable intent for
-// a result-acceptance effect. Callers use it when replay must continue the
-// coordinator projection after the journaled harness boundary has completed.
-func readResultAcceptanceEffectPayload(pending store.PendingEffect) (resultAcceptanceEffectPayload, error) {
-	if pending.Kind != store.PendingEffectKindResultAcceptance {
-		return resultAcceptanceEffectPayload{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
-	}
-	var payload resultAcceptanceEffectPayload
-	if err := decodePendingEffect(pending, &payload); err != nil {
-		return resultAcceptanceEffectPayload{}, fmt.Errorf("decode result acceptance payload: %w", err)
-	}
-	return payload, nil
-}
-
 // readAcceptedReviewReportFromEffect extracts the immutable review invocation
 // and report snapshot from a result-acceptance effect. Legacy payloads without
 // the snapshot fall back to the invocation artifact retained on disk.
 func readAcceptedReviewReportFromEffect(pending store.PendingEffect) (store.Invocation, report.Report, bool, error) {
-	payload, err := readResultAcceptanceEffectPayload(pending)
+	payload, err := effectkernel.ReadResultAcceptance(pending)
 	if err != nil {
 		return store.Invocation{}, report.Report{}, false, err
 	}

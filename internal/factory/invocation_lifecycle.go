@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -169,9 +170,6 @@ type InvocationLifecycle interface {
 // invocationLifecycleHooks are coordinator-owned effects passed explicitly to
 // the module. The module never receives the coordinator's dependency bundle.
 type invocationLifecycleHooks struct {
-	startWorker              func(context.Context, RunStore, worker.StartRequest) error
-	resumeHarness            func(context.Context, RunStore, InvocationStore, string, harness.Runtime, store.Invocation, harness.StartRequest) (store.Invocation, error)
-	resumeHarnessManually    func(context.Context, RunStore, InvocationStore, string, harness.Runtime, store.Invocation, harness.StartRequest) (store.Invocation, error)
 	persistRun               func(context.Context, config.RepositoryRegistration, RunStore, store.Run, store.Run) error
 	notifyWorkspace          func(context.Context, config.RepositoryRegistration, string, string) error
 	publishReviewStatus      func(context.Context, config.RepositoryRegistration, RunStore, store.Run, string, github.CommitStatusState, string) error
@@ -186,6 +184,7 @@ type invocationLifecycleHooks struct {
 // adapters used by launch and recovery, plus explicitly supplied coordinator
 // effect hooks.
 type invocationLifecycle struct {
+	journal             invocationJournal
 	worker              worker.WorkerRuntime
 	terminal            terminal.TerminalRuntime
 	harness             harness.Runtime
@@ -203,12 +202,12 @@ var _ InvocationLifecycle = (*invocationLifecycle)(nil)
 
 // newInvocationLifecycle constructs the module from explicit adapters and
 // hooks. It intentionally accepts only explicit adapters and effects.
-func newInvocationLifecycle(workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks) *invocationLifecycle {
+func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks) *invocationLifecycle {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	return &invocationLifecycle{
-		worker: workerRuntime, terminal: terminalRuntime, harness: harnessRuntime,
+		journal: journal, worker: workerRuntime, terminal: terminalRuntime, harness: harnessRuntime,
 		harnessCapabilities: capabilities, worktree: worktree, clock: clock, hooks: hooks,
 		harnessRuntimes: make(map[config.Harness]harness.Runtime, 2),
 	}
@@ -1023,10 +1022,10 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 	if err := l.recordLaunchEvaluation(ctx, request.EvaluationRecorder, *request.Run, invocation); err != nil {
 		return AgentLaunchResult{}, err
 	}
-	if l.hooks.startWorker == nil {
+	if l.journal == nil {
 		return AgentLaunchResult{}, errors.New("worker runtime is required")
 	}
-	if err := l.hooks.startWorker(ctx, request.RunStore, materialised.workerRequest); err != nil {
+	if err := l.journal.StartWorker(ctx, request.RunStore, materialised.workerRequest); err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("start worker for visible agent: %w", err)
 	}
 	workerStarted = true
@@ -1459,10 +1458,10 @@ func (l *invocationLifecycle) ensureWorkerForInvocation(ctx context.Context, reg
 			}
 		}
 	}
-	if l.hooks.startWorker == nil {
+	if l.journal == nil {
 		return worker.StartRequest{}, invocation, errors.New("worker launch hook is required for invocation recovery")
 	}
-	if err := l.hooks.startWorker(ctx, runStore, request); err != nil {
+	if err := l.journal.StartWorker(ctx, runStore, request); err != nil {
 		return worker.StartRequest{}, invocation, fmt.Errorf("start or recreate worker during invocation recovery: %w", err)
 	}
 	return request, invocation, nil
@@ -1574,16 +1573,13 @@ func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Cont
 		}
 	}
 	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), WorkspaceID: workspaceID, Surface: roleSurface, Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
+	if l.journal == nil {
+		return invocation, errors.New("harness resume hook is required")
+	}
 	if automatic {
-		if l.hooks.resumeHarness == nil {
-			return invocation, errors.New("harness resume hook is required")
-		}
-		return l.hooks.resumeHarness(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+		return l.journal.ResumeHarness(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
 	}
-	if l.hooks.resumeHarnessManually == nil {
-		return invocation, errors.New("manual harness resume hook is required")
-	}
-	return l.hooks.resumeHarnessManually(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	return l.journal.ResumeHarnessManually(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
 }
 
 // resumePersistedInvocation performs the bounded automatic native resume.
@@ -1717,7 +1713,7 @@ func (l *invocationLifecycle) notifyLifecycle(ctx context.Context, registration 
 
 // stopActiveRunWorkers stops every currently delegated worker for a run and
 // retains the run's credential volume and invocation artifacts.
-func (l *invocationLifecycle) stopActiveRunWorkers(ctx context.Context, runStore RunStore, run store.Run) error {
+func (l *invocationLifecycle) stopActiveRunWorkers(ctx context.Context, runStore effectkernel.RunStore, run store.Run) error {
 	if l.worker == nil {
 		return nil
 	}
