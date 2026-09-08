@@ -949,7 +949,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 			return AgentResult{}, fmt.Errorf("decode specification packet for test handoff checkpoint: %w", packetErr)
 		}
 		issue = ensureIssueIdentity(issue, packet.Issue, run.IssueNumber)
-		checkpoint, next, err = s.journal().Checkpoint(ctx, runStore, workspace, checkpointRequest, repository, issue, previous, next)
+		checkpoint, next, err = s.journal().Checkpoint(ctx, runStore, checkpointRequest, repository, issue, previous, next)
 	} else {
 		checkpoint, err = workspace.CreateCheckpoint(ctx, checkpointRequest)
 	}
@@ -1140,7 +1140,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 			return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint issue context could not be read")
 		}
 		issue = ensureIssueIdentity(issue, packet.Issue, run.IssueNumber)
-		checkpoint, next, err = s.journal().Checkpoint(ctx, runStore, workspace, checkpointRequest, repository, issue, previous, next)
+		checkpoint, next, err = s.journal().Checkpoint(ctx, runStore, checkpointRequest, repository, issue, previous, next)
 	} else {
 		checkpoint, err = workspace.CreateCheckpoint(ctx, checkpointRequest)
 	}

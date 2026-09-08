@@ -145,7 +145,7 @@ func New(adapters Adapters) *Journal {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
-	labels := labelProjection{issues: adapters.Issues, presentation: adapters.Presentation}
+	labels := issueProjection{issues: adapters.Issues, presentation: adapters.Presentation}
 	journal := &Journal{
 		dispatcher:      NewDispatcher(),
 		stateTransition: stateTransitionHandler{now: clock, labels: labels, projector: adapters.Projector, lifecycle: adapters.Lifecycle},

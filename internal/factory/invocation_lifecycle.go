@@ -1573,11 +1573,14 @@ func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Cont
 		}
 	}
 	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), WorkspaceID: workspaceID, Surface: roleSurface, Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
-	if l.journal == nil {
-		return invocation, errors.New("harness resume hook is required")
-	}
 	if automatic {
+		if l.journal == nil {
+			return invocation, errors.New("harness resume hook is required")
+		}
 		return l.journal.ResumeHarness(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	}
+	if l.journal == nil {
+		return invocation, errors.New("manual harness resume hook is required")
 	}
 	return l.journal.ResumeHarnessManually(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
 }

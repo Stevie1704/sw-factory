@@ -13,7 +13,7 @@ import (
 // projection of one persisted run revision.
 type stateTransitionHandler struct {
 	now       func() time.Time
-	labels    labelProjection
+	labels    issueProjection
 	projector RunProjector
 	lifecycle Lifecycle
 }
@@ -64,7 +64,8 @@ func (h stateTransitionHandler) apply(ctx context.Context, runStore RunStore, tr
 		}
 		next.UpdatedAt = h.now().UTC()
 		if !transition.PersistBeforeEffects {
-			if err := h.persist(ctx, runStore, transition, next); err != nil {
+			scope := scopeFor(transition.InvalidateAllResults, transition.InvalidateResults)
+			if err := h.persist(ctx, runStore, scope, transition.Previous.Revision, next, "state transition"); err != nil {
 				return err
 			}
 			if err := h.projector.RecordTransition(ctx, runStore, transition.Previous, next, next.UpdatedAt); err != nil {
@@ -82,39 +83,66 @@ func (h stateTransitionHandler) apply(ctx context.Context, runStore RunStore, tr
 // persist writes the transition's run revision, invalidating the superseded
 // packet results when the transition crosses a packet revision boundary. A
 // store without an atomic seam persists and invalidates in two steps.
-func (h stateTransitionHandler) persist(ctx context.Context, runStore RunStore, transition StateTransition, next store.Run) error {
-	expected := transition.Previous.Revision
-	switch {
-	case transition.InvalidateAllResults:
+//
+// description names the operation in a persistence failure, so an apply and a
+// replay of the same transition keep their own durable error text.
+func (h stateTransitionHandler) persist(ctx context.Context, runStore RunStore, scope invalidationScope, expected int64, next store.Run, description string) error {
+	switch scope {
+	case invalidateAllResults:
 		atomic, err := h.projector.SaveInvalidatingAllResults(ctx, runStore, expected, next)
 		if err != nil {
-			return fmt.Errorf("persist state transition and invalidate all results: %w", err)
+			return fmt.Errorf("persist %s and invalidate all results: %w", description, err)
 		}
 		if atomic {
 			return nil
 		}
 		if err := h.projector.SaveAtRevision(ctx, runStore, expected, next); err != nil {
-			return fmt.Errorf("persist state transition: %w", err)
+			return fmt.Errorf("persist %s: %w", description, err)
 		}
 		return h.projector.InvalidateAllResults(ctx, runStore, next.ID)
-	case transition.InvalidateResults:
+	case invalidateResults:
 		atomic, err := h.projector.SaveInvalidatingResults(ctx, runStore, expected, next)
 		if err != nil {
-			return fmt.Errorf("persist state transition and invalidate results: %w", err)
+			return fmt.Errorf("persist %s and invalidate results: %w", description, err)
 		}
 		if atomic {
 			return nil
 		}
 		if err := h.projector.SaveAtRevision(ctx, runStore, expected, next); err != nil {
-			return fmt.Errorf("persist state transition: %w", err)
+			return fmt.Errorf("persist %s: %w", description, err)
 		}
 		return h.projector.InvalidateResults(ctx, runStore, next.ID)
 	default:
 		if err := h.projector.Save(ctx, runStore, next); err != nil {
-			return fmt.Errorf("persist state transition: %w", err)
+			return fmt.Errorf("persist %s: %w", description, err)
 		}
 	}
 	return nil
+}
+
+// invalidationScope selects how much of a superseded packet a transition
+// discards along with its run revision.
+type invalidationScope int
+
+const (
+	// retainResults keeps every prior gate and invocation projection.
+	retainResults invalidationScope = iota
+	// invalidateResults discards the superseded invocation and gate results.
+	invalidateResults
+	// invalidateAllResults additionally discards the superseded baseline.
+	invalidateAllResults
+)
+
+// scopeFor selects the invalidation a transition reserved.
+func scopeFor(invalidateAll, invalidate bool) invalidationScope {
+	switch {
+	case invalidateAll:
+		return invalidateAllResults
+	case invalidate:
+		return invalidateResults
+	default:
+		return retainResults
+	}
 }
 
 // Replay restores the complete persisted run revision associated with a
@@ -179,53 +207,13 @@ func (h stateTransitionHandler) Replay(ctx context.Context, request ReplayReques
 	}
 	next.UpdatedAt = h.now().UTC()
 	if current == nil || current.Revision < next.Revision {
-		if err := h.persistReplay(ctx, runStore, payload, next); err != nil {
+		scope := scopeFor(payload.InvalidateAllResults, payload.InvalidateResults)
+		if err := h.persist(ctx, runStore, scope, payload.Previous.Revision, next, "replayed state transition"); err != nil {
 			return store.Run{}, err
 		}
 	}
-	journal, ok := runStore.(PendingEffectStore)
-	if !ok {
-		return next, nil
-	}
-	if err := journal.ClearPendingEffect(ctx, effect.RunID, effect.ID); err != nil {
-		return store.Run{}, fmt.Errorf("clear replayed state transition: %w", err)
+	if err := clearReplayedEffect(ctx, runStore, effect, "state transition"); err != nil {
+		return store.Run{}, err
 	}
 	return next, nil
-}
-
-// persistReplay writes the replayed run revision with the same invalidation
-// semantics the original transition reserved.
-func (h stateTransitionHandler) persistReplay(ctx context.Context, runStore RunStore, payload stateTransitionEffectPayload, next store.Run) error {
-	expected := payload.Previous.Revision
-	switch {
-	case payload.InvalidateAllResults:
-		atomic, err := h.projector.SaveInvalidatingAllResults(ctx, runStore, expected, next)
-		if err != nil {
-			return fmt.Errorf("persist replayed state transition and invalidate all results: %w", err)
-		}
-		if atomic {
-			return nil
-		}
-		if err := h.projector.SaveAtRevision(ctx, runStore, expected, next); err != nil {
-			return fmt.Errorf("persist replayed state transition: %w", err)
-		}
-		return h.projector.InvalidateAllResults(ctx, runStore, next.ID)
-	case payload.InvalidateResults:
-		atomic, err := h.projector.SaveInvalidatingResults(ctx, runStore, expected, next)
-		if err != nil {
-			return fmt.Errorf("persist replayed state transition and invalidate results: %w", err)
-		}
-		if atomic {
-			return nil
-		}
-		if err := h.projector.SaveAtRevision(ctx, runStore, expected, next); err != nil {
-			return fmt.Errorf("persist replayed state transition: %w", err)
-		}
-		return h.projector.InvalidateResults(ctx, runStore, next.ID)
-	default:
-		if err := h.projector.Save(ctx, runStore, next); err != nil {
-			return fmt.Errorf("persist replayed state transition: %w", err)
-		}
-	}
-	return nil
 }

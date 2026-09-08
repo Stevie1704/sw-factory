@@ -17,19 +17,19 @@ import (
 type checkpointHandler struct {
 	now       func() time.Time
 	workspace gitadapter.GitWorkspace
-	labels    labelProjection
+	labels    issueProjection
 	projector RunProjector
 }
 
 // Checkpoint makes a checkpoint commit and the immediate run projection one
 // restart-safe operation. The marker in the Git adapter handles a commit that
 // was created just before the process stopped.
-func (j *Journal) Checkpoint(ctx context.Context, runStore RunStore, workspace gitadapter.GitWorkspace, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
-	return j.checkpoint.commit(ctx, runStore, workspace, request, repository, issue, previous, nextTemplate)
+func (j *Journal) Checkpoint(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
+	return j.checkpoint.commit(ctx, runStore, request, repository, issue, previous, nextTemplate)
 }
 
 // commit reserves the checkpoint, creates it, and persists its projection.
-func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, workspace gitadapter.GitWorkspace, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
+func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
 	if err := ValidateRunBeforeEffect(store.PendingEffectKindCheckpoint, nextTemplate); err != nil {
 		return gitadapter.CheckpointResult{}, nextTemplate, err
 	}
@@ -54,7 +54,7 @@ func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, worksp
 	var checkpoint gitadapter.CheckpointResult
 	next := nextTemplate
 	action := func() error {
-		checkpoint, err = workspace.CreateCheckpoint(ctx, request)
+		checkpoint, err = h.workspace.CreateCheckpoint(ctx, request)
 		if err != nil {
 			return fmt.Errorf("create checkpoint: %w", err)
 		}

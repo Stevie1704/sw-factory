@@ -58,12 +58,5 @@ func (h labelTransitionHandler) Replay(ctx context.Context, request ReplayReques
 	if err := journal.ClearPendingEffect(ctx, effect.RunID, effect.ID); err != nil {
 		return store.Run{}, fmt.Errorf("clear replayed labels: %w", err)
 	}
-	run, err := h.projector.Read(ctx, runStore)
-	if err != nil {
-		return store.Run{}, fmt.Errorf("read run after label replay: %w", err)
-	}
-	if run == nil {
-		return store.Run{}, fmt.Errorf("run %q disappeared during label replay", effect.RunID)
-	}
-	return *run, nil
+	return readRunAfterReplay(ctx, h.projector, runStore, effect.RunID, "label replay")
 }

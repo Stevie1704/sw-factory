@@ -375,28 +375,28 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 			name: "push", kind: store.PendingEffectKindPush,
 			identity: pushRequest.WorktreePath + "\x00" + pushRequest.Branch + "\x00" + run.CheckpointSHA,
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_ = journal.Push(ctx, runStore, run.ID, journalWorkspaceForTest{}, pushRequest, run.CheckpointSHA)
+				_ = journal.Push(ctx, runStore, run.ID, pushRequest, run.CheckpointSHA)
 			},
 		},
 		{
 			name: "checkpoint", kind: store.PendingEffectKindCheckpoint,
 			identity: checkpointRequest.ParentSHA + "\x00" + string(checkpointRequest.Kind) + "\x00" + strings.Join(checkpointRequest.Paths, "\x00"),
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_, _, _ = journal.Checkpoint(ctx, runStore, journalWorkspaceForTest{}, checkpointRequest, repository, issue, run, next)
+				_, _, _ = journal.Checkpoint(ctx, runStore, checkpointRequest, repository, issue, run, next)
 			},
 		},
 		{
 			name: "pull request creation", kind: store.PendingEffectKindPullRequest,
 			identity: pullRequest.HeadBranch + "\x00" + pullRequest.BaseBranch + "\x00" + pullRequest.Body,
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_, _, _ = journal.UpsertPullRequestAndPersist(ctx, runStore, journalPullRequestsForTest{}, repository, issue, run, next, pullRequest, 0)
+				_, _, _ = journal.UpsertPullRequestAndPersist(ctx, runStore, repository, issue, run, next, pullRequest, 0)
 			},
 		},
 		{
 			name: "pull request update", kind: store.PendingEffectKindPullRequest,
 			identity: fmt.Sprintf("update=%d\x00%s", 11, pullRequest.Body),
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_ = journal.UpdatePullRequest(ctx, runStore, run.ID, journalPullRequestsForTest{}, repository, 11, pullRequest)
+				_ = journal.UpdatePullRequest(ctx, runStore, run.ID, repository, 11, pullRequest)
 			},
 		},
 		{

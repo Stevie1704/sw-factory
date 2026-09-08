@@ -655,7 +655,7 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 	}
 	updated := existing
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		if err := s.journal().UpdatePullRequest(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest); err != nil {
+		if err := s.journal().UpdatePullRequest(ctx, runStore, run.ID, repository, existing.Number, updateRequest); err != nil {
 			return fmt.Errorf("update pull request with specification review: %w", err)
 		}
 		updated.Body = updateRequest.Body

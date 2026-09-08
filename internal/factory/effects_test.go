@@ -288,13 +288,13 @@ func TestPushEffectReplaysTheActualRemoteMutation(t *testing.T) {
 	service := newEffectMatrixService(nil, nil, workspace, nil)
 	request := gitadapter.PushRequest{WorktreePath: "/worktree", Branch: run.Branch}
 	blocked := &effectTestStore{Store: opened, saveErr: errors.New("reservation unavailable")}
-	if err := service.journal().Push(ctx, blocked, run.ID, workspace, request, workspace.expectedRemoteHead); err == nil {
+	if err := service.journal().Push(ctx, blocked, run.ID, request, workspace.expectedRemoteHead); err == nil {
 		t.Fatal("pushWithEffect() before reservation = nil, want reservation failure")
 	}
 	if workspace.pushMutations != 0 {
 		t.Fatalf("push mutations before reservation = %d, want zero", workspace.pushMutations)
 	}
-	if err := service.journal().Push(ctx, opened, run.ID, workspace, request, workspace.expectedRemoteHead); err == nil {
+	if err := service.journal().Push(ctx, opened, run.ID, request, workspace.expectedRemoteHead); err == nil {
 		t.Fatal("pushWithEffect() = nil, want response-loss error")
 	}
 	if workspace.pushMutations != 1 {
@@ -331,7 +331,7 @@ func TestPushEffectRejectsAChangedLocalHead(t *testing.T) {
 	service := newEffectMatrixService(nil, nil, workspace, nil)
 	request := gitadapter.PushRequest{WorktreePath: run.Worktree, Branch: run.Branch}
 
-	err := service.journal().Push(ctx, opened, run.ID, workspace, request, workspace.expectedRemoteHead)
+	err := service.journal().Push(ctx, opened, run.ID, request, workspace.expectedRemoteHead)
 	if err == nil || !strings.Contains(err.Error(), "local worktree HEAD") {
 		t.Fatalf("pushWithEffect() error = %v, want changed-local-HEAD refusal", err)
 	}
@@ -406,7 +406,7 @@ func TestPullRequestReplayRejectsNewerPersistedRevisionBeforeMutation(t *testing
 	next := run
 	next.Revision++
 	request := github.PullRequestRequest{Title: "Factory PR", Body: "body", HeadBranch: run.Branch, BaseBranch: "main", Draft: true}
-	if _, _, err := service.journal().UpsertPullRequestAndPersist(ctx, opened, pullRequests, repository, github.Issue{Number: run.IssueNumber}, previous, next, request, 0); err == nil {
+	if _, _, err := service.journal().UpsertPullRequestAndPersist(ctx, opened, repository, github.Issue{Number: run.IssueNumber}, previous, next, request, 0); err == nil {
 		t.Fatal("upsertPullRequestAndPersistWithEffect() = nil, want response-loss error")
 	}
 	if pullRequests.createCalls != 1 {

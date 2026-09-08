@@ -13,7 +13,7 @@ import (
 // status-comment edit that publishes it.
 type statusCommentHandler struct {
 	now       func() time.Time
-	labels    labelProjection
+	labels    issueProjection
 	projector RunProjector
 }
 

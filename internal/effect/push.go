@@ -22,12 +22,12 @@ type pushHandler struct {
 // Push publishes one run branch while recognizing an already matching remote
 // head. A repeated Git push is transport-safe, but the remote head read makes
 // the semantic effect exactly-once at the coordinator seam.
-func (j *Journal) Push(ctx context.Context, runStore RunStore, runID string, workspace gitadapter.GitWorkspace, request gitadapter.PushRequest, expectedSHA string) error {
-	return j.push.publish(ctx, runStore, runID, workspace, request, expectedSHA)
+func (j *Journal) Push(ctx context.Context, runStore RunStore, runID string, request gitadapter.PushRequest, expectedSHA string) error {
+	return j.push.publish(ctx, runStore, runID, request, expectedSHA)
 }
 
 // publish reserves and performs one branch push.
-func (h pushHandler) publish(ctx context.Context, runStore RunStore, runID string, workspace gitadapter.GitWorkspace, request gitadapter.PushRequest, expectedSHA string) error {
+func (h pushHandler) publish(ctx context.Context, runStore RunStore, runID string, request gitadapter.PushRequest, expectedSHA string) error {
 	payload := pushEffectPayload{
 		Request:     pushRequestJSON{WorktreePath: request.WorktreePath, Branch: request.Branch},
 		ExpectedSHA: expectedSHA,
@@ -37,7 +37,7 @@ func (h pushHandler) publish(ctx context.Context, runStore RunStore, runID strin
 		return err
 	}
 	return WithPendingEffect(ctx, runStore, effect, applier(func() error {
-		return pushOnce(ctx, workspace, request, expectedSHA)
+		return pushOnce(ctx, h.workspace, request, expectedSHA)
 	}))
 }
 

@@ -9,10 +9,10 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// labelProjection makes the two GitHub projections of a run — its state label
+// issueProjection makes the two GitHub projections of a run — its state label
 // and its editable status comment — converge on a persisted run revision. It
 // is the shared apply path behind every kind that advances workflow state.
-type labelProjection struct {
+type issueProjection struct {
 	issues       IssueClient
 	presentation RunPresentation
 }
@@ -20,7 +20,7 @@ type labelProjection struct {
 // applyStateTransition makes the two GitHub projections converge on a
 // persisted run revision. Reads before each mutation recognize an effect that
 // completed just before a process interruption.
-func (p labelProjection) applyStateTransition(ctx context.Context, next *store.Run, transition StateTransition) error {
+func (p issueProjection) applyStateTransition(ctx context.Context, next *store.Run, transition StateTransition) error {
 	if next == nil {
 		return errors.New("state transition run is required")
 	}
@@ -85,7 +85,7 @@ func (p labelProjection) applyStateTransition(ctx context.Context, next *store.R
 // applyStatusComment observes the marker-owned status comment before editing
 // it. A matching body is already complete, so a replay after an ambiguous
 // GitHub response performs no second mutation.
-func (p labelProjection) applyStatusComment(ctx context.Context, payload statusCommentEffectPayload) error {
+func (p issueProjection) applyStatusComment(ctx context.Context, payload statusCommentEffectPayload) error {
 	if p.issues == nil {
 		return errors.New("GitHub client is required for status comment effect")
 	}

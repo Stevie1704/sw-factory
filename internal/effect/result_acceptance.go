@@ -43,7 +43,7 @@ type ResultAcceptance struct {
 type resultAcceptanceHandler struct {
 	now       func() time.Time
 	issues    IssueClient
-	labels    labelProjection
+	labels    issueProjection
 	projector RunProjector
 	lifecycle Lifecycle
 }

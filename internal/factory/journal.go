@@ -122,8 +122,9 @@ func (runProjector) RecordTransition(ctx context.Context, runStore effectkernel.
 }
 
 // journalLifecycle exposes the invocation-lifecycle behaviour the journal
-// needs. It resolves the module on each call rather than closing over it, so
-// the journal never holds a reference into the coordinator's method graph.
+// needs. It resolves the module on each call rather than closing over one
+// method, so the journal depends on this interface and not on a callback into
+// the coordinator's method graph.
 type journalLifecycle struct {
 	service *Service
 }

@@ -15,7 +15,7 @@ import (
 type pullRequestHandler struct {
 	now       func() time.Time
 	clients   github.PullRequestClient
-	labels    labelProjection
+	labels    issueProjection
 	projector RunProjector
 }
 
@@ -64,18 +64,18 @@ func UpsertPullRequest(ctx context.Context, client github.PullRequestClient, rep
 // with the run projection that records its identity. Recovery can therefore
 // discover a created pull request and finish the missing durable state without
 // creating a second one.
-func (j *Journal) UpsertPullRequestAndPersist(ctx context.Context, runStore RunStore, client github.PullRequestClient, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
-	return j.pullRequest.upsertAndPersist(ctx, runStore, client, repository, issue, previous, next, request, expectedNumber)
+func (j *Journal) UpsertPullRequestAndPersist(ctx context.Context, runStore RunStore, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
+	return j.pullRequest.upsertAndPersist(ctx, runStore, repository, issue, previous, next, request, expectedNumber)
 }
 
 // UpdatePullRequest journals a standalone generated-body update, such as
 // review regeneration, when no run-state change accompanies it.
-func (j *Journal) UpdatePullRequest(ctx context.Context, runStore RunStore, runID string, client github.PullRequestClient, repository github.Repository, number int, request github.PullRequestRequest) error {
-	return j.pullRequest.update(ctx, runStore, runID, client, repository, number, request)
+func (j *Journal) UpdatePullRequest(ctx context.Context, runStore RunStore, runID string, repository github.Repository, number int, request github.PullRequestRequest) error {
+	return j.pullRequest.update(ctx, runStore, runID, repository, number, request)
 }
 
 // upsertAndPersist reserves the pull-request mutation and its run projection.
-func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunStore, client github.PullRequestClient, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
+func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunStore, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
 	if err := ValidateRunBeforeEffect(store.PendingEffectKindPullRequest, next); err != nil {
 		return github.PullRequest{}, next, err
 	}
@@ -86,7 +86,7 @@ func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunSt
 	}
 	var pullRequest github.PullRequest
 	apply := func() error {
-		pullRequest, err = UpsertPullRequest(ctx, client, repository, expectedNumber, request)
+		pullRequest, err = UpsertPullRequest(ctx, h.clients, repository, expectedNumber, request)
 		if err != nil {
 			return fmt.Errorf("upsert draft pull request: %w", err)
 		}
@@ -116,14 +116,14 @@ func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunSt
 }
 
 // update reserves a standalone generated-body update.
-func (h pullRequestHandler) update(ctx context.Context, runStore RunStore, runID string, client github.PullRequestClient, repository github.Repository, number int, request github.PullRequestRequest) error {
+func (h pullRequestHandler) update(ctx context.Context, runStore RunStore, runID string, repository github.Repository, number int, request github.PullRequestRequest) error {
 	payload := pullRequestEffectPayload{Repository: repository, Number: number, Request: request}
 	effect, err := reserve(h.now, runID, store.PendingEffectKindPullRequest, fmt.Sprintf("update=%d\x00%s", number, request.Body), payload)
 	if err != nil {
 		return err
 	}
 	return WithPendingEffect(ctx, runStore, effect, applier(func() error {
-		_, err := UpsertPullRequest(ctx, client, repository, number, request)
+		_, err := UpsertPullRequest(ctx, h.clients, repository, number, request)
 		return err
 	}))
 }

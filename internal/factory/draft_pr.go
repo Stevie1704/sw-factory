@@ -164,7 +164,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		next.Revision = run.Revision + 1
 		next.UpdatedAt = s.deps.Now().UTC()
 		if _, journaled := runStore.(PendingEffectStore); journaled {
-			checkpoint, next, checkpointErr = s.journal().Checkpoint(ctx, runStore, workspace, checkpointRequest, repository, issue, *run, next)
+			checkpoint, next, checkpointErr = s.journal().Checkpoint(ctx, runStore, checkpointRequest, repository, issue, *run, next)
 		} else {
 			checkpoint, checkpointErr = workspace.CreateCheckpoint(ctx, checkpointRequest)
 		}
@@ -233,7 +233,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		next.Status = draftTransition.Status
 		next.Revision = result.Run.Revision + 1
 		next.UpdatedAt = s.deps.Now().UTC()
-		pullRequest, next, err = s.journal().UpsertPullRequestAndPersist(ctx, runStore, pullRequests, repository, issue, result.Run, next, plannedRequest, expectedNumber)
+		pullRequest, next, err = s.journal().UpsertPullRequestAndPersist(ctx, runStore, repository, issue, result.Run, next, plannedRequest, expectedNumber)
 	} else {
 		pullRequest, err = s.upsertDraftPullRequest(ctx, pullRequests, repository, next, packet, gates, request.Intervention)
 		if err != nil {
@@ -262,7 +262,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 func (s *Service) publishCheckpointBranch(ctx context.Context, runStore RunStore, workspace gitadapter.GitWorkspace, run store.Run) error {
 	request := gitadapter.PushRequest{WorktreePath: run.Worktree, Branch: run.Branch}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		return s.journal().Push(ctx, runStore, run.ID, workspace, request, run.CheckpointSHA)
+		return s.journal().Push(ctx, runStore, run.ID, request, run.CheckpointSHA)
 	}
 	return workspace.Push(ctx, request)
 }
@@ -334,7 +334,7 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 	}
 	updated := existing
 	if _, journaled := runStore.(PendingEffectStore); journaled {
-		err = s.journal().UpdatePullRequest(ctx, runStore, run.ID, client, repository, existing.Number, updateRequest)
+		err = s.journal().UpdatePullRequest(ctx, runStore, run.ID, repository, existing.Number, updateRequest)
 	} else {
 		updated, err = client.UpdatePullRequest(ctx, repository, existing.Number, updateRequest)
 	}

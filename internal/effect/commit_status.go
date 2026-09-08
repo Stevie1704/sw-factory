@@ -108,14 +108,7 @@ func (h commitStatusHandler) Replay(ctx context.Context, request ReplayRequest) 
 	if err := clearReplayedEffect(ctx, runStore, effect, "commit status"); err != nil {
 		return store.Run{}, err
 	}
-	current, err := h.projector.Read(ctx, runStore)
-	if err != nil {
-		return store.Run{}, fmt.Errorf("read run after commit status replay: %w", err)
-	}
-	if current == nil {
-		return store.Run{}, fmt.Errorf("run %q disappeared during commit status replay", effect.RunID)
-	}
-	return *current, nil
+	return readRunAfterReplay(ctx, h.projector, runStore, effect.RunID, "commit status replay")
 }
 
 // publishStatusCheckpoint makes the remote resolve the commit a journaled
