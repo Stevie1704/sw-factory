@@ -1,16 +1,19 @@
-# Visible agent runtime
+# Agent runtime
 
 Issues #6, #12, and #14 add the visible role-agent boundary. The coordinator
 owns the run, invocation identity, stage, policy, and report decision. A
-harness is an interactive proposal-maker; it does not own GitHub mutations, Git
-history, or workflow transitions.
+harness is a headless or interactive proposal-maker; it does not own GitHub
+mutations, Git history, or workflow transitions.
 
 ## Harness adapters
 
-Codex and Claude Code are interchangeable. Both implement the same `Runtime`
-seam: capability discovery, launch, native session identification, resume, and
-graceful stop. An adapter translates one harness-neutral invocation into native
-commands and owns no workflow, Git, retry, or terminal-layout decision.
+Codex and Claude Code are interchangeable at the role-selection boundary. The
+transitional interactive adapters implement the `Runtime` seam: capability
+discovery, launch, native session identification, resume, and graceful stop.
+Codex additionally implements the factory-owned `HeadlessRuntime` seam used by
+new production launches. An adapter translates one harness-neutral invocation
+into native commands and owns no workflow, Git, retry, or terminal-layout
+decision.
 
 The coordinator resolves the adapter from the frozen repository policy for the
 role, so workflow code never names a tool. `Capabilities` reports the adapter
@@ -29,8 +32,34 @@ The two adapters differ in how a native session identity is obtained:
 
 | Harness | Native session identity | Resume |
 | --- | --- | --- |
-| Codex | Persisted by Codex; the adapter snapshots the role home before launch and discovers the new session file | `codex ... resume <uuid>` with the global flags first |
+| Codex interactive | Persisted by Codex; the adapter snapshots the role home before launch and discovers the new session file | `codex ... resume <uuid>` with the global flags first |
+| Codex headless | Read from the machine-readable `thread.started` event emitted by `codex exec --json` and retained in the invocation | `codex exec --json ... resume <uuid>` with the exec flags before the subcommand |
 | Claude Code | Assigned by the adapter with `--session-id <uuid>` before launch, which removes the discovery race | `claude ... --resume <uuid>` |
+
+### Terminal-free Codex execution
+
+An all-Codex repository launches each role through `HeadlessRuntime`. The
+adapter asks the existing per-invocation Docker worker to run
+`codex exec --json`; it never starts Codex or a harness helper on the
+coordinator host. The worker uses `docker exec -d` with neither a TTY nor
+attached stdin, and stores bounded stdout/stderr in the invocation's private
+role-home process state. JSON events are control-plane input only: the
+`thread.started` event supplies the opaque native identity and explicit error
+codes classify capacity or authentication outcomes. Model text is never a
+workflow result.
+
+The coordinator still accepts exactly one authoritative result: the
+schema-versioned `factory-report` under `/results`. It validates that report
+against the unchanged invocation identity, role, stage, checkpoint, permitted
+paths, and size contract. A detached process may exit before report acceptance;
+recovery distinguishes an exited process with a report from an exited process
+that needs the bounded native-resume policy.
+
+The headless path is intentionally additive while issue #164 moves Claude Code
+onto the same seam. Issue #165 can then remove the interactive terminal
+orchestration once no persisted invocation needs it. Until those migrations are
+complete, Claude and explicitly injected legacy adapters retain the interactive
+runtime and `factory attach` behavior.
 
 Both adapters disable the harness's own approval gates, because the worker is
 the security boundary and an inner gate would stall an unattended invocation.
@@ -53,7 +82,7 @@ against controlled stub executables before any live run.
 
 ## Starting an invocation
 
-After an issue has been claimed, start the visible Codex session with:
+After an issue has been claimed, start the selected role with:
 
 ```sh
 factory agent \
@@ -79,12 +108,13 @@ test role.
 The agent auth flags must name the same sources registered for the repository;
 distinct one-off sources are refused because recovery never persists host
 credential paths. Change the registered source with `factory register` instead.
-The command creates or reuses the control workspace and creates one run workspace
-with role surfaces. Dormant status and checks layout
-definitions remain in the terminal adapter so they can return when they display
-live coordinator and gate output rather than duplicate the one-shot
-`factory status` command. The output reports the invocation identifier, run, and opaque terminal
-handles. It does not print the role prompt or terminal contents.
+For a repository whose roles all select Codex, the command starts the role in
+the isolated worker without creating a cmux workspace or surface. Mixed and
+Claude repositories create or reuse the control workspace and one run workspace
+with role surfaces. Headless output is inspected only as bounded adapter
+diagnostic data; it is not a workflow result. The output reports the invocation
+identifier and run. Interactive launches additionally report opaque terminal
+handles; the coordinator never prints the role prompt or terminal contents.
 
 ### Clean claim handoff and recovery boundary
 
@@ -132,10 +162,12 @@ factory auth refresh --config /Users/me/.config/factory/config.yaml --run-id run
 ```
 
 `factory resume` retries harness capacity or performs a manual native resume
-without spending the automatic recovery allowance. A manually resumed session
-sets a durable attach gate; workflow progression and report acceptance remain
-blocked until `factory attach` restores the worker and visible terminal
-topology and clears that gate. `factory auth refresh` reads the explicitly
+without spending the automatic recovery allowance. A manually resumed
+interactive session sets a durable attach gate; workflow progression and report
+acceptance remain blocked until `factory attach` restores the worker and visible
+terminal topology and clears that gate. A manually resumed headless Codex
+session has no attach gate: its worker state and native identity are already
+coordinator-owned and progression can continue unattended. `factory auth refresh` reads the explicitly
 registered host credential source and reseeds only the factory-managed worker
 credential volume; it never writes the source file or host harness directory.
 

@@ -132,7 +132,7 @@ func (h harnessResumeHandler) resumeManually(ctx context.Context, runStore RunSt
 	}
 	updated := invocation
 	reserved := invocation
-	reserved.AttachRequired = true
+	reserved.AttachRequired = !runtime.Capabilities().Headless
 	reserved.UpdatedAt = h.now().UTC()
 	var waitingFailure error
 	apply := func() error {
@@ -182,7 +182,7 @@ func (h harnessResumeHandler) resumeManuallyWithoutJournal(ctx context.Context, 
 		return invocation, fmt.Errorf("resume native harness session manually: %w", classifyHarnessRuntimeError(runtime, err))
 	}
 	updated := invocation
-	updated.AttachRequired = true
+	updated.AttachRequired = !runtime.Capabilities().Headless
 	if session.NativeSessionID != "" {
 		updated.NativeSessionID = session.NativeSessionID
 	}
@@ -230,15 +230,15 @@ func (h harnessResumeHandler) Replay(ctx context.Context, request replayRequest)
 	}
 	if payload.Manual {
 		if !invocation.AttachRequired {
-			reserved := *invocation
-			reserved.AttachRequired = true
-			reserved.UpdatedAt = h.now().UTC()
-			if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
-				return store.Run{}, fmt.Errorf("reserve replayed manual native session resume: %w", err)
-			}
 			harnessRuntime, runtimeErr := h.lifecycle.HarnessRuntime(payload.SocketPath, payload.Invocation.Harness)
 			if runtimeErr != nil {
 				return store.Run{}, fmt.Errorf("ensure harness for manual native resume replay: %w", runtimeErr)
+			}
+			reserved := *invocation
+			reserved.AttachRequired = !harnessRuntime.Capabilities().Headless
+			reserved.UpdatedAt = h.now().UTC()
+			if err := invocationStore.SaveInvocation(ctx, reserved); err != nil {
+				return store.Run{}, fmt.Errorf("reserve replayed manual native session resume: %w", err)
 			}
 			session, resumeErr := harnessRuntime.Resume(ctx, payload.Request)
 			if resumeErr != nil {

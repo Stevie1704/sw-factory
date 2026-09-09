@@ -655,24 +655,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			}
 		}
 	}
-	terminalRuntime := s.deps.Terminal
-	if terminalRuntime == nil {
-		terminalRuntime = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
-	}
-	terminalInspector, ok := terminalRuntime.(terminal.WorkspaceInspector)
-	if !ok {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-			Kind:     RecoveryDiscrepancyInfrastructure,
-			Source:   "cmux",
-			Field:    "inspection",
-			Expected: "read persisted workspace and surface identities",
-			Observed: "terminal inspector unavailable",
-		})
-	} else {
-		inspectTerminalProjection(ctx, diagnosis, terminalInspector, *active)
-	}
-
-	_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
+	_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
 	if runtimeErr != nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 			Kind:     RecoveryDiscrepancyInfrastructure,
@@ -682,6 +665,25 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			Observed: runtimeErr.Error(),
 		})
 		return
+	}
+	headless := coordinatorUsesHeadless(harnessRuntime)
+	if !headless {
+		terminalRuntime := s.deps.Terminal
+		if terminalRuntime == nil {
+			terminalRuntime = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
+		}
+		terminalInspector, ok := terminalRuntime.(terminal.WorkspaceInspector)
+		if !ok {
+			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+				Kind:     RecoveryDiscrepancyInfrastructure,
+				Source:   "cmux",
+				Field:    "inspection",
+				Expected: "read persisted workspace and surface identities",
+				Observed: "terminal inspector unavailable",
+			})
+		} else {
+			inspectTerminalProjection(ctx, diagnosis, terminalInspector, *active)
+		}
 	}
 	if !hasNativeSession {
 		return
@@ -694,7 +696,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 		return
 	}
 	if inspector, ok := harnessRuntime.(harness.NativeSessionInspector); ok {
-		observed, providerErr := inspector.NativeSessionID(ctx, harness.NativeSessionRequest{RunID: run.ID, WorkerID: workerIDForInvocation(*active), Harness: active.Harness})
+		observed, providerErr := inspector.NativeSessionID(ctx, harness.NativeSessionRequest{RunID: run.ID, InvocationID: active.ID, WorkerID: workerIDForInvocation(*active), Harness: active.Harness})
 		if providerErr != nil {
 			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 				Kind:        RecoveryDiscrepancyInfrastructure,
@@ -724,7 +726,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	}
 	if active.Status == store.InvocationStatusActive {
 		if livenessInspector, ok := harnessRuntime.(harness.NativeSessionLivenessInspector); ok {
-			running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, WorkerID: workerIDForInvocation(*active), Harness: active.Harness})
+			running, livenessErr := livenessInspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, InvocationID: active.ID, WorkerID: workerIDForInvocation(*active), Harness: active.Harness})
 			if livenessErr != nil {
 				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 					Kind:        RecoveryDiscrepancyInfrastructure,
@@ -735,6 +737,16 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 					Recoverable: workerProjectionLost,
 				})
 			} else if !running {
+				if headless {
+					presence, presenceErr := structuredReportPresenceForInvocation(*active)
+					if presenceErr == nil && presence == structuredReportPresent {
+						// A detached Codex process may exit immediately after
+						// writing the authoritative report. Report polling owns
+						// acceptance; recovery must not classify that as a lost
+						// native session.
+						return
+					}
+				}
 				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 					Kind:        RecoveryDiscrepancyInfrastructure,
 					Source:      "harness",
@@ -915,6 +927,46 @@ func (s *Service) Reconcile(ctx context.Context) (RecoveryResult, error) {
 	return result, reconcileErr
 }
 
+// recoverHeadlessNativeSessionIdentities adopts a thread.started identity that
+// the worker durably captured before a coordinator could persist the same
+// value. This closes the response-loss window between detached process launch
+// and invocation persistence without ever launching a replacement process.
+func (s *Service) recoverHeadlessNativeSessionIdentities(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) error {
+	invocationStore, ok := runStore.(InvocationStore)
+	if !ok {
+		return nil
+	}
+	activeValues, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if err != nil || !supported {
+		return err
+	}
+	for _, active := range activeValues {
+		if active.Status != store.InvocationStatusActive || strings.TrimSpace(active.NativeSessionID) != "" || active.Harness != string(config.HarnessCodex) {
+			continue
+		}
+		_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.HarnessCodex)
+		if runtimeErr != nil || !coordinatorUsesHeadless(harnessRuntime) {
+			continue
+		}
+		inspector, inspectable := harnessRuntime.(harness.NativeSessionInspector)
+		if !inspectable {
+			continue
+		}
+		nativeID, inspectErr := inspector.NativeSessionID(ctx, harness.NativeSessionRequest{
+			RunID: run.ID, InvocationID: active.ID, WorkerID: workerIDForInvocation(active), Harness: active.Harness,
+		})
+		if inspectErr != nil || strings.TrimSpace(nativeID) == "" {
+			continue
+		}
+		active.NativeSessionID = nativeID
+		active.UpdatedAt = s.lifecycleModule().clock().UTC()
+		if err := invocationStore.SaveInvocation(ctx, active); err != nil {
+			return fmt.Errorf("persist recovered headless native session: %w", err)
+		}
+	}
+	return nil
+}
+
 // AbandonPendingEffect clears one durable effect only after an explicit human
 // decision, then pauses the run so a later progression cannot guess whether a
 // partially applied external mutation should be replayed.
@@ -1013,6 +1065,22 @@ func (s *Service) reconcileInterruptedRun(ctx context.Context, registration conf
 // because it has directly observed the native process exit; ordinary startup
 // reconciliation keeps the same-process duplicate-launch guard.
 func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, allowSameProcessRecovery bool) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error) {
+	if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, run); err != nil {
+		diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
+		addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+			Kind:     RecoveryDiscrepancyInfrastructure,
+			Source:   "operational store",
+			Field:    "headless native session identity",
+			Expected: "persist recovered thread identity",
+			Observed: err.Error(),
+		})
+		diagnosis.SourcesAgree = false
+		paused, pauseErr := s.pauseRunLocally(ctx, runStore, run, diagnosis)
+		if pauseErr != nil {
+			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(&InfrastructureDiscrepancyError{Diagnosis: diagnosis}, pauseErr)
+		}
+		return paused, diagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
+	}
 	journal, ok := runStore.(PendingEffectStore)
 	if !ok {
 		if store.IsTerminalStatus(run.Status) {

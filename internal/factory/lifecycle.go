@@ -380,6 +380,9 @@ func (s *Service) notifyTerminal(ctx context.Context, registration config.Reposi
 // notifyWorkspace sends one concise coordinator notification through the
 // registered control workspace, lazily constructing the runtime when needed.
 func (s *Service) notifyWorkspace(ctx context.Context, registration config.RepositoryRegistration, title, body string) error {
+	if s.repositoryUsesHeadlessCodex(registration) {
+		return nil
+	}
 	terminalRuntime := s.deps.Terminal
 	if terminalRuntime == nil {
 		var err error
@@ -400,6 +403,31 @@ func (s *Service) notifyWorkspace(ctx context.Context, registration config.Repos
 		return fmt.Errorf("notify coordinator: %w", err)
 	}
 	return nil
+}
+
+// repositoryUsesHeadlessCodex determines whether operator notifications must
+// remain terminal-free for an all-Codex repository. A mixed or legacy adapter
+// still uses the registered terminal runtime.
+func (s *Service) repositoryUsesHeadlessCodex(registration config.RepositoryRegistration) bool {
+	if s.deps.Harness != nil || s.deps.HeadlessHarness == nil {
+		return false
+	}
+	if s.deps.LoadRepository == nil || strings.TrimSpace(registration.RepositoryConfigPath) == "" {
+		return false
+	}
+	policy, err := s.deps.LoadRepository(registration.RepositoryConfigPath)
+	if err != nil {
+		return false
+	}
+	if len(policy.RoleHarnessDefaults) == 0 {
+		return false
+	}
+	for _, selected := range policy.RoleHarnessDefaults {
+		if selected != config.HarnessCodex {
+			return false
+		}
+	}
+	return true
 }
 
 // controlWorkspaceName resolves the registered coordinator workspace name, or

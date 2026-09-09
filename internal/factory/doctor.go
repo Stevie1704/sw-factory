@@ -58,11 +58,14 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		RoleCraft:          roleCraft(repositoryPolicy),
 	})...)
 
-	terminalChecker := s.deps.Terminal
-	if terminalChecker == nil {
-		terminalChecker = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
+	headlessChecker := s.doctorHeadlessChecker()
+	if s.deps.Harness != nil || !repositoryUsesHeadlessCodex(repositoryPolicy, headlessChecker) {
+		terminalChecker := s.deps.Terminal
+		if terminalChecker == nil {
+			terminalChecker = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
+		}
+		checks = append(checks, terminal.StartupChecks(asTerminalDoctorChecker(terminalChecker))...)
 	}
-	checks = append(checks, terminal.StartupChecks(asTerminalDoctorChecker(terminalChecker))...)
 
 	checks = append(checks, worker.StartupChecks(s.doctorWorker(), image)...)
 	checks = append(checks, harness.StartupChecks(harness.StartupRequest{
@@ -74,6 +77,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		Resolve:               s.deps.HarnessCapabilities,
 		SkillChecker:          s.doctorSkillContractChecker(),
 		SkillEvidencePath:     skillEvidencePath(registration.Path),
+		HeadlessChecker:       headlessChecker,
 	})...)
 	checks = append(checks, store.StartupCheck(registration.OperationalDataPath))
 
@@ -128,6 +132,28 @@ func (s *Service) doctorHarnessAuthenticationChecker() worker.HarnessAuthenticat
 func (s *Service) doctorSkillContractChecker() worker.SkillContractChecker {
 	checker, _ := s.deps.Worker.(worker.SkillContractChecker)
 	return checker
+}
+
+// doctorHeadlessChecker resolves the worker-owned detached-process diagnosis
+// seam without requiring every test or embedding worker to implement it.
+func (s *Service) doctorHeadlessChecker() worker.HeadlessChecker {
+	checker, _ := s.deps.Worker.(worker.HeadlessChecker)
+	return checker
+}
+
+// repositoryUsesHeadlessCodex reports whether startup can avoid terminal
+// diagnosis because every configured role selects Codex and the worker image
+// has the helper capability needed to execute it.
+func repositoryUsesHeadlessCodex(policy *config.RepositoryConfig, checker worker.HeadlessChecker) bool {
+	if checker == nil || policy == nil || len(policy.RoleHarnessDefaults) == 0 {
+		return false
+	}
+	for _, selected := range policy.RoleHarnessDefaults {
+		if selected != config.HarnessCodex {
+			return false
+		}
+	}
+	return true
 }
 
 // skillEvidencePath resolves the recorded worker skill smoke evidence inside

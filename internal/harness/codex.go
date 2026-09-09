@@ -40,7 +40,7 @@ func (c *Codex) NativeSessionID(ctx context.Context, request NativeSessionReques
 	if !ok {
 		return "", errors.New("worker runtime does not support native session inspection")
 	}
-	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 }
 
 // NativeSessionRunning reports whether a Codex process is still running in
@@ -49,7 +49,7 @@ func (c *Codex) NativeSessionRunning(ctx context.Context, request NativeSessionR
 	if request.Harness != "" && request.Harness != NameCodex {
 		return false, fmt.Errorf("Codex adapter cannot inspect harness %q", request.Harness)
 	}
-	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex}, `[c]odex`)
+	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex}, `[c]odex`)
 }
 
 // Start launches a fresh Codex TUI in a worker-backed terminal surface.
@@ -131,7 +131,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	if request.ResumeSessionID == "" {
 		if provider, ok := c.Worker.(worker.NativeSessionSnapshotProvider); ok {
 			snapshotProvider = provider
-			baseline, err = provider.NativeSessionIDs(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+			baseline, err = provider.NativeSessionIDs(ctx, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if err != nil {
 				return Session{}, fmt.Errorf("snapshot Codex native sessions: %w", err)
 			}
@@ -144,7 +144,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	nativeSessionID := request.ResumeSessionID
 	if nativeSessionID == "" {
 		if snapshotProvider != nil {
-			discovered, discoverErr := discoverNativeSession(ctx, snapshotProvider, baseline, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+			discovered, discoverErr := discoverNativeSession(ctx, snapshotProvider, baseline, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if discoverErr != nil {
 				// Codex reports why it could not start on its surface, so the
 				// transcript is captured before the surface is closed.
@@ -154,7 +154,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 			}
 			nativeSessionID = discovered
 		} else if provider, ok := c.Worker.(worker.NativeSessionProvider); ok {
-			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if discoverErr != nil {
 				failure := captureLaunchFailure(ctx, c.Terminal, surface.ID, fmt.Errorf("discover Codex native session: %w", discoverErr))
 				_ = c.Terminal.CloseSurface(ctx, surface.ID)

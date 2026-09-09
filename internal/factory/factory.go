@@ -177,6 +177,9 @@ type Dependencies struct {
 	Terminal terminal.TerminalRuntime
 	// Harness owns interactive role lifecycle and native session recovery.
 	Harness harness.Runtime
+	// HeadlessHarness owns terminal-free role lifecycle. It is selected for
+	// Codex when no explicit legacy Harness adapter is injected.
+	HeadlessHarness harness.HeadlessRuntime
 	// HarnessCapabilities resolves static adapter capabilities for startup and
 	// claim checks without launching a worker or terminal surface.
 	HarnessCapabilities harness.CapabilityResolver
@@ -360,6 +363,11 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	}
 	if dependencies.HarnessCapabilities == nil {
 		dependencies.HarnessCapabilities = harness.CapabilitiesFor
+	}
+	if dependencies.HeadlessHarness == nil && dependencies.Harness == nil {
+		if _, ok := dependencies.Worker.(worker.HeadlessProcessRuntime); ok {
+			dependencies.HeadlessHarness = harness.NewCodexHeadless(dependencies.Worker)
+		}
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }

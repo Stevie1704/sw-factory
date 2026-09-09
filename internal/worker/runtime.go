@@ -209,6 +209,10 @@ type CredentialSeedRequest struct {
 type NativeSessionRequest struct {
 	// RunID selects the worker whose role home is inspected.
 	RunID string
+	// InvocationID selects the headless process state belonging to one
+	// invocation. Interactive session discovery may leave it empty for
+	// compatibility with older workers.
+	InvocationID string
 	// WorkerID optionally selects the worker whose role home is inspected.
 	WorkerID string
 	// Harness identifies the session format being inspected.

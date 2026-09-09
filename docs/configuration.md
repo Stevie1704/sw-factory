@@ -25,9 +25,10 @@ factory doctor --config /Users/me/.config/factory/config.yaml
 ```
 
 The doctor reports configuration, GitHub authentication and permissions, the
-factory labels, the checkout's remote/hooks/worktree support, cmux, Docker,
-the pinned worker image, both supported harness executables, interactive-resume
-capabilities, harness authentication sources, and SQLite. It runs every
+factory labels, the checkout's remote/hooks/worktree support, Docker, the
+pinned worker image, both supported harness executables, harness capabilities,
+the headless worker helper for all-Codex policies, harness authentication
+sources, and SQLite. Mixed or interactive policies also require cmux. It runs every
 contributor even after a failure and returns a nonzero exit status when any
 blocking prerequisite remains. Each failure includes a bounded problem and a
 corrective action; command output and credential contents are never rendered.
@@ -37,7 +38,7 @@ configured target branch head and reports each failure.
 The SQLite check opens the existing store read-only; it does not create,
 migrate, back up, chmod, or initialize store state.
 Missing optional host credential files are warnings because a harness may be
-authenticated during its first visible worker session.
+authenticated during its first worker session.
 
 Start the persistent coordinator after diagnosis is ready:
 
@@ -528,9 +529,10 @@ the factory state label, edit the existing status comment, notify cmux, stop
 the worker without deleting retained state, and leave the branch and worktree
 available for cleanup or an explicit retry.
 
-After a claim, `factory agent` starts the visible Codex implementation role and
-prints the run, invocation, workspace, and surface handles. The role receives a
-read-only invocation packet and reports through `factory-report`; use
+After a claim, `factory agent` starts the selected role. All-Codex policies run
+Codex headlessly inside the pinned worker and print only logical invocation
+identities; Claude, mixed, and explicitly interactive policies retain workspace
+and surface handles. The role receives a read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
 result. The operational store schema is version 30 and persists invocation
@@ -577,11 +579,13 @@ the branch, and opens a draft pull request.
 
 Before starting, prepare a dedicated GitHub repository with a checked-in
 `factory.yaml`, a fresh open issue carrying `agent-ready`, valid `gh` login,
-Docker with the configured worker image available, a running cmux session, and
-the host Codex `auth.json` path registered in the host configuration. Build the
-three local commands from this checkout (`factory`, `factory-report`, and
-`factory-worker-attach`) so the worker image can invoke the pinned report
-command.
+Docker with the configured worker image available, and the host Codex `auth.json`
+path registered in the host configuration. Mixed or Claude Code repositories
+also need a running cmux session. All-Codex repositories use the headless worker
+path and do not require cmux. Build the local commands from this checkout
+(`factory`, `factory-report`, and `factory-worker-attach`) so the worker image
+can invoke the pinned report command; the headless worker helper is built into
+the image.
 
 Run the path in this order:
 
@@ -604,8 +608,9 @@ factory draft-pr \
 Record the command output and verify the demonstration at each boundary:
 
 - the issue has exactly one factory state label and one editable status comment;
-- the worker reaches the visible Codex session, while its container has no Git
-  remote or GitHub credential access;
+- the selected role reaches its worker process (headless Codex for all-Codex
+  policy, or a visible session for an interactive policy), while its container
+  has no Git remote or GitHub credential access;
 - the run worktree contains one `factory: implementation checkpoint <run-id>`
   commit, and `git ls-remote` shows the pushed `factory/<run-id>` branch only
   after every configured gate passes;

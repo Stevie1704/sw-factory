@@ -15,6 +15,14 @@ The interface has five operations:
 - `inspect` reports existence and running state without returning a Docker
   identifier.
 
+The optional `HeadlessProcessRuntime` extension adds `start-headless`,
+`inspect-headless`, `cancel-headless`, and `finish-headless`. It receives only
+the logical run, worker, and invocation identities, the command argv, and the
+explicit worker environment. It never returns a container name, PID, PTY, or
+host path. The Docker adapter runs the command through
+`/usr/local/bin/factory-worker-headless` with `docker exec -d`; no `-i` or `-t`
+flag is used.
+
 The checked-in worker build workflow is local-only: Docker's content-addressable
 local image ID is emitted as the `sha256` digest and verified as
 `image@digest` with `--pull=never`. A published copy must use its registry
@@ -31,6 +39,15 @@ The Docker adapter uses these stable paths regardless of the host checkout:
 | `/invocation` | read-only | The frozen invocation packet for the active role |
 | `/results` | read-write | The invocation-scoped `report.json` result directory |
 | `/run/factory-auth` | managed; written only by the adapter, read-only for the role | A factory-managed Codex credential volume, separate from role session state |
+
+Headless process state is kept in the role volume at
+`/home/factory/.factory-headless/<invocation-id>`. The helper atomically records
+`starting`, `running`, `exited`, `cancelled`, or `lost`, retains bounded native
+stdout/stderr, and can be inspected or cancelled after the coordinator
+restarts. A fresh launch is idempotent once state exists; an exact native
+resume may replace only an exited or lost process. The role volume survives
+worker recreation, while the worker image remains pinned by the existing
+`image@digest` contract.
 
 Workers run as uid/gid `10001:10001`, drop all capabilities, disable privilege
 escalation, and use the ordinary bridge network for public research access.
@@ -105,7 +122,9 @@ to the current process streams. A terminal adapter can therefore launch Codex
 in a real pseudo-terminal without learning Docker identifiers.
 
 The terminal surface is for observation and human input only. The coordinator
-does not scrape its output. A harness publishes completion with
+does not scrape its output. A headless Codex process publishes no workflow
+completion through its JSON event stream; every harness publishes completion
+with
 `factory-report`, which atomically writes a schema-versioned JSON report below
 `/results`; the coordinator validates that report against the persisted
 invocation, current worktree, permitted paths, and stage invariants.
@@ -120,10 +139,13 @@ invocation mounts are stale, the adapter recreates it from the persisted
 factory-managed credential volume survive that recreation; the invocation and
 result directories are mounted again from their persisted paths.
 
-The harness adapters inspect the worker process table through the same command
-seam used by gates. If the persisted native session process exits after launch,
+Interactive harness adapters inspect the worker process table through the same
+command seam used by gates. Headless Codex uses the worker-owned process-state
+inspection instead. If the persisted native session process exits after launch,
 the coordinator records that interruption and applies its bounded resume policy
-without using terminal text as a correctness signal.
+without using terminal text or model output as a correctness signal. An exited
+process with a regular report is left for normal report acceptance; only a
+missing report enters native-resume recovery.
 
 When harness capacity is unavailable, the coordinator stops the worker and
 records `waiting_for_harness`; the polling supervisor retries after capacity

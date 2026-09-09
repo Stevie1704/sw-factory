@@ -60,6 +60,19 @@ type HarnessAuthenticationChecker interface {
 	CheckHarnessAuthentication(context.Context, HarnessAuthenticationCheckRequest) error
 }
 
+// HeadlessChecker is the worker diagnosis seam for the terminal-free process
+// helper required by headless harness execution.
+type HeadlessChecker interface {
+	CheckHeadless(context.Context, HeadlessCheckRequest) error
+}
+
+// HeadlessCheckRequest identifies the pinned worker image whose detached
+// process helper must be present and executable.
+type HeadlessCheckRequest struct {
+	// Image is the immutable worker image to inspect.
+	Image ImageReference
+}
+
 // StartupChecks returns independent Docker daemon and worker-image checks.
 func StartupChecks(checker DoctorChecker, image ImageReference) []doctor.Check {
 	return []doctor.Check{
@@ -167,6 +180,23 @@ func (r *DockerRuntime) CheckHarnessAuthentication(ctx context.Context, request 
 	return nil
 }
 
+// CheckHeadless verifies that the worker image contains the detached process
+// helper used by terminal-free harness execution.
+func (r *DockerRuntime) CheckHeadless(ctx context.Context, request HeadlessCheckRequest) error {
+	if err := validateImageReference(request.Image); err != nil {
+		return err
+	}
+	if _, err := r.runDocker(ctx, []string{
+		"run", "--rm", "--pull=never", "--user", WorkerUser,
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--network", "none",
+		"--entrypoint", "/bin/sh", imageReference(request.Image.Name, request.Image.Digest), "-c",
+		"test -x /usr/local/bin/factory-worker-headless",
+	}); err != nil {
+		return errors.New("headless worker process helper is not usable in the worker image")
+	}
+	return nil
+}
+
 // harnessAuthenticationCommand returns the fixed in-worker auth file location
 // and status command for a supported harness. It never incorporates user text
 // into a shell command.
@@ -218,6 +248,7 @@ func validateImageReference(image ImageReference) error {
 var _ DoctorChecker = (*DockerRuntime)(nil)
 var _ HarnessChecker = (*DockerRuntime)(nil)
 var _ HarnessAuthenticationChecker = (*DockerRuntime)(nil)
+var _ HeadlessChecker = (*DockerRuntime)(nil)
 var _ SkillContractChecker = (*DockerRuntime)(nil)
 
 // SkillContractRequest identifies the role-mandated skills one harness must

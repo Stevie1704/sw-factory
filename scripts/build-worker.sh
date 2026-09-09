@@ -66,6 +66,7 @@ echo "Verifying local image reference $local_reference"
   test -d /work && test -d /git && test -d /cache && test -d /invocation && test -d /results
   test ! -w /run/factory-auth
   test -x /usr/local/bin/factory-report
+  test -x /usr/local/bin/factory-worker-headless
   command -v codex >/dev/null
   command -v claude >/dev/null
   command -v git >/dev/null

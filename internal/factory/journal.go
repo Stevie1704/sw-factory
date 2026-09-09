@@ -139,9 +139,10 @@ func (l journalLifecycle) StopActiveWorkers(ctx context.Context, runStore effect
 	return l.service.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run)
 }
 
-// HarnessRuntime resolves the named harness behind the run's terminal.
+// HarnessRuntime resolves the named harness behind the coordinator-owned
+// lifecycle seam. Codex may resolve to a terminal-free adapter.
 func (l journalLifecycle) HarnessRuntime(socketPath, harnessName string) (harness.Runtime, error) {
-	_, harnessRuntime, err := l.service.lifecycleModule().ensureAgentRuntime(socketPath, config.Harness(harnessName))
+	_, harnessRuntime, err := l.service.lifecycleModule().ensureCoordinatorHarnessRuntime(socketPath, config.Harness(harnessName))
 	return harnessRuntime, err
 }
 

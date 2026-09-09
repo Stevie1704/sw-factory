@@ -181,7 +181,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 </header>
 
 <h2 id="overview"><span class="num">01</span>Overview</h2>
-<p>The factory is a host-local Go program. One operator runs it against one registered repository. It claims an authorized issue, freezes a specification packet, and then drives that work through fixed workflow stages. Interactive coding harnesses do the craft; the factory keeps every decision.</p>
+<p>The factory is a host-local Go program. One operator runs it against one registered repository. It claims an authorized issue, freezes a specification packet, and then drives that work through fixed workflow stages. Headless Codex or interactive Claude Code harnesses do the craft; the factory keeps every decision.</p>
 
 <p>Three architectural rules explain most of the code shape:</p>
 <ol>
@@ -203,13 +203,13 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 <tbody>
 <tr><td class="nowrap"><code>internal/factory</code></td><td><span class="pill p-coord">coordinator</span></td><td class="nowrap">40</td><td>The complete run coordinator: claim, stages, gates, effects, repair, recovery.</td></tr>
 <tr><td class="nowrap"><code>internal/store</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">4</td><td>SQLite operational store, effect journal, and evaluation summaries.</td></tr>
-<tr><td class="nowrap"><code>internal/worker</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Docker-backed isolated execution environment for one run.</td></tr>
+<tr><td class="nowrap"><code>internal/worker</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">3</td><td>Docker-backed isolated execution environment for one run, including detached headless process state.</td></tr>
 <tr><td class="nowrap"><code>internal/cli</code></td><td><span class="pill p-entry">entry</span></td><td class="nowrap">1</td><td>Command table, flag parsing, and operator-facing rendering.</td></tr>
 <tr><td class="nowrap"><code>internal/github</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Issue, comment, commit-status, and pull-request access through <code>gh</code>.</td></tr>
 <tr><td class="nowrap"><code>internal/config</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">2</td><td>Host YAML and checked-in repository YAML, with validation.</td></tr>
 <tr><td class="nowrap"><code>internal/report</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">1</td><td>The structured report envelope exchanged between harness and coordinator.</td></tr>
 <tr><td class="nowrap"><code>internal/prompt</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Embedded versioned role prompts and craft substitution.</td></tr>
-<tr><td class="nowrap"><code>internal/harness</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">7</td><td>Codex and Claude Code adapters behind one lifecycle seam.</td></tr>
+<tr><td class="nowrap"><code>internal/harness</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">8</td><td>Codex headless and Claude interactive adapters behind factory-owned lifecycle seams.</td></tr>
 <tr><td class="nowrap"><code>internal/git</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Host Git: worktrees, checkpoints, base sync, push, guidance reads.</td></tr>
 <tr><td class="nowrap"><code>internal/terminal</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>cmux workspaces and operator-visible surfaces.</td></tr>
 <tr><td class="nowrap"><code>internal/gate</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Ordered setup-and-gate suite execution against an exact checkpoint.</td></tr>
@@ -278,11 +278,11 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 
   <rect class="box" x="325" y="284" width="270" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
   <text class="t-lbl" x="340" y="305">worker.WorkerRuntime</text>
-  <text class="t-sm" x="340" y="321">DockerRuntime → one isolated worker per run</text>
+  <text class="t-sm" x="340" y="321">DockerRuntime → isolated worker and detached process state</text>
 
   <rect class="box" x="325" y="350" width="270" height="52" fill="var(--adapter-soft)" stroke="var(--adapter)"/>
   <text class="t-lbl" x="340" y="371">harness.Runtime</text>
-  <text class="t-sm" x="340" y="387">Codex · Claude Code · start, resume, finish</text>
+  <text class="t-sm" x="340" y="387">HeadlessRuntime / Runtime → Codex · Claude Code</text>
 
   <rect class="box" x="325" y="416" width="270" height="52" fill="var(--policy-soft)" stroke="var(--policy)"/>
   <text class="t-lbl" x="340" y="437">workflow · config · gate · prompt · effect</text>
@@ -363,6 +363,11 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
   <td class="nowrap"><code>cmd/factory-worker-attach/main.go</code></td>
   <td>Attaches a visible terminal to a worker selected by run identity. It parses only the opaque run identity and explicit environment; Docker naming and PTY attachment stay inside the worker adapter.</td>
 </tr>
+<tr>
+  <td class="nowrap"><code>factory-worker-headless</code></td><td class="nowrap">inside the worker</td>
+  <td class="nowrap"><code>cmd/factory-worker-headless/main.go</code></td>
+  <td>Supervises one detached headless process, retaining bounded output and durable state for inspect, cancel, and exact-session recovery. It never crosses the worker boundary.</td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -376,7 +381,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 <tr><td class="nowrap">Docker</td><td class="nowrap"><code>docker</code> binary</td><td>Container names, volumes, and mounts are derived privately from the run identity and never appear in <code>WorkerRuntime</code>.</td></tr>
 <tr><td class="nowrap">Git</td><td class="nowrap"><code>git</code> binary</td><td>Branch, worktree, checkpoint, base sync, and push are task-shaped operations, not Git commands, in coordinator code.</td></tr>
 <tr><td class="nowrap">cmux</td><td class="nowrap"><code>cmux</code> binary</td><td>Surface handles are opaque. A screen is never a correctness protocol.</td></tr>
-<tr><td class="nowrap">Codex, Claude Code</td><td class="nowrap">worker exec</td><td>Harness selection is per role and fails closed. Both adapters implement one lifecycle.</td></tr>
+<tr><td class="nowrap">Codex, Claude Code</td><td class="nowrap">worker exec</td><td>Harness selection is per role and fails closed. Codex uses <code>codex exec --json</code> through the detached worker seam; Claude retains the interactive compatibility seam.</td></tr>
 <tr><td class="nowrap">SQLite</td><td class="nowrap"><code>modernc.org/sqlite</code></td><td>Pure Go, so the factory builds without cgo and the store file stays a plain host file.</td></tr>
 </tbody>
 </table>
@@ -619,10 +624,10 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
   </div>
   <div class="card l-policy">
     <h5>internal/harness</h5>
-    <p class="role">policy · 7 files</p>
-    <p><strong>Owns</strong> the interactive coding tools behind one lifecycle: <code>Capabilities</code>, <code>Start</code>, <code>Resume</code>, <code>Finish</code>. <code>New</code> <span class="t-xs">harness.go:135</span> is the only place a declared harness name becomes an implementation.</p>
+    <p class="role">policy · 8 files</p>
+    <p><strong>Owns</strong> the coding tools behind factory-owned lifecycle seams: interactive <code>Runtime</code> and terminal-free <code>HeadlessRuntime</code>. <code>New</code> <span class="t-xs">harness.go:135</span> remains the only place a declared legacy harness name becomes an implementation.</p>
     <dl>
-      <dt>Key types</dt><dd><code>Runtime</code>, <code>Capabilities</code>, <code>Session</code>, <code>LaunchFailure</code>, <code>NativeSessionInspector</code>, <code>NativeSessionLivenessInspector</code></dd>
+      <dt>Key types</dt><dd><code>Runtime</code>, <code>HeadlessRuntime</code>, <code>Capabilities</code>, <code>Session</code>, <code>HeadlessSession</code>, <code>LaunchFailure</code>, <code>NativeSessionInspector</code>, <code>NativeSessionLivenessInspector</code></dd>
       <dt>Adapters</dt><dd><code>codex.go</code>, <code>claude.go</code></dd>
       <dt>Native sessions</dt><dd>A fresh launch polls up to 60 s for the harness to persist its session file, then records the identifier so a later resume is exact rather than hopeful.</dd>
       <dt>Diagnostics</dt><dd>A failed launch captures at most 200 lines of its surface. That transcript never reaches a GitHub projection.</dd>
@@ -677,10 +682,10 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
   </div>
   <div class="card l-adapter">
     <h5>internal/worker</h5>
-    <p class="role">adapter · 2 files · ~2,200 lines</p>
-    <p><strong>Owns</strong> the isolated per-run execution environment. <code>DockerRuntime</code> derives container names privately from the run identity; no runtime identifier crosses the interface.</p>
+    <p class="role">adapter · 3 files · ~2,500 lines</p>
+    <p><strong>Owns</strong> the isolated per-run execution environment and detached process state. <code>DockerRuntime</code> derives container names privately from the run identity; no runtime identifier crosses the interface.</p>
     <dl>
-      <dt>Seams</dt><dd><code>WorkerRuntime</code> <span class="t-xs">runtime.go:293</span> · <code>InteractiveRuntime</code> · <code>CleanupRuntime</code> · <code>CredentialSeeder</code> · <code>ClaudeCredentialSeeder</code> · <code>NativeSessionProvider</code> · <code>NativeSessionSnapshotProvider</code></dd>
+      <dt>Seams</dt><dd><code>WorkerRuntime</code> <span class="t-xs">runtime.go:293</span> · <code>InteractiveRuntime</code> · <code>HeadlessProcessRuntime</code> · <code>HeadlessChecker</code> · <code>CleanupRuntime</code> · <code>CredentialSeeder</code> · <code>ClaudeCredentialSeeder</code> · <code>NativeSessionProvider</code> · <code>NativeSessionSnapshotProvider</code></dd>
       <dt>Mount contract</dt><dd><code>Inspection.MountContractStatus</code> reports only booleans, so a stale-mount check never leaks a host path or volume name.</dd>
       <dt>Reference</dt><dd><a href="worker-runtime.md">docs/worker-runtime.md</a></dd>
     </dl>
@@ -771,6 +776,11 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
   <td>Harness argument shapes, native session file formats, and resume semantics. <code>Finish</code> must be idempotent because reconciliation can replay it.</td>
 </tr>
 <tr>
+  <td class="nowrap"><code>harness.HeadlessRuntime</code></td>
+  <td class="nowrap"><code>CodexHeadless</code></td>
+  <td>Terminal-free <code>codex exec --json</code> launch, machine-readable native identity, bounded process inspection, cancellation, and accepted-completion shutdown inside the pinned worker.</td>
+</tr>
+<tr>
   <td class="nowrap"><code>git.GitWorkspace</code></td>
   <td class="nowrap"><code>git</code> binary runner</td>
   <td>Git plumbing. The coordinator asks for a checkpoint, a base synchronization, or a push.</td>
@@ -809,7 +819,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 </table>
 </div>
 
-<p>Optional capability interfaces are used throughout instead of one wide interface. <code>RemoteBranchInspector</code>, <code>AncestryInspector</code>, <code>SurfaceReader</code>, <code>NativeSessionSnapshotProvider</code>, <code>ClaudeCredentialSeeder</code>, and <code>CleanupRuntime</code> are each discovered with a type assertion. An adapter that cannot do the extra thing keeps working; the coordinator simply loses that recovery path and says so.</p>
+<p>Optional capability interfaces are used throughout instead of one wide interface. <code>RemoteBranchInspector</code>, <code>AncestryInspector</code>, <code>SurfaceReader</code>, <code>NativeSessionSnapshotProvider</code>, <code>ClaudeCredentialSeeder</code>, <code>HeadlessProcessRuntime</code>, <code>HeadlessChecker</code>, and <code>CleanupRuntime</code> are each discovered with a type assertion. An adapter that cannot do the extra thing keeps working; the coordinator simply loses that recovery path and says so.</p>
 
 <h2 id="lifecycle"><span class="num">06</span>Run lifecycle</h2>
 

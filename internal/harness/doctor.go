@@ -40,7 +40,7 @@ func (e *CapabilityError) Error() string {
 func CapabilitiesFor(name string) (Capabilities, error) {
 	switch strings.TrimSpace(name) {
 	case NameCodex:
-		return (&Codex{}).Capabilities(), nil
+		return Capabilities{Name: NameCodex, InteractiveResume: true, Headless: true}, nil
 	case NameClaude:
 		return (&Claude{}).Capabilities(), nil
 	default:
@@ -100,12 +100,14 @@ type StartupRequest struct {
 	// SkillEvidencePath is the host path of the recorded worker skill smoke
 	// evidence.
 	SkillEvidencePath string
+	// HeadlessChecker verifies the worker process helper for all-Codex policy.
+	HeadlessChecker worker.HeadlessChecker
 }
 
 // StartupChecks returns independent capability, executable, and authentication
 // checks. Every selected harness contributes a check before the run begins.
 func StartupChecks(request StartupRequest) []doctor.Check {
-	checks := []doctor.Check{interactiveResumeCheck(request.Policy, request.Resolve)}
+	checks := []doctor.Check{interactiveResumeCheck(request)}
 	selected := selectedHarnesses(request.Policy)
 	for _, name := range selected {
 		harnessName := name
@@ -143,16 +145,36 @@ func selectedHarnesses(policy *config.RepositoryConfig) []string {
 
 // interactiveResumeCheck adapts the capability validation error to a bounded
 // operator-facing diagnosis without exposing implementation error details.
-func interactiveResumeCheck(policy *config.RepositoryConfig, resolve CapabilityResolver) doctor.Check {
-	return func(context.Context) doctor.Result {
+func interactiveResumeCheck(request StartupRequest) doctor.Check {
+	return func(ctx context.Context) doctor.Result {
+		policy := request.Policy
 		if policy == nil {
 			return doctor.Failure("harness capability", "repository harness policy is unavailable", "repair the checked-in role_harness_defaults configuration")
 		}
-		if err := ValidateInteractiveResumeCapabilities(*policy, resolve); err != nil {
+		if err := ValidateInteractiveResumeCapabilities(*policy, request.Resolve); err != nil {
 			return doctor.Failure("harness capability", err.Error(), "select an adapter with interactive resume support for every declared role")
+		}
+		if allRolesUseCodex(*policy) && request.HeadlessChecker != nil {
+			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {
+				return doctor.Failure("harness capability", "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
+			}
 		}
 		return doctor.Success("harness capability")
 	}
+}
+
+// allRolesUseCodex identifies the repository policy that can run without any
+// terminal topology. A mixed policy retains cmux for its Claude roles.
+func allRolesUseCodex(policy config.RepositoryConfig) bool {
+	if len(policy.RoleHarnessDefaults) == 0 {
+		return false
+	}
+	for _, selected := range policy.RoleHarnessDefaults {
+		if selected != config.HarnessCodex {
+			return false
+		}
+	}
+	return true
 }
 
 // executableCheck probes one selected harness in the exact pinned image.
@@ -174,7 +196,7 @@ func executableCheck(checker worker.HarnessChecker, image worker.ImageReference,
 func credentialCheck(name, path string, image worker.ImageReference, checker worker.HarnessAuthenticationChecker) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		if strings.TrimSpace(path) == "" {
-			return doctor.Warning(name+" authentication", "no host credential file is configured", "authenticate during the first visible worker session or configure a private credential file")
+			return doctor.Warning(name+" authentication", "no host credential file is configured", "authenticate during the first worker session or configure a private credential file")
 		}
 		info, err := os.Lstat(path)
 		if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") || err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 || info.Size() == 0 {
