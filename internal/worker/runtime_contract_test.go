@@ -3,6 +3,7 @@ package worker_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -392,6 +393,78 @@ func TestDockerRuntimeReturnsACommandExitResult(t *testing.T) {
 	}
 }
 
+// TestDockerRuntimeBoundsCapturedCommandOutput verifies that the runtime
+// bounds each captured stream independently: output exactly at the limit is
+// still a complete command result, while one byte beyond it replaces every
+// result with a typed output-limit failure, whatever the command exit code.
+func TestDockerRuntimeBoundsCapturedCommandOutput(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.StartRequest{
+		RunID:           "run-contract-output-limit",
+		WorktreePath:    makeDirectory(t, "worktree"),
+		GitMetadataPath: makeDirectory(t, "git-metadata"),
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+	}
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	limit := worker.MaxCapturedOutputBytes
+	for _, test := range []struct {
+		name        string
+		stdoutBytes int
+		stderrBytes int
+		exitStatus  int
+		wantStream  string
+	}{
+		{name: "stdout at the limit", stdoutBytes: limit},
+		{name: "stderr at the limit", stderrBytes: limit},
+		{name: "stdout beyond the limit", stdoutBytes: limit + 1, wantStream: "stdout"},
+		{name: "stderr beyond the limit", stderrBytes: limit + 1, wantStream: "stderr"},
+		{name: "stdout beyond the limit on a failing command", stdoutBytes: limit + 1, exitStatus: 7, wantStream: "stdout"},
+		{name: "stderr beyond the limit on a failing command", stderrBytes: limit + 1, exitStatus: 7, wantStream: "stderr"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("WORKER_DOCKER_EXEC_STDOUT_BYTES", strconv.Itoa(test.stdoutBytes))
+			t.Setenv("WORKER_DOCKER_EXEC_STDERR_BYTES", strconv.Itoa(test.stderrBytes))
+			t.Setenv("WORKER_DOCKER_EXEC_STATUS", strconv.Itoa(test.exitStatus))
+			result, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
+				RunID:             request.RunID,
+				Command:           "measure-output",
+				EnvironmentPolicy: worker.EnvironmentPolicyClean,
+				Role:              "gate",
+			})
+			if test.wantStream == "" {
+				if err != nil {
+					t.Fatalf("RunCommand() error = %v, want a complete result at the limit", err)
+				}
+				if len(result.Stdout) != test.stdoutBytes || len(result.Stderr) != test.stderrBytes {
+					t.Fatalf("RunCommand() captured %d stdout and %d stderr bytes, want %d and %d", len(result.Stdout), len(result.Stderr), test.stdoutBytes, test.stderrBytes)
+				}
+				return
+			}
+			var limitErr *worker.OutputLimitExceededError
+			if !errors.As(err, &limitErr) {
+				t.Fatalf("RunCommand() error = %v, want a typed output-limit error", err)
+			}
+			if limitErr.Stream != test.wantStream || limitErr.Limit != limit || limitErr.Operation == "" {
+				t.Fatalf("output-limit error = %#v, want stream %q, limit %d, and a named operation", limitErr, test.wantStream, limit)
+			}
+			if result.ExitCode != 0 || result.Stdout != "" || result.Stderr != "" {
+				t.Fatalf("RunCommand() returned partial result %#v, want no result on overflow", result)
+			}
+			message := err.Error()
+			if strings.Contains(message, strings.Repeat("a", 32)) || strings.Contains(message, strings.Repeat("e", 32)) {
+				t.Fatalf("output-limit error published captured output: %q", message)
+			}
+			if !strings.Contains(message, test.wantStream) || !strings.Contains(message, strconv.Itoa(limit)) {
+				t.Fatalf("output-limit error = %q, want the stream and the limit", message)
+			}
+		})
+	}
+}
+
 // TestDockerRuntimeKeepsUnrelatedInspectFailuresAsRuntimeErrors verifies that
 // only the Docker inspect missing-container response is treated as absence.
 func TestDockerRuntimeKeepsUnrelatedInspectFailuresAsRuntimeErrors(t *testing.T) {
@@ -512,6 +585,15 @@ case "$command_name" in
         exit 7
         ;;
       *)
+        if [ "${WORKER_DOCKER_EXEC_STDOUT_BYTES:-0}" -gt 0 ]; then
+          head -c "$WORKER_DOCKER_EXEC_STDOUT_BYTES" /dev/zero | tr '\0' 'a'
+        fi
+        if [ "${WORKER_DOCKER_EXEC_STDERR_BYTES:-0}" -gt 0 ]; then
+          head -c "$WORKER_DOCKER_EXEC_STDERR_BYTES" /dev/zero | tr '\0' 'e' >&2
+        fi
+        if [ "${WORKER_DOCKER_EXEC_STDOUT_BYTES:-0}" -gt 0 ] || [ "${WORKER_DOCKER_EXEC_STDERR_BYTES:-0}" -gt 0 ]; then
+          exit "${WORKER_DOCKER_EXEC_STATUS:-0}"
+        fi
         printf 'command-ok\n'
         ;;
     esac
