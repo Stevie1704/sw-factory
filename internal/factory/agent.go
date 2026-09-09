@@ -226,12 +226,11 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 		return AgentResult{}, err
 	}
 	defer func() { _ = runStore.Close() }()
-	return s.acceptanceModule().Accept(ctx, ReportAcceptanceRequest{
-		Registration:       registration,
-		RunStore:           runStore,
-		Run:                run,
-		Request:            request,
-		EvaluationRecorder: acceptanceEvaluationRecorderForRunStore(runStore),
+	return s.acceptanceModule(acceptanceEvaluationRecorderForRunStore(runStore)).Accept(ctx, ReportAcceptanceRequest{
+		Registration: registration,
+		RunStore:     runStore,
+		Run:          run,
+		Request:      request,
 	})
 }
 

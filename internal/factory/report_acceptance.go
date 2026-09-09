@@ -30,6 +30,9 @@ type AcceptanceSnapshot struct {
 	Role workflow.RoleDefinition
 	// Packet is the decoded frozen specification packet of the run.
 	Packet SpecificationPacket
+	// PacketError is retained by gather so admission can preserve the original
+	// checkpoint-before-packet rejection order without decoding the packet again.
+	PacketError error
 	// Report is the structured proposal read from the invocation directory.
 	Report report.Report
 	// Worktree is the inspected state of the run worktree.
@@ -37,6 +40,24 @@ type AcceptanceSnapshot struct {
 	// ObservedChanges are the changed paths attributed to this invocation. An
 	// open objection cycle attributes only what the revision itself changed.
 	ObservedChanges []string
+	// ObservedProtectedTestPaths are the gathered content identities for the run's
+	// protected test paths.
+	ObservedProtectedTestPaths []store.ProtectedTestPath
+	// ProtectedTestPathsError is a deferred read failure for a protected path.
+	// Admission returns it at the same point as the former live filesystem read.
+	ProtectedTestPathsError error
+	// ObjectionBasePaths are the gathered content identities frozen when an
+	// implementation report opens a test objection.
+	ObjectionBasePaths []store.ProtectedTestPath
+	// ObjectionBasePathsError is a deferred read failure for objection context.
+	// Projection returns it without touching the filesystem.
+	ObjectionBasePathsError error
+	// AutomatedObjection is the read-only pilot decision gathered for an
+	// implementation objection before admission begins.
+	AutomatedObjection bool
+	// ObjectionGateReason explains why the gathered pilot decision refused
+	// automated objection handling.
+	ObjectionGateReason string
 }
 
 // TestInvocation reports whether the independent test role owns this report.
@@ -114,7 +135,6 @@ type reportAcceptanceHooks struct {
 	pauseUnverifiableTest     func(context.Context, config.RepositoryRegistration, RunStore, *store.Run, *store.Invocation, report.Report) (AgentResult, error)
 	pauseUnverifiableRevision func(context.Context, config.RepositoryRegistration, RunStore, *store.Run, *store.Invocation, report.Report) (AgentResult, error)
 	publishClarification      func(context.Context, config.RepositoryRegistration, RunStore, store.Run) (store.Run, error)
-	objectionGate             func(context.Context, config.RepositoryRegistration, SpecificationPacket) (bool, string)
 	persistRun                func(context.Context, config.RepositoryRegistration, RunStore, store.Run, store.Run) error
 }
 
@@ -122,16 +142,26 @@ type reportAcceptanceHooks struct {
 // constructor arguments, so the module never reaches the coordinator's
 // dependency set.
 type reportAcceptance struct {
-	journal   acceptanceJournal
-	lifecycle acceptanceLifecycle
-	worktree  gitadapter.WorktreeInspector
-	clock     Clock
-	hooks     reportAcceptanceHooks
+	journal            acceptanceJournal
+	lifecycle          acceptanceLifecycle
+	worktree           gitadapter.WorktreeInspector
+	clock              Clock
+	evaluationRecorder acceptanceEvaluationRecorder
+	objectionGate      func(context.Context, config.RepositoryRegistration, SpecificationPacket) (bool, string)
+	hooks              reportAcceptanceHooks
 }
 
 // newReportAcceptance binds the module to one adapter set.
-func newReportAcceptance(journal acceptanceJournal, lifecycle acceptanceLifecycle, worktree gitadapter.WorktreeInspector, clock Clock, hooks reportAcceptanceHooks) *reportAcceptance {
-	return &reportAcceptance{journal: journal, lifecycle: lifecycle, worktree: worktree, clock: clock, hooks: hooks}
+func newReportAcceptance(journal acceptanceJournal, lifecycle acceptanceLifecycle, worktree gitadapter.WorktreeInspector, clock Clock, evaluationRecorder acceptanceEvaluationRecorder, objectionGate func(context.Context, config.RepositoryRegistration, SpecificationPacket) (bool, string), hooks reportAcceptanceHooks) *reportAcceptance {
+	return &reportAcceptance{
+		journal:            journal,
+		lifecycle:          lifecycle,
+		worktree:           worktree,
+		clock:              clock,
+		evaluationRecorder: evaluationRecorder,
+		objectionGate:      objectionGate,
+		hooks:              hooks,
+	}
 }
 
 // ReportAcceptanceRequest is one acceptance of one invocation report against
@@ -145,8 +175,6 @@ type ReportAcceptanceRequest struct {
 	Run *store.Run
 	// Request selects the invocation and repeats the path policy.
 	Request AgentReportRequest
-	// EvaluationRecorder is the optional content-free evaluation projection.
-	EvaluationRecorder acceptanceEvaluationRecorder
 }
 
 // Accept sequences the four phases of report acceptance. Repeated acceptance
@@ -167,7 +195,7 @@ func (a *reportAcceptance) Accept(ctx context.Context, request ReportAcceptanceR
 	if err := admitAcceptanceIdentity(*request.Run, *invocation, roleDefinition, request.Request); err != nil {
 		return AgentResult{}, err
 	}
-	snapshot, err := a.gather(ctx, *request.Run, *invocation, roleDefinition)
+	snapshot, err := a.gather(ctx, request.Registration, *request.Run, *invocation, roleDefinition)
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -181,14 +209,8 @@ func (a *reportAcceptance) Accept(ctx context.Context, request ReportAcceptanceR
 		}
 		return a.hooks.pauseUnverifiableTest(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report)
 	}
-	var objection acceptanceObjection
-	if outcome == AcceptanceOutcomeTestObjection {
-		objection.Automated, objection.Reason = a.hooks.objectionGate(ctx, request.Registration, snapshot.Packet)
-	}
-	if err := recordAcceptanceEvaluation(ctx, request.EvaluationRecorder, snapshot, outcome); err != nil {
-		return AgentResult{}, err
-	}
-	return a.commit(ctx, request, invocationStore, invocation, snapshot, outcome, objection)
+	projection := projectAcceptance(snapshot, outcome, a.clock().UTC())
+	return a.commit(ctx, request, invocationStore, invocation, snapshot, outcome, projection)
 }
 
 // identify resolves the invocation the request names and the role definition
@@ -306,7 +328,7 @@ func (a *reportAcceptance) resumeAcceptedStageProjection(ctx context.Context, re
 // gather performs every read report acceptance needs: the report bytes, the
 // worktree the invocation produced, and the frozen specification packet. It
 // takes read-only seams and mutates nothing.
-func (a *reportAcceptance) gather(ctx context.Context, run store.Run, invocation store.Invocation, roleDefinition workflow.RoleDefinition) (AcceptanceSnapshot, error) {
+func (a *reportAcceptance) gather(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation, roleDefinition workflow.RoleDefinition) (AcceptanceSnapshot, error) {
 	snapshot := AcceptanceSnapshot{Run: run, Invocation: invocation, Role: roleDefinition}
 	path := reportPath(invocation)
 	var err error
@@ -334,7 +356,16 @@ func (a *reportAcceptance) gather(ctx context.Context, run store.Run, invocation
 	}
 	snapshot.Packet, err = decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
-		return AcceptanceSnapshot{}, fmt.Errorf("decode specification packet for agent report: %w", err)
+		snapshot.PacketError = fmt.Errorf("decode specification packet for agent report: %w", err)
+	}
+	if snapshot.PacketError == nil && !snapshot.TestRevisionActive() {
+		snapshot.ObservedProtectedTestPaths, snapshot.ProtectedTestPathsError = observeProtectedTestPaths(run.Worktree, run.ProtectedTestPaths)
+	}
+	if snapshot.PacketError == nil && implementationTestObjection(snapshot.Report, snapshot.Invocation) {
+		if a.objectionGate != nil {
+			snapshot.AutomatedObjection, snapshot.ObjectionGateReason = a.objectionGate(ctx, registration, snapshot.Packet)
+		}
+		snapshot.ObjectionBasePaths, snapshot.ObjectionBasePathsError = protectedTestPathsForCheckpoint(run.Worktree, snapshot.Worktree.ChangedPaths)
 	}
 	return snapshot, nil
 }
@@ -368,6 +399,9 @@ func admitAcceptanceIdentity(run store.Run, invocation store.Invocation, roleDef
 func AdmitReport(snapshot AcceptanceSnapshot) (AcceptanceOutcome, error) {
 	if err := admitAcceptanceCheckpoint(snapshot); err != nil {
 		return "", err
+	}
+	if snapshot.PacketError != nil {
+		return "", snapshot.PacketError
 	}
 	if err := admitAcceptanceRouting(snapshot); err != nil {
 		return "", err
@@ -474,7 +508,10 @@ func admitAcceptancePathOwnership(snapshot AcceptanceSnapshot) error {
 			return err
 		}
 	}
-	return validateProtectedTestPaths(snapshot.Run.Worktree, snapshot.Worktree, snapshot.Run.ProtectedTestPaths)
+	if snapshot.ProtectedTestPathsError != nil {
+		return snapshot.ProtectedTestPathsError
+	}
+	return validateProtectedTestPathObservations(snapshot.Worktree, snapshot.Run.ProtectedTestPaths, snapshot.ObservedProtectedTestPaths)
 }
 
 // acceptanceValidationContext renders the report-schema validation inputs the
@@ -499,16 +536,6 @@ func acceptanceValidationContext(snapshot AcceptanceSnapshot) report.ValidationC
 		TestPaths:               snapshot.Packet.RepositoryConfig.TestPolicy.TestPaths,
 		TestInfrastructurePaths: snapshot.Packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
 	}
-}
-
-// acceptanceObjection is the resolved implementation objection, including the
-// measured-pilot decision that says whether it may run automatically.
-type acceptanceObjection struct {
-	// Automated reports whether the authorized pilot decision permits an
-	// automated revision cycle.
-	Automated bool
-	// Reason explains a refused automation to the operator.
-	Reason string
 }
 
 // recordAcceptanceEvaluation writes the content-free evaluation projection of
@@ -597,40 +624,70 @@ type acceptanceProjection struct {
 	Invocation store.Invocation
 	// Previous is the run as it was persisted before this acceptance.
 	Previous store.Run
-	// Next is the projected run without the persistence strategy's own edits.
+	// Next is the complete run projection for direct persistence.
 	Next store.Run
+	// JournaledNext is the same logical projection with the revision and
+	// timestamp required in a restart-safe result-acceptance effect.
+	JournaledNext store.Run
+	// Error is a pure projection refusal. Commitment returns it after the
+	// evaluation and native-session checks that historically preceded projection.
+	Error error
 }
 
 // projectAcceptance builds the accepted invocation and the next run from an
 // admitted report. Both persistence strategies share it; only the durability
 // mechanism, and the restart-safety edits that mechanism requires, differ.
-func projectAcceptance(snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, objection acceptanceObjection, nativeSessionID string, now time.Time) (acceptanceProjection, error) {
+func projectAcceptance(snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, now time.Time) acceptanceProjection {
 	accepted := snapshot.Invocation
-	accepted.NativeSessionID = nativeSessionID
 	accepted.Status = acceptedInvocationStatus(snapshot.Report.Outcome)
 	accepted.UpdatedAt = now
 	previous := snapshot.Run
+	projection := acceptanceProjection{Invocation: accepted, Previous: previous}
 	next := previous
 	releaseActiveInvocation(&next, snapshot.Invocation.ID)
 	switch outcome {
 	case AcceptanceOutcomeTestObjection:
-		projected, err := projectImplementationTestObjection(previous, snapshot.Report, snapshot.Invocation, snapshot.Packet, snapshot.Worktree, objection.Automated, objection.Reason)
+		if snapshot.ObjectionBasePathsError != nil {
+			projection.Error = fmt.Errorf("record test objection worktree context: %w", snapshot.ObjectionBasePathsError)
+			return projection
+		}
+		projected, err := projectImplementationTestObjection(previous, snapshot.Report, snapshot.Invocation, snapshot.Packet, snapshot.ObjectionBasePaths, snapshot.AutomatedObjection, snapshot.ObjectionGateReason)
 		if err != nil {
-			return acceptanceProjection{}, err
+			projection.Error = err
+			return projection
 		}
 		next = projected
-	case AcceptanceOutcomeTestStage, AcceptanceOutcomeReview:
-		// The test and review stage policies own their own run transition.
+		next.Revision = previous.Revision + 1
+		next.UpdatedAt = now
+	case AcceptanceOutcomeReview:
+		if err := applyReviewResultProjection(&next, snapshot.Invocation.Role, snapshot.Report); err != nil {
+			projection.Error = err
+			return projection
+		}
+	case AcceptanceOutcomeTestStage:
+		// The test-stage policy owns its run transition after commitment.
 	default:
 		next = agentReportRunProjection(previous, snapshot.Invocation.Stage, snapshot.Report)
+		next.UpdatedAt = now
 	}
-	return acceptanceProjection{Invocation: accepted, Previous: previous, Next: next}, nil
+	journaledNext := next
+	journaledNext.Revision = previous.Revision + 1
+	if outcome == AcceptanceOutcomeTestStage || outcome == AcceptanceOutcomeReview {
+		journaledNext.Revision = previous.Revision
+	}
+	journaledNext.UpdatedAt = now
+	projection.Next = next
+	projection.JournaledNext = journaledNext
+	return projection
 }
 
 // commit makes the projection durable and hands the run to the stage policy
 // that owns it. The journaled and legacy stores share the projection and the
 // dispatch; only the durability mechanism differs.
-func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, objection acceptanceObjection) (AgentResult, error) {
+func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, projection acceptanceProjection) (AgentResult, error) {
+	if err := recordAcceptanceEvaluation(ctx, a.evaluationRecorder, snapshot, outcome); err != nil {
+		return AgentResult{}, err
+	}
 	harnessRuntime, err := a.lifecycle.HarnessRuntime(request.Registration.Cmux.SocketPath, invocation.Harness)
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("ensure agent runtime: %w", err)
@@ -639,9 +696,9 @@ func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceR
 	if err != nil {
 		return AgentResult{}, err
 	}
-	projection, err := projectAcceptance(snapshot, outcome, objection, nativeSessionID, a.clock().UTC())
-	if err != nil {
-		return AgentResult{}, err
+	projection.Invocation.NativeSessionID = nativeSessionID
+	if projection.Error != nil {
+		return AgentResult{}, projection.Error
 	}
 	if _, journaled := request.RunStore.(PendingEffectStore); journaled {
 		err = a.commitJournaled(ctx, request, invocationStore, invocation, snapshot, harnessRuntime, outcome, projection)
@@ -659,17 +716,7 @@ func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceR
 // revision bump are applied before it is reserved rather than by the stage
 // policy that runs after it.
 func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, outcome AcceptanceOutcome, projection acceptanceProjection) error {
-	next := projection.Next
-	if outcome == AcceptanceOutcomeReview {
-		if err := applyReviewResultProjection(&next, invocation.Role, snapshot.Report); err != nil {
-			return err
-		}
-	}
-	next.Revision = projection.Previous.Revision + 1
-	if outcome == AcceptanceOutcomeTestStage || outcome == AcceptanceOutcomeReview {
-		next.Revision = projection.Previous.Revision
-	}
-	next.UpdatedAt = a.clock().UTC()
+	next := projection.JournaledNext
 	accepted, committed, err := a.journal.AcceptResult(ctx, request.RunStore, invocationStore, effectkernel.ResultAcceptance{
 		Repository: commandRepository(request.Registration),
 		SocketPath: request.Registration.Cmux.SocketPath,
@@ -713,8 +760,6 @@ func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAccep
 	next := projection.Next
 	switch outcome {
 	case AcceptanceOutcomeTestObjection:
-		next.Revision = projection.Previous.Revision + 1
-		next.UpdatedAt = a.clock().UTC()
 		*request.Run = next
 		if err := a.hooks.persistRun(ctx, request.Registration, request.RunStore, projection.Previous, next); err != nil {
 			return fmt.Errorf("persist implementation test objection: %w", err)
@@ -723,7 +768,6 @@ func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAccep
 		// The stage policy persists its own transition.
 		*request.Run = next
 	default:
-		next.UpdatedAt = a.clock().UTC()
 		*request.Run = next
 		if err := a.hooks.persistRun(ctx, request.Registration, request.RunStore, projection.Previous, next); err != nil {
 			return fmt.Errorf("persist accepted agent state: %w", err)

@@ -472,7 +472,7 @@ func normalizeMeasuredPilotDecision(value string) (string, bool) {
 // projectImplementationTestObjection moves a validated implementation
 // objection to the test stage and freezes the dirty implementation paths that
 // the resumed test role must treat as pre-existing context.
-func projectImplementationTestObjection(previous store.Run, value report.Report, invocation store.Invocation, packet SpecificationPacket, observed gitadapter.WorktreeState, automated bool, automationReason string) (store.Run, error) {
+func projectImplementationTestObjection(previous store.Run, value report.Report, invocation store.Invocation, packet SpecificationPacket, basePaths []store.ProtectedTestPath, automated bool, automationReason string) (store.Run, error) {
 	if err := validateImplementationTestObjection(value, invocation, previous, packet); err != nil {
 		return store.Run{}, err
 	}
@@ -500,11 +500,7 @@ func projectImplementationTestObjection(previous store.Run, value report.Report,
 		Evidence:     objection.Evidence,
 		InvocationID: next.TestInvocationID,
 	}
-	basePaths, err := protectedTestPathsForCheckpoint(previous.Worktree, observed.ChangedPaths)
-	if err != nil {
-		return store.Run{}, fmt.Errorf("record test objection worktree context: %w", err)
-	}
-	next.TestRevisionBaseChangedPaths = basePaths
+	next.TestRevisionBaseChangedPaths = append([]store.ProtectedTestPath(nil), basePaths...)
 	next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
@@ -747,12 +743,36 @@ func validateImplementationTestPaths(paths []string, policy config.TestPolicy) e
 // validateProtectedTestPaths verifies implementation has not changed a
 // protected test path since the test checkpoint, including a deleted file.
 func validateProtectedTestPaths(worktree string, state gitadapter.WorktreeState, protected []store.ProtectedTestPath) error {
+	observed, err := observeProtectedTestPaths(worktree, protected)
+	if err != nil {
+		return err
+	}
+	return validateProtectedTestPathObservations(state, protected, observed)
+}
+
+// observeProtectedTestPaths gathers the current content identities for the
+// protected paths that a later pure admission decision compares.
+func observeProtectedTestPaths(worktree string, protected []store.ProtectedTestPath) ([]store.ProtectedTestPath, error) {
+	observed := make([]store.ProtectedTestPath, 0, len(protected))
 	for _, value := range protected {
 		current, err := testPathDigest(worktree, value.Path)
 		if err != nil {
-			return fmt.Errorf("inspect protected test path %q: %w", value.Path, err)
+			return nil, fmt.Errorf("inspect protected test path %q: %w", value.Path, err)
 		}
-		if current != value.SHA256 {
+		observed = append(observed, store.ProtectedTestPath{Path: value.Path, SHA256: current})
+	}
+	return observed, nil
+}
+
+// validateProtectedTestPathObservations compares only gathered worktree facts,
+// keeping report admission independent of later filesystem mutations.
+func validateProtectedTestPathObservations(state gitadapter.WorktreeState, protected, observed []store.ProtectedTestPath) error {
+	currentByPath := make(map[string]string, len(observed))
+	for _, value := range observed {
+		currentByPath[value.Path] = value.SHA256
+	}
+	for _, value := range protected {
+		if currentByPath[value.Path] != value.SHA256 {
 			return fmt.Errorf("implementation changed protected test path %q", value.Path)
 		}
 		for _, changed := range state.ChangedPaths {
