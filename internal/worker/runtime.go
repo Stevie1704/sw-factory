@@ -51,6 +51,21 @@ const (
 	// workerImageDigestPrefix is the only image digest algorithm accepted by
 	// version one.
 	workerImageDigestPrefix = "sha256:"
+	// MaxCapturedOutputBytes is the capture limit: the most the adapter buffers
+	// of one stream for one Docker invocation. Stdout and stderr are bounded
+	// independently, so a single command retains at most 16 MiB of output plus
+	// buffer growth.
+	//
+	// Outputs measured on this repository and on a worker-shaped container:
+	// setup (`go mod download`) 0 B, format gate (`gofmt -l .`) 0 B, vet gate
+	// 0 B, test gate 1.4 KB and 240 KB with `-v`, focused red-test
+	// verification 206 B, `docker container inspect --format '{{json .}}'`
+	// 6.5 KB, and `run`, `stop`, `rm` under 260 B each. Native session
+	// liveness writes nothing by construction, and session discovery writes 37
+	// B per identifier. The 8 MiB limit leaves more than thirty times the
+	// largest measured output, so it never truncates real work; it only stops
+	// a pathological command from growing the coordinator heap without bound.
+	MaxCapturedOutputBytes = 8 << 20
 )
 
 // EnvironmentPolicy controls which explicit environment a worker command may
@@ -500,6 +515,12 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	result, err := r.runDocker(ctx, args)
 	if err == nil {
 		return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, nil
+	}
+	// The capture limit outranks exit-code classification: a command that
+	// wrote past it produced no complete result to report.
+	var limitErr *OutputLimitExceededError
+	if errors.As(err, &limitErr) {
+		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, err)
 	}
 	if ctx.Err() != nil {
 		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, ctx.Err())
@@ -1196,10 +1217,28 @@ func (r *DockerRuntime) runDockerWithInput(ctx context.Context, args []string, i
 	}
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Stdin = bytes.NewReader(input)
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
+	stdout := &boundedStream{limit: MaxCapturedOutputBytes}
+	stderr := &boundedStream{limit: MaxCapturedOutputBytes}
+	command.Stdout = stdout
+	command.Stderr = stderr
 	err := command.Run()
+	// An overflow invalidates the whole invocation, so it is classified before
+	// the process outcome: the caller receives no partial result and no
+	// exit-code interpretation of a command whose output was never complete.
+	stream := ""
+	switch {
+	case stdout.exceeded:
+		stream = "stdout"
+	case stderr.exceeded:
+		stream = "stderr"
+	}
+	if stream != "" {
+		return dockerCommandResult{}, &OutputLimitExceededError{
+			Operation: workerOperation(args),
+			Stream:    stream,
+			Limit:     MaxCapturedOutputBytes,
+		}
+	}
 	result := dockerCommandResult{
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
@@ -1222,6 +1261,67 @@ func (r *DockerRuntime) runDockerWithInput(ctx context.Context, args []string, i
 		Stdout:         result.Stdout,
 		Stderr:         result.Stderr,
 		Cause:          err,
+	}
+}
+
+// boundedStream captures at most limit bytes of one output stream and records
+// whether the process tried to write more.
+type boundedStream struct {
+	// limit is the maximum number of bytes retained for this stream.
+	limit int
+	// captured holds the retained bytes; it is only read when no overflow
+	// occurred, so it never reaches a caller as a complete result.
+	captured bytes.Buffer
+	// exceeded reports that the process wrote past the limit.
+	exceeded bool
+}
+
+// Write retains bytes up to the limit and discards the rest. It always reports
+// a complete write so the copy that feeds it keeps draining the process pipe;
+// returning an error instead would block the Docker process on a full pipe
+// until the context deadline.
+func (b *boundedStream) Write(data []byte) (int, error) {
+	if remaining := b.limit - b.captured.Len(); len(data) > remaining {
+		b.exceeded = true
+		if remaining > 0 {
+			b.captured.Write(data[:remaining])
+		}
+		return len(data), nil
+	}
+	return b.captured.Write(data)
+}
+
+// String returns the retained bytes.
+func (b *boundedStream) String() string { return b.captured.String() }
+
+// OutputLimitExceededError reports that one worker operation wrote past the
+// capture limit. It carries no captured output, container name, host path, or
+// Docker argument.
+type OutputLimitExceededError struct {
+	// Operation names the failed operation in the seam's vocabulary.
+	Operation string
+	// Stream is the overflowing stream, either stdout or stderr.
+	Stream string
+	// Limit is the configured per-stream byte limit.
+	Limit int
+}
+
+// Error reports the operation, stream, and limit without any captured output.
+func (e *OutputLimitExceededError) Error() string {
+	return fmt.Sprintf("%s exceeded the %d byte %s capture limit", e.Operation, e.Limit, e.Stream)
+}
+
+// workerOperation names one invocation in the seam's own vocabulary, so an
+// overflow reports what the factory was doing rather than which Docker
+// sub-command the adapter used.
+func workerOperation(args []string) string {
+	switch args[0] {
+	case "exec":
+		return "worker command"
+	case "container":
+		return "worker inspection"
+	default:
+		return "worker lifecycle operation"
 	}
 }
 

@@ -85,6 +85,12 @@ runner publishes one final Commit Status at the run's exact checkpoint SHA
 under the stable context `factory/gate/<gate-name>`; command output is not used
 to decide success.
 
+The adapter buffers at most 8 MiB of standard output and 8 MiB of standard
+error for every Docker invocation, including worker commands and lifecycle or
+inspection calls. A stream that writes past this capture limit returns a typed
+output-limit failure instead of a command result. `docs/agent-runtime.md`
+records how a role observes that failure.
+
 The contract tests use a controlled Docker executable. Live Docker, harness,
 and terminal checks remain environment checks and are not ordinary unit-test
 dependencies.

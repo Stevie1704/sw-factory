@@ -99,6 +99,13 @@ _Avoid_: Personal skill, installed skill
 The recorded result of a real worker invocation in which one harness loaded and used the role-mandated skills, keyed by the immutable worker image digest and the harness version observed in that image. Startup reads the record instead of repeating the paid, nondeterministic model call, and a rebuilt image invalidates every record keyed by the previous digest.
 _Avoid_: Skill test, live startup check
 
+**Capture limit**:
+The fixed per-stream byte limit the worker runtime buffers for one command,
+inspection, or lifecycle operation. A stream that writes past it produces a
+typed output-limit failure with no partial command result, and that failure
+outranks ordinary exit-code classification.
+_Avoid_: Truncation, output cap, log limit
+
 **WorkerRuntime**:
 The portable seam that starts, resumes, commands, stops, and inspects a worker while hiding runtime identifiers, container paths, role homes, invocation packets, result files, and process tracking.
 _Avoid_: Docker API
