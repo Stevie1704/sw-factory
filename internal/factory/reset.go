@@ -253,11 +253,15 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	if len(blockers) > 0 {
 		return ResetResult{Plan: plan}, &ResetBlockedError{Blockers: blockers}
 	}
-	if err := s.checkResetAdapters(ctx, registration, plan); err != nil {
-		return ResetResult{Plan: plan}, err
-	}
 	if !request.Confirm {
 		return ResetResult{Plan: plan}, &ResetConfirmationRequiredError{}
+	}
+	// The adapter preflight runs only on the confirmed path. A preview is
+	// read-only and must not depend on a reachable Docker or terminal host,
+	// while a confirmed reset must not begin deletion with a known-unavailable
+	// adapter and leave a half-reset installation behind.
+	if err := s.checkResetAdapters(ctx, registration, plan); err != nil {
+		return ResetResult{Plan: plan}, err
 	}
 
 	// Confirmation never treats the preview as authority. Lifecycle
