@@ -87,7 +87,7 @@ to decide success.
 
 The adapter buffers at most 8 MiB of standard output and 8 MiB of standard
 error for every Docker invocation, including worker commands and lifecycle or
-inspection calls. A stream that writes past the bound returns a typed
+inspection calls. A stream that writes past this capture limit returns a typed
 output-limit failure instead of a command result. `docs/agent-runtime.md`
 records how a role observes that failure.
 

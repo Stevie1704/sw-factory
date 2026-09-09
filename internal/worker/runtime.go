@@ -51,20 +51,20 @@ const (
 	// workerImageDigestPrefix is the only image digest algorithm accepted by
 	// version one.
 	workerImageDigestPrefix = "sha256:"
-	// MaxCapturedOutputBytes bounds each stream the adapter buffers for one
-	// Docker invocation. Stdout and stderr are bounded independently, so a
-	// single command retains at most 16 MiB plus process overhead.
+	// MaxCapturedOutputBytes is the capture limit: the most the adapter buffers
+	// of one stream for one Docker invocation. Stdout and stderr are bounded
+	// independently, so a single command retains at most 16 MiB of output plus
+	// buffer growth.
 	//
-	// Representative outputs measured on this repository and on a worker-shaped
-	// container: setup (`go mod download`) 0 B, format gate 0 B, vet gate 0 B,
-	// test gate 1.4 KB and 240 KB with `-v`, focused red-test verification
-	// 206 B, native session discovery well under 1 KB, `docker container
-	// inspect --format '{{json .}}'` 6.5 KB, and `run`, `stop`, `rm` under
-	// 260 B each. The 8 MiB bound leaves more than thirty times the largest
-	// measured output, so it never truncates real work; it only stops a
-	// pathological command from growing the coordinator heap without limit.
-	// It is deliberately unrelated to the review-diff bound, which measures a
-	// published artifact rather than adapter memory.
+	// Outputs measured on this repository and on a worker-shaped container:
+	// setup (`go mod download`) 0 B, format gate (`gofmt -l .`) 0 B, vet gate
+	// 0 B, test gate 1.4 KB and 240 KB with `-v`, focused red-test
+	// verification 206 B, `docker container inspect --format '{{json .}}'`
+	// 6.5 KB, and `run`, `stop`, `rm` under 260 B each. Native session
+	// liveness writes nothing by construction, and session discovery writes 37
+	// B per identifier. The 8 MiB limit leaves more than thirty times the
+	// largest measured output, so it never truncates real work; it only stops
+	// a pathological command from growing the coordinator heap without bound.
 	MaxCapturedOutputBytes = 8 << 20
 )
 
@@ -516,8 +516,8 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	if err == nil {
 		return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, nil
 	}
-	// The output bound outranks exit-code classification: a command that
-	// overflowed produced no complete result to report.
+	// The capture limit outranks exit-code classification: a command that
+	// wrote past it produced no complete result to report.
 	var limitErr *OutputLimitExceededError
 	if errors.As(err, &limitErr) {
 		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, err)
@@ -1225,9 +1225,16 @@ func (r *DockerRuntime) runDockerWithInput(ctx context.Context, args []string, i
 	// An overflow invalidates the whole invocation, so it is classified before
 	// the process outcome: the caller receives no partial result and no
 	// exit-code interpretation of a command whose output was never complete.
-	if stream, exceeded := overflowingStream(stdout, stderr); exceeded {
+	stream := ""
+	switch {
+	case stdout.exceeded:
+		stream = "stdout"
+	case stderr.exceeded:
+		stream = "stderr"
+	}
+	if stream != "" {
 		return dockerCommandResult{}, &OutputLimitExceededError{
-			Operation: dockerOperation(args),
+			Operation: workerOperation(args),
 			Stream:    stream,
 			Limit:     MaxCapturedOutputBytes,
 		}
@@ -1287,25 +1294,11 @@ func (b *boundedStream) Write(data []byte) (int, error) {
 // String returns the retained bytes.
 func (b *boundedStream) String() string { return b.captured.String() }
 
-// overflowingStream names the first stream that exceeded the capture limit so
-// one command reports one deterministic overflow.
-func overflowingStream(stdout, stderr *boundedStream) (string, bool) {
-	switch {
-	case stdout.exceeded:
-		return "stdout", true
-	case stderr.exceeded:
-		return "stderr", true
-	default:
-		return "", false
-	}
-}
-
-// OutputLimitExceededError reports that one worker or Docker operation
-// produced more output than the runtime buffers. It carries no captured
-// output, container name, host path, or Docker argument.
+// OutputLimitExceededError reports that one worker operation wrote past the
+// capture limit. It carries no captured output, container name, host path, or
+// Docker argument.
 type OutputLimitExceededError struct {
-	// Operation names the failed operation without exposing private Docker
-	// identifiers.
+	// Operation names the failed operation in the seam's vocabulary.
 	Operation string
 	// Stream is the overflowing stream, either stdout or stderr.
 	Stream string
@@ -1318,19 +1311,18 @@ func (e *OutputLimitExceededError) Error() string {
 	return fmt.Sprintf("%s exceeded the %d byte %s capture limit", e.Operation, e.Limit, e.Stream)
 }
 
-// dockerOperation names one Docker invocation for error prose. The adapter
-// always builds its arguments from literal sub-commands, so the leading
-// arguments never contain a container name, host path, or credential.
-func dockerOperation(args []string) string {
-	if len(args) == 0 {
-		return "docker command"
+// workerOperation names one invocation in the seam's own vocabulary, so an
+// overflow reports what the factory was doing rather than which Docker
+// sub-command the adapter used.
+func workerOperation(args []string) string {
+	switch args[0] {
+	case "exec":
+		return "worker command"
+	case "container":
+		return "worker inspection"
+	default:
+		return "worker lifecycle operation"
 	}
-	if args[0] == "container" || args[0] == "volume" {
-		if len(args) > 1 {
-			return "docker " + args[0] + " " + args[1]
-		}
-	}
-	return "docker " + args[0]
 }
 
 // dockerCommandResult is the internal output of one Docker CLI invocation.

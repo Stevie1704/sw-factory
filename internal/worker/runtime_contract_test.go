@@ -448,8 +448,8 @@ func TestDockerRuntimeBoundsCapturedCommandOutput(t *testing.T) {
 			if !errors.As(err, &limitErr) {
 				t.Fatalf("RunCommand() error = %v, want a typed output-limit error", err)
 			}
-			if limitErr.Stream != test.wantStream || limitErr.Limit != limit || limitErr.Operation == "" {
-				t.Fatalf("output-limit error = %#v, want stream %q, limit %d, and a named operation", limitErr, test.wantStream, limit)
+			if limitErr.Stream != test.wantStream || limitErr.Limit != limit || limitErr.Operation != "worker command" {
+				t.Fatalf("output-limit error = %#v, want stream %q, limit %d, and the worker command operation", limitErr, test.wantStream, limit)
 			}
 			if result.ExitCode != 0 || result.Stdout != "" || result.Stderr != "" {
 				t.Fatalf("RunCommand() returned partial result %#v, want no result on overflow", result)
@@ -457,6 +457,9 @@ func TestDockerRuntimeBoundsCapturedCommandOutput(t *testing.T) {
 			message := err.Error()
 			if strings.Contains(message, strings.Repeat("a", 32)) || strings.Contains(message, strings.Repeat("e", 32)) {
 				t.Fatalf("output-limit error published captured output: %q", message)
+			}
+			if strings.Contains(message, "docker") {
+				t.Fatalf("output-limit error = %q, want seam vocabulary without Docker arguments", message)
 			}
 			if !strings.Contains(message, test.wantStream) || !strings.Contains(message, strconv.Itoa(limit)) {
 				t.Fatalf("output-limit error = %q, want the stream and the limit", message)

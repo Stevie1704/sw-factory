@@ -260,10 +260,10 @@ factory-report \
 
 The coordinator independently reruns `focused_test_command` inside the worker
 and requires the reported `expected_failure_reason` to appear in the captured
-output. A focused command that writes past the worker runtime's per-stream
-output bound is an unverifiable rerun, not red evidence: verification reports
-that it could not be completed and the run moves to `test/waiting_for_human`. Only that matching non-zero exit is verified red evidence. A passing
+output. Only that matching non-zero exit is verified red evidence. A passing
 command, worker failure, missing expected reason, or path-ownership dispute moves the run to `test/waiting_for_human`;
+a focused command that writes past the worker runtime's capture limit is such
+a worker failure, and verification reports that it could not be completed;
 the coordinator records only the content-free `test_dispute` evaluation
 category. An implementation objection follows the separately gated objection
 cycle described above; ordinary unverifiable test-stage reports never trigger
@@ -421,7 +421,7 @@ runs the complete frozen gate suite and retains each result under that exact
 checkpoint SHA. Typed deterministic gate failures are assembled into one
 bounded check-repair packet containing all gate outcomes, skipped dependency
 reasons, and bounded command diagnostics. A setup or gate command that writes
-past the worker runtime's per-stream output bound has no deterministic result:
+past the worker runtime's capture limit has no deterministic result:
 it is reported as `factory setup failed` or `factory gate execution failed`,
 and the packet records that failure without the command output. The next implementation invocation
 uses the existing worker role volume, implementation surface, and native
@@ -441,22 +441,24 @@ the full gate suite runs again; no prior checkpoint result authorizes it. Gate
 counts, repair attempts, stage durations, budget exhaustion, and available
 usage metadata remain in the local content-free evaluation summary.
 
-## Bounded command output
+## Capture limit
 
 The worker runtime buffers at most 8 MiB of standard output and 8 MiB of
-standard error for one command, so one command retains at most 16 MiB. The
-bound is crash containment, not a truncation feature: measured setup, gate,
-focused-test, native-session, and Docker inspection outputs stay far below it.
+standard error for one command, so one command retains at most 16 MiB of
+output plus buffer growth. The capture limit is crash containment, not a
+truncation feature: measured setup, gate, focused-test, native-session, and
+worker inspection outputs stay far below it.
 
-A command that writes past either bound stops being a command result. The
-runtime returns no partial result and no exit code; it returns a typed
-output-limit failure that names the operation, the overflowing stream, and the
-configured limit. The failure outranks ordinary exit-code handling, so a
-command that overflows and then exits non-zero is an output-limit failure, not
-a deterministic gate or test result. The failure text never contains captured
-output, container names, host paths, credentials, or Docker arguments.
+A command that writes past the limit on either stream stops being a command
+result. The runtime returns no partial result and no exit code; it returns a
+typed output-limit failure that names the operation, the overflowing stream,
+and the configured limit. The failure outranks ordinary exit-code handling, so
+a command that writes past the limit and then exits non-zero is an
+output-limit failure, not a deterministic gate or test result. The failure
+text never contains captured output, container names, host paths, credentials,
+or Docker arguments.
 
-Roles observe the bound only as an execution failure of the affected
+Roles observe the limit only as an execution failure of the affected
 operation: `factory setup failed` or `factory gate execution failed` for the
 gate suite and the check-repair packet, and an unverifiable focused red test
 that pauses the run for a human.
