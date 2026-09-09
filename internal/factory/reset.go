@@ -26,6 +26,10 @@ const resetWorkspaceCloseTimeout = 10 * time.Second
 // reporting the same name cannot loop forever.
 const resetControlWorkspaceCloseLimit = 8
 
+// resetFailureReasonLimit bounds one operator-facing failure explanation so an
+// adapter cannot spill an unbounded payload into a reset report.
+const resetFailureReasonLimit = 200
+
 // resetDatabaseSidecarSuffixes are the SQLite files that belong to one exact
 // database path. They are named rather than discovered so reset never widens
 // into an unrelated file that merely shares a directory.
@@ -48,7 +52,7 @@ var resetRetainedResources = []string{
 // run, regardless of status or retention age.
 type ResetStore interface {
 	OperationalStore
-	ListResetCandidates(context.Context) ([]store.CleanupCandidate, error)
+	ListResetCandidates(context.Context) ([]store.RunRemovalCandidate, error)
 }
 
 // ResetRequest selects whether the destructive operation is explicitly
@@ -61,26 +65,17 @@ type ResetRequest struct {
 // ResetRun describes every local target one persisted run contributes to a
 // reset plan.
 type ResetRun struct {
+	// runLocalResources carries the exact branch, worktree, workspace, worker,
+	// role, stored-output, and credential-store targets the shared validator
+	// derived, so the plan cannot drift from what was validated.
+	runLocalResources
 	// RunID identifies the run and its private worker resources.
 	RunID string
 	// Status is the run status observed when the final plan was built.
 	Status store.Status
-	// Branch is the local factory branch to remove.
-	Branch string
-	// Worktree is the exact local worktree path to remove.
-	Worktree string
 	// GitProjection is the exact private Git metadata directory the Git
 	// workspace adapter removes with the worktree.
 	GitProjection string
-	// WorkspaceIDs contains the terminal workspace handles to close.
-	WorkspaceIDs []string
-	// WorkerIDs contains the exact worker container identities to remove.
-	WorkerIDs []string
-	// Roles selects the run-scoped role-home volumes to remove.
-	Roles []string
-	// StoredOutputs contains the exact generated invocation and result
-	// directories to remove.
-	StoredOutputs []string
 }
 
 // ResetCredentialStore is one factory-managed credential volume identified by a
@@ -219,7 +214,7 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 
-	registration, err := s.registration()
+	registration, err := s.soleRegistration()
 	if err != nil {
 		return ResetResult{}, err
 	}
@@ -229,22 +224,18 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 		return ResetResult{}, err
 	}
 	if held {
-		return ResetResult{}, &ResetBlockedError{Blockers: []ResetBlocker{{
-			Reason: "the coordinator for this repository is running and owns its lock",
-			Action: "run factory stop, then repeat factory reset",
-		}}}
+		return ResetResult{}, &ResetBlockedError{Blockers: []ResetBlocker{runningCoordinatorBlocker()}}
 	}
 
-	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
+	// A preview opens the store read-only. The ordinary opener creates an
+	// absent database, initializes its metadata, and backs up and migrates an
+	// older schema, so using it here would let inspecting an installation
+	// change it.
+	resetStore, err := s.openResetStore(ctx, registration.OperationalDataPath, !request.Confirm)
 	if err != nil {
 		return ResetResult{}, err
 	}
-	resetStore, ok := opened.(ResetStore)
-	if !ok {
-		_ = opened.Close()
-		return ResetResult{}, errors.New("operational store does not support reset")
-	}
-	storeClosed := false
+	storeClosed := resetStore == nil
 	defer func() {
 		if !storeClosed {
 			_ = resetStore.Close()
@@ -266,10 +257,7 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	// coordinator from starting against the store it is about to remove.
 	lock, err := acquireCoordinatorLock(lockPath)
 	if errors.Is(err, ErrCoordinatorAlreadyRunning) {
-		return ResetResult{Plan: plan}, &ResetBlockedError{Blockers: []ResetBlocker{{
-			Reason: "the coordinator for this repository is running and owns its lock",
-			Action: "run factory stop, then repeat factory reset",
-		}}}
+		return ResetResult{Plan: plan}, &ResetBlockedError{Blockers: []ResetBlocker{runningCoordinatorBlocker()}}
 	}
 	if err != nil {
 		return ResetResult{Plan: plan}, err
@@ -288,10 +276,10 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	// plan is rebuilt from the resulting terminal state.
 	transitions, blockers, err := s.reconcileResetLifecycle(ctx, registration, resetStore)
 	if err != nil {
-		return ResetResult{Plan: plan}, err
+		return ResetResult{Plan: plan, Lifecycle: transitions}, err
 	}
 	if len(blockers) > 0 {
-		return ResetResult{Plan: plan}, &ResetBlockedError{Blockers: blockers}
+		return ResetResult{Plan: plan, Lifecycle: transitions}, &ResetBlockedError{Blockers: blockers}
 	}
 	plan, blockers, err = s.buildResetPlan(ctx, registration, resetStore, lockPath)
 	if err != nil {
@@ -306,30 +294,91 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	if len(result.Remaining) > 0 {
 		return result, &ResetIncompleteError{Remaining: result.Remaining}
 	}
-	if err := resetStore.Close(); err != nil {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: "operational store", Reason: safeStatusCommentValue(err.Error())})
-		return result, &ResetIncompleteError{Remaining: result.Remaining}
+	if !storeClosed {
+		if err := resetStore.Close(); err != nil {
+			result.Remaining = append(result.Remaining, ResetFailure{Target: "operational store", Reason: resetFailureReason(err)})
+			return result, &ResetIncompleteError{Remaining: result.Remaining}
+		}
+		storeClosed = true
 	}
-	storeClosed = true
 	s.removeResetStore(plan, &result)
 	if len(result.Remaining) > 0 {
 		return result, &ResetIncompleteError{Remaining: result.Remaining}
 	}
 	if err := os.Remove(plan.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: "host configuration " + plan.ConfigPath, Reason: safeStatusCommentValue(err.Error())})
+		result.Remaining = append(result.Remaining, ResetFailure{Target: "host configuration " + plan.ConfigPath, Reason: resetFailureReason(err)})
 		return result, &ResetIncompleteError{Remaining: result.Remaining}
 	}
 	result.Removed = append(result.Removed, "host configuration "+plan.ConfigPath)
+	// The lock inode is unlinked last. Reset holds its advisory lock for the
+	// whole pass, but unlinking it earlier would let a concurrent factory start
+	// create a fresh inode and lock that one while the store still existed.
+	if err := removeCoordinatorLock(plan.CoordinatorLock); err != nil {
+		result.Remaining = append(result.Remaining, ResetFailure{Target: "coordinator lock " + plan.CoordinatorLock, Reason: resetFailureReason(err)})
+		return result, &ResetIncompleteError{Remaining: result.Remaining}
+	}
+	result.Removed = append(result.Removed, "coordinator lock "+plan.CoordinatorLock)
 	return result, nil
+}
+
+// soleRegistration loads the one registration reset is allowed to remove. Reset
+// deletes the whole host configuration and closes the control workspace that
+// configuration names, so it refuses a configuration holding more than one
+// registration rather than destroying a registration it never planned for.
+// Version one registers exactly one repository, so this is a guard against a
+// hand-edited configuration, not a supported multi-repository mode.
+func (s *Service) soleRegistration() (config.RepositoryRegistration, error) {
+	if s.configPath == "" {
+		return config.RepositoryRegistration{}, errors.New("host configuration path is required")
+	}
+	host, err := s.deps.Config.Load(s.configPath)
+	if err != nil {
+		return config.RepositoryRegistration{}, err
+	}
+	if len(host.Repositories) == 0 {
+		return config.RepositoryRegistration{}, errors.New("no repository is registered")
+	}
+	if len(host.Repositories) > 1 {
+		return config.RepositoryRegistration{}, fmt.Errorf("host configuration %q holds %d registrations; reset removes the whole configuration and cannot prove it owns every one", s.configPath, len(host.Repositories))
+	}
+	return host.Repositories[0], nil
+}
+
+// openResetStore opens the operational store for one reset pass. An absent
+// database is not a failure: it is an already-removed target, so reset plans
+// the resources that do not depend on it and completes idempotently.
+func (s *Service) openResetStore(ctx context.Context, databasePath string, readOnly bool) (ResetStore, error) {
+	if _, err := os.Lstat(databasePath); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("inspect operational store: %w", err)
+	}
+	open := s.deps.OpenStore
+	if readOnly {
+		open = StoreOpener(s.deps.OpenStoreReadOnly)
+	}
+	opened, err := open(ctx, databasePath)
+	if err != nil {
+		return nil, err
+	}
+	resetStore, ok := opened.(ResetStore)
+	if !ok {
+		_ = opened.Close()
+		return nil, errors.New("operational store does not support reset")
+	}
+	return resetStore, nil
 }
 
 // buildResetPlan derives every removable target from validated persisted
 // identities and registered absolute paths. It performs no mutation, so both
 // the preview and the post-lifecycle confirmation use it unchanged.
 func (s *Service) buildResetPlan(ctx context.Context, registration config.RepositoryRegistration, resetStore ResetStore, lockPath string) (ResetPlan, []ResetBlocker, error) {
-	candidates, err := resetStore.ListResetCandidates(ctx)
-	if err != nil {
-		return ResetPlan{}, nil, err
+	var candidates []store.RunRemovalCandidate
+	if resetStore != nil {
+		var err error
+		if candidates, err = resetStore.ListResetCandidates(ctx); err != nil {
+			return ResetPlan{}, nil, err
+		}
 	}
 	databasePath := filepath.Clean(registration.OperationalDataPath)
 	plan := ResetPlan{
@@ -337,7 +386,7 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 		RepositoryPath:      registration.Path,
 		OperationalDataPath: databasePath,
 		CoordinatorLock:     lockPath,
-		ControlWorkspace:    defaultString(registration.Cmux.ControlWorkspace, "factory-control"),
+		ControlWorkspace:    controlWorkspaceName(registration),
 		Retained:            append([]string(nil), resetRetainedResources...),
 	}
 	plan.DatabaseSidecars = existingDatabaseSidecars(databasePath)
@@ -349,7 +398,7 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 	// The evaluation projection lives in the same database, so reset reports
 	// how many summaries disappear with it. Retention outside reset is
 	// unchanged and stays owned by the explicit evaluation-delete command.
-	if reader, ok := resetStore.(EvaluationReadStore); ok {
+	if reader, ok := resetStore.(EvaluationReadStore); ok && resetStore != nil {
 		summaries, summaryErr := reader.ListEvaluationSummaries(ctx, "")
 		if summaryErr != nil {
 			return ResetPlan{}, nil, summaryErr
@@ -369,20 +418,23 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 			})
 			continue
 		}
+		if resources.UnsafeCredentialStore != "" {
+			blockers = append(blockers, ResetBlocker{
+				RunID:  candidate.Run.ID,
+				Reason: resources.UnsafeCredentialStore,
+				Action: "resolve the run's persisted state, then repeat factory reset",
+			})
+			continue
+		}
 		if blocker := s.resetLifecycleBlocker(ctx, registration, candidate.Run); blocker != nil {
 			blockers = append(blockers, *blocker)
 			continue
 		}
 		plan.Runs = append(plan.Runs, ResetRun{
-			RunID:         candidate.Run.ID,
-			Status:        candidate.Run.Status,
-			Branch:        resources.Branch,
-			Worktree:      resources.Worktree,
-			GitProjection: runGitProjectionPath(resources.Worktree, candidate.Run.ID),
-			WorkspaceIDs:  resources.WorkspaceIDs,
-			WorkerIDs:     resources.WorkerIDs,
-			Roles:         resources.Roles,
-			StoredOutputs: resources.StoredOutputs,
+			runLocalResources: resources,
+			RunID:             candidate.Run.ID,
+			Status:            candidate.Run.Status,
+			GitProjection:     runGitProjectionPath(resources.Worktree, candidate.Run.ID),
 		})
 		for _, storeID := range resources.CredentialStoreIDs {
 			if _, exists := seenCredentialStores[storeID]; exists {
@@ -403,38 +455,56 @@ func (s *Service) resetLifecycleBlocker(ctx context.Context, registration config
 	if store.IsTerminalStatus(run.Status) {
 		return nil
 	}
-	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	observation, err := s.observeGitHubLifecycle(ctx, registration, run)
 	if err != nil {
-		return &ResetBlocker{
-			RunID:  run.ID,
-			Reason: fmt.Sprintf("GitHub lifecycle for issue #%d could not be read", run.IssueNumber),
-			Action: "restore GitHub access, then repeat factory reset",
-		}
+		blocker := unreadableLifecycleBlocker(run, "issue or tracked pull request")
+		return &blocker
 	}
-	pullRequest, hasPullRequest, err := s.trackedPullRequest(ctx, registration, run)
+	decision, err := classifyLifecycle(run, observation.Issue, observation.PullRequest, observation.HasPullRequest)
 	if err != nil {
 		return &ResetBlocker{
 			RunID:  run.ID,
-			Reason: fmt.Sprintf("GitHub lifecycle for the tracked pull request of issue #%d could not be read", run.IssueNumber),
-			Action: "restore GitHub access, then repeat factory reset",
-		}
-	}
-	decision, err := classifyLifecycle(run, issue, pullRequest, hasPullRequest)
-	if err != nil {
-		return &ResetBlocker{
-			RunID:  run.ID,
-			Reason: safeStatusCommentValue(err.Error()),
+			Reason: resetFailureReason(err),
 			Action: "resolve the pull request on GitHub, then repeat factory reset",
 		}
 	}
 	if decision.Outcome != LifecycleUnchanged {
 		return nil
 	}
-	return &ResetBlocker{
+	blocker := liveRunBlocker(run)
+	return &blocker
+}
+
+// runningCoordinatorBlocker is the single refusal reset reports while a
+// coordinator owns the registered checkout's lock. Reset never signals or kills
+// that process; stopping it stays an explicit operator decision.
+func runningCoordinatorBlocker() ResetBlocker {
+	return ResetBlocker{
+		Reason: "the coordinator for this repository is running and owns its lock",
+		Action: "run factory stop, then repeat factory reset",
+	}
+}
+
+// liveRunBlocker is the single refusal reset reports for a run whose GitHub
+// issue or pull request is still live. Reset never invents a terminal outcome,
+// so the action names the existing supervised way to close the run.
+func liveRunBlocker(run store.Run) ResetBlocker {
+	return ResetBlocker{
 		RunID:  run.ID,
 		Reason: fmt.Sprintf("run %s is not terminal and its GitHub issue #%d or pull request is still live", run.ID, run.IssueNumber),
 		Action: fmt.Sprintf("close or merge issue #%d and its pull request through the supervised workflow, or comment /factory cancel on the issue, then repeat factory reset", run.IssueNumber),
+	}
+}
+
+// unreadableLifecycleBlocker is the single refusal reset reports when GitHub
+// transport or authorization fails while a non-terminal run still exists. The
+// subject names which projection could not be read; the transport failure
+// itself is deliberately not quoted into operator-facing output.
+func unreadableLifecycleBlocker(run store.Run, subject string) ResetBlocker {
+	return ResetBlocker{
+		RunID:  run.ID,
+		Reason: fmt.Sprintf("GitHub lifecycle for the %s of issue #%d could not be read", subject, run.IssueNumber),
+		Action: "restore GitHub access, then repeat factory reset",
 	}
 }
 
@@ -444,6 +514,9 @@ func (s *Service) resetLifecycleBlocker(ctx context.Context, registration config
 // store first would strand a merged or closed run with a running label on
 // GitHub, because the status-comment and run identities live only here.
 func (s *Service) reconcileResetLifecycle(ctx context.Context, registration config.RepositoryRegistration, resetStore ResetStore) ([]ResetLifecycleTransition, []ResetBlocker, error) {
+	if resetStore == nil {
+		return nil, nil, nil
+	}
 	runStore, ok := resetStore.(RunStore)
 	if !ok {
 		return nil, nil, errors.New("operational store does not support run coordination")
@@ -463,17 +536,13 @@ func (s *Service) reconcileResetLifecycle(ctx context.Context, registration conf
 		if err != nil {
 			blockers = append(blockers, ResetBlocker{
 				RunID:  run.ID,
-				Reason: safeStatusCommentValue(fmt.Sprintf("lifecycle observation failed: %v", err)),
+				Reason: resetFailureReason(fmt.Errorf("lifecycle observation failed: %w", err)),
 				Action: "restore GitHub access, then repeat factory reset",
 			})
 			continue
 		}
 		if result.Outcome == LifecycleUnchanged {
-			blockers = append(blockers, ResetBlocker{
-				RunID:  run.ID,
-				Reason: fmt.Sprintf("run %s is not terminal and its GitHub issue #%d or pull request is still live", run.ID, run.IssueNumber),
-				Action: fmt.Sprintf("close or merge issue #%d and its pull request through the supervised workflow, or comment /factory cancel on the issue, then repeat factory reset", run.IssueNumber),
-			})
+			blockers = append(blockers, liveRunBlocker(run))
 			continue
 		}
 		transitions = append(transitions, ResetLifecycleTransition{RunID: run.ID, Outcome: result.Outcome, Reason: result.Reason})
@@ -509,16 +578,16 @@ func (s *Service) checkResetAdapters(ctx context.Context, registration config.Re
 			blockers = append(blockers, ResetBlocker{Reason: "the worker runtime cannot remove worker resources", Action: "restore the worker runtime, then repeat factory reset"})
 		} else if checker, ok := s.deps.Worker.(interface{ CheckDocker(context.Context) error }); ok {
 			if err := checker.CheckDocker(ctx); err != nil {
-				blockers = append(blockers, ResetBlocker{Reason: safeStatusCommentValue(fmt.Sprintf("the worker runtime is unavailable: %v", err)), Action: "start the worker runtime, then repeat factory reset"})
+				blockers = append(blockers, ResetBlocker{Reason: resetFailureReason(fmt.Errorf("the worker runtime is unavailable: %w", err)), Action: "start the worker runtime, then repeat factory reset"})
 			}
 		}
 	}
 	if needsTerminal {
 		terminalRuntime, err := s.resetTerminalRuntime(registration)
 		if err != nil {
-			blockers = append(blockers, ResetBlocker{Reason: safeStatusCommentValue(fmt.Sprintf("the terminal adapter is unavailable: %v", err)), Action: "start the terminal adapter, then repeat factory reset"})
+			blockers = append(blockers, ResetBlocker{Reason: resetFailureReason(fmt.Errorf("the terminal adapter is unavailable: %w", err)), Action: "start the terminal adapter, then repeat factory reset"})
 		} else if err := checkTerminalAvailability(ctx, terminalRuntime); err != nil {
-			blockers = append(blockers, ResetBlocker{Reason: safeStatusCommentValue(fmt.Sprintf("the terminal adapter is unavailable: %v", err)), Action: "start the terminal adapter, then repeat factory reset"})
+			blockers = append(blockers, ResetBlocker{Reason: resetFailureReason(fmt.Errorf("the terminal adapter is unavailable: %w", err)), Action: "start the terminal adapter, then repeat factory reset"})
 		}
 	}
 	if len(blockers) > 0 {
@@ -528,22 +597,18 @@ func (s *Service) checkResetAdapters(ctx context.Context, registration config.Re
 }
 
 // checkTerminalAvailability verifies both the terminal executable and its
-// control socket. An installed binary without a reachable socket would let the
-// preflight pass and then fail every workspace close.
+// control socket through the adapter's own diagnosis seam. An installed binary
+// without a reachable socket would otherwise pass the preflight and then fail
+// every workspace close.
 func checkTerminalAvailability(ctx context.Context, terminalRuntime terminal.TerminalRuntime) error {
-	if checker, ok := terminalRuntime.(interface {
-		CheckExecutable(context.Context) error
-	}); ok {
-		if err := checker.CheckExecutable(ctx); err != nil {
-			return err
-		}
+	checker, ok := terminalRuntime.(terminal.DoctorChecker)
+	if !ok {
+		return nil
 	}
-	if checker, ok := terminalRuntime.(interface {
-		CheckSocket(context.Context) error
-	}); ok {
-		return checker.CheckSocket(ctx)
+	if err := checker.CheckExecutable(ctx); err != nil {
+		return err
 	}
-	return nil
+	return checker.CheckSocket(ctx)
 }
 
 // executeReset removes every planned target except the operational store and
@@ -551,7 +616,7 @@ func checkTerminalAvailability(ctx context.Context, terminalRuntime terminal.Ter
 // long as possible. Independent targets are attempted individually so one
 // bounded failure cannot hide every later one.
 func (s *Service) executeReset(ctx context.Context, registration config.RepositoryRegistration, plan ResetPlan, result *ResetResult) {
-	terminalRuntime := s.resetTerminalRuntimeOrNil(registration)
+	terminalRuntime := s.availableTerminalRuntime(registration)
 	for _, run := range plan.Runs {
 		for _, workspaceID := range run.WorkspaceIDs {
 			s.closeResetWorkspace(ctx, terminalRuntime, workspaceID, result)
@@ -568,7 +633,7 @@ func (s *Service) executeReset(ctx context.Context, registration config.Reposito
 			continue
 		}
 		if err := runtime.Cleanup(ctx, worker.CleanupRequest{RunID: run.RunID, WorkerIDs: run.WorkerIDs, Roles: run.Roles, StoredOutputs: run.StoredOutputs}); err != nil {
-			result.Remaining = append(result.Remaining, ResetFailure{Target: "worker resources for run " + run.RunID, Reason: safeStatusCommentValue(err.Error())})
+			result.Remaining = append(result.Remaining, ResetFailure{Target: "worker resources for run " + run.RunID, Reason: resetFailureReason(err)})
 			continue
 		}
 		result.Removed = append(result.Removed, "worker resources for run "+run.RunID)
@@ -581,7 +646,7 @@ func (s *Service) executeReset(ctx context.Context, registration config.Reposito
 			continue
 		}
 		if err := remover.RemoveCredentialStore(ctx, worker.RemoveCredentialStoreRequest{RunID: credentialStore.RunID, CredentialStoreID: credentialStore.CredentialStoreID}); err != nil {
-			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: safeStatusCommentValue(err.Error())})
+			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
 			continue
 		}
 		result.Removed = append(result.Removed, target)
@@ -595,17 +660,12 @@ func (s *Service) executeReset(ctx context.Context, registration config.Reposito
 			continue
 		}
 		if err := workspace.Remove(ctx, registration.Path, gitadapter.Workspace{RunID: run.RunID, Branch: run.Branch, Worktree: run.Worktree}); err != nil {
-			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: safeStatusCommentValue(err.Error())})
+			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
 			continue
 		}
 		result.Removed = append(result.Removed, target)
 	}
 
-	if err := removeCoordinatorLock(plan.CoordinatorLock); err != nil {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: "coordinator lock " + plan.CoordinatorLock, Reason: safeStatusCommentValue(err.Error())})
-		return
-	}
-	result.Removed = append(result.Removed, "coordinator lock "+plan.CoordinatorLock)
 }
 
 // removeResetStore removes the operational database, its SQLite sidecars, and
@@ -616,7 +676,7 @@ func (s *Service) removeResetStore(plan ResetPlan, result *ResetResult) {
 	targets = append(targets, plan.MigrationBackups...)
 	for _, path := range targets {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			result.Remaining = append(result.Remaining, ResetFailure{Target: "operational store file " + path, Reason: safeStatusCommentValue(err.Error())})
+			result.Remaining = append(result.Remaining, ResetFailure{Target: "operational store file " + path, Reason: resetFailureReason(err)})
 			continue
 		}
 		result.Removed = append(result.Removed, "operational store file "+path)
@@ -637,7 +697,7 @@ func (s *Service) closeResetWorkspace(ctx context.Context, terminalRuntime termi
 	err := terminalRuntime.CloseWorkspace(closeCtx, terminal.WorkspaceID(workspaceID))
 	cancel()
 	if err != nil {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: safeStatusCommentValue(err.Error())})
+		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
 		return
 	}
 	result.Removed = append(result.Removed, target)
@@ -664,7 +724,7 @@ func (s *Service) closeResetControlWorkspace(ctx context.Context, terminalRuntim
 	for attempt := 0; attempt < resetControlWorkspaceCloseLimit; attempt++ {
 		found, exists, err := finder.FindWorkspace(ctx, name)
 		if err != nil {
-			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: safeStatusCommentValue(err.Error())})
+			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
 			return
 		}
 		if !exists {
@@ -688,15 +748,26 @@ func (s *Service) resetTerminalRuntime(registration config.RepositoryRegistratio
 	return s.lifecycleModule().ensureTerminalRuntime(registration.Cmux.SocketPath)
 }
 
-// resetTerminalRuntimeOrNil resolves the terminal adapter and reports an
-// unavailable adapter as a nil runtime, so each affected target records its own
+// availableTerminalRuntime resolves the terminal adapter, reporting an
+// unavailable adapter as a nil runtime so each affected target records its own
 // bounded failure instead of aborting the whole reset.
-func (s *Service) resetTerminalRuntimeOrNil(registration config.RepositoryRegistration) terminal.TerminalRuntime {
+func (s *Service) availableTerminalRuntime(registration config.RepositoryRegistration) terminal.TerminalRuntime {
 	terminalRuntime, err := s.resetTerminalRuntime(registration)
 	if err != nil {
 		return nil
 	}
 	return terminalRuntime
+}
+
+// resetFailureReason renders one adapter failure for an operator-facing plan.
+// Adapter errors embed raw git and Docker standard-error text, so the value is
+// stripped of control characters and bounded: a reset report must not become a
+// channel for command output, credential paths, or database content.
+func resetFailureReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	return boundedText(safeStatusCommentValue(err.Error()), resetFailureReasonLimit)
 }
 
 // runGitProjectionPath names the exact private Git metadata directory that the

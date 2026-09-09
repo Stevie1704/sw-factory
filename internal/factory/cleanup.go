@@ -30,7 +30,7 @@ const (
 // run artifacts while keeping evaluation-summary deletion separate.
 type CleanupStore interface {
 	OperationalStore
-	ListCleanupCandidates(context.Context, time.Time, string) ([]store.CleanupCandidate, error)
+	ListRunRemovalCandidates(context.Context, time.Time, string) ([]store.RunRemovalCandidate, error)
 	BeginCleanup(context.Context, string, time.Time) (store.CleanupTransaction, error)
 }
 
@@ -178,7 +178,7 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 		return CleanupResult{}, fmt.Errorf("cleanup cutoff %s is newer than the required seven-day cutoff %s", before.Format(time.RFC3339Nano), minimumBefore.Format(time.RFC3339Nano))
 	}
 	before = before.UTC()
-	candidates, err := cleanupStore.ListCleanupCandidates(ctx, before, request.RunID)
+	candidates, err := cleanupStore.ListRunRemovalCandidates(ctx, before, request.RunID)
 	if err != nil {
 		return CleanupResult{}, err
 	}
@@ -299,7 +299,7 @@ func (s *Service) openCleanupStore(ctx context.Context) (config.RepositoryRegist
 // buildCleanupPlan validates persisted identity and derives only exact,
 // run-scoped resources from each store candidate. It observes tracked pull
 // requests so an open PR keeps its worktree and session state.
-func (s *Service) buildCleanupPlan(ctx context.Context, registration config.RepositoryRegistration, candidates []store.CleanupCandidate, before time.Time) CleanupPlan {
+func (s *Service) buildCleanupPlan(ctx context.Context, registration config.RepositoryRegistration, candidates []store.RunRemovalCandidate, before time.Time) CleanupPlan {
 	plan := CleanupPlan{Before: before.UTC()}
 	for _, candidate := range candidates {
 		target, reason := s.cleanupTarget(ctx, registration, candidate)
@@ -314,7 +314,7 @@ func (s *Service) buildCleanupPlan(ctx context.Context, registration config.Repo
 
 // cleanupTarget validates one candidate before it can enter a destructive
 // plan. Every rejection is fail-closed so a malformed row cannot widen cleanup.
-func (s *Service) cleanupTarget(ctx context.Context, registration config.RepositoryRegistration, candidate store.CleanupCandidate) (CleanupRun, string) {
+func (s *Service) cleanupTarget(ctx context.Context, registration config.RepositoryRegistration, candidate store.RunRemovalCandidate) (CleanupRun, string) {
 	run := candidate.Run
 	resources, reason := validateRunLocalResources(registration, candidate)
 	if reason != "" {
@@ -379,6 +379,20 @@ func cleanupPlansEqual(left, right CleanupPlan) bool {
 	}
 	for index := range left.Skipped {
 		if left.Skipped[index] != right.Skipped[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// stringSlicesEqual compares ordered cleanup target fields without exposing a
+// mutable alias through the plan comparison.
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
 			return false
 		}
 	}

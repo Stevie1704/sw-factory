@@ -135,17 +135,12 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 		return LifecycleResult{Outcome: LifecycleUnchanged, Run: updated, Reason: updated.LifecycleReason}, nil
 	}
 
-	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
-	if err != nil {
-		return LifecycleResult{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
-	}
-	pullRequest, hasPullRequest, err := s.trackedPullRequest(ctx, registration, *run)
+	observation, err := s.observeGitHubLifecycle(ctx, registration, *run)
 	if err != nil {
 		return LifecycleResult{}, err
 	}
-
-	decision, err := classifyLifecycle(*run, issue, pullRequest, hasPullRequest)
+	issue, pullRequest := observation.Issue, observation.PullRequest
+	decision, err := classifyLifecycle(*run, issue, pullRequest, observation.HasPullRequest)
 	if err != nil {
 		return LifecycleResult{}, err
 	}
@@ -166,6 +161,36 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 	next.UpdatedAt = s.deps.Now().UTC()
 	updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
 	return LifecycleResult{Outcome: decision.Outcome, Run: updated, Reason: decision.Reason}, transitionErr
+}
+
+// lifecycleObservation is one complete read of a run's GitHub lifecycle and the
+// coordinator's decision about it. It performs no mutation, so a read-only
+// caller and the transition path reach identical conclusions from identical
+// inputs.
+type lifecycleObservation struct {
+	// Issue is the observed issue snapshot.
+	Issue github.Issue
+	// PullRequest is the tracked pull request, when one exists.
+	PullRequest github.PullRequest
+	// HasPullRequest reports whether a tracked pull request was found.
+	HasPullRequest bool
+}
+
+// observeGitHubLifecycle reads one run's issue and tracked pull request. It is
+// the single read path for lifecycle state, so no caller can assemble a
+// different view of GitHub before the shared rules are applied to it.
+// Classification is deliberately left to the caller, because a transition and a
+// read-only refusal report an uninterpretable lifecycle differently.
+func (s *Service) observeGitHubLifecycle(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (lifecycleObservation, error) {
+	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	if err != nil {
+		return lifecycleObservation{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
+	}
+	pullRequest, hasPullRequest, err := s.trackedPullRequest(ctx, registration, run)
+	if err != nil {
+		return lifecycleObservation{}, err
+	}
+	return lifecycleObservation{Issue: issue, PullRequest: pullRequest, HasPullRequest: hasPullRequest}, nil
 }
 
 // lifecycleDecision is the coordinator-owned interpretation of one GitHub
@@ -364,7 +389,7 @@ func (s *Service) notifyWorkspace(ctx context.Context, registration config.Repos
 		}
 	}
 	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
-		Name:             defaultString(registration.Cmux.ControlWorkspace, "factory-control"),
+		Name:             controlWorkspaceName(registration),
 		Description:      "software factory coordinator",
 		WorkingDirectory: registration.Path,
 	})
@@ -375,4 +400,10 @@ func (s *Service) notifyWorkspace(ctx context.Context, registration config.Repos
 		return fmt.Errorf("notify coordinator: %w", err)
 	}
 	return nil
+}
+
+// controlWorkspaceName resolves the registered coordinator workspace name, or
+// the factory default when a registration leaves it unset.
+func controlWorkspaceName(registration config.RepositoryRegistration) string {
+	return defaultString(registration.Cmux.ControlWorkspace, "factory-control")
 }

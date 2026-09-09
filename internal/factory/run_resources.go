@@ -51,15 +51,20 @@ type runLocalResources struct {
 	// CredentialStoreIDs contains the persisted factory-managed credential
 	// store identities this run mounted. Ordinary cleanup retains them.
 	CredentialStoreIDs []string
+	// UnsafeCredentialStore explains why a persisted credential-store identity
+	// could not be validated, or is empty when every identity is safe. It is a
+	// report rather than a rejection, because cleanup never addresses credential
+	// storage and must not start failing on an identity it does not use.
+	UnsafeCredentialStore string
 }
 
 // validateRunLocalResources derives one run's exact local resources and returns
 // a bounded operator-facing reason when any persisted identity, path, or
 // pending effect makes destruction unsafe. It is fail-closed: an identity that
 // cannot be proven run-scoped rejects the whole run.
-func validateRunLocalResources(registration config.RepositoryRegistration, candidate store.CleanupCandidate) (runLocalResources, string) {
+func validateRunLocalResources(registration config.RepositoryRegistration, candidate store.RunRemovalCandidate) (runLocalResources, string) {
 	run := candidate.Run
-	if !safeCleanupIdentifier(run.ID) {
+	if !safeLocalIdentifier(run.ID) {
 		return runLocalResources{}, "run identifier is not a safe local identifier"
 	}
 	if candidate.PendingEffect != nil {
@@ -79,7 +84,7 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 	if pathWithin(registration.Path, worktree) || pathWithin(worktree, registration.Path) {
 		return runLocalResources{}, "worktree overlaps the registered repository"
 	}
-	if reason := cleanupDirectoryTarget(worktree, "worktree"); reason != "" {
+	if reason := removableDirectoryTarget(worktree, "worktree"); reason != "" {
 		return runLocalResources{}, reason
 	}
 
@@ -115,13 +120,14 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 	var workspaceIDs []string
 	seenWorkspaceIDs := make(map[string]struct{}, len(candidate.Invocations))
 	var credentialStoreIDs []string
+	unsafeCredentialStore := ""
 	seenCredentialStoreIDs := make(map[string]struct{}, len(candidate.Invocations))
 	for _, invocation := range candidate.Invocations {
-		if !safeCleanupIdentifier(invocation.Role) {
+		if !safeLocalIdentifier(invocation.Role) {
 			return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe worker role", invocation.ID)
 		}
 		workerID := workerIDForInvocation(invocation)
-		if !safeCleanupIdentifier(workerID) {
+		if !safeLocalIdentifier(workerID) {
 			return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe worker identity", invocation.ID)
 		}
 		if _, exists := seenWorkerIDs[workerID]; !exists {
@@ -133,10 +139,9 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 			roles = append(roles, invocation.Role)
 		}
 		if storeID := invocation.CredentialStoreID; storeID != "" {
-			if !safeCleanupIdentifier(storeID) {
-				return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe credential store identity", invocation.ID)
-			}
-			if _, exists := seenCredentialStoreIDs[storeID]; !exists {
+			if !safeLocalIdentifier(storeID) {
+				unsafeCredentialStore = fmt.Sprintf("invocation %q has an unsafe credential store identity", invocation.ID)
+			} else if _, exists := seenCredentialStoreIDs[storeID]; !exists {
 				seenCredentialStoreIDs[storeID] = struct{}{}
 				credentialStoreIDs = append(credentialStoreIDs, storeID)
 			}
@@ -157,20 +162,21 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 	sort.Strings(workspaceIDs)
 	sort.Strings(credentialStoreIDs)
 	return runLocalResources{
-		Branch:             run.Branch,
-		Worktree:           worktree,
-		WorkspaceIDs:       workspaceIDs,
-		WorkerIDs:          workerIDs,
-		StoredOutputs:      storedOutputs,
-		Roles:              roles,
-		CredentialStoreIDs: credentialStoreIDs,
+		Branch:                run.Branch,
+		Worktree:              worktree,
+		WorkspaceIDs:          workspaceIDs,
+		WorkerIDs:             workerIDs,
+		StoredOutputs:         storedOutputs,
+		Roles:                 roles,
+		CredentialStoreIDs:    credentialStoreIDs,
+		UnsafeCredentialStore: unsafeCredentialStore,
 	}, ""
 }
 
-// cleanupDirectoryTarget verifies that an exact planned directory is safe to
+// removableDirectoryTarget verifies that an exact planned directory is safe to
 // remove. Missing directories are valid because a prior partial removal may
 // already have removed them.
-func cleanupDirectoryTarget(path, label string) string {
+func removableDirectoryTarget(path, label string) string {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) == string(filepath.Separator) {
 		return label + " is not a safe absolute directory"
 	}
@@ -190,9 +196,9 @@ func cleanupDirectoryTarget(path, label string) string {
 	return ""
 }
 
-// safeCleanupIdentifier accepts only one path component suitable for both
+// safeLocalIdentifier accepts only one path component suitable for both
 // generated directory names and the worker runtime's run identity.
-func safeCleanupIdentifier(value string) bool {
+func safeLocalIdentifier(value string) bool {
 	if value == "" || value == "." || value == ".." || strings.TrimSpace(value) != value {
 		return false
 	}
@@ -208,7 +214,7 @@ func safeCleanupIdentifier(value string) bool {
 // safeWorkspaceHandle accepts an opaque terminal workspace handle that is safe
 // to display in a plan and to pass as one command argument. Handles are
 // adapter-generated and never name a path, so this is deliberately wider than
-// safeCleanupIdentifier: it rejects only empty, padded, option-shaped, and
+// safeLocalIdentifier: it rejects only empty, padded, option-shaped, and
 // control-character values.
 func safeWorkspaceHandle(value string) bool {
 	if value == "" || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") {
@@ -216,20 +222,6 @@ func safeWorkspaceHandle(value string) bool {
 	}
 	for _, character := range value {
 		if unicode.IsControl(character) {
-			return false
-		}
-	}
-	return true
-}
-
-// stringSlicesEqual compares ordered plan target fields without exposing a
-// mutable alias through a plan comparison.
-func stringSlicesEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
 			return false
 		}
 	}

@@ -45,12 +45,122 @@ func TestResetPreviewsAnEmptyInstallationWithoutMutation(t *testing.T) {
 		t.Fatal("plan retained resources = none, want the deliberately retained resources named")
 	}
 	fixture.assertNoMutation(t)
+	if fixture.opened != 0 {
+		t.Fatalf("creating store opens = %d, want the preview to read an existing database read-only", fixture.opened)
+	}
 	if _, err := os.Stat(fixture.configPath); err != nil {
 		t.Fatalf("host configuration missing after preview: %v", err)
 	}
 }
 
-// TestResetRemovesEveryTerminalRunResource verifies that a confirmed reset
+// TestResetPreviewNeverCreatesOrMigratesTheOperationalStore verifies that a
+// preview inspects the installation without changing it. The ordinary opener
+// creates an absent database and backs up and migrates an older schema, so a
+// preview that used it would change the very state it reports.
+func TestResetPreviewNeverCreatesOrMigratesTheOperationalStore(t *testing.T) {
+	t.Parallel()
+
+	fixture := newResetFixture(t)
+	if err := os.Remove(fixture.operationalPath); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := fixture.service.Reset(context.Background(), factory.ResetRequest{})
+	var confirmationErr *factory.ResetConfirmationRequiredError
+	if !errors.As(err, &confirmationErr) {
+		t.Fatalf("Reset() error = %v, want ResetConfirmationRequiredError", err)
+	}
+	if len(result.Plan.Runs) != 0 {
+		t.Fatalf("planned runs = %d, want none for an absent database", len(result.Plan.Runs))
+	}
+	if _, err := os.Stat(fixture.operationalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preview recreated the operational store: err = %v", err)
+	}
+	if fixture.opened != 0 {
+		t.Fatalf("creating store opens = %d, want the preview to use the read-only opener", fixture.opened)
+	}
+	entries, err := os.ReadDir(filepath.Dir(fixture.operationalPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".bak-") {
+			t.Fatalf("preview wrote a migration backup: %s", entry.Name())
+		}
+	}
+	fixture.assertNoMutation(t)
+}
+
+// TestResetRefusesAnUnavailableTerminalAdapter verifies that an installed
+// terminal binary with an unreachable control socket blocks reset before
+// deletion, rather than passing the preflight and failing every close.
+func TestResetRefusesAnUnavailableTerminalAdapter(t *testing.T) {
+	t.Parallel()
+
+	fixture := newResetFixture(t)
+	fixture.terminal.socketErr = errors.New("socket not found")
+
+	_, err := fixture.service.Reset(context.Background(), factory.ResetRequest{Confirm: true})
+	var blocked *factory.ResetBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("Reset() error = %v, want ResetBlockedError", err)
+	}
+	if len(blocked.Blockers) != 1 || !strings.Contains(blocked.Blockers[0].Reason, "terminal adapter is unavailable") {
+		t.Fatalf("blockers = %#v, want the unavailable terminal adapter named", blocked.Blockers)
+	}
+	fixture.assertNoMutation(t)
+}
+
+// TestResetRefusesAnUnavailableGitAdapter verifies that a missing Git workspace
+// adapter blocks reset before any run resource is removed.
+func TestResetRefusesAnUnavailableGitAdapter(t *testing.T) {
+	t.Parallel()
+
+	fixture := newResetFixture(t)
+	fixture.saveRun(t, "run-no-git", store.StatusComplete, 0)
+	fixture.service = factory.NewWithDependencies(fixture.configPath, factory.Dependencies{
+		Config:    fixture.config,
+		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
+		GitHub:    fixture.github,
+		Worktree:  nonWorkspaceWorktree{},
+		Worker:    fixture.worker,
+		Terminal:  fixture.terminal,
+		Now:       func() time.Time { return time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC) },
+	})
+
+	_, err := fixture.service.Reset(context.Background(), factory.ResetRequest{Confirm: true})
+	var blocked *factory.ResetBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("Reset() error = %v, want ResetBlockedError", err)
+	}
+	if len(blocked.Blockers) != 1 || !strings.Contains(blocked.Blockers[0].Reason, "Git workspace adapter is unavailable") {
+		t.Fatalf("blockers = %#v, want the unavailable Git adapter named", blocked.Blockers)
+	}
+	fixture.assertNoMutation(t)
+}
+
+// TestResetRefusesAConfigurationHoldingMoreThanOneRegistration verifies that
+// reset never deletes a configuration whose other registrations it did not
+// plan for, because it cannot prove it owns their resources.
+func TestResetRefusesAConfigurationHoldingMoreThanOneRegistration(t *testing.T) {
+	t.Parallel()
+
+	fixture := newResetFixture(t)
+	second := fixture.registration
+	second.Path = filepath.Join(fixture.root, "other-repository")
+	fixture.config.value.Repositories = append(fixture.config.value.Repositories, second)
+
+	_, err := fixture.service.Reset(context.Background(), factory.ResetRequest{})
+	if err == nil || !strings.Contains(err.Error(), "holds 2 registrations") {
+		t.Fatalf("Reset() error = %v, want the multi-registration refusal", err)
+	}
+	fixture.assertNoMutation(t)
+	if _, err := os.Stat(fixture.configPath); err != nil {
+		t.Fatalf("host configuration removed by a refused reset: %v", err)
+	}
+}
+
+// TestResetRemovesEveryTerminalRunResource verifies// TestResetRemovesEveryTerminalRunResource verifies that a confirmed reset
 // removes each persisted run's local resources through the owning adapters and
 // then removes the store and configuration last.
 func TestResetRemovesEveryTerminalRunResource(t *testing.T) {
@@ -443,6 +553,9 @@ type resetFixture struct {
 	worker          *resetWorker
 	terminal        *resetTerminal
 	service         *factory.Service
+	// opened counts uses of the creating store opener, which a read-only
+	// preview must never reach.
+	opened int
 }
 
 // newResetFixture creates a registered installation with a real operational
@@ -488,8 +601,11 @@ func newResetFixture(t *testing.T) *resetFixture {
 	fixture.worker = &resetWorker{}
 	fixture.terminal = &resetTerminal{control: terminal.Workspace{ID: "workspace-control", Name: "factory-control"}}
 	fixture.service = factory.NewWithDependencies(fixture.configPath, factory.Dependencies{
-		Config:       fixture.config,
-		OpenStore:    func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
+		Config: fixture.config,
+		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
+			fixture.opened++
+			return store.Open(ctx, path)
+		},
 		GitHub:       fixture.github,
 		PullRequests: fixture.github,
 		GitWorkspace: fixture.workspace,
@@ -845,7 +961,15 @@ type resetTerminal struct {
 	created       []string
 	notifications []terminal.Notification
 	closeErr      error
+	// socketErr reports an unreachable control socket to the preflight.
+	socketErr error
 }
+
+// CheckExecutable reports the configured terminal executable availability.
+func (*resetTerminal) CheckExecutable(context.Context) error { return nil }
+
+// CheckSocket reports the configured terminal socket reachability.
+func (t *resetTerminal) CheckSocket(context.Context) error { return t.socketErr }
 
 // EnsureControlWorkspace records a control workspace creation, which a reset
 // preview must never perform.
@@ -914,5 +1038,20 @@ func (t *resetTerminal) CloseWorkspace(_ context.Context, workspaceID terminal.W
 	return nil
 }
 
+// nonWorkspaceWorktree is a worktree manager without the GitWorkspace
+// capability, so reset observes a missing Git adapter.
+type nonWorkspaceWorktree struct{}
+
+// Create satisfies WorktreeManager; reset never creates a worktree.
+func (nonWorkspaceWorktree) Create(context.Context, string, string, string) (gitadapter.Workspace, error) {
+	return gitadapter.Workspace{}, errors.New("unexpected workspace creation")
+}
+
+// Remove satisfies WorktreeManager; the unavailable adapter never reaches it.
+func (nonWorkspaceWorktree) Remove(context.Context, string, gitadapter.Workspace) error {
+	return errors.New("unexpected workspace removal")
+}
+
+var _ terminal.DoctorChecker = (*resetTerminal)(nil)
 var _ terminal.WorkspaceFinder = (*resetTerminal)(nil)
 var _ worker.CredentialStoreRemover = (*resetWorker)(nil)

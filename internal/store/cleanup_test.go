@@ -108,12 +108,12 @@ func TestStoreCleanupUsesTerminalRetentionAndPreservesEvaluationSummaries(t *tes
 		t.Fatal(err)
 	}
 
-	candidates, err := opened.ListCleanupCandidates(ctx, now.Add(-7*24*time.Hour), "")
+	candidates, err := opened.ListRunRemovalCandidates(ctx, now.Add(-7*24*time.Hour), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(candidates) != 1 || candidates[0].Run.ID != boundary.ID {
-		t.Fatalf("ListCleanupCandidates() = %#v, want only boundary run", candidates)
+		t.Fatalf("ListRunRemovalCandidates() = %#v, want only boundary run", candidates)
 	}
 	if candidates[0].PendingEffect == nil || len(candidates[0].Invocations) != 1 {
 		t.Fatalf("cleanup candidate = %#v, want pending effect and invocation history", candidates[0])

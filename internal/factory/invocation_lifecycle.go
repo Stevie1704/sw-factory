@@ -1094,7 +1094,7 @@ func (l *invocationLifecycle) ensureLaunchTerminal(ctx context.Context, registra
 	if l.terminal == nil {
 		return launchWorkspace{}, terminal.Surface{}, errors.New("terminal runtime is required")
 	}
-	control, err := l.terminal.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{Name: defaultString(registration.Cmux.ControlWorkspace, "factory-control"), Description: "software factory coordinator", WorkingDirectory: registration.Path})
+	control, err := l.terminal.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{Name: controlWorkspaceName(registration), Description: "software factory coordinator", WorkingDirectory: registration.Path})
 	if err != nil {
 		return launchWorkspace{}, terminal.Surface{}, err
 	}

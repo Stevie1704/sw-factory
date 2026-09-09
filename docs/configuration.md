@@ -696,8 +696,17 @@ factory reset --config /Users/me/.config/factory/config.yaml --confirm
 
 The preview is read-only: it performs no filesystem, Git, Docker, terminal,
 store, configuration, or GitHub mutation, and it prints the removable targets
-separately from the deliberately retained resources. Confirmation re-observes
-current state and never treats the earlier preview as authority.
+separately from the deliberately retained resources. It opens the operational
+store through the read-only entry point, so previewing an installation never
+creates an absent database, initializes its metadata, or backs up and migrates
+an older schema. An absent database is reported as an already-removed target
+rather than recreated. Confirmation re-observes current state and never treats
+the earlier preview as authority.
+
+Reset removes the whole host configuration, so it refuses a configuration
+holding more than one registration: it cannot prove it owns the resources of a
+registration it did not plan for. Version one registers exactly one repository,
+so this guards a hand-edited configuration rather than a supported mode.
 
 Before deleting anything, reset proves that no coordinator owns the registered
 checkout's lock and refuses while `factory start` is running, directing the
@@ -723,9 +732,12 @@ deletion plan is built. The confirmed sequence then closes terminal workspaces;
 removes worker containers, role volumes, and factory-managed credential
 volumes; removes generated invocation and result directories; removes run
 worktrees, local run branches, and private Git projections; removes the
-unlocked coordinator lock; removes the operational database with its SQLite
-sidecars and only the migration backups proven to belong to that exact
-database; and removes the selected host configuration last. The operational
+operational database with its SQLite sidecars and only the migration backups
+proven to belong to that exact database; removes the selected host
+configuration; and unlinks the coordinator lock last. Reset holds that lock for
+the whole confirmed pass, and unlinking it earlier would let a concurrent
+`factory start` create a fresh lock inode and acquire it while the store still
+existed. The operational
 store is the cleanup manifest, so it and the configuration survive until every
 resource whose identity depends on them is gone.
 
