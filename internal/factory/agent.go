@@ -2,13 +2,11 @@ package factory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -213,137 +211,28 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 	return s.startAgentWithStore(ctx, registration, runStore, run, request)
 }
 
-// reviewCanBeAcceptedWhileWaiting permits the serialized event loop to apply
-// a second review result after the first reviewer has already put the round in
-// a human-waiting state. Non-review work remains blocked by that state.
-func reviewCanBeAcceptedWhileWaiting(run store.Run, invocation store.Invocation) bool {
-	if run.Stage != store.StageReview || run.Status != store.StatusWaitingForHuman || !roleIsKind(invocation, workflow.RoleKindReview) {
-		return false
+// AcceptAgentReport reads only the invocation report file, validates its
+// identity and observed worktree state, and then lets the coordinator decide
+// the resulting workflow status. Store opening and command locking remain
+// coordinator concerns; every phase after them belongs to the module.
+func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequest) (AgentResult, error) {
+	if strings.TrimSpace(request.InvocationID) == "" {
+		return AgentResult{}, errors.New("invocation id is required")
 	}
-	if containsString(run.ActiveInvocationIDs, invocation.ID) {
-		return true
-	}
-	return false
-}
-
-// reviewHasBlockingResult reports whether either isolated reviewer has a
-// concrete correctness, security, specification, or standards violation.
-func reviewHasBlockingResult(run store.Run) bool {
-	return (reviewRoleConfigured(run, workflow.RoleSpecificationReview) && run.SpecificationReview != nil && reviewHasBlockingFindingForRole(workflow.RoleSpecificationReview, run.SpecificationReview.Findings)) ||
-		(reviewRoleConfigured(run, workflow.RoleStandardsReview) && run.StandardsReview != nil && reviewHasBlockingFindingForRole(workflow.RoleStandardsReview, run.StandardsReview.Findings))
-}
-
-// acceptedInvocationStatus maps a validated report outcome to its durable
-// invocation lifecycle state, keeping result acceptance consistent across all
-// visible roles.
-func acceptedInvocationStatus(outcome report.Outcome) store.InvocationStatus {
-	switch outcome {
-	case report.OutcomeCompleted:
-		return store.InvocationStatusCompleted
-	case report.OutcomeNeedsClarification:
-		return store.InvocationStatusWaitingForHuman
-	case report.OutcomeCannotProceed:
-		return store.InvocationStatusCannotProceed
-	default:
-		return store.InvocationStatusCannotProceed
-	}
-}
-
-// agentReportRunProjection applies the declared workflow transition for a
-// validated generic handoff in both journaled and legacy paths. An unreadable
-// frozen packet or an undeclared transition fails the run at its invocation
-// stage instead of guessing a route that could skip a selected stage.
-func agentReportRunProjection(previous store.Run, invocationStage store.Stage, value report.Report) store.Run {
-	next := previous
-	// An accepted report ends the run's delegation to its invocation, so the
-	// status projection stops implying that a harness is executing.
-	clearActiveInvocations(&next)
-	route, readable := routeForRun(previous)
-	if !readable {
-		next.Stage = invocationStage
-		next.Status = store.StatusFailed
-		next.PendingQuestions = nil
-		return next
-	}
-	transition, err := workflow.DefaultRegistry().ResolveRouteReportTransition(route, invocationStage, value.Outcome)
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	registration, runStore, run, err := s.openReportRunStore(ctx)
 	if err != nil {
-		next.Stage = invocationStage
-		next.Status = store.StatusFailed
-		next.PendingQuestions = nil
-		return next
+		return AgentResult{}, err
 	}
-	next.Stage = transition.Stage
-	next.Status = transition.Status
-	switch value.Outcome {
-	case report.OutcomeNeedsClarification:
-		next.PendingQuestions = pendingQuestionsFromReport(value.Questions)
-	case report.OutcomeCannotProceed:
-		next.PendingQuestions = nil
-	default:
-		if value.Handoff != nil && len(value.Handoff.ProductionFilesChanged) != 0 {
-			next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
-		}
-		next.PendingQuestions = nil
-	}
-	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
-	return next
-}
-
-// readAcceptedAgentReport returns the immutable report belonging to a terminal
-// invocation. It makes repeated acceptance a read-only idempotent operation for
-// the durable journal store without re-finishing its harness session. This
-// function reads from the filesystem and should only be used as a fallback when
-// the pending effect payload is unavailable.
-func readAcceptedAgentReport(invocation store.Invocation) (report.Report, error) {
-	path := reportPath(invocation)
-	if roleIsKind(invocation, workflow.RoleKindTest) {
-		return report.ReadEnvelope(path)
-	}
-	return report.Read(path)
-}
-
-// readAcceptedReportFromEffect extracts the accepted report from a result
-// acceptance pending effect payload. This provides the immutable snapshot that
-// was validated during acceptance, avoiding re-reading mutable report.json.
-func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, error) {
-	payload, err := effectkernel.ReadResultAcceptance(pending)
-	if err != nil {
-		return report.Report{}, err
-	}
-	if strings.TrimSpace(payload.AcceptedReport) == "" {
-		return report.Report{}, errors.New("result acceptance payload has no accepted report")
-	}
-	var value report.Report
-	if err := json.Unmarshal([]byte(payload.AcceptedReport), &value); err != nil {
-		return report.Report{}, fmt.Errorf("decode accepted report from effect: %w", err)
-	}
-	return value, nil
-}
-
-// readAcceptedReviewReportFromEffect extracts the immutable review invocation
-// and report snapshot from a result-acceptance effect. Legacy payloads without
-// the snapshot fall back to the invocation artifact retained on disk.
-func readAcceptedReviewReportFromEffect(pending store.PendingEffect) (store.Invocation, report.Report, bool, error) {
-	payload, err := effectkernel.ReadResultAcceptance(pending)
-	if err != nil {
-		return store.Invocation{}, report.Report{}, false, err
-	}
-	if !roleIsKind(payload.Invocation, workflow.RoleKindReview) {
-		return payload.Invocation, report.Report{}, false, nil
-	}
-	if strings.TrimSpace(payload.AcceptedReport) == "" {
-		value, readErr := readAcceptedAgentReport(payload.Invocation)
-		if readErr != nil {
-			return store.Invocation{}, report.Report{}, true, fmt.Errorf("read accepted review report from invocation artifact: %w", readErr)
-		}
-		return payload.Invocation, value, true, nil
-	}
-	var value report.Report
-	if err := json.Unmarshal([]byte(payload.AcceptedReport), &value); err != nil {
-		return store.Invocation{}, report.Report{}, true, fmt.Errorf("decode accepted review report from effect: %w", err)
-	}
-	return payload.Invocation, value, true, nil
+	defer func() { _ = runStore.Close() }()
+	return s.acceptanceModule().Accept(ctx, ReportAcceptanceRequest{
+		Registration:       registration,
+		RunStore:           runStore,
+		Run:                run,
+		Request:            request,
+		EvaluationRecorder: acceptanceEvaluationRecorderForRunStore(runStore),
+	})
 }
 
 // RunAgent launches the visible agent and accepts a report when one is already
