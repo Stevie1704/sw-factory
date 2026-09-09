@@ -116,12 +116,12 @@ func TestAdmitReportParksAnUnverifiableTestReportInsteadOfRejectingIt(t *testing
 		snapshot.Packet.Route = workflow.RouteAcceptance
 		snapshot.Report.ReportedAt = time.Time{}
 	})
-	admission, err := AdmitReport(snapshot)
+	outcome, err := AdmitReport(snapshot)
 	if err != nil {
 		t.Fatalf("want an unverifiable admission, got %v", err)
 	}
-	if !admission.Unverifiable {
-		t.Fatal("want the report parked as unverifiable")
+	if outcome != AcceptanceOutcomeUnverifiable {
+		t.Fatalf("want the report parked as unverifiable, got %q", outcome)
 	}
 }
 
@@ -142,5 +142,74 @@ func TestAdmitAcceptanceIdentityRejectsAPathPolicyThatDiffersFromTheInvocation(t
 	err := admitAcceptanceIdentity(snapshot.Run, snapshot.Invocation, snapshot.Role, AgentReportRequest{PermittedPaths: []string{"cmd/"}})
 	if err == nil || !strings.Contains(err.Error(), "permitted paths do not match the invocation policy") {
 		t.Fatalf("want path policy rejection, got %v", err)
+	}
+}
+
+// completedImplementationSnapshot is an admissible implementation report. The
+// rejection cases below start from it, so each one differs from an accepted
+// report in exactly the field the rejection is about.
+func completedImplementationSnapshot(t *testing.T, mutate func(*AcceptanceSnapshot)) AcceptanceSnapshot {
+	t.Helper()
+	return admissionSnapshot(t, workflow.RoleImplementation, store.StageImplementation, func(snapshot *AcceptanceSnapshot) {
+		snapshot.Report.Handoff = &report.Handoff{
+			ChangeSummary:          "the coordinator now sequences report acceptance",
+			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "accept a report", Evidence: "go test ./internal/factory/"}},
+			ProductionFilesChanged: []string{"internal/factory/agent.go"},
+			FocusedCommands:        []string{"go test ./internal/factory/"},
+		}
+		snapshot.Worktree.ChangedPaths = []string{"internal/factory/agent.go"}
+		snapshot.ObservedChanges = []string{"internal/factory/agent.go"}
+		if mutate != nil {
+			mutate(snapshot)
+		}
+	})
+}
+
+func TestAdmitReportSelectsTheHandoffOutcomeForACompletedImplementationReport(t *testing.T) {
+	outcome, err := AdmitReport(completedImplementationSnapshot(t, nil))
+	if err != nil {
+		t.Fatalf("want an admitted report, got %v", err)
+	}
+	if outcome != AcceptanceOutcomeHandoff {
+		t.Fatalf("want the handoff outcome, got %q", outcome)
+	}
+}
+
+func TestAdmitReportRejectsAReportThatChangedAProtectedTestPath(t *testing.T) {
+	snapshot := completedImplementationSnapshot(t, func(snapshot *AcceptanceSnapshot) {
+		snapshot.Run.ProtectedTestPaths = []store.ProtectedTestPath{{Path: "internal/factory/agent_test.go", SHA256: strings.Repeat("d", 64)}}
+	})
+	_, err := AdmitReport(snapshot)
+	if err == nil || !strings.Contains(err.Error(), "protected test path") {
+		t.Fatalf("want a protected test path rejection, got %v", err)
+	}
+}
+
+func TestAdmitReportRejectsAClarificationWithoutAQuestion(t *testing.T) {
+	snapshot := completedImplementationSnapshot(t, func(snapshot *AcceptanceSnapshot) {
+		snapshot.Report.Outcome = report.OutcomeNeedsClarification
+		snapshot.Report.Handoff = nil
+	})
+	_, err := AdmitReport(snapshot)
+	if err == nil || !strings.Contains(err.Error(), "at least one question") {
+		t.Fatalf("want a clarification rejection, got %v", err)
+	}
+}
+
+func TestAdmitAcceptanceIdentityRejectsAnUnsafePathPolicy(t *testing.T) {
+	snapshot := completedImplementationSnapshot(t, nil)
+	err := admitAcceptanceIdentity(snapshot.Run, snapshot.Invocation, snapshot.Role, AgentReportRequest{PermittedPaths: []string{"../escape"}})
+	if err == nil {
+		t.Fatal("want an unsafe permitted path rejection")
+	}
+}
+
+func TestAdmitAcceptanceIdentityRejectsATerminalRun(t *testing.T) {
+	snapshot := completedImplementationSnapshot(t, func(snapshot *AcceptanceSnapshot) {
+		snapshot.Run.Status = store.StatusFailed
+	})
+	err := admitAcceptanceIdentity(snapshot.Run, snapshot.Invocation, snapshot.Role, AgentReportRequest{})
+	if err == nil {
+		t.Fatal("want a run-state rejection")
 	}
 }

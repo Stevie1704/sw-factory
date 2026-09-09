@@ -127,7 +127,7 @@ func resolveModelPolicy(repository config.RepositoryConfig, request AgentRequest
 			Problem: fmt.Sprintf("no model policy for role %q", request.Role),
 		}
 	}
-	if !contains(options, selected) && !hasOverride(repository.AllowedOverrides, config.OverrideModel) {
+	if !containsString(options, selected) && !hasOverride(repository.AllowedOverrides, config.OverrideModel) {
 		return "", &PolicyRejection{
 			Code:    PolicyRejectionModelOverride,
 			Problem: fmt.Sprintf("model %q is not a declared option for role %q", selected, request.Role),
@@ -145,7 +145,7 @@ func resolveReasoningEffortPolicy(repository config.RepositoryConfig, request Ag
 	if selected == "" && len(options) > 0 {
 		selected = options[0]
 	}
-	if selected != "" && !contains(options, selected) && !hasOverride(repository.AllowedOverrides, config.OverrideReasoningEffort) {
+	if selected != "" && !containsString(options, selected) && !hasOverride(repository.AllowedOverrides, config.OverrideReasoningEffort) {
 		return "", &PolicyRejection{
 			Code:    PolicyRejectionReasoningEffortOverride,
 			Problem: fmt.Sprintf("reasoning effort %q is not a declared option for role %q", selected, request.Role),
@@ -156,16 +156,6 @@ func resolveReasoningEffortPolicy(repository config.RepositoryConfig, request Ag
 
 // hasOverride reports whether a repository policy explicitly permits a setting.
 func hasOverride(values []config.OverrideName, wanted config.OverrideName) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
-}
-
-// contains reports whether a string appears in a policy list.
-func contains(values []string, wanted string) bool {
 	for _, value := range values {
 		if value == wanted {
 			return true

@@ -55,16 +55,39 @@ func (snapshot AcceptanceSnapshot) TestRevisionActive() bool {
 	return snapshot.TestInvocation() && snapshot.Run.TestObjection != nil
 }
 
-// AcceptanceAdmission is the decision pure admission reaches. It carries no
-// projection: it says only whether the report may be accepted, and which of
-// the two non-rejecting exits the sequencer must take.
-type AcceptanceAdmission struct {
-	// Unverifiable marks a test report that failed schema validation in the
-	// one shape the coordinator parks for a person instead of refusing.
-	Unverifiable bool
-	// ImplementationObjection marks an accepted implementation report that
-	// disputes a protected test and redirects the run back to the test role.
-	ImplementationObjection bool
+// AcceptanceOutcome identifies the exit admission selected for one report. It
+// is resolved once, so projection, commitment, and dispatch read the same
+// decision instead of recomputing the role and objection predicates.
+type AcceptanceOutcome string
+
+const (
+	// AcceptanceOutcomeHandoff means the report completes its stage and the
+	// declared workflow transition owns the next run projection.
+	AcceptanceOutcomeHandoff AcceptanceOutcome = "handoff"
+	// AcceptanceOutcomeTestStage means the independent test stage policy owns
+	// the continuation of this report.
+	AcceptanceOutcomeTestStage AcceptanceOutcome = "test-stage"
+	// AcceptanceOutcomeReview means an isolated review round owns it.
+	AcceptanceOutcomeReview AcceptanceOutcome = "review"
+	// AcceptanceOutcomeTestObjection means an accepted implementation report
+	// disputes a protected test and redirects the run to the test role.
+	AcceptanceOutcomeTestObjection AcceptanceOutcome = "test-objection"
+	// AcceptanceOutcomeUnverifiable means a test report failed schema
+	// validation in the one shape the coordinator parks for a person instead
+	// of refusing.
+	AcceptanceOutcomeUnverifiable AcceptanceOutcome = "unverifiable"
+)
+
+// acceptanceEvaluationRecorder is the content-free evaluation projection one
+// accepted report writes. The module receives it explicitly instead of
+// discovering the coordinator's broader store capability itself.
+type acceptanceEvaluationRecorder interface {
+	EnsureEvaluationSummary(context.Context, store.Run) error
+	RecordEvaluationExemption(context.Context, string, store.EvaluationExemption) error
+	RecordEvaluationEscalation(context.Context, string, store.EvaluationEscalationCategory) error
+	RecordEvaluationBlocker(context.Context, string, store.EvaluationBlockerCategory) error
+	RecordEvaluationBudgetExhaustion(context.Context, string) error
+	RecordEvaluationUsage(context.Context, string, string, store.EvaluationUsage) error
 }
 
 // acceptanceJournal is the durable-effect seam report acceptance owns. Result
@@ -123,7 +146,7 @@ type ReportAcceptanceRequest struct {
 	// Request selects the invocation and repeats the path policy.
 	Request AgentReportRequest
 	// EvaluationRecorder is the optional content-free evaluation projection.
-	EvaluationRecorder evaluationRecorder
+	EvaluationRecorder acceptanceEvaluationRecorder
 }
 
 // Accept sequences the four phases of report acceptance. Repeated acceptance
@@ -148,28 +171,29 @@ func (a *reportAcceptance) Accept(ctx context.Context, request ReportAcceptanceR
 	if err != nil {
 		return AgentResult{}, err
 	}
-	admission, err := AdmitReport(snapshot)
+	outcome, err := AdmitReport(snapshot)
 	if err != nil {
 		return AgentResult{}, err
 	}
-	if admission.Unverifiable {
+	if outcome == AcceptanceOutcomeUnverifiable {
 		if snapshot.TestRevisionActive() {
 			return a.hooks.pauseUnverifiableRevision(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report)
 		}
 		return a.hooks.pauseUnverifiableTest(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report)
 	}
-	objection := acceptanceObjection{Present: admission.ImplementationObjection}
-	if objection.Present {
+	var objection acceptanceObjection
+	if outcome == AcceptanceOutcomeTestObjection {
 		objection.Automated, objection.Reason = a.hooks.objectionGate(ctx, request.Registration, snapshot.Packet)
 	}
-	if err := recordAcceptanceEvaluation(ctx, request.EvaluationRecorder, snapshot, admission); err != nil {
+	if err := recordAcceptanceEvaluation(ctx, request.EvaluationRecorder, snapshot, outcome); err != nil {
 		return AgentResult{}, err
 	}
-	return a.commit(ctx, request, invocationStore, invocation, snapshot, objection)
+	return a.commit(ctx, request, invocationStore, invocation, snapshot, outcome, objection)
 }
 
 // identify resolves the invocation the request names and the role definition
-// that owns its stage. It is the only store read outside gather.
+// that owns its stage. It is the one read the sequencer needs before it can
+// tell a first acceptance from a repeated one.
 func (a *reportAcceptance) identify(ctx context.Context, invocationStore InvocationStore, request ReportAcceptanceRequest) (*store.Invocation, workflow.RoleDefinition, error) {
 	run := request.Run
 	if run == nil {
@@ -337,63 +361,101 @@ func admitAcceptanceIdentity(run store.Run, invocation store.Invocation, roleDef
 	return nil
 }
 
-// AdmitReport decides whether one gathered report may be accepted. It is pure
-// over the snapshot: it takes no adapter and no context, so a rejection can be
-// reproduced from a run, an invocation, a report, and a worktree state alone.
-func AdmitReport(snapshot AcceptanceSnapshot) (AcceptanceAdmission, error) {
-	run, invocation := snapshot.Run, snapshot.Invocation
-	if run.CheckpointSHA != "" && snapshot.Worktree.HeadSHA != run.CheckpointSHA {
-		return AcceptanceAdmission{}, fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", snapshot.Worktree.HeadSHA, run.CheckpointSHA)
+// AdmitReport decides whether one gathered report may be accepted and which
+// exit it takes. It is pure over the snapshot: it takes no adapter and no
+// context, so a rejection can be reproduced from a run, an invocation, a
+// report, and a worktree state alone.
+func AdmitReport(snapshot AcceptanceSnapshot) (AcceptanceOutcome, error) {
+	if err := admitAcceptanceCheckpoint(snapshot); err != nil {
+		return "", err
 	}
-	if snapshot.ReviewInvocation() && len(snapshot.Worktree.ChangedPaths) != 0 {
-		return AcceptanceAdmission{}, fmt.Errorf("%s changed the immutable checkpoint worktree", invocation.Role)
-	}
-	if snapshot.TestInvocation() && !independentTestStageDeclared(snapshot.Packet) {
-		return AcceptanceAdmission{}, errors.New("test-stage reports are unavailable in advisory mode without a selected route; implementation owns TDD")
-	}
-	if err := validateImplementationOwnedSignals(snapshot.Report, invocation, snapshot.Packet); err != nil {
-		return AcceptanceAdmission{}, err
-	}
-	if err := validateReviewRepairTestOwnerRouting(snapshot.Report, invocation, run, snapshot.Packet); err != nil {
-		return AcceptanceAdmission{}, err
-	}
-	if snapshot.ReviewInvocation() && snapshot.Report.ReviewHandoff != nil && snapshot.Report.ReviewHandoff.ReviewedSHA != run.CheckpointSHA {
-		return AcceptanceAdmission{}, &ReviewCheckpointMismatchError{
-			Role:         invocation.Role,
-			InvocationID: invocation.ID,
-			Expected:     run.CheckpointSHA,
-			Observed:     snapshot.Report.ReviewHandoff.ReviewedSHA,
-		}
+	if err := admitAcceptanceRouting(snapshot); err != nil {
+		return "", err
 	}
 	if err := report.Validate(snapshot.Report, acceptanceValidationContext(snapshot)); err != nil {
-		if isUnverifiableTestReport(snapshot.Report, invocation) {
-			return AcceptanceAdmission{Unverifiable: true}, nil
+		if isUnverifiableTestReport(snapshot.Report, snapshot.Invocation) {
+			return AcceptanceOutcomeUnverifiable, nil
 		}
-		return AcceptanceAdmission{}, err
+		return "", err
 	}
-	if snapshot.TestInvocation() {
-		if err := validateTestStageReportPolicy(snapshot.Report, snapshot.Packet.RepositoryConfig.TestPolicy); err != nil {
-			return AcceptanceAdmission{}, err
-		}
-	}
-	objection := implementationTestObjection(snapshot.Report, invocation)
-	if snapshot.Report.TestObjectionResponse != nil && !snapshot.TestRevisionActive() {
-		return AcceptanceAdmission{}, errors.New("test objection response requires an active implementation objection")
-	}
-	if objection {
-		if err := validateImplementationTestObjection(snapshot.Report, invocation, run, snapshot.Packet); err != nil {
-			return AcceptanceAdmission{}, err
-		}
+	objection, err := admitAcceptanceObjection(snapshot)
+	if err != nil {
+		return "", err
 	}
 	if err := admitAcceptancePathOwnership(snapshot); err != nil {
-		return AcceptanceAdmission{}, err
+		return "", err
 	}
 	if snapshot.Report.Outcome == report.OutcomeNeedsClarification {
-		if err := validateClarificationQuestions(snapshot.Packet, run.PendingQuestions, snapshot.Report.Questions); err != nil {
-			return AcceptanceAdmission{}, err
+		if err := validateClarificationQuestions(snapshot.Packet, snapshot.Run.PendingQuestions, snapshot.Report.Questions); err != nil {
+			return "", err
 		}
 	}
-	return AcceptanceAdmission{ImplementationObjection: objection}, nil
+	switch {
+	case objection:
+		return AcceptanceOutcomeTestObjection, nil
+	case snapshot.TestInvocation():
+		return AcceptanceOutcomeTestStage, nil
+	case snapshot.ReviewInvocation():
+		return AcceptanceOutcomeReview, nil
+	}
+	return AcceptanceOutcomeHandoff, nil
+}
+
+// admitAcceptanceCheckpoint enforces that the observed worktree still holds
+// the immutable checkpoint the invocation was launched against. A reviewer
+// additionally owns no write to that checkpoint at all.
+func admitAcceptanceCheckpoint(snapshot AcceptanceSnapshot) error {
+	if snapshot.Run.CheckpointSHA != "" && snapshot.Worktree.HeadSHA != snapshot.Run.CheckpointSHA {
+		return fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", snapshot.Worktree.HeadSHA, snapshot.Run.CheckpointSHA)
+	}
+	if snapshot.ReviewInvocation() && len(snapshot.Worktree.ChangedPaths) != 0 {
+		return fmt.Errorf("%s changed the immutable checkpoint worktree", snapshot.Invocation.Role)
+	}
+	return nil
+}
+
+// admitAcceptanceRouting enforces the frozen workflow route: a test report
+// needs a declared independent test stage, neither an implementation signal
+// nor a review-repair handoff may cross the role that owns it, and a review
+// result must name the exact checkpoint its round was opened against.
+func admitAcceptanceRouting(snapshot AcceptanceSnapshot) error {
+	if snapshot.TestInvocation() && !independentTestStageDeclared(snapshot.Packet) {
+		return errors.New("test-stage reports are unavailable in advisory mode without a selected route; implementation owns TDD")
+	}
+	if err := validateImplementationOwnedSignals(snapshot.Report, snapshot.Invocation, snapshot.Packet); err != nil {
+		return err
+	}
+	if err := validateReviewRepairTestOwnerRouting(snapshot.Report, snapshot.Invocation, snapshot.Run, snapshot.Packet); err != nil {
+		return err
+	}
+	if !snapshot.ReviewInvocation() || snapshot.Report.ReviewHandoff == nil || snapshot.Report.ReviewHandoff.ReviewedSHA == snapshot.Run.CheckpointSHA {
+		return nil
+	}
+	return &ReviewCheckpointMismatchError{
+		Role:         snapshot.Invocation.Role,
+		InvocationID: snapshot.Invocation.ID,
+		Expected:     snapshot.Run.CheckpointSHA,
+		Observed:     snapshot.Report.ReviewHandoff.ReviewedSHA,
+	}
+}
+
+// admitAcceptanceObjection reports whether an accepted implementation report
+// opens a bounded test objection cycle, and refuses a response to an objection
+// that is not open.
+func admitAcceptanceObjection(snapshot AcceptanceSnapshot) (bool, error) {
+	if snapshot.TestInvocation() {
+		if err := validateTestStageReportPolicy(snapshot.Report, snapshot.Packet.RepositoryConfig.TestPolicy); err != nil {
+			return false, err
+		}
+	}
+	objection := implementationTestObjection(snapshot.Report, snapshot.Invocation)
+	if snapshot.Report.TestObjectionResponse != nil && !snapshot.TestRevisionActive() {
+		return false, errors.New("test objection response requires an active implementation objection")
+	}
+	if !objection {
+		return false, nil
+	}
+	return true, validateImplementationTestObjection(snapshot.Report, snapshot.Invocation, snapshot.Run, snapshot.Packet)
 }
 
 // admitAcceptancePathOwnership enforces the path split between the test role
@@ -442,8 +504,6 @@ func acceptanceValidationContext(snapshot AcceptanceSnapshot) report.ValidationC
 // acceptanceObjection is the resolved implementation objection, including the
 // measured-pilot decision that says whether it may run automatically.
 type acceptanceObjection struct {
-	// Present marks an admitted objection against a protected test.
-	Present bool
 	// Automated reports whether the authorized pilot decision permits an
 	// automated revision cycle.
 	Automated bool
@@ -453,7 +513,7 @@ type acceptanceObjection struct {
 
 // recordAcceptanceEvaluation writes the content-free evaluation projection of
 // one accepted report. A store without the projection records nothing.
-func recordAcceptanceEvaluation(ctx context.Context, recorder evaluationRecorder, snapshot AcceptanceSnapshot, admission AcceptanceAdmission) error {
+func recordAcceptanceEvaluation(ctx context.Context, recorder acceptanceEvaluationRecorder, snapshot AcceptanceSnapshot, outcome AcceptanceOutcome) error {
 	if recorder == nil {
 		return nil
 	}
@@ -494,7 +554,7 @@ func recordAcceptanceEvaluation(ctx context.Context, recorder evaluationRecorder
 			return fmt.Errorf("record local evaluation usage: %w", err)
 		}
 	}
-	if admission.ImplementationObjection || (snapshot.TestRevisionActive() && value.TestObjectionResponse != nil) {
+	if outcome == AcceptanceOutcomeTestObjection || (snapshot.TestRevisionActive() && value.TestObjectionResponse != nil) {
 		if err := recorder.RecordEvaluationEscalation(ctx, run.ID, store.EvaluationEscalationTestDispute); err != nil {
 			return fmt.Errorf("record test objection escalation: %w", err)
 		}
@@ -539,14 +599,12 @@ type acceptanceProjection struct {
 	Previous store.Run
 	// Next is the projected run without the persistence strategy's own edits.
 	Next store.Run
-	// StopWorker reports whether acceptance ends this invocation's worker.
-	StopWorker bool
 }
 
 // projectAcceptance builds the accepted invocation and the next run from an
 // admitted report. Both persistence strategies share it; only the durability
 // mechanism, and the restart-safety edits that mechanism requires, differ.
-func projectAcceptance(snapshot AcceptanceSnapshot, objection acceptanceObjection, nativeSessionID string, now time.Time) (acceptanceProjection, error) {
+func projectAcceptance(snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, objection acceptanceObjection, nativeSessionID string, now time.Time) (acceptanceProjection, error) {
 	accepted := snapshot.Invocation
 	accepted.NativeSessionID = nativeSessionID
 	accepted.Status = acceptedInvocationStatus(snapshot.Report.Outcome)
@@ -554,26 +612,25 @@ func projectAcceptance(snapshot AcceptanceSnapshot, objection acceptanceObjectio
 	previous := snapshot.Run
 	next := previous
 	releaseActiveInvocation(&next, snapshot.Invocation.ID)
-	switch {
-	case objection.Present:
+	switch outcome {
+	case AcceptanceOutcomeTestObjection:
 		projected, err := projectImplementationTestObjection(previous, snapshot.Report, snapshot.Invocation, snapshot.Packet, snapshot.Worktree, objection.Automated, objection.Reason)
 		if err != nil {
 			return acceptanceProjection{}, err
 		}
 		next = projected
-	case snapshot.TestInvocation() || snapshot.ReviewInvocation():
+	case AcceptanceOutcomeTestStage, AcceptanceOutcomeReview:
 		// The test and review stage policies own their own run transition.
 	default:
 		next = agentReportRunProjection(previous, snapshot.Invocation.Stage, snapshot.Report)
 	}
-	stopWorker := snapshot.Report.Outcome == report.OutcomeNeedsClarification || snapshot.ReviewInvocation() || objection.Present
-	return acceptanceProjection{Invocation: accepted, Previous: previous, Next: next, StopWorker: stopWorker}, nil
+	return acceptanceProjection{Invocation: accepted, Previous: previous, Next: next}, nil
 }
 
 // commit makes the projection durable and hands the run to the stage policy
 // that owns it. The journaled and legacy stores share the projection and the
 // dispatch; only the durability mechanism differs.
-func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, objection acceptanceObjection) (AgentResult, error) {
+func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, objection acceptanceObjection) (AgentResult, error) {
 	harnessRuntime, err := a.lifecycle.HarnessRuntime(request.Registration.Cmux.SocketPath, invocation.Harness)
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("ensure agent runtime: %w", err)
@@ -582,34 +639,34 @@ func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceR
 	if err != nil {
 		return AgentResult{}, err
 	}
-	projection, err := projectAcceptance(snapshot, objection, nativeSessionID, a.clock().UTC())
+	projection, err := projectAcceptance(snapshot, outcome, objection, nativeSessionID, a.clock().UTC())
 	if err != nil {
 		return AgentResult{}, err
 	}
 	if _, journaled := request.RunStore.(PendingEffectStore); journaled {
-		err = a.commitJournaled(ctx, request, invocationStore, invocation, snapshot, harnessRuntime, projection)
+		err = a.commitJournaled(ctx, request, invocationStore, invocation, snapshot, harnessRuntime, outcome, projection)
 	} else {
-		err = a.commitDirect(ctx, request, invocationStore, invocation, snapshot, harnessRuntime, objection, projection)
+		err = a.commitDirect(ctx, request, invocationStore, invocation, snapshot, harnessRuntime, outcome, projection)
 	}
 	if err != nil {
 		return AgentResult{}, err
 	}
-	return a.dispatch(ctx, request, invocation, snapshot, objection)
+	return a.dispatch(ctx, request, invocation, snapshot, outcome)
 }
 
 // commitJournaled persists the acceptance as one durable effect. The effect
 // payload has to survive a restart on its own, so the review result and the
 // revision bump are applied before it is reserved rather than by the stage
 // policy that runs after it.
-func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, projection acceptanceProjection) error {
+func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, outcome AcceptanceOutcome, projection acceptanceProjection) error {
 	next := projection.Next
-	if snapshot.ReviewInvocation() {
+	if outcome == AcceptanceOutcomeReview {
 		if err := applyReviewResultProjection(&next, invocation.Role, snapshot.Report); err != nil {
 			return err
 		}
 	}
 	next.Revision = projection.Previous.Revision + 1
-	if snapshot.TestInvocation() || snapshot.ReviewInvocation() {
+	if outcome == AcceptanceOutcomeTestStage || outcome == AcceptanceOutcomeReview {
 		next.Revision = projection.Previous.Revision
 	}
 	next.UpdatedAt = a.clock().UTC()
@@ -626,7 +683,7 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 		Invocation: projection.Invocation,
 		Previous:   projection.Previous,
 		Next:       next,
-		StopWorker: projection.StopWorker,
+		StopWorker: snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview || outcome == AcceptanceOutcomeTestObjection,
 		Report:     snapshot.Report,
 	})
 	if err != nil {
@@ -640,11 +697,11 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 // commitDirect persists the acceptance against a legacy store that has no
 // journal. The harness session is finished first, so a failure leaves the
 // invocation active and the report re-acceptable.
-func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, objection acceptanceObjection, projection acceptanceProjection) error {
+func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, outcome AcceptanceOutcome, projection acceptanceProjection) error {
 	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: projection.Invocation.NativeSessionID, Surface: invocationSurface(*invocation)}); err != nil {
 		return fmt.Errorf("finish accepted harness session: %w", err)
 	}
-	if snapshot.Report.Outcome == report.OutcomeNeedsClarification || snapshot.ReviewInvocation() {
+	if snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview {
 		if err := a.lifecycle.StopWorker(ctx, workerIDForInvocation(*invocation)); err != nil {
 			return err
 		}
@@ -654,15 +711,15 @@ func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAccep
 		return fmt.Errorf("persist accepted invocation: %w", err)
 	}
 	next := projection.Next
-	switch {
-	case objection.Present:
+	switch outcome {
+	case AcceptanceOutcomeTestObjection:
 		next.Revision = projection.Previous.Revision + 1
 		next.UpdatedAt = a.clock().UTC()
 		*request.Run = next
 		if err := a.hooks.persistRun(ctx, request.Registration, request.RunStore, projection.Previous, next); err != nil {
 			return fmt.Errorf("persist implementation test objection: %w", err)
 		}
-	case snapshot.TestInvocation() || snapshot.ReviewInvocation():
+	case AcceptanceOutcomeTestStage, AcceptanceOutcomeReview:
 		// The stage policy persists its own transition.
 		*request.Run = next
 	default:
@@ -678,13 +735,13 @@ func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAccep
 // dispatch hands the committed run to the stage policy that owns its
 // continuation. Test, review, objection, and clarification remain separate
 // policies in their own files.
-func (a *reportAcceptance) dispatch(ctx context.Context, request ReportAcceptanceRequest, invocation *store.Invocation, snapshot AcceptanceSnapshot, objection acceptanceObjection) (AgentResult, error) {
-	switch {
-	case objection.Present:
+func (a *reportAcceptance) dispatch(ctx context.Context, request ReportAcceptanceRequest, invocation *store.Invocation, snapshot AcceptanceSnapshot, outcome AcceptanceOutcome) (AgentResult, error) {
+	switch outcome {
+	case AcceptanceOutcomeTestObjection:
 		return a.hooks.finishObjection(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report)
-	case snapshot.TestInvocation():
+	case AcceptanceOutcomeTestStage:
 		return a.hooks.acceptTestStage(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report, snapshot.Worktree)
-	case snapshot.ReviewInvocation():
+	case AcceptanceOutcomeReview:
 		return a.hooks.acceptReview(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report)
 	}
 	if snapshot.Report.Outcome == report.OutcomeNeedsClarification {
@@ -699,8 +756,8 @@ func (a *reportAcceptance) dispatch(ctx context.Context, request ReportAcceptanc
 
 // acceptanceEvaluationRecorderForRunStore narrows a coordinator-owned store to
 // the content-free evaluation projection acceptance records into.
-func acceptanceEvaluationRecorderForRunStore(runStore RunStore) evaluationRecorder {
-	recorder, _ := runStore.(evaluationRecorder)
+func acceptanceEvaluationRecorderForRunStore(runStore RunStore) acceptanceEvaluationRecorder {
+	recorder, _ := runStore.(acceptanceEvaluationRecorder)
 	return recorder
 }
 
