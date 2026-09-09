@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,9 @@ func TestResetRemovesEveryTerminalRunResource(t *testing.T) {
 	fixture := newResetFixture(t)
 	fixture.saveRun(t, "run-one", store.StatusComplete, 0)
 	fixture.saveRun(t, "run-two", store.StatusCancelled, 0)
+	// The lock path is read before the destructive call, because a preview
+	// reopens the store and would recreate the database this test asserts gone.
+	lockPath := fixture.lockPath()
 
 	result, err := fixture.service.Reset(context.Background(), factory.ResetRequest{Confirm: true})
 	if err != nil {
@@ -84,12 +88,15 @@ func TestResetRemovesEveryTerminalRunResource(t *testing.T) {
 	if len(fixture.terminal.closed) != 3 {
 		t.Fatalf("terminal closes = %#v, want both run workspaces and the control workspace", fixture.terminal.closed)
 	}
+	if fixture.terminal.closed[2] != "workspace-control" {
+		t.Fatalf("control workspace close = %q, want workspace-control", fixture.terminal.closed[2])
+	}
 	for _, path := range []string{fixture.configPath, fixture.operationalPath} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("path %q still exists after reset: err = %v", path, err)
 		}
 	}
-	if _, err := os.Stat(fixture.lockPath()); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("coordinator lock still exists after reset: err = %v", err)
 	}
 }
@@ -162,6 +169,14 @@ func TestResetCompletesAMergedRunThroughTheNormalLifecycle(t *testing.T) {
 	}
 	if len(fixture.workspace.removed) != 1 {
 		t.Fatalf("Git workspace removals = %d, want the completed run removed", len(fixture.workspace.removed))
+	}
+	// The terminal notification published by the transition creates a second
+	// workspace under the registered control name, and reset closes both.
+	if len(fixture.terminal.created) != 1 {
+		t.Fatalf("control workspace creations = %d, want the notification's one", len(fixture.terminal.created))
+	}
+	if got := len(fixture.terminal.closed); got != 3 {
+		t.Fatalf("terminal closes = %#v, want the run workspace and both control workspaces", fixture.terminal.closed)
 	}
 }
 
@@ -608,8 +623,11 @@ func (f *resetFixture) assertNoMutation(t *testing.T) {
 	if len(f.terminal.closed) != 0 || len(f.terminal.created) != 0 {
 		t.Fatalf("terminal effects = closes %#v creations %#v, want none", f.terminal.closed, f.terminal.created)
 	}
-	if len(f.github.replacedLabels) != 0 || len(f.github.editedComments) != 0 {
-		t.Fatalf("GitHub mutations = labels %#v comments %#v, want none", f.github.replacedLabels, f.github.editedComments)
+	if len(f.github.replacedLabels) != 0 || len(f.github.editedComments) != 0 || len(f.github.createdComments) != 0 {
+		t.Fatalf("GitHub mutations = labels %#v edits %#v comments %#v, want none", f.github.replacedLabels, f.github.editedComments, f.github.createdComments)
+	}
+	if f.worker.stopCalls != 0 || len(f.terminal.notifications) != 0 {
+		t.Fatalf("coordinator effects = worker stops %d notifications %#v, want none", f.worker.stopCalls, f.terminal.notifications)
 	}
 }
 
@@ -816,9 +834,13 @@ func (w *resetWorker) RemoveCredentialStore(_ context.Context, request worker.Re
 // CheckDocker reports the configured worker-runtime availability.
 func (w *resetWorker) CheckDocker(context.Context) error { return w.dockerErr }
 
-// resetTerminal records terminal workspace effects for reset tests.
+// resetTerminal records terminal workspace effects for reset tests. It models
+// the real adapter: creating a control workspace adds another workspace under
+// the same name rather than returning the existing one, so a reset that closes
+// only the first match leaves one behind.
 type resetTerminal struct {
 	control       terminal.Workspace
+	controls      []terminal.Workspace
 	closed        []string
 	created       []string
 	notifications []terminal.Notification
@@ -829,15 +851,31 @@ type resetTerminal struct {
 // preview must never perform.
 func (t *resetTerminal) EnsureControlWorkspace(_ context.Context, request terminal.WorkspaceRequest) (terminal.Workspace, error) {
 	t.created = append(t.created, request.Name)
-	return t.control, nil
+	created := terminal.Workspace{ID: terminal.WorkspaceID(fmt.Sprintf("%s-%d", t.control.ID, len(t.created))), Name: t.control.Name}
+	t.controls = append(t.controls, created)
+	return created, nil
 }
 
-// FindWorkspace resolves the control workspace without creating one.
+// FindWorkspace returns the first workspace with the requested name that is
+// still open, without creating one.
 func (t *resetTerminal) FindWorkspace(_ context.Context, name string) (terminal.Workspace, bool, error) {
-	if name != t.control.Name {
-		return terminal.Workspace{}, false, nil
+	for _, workspace := range append([]terminal.Workspace{t.control}, t.controls...) {
+		if workspace.Name != name || t.isClosed(string(workspace.ID)) {
+			continue
+		}
+		return workspace, true, nil
 	}
-	return t.control, true, nil
+	return terminal.Workspace{}, false, nil
+}
+
+// isClosed reports whether a workspace handle was already closed.
+func (t *resetTerminal) isClosed(workspaceID string) bool {
+	for _, closed := range t.closed {
+		if closed == workspaceID {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureRunWorkspace satisfies terminal.TerminalRuntime for reset tests.

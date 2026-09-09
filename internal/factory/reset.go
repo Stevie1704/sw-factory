@@ -21,6 +21,11 @@ import (
 // unresponsive terminal cannot stall the rest of a reset.
 const resetWorkspaceCloseTimeout = 10 * time.Second
 
+// resetControlWorkspaceCloseLimit bounds how many workspaces sharing the
+// registered control-workspace name reset will close, so an adapter that keeps
+// reporting the same name cannot loop forever.
+const resetControlWorkspaceCloseLimit = 8
+
 // resetDatabaseSidecarSuffixes are the SQLite files that belong to one exact
 // database path. They are named rather than discovered so reset never widens
 // into an unrelated file that merely shares a directory.
@@ -256,6 +261,20 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	if !request.Confirm {
 		return ResetResult{Plan: plan}, &ResetConfirmationRequiredError{}
 	}
+	// Deletion takes seconds, so proving the lock unheld once is not enough:
+	// the confirmed path owns the lock for its whole duration, preventing a
+	// coordinator from starting against the store it is about to remove.
+	lock, err := acquireCoordinatorLock(lockPath)
+	if errors.Is(err, ErrCoordinatorAlreadyRunning) {
+		return ResetResult{Plan: plan}, &ResetBlockedError{Blockers: []ResetBlocker{{
+			Reason: "the coordinator for this repository is running and owns its lock",
+			Action: "run factory stop, then repeat factory reset",
+		}}}
+	}
+	if err != nil {
+		return ResetResult{Plan: plan}, err
+	}
+	defer func() { _ = lock.release() }()
 	// The adapter preflight runs only on the confirmed path. A preview is
 	// read-only and must not depend on a reachable Docker or terminal host,
 	// while a confirmed reset must not begin deletion with a known-unavailable
@@ -498,16 +517,31 @@ func (s *Service) checkResetAdapters(ctx context.Context, registration config.Re
 		terminalRuntime, err := s.resetTerminalRuntime(registration)
 		if err != nil {
 			blockers = append(blockers, ResetBlocker{Reason: safeStatusCommentValue(fmt.Sprintf("the terminal adapter is unavailable: %v", err)), Action: "start the terminal adapter, then repeat factory reset"})
-		} else if checker, ok := terminalRuntime.(interface {
-			CheckExecutable(context.Context) error
-		}); ok {
-			if err := checker.CheckExecutable(ctx); err != nil {
-				blockers = append(blockers, ResetBlocker{Reason: safeStatusCommentValue(fmt.Sprintf("the terminal adapter is unavailable: %v", err)), Action: "start the terminal adapter, then repeat factory reset"})
-			}
+		} else if err := checkTerminalAvailability(ctx, terminalRuntime); err != nil {
+			blockers = append(blockers, ResetBlocker{Reason: safeStatusCommentValue(fmt.Sprintf("the terminal adapter is unavailable: %v", err)), Action: "start the terminal adapter, then repeat factory reset"})
 		}
 	}
 	if len(blockers) > 0 {
 		return &ResetBlockedError{Blockers: blockers}
+	}
+	return nil
+}
+
+// checkTerminalAvailability verifies both the terminal executable and its
+// control socket. An installed binary without a reachable socket would let the
+// preflight pass and then fail every workspace close.
+func checkTerminalAvailability(ctx context.Context, terminalRuntime terminal.TerminalRuntime) error {
+	if checker, ok := terminalRuntime.(interface {
+		CheckExecutable(context.Context) error
+	}); ok {
+		if err := checker.CheckExecutable(ctx); err != nil {
+			return err
+		}
+	}
+	if checker, ok := terminalRuntime.(interface {
+		CheckSocket(context.Context) error
+	}); ok {
+		return checker.CheckSocket(ctx)
 	}
 	return nil
 }
@@ -623,16 +657,26 @@ func (s *Service) closeResetControlWorkspace(ctx context.Context, terminalRuntim
 		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: "the terminal adapter cannot resolve a workspace by name"})
 		return
 	}
-	found, exists, err := finder.FindWorkspace(ctx, name)
-	if err != nil {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: safeStatusCommentValue(err.Error())})
-		return
+	// A coordinator that ensured the control workspace in an earlier process
+	// can have created more than one workspace under the registered name, so
+	// every match is closed rather than only the first one the adapter reports.
+	before := len(result.Remaining)
+	for attempt := 0; attempt < resetControlWorkspaceCloseLimit; attempt++ {
+		found, exists, err := finder.FindWorkspace(ctx, name)
+		if err != nil {
+			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: safeStatusCommentValue(err.Error())})
+			return
+		}
+		if !exists {
+			result.Removed = append(result.Removed, target)
+			return
+		}
+		s.closeResetWorkspace(ctx, terminalRuntime, string(found.ID), result)
+		if len(result.Remaining) != before {
+			return
+		}
 	}
-	if !exists {
-		result.Removed = append(result.Removed, target)
-		return
-	}
-	s.closeResetWorkspace(ctx, terminalRuntime, string(found.ID), result)
+	result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: "the terminal adapter still reports a workspace with this name after repeated closes"})
 }
 
 // resetTerminalRuntime resolves the terminal adapter without creating a

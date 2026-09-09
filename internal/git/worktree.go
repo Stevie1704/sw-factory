@@ -675,7 +675,10 @@ func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove worktree %q: %w", workspace.Worktree, err))
 		}
 	}
-	if m.branchExists(ctx, repositoryPath, workspace.Branch) {
+	present, err := m.branchExists(ctx, repositoryPath, workspace.Branch)
+	if err != nil {
+		cleanupErrors = append(cleanupErrors, err)
+	} else if present {
 		if _, err := m.runner().Run(ctx, repositoryPath, []string{"branch", "-D", workspace.Branch}); err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove branch %q: %w", workspace.Branch, err))
 		}
@@ -696,25 +699,34 @@ func (m *LocalWorktreeManager) worktreeRegistered(ctx context.Context, repositor
 	if err != nil {
 		return false, fmt.Errorf("list worktrees for removal: %w", err)
 	}
-	wanted := resolveWorktreePath(worktreePath)
+	// Git records the resolved path, while an already-removed worktree cannot
+	// be resolved at all, so both forms are compared.
+	wantedClean := filepath.Clean(worktreePath)
+	wantedResolved := resolveWorktreePath(worktreePath)
 	for _, line := range strings.Split(string(output), "\n") {
 		value, found := strings.CutPrefix(strings.TrimSpace(line), "worktree ")
 		if !found {
 			continue
 		}
-		if resolveWorktreePath(value) == wanted {
+		clean := filepath.Clean(value)
+		if clean == wantedClean || clean == wantedResolved || resolveWorktreePath(value) == wantedResolved {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-// branchExists reports whether the local branch is still present. A failed
-// lookup is reported as absent, because the deletion that follows would report
-// the same repository failure with a clearer message.
-func (m *LocalWorktreeManager) branchExists(ctx context.Context, repositoryPath, branch string) bool {
-	_, err := m.runner().Run(ctx, repositoryPath, []string{"show-ref", "--verify", "--quiet", "refs/heads/" + branch})
-	return err == nil
+// branchExists reports whether the local branch is still present. It lists the
+// exact branch rather than verifying a ref, because a listing succeeds for both
+// a present and an absent branch: a lookup failure is then a real repository
+// failure and is reported instead of being mistaken for an absent branch that
+// needs no deletion.
+func (m *LocalWorktreeManager) branchExists(ctx context.Context, repositoryPath, branch string) (bool, error) {
+	output, err := m.runner().Run(ctx, repositoryPath, []string{"branch", "--list", branch})
+	if err != nil {
+		return false, fmt.Errorf("list branch %q for removal: %w", branch, err)
+	}
+	return strings.TrimSpace(string(output)) != "", nil
 }
 
 // resolveWorktreePath normalizes one worktree path for comparison with Git's
