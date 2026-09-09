@@ -1033,6 +1033,21 @@ func writeCleanupPlan(output, errorsOutput io.Writer, plan factory.CleanupPlan) 
 	return true
 }
 
+// resetUsage distinguishes the whole-installation reset from the seven-day run
+// cleanup, the explicit evaluation deletion, registration, label bootstrap, and
+// software installation, because only reset is irreversible for the whole
+// installation.
+const resetUsage = `Usage of reset:
+  Remove one registered installation's complete local state and return the host
+  to its pre-init condition. This is not the seven-day run retention operation:
+  use "factory cleanup" for eligible run artifacts, "factory evaluation-delete"
+  for evaluation summaries, "factory register" to add a registration, and
+  "factory bootstrap-labels" for the GitHub labels. Reset never uninstalls
+  binaries, deletes Docker images, deletes repository caches, or deletes GitHub
+  history, label definitions, or remote branches.
+
+`
+
 // runReset displays the complete local reset plan and requires --confirm before
 // the Factory service removes any installation resource. Unlike every other
 // command, reset requires an explicit --config path: a command that destroys a
@@ -1041,7 +1056,11 @@ func runReset(ctx context.Context, args []string, _ string, output, errorsOutput
 	flags := flag.NewFlagSet("reset", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	configPath := flags.String("config", "", "host configuration path (required)")
-	confirm := flags.Bool("confirm", false, "confirm removal of the displayed local targets")
+	confirm := flags.Bool("confirm", false, "confirm complete removal of the displayed installation targets")
+	flags.Usage = func() {
+		_, _ = fmt.Fprint(errorsOutput, resetUsage)
+		flags.PrintDefaults()
+	}
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}

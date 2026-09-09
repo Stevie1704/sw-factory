@@ -234,3 +234,18 @@ remote branches, credential stores, and local evaluation summaries. It is the
 last operation that knows a run's workspace handles, so a workspace it cannot
 close is reported for manual closure instead of being lost silently.
 _Avoid_: Remote branch deletion, automatic summary deletion
+
+**Reset**:
+The explicit, whole-installation operation that returns one registered factory
+installation to its pre-`init` local state: every run's worktree, local branch,
+Git projection, generated outputs, workers, and role volumes, plus the
+factory-managed credential volumes, the factory-created and registered terminal
+workspaces, the repository's coordinator lock, the operational database with
+its sidecars and its own migration backups, the evaluation projection inside
+that database, and the host configuration last. It is not retention: it has no
+cutoff and selects every persisted run. It carries every non-terminal run to a
+terminal outcome through the ordinary lifecycle projection before deleting the
+store that identifies it, refuses a genuinely live run, and retains the source
+checkout, installed binaries, worker images, repository caches, host credential
+sources, GitHub history and label definitions, and remote branches.
+_Avoid_: Cleanup, uninstall, deregistration, factory reinstall

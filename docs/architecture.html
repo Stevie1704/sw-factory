@@ -410,7 +410,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
   <text class="t-hd" x="18" y="118">COORDINATOR</text>
   <text class="t-xs" x="18" y="134">workflow authority</text>
   <text class="t-lbl" x="172" y="120" fill="var(--coord)">internal/factory</text>
-  <text class="t-sm" x="172" y="140">34 files · claim, baseline, agent lifecycle, gates, effects, repair, review, recovery, polling, cleanup</text>
+  <text class="t-sm" x="172" y="140">42 files · claim, baseline, agent lifecycle, gates, effects, repair, review, recovery, polling, cleanup, reset</text>
 
   <!-- band 3 policy -->
   <rect class="box" x="150" y="168" width="830" height="62" fill="var(--policy-soft)" stroke="var(--policy)"/>
@@ -495,7 +495,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
     <p><strong>Owns</strong> the operator-facing command surface: the command table, flag parsing, and every rendering of a result. It holds no workflow logic, so a change to a stage never changes the CLI.</p>
     <dl>
       <dt>Key types</dt><dd><code>commandTable</code> <span class="t-xs">cli.go:30</span>, <code>commandHandler</code>, <code>Run</code> <span class="t-xs">cli.go:56</span></dd>
-      <dt>Commands</dt><dd><code>init</code> · <code>register</code> · <code>bootstrap-labels</code> · <code>doctor</code> · <code>start</code> · <code>stop</code> · <code>resume</code> · <code>attach</code> · <code>auth</code> · <code>issue</code> · <code>agent</code> · <code>agent-report</code> · <code>draft-pr</code> · <code>poll</code> · <code>reconcile</code> · <code>status</code> · <code>evaluation</code> · <code>evaluation-delete</code> · <code>evaluation-disposition</code> · <code>cleanup</code></dd>
+      <dt>Commands</dt><dd><code>init</code> · <code>register</code> · <code>bootstrap-labels</code> · <code>doctor</code> · <code>start</code> · <code>stop</code> · <code>resume</code> · <code>attach</code> · <code>auth</code> · <code>issue</code> · <code>agent</code> · <code>agent-report</code> · <code>draft-pr</code> · <code>poll</code> · <code>reconcile</code> · <code>status</code> · <code>evaluation</code> · <code>evaluation-delete</code> · <code>evaluation-disposition</code> · <code>cleanup</code> · <code>reset</code></dd>
       <dt>Talks to</dt><dd><code>config</code>, <code>doctor</code>, <code>factory</code>, <code>store</code></dd>
       <dt>Exit codes</dt><dd>0 success · 1 operational error · 2 missing or unknown command</dd>
     </dl>
@@ -554,6 +554,8 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 <tr><td class="nowrap"><code>lock.go</code></td><td>The single-coordinator guard.</td></tr>
 <tr><td class="nowrap"><code>interruption.go</code></td><td>Operator interruption of an active invocation.</td></tr>
 <tr><td class="nowrap"><code>cleanup.go</code></td><td>Previewing and, on explicit confirmation, removing local run artifacts. It never deletes a remote branch or an evaluation summary.</td></tr>
+<tr><td class="nowrap"><code>reset.go</code></td><td>Previewing and, on explicit confirmation, returning one registered installation to its pre-<code>init</code> local state. It terminalizes every non-terminal run through the ordinary lifecycle projection before removing the store that identifies it.</td></tr>
+<tr><td class="nowrap"><code>run_resources.go</code></td><td>The one validator that derives a run's exact local resources from persisted identities, shared by cleanup and reset.</td></tr>
 <tr><td class="nowrap"><code>workflow_helpers.go</code></td><td>Small shared registry lookups.</td></tr>
 </tbody>
 </table>
