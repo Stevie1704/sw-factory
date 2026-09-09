@@ -193,7 +193,7 @@ func saveIntegrationRun(t *testing.T, operationalPath, repositoryPath string, wo
 		InvocationDirectory: packetPath,
 		ResultDirectory:     resultPath,
 		WorkspaceID:         "workspace-integration",
-		CredentialStoreID:   "credential-store",
+		CredentialStoreID:   repositoryPath,
 		CreatedAt:           at,
 		UpdatedAt:           at,
 	}); err != nil {

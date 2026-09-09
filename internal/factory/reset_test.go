@@ -139,6 +139,27 @@ func TestResetRefusesAnUnavailableGitAdapter(t *testing.T) {
 	fixture.assertNoMutation(t)
 }
 
+// TestResetPreflightsGitBeforeRemovingAnyResource verifies that a configured
+// adapter which cannot enumerate the registered repository blocks reset before
+// terminal or worker cleanup begins.
+func TestResetPreflightsGitBeforeRemovingAnyResource(t *testing.T) {
+	t.Parallel()
+
+	fixture := newResetFixture(t)
+	fixture.saveRun(t, "run-git-preflight", store.StatusComplete, 0)
+	fixture.workspace.checkErr = errors.New("git executable is unavailable")
+
+	_, err := fixture.service.Reset(context.Background(), factory.ResetRequest{Confirm: true})
+	var blocked *factory.ResetBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("Reset() error = %v, want ResetBlockedError", err)
+	}
+	if len(blocked.Blockers) != 1 || !strings.Contains(blocked.Blockers[0].Reason, "Git workspace adapter is unavailable") {
+		t.Fatalf("blockers = %#v, want the unavailable Git adapter named", blocked.Blockers)
+	}
+	fixture.assertNoMutation(t)
+}
+
 // TestResetRefusesAConfigurationHoldingMoreThanOneRegistration verifies that
 // reset never deletes a configuration whose other registrations it did not
 // plan for, because it cannot prove it owns their resources.
@@ -160,7 +181,7 @@ func TestResetRefusesAConfigurationHoldingMoreThanOneRegistration(t *testing.T) 
 	}
 }
 
-// TestResetRemovesEveryTerminalRunResource verifies// TestResetRemovesEveryTerminalRunResource verifies that a confirmed reset
+// TestResetRemovesEveryTerminalRunResource verifies that a confirmed reset
 // removes each persisted run's local resources through the owning adapters and
 // then removes the store and configuration last.
 func TestResetRemovesEveryTerminalRunResource(t *testing.T) {
@@ -180,6 +201,9 @@ func TestResetRemovesEveryTerminalRunResource(t *testing.T) {
 	if len(result.Remaining) != 0 {
 		t.Fatalf("remaining targets = %#v, want none", result.Remaining)
 	}
+	if got := result.Removed[len(result.Removed)-1]; got != "host configuration "+fixture.configPath {
+		t.Fatalf("final removed target = %q, want host configuration last", got)
+	}
 	if len(result.Plan.Runs) != 2 {
 		t.Fatalf("planned runs = %d, want two", len(result.Plan.Runs))
 	}
@@ -192,8 +216,8 @@ func TestResetRemovesEveryTerminalRunResource(t *testing.T) {
 	if got := len(fixture.worker.credentialStores); got != 1 {
 		t.Fatalf("credential store removals = %d, want one shared store removed once", got)
 	}
-	if fixture.worker.credentialStores[0].CredentialStoreID != "credential-store" {
-		t.Fatalf("credential store = %q, want credential-store", fixture.worker.credentialStores[0].CredentialStoreID)
+	if fixture.worker.credentialStores[0].CredentialStoreID != fixture.repositoryPath {
+		t.Fatalf("credential store = %q, want persisted repository identity %q", fixture.worker.credentialStores[0].CredentialStoreID, fixture.repositoryPath)
 	}
 	if len(fixture.terminal.closed) != 3 {
 		t.Fatalf("terminal closes = %#v, want both run workspaces and the control workspace", fixture.terminal.closed)
@@ -457,6 +481,76 @@ func TestResetRefusesUnsafePersistedIdentities(t *testing.T) {
 	}
 }
 
+// TestResetRefusesAnOutputPathOwnedByAnotherInvocation verifies that a
+// persisted path cannot select an unrelated but lexically similar packet tree.
+func TestResetRefusesAnOutputPathOwnedByAnotherInvocation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newResetFixture(t)
+	fixture.saveRun(t, "run-output", store.StatusComplete, 0)
+	unrelated := filepath.Join(fixture.root, "unrelated", ".factory-agents", "run-output", "other-invocation", "packet")
+	if err := os.MkdirAll(unrelated, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := store.Open(context.Background(), fixture.operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := opened.Invocation(context.Background(), "run-output", "invocation-run-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation.InvocationDirectory = unrelated
+	if err := opened.SaveInvocation(context.Background(), *invocation); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = fixture.service.Reset(context.Background(), factory.ResetRequest{})
+	var blocked *factory.ResetBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("Reset() error = %v, want ResetBlockedError", err)
+	}
+	if len(blocked.Blockers) != 1 || !strings.Contains(blocked.Blockers[0].Reason, "output path outside its owned directory") {
+		t.Fatalf("blockers = %#v, want the unrelated output path named", blocked.Blockers)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated output was changed by reset planning: %v", err)
+	}
+	fixture.assertNoMutation(t)
+}
+
+// TestResetRefusesASymlinkedOperationalStore verifies that reset never opens or
+// deletes a database through a redirected configured path.
+func TestResetRefusesASymlinkedOperationalStore(t *testing.T) {
+	t.Parallel()
+
+	fixture := newResetFixture(t)
+	target := filepath.Join(fixture.root, "redirected", "factory.db")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(fixture.operationalPath, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, fixture.operationalPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fixture.service.Reset(context.Background(), factory.ResetRequest{Confirm: true}); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("Reset() error = %v, want symbolic-link refusal", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("redirected operational store was removed: %v", err)
+	}
+	if _, err := os.Stat(fixture.configPath); err != nil {
+		t.Fatalf("host configuration was removed after store refusal: %v", err)
+	}
+	fixture.assertNoMutation(t)
+}
+
 // TestResetRefusesAnUnavailableWorkerAdapter verifies that known adapter
 // unavailability is detected before deletion, so reset cannot leave a half-reset
 // installation behind.
@@ -684,7 +778,7 @@ func (f *resetFixture) saveRunWithWorktree(t *testing.T, runID string, status st
 		InvocationDirectory: filepath.Join(invocationRoot, "packet"),
 		ResultDirectory:     filepath.Join(invocationRoot, "results"),
 		WorkspaceID:         "workspace-" + runID,
-		CredentialStoreID:   "credential-store",
+		CredentialStoreID:   f.repositoryPath,
 		CreatedAt:           at,
 		UpdatedAt:           at,
 	}); err != nil {
@@ -863,6 +957,12 @@ func (*resetGitHub) SetPullRequestDraft(context.Context, github.Repository, int,
 type resetWorkspace struct {
 	removed   []gitadapter.Workspace
 	removeErr error
+	checkErr  error
+}
+
+// CheckRemoval reports whether the Git adapter can inspect removal targets.
+func (w *resetWorkspace) CheckRemoval(context.Context, string, gitadapter.Workspace) error {
+	return w.checkErr
 }
 
 // Create satisfies the GitWorkspace contract; reset never creates a workspace.

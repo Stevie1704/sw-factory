@@ -91,11 +91,22 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 	storedOutputs := make([]string, 0, len(candidate.Invocations)*2)
 	seenOutputs := make(map[string]struct{}, len(candidate.Invocations)*2)
 	for _, invocation := range candidate.Invocations {
-		for _, path := range []string{invocation.InvocationDirectory, invocation.ResultDirectory} {
+		expectedRoot := invocationRoot(run, invocation.ID)
+		for _, target := range []struct {
+			path string
+			want string
+		}{
+			{path: invocation.InvocationDirectory, want: filepath.Join(expectedRoot, "packet")},
+			{path: invocation.ResultDirectory, want: filepath.Join(expectedRoot, "results")},
+		} {
+			path := target.path
 			if path == "" {
 				continue
 			}
 			clean := filepath.Clean(path)
+			if clean != filepath.Clean(target.want) {
+				return runLocalResources{}, fmt.Sprintf("invocation %q has an output path outside its owned directory", invocation.ID)
+			}
 			if pathWithin(registration.Path, clean) {
 				return runLocalResources{}, "stored output overlaps the registered repository"
 			}
@@ -139,8 +150,8 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 			roles = append(roles, invocation.Role)
 		}
 		if storeID := invocation.CredentialStoreID; storeID != "" {
-			if !safeLocalIdentifier(storeID) {
-				unsafeCredentialStore = fmt.Sprintf("invocation %q has an unsafe credential store identity", invocation.ID)
+			if storeID != registration.Path {
+				unsafeCredentialStore = fmt.Sprintf("invocation %q has a credential store identity that does not match the registered repository", invocation.ID)
 			} else if _, exists := seenCredentialStoreIDs[storeID]; !exists {
 				seenCredentialStoreIDs[storeID] = struct{}{}
 				credentialStoreIDs = append(credentialStoreIDs, storeID)

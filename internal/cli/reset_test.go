@@ -44,7 +44,7 @@ func TestResetCommandPrintsRemovedAndRetainedResourcesBeforeConfirmation(t *test
 		"reset branch: factory/run-cli-reset (local only; remote retained)",
 		"reset git projection: ",
 		"reset terminal workspace: workspace-cli-reset",
-		"reset credential volume: credential-store",
+		"reset credential volume: " + repositoryPath,
 		"reset control workspace: factory-control",
 		"reset coordinator lock: ",
 		"reset database: " + operationalPath,
@@ -130,7 +130,7 @@ func saveResetRun(t *testing.T, operationalPath, repositoryPath, worktreePath st
 		Stage:             store.StageImplementation,
 		Status:            store.InvocationStatusCompleted,
 		WorkspaceID:       "workspace-cli-reset",
-		CredentialStoreID: "credential-store",
+		CredentialStoreID: repositoryPath,
 	}); err != nil {
 		t.Fatal(err)
 	}

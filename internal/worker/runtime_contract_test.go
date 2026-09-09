@@ -256,6 +256,35 @@ func TestDockerRuntimeCleansRunResourcesWithoutCredentialStorage(t *testing.T) {
 	}
 }
 
+// TestDockerRuntimeRemovesCredentialStorageFromThePersistedRepositoryIdentity
+// verifies that the production absolute-path identity is hashed into the exact
+// private volume name instead of being rejected as a Docker identifier.
+func TestDockerRuntimeRemovesCredentialStorageFromThePersistedRepositoryIdentity(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	repositoryPath := filepath.Join(t.TempDir(), "registered repository")
+
+	if err := runtime.RemoveCredentialStore(context.Background(), worker.RemoveCredentialStoreRequest{
+		RunID:             "run-credential-reset",
+		CredentialStoreID: repositoryPath,
+	}); err != nil {
+		t.Fatalf("RemoveCredentialStore() error = %v", err)
+	}
+	lines := readStubLog(t, logPath)
+	if len(lines) != 1 || !strings.Contains(lines[0], "volume rm factory-auth-codex-") {
+		t.Fatalf("credential cleanup calls = %#v, want one private volume removal", lines)
+	}
+	if strings.Contains(lines[0], repositoryPath) {
+		t.Fatalf("credential cleanup leaked persisted identity in Docker arguments: %q", lines[0])
+	}
+	if err := runtime.RemoveCredentialStore(context.Background(), worker.RemoveCredentialStoreRequest{
+		RunID:             "run-credential-reset",
+		CredentialStoreID: repositoryPath + "\nunsafe",
+	}); err == nil {
+		t.Fatal("RemoveCredentialStore() accepted a control character")
+	}
+}
+
 // TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment verifies the
 // worker cannot start from a mutable image or execute with a host credential.
 func TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment(t *testing.T) {

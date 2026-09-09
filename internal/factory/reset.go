@@ -120,6 +120,9 @@ type ResetPlan struct {
 	RepositoryPath string
 	// OperationalDataPath is the operational SQLite database to remove.
 	OperationalDataPath string
+	// operationalDataTarget is the canonical database target used for opening
+	// and removal after resolving any symlinks in its parent directory.
+	operationalDataTarget string
 	// DatabaseSidecars contains the exact SQLite sidecar files to remove.
 	DatabaseSidecars []string
 	// MigrationBackups contains only backups proven to belong to that exact
@@ -218,6 +221,10 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	if err != nil {
 		return ResetResult{}, err
 	}
+	operationalDataTarget, err := resetOperationalDataTarget(registration.OperationalDataPath)
+	if err != nil {
+		return ResetResult{}, err
+	}
 	lockPath := coordinatorLockPath(registration)
 	held, err := coordinatorLockHeld(lockPath)
 	if err != nil {
@@ -231,7 +238,7 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	// absent database, initializes its metadata, and backs up and migrates an
 	// older schema, so using it here would let inspecting an installation
 	// change it.
-	resetStore, err := s.openResetStore(ctx, registration.OperationalDataPath, !request.Confirm)
+	resetStore, err := s.openResetStore(ctx, operationalDataTarget, !request.Confirm)
 	if err != nil {
 		return ResetResult{}, err
 	}
@@ -242,7 +249,7 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 		}
 	}()
 
-	plan, blockers, err := s.buildResetPlan(ctx, registration, resetStore, lockPath)
+	plan, blockers, err := s.buildResetPlan(ctx, registration, resetStore, lockPath, operationalDataTarget)
 	if err != nil {
 		return ResetResult{}, err
 	}
@@ -271,17 +278,17 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 		return ResetResult{Plan: plan}, err
 	}
 
-	// Confirmation never treats the preview as authority. Lifecycle
-	// reconciliation is committed to the store first, and the final deletion
+	// Confirmation never treats the preview as authority. The lifecycle
+	// transition is committed to the store first, and the final deletion
 	// plan is rebuilt from the resulting terminal state.
-	transitions, blockers, err := s.reconcileResetLifecycle(ctx, registration, resetStore)
+	transitions, blockers, err := s.applyResetLifecycleTransitions(ctx, registration, resetStore)
 	if err != nil {
 		return ResetResult{Plan: plan, Lifecycle: transitions}, err
 	}
 	if len(blockers) > 0 {
 		return ResetResult{Plan: plan, Lifecycle: transitions}, &ResetBlockedError{Blockers: blockers}
 	}
-	plan, blockers, err = s.buildResetPlan(ctx, registration, resetStore, lockPath)
+	plan, blockers, err = s.buildResetPlan(ctx, registration, resetStore, lockPath, operationalDataTarget)
 	if err != nil {
 		return ResetResult{Plan: plan, Lifecycle: transitions}, err
 	}
@@ -305,19 +312,19 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	if len(result.Remaining) > 0 {
 		return result, &ResetIncompleteError{Remaining: result.Remaining}
 	}
-	if err := os.Remove(plan.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: "host configuration " + plan.ConfigPath, Reason: resetFailureReason(err)})
-		return result, &ResetIncompleteError{Remaining: result.Remaining}
-	}
-	result.Removed = append(result.Removed, "host configuration "+plan.ConfigPath)
-	// The lock inode is unlinked last. Reset holds its advisory lock for the
-	// whole pass, but unlinking it earlier would let a concurrent factory start
-	// create a fresh inode and lock that one while the store still existed.
+	// The store is already absent, so a concurrent factory start cannot pass its
+	// read-only startup diagnosis after this unlink. Removing the lock before the
+	// configuration keeps that configuration available if unlinking fails.
 	if err := removeCoordinatorLock(plan.CoordinatorLock); err != nil {
 		result.Remaining = append(result.Remaining, ResetFailure{Target: "coordinator lock " + plan.CoordinatorLock, Reason: resetFailureReason(err)})
 		return result, &ResetIncompleteError{Remaining: result.Remaining}
 	}
 	result.Removed = append(result.Removed, "coordinator lock "+plan.CoordinatorLock)
+	if err := os.Remove(plan.ConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		result.Remaining = append(result.Remaining, ResetFailure{Target: "host configuration " + plan.ConfigPath, Reason: resetFailureReason(err)})
+		return result, &ResetIncompleteError{Remaining: result.Remaining}
+	}
+	result.Removed = append(result.Removed, "host configuration "+plan.ConfigPath)
 	return result, nil
 }
 
@@ -331,6 +338,16 @@ func (s *Service) soleRegistration() (config.RepositoryRegistration, error) {
 	if s.configPath == "" {
 		return config.RepositoryRegistration{}, errors.New("host configuration path is required")
 	}
+	if !filepath.IsAbs(s.configPath) {
+		return config.RepositoryRegistration{}, errors.New("host configuration path must be absolute")
+	}
+	if info, err := os.Lstat(s.configPath); err != nil {
+		return config.RepositoryRegistration{}, fmt.Errorf("inspect host configuration: %w", err)
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return config.RepositoryRegistration{}, errors.New("host configuration must not be a symbolic link")
+	} else if !info.Mode().IsRegular() {
+		return config.RepositoryRegistration{}, errors.New("host configuration must be a regular file")
+	}
 	host, err := s.deps.Config.Load(s.configPath)
 	if err != nil {
 		return config.RepositoryRegistration{}, err
@@ -342,6 +359,29 @@ func (s *Service) soleRegistration() (config.RepositoryRegistration, error) {
 		return config.RepositoryRegistration{}, fmt.Errorf("host configuration %q holds %d registrations; reset removes the whole configuration and cannot prove it owns every one", s.configPath, len(host.Repositories))
 	}
 	return host.Repositories[0], nil
+}
+
+// resetOperationalDataTarget validates the configured database leaf and
+// resolves its parent directory before any store open. A symlinked leaf is
+// refused, while resolving parent links once gives every later operation one
+// stable target instead of repeatedly traversing a redirectable path.
+func resetOperationalDataTarget(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", errors.New("operational store path must be absolute")
+	}
+	info, err := os.Lstat(path)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("operational store must not be a symbolic link")
+		}
+		if !info.Mode().IsRegular() {
+			return "", errors.New("operational store must be a regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect operational store: %w", err)
+	}
+	parent := resolvePath(filepath.Dir(filepath.Clean(path)))
+	return filepath.Join(parent, filepath.Base(filepath.Clean(path))), nil
 }
 
 // openResetStore opens the operational store for one reset pass. An absent
@@ -372,7 +412,7 @@ func (s *Service) openResetStore(ctx context.Context, databasePath string, readO
 // buildResetPlan derives every removable target from validated persisted
 // identities and registered absolute paths. It performs no mutation, so both
 // the preview and the post-lifecycle confirmation use it unchanged.
-func (s *Service) buildResetPlan(ctx context.Context, registration config.RepositoryRegistration, resetStore ResetStore, lockPath string) (ResetPlan, []ResetBlocker, error) {
+func (s *Service) buildResetPlan(ctx context.Context, registration config.RepositoryRegistration, resetStore ResetStore, lockPath, operationalDataTarget string) (ResetPlan, []ResetBlocker, error) {
 	var candidates []store.RunRemovalCandidate
 	if resetStore != nil {
 		var err error
@@ -380,14 +420,15 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 			return ResetPlan{}, nil, err
 		}
 	}
-	databasePath := filepath.Clean(registration.OperationalDataPath)
+	databasePath := filepath.Clean(operationalDataTarget)
 	plan := ResetPlan{
-		ConfigPath:          s.configPath,
-		RepositoryPath:      registration.Path,
-		OperationalDataPath: databasePath,
-		CoordinatorLock:     lockPath,
-		ControlWorkspace:    controlWorkspaceName(registration),
-		Retained:            append([]string(nil), resetRetainedResources...),
+		ConfigPath:            s.configPath,
+		RepositoryPath:        registration.Path,
+		OperationalDataPath:   filepath.Clean(registration.OperationalDataPath),
+		operationalDataTarget: databasePath,
+		CoordinatorLock:       lockPath,
+		ControlWorkspace:      controlWorkspaceName(registration),
+		Retained:              append([]string(nil), resetRetainedResources...),
 	}
 	plan.DatabaseSidecars = existingDatabaseSidecars(databasePath)
 	backups, err := databaseMigrationBackups(databasePath)
@@ -508,12 +549,12 @@ func unreadableLifecycleBlocker(run store.Run, subject string) ResetBlocker {
 	}
 }
 
-// reconcileResetLifecycle carries every non-terminal run to its terminal
+// applyResetLifecycleTransitions carries every non-terminal run to its terminal
 // outcome through the ordinary lifecycle projection and commits the result to
 // the operational store before the final deletion plan is built. Deleting the
 // store first would strand a merged or closed run with a running label on
 // GitHub, because the status-comment and run identities live only here.
-func (s *Service) reconcileResetLifecycle(ctx context.Context, registration config.RepositoryRegistration, resetStore ResetStore) ([]ResetLifecycleTransition, []ResetBlocker, error) {
+func (s *Service) applyResetLifecycleTransitions(ctx context.Context, registration config.RepositoryRegistration, resetStore ResetStore) ([]ResetLifecycleTransition, []ResetBlocker, error) {
 	if resetStore == nil {
 		return nil, nil, nil
 	}
@@ -570,8 +611,20 @@ func (s *Service) checkResetAdapters(ctx context.Context, registration config.Re
 	if len(plan.CredentialStores) > 0 {
 		needsWorker = true
 	}
-	if needsGit && s.gitWorkspace() == nil {
-		blockers = append(blockers, ResetBlocker{Reason: "the Git workspace adapter is unavailable", Action: "restore the Git adapter, then repeat factory reset"})
+	if needsGit {
+		workspace := s.gitWorkspace()
+		if workspace == nil {
+			blockers = append(blockers, ResetBlocker{Reason: "the Git workspace adapter is unavailable", Action: "restore the Git adapter, then repeat factory reset"})
+		} else if checker, ok := workspace.(gitadapter.RemovalChecker); !ok {
+			blockers = append(blockers, ResetBlocker{Reason: "the Git workspace adapter cannot preflight removal targets", Action: "restore the Git adapter, then repeat factory reset"})
+		} else {
+			for _, run := range plan.Runs {
+				target := gitadapter.Workspace{RunID: run.RunID, Branch: run.Branch, Worktree: run.Worktree}
+				if err := checker.CheckRemoval(ctx, registration.Path, target); err != nil {
+					blockers = append(blockers, ResetBlocker{RunID: run.RunID, Reason: resetFailureReason(fmt.Errorf("the Git workspace adapter is unavailable: %w", err)), Action: "restore the Git adapter or repair the persisted worktree, then repeat factory reset"})
+				}
+			}
+		}
 	}
 	if needsWorker {
 		if _, ok := s.deps.Worker.(worker.CleanupRuntime); !ok {
@@ -672,7 +725,11 @@ func (s *Service) executeReset(ctx context.Context, registration config.Reposito
 // only the migration backups proven to belong to that exact database. It runs
 // after every resource whose identity depended on the store.
 func (s *Service) removeResetStore(plan ResetPlan, result *ResetResult) {
-	targets := append([]string{plan.OperationalDataPath}, plan.DatabaseSidecars...)
+	databaseTarget := plan.operationalDataTarget
+	if databaseTarget == "" {
+		databaseTarget = plan.OperationalDataPath
+	}
+	targets := append([]string{databaseTarget}, plan.DatabaseSidecars...)
 	targets = append(targets, plan.MigrationBackups...)
 	for _, path := range targets {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {

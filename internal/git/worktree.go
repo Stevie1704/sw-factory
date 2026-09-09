@@ -145,6 +145,13 @@ type GitWorkspace interface {
 	SynchronizeBase(context.Context, BaseSyncRequest) error
 }
 
+// RemovalChecker is the optional read-only capability used to prove that Git
+// can inspect a registered repository before destructive cleanup begins.
+type RemovalChecker interface {
+	// CheckRemoval validates one exact worktree removal target without mutation.
+	CheckRemoval(context.Context, string, Workspace) error
+}
+
 // RemoteBranchInspector is the optional read-only projection used to
 // recognize a completed push after a coordinator restart.
 type RemoteBranchInspector interface {
@@ -674,6 +681,10 @@ func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string
 		if _, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "remove", "--force", workspace.Worktree}); err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove worktree %q: %w", workspace.Worktree, err))
 		}
+	} else if _, err := os.Lstat(workspace.Worktree); err == nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("worktree %q still exists but Git no longer reports it", workspace.Worktree))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("inspect unregistered worktree %q: %w", workspace.Worktree, err))
 	}
 	present, err := m.branchExists(ctx, repositoryPath, workspace.Branch)
 	if err != nil {
@@ -691,9 +702,35 @@ func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string
 	return errors.Join(cleanupErrors...)
 }
 
+// CheckRemoval verifies that Git can inspect one exact removal target and that
+// an extant worktree is still registered before any destructive cleanup begins.
+func (m *LocalWorktreeManager) CheckRemoval(ctx context.Context, repositoryPath string, workspace Workspace) error {
+	if err := validateDoctorRepository(repositoryPath); err != nil {
+		return err
+	}
+	registered, err := m.worktreeRegistered(ctx, repositoryPath, workspace.Worktree)
+	if err != nil {
+		return err
+	}
+	if !registered {
+		if _, err := os.Lstat(workspace.Worktree); err == nil {
+			return fmt.Errorf("worktree %q still exists but Git no longer reports it", workspace.Worktree)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect unregistered worktree %q: %w", workspace.Worktree, err)
+		}
+	}
+	if _, err := m.branchExists(ctx, repositoryPath, workspace.Branch); err != nil {
+		return err
+	}
+	if workspace.RunID == "" {
+		return nil
+	}
+	return inspectRunGitMetadata(workspace)
+}
+
 // worktreeRegistered reports whether Git still tracks the exact worktree path.
-// Removal of an untracked path is skipped rather than attempted, because git
-// worktree remove fails on an already-removed worktree.
+// An absent path is safe only when it is absent on disk too; callers reject an
+// extant unregistered directory as ownership ambiguity.
 func (m *LocalWorktreeManager) worktreeRegistered(ctx context.Context, repositoryPath, worktreePath string) (bool, error) {
 	output, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "list", "--porcelain"})
 	if err != nil {
@@ -743,6 +780,19 @@ func resolveWorktreePath(path string) string {
 // .factory-git projection. Symlinks and non-directories are rejected so a
 // persisted path cannot widen Git cleanup beyond the run's own metadata.
 func removeRunGitMetadata(workspace Workspace) error {
+	if err := inspectRunGitMetadata(workspace); err != nil {
+		return err
+	}
+	metadataPath := filepath.Join(filepath.Dir(filepath.Clean(workspace.Worktree)), ".factory-git", workspace.RunID)
+	if err := os.RemoveAll(metadataPath); err != nil {
+		return fmt.Errorf("remove Git metadata %q: %w", metadataPath, err)
+	}
+	return nil
+}
+
+// inspectRunGitMetadata proves that an existing private Git projection is a
+// real directory rather than a redirected or non-directory removal target.
+func inspectRunGitMetadata(workspace Workspace) error {
 	metadataPath := filepath.Join(filepath.Dir(filepath.Clean(workspace.Worktree)), ".factory-git", workspace.RunID)
 	info, err := os.Lstat(metadataPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -756,9 +806,6 @@ func removeRunGitMetadata(workspace Workspace) error {
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("Git metadata %q is not a directory", metadataPath)
-	}
-	if err := os.RemoveAll(metadataPath); err != nil {
-		return fmt.Errorf("remove Git metadata %q: %w", metadataPath, err)
 	}
 	return nil
 }

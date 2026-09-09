@@ -824,10 +824,8 @@ func (r *DockerRuntime) RemoveCredentialStore(ctx context.Context, request Remov
 	if err := validateRunID(request.RunID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(request.CredentialStoreID) != "" {
-		if err := validateRunID(request.CredentialStoreID); err != nil {
-			return fmt.Errorf("credential store id %q: %w", request.CredentialStoreID, err)
-		}
+	if strings.ContainsAny(request.CredentialStoreID, "\x00\r\n") {
+		return errors.New("credential store id contains control characters")
 	}
 	volume := credentialVolumeName(request.RunID, request.CredentialStoreID)
 	if _, err := r.runDocker(ctx, []string{"volume", "rm", volume}); err != nil && !isDockerResourceNotFound(err) {

@@ -727,17 +727,18 @@ essential: deleting the SQLite database first would strand a closed or merged
 run with `agent-running` on GitHub, because the coordinator loses the
 status-comment and run identities needed to project its terminal outcome.
 
-Lifecycle reconciliation is committed to the operational store before the final
+The lifecycle transition is committed to the operational store before the final
 deletion plan is built. The confirmed sequence then closes terminal workspaces;
 removes worker containers, role volumes, and factory-managed credential
 volumes; removes generated invocation and result directories; removes run
 worktrees, local run branches, and private Git projections; removes the
 operational database with its SQLite sidecars and only the migration backups
-proven to belong to that exact database; removes the selected host
-configuration; and unlinks the coordinator lock last. Reset holds that lock for
-the whole confirmed pass, and unlinking it earlier would let a concurrent
-`factory start` create a fresh lock inode and acquire it while the store still
-existed. The operational
+proven to belong to that exact database; removes the coordinator lock; and
+removes the selected host configuration last. Reset holds that lock for the
+whole confirmed pass. Once the store is gone, a concurrent
+`factory start` cannot pass its read-only startup diagnosis, so unlinking the
+lock before the configuration preserves the configuration if unlinking fails.
+The operational
 store is the cleanup manifest, so it and the configuration survive until every
 resource whose identity depends on them is gone.
 
