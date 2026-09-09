@@ -672,3 +672,10 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 	}
 	return nil
 }
+
+// reviewHasBlockingResult reports whether either isolated reviewer has a
+// concrete correctness, security, specification, or standards violation.
+func reviewHasBlockingResult(run store.Run) bool {
+	return (reviewRoleConfigured(run, workflow.RoleSpecificationReview) && run.SpecificationReview != nil && reviewHasBlockingFindingForRole(workflow.RoleSpecificationReview, run.SpecificationReview.Findings)) ||
+		(reviewRoleConfigured(run, workflow.RoleStandardsReview) && run.StandardsReview != nil && reviewHasBlockingFindingForRole(workflow.RoleStandardsReview, run.StandardsReview.Findings))
+}
