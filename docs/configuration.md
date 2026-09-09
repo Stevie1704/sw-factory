@@ -621,7 +621,7 @@ demonstration evidence. Close the disposable pull request and issue, then use
 
 ## Operational SQLite store
 
-The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
+The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy, and `factory reset` removes only the backups whose file name proves they belong to that exact database. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
 
 Issue #25 adds a logically separate `evaluation_summaries` projection inside
 the same versioned SQLite store, plus isolated usage and disposition tables. It stores
@@ -669,5 +669,102 @@ packets/results, and Git metadata projections through the WorkerRuntime and
 GitWorkspace adapters. Factory-managed credential volumes and local evaluation
 summaries are retained; `factory evaluation-delete` remains the only summary
 deletion command.
+
+## Complete local reset
+
+`factory reset` is the separate, deliberately destructive operation that
+returns one registered installation to its pre-`init` local state. It is not a
+retention policy: it has no cutoff, it selects every persisted run, and it
+removes the installation itself.
+
+| Operation | Scope | Keeps the installation |
+| --- | --- | --- |
+| `factory cleanup` | Terminal run artifacts older than seven days | Yes |
+| `factory evaluation-delete` | Selected terminal evaluation summaries | Yes |
+| `factory register` | Adds one repository registration | Yes |
+| `factory bootstrap-labels` | Creates the factory-owned GitHub labels | Yes |
+| `factory reset` | Every local resource of one registered installation | No |
+
+Reset requires an explicit `--config` path. A command that destroys a whole
+installation must never default to the operator's real configuration, so the
+usual default-path behavior is deliberately not applied here.
+
+```sh
+factory reset --config /Users/me/.config/factory/config.yaml
+factory reset --config /Users/me/.config/factory/config.yaml --confirm
+```
+
+The preview is read-only: it performs no filesystem, Git, Docker, terminal,
+store, configuration, or GitHub mutation, and it prints the removable targets
+separately from the deliberately retained resources. It opens the operational
+store through the read-only entry point, so previewing an installation never
+creates an absent database, initializes its metadata, or backs up and migrates
+an older schema. An absent database is reported as an already-removed target
+rather than recreated. Confirmation re-observes current state and never treats
+the earlier preview as authority.
+
+Reset removes the whole host configuration, so it refuses a configuration
+holding more than one registration: it cannot prove it owns the resources of a
+registration it did not plan for. Version one registers exactly one repository,
+so this guards a hand-edited configuration rather than a supported mode.
+
+Before deleting anything, reset proves that no coordinator owns the registered
+checkout's lock and refuses while `factory start` is running, directing the
+operator to `factory stop`; it never signals the coordinator itself. It then
+validates every persisted run, invocation, workspace, output, worker, role, and
+credential-store identity, refusing malformed identities, unsafe paths,
+symlinks that could redirect removal, pending effects, ownership ambiguity, and
+known required-adapter unavailability.
+
+Reset reads the GitHub lifecycle of every non-terminal run before discarding
+its state, using the same coordinator-owned rules as ordinary polling. A merged
+pull request completes the run and an unmerged closed pull request or closed
+issue cancels it, publishing the normal final label and status comment first.
+A genuinely live issue or pull request blocks reset with the run identity and
+the supervised cancellation instruction; GitHub transport or authorization
+failure also blocks reset while a non-terminal run exists. This step is
+essential: deleting the SQLite database first would strand a closed or merged
+run with `agent-running` on GitHub, because the coordinator loses the
+status-comment and run identities needed to project its terminal outcome.
+
+The lifecycle transition is committed to the operational store before the final
+deletion plan is built. The confirmed sequence then closes terminal workspaces;
+removes worker containers, role volumes, and factory-managed credential
+volumes; removes generated invocation and result directories; removes run
+worktrees, local run branches, and private Git projections; removes the
+operational database with its SQLite sidecars and only the migration backups
+proven to belong to that exact database; removes the coordinator lock; and
+removes the selected host configuration last. Reset holds that lock for the
+whole confirmed pass. Once the store is gone, a concurrent
+`factory start` cannot pass its read-only startup diagnosis, so unlinking the
+lock before the configuration preserves the configuration if unlinking fails.
+The operational
+store is the cleanup manifest, so it and the configuration survive until every
+resource whose identity depends on them is gone.
+
+The evaluation projection stored in that database disappears with it. Ordinary
+evaluation retention outside reset is unchanged and remains owned by
+`factory evaluation-delete`.
+
+An already-absent target is a success, so a partially completed reset is safely
+retryable. A failure reports what was removed and what remains, without
+credentials, credential paths, database content, issue text, prompts, diffs, or
+command output, and retains the store and configuration whenever either is
+still needed to retry remaining work.
+
+Reset retains the source checkout, its tracked files, `factory.yaml`, and
+ordinary local branches; the installed `factory`, `factory-report`, and
+`factory-worker-attach` binaries; Docker worker images; repository-declared
+cache directories; host Codex and Claude credential sources and host harness
+state; GitHub label definitions, issues, pull requests, reviews, comments,
+commit statuses, and merged history; and remote `factory/*` branches. Retained
+labels are deliberate: `factory bootstrap-labels` is idempotent, while deleting
+a label definition would strip it from historical issues. Installation and
+worker-image construction stay owned by the build and install commands, so
+reset never uninstalls its own binary.
+
+After a successful reset the selected configuration path does not exist, its
+operational database does not exist, no planned local runtime artifact remains,
+and the ordinary fresh-host journey works again.
 
 The high-level `Factory` seam injects configuration, repository checking, GitHub, pull requests, `GitWorkspace`, worker, terminal, harness, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; issue #6 adds the portable `TerminalRuntime`, Codex harness, invocation packet, and structured report boundary; issue #7 adds host checkpoint, push, and draft-PR orchestration.

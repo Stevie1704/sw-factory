@@ -1399,6 +1399,64 @@ factory cleanup \
   --confirm
 ~~~
 
+#### Full local reset
+
+`factory reset` is a different operation from the seven-day `factory cleanup`.
+Cleanup removes eligible run artifacts and keeps the installation. Reset
+returns one registered installation to its pre-`init` local state: every run
+worktree, local `factory/<run-id>` branch, private Git projection, generated
+invocation and result directory, worker container, role volume,
+factory-managed credential volume, factory-created terminal workspace, the
+registered control workspace, the repository's coordinator lock, the
+operational database with its SQLite sidecars and its own migration backups,
+the evaluation projection stored in that database, and finally the selected
+host configuration.
+
+Reset requires an explicit `--config` path, because a command that destroys a
+whole installation must never default to your real configuration.
+
+~~~sh
+factory reset --config /Users/me/.config/factory/config.yaml
+~~~
+
+The preview prints every removable target and every deliberately retained
+resource, and returns exit status <code>2</code> without <code>--confirm</code>.
+Confirm the displayed plan:
+
+~~~sh
+factory reset \
+  --config /Users/me/.config/factory/config.yaml \
+  --confirm
+~~~
+
+Reset refuses while the repository's coordinator is running and tells you to
+run `factory stop` first; it never signals or kills the coordinator itself.
+Before deleting anything it reads the GitHub lifecycle of every non-terminal
+run. A merged pull request completes the run and an unmerged closed pull
+request or closed issue cancels it, both through the normal lifecycle
+projection that publishes the final issue label and status comment. A run whose
+issue or pull request is still genuinely live blocks reset instead of receiving
+an invented terminal outcome; close or cancel it through the supervised
+workflow first.
+
+Reset retains this source checkout, its tracked files, `factory.yaml`, and
+ordinary local branches; installed binaries; Docker worker images; repository
+caches; host Codex and Claude credential sources and host harness state; GitHub
+label definitions, issues, pull requests, reviews, comments, commit statuses,
+and merged history; and remote `factory/*` branches. Reinstalling binaries and
+rebuilding the worker image remain owned by the build and install commands.
+
+An already-absent target is a success, so a reset interrupted part way through
+can be repeated. A partial reset retains the operational store and the host
+configuration, reports what it removed and what remains, and a rerun completes
+the reduced plan. After a successful reset the ordinary fresh-host journey
+works again:
+
+~~~text
+install binaries -> build worker image -> factory init -> factory register
+-> factory bootstrap-labels -> factory doctor -> factory start
+~~~
+
 A pending effect, malformed run identity, malformed terminal workspace handle,
 unproven path scope, or a still-open pull request blocks cleanup for that run.
 The confirmation pass refuses a changed plan, so the resources displayed in the
@@ -1484,6 +1542,7 @@ supported by the installed binary.
 | <code>factory evaluation-disposition</code> | Record a human disposition for a <code>test_dispute</code> or <code>review_finding</code> event.                                                                  |
 | <code>factory evaluation-delete</code>      | Explicitly delete terminal evaluation summaries before an RFC3339 cutoff with <code>--confirm</code>.                                                             |
 | <code>factory cleanup</code>                | Preview or, with <code>--confirm</code>, remove eligible local run artifacts.                                                                                     |
+| <code>factory reset</code>                  | Preview or, with <code>--confirm</code>, remove one registered installation's complete local state. Requires an explicit <code>--config</code>.                    |
 
 ### Useful factory agent flags
 

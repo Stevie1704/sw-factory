@@ -135,51 +135,96 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 		return LifecycleResult{Outcome: LifecycleUnchanged, Run: updated, Reason: updated.LifecycleReason}, nil
 	}
 
-	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
-	if err != nil {
-		return LifecycleResult{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
-	}
-	pullRequest, hasPullRequest, err := s.trackedPullRequest(ctx, registration, *run)
+	observation, err := s.observeGitHubLifecycle(ctx, registration, *run)
 	if err != nil {
 		return LifecycleResult{}, err
 	}
+	issue, pullRequest := observation.Issue, observation.PullRequest
+	decision, err := classifyLifecycle(*run, issue, pullRequest, observation.HasPullRequest)
+	if err != nil {
+		return LifecycleResult{}, err
+	}
+	next := *run
+	switch decision.Outcome {
+	case LifecycleCompleted:
+		next.Stage = store.StageReady
+		next.Status = store.StatusComplete
+		next.MergeCommitSHA = pullRequest.MergeCommitSHA
+	case LifecycleCancelled:
+		next.Status = store.StatusCancelled
+		next.MergeCommitSHA = ""
+	default:
+		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run}, nil
+	}
+	next.LifecycleReason = decision.Reason
+	next.LifecycleNotificationSent = false
+	next.UpdatedAt = s.deps.Now().UTC()
+	updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
+	return LifecycleResult{Outcome: decision.Outcome, Run: updated, Reason: decision.Reason}, transitionErr
+}
 
+// lifecycleObservation is one complete read of a run's GitHub lifecycle and the
+// coordinator's decision about it. It performs no mutation, so a read-only
+// caller and the transition path reach identical conclusions from identical
+// inputs.
+type lifecycleObservation struct {
+	// Issue is the observed issue snapshot.
+	Issue github.Issue
+	// PullRequest is the tracked pull request, when one exists.
+	PullRequest github.PullRequest
+	// HasPullRequest reports whether a tracked pull request was found.
+	HasPullRequest bool
+}
+
+// observeGitHubLifecycle reads one run's issue and tracked pull request. It is
+// the single read path for lifecycle state, so no caller can assemble a
+// different view of GitHub before the shared rules are applied to it.
+// Classification is deliberately left to the caller, because a transition and a
+// read-only refusal report an uninterpretable lifecycle differently.
+func (s *Service) observeGitHubLifecycle(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (lifecycleObservation, error) {
+	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	if err != nil {
+		return lifecycleObservation{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
+	}
+	pullRequest, hasPullRequest, err := s.trackedPullRequest(ctx, registration, run)
+	if err != nil {
+		return lifecycleObservation{}, err
+	}
+	return lifecycleObservation{Issue: issue, PullRequest: pullRequest, HasPullRequest: hasPullRequest}, nil
+}
+
+// lifecycleDecision is the coordinator-owned interpretation of one GitHub
+// observation, separated from the store writes and GitHub projections a
+// terminal transition performs. A read-only caller can reach the same decision
+// without applying it.
+type lifecycleDecision struct {
+	// Outcome identifies the required terminal transition, if any.
+	Outcome LifecycleOutcome
+	// Reason is the operator-facing explanation recorded with the transition.
+	Reason string
+}
+
+// classifyLifecycle applies the single coordinator-owned rule set that decides
+// whether an observed issue and pull request complete, cancel, or leave a run
+// unchanged. It is the only interpretation of GitHub lifecycle state, so no
+// caller can invent a reset-specific or cleanup-specific variant.
+func classifyLifecycle(run store.Run, issue github.Issue, pullRequest github.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
 	// GitHub reports a merged pull request as closed, so merge detection must
 	// happen before either ordinary closed-state cancellation branch.
 	if hasPullRequest && pullRequest.Merged {
 		if strings.TrimSpace(pullRequest.MergeCommitSHA) == "" {
-			return LifecycleResult{}, fmt.Errorf("merged pull request #%d has no merge commit", pullRequest.Number)
+			return lifecycleDecision{}, fmt.Errorf("merged pull request #%d has no merge commit", pullRequest.Number)
 		}
-		reason := fmt.Sprintf("pull request #%d merged", pullRequest.Number)
-		next := *run
-		next.Stage = store.StageReady
-		next.Status = store.StatusComplete
-		next.MergeCommitSHA = pullRequest.MergeCommitSHA
-		next.LifecycleReason = reason
-		next.LifecycleNotificationSent = false
-		next.UpdatedAt = s.deps.Now().UTC()
-		updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
-		return LifecycleResult{Outcome: LifecycleCompleted, Run: updated, Reason: reason}, transitionErr
+		return lifecycleDecision{Outcome: LifecycleCompleted, Reason: fmt.Sprintf("pull request #%d merged", pullRequest.Number)}, nil
 	}
-
-	reason := ""
 	switch {
 	case hasPullRequest && strings.EqualFold(strings.TrimSpace(pullRequest.State), "closed"):
-		reason = fmt.Sprintf("pull request #%d closed without merging", pullRequest.Number)
+		return lifecycleDecision{Outcome: LifecycleCancelled, Reason: fmt.Sprintf("pull request #%d closed without merging", pullRequest.Number)}, nil
 	case strings.EqualFold(strings.TrimSpace(issue.State), "closed"):
-		reason = fmt.Sprintf("issue #%d closed", run.IssueNumber)
+		return lifecycleDecision{Outcome: LifecycleCancelled, Reason: fmt.Sprintf("issue #%d closed", run.IssueNumber)}, nil
 	default:
-		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run}, nil
+		return lifecycleDecision{Outcome: LifecycleUnchanged}, nil
 	}
-	next := *run
-	next.Status = store.StatusCancelled
-	next.LifecycleReason = reason
-	next.MergeCommitSHA = ""
-	next.LifecycleNotificationSent = false
-	next.UpdatedAt = s.deps.Now().UTC()
-	updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
-	return LifecycleResult{Outcome: LifecycleCancelled, Run: updated, Reason: reason}, transitionErr
 }
 
 // trackedPullRequest loads the PR found by the run's exact branch and frozen
@@ -344,7 +389,7 @@ func (s *Service) notifyWorkspace(ctx context.Context, registration config.Repos
 		}
 	}
 	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
-		Name:             defaultString(registration.Cmux.ControlWorkspace, "factory-control"),
+		Name:             controlWorkspaceName(registration),
 		Description:      "software factory coordinator",
 		WorkingDirectory: registration.Path,
 	})
@@ -355,4 +400,10 @@ func (s *Service) notifyWorkspace(ctx context.Context, registration config.Repos
 		return fmt.Errorf("notify coordinator: %w", err)
 	}
 	return nil
+}
+
+// controlWorkspaceName resolves the registered coordinator workspace name, or
+// the factory default when a registration leaves it unset.
+func controlWorkspaceName(registration config.RepositoryRegistration) string {
+	return defaultString(registration.Cmux.ControlWorkspace, "factory-control")
 }

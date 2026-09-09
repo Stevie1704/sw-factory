@@ -13,9 +13,11 @@ import (
 // the cleanup cutoff after a plan was created.
 var ErrCleanupNotEligible = errors.New("run is not cleanup eligible")
 
-// CleanupCandidate is one terminal run and the operational records needed by
-// the coordinator to plan safe external cleanup.
-type CleanupCandidate struct {
+// RunRemovalCandidate is one persisted run and the operational records the
+// coordinator needs to plan safe external removal of its local resources. Both
+// the seven-day cleanup and the whole-installation reset select from it, so it
+// is named for neither.
+type RunRemovalCandidate struct {
 	// Run is the current persisted run projection.
 	Run Run
 	// Invocations contains every persisted invocation for the run.
@@ -134,10 +136,10 @@ func (s *Store) BeginCleanup(ctx context.Context, runID string, before time.Time
 	return transaction, nil
 }
 
-// ListCleanupCandidates returns terminal runs whose terminal time is at or
+// ListRunRemovalCandidates returns terminal runs whose terminal time is at or
 // before before. An empty runID lists every candidate; a non-empty runID
 // narrows the result without changing the same eligibility rules.
-func (s *Store) ListCleanupCandidates(ctx context.Context, before time.Time, runID string) ([]CleanupCandidate, error) {
+func (s *Store) ListRunRemovalCandidates(ctx context.Context, before time.Time, runID string) ([]RunRemovalCandidate, error) {
 	if before.IsZero() {
 		return nil, errors.New("cleanup cutoff is required")
 	}
@@ -169,30 +171,7 @@ func (s *Store) ListCleanupCandidates(ctx context.Context, before time.Time, run
 		return nil, fmt.Errorf("read cleanup candidates: %w", err)
 	}
 
-	candidates := make([]CleanupCandidate, 0, len(ids))
-	for _, id := range ids {
-		run, err := s.cleanupRun(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if run == nil {
-			continue
-		}
-		invocations, err := s.cleanupInvocations(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		pendingEffect, err := s.PendingEffect(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("read cleanup pending effect for run %q: %w", id, err)
-		}
-		candidates = append(candidates, CleanupCandidate{
-			Run:           *run,
-			Invocations:   invocations,
-			PendingEffect: pendingEffect,
-		})
-	}
-	return candidates, nil
+	return s.removalCandidates(ctx, ids)
 }
 
 // DeleteCleanupRun reserves and atomically removes one already-planned run and
@@ -349,4 +328,58 @@ func deleteCleanupRunRow(ctx context.Context, tx *sql.Tx, runID string) (int, er
 		return 0, err
 	}
 	return int(changed), nil
+}
+
+// ListResetCandidates returns every persisted run with the operational records
+// a complete local reset needs, regardless of status or retention age. It is
+// separate from ListRunRemovalCandidates because reset owns the whole
+// installation rather than the seven-day terminal-run retention window.
+func (s *Store) ListResetCandidates(ctx context.Context) ([]RunRemovalCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id
+		FROM operational_runs
+		ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list reset candidates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan reset candidate: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read reset candidates: %w", err)
+	}
+
+	return s.removalCandidates(ctx, ids)
+}
+
+// removalCandidates hydrates the complete operational projection of each
+// selected run. Both removal commands share it, so neither can plan from a
+// narrower view of a run than the other.
+func (s *Store) removalCandidates(ctx context.Context, ids []string) ([]RunRemovalCandidate, error) {
+	candidates := make([]RunRemovalCandidate, 0, len(ids))
+	for _, id := range ids {
+		run, err := s.cleanupRun(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if run == nil {
+			continue
+		}
+		invocations, err := s.cleanupInvocations(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		pendingEffect, err := s.PendingEffect(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("read pending effect for removal candidate %q: %w", id, err)
+		}
+		candidates = append(candidates, RunRemovalCandidate{Run: *run, Invocations: invocations, PendingEffect: pendingEffect})
+	}
+	return candidates, nil
 }

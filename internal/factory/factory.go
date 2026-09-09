@@ -79,6 +79,9 @@ type Factory interface {
 	// Cleanup previews and, when explicitly confirmed, removes eligible local
 	// run artifacts without deleting remote branches or evaluation summaries.
 	Cleanup(context.Context, CleanupRequest) (CleanupResult, error)
+	// Reset previews and, when explicitly confirmed, returns one registered
+	// installation to its pre-init local state.
+	Reset(context.Context, ResetRequest) (ResetResult, error)
 }
 
 // RunCoordinator is the single claim/state-transition seam used by the
@@ -124,6 +127,11 @@ type LatestRunStore interface {
 // StoreOpener opens the host-local operational store.
 type StoreOpener func(context.Context, string) (OperationalStore, error)
 
+// ReadOnlyStoreOpener opens an existing operational store without creating
+// directories, initializing metadata, migrating a schema, or writing a backup.
+// A read-only command uses it so inspecting an installation cannot change it.
+type ReadOnlyStoreOpener func(context.Context, string) (OperationalStore, error)
+
 // RepositoryChecker validates a registered repository path.
 type RepositoryChecker func(string) error
 
@@ -141,11 +149,13 @@ type StartupDiagnosis func(context.Context) (DoctorResult, error)
 
 // Dependencies are the adapters at the high-level factory seam.
 type Dependencies struct {
-	Config          ConfigRepository
-	OpenStore       StoreOpener
-	CheckRepository RepositoryChecker
-	LoadRepository  RepositoryConfigLoader
-	GitHub          github.Client
+	Config    ConfigRepository
+	OpenStore StoreOpener
+	// OpenStoreReadOnly opens the operational store for inspection only.
+	OpenStoreReadOnly ReadOnlyStoreOpener
+	CheckRepository   RepositoryChecker
+	LoadRepository    RepositoryConfigLoader
+	GitHub            github.Client
 	// IssuePoller lists eligible GitHub work without broadening the mutation
 	// authority of the existing issue client seam.
 	IssuePoller github.IssuePoller
@@ -291,6 +301,11 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.OpenStore == nil {
 		dependencies.OpenStore = func(ctx context.Context, path string) (OperationalStore, error) {
 			return store.Open(ctx, path)
+		}
+	}
+	if dependencies.OpenStoreReadOnly == nil {
+		dependencies.OpenStoreReadOnly = func(ctx context.Context, path string) (OperationalStore, error) {
+			return store.OpenReadOnly(ctx, path)
 		}
 	}
 	if dependencies.CheckRepository == nil {

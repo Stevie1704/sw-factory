@@ -106,6 +106,14 @@ type WorkspaceInspector interface {
 	InspectWorkspace(context.Context, WorkspaceID) (WorkspaceInspection, error)
 }
 
+// WorkspaceFinder is the optional read-only adapter capability that resolves
+// an operator-facing workspace name to its opaque handle without creating one.
+// A reset preview needs the control workspace identity while remaining free of
+// terminal mutation, which EnsureControlWorkspace cannot provide.
+type WorkspaceFinder interface {
+	FindWorkspace(context.Context, string) (Workspace, bool, error)
+}
+
 // SurfaceReader is the optional adapter capability that reads a surface's
 // visible output. A launch that fails leaves its diagnosis only on the surface,
 // so callers capture that output before the failure path closes the surface.
@@ -459,6 +467,32 @@ func isWorkspaceNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not_found: Workspace not found")
 }
 
+// FindWorkspace resolves one workspace by its operator-facing name across every
+// window without creating, focusing, or otherwise changing terminal state. An
+// absent workspace is a successful negative result.
+func (r *CmuxRuntime) FindWorkspace(ctx context.Context, name string) (Workspace, bool, error) {
+	if strings.TrimSpace(name) == "" {
+		return Workspace{}, false, errors.New("workspace name is required")
+	}
+	topology, err := r.topology(ctx, []string{"tree", "--all", "--json", "--id-format", "uuids"})
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	for _, window := range topology.Windows {
+		for _, workspace := range window.Workspaces {
+			label := workspace.Name
+			if label == "" {
+				label = workspace.Title
+			}
+			if label != name || strings.TrimSpace(workspace.ID) == "" {
+				continue
+			}
+			return Workspace{ID: WorkspaceID(workspace.ID), Name: label}, true, nil
+		}
+	}
+	return Workspace{}, false, nil
+}
+
 // InspectWorkspace reads one workspace and its surface identities without
 // mutating cmux or interpreting terminal output. A cmux response identifying
 // the requested workspace as missing is reported as a successful negative
@@ -729,7 +763,11 @@ func workspaceCreateArgs(name, description, workingDirectory, focus, layout stri
 type topologyResponse struct {
 	Windows []struct {
 		Workspaces []struct {
-			ID    string `json:"id"`
+			ID string `json:"id"`
+			// Name and Title are both decoded because the adapter spells one
+			// workspace label differently across its structured responses.
+			Name  string `json:"name"`
+			Title string `json:"title"`
 			Panes []struct {
 				Surfaces []struct {
 					ID    string `json:"id"`
@@ -801,3 +839,4 @@ func (r *CmuxRuntime) topology(ctx context.Context, args []string) (topologyResp
 
 var _ TerminalRuntime = (*CmuxRuntime)(nil)
 var _ WorkspaceInspector = (*CmuxRuntime)(nil)
+var _ WorkspaceFinder = (*CmuxRuntime)(nil)

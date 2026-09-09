@@ -662,7 +662,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		}
 	}
 	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
-		Name:             defaultString(registration.Cmux.ControlWorkspace, "factory-control"),
+		Name:             controlWorkspaceName(registration),
 		Description:      "software factory coordinator",
 		WorkingDirectory: registration.Path,
 	})

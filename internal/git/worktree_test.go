@@ -150,6 +150,40 @@ func TestLocalWorktreeManagerCreatesFromFetchedTargetWithoutChangingOrdinaryChec
 	}
 }
 
+// TestLocalGitWorkspaceRefusesAnExtantUnregisteredWorktree verifies that an
+// ownership ambiguity cannot be reported as successful removal while the
+// persisted directory remains on disk.
+func TestLocalGitWorkspaceRefusesAnExtantUnregisteredWorktree(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repository := filepath.Join(root, "project")
+	remote := filepath.Join(root, "project-origin.git")
+	initializeGitRepository(t, repository, remote)
+	worktreePath := filepath.Join(root, "worktrees", "run-orphan")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "branch", "factory/run-orphan")
+
+	manager := &gitadapter.LocalWorktreeManager{}
+	workspace := gitadapter.Workspace{
+		RunID:    "run-orphan",
+		Branch:   "factory/run-orphan",
+		Worktree: worktreePath,
+	}
+	if err := manager.CheckRemoval(context.Background(), repository, workspace); err == nil || !strings.Contains(err.Error(), "Git no longer reports it") {
+		t.Fatalf("CheckRemoval() error = %v, want ownership-ambiguity refusal", err)
+	}
+	err := manager.Remove(context.Background(), repository, workspace)
+	if err == nil || !strings.Contains(err.Error(), "Git no longer reports it") {
+		t.Fatalf("Remove() error = %v, want extant unregistered worktree refusal", err)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("ambiguous worktree path was removed: %v", err)
+	}
+}
+
 // TestLocalGitWorkspaceMergesAnAdvancedTargetIntoTheRunBranch verifies the
 // readiness synchronization handles divergent commits with a regular merge.
 func TestLocalGitWorkspaceMergesAnAdvancedTargetIntoTheRunBranch(t *testing.T) {
