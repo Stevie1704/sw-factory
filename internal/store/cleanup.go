@@ -350,3 +350,50 @@ func deleteCleanupRunRow(ctx context.Context, tx *sql.Tx, runID string) (int, er
 	}
 	return int(changed), nil
 }
+
+// ListResetCandidates returns every persisted run with the operational records
+// a complete local reset needs, regardless of status or retention age. It is
+// separate from ListCleanupCandidates because reset owns the whole
+// installation rather than the seven-day terminal-run retention window.
+func (s *Store) ListResetCandidates(ctx context.Context) ([]CleanupCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id
+		FROM operational_runs
+		ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list reset candidates: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan reset candidate: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read reset candidates: %w", err)
+	}
+
+	candidates := make([]CleanupCandidate, 0, len(ids))
+	for _, id := range ids {
+		run, err := s.cleanupRun(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if run == nil {
+			continue
+		}
+		invocations, err := s.cleanupInvocations(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		pendingEffect, err := s.PendingEffect(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("read reset pending effect for run %q: %w", id, err)
+		}
+		candidates = append(candidates, CleanupCandidate{Run: *run, Invocations: invocations, PendingEffect: pendingEffect})
+	}
+	return candidates, nil
+}

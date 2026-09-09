@@ -663,12 +663,22 @@ func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string
 		}
 	}
 
+	// Each target is removed only when Git still reports it. An already
+	// removed worktree or branch is a successful result, so a cleanup or reset
+	// interrupted after partial progress can be repeated safely.
 	var cleanupErrors []error
-	if _, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "remove", "--force", workspace.Worktree}); err != nil {
-		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove worktree %q: %w", workspace.Worktree, err))
+	registered, err := m.worktreeRegistered(ctx, repositoryPath, workspace.Worktree)
+	if err != nil {
+		cleanupErrors = append(cleanupErrors, err)
+	} else if registered {
+		if _, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "remove", "--force", workspace.Worktree}); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove worktree %q: %w", workspace.Worktree, err))
+		}
 	}
-	if _, err := m.runner().Run(ctx, repositoryPath, []string{"branch", "-D", workspace.Branch}); err != nil {
-		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove branch %q: %w", workspace.Branch, err))
+	if m.branchExists(ctx, repositoryPath, workspace.Branch) {
+		if _, err := m.runner().Run(ctx, repositoryPath, []string{"branch", "-D", workspace.Branch}); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove branch %q: %w", workspace.Branch, err))
+		}
 	}
 	if workspace.RunID != "" {
 		if err := removeRunGitMetadata(workspace); err != nil {
@@ -676,6 +686,45 @@ func (m *LocalWorktreeManager) Remove(ctx context.Context, repositoryPath string
 		}
 	}
 	return errors.Join(cleanupErrors...)
+}
+
+// worktreeRegistered reports whether Git still tracks the exact worktree path.
+// Removal of an untracked path is skipped rather than attempted, because git
+// worktree remove fails on an already-removed worktree.
+func (m *LocalWorktreeManager) worktreeRegistered(ctx context.Context, repositoryPath, worktreePath string) (bool, error) {
+	output, err := m.runner().Run(ctx, repositoryPath, []string{"worktree", "list", "--porcelain"})
+	if err != nil {
+		return false, fmt.Errorf("list worktrees for removal: %w", err)
+	}
+	wanted := resolveWorktreePath(worktreePath)
+	for _, line := range strings.Split(string(output), "\n") {
+		value, found := strings.CutPrefix(strings.TrimSpace(line), "worktree ")
+		if !found {
+			continue
+		}
+		if resolveWorktreePath(value) == wanted {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// branchExists reports whether the local branch is still present. A failed
+// lookup is reported as absent, because the deletion that follows would report
+// the same repository failure with a clearer message.
+func (m *LocalWorktreeManager) branchExists(ctx context.Context, repositoryPath, branch string) bool {
+	_, err := m.runner().Run(ctx, repositoryPath, []string{"show-ref", "--verify", "--quiet", "refs/heads/" + branch})
+	return err == nil
+}
+
+// resolveWorktreePath normalizes one worktree path for comparison with Git's
+// own reporting, which resolves symbolic links in the paths it records.
+func resolveWorktreePath(path string) string {
+	clean := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return resolved
+	}
+	return clean
 }
 
 // removeRunGitMetadata removes one exact run directory under the sibling

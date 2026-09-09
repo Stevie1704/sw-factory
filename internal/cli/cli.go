@@ -48,6 +48,7 @@ var commandTable = []commandDefinition{
 	{name: "evaluation-delete", handler: runEvaluationDelete},
 	{name: "evaluation-disposition", handler: runEvaluationDisposition},
 	{name: "cleanup", handler: runCleanup},
+	{name: "reset", handler: runReset},
 }
 
 // Run dispatches the requested CLI command and returns its exit status.
@@ -1026,6 +1027,146 @@ func writeCleanupPlan(output, errorsOutput io.Writer, plan factory.CleanupPlan) 
 	}
 	for _, skipped := range plan.Skipped {
 		if !writeOutput(output, errorsOutput, "cleanup skipped run: %s reason=%s\n", skipped.RunID, skipped.Reason) {
+			return false
+		}
+	}
+	return true
+}
+
+// runReset displays the complete local reset plan and requires --confirm before
+// the Factory service removes any installation resource. Unlike every other
+// command, reset requires an explicit --config path: a command that destroys a
+// whole installation must never default to the operator's real configuration.
+func runReset(ctx context.Context, args []string, _ string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("reset", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", "", "host configuration path (required)")
+	confirm := flags.Bool("confirm", false, "confirm removal of the displayed local targets")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("reset does not accept positional arguments"))
+		return 2
+	}
+	if strings.TrimSpace(*configPath) == "" {
+		writeError(errorsOutput, errors.New("reset requires an explicit --config path"))
+		return 2
+	}
+
+	service := factory.New(*configPath)
+	preview, err := service.Reset(ctx, factory.ResetRequest{})
+	var confirmationErr *factory.ResetConfirmationRequiredError
+	if err != nil && !errors.As(err, &confirmationErr) {
+		writeResetPlan(output, errorsOutput, preview.Plan)
+		return writeResetError(errorsOutput, err)
+	}
+	if !writeResetPlan(output, errorsOutput, preview.Plan) {
+		return 1
+	}
+	if !*confirm {
+		if !writeOutput(output, errorsOutput, "reset requires --confirm; no resources removed\n") {
+			return 1
+		}
+		return 2
+	}
+
+	result, err := service.Reset(ctx, factory.ResetRequest{Confirm: true})
+	for _, transition := range result.Lifecycle {
+		if !writeOutput(output, errorsOutput, "reset lifecycle: run=%s outcome=%s reason=%s\n", transition.RunID, transition.Outcome, transition.Reason) {
+			return 1
+		}
+	}
+	for _, removed := range result.Removed {
+		if !writeOutput(output, errorsOutput, "reset removed: %s\n", removed) {
+			return 1
+		}
+	}
+	for _, remaining := range result.Remaining {
+		if !writeOutput(output, errorsOutput, "reset remaining: %s reason=%s\n", remaining.Target, remaining.Reason) {
+			return 1
+		}
+	}
+	if err != nil {
+		return writeResetError(errorsOutput, err)
+	}
+	if !writeOutput(output, errorsOutput, "reset complete: runs=%d\n", len(result.Plan.Runs)) {
+		return 1
+	}
+	return 0
+}
+
+// writeResetError renders a reset refusal with every blocker and its corrective
+// action, so an operator resolves them in one pass.
+func writeResetError(errorsOutput io.Writer, err error) int {
+	var blocked *factory.ResetBlockedError
+	if errors.As(err, &blocked) {
+		for _, blocker := range blocked.Blockers {
+			if blocker.RunID == "" {
+				_, _ = fmt.Fprintf(errorsOutput, "reset blocked: %s\naction: %s\n", blocker.Reason, blocker.Action)
+				continue
+			}
+			_, _ = fmt.Fprintf(errorsOutput, "reset blocked: run=%s %s\naction: %s\n", blocker.RunID, blocker.Reason, blocker.Action)
+		}
+	}
+	writeError(errorsOutput, err)
+	return 1
+}
+
+// writeResetPlan renders every exact target and every deliberately retained
+// resource before any confirmed mutation.
+func writeResetPlan(output, errorsOutput io.Writer, plan factory.ResetPlan) bool {
+	if plan.RepositoryPath == "" {
+		return true
+	}
+	if !writeOutput(output, errorsOutput, "reset repository: %s\nreset runs: %d\n", plan.RepositoryPath, len(plan.Runs)) {
+		return false
+	}
+	for _, run := range plan.Runs {
+		if !writeOutput(output, errorsOutput, "reset run: %s status=%s\nreset worktree: %s\nreset branch: %s (local only; remote retained)\nreset git projection: %s\n", run.RunID, run.Status, run.Worktree, run.Branch, run.GitProjection) {
+			return false
+		}
+		if !writeResetTargets(output, errorsOutput, "reset worker", run.WorkerIDs) ||
+			!writeResetTargets(output, errorsOutput, "reset worker role", run.Roles) ||
+			!writeResetTargets(output, errorsOutput, "reset terminal workspace", run.WorkspaceIDs) ||
+			!writeResetTargets(output, errorsOutput, "reset stored output", run.StoredOutputs) {
+			return false
+		}
+	}
+	for _, credentialStore := range plan.CredentialStores {
+		if !writeOutput(output, errorsOutput, "reset credential volume: %s\n", credentialStore.CredentialStoreID) {
+			return false
+		}
+	}
+	if len(plan.CredentialStores) == 0 && !writeOutput(output, errorsOutput, "reset credential volume: none\n") {
+		return false
+	}
+	if !writeOutput(output, errorsOutput, "reset control workspace: %s\nreset coordinator lock: %s\nreset database: %s\nreset evaluation summaries: %d\n", plan.ControlWorkspace, plan.CoordinatorLock, plan.OperationalDataPath, plan.EvaluationSummaries) {
+		return false
+	}
+	if !writeResetTargets(output, errorsOutput, "reset database sidecar", plan.DatabaseSidecars) ||
+		!writeResetTargets(output, errorsOutput, "reset database backup", plan.MigrationBackups) {
+		return false
+	}
+	if !writeOutput(output, errorsOutput, "reset config: %s (removed last)\n", plan.ConfigPath) {
+		return false
+	}
+	for _, retained := range plan.Retained {
+		if !writeOutput(output, errorsOutput, "reset retains: %s\n", retained) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeResetTargets renders one labelled group of exact targets and states
+// explicitly when a group is empty, so the plan is never silently incomplete.
+func writeResetTargets(output, errorsOutput io.Writer, label string, targets []string) bool {
+	if len(targets) == 0 {
+		return writeOutput(output, errorsOutput, "%s: none\n", label)
+	}
+	for _, target := range targets {
+		if !writeOutput(output, errorsOutput, "%s: %s\n", label, target) {
 			return false
 		}
 	}

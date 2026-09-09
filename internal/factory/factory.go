@@ -79,6 +79,9 @@ type Factory interface {
 	// Cleanup previews and, when explicitly confirmed, removes eligible local
 	// run artifacts without deleting remote branches or evaluation summaries.
 	Cleanup(context.Context, CleanupRequest) (CleanupResult, error)
+	// Reset previews and, when explicitly confirmed, returns one registered
+	// installation to its pre-init local state.
+	Reset(context.Context, ResetRequest) (ResetResult, error)
 }
 
 // RunCoordinator is the single claim/state-transition seam used by the

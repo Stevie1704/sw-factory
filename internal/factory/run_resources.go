@@ -1,0 +1,237 @@
+package factory
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
+)
+
+// destructiveWorkerRoles covers every factory-declared role that can create a
+// run-scoped worker home, including deterministic gate execution.
+var destructiveWorkerRoles = factoryWorkerRoles()
+
+// factoryWorkerRoles derives destructive role identities from the factory
+// registry so a newly declared visible role cannot leave its worker home
+// behind.
+func factoryWorkerRoles() []string {
+	roles := []string{"gate"}
+	for _, definition := range workflow.DefaultRegistry().Roles() {
+		roles = append(roles, definition.Name)
+	}
+	return roles
+}
+
+// runLocalResources is the complete set of exact local resources one persisted
+// run owns. Every field is derived from validated persisted identities and the
+// registered absolute paths, never from a filesystem or Docker prefix scan, so
+// a malformed row cannot widen a destructive operation.
+type runLocalResources struct {
+	// Branch is the local factory branch. Remote branches are never included.
+	Branch string
+	// Worktree is the exact local worktree path.
+	Worktree string
+	// WorkspaceIDs contains the terminal workspace handles this run created.
+	WorkspaceIDs []string
+	// WorkerIDs contains the exact worker container identities for this run.
+	WorkerIDs []string
+	// StoredOutputs contains the exact generated invocation and result
+	// directories.
+	StoredOutputs []string
+	// Roles selects the run-scoped role-home volumes.
+	Roles []string
+	// CredentialStoreIDs contains the persisted factory-managed credential
+	// store identities this run mounted. Ordinary cleanup retains them.
+	CredentialStoreIDs []string
+}
+
+// validateRunLocalResources derives one run's exact local resources and returns
+// a bounded operator-facing reason when any persisted identity, path, or
+// pending effect makes destruction unsafe. It is fail-closed: an identity that
+// cannot be proven run-scoped rejects the whole run.
+func validateRunLocalResources(registration config.RepositoryRegistration, candidate store.CleanupCandidate) (runLocalResources, string) {
+	run := candidate.Run
+	if !safeCleanupIdentifier(run.ID) {
+		return runLocalResources{}, "run identifier is not a safe local identifier"
+	}
+	if candidate.PendingEffect != nil {
+		return runLocalResources{}, fmt.Sprintf("pending external effect %q requires reconciliation", candidate.PendingEffect.ID)
+	}
+	if resolvePath(run.RepositoryPath) != resolvePath(registration.Path) {
+		return runLocalResources{}, "run repository does not match the registered repository"
+	}
+	expectedBranch := "factory/" + run.ID
+	if run.Branch != expectedBranch {
+		return runLocalResources{}, fmt.Sprintf("branch %q is not the run-owned branch %q", run.Branch, expectedBranch)
+	}
+	if !filepath.IsAbs(run.Worktree) || filepath.Base(filepath.Clean(run.Worktree)) != run.ID {
+		return runLocalResources{}, "worktree is not an absolute run-scoped path"
+	}
+	worktree := filepath.Clean(run.Worktree)
+	if pathWithin(registration.Path, worktree) || pathWithin(worktree, registration.Path) {
+		return runLocalResources{}, "worktree overlaps the registered repository"
+	}
+	if reason := cleanupDirectoryTarget(worktree, "worktree"); reason != "" {
+		return runLocalResources{}, reason
+	}
+
+	storedOutputs := make([]string, 0, len(candidate.Invocations)*2)
+	seenOutputs := make(map[string]struct{}, len(candidate.Invocations)*2)
+	for _, invocation := range candidate.Invocations {
+		for _, path := range []string{invocation.InvocationDirectory, invocation.ResultDirectory} {
+			if path == "" {
+				continue
+			}
+			clean := filepath.Clean(path)
+			if pathWithin(registration.Path, clean) {
+				return runLocalResources{}, "stored output overlaps the registered repository"
+			}
+			if _, exists := seenOutputs[clean]; !exists {
+				seenOutputs[clean] = struct{}{}
+				storedOutputs = append(storedOutputs, clean)
+			}
+		}
+	}
+	if err := worker.ValidateCleanupStoredOutputs(run.ID, storedOutputs); err != nil {
+		return runLocalResources{}, err.Error()
+	}
+	sort.Strings(storedOutputs)
+
+	roles := append([]string(nil), destructiveWorkerRoles...)
+	roleSet := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		roleSet[role] = struct{}{}
+	}
+	workerIDs := []string{run.ID}
+	seenWorkerIDs := map[string]struct{}{run.ID: {}}
+	var workspaceIDs []string
+	seenWorkspaceIDs := make(map[string]struct{}, len(candidate.Invocations))
+	var credentialStoreIDs []string
+	seenCredentialStoreIDs := make(map[string]struct{}, len(candidate.Invocations))
+	for _, invocation := range candidate.Invocations {
+		if !safeCleanupIdentifier(invocation.Role) {
+			return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe worker role", invocation.ID)
+		}
+		workerID := workerIDForInvocation(invocation)
+		if !safeCleanupIdentifier(workerID) {
+			return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe worker identity", invocation.ID)
+		}
+		if _, exists := seenWorkerIDs[workerID]; !exists {
+			seenWorkerIDs[workerID] = struct{}{}
+			workerIDs = append(workerIDs, workerID)
+		}
+		if _, exists := roleSet[invocation.Role]; !exists {
+			roleSet[invocation.Role] = struct{}{}
+			roles = append(roles, invocation.Role)
+		}
+		if storeID := invocation.CredentialStoreID; storeID != "" {
+			if !safeCleanupIdentifier(storeID) {
+				return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe credential store identity", invocation.ID)
+			}
+			if _, exists := seenCredentialStoreIDs[storeID]; !exists {
+				seenCredentialStoreIDs[storeID] = struct{}{}
+				credentialStoreIDs = append(credentialStoreIDs, storeID)
+			}
+		}
+		if invocation.WorkspaceID == "" {
+			continue
+		}
+		if !safeWorkspaceHandle(invocation.WorkspaceID) {
+			return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe terminal workspace handle", invocation.ID)
+		}
+		if _, exists := seenWorkspaceIDs[invocation.WorkspaceID]; !exists {
+			seenWorkspaceIDs[invocation.WorkspaceID] = struct{}{}
+			workspaceIDs = append(workspaceIDs, invocation.WorkspaceID)
+		}
+	}
+	sort.Strings(workerIDs)
+	sort.Strings(roles)
+	sort.Strings(workspaceIDs)
+	sort.Strings(credentialStoreIDs)
+	return runLocalResources{
+		Branch:             run.Branch,
+		Worktree:           worktree,
+		WorkspaceIDs:       workspaceIDs,
+		WorkerIDs:          workerIDs,
+		StoredOutputs:      storedOutputs,
+		Roles:              roles,
+		CredentialStoreIDs: credentialStoreIDs,
+	}, ""
+}
+
+// cleanupDirectoryTarget verifies that an exact planned directory is safe to
+// remove. Missing directories are valid because a prior partial removal may
+// already have removed them.
+func cleanupDirectoryTarget(path, label string) string {
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) == string(filepath.Separator) {
+		return label + " is not a safe absolute directory"
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		return fmt.Sprintf("inspect %s: %v", label, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return label + " must not be a symbolic link"
+	}
+	if !info.IsDir() {
+		return label + " is not a directory"
+	}
+	return ""
+}
+
+// safeCleanupIdentifier accepts only one path component suitable for both
+// generated directory names and the worker runtime's run identity.
+func safeCleanupIdentifier(value string) bool {
+	if value == "" || value == "." || value == ".." || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// safeWorkspaceHandle accepts an opaque terminal workspace handle that is safe
+// to display in a plan and to pass as one command argument. Handles are
+// adapter-generated and never name a path, so this is deliberately wider than
+// safeCleanupIdentifier: it rejects only empty, padded, option-shaped, and
+// control-character values.
+func safeWorkspaceHandle(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+// stringSlicesEqual compares ordered plan target fields without exposing a
+// mutable alias through a plan comparison.
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}

@@ -145,6 +145,41 @@ func requestCoordinatorStop(path string) (StopResult, error) {
 	return StopResult{Running: true, PID: pid}, nil
 }
 
+// coordinatorLockHeld reports whether a live coordinator currently owns the
+// repository lock. It never creates the lock inode, signals the owner, or
+// changes the lock's contents, so a read-only reset preview can call it. An
+// absent lock file means no coordinator is running.
+func coordinatorLockHeld(path string) (bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return false, errors.New("coordinator lock path is required")
+	}
+	file, err := openPrivateLockFile(path, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = file.Close() }()
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == nil {
+		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
+		return false, nil
+	} else if !lockWouldBlock(err) {
+		return false, fmt.Errorf("inspect coordinator lock: %w", err)
+	}
+	return true, nil
+}
+
+// removeCoordinatorLock removes one proven-unlocked coordinator lock inode.
+// An already-absent lock is a successful result. The shared parent directory
+// is retained because it belongs to every repository on the host.
+func removeCoordinatorLock(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove coordinator lock: %w", err)
+	}
+	return nil
+}
+
 // ensurePrivateLockDirectory creates and validates the lock's parent without
 // permitting group or other-user access to the PID marker.
 func ensurePrivateLockDirectory(path string) error {

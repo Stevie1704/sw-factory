@@ -4,19 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
-	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 const (
@@ -30,20 +25,6 @@ const (
 	// workspace it owns.
 	cleanupWorkspaceCloseTimeout = 10 * time.Second
 )
-
-// cleanupWorkerRoles covers every factory-declared role that can create a
-// run-scoped worker home, including deterministic gate execution.
-var cleanupWorkerRoles = factoryWorkerRoles()
-
-// factoryWorkerRoles derives cleanup identities from the factory registry so a
-// newly declared visible role cannot leave its worker home behind.
-func factoryWorkerRoles() []string {
-	roles := []string{"gate"}
-	for _, definition := range workflow.DefaultRegistry().Roles() {
-		roles = append(roles, definition.Name)
-	}
-	return roles
-}
 
 // CleanupStore is the operational-store seam needed to list and delete local
 // run artifacts while keeping evaluation-summary deletion separate.
@@ -335,14 +316,9 @@ func (s *Service) buildCleanupPlan(ctx context.Context, registration config.Repo
 // plan. Every rejection is fail-closed so a malformed row cannot widen cleanup.
 func (s *Service) cleanupTarget(ctx context.Context, registration config.RepositoryRegistration, candidate store.CleanupCandidate) (CleanupRun, string) {
 	run := candidate.Run
-	if !safeCleanupIdentifier(run.ID) {
-		return CleanupRun{}, "run identifier is not a safe local identifier"
-	}
-	if candidate.PendingEffect != nil {
-		return CleanupRun{}, fmt.Sprintf("pending external effect %q requires reconciliation", candidate.PendingEffect.ID)
-	}
-	if resolvePath(run.RepositoryPath) != resolvePath(registration.Path) {
-		return CleanupRun{}, "run repository does not match the registered repository"
+	resources, reason := validateRunLocalResources(registration, candidate)
+	if reason != "" {
+		return CleanupRun{}, reason
 	}
 	if !store.IsTerminalStatus(run.Status) {
 		return CleanupRun{}, "run is no longer terminal"
@@ -367,82 +343,6 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 			return CleanupRun{}, "pull request lifecycle is not conclusively terminal"
 		}
 	}
-	expectedBranch := "factory/" + run.ID
-	if run.Branch != expectedBranch {
-		return CleanupRun{}, fmt.Sprintf("branch %q is not the run-owned branch %q", run.Branch, expectedBranch)
-	}
-	if !filepath.IsAbs(run.Worktree) || filepath.Base(filepath.Clean(run.Worktree)) != run.ID {
-		return CleanupRun{}, "worktree is not an absolute run-scoped path"
-	}
-	worktree := filepath.Clean(run.Worktree)
-	if pathWithin(registration.Path, worktree) || pathWithin(worktree, registration.Path) {
-		return CleanupRun{}, "worktree overlaps the registered repository"
-	}
-	if reason := cleanupDirectoryTarget(worktree, "worktree"); reason != "" {
-		return CleanupRun{}, reason
-	}
-
-	storedOutputs := make([]string, 0, len(candidate.Invocations)*2)
-	seenOutputs := make(map[string]struct{}, len(candidate.Invocations)*2)
-	for _, invocation := range candidate.Invocations {
-		for _, path := range []string{invocation.InvocationDirectory, invocation.ResultDirectory} {
-			if path == "" {
-				continue
-			}
-			clean := filepath.Clean(path)
-			if pathWithin(registration.Path, clean) {
-				return CleanupRun{}, "stored output overlaps the registered repository"
-			}
-			if _, exists := seenOutputs[clean]; !exists {
-				seenOutputs[clean] = struct{}{}
-				storedOutputs = append(storedOutputs, clean)
-			}
-		}
-	}
-	if err := worker.ValidateCleanupStoredOutputs(run.ID, storedOutputs); err != nil {
-		return CleanupRun{}, err.Error()
-	}
-	sort.Strings(storedOutputs)
-
-	roles := append([]string(nil), cleanupWorkerRoles...)
-	roleSet := make(map[string]struct{}, len(roles))
-	for _, role := range roles {
-		roleSet[role] = struct{}{}
-	}
-	workerIDs := []string{run.ID}
-	seenWorkerIDs := map[string]struct{}{run.ID: {}}
-	var workspaceIDs []string
-	seenWorkspaceIDs := make(map[string]struct{}, len(candidate.Invocations))
-	for _, invocation := range candidate.Invocations {
-		if !safeCleanupIdentifier(invocation.Role) {
-			return CleanupRun{}, fmt.Sprintf("invocation %q has an unsafe worker role", invocation.ID)
-		}
-		workerID := workerIDForInvocation(invocation)
-		if !safeCleanupIdentifier(workerID) {
-			return CleanupRun{}, fmt.Sprintf("invocation %q has an unsafe worker identity", invocation.ID)
-		}
-		if _, exists := seenWorkerIDs[workerID]; !exists {
-			seenWorkerIDs[workerID] = struct{}{}
-			workerIDs = append(workerIDs, workerID)
-		}
-		if _, exists := roleSet[invocation.Role]; !exists {
-			roleSet[invocation.Role] = struct{}{}
-			roles = append(roles, invocation.Role)
-		}
-		if invocation.WorkspaceID == "" {
-			continue
-		}
-		if !safeWorkspaceHandle(invocation.WorkspaceID) {
-			return CleanupRun{}, fmt.Sprintf("invocation %q has an unsafe terminal workspace handle", invocation.ID)
-		}
-		if _, exists := seenWorkspaceIDs[invocation.WorkspaceID]; !exists {
-			seenWorkspaceIDs[invocation.WorkspaceID] = struct{}{}
-			workspaceIDs = append(workspaceIDs, invocation.WorkspaceID)
-		}
-	}
-	sort.Strings(workerIDs)
-	sort.Strings(roles)
-	sort.Strings(workspaceIDs)
 	eligibleAt := run.TerminalAt
 	if eligibleAt.IsZero() {
 		eligibleAt = run.UpdatedAt
@@ -455,69 +355,14 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 		Status:         run.Status,
 		EligibleAt:     eligibleAt.UTC(),
 		RepositoryPath: registration.Path,
-		Branch:         run.Branch,
-		Worktree:       worktree,
-		WorkspaceIDs:   workspaceIDs,
+		Branch:         resources.Branch,
+		Worktree:       resources.Worktree,
+		WorkspaceIDs:   resources.WorkspaceIDs,
 		WorkerRunID:    run.ID,
-		WorkerIDs:      workerIDs,
-		StoredOutputs:  storedOutputs,
-		Roles:          roles,
+		WorkerIDs:      resources.WorkerIDs,
+		StoredOutputs:  resources.StoredOutputs,
+		Roles:          resources.Roles,
 	}, ""
-}
-
-// cleanupDirectoryTarget verifies that an exact planned directory is safe to
-// remove. Missing directories are valid because a prior partial cleanup may
-// already have removed them.
-func cleanupDirectoryTarget(path, label string) string {
-	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) == string(filepath.Separator) {
-		return label + " is not a safe absolute directory"
-	}
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return ""
-	}
-	if err != nil {
-		return fmt.Sprintf("inspect %s: %v", label, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return label + " must not be a symbolic link"
-	}
-	if !info.IsDir() {
-		return label + " is not a directory"
-	}
-	return ""
-}
-
-// safeCleanupIdentifier accepts only one path component suitable for both
-// generated directory names and the worker runtime's run identity.
-func safeCleanupIdentifier(value string) bool {
-	if value == "" || value == "." || value == ".." || strings.TrimSpace(value) != value {
-		return false
-	}
-	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-// safeWorkspaceHandle accepts an opaque terminal workspace handle that is safe
-// to display in the plan and to pass as one command argument. Handles are
-// adapter-generated and never name a path, so this is deliberately wider than
-// safeCleanupIdentifier: it rejects only empty, padded, option-shaped, and
-// control-character values.
-func safeWorkspaceHandle(value string) bool {
-	if value == "" || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") {
-		return false
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return false
-		}
-	}
-	return true
 }
 
 // cleanupPlansEqual compares the operator-visible target identity used to
@@ -534,20 +379,6 @@ func cleanupPlansEqual(left, right CleanupPlan) bool {
 	}
 	for index := range left.Skipped {
 		if left.Skipped[index] != right.Skipped[index] {
-			return false
-		}
-	}
-	return true
-}
-
-// stringSlicesEqual compares ordered cleanup target fields without exposing a
-// mutable alias through the plan comparison.
-func stringSlicesEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
 			return false
 		}
 	}

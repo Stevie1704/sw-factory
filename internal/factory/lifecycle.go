@@ -145,41 +145,61 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 		return LifecycleResult{}, err
 	}
 
+	decision, err := classifyLifecycle(*run, issue, pullRequest, hasPullRequest)
+	if err != nil {
+		return LifecycleResult{}, err
+	}
+	next := *run
+	switch decision.Outcome {
+	case LifecycleCompleted:
+		next.Stage = store.StageReady
+		next.Status = store.StatusComplete
+		next.MergeCommitSHA = pullRequest.MergeCommitSHA
+	case LifecycleCancelled:
+		next.Status = store.StatusCancelled
+		next.MergeCommitSHA = ""
+	default:
+		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run}, nil
+	}
+	next.LifecycleReason = decision.Reason
+	next.LifecycleNotificationSent = false
+	next.UpdatedAt = s.deps.Now().UTC()
+	updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
+	return LifecycleResult{Outcome: decision.Outcome, Run: updated, Reason: decision.Reason}, transitionErr
+}
+
+// lifecycleDecision is the coordinator-owned interpretation of one GitHub
+// observation, separated from the store writes and GitHub projections a
+// terminal transition performs. A read-only caller can reach the same decision
+// without applying it.
+type lifecycleDecision struct {
+	// Outcome identifies the required terminal transition, if any.
+	Outcome LifecycleOutcome
+	// Reason is the operator-facing explanation recorded with the transition.
+	Reason string
+}
+
+// classifyLifecycle applies the single coordinator-owned rule set that decides
+// whether an observed issue and pull request complete, cancel, or leave a run
+// unchanged. It is the only interpretation of GitHub lifecycle state, so no
+// caller can invent a reset-specific or cleanup-specific variant.
+func classifyLifecycle(run store.Run, issue github.Issue, pullRequest github.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
 	// GitHub reports a merged pull request as closed, so merge detection must
 	// happen before either ordinary closed-state cancellation branch.
 	if hasPullRequest && pullRequest.Merged {
 		if strings.TrimSpace(pullRequest.MergeCommitSHA) == "" {
-			return LifecycleResult{}, fmt.Errorf("merged pull request #%d has no merge commit", pullRequest.Number)
+			return lifecycleDecision{}, fmt.Errorf("merged pull request #%d has no merge commit", pullRequest.Number)
 		}
-		reason := fmt.Sprintf("pull request #%d merged", pullRequest.Number)
-		next := *run
-		next.Stage = store.StageReady
-		next.Status = store.StatusComplete
-		next.MergeCommitSHA = pullRequest.MergeCommitSHA
-		next.LifecycleReason = reason
-		next.LifecycleNotificationSent = false
-		next.UpdatedAt = s.deps.Now().UTC()
-		updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
-		return LifecycleResult{Outcome: LifecycleCompleted, Run: updated, Reason: reason}, transitionErr
+		return lifecycleDecision{Outcome: LifecycleCompleted, Reason: fmt.Sprintf("pull request #%d merged", pullRequest.Number)}, nil
 	}
-
-	reason := ""
 	switch {
 	case hasPullRequest && strings.EqualFold(strings.TrimSpace(pullRequest.State), "closed"):
-		reason = fmt.Sprintf("pull request #%d closed without merging", pullRequest.Number)
+		return lifecycleDecision{Outcome: LifecycleCancelled, Reason: fmt.Sprintf("pull request #%d closed without merging", pullRequest.Number)}, nil
 	case strings.EqualFold(strings.TrimSpace(issue.State), "closed"):
-		reason = fmt.Sprintf("issue #%d closed", run.IssueNumber)
+		return lifecycleDecision{Outcome: LifecycleCancelled, Reason: fmt.Sprintf("issue #%d closed", run.IssueNumber)}, nil
 	default:
-		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run}, nil
+		return lifecycleDecision{Outcome: LifecycleUnchanged}, nil
 	}
-	next := *run
-	next.Status = store.StatusCancelled
-	next.LifecycleReason = reason
-	next.MergeCommitSHA = ""
-	next.LifecycleNotificationSent = false
-	next.UpdatedAt = s.deps.Now().UTC()
-	updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
-	return LifecycleResult{Outcome: LifecycleCancelled, Run: updated, Reason: reason}, transitionErr
 }
 
 // trackedPullRequest loads the PR found by the run's exact branch and frozen

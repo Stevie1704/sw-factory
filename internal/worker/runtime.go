@@ -330,6 +330,26 @@ type CleanupRuntime interface {
 	Cleanup(context.Context, CleanupRequest) error
 }
 
+// RemoveCredentialStoreRequest selects one factory-managed credential volume
+// by the persisted credential-store identity that created it.
+type RemoveCredentialStoreRequest struct {
+	// RunID is the legacy fallback identity used when a worker was started
+	// before credential stores had their own identifier.
+	RunID string
+	// CredentialStoreID is the persisted identity of the credential store.
+	CredentialStoreID string
+}
+
+// CredentialStoreRemover is the optional destructive extension that removes a
+// factory-managed credential volume. It is deliberately separate from
+// CleanupRuntime because ordinary seven-day run cleanup retains credential
+// storage; only a complete installation reset may remove it.
+type CredentialStoreRemover interface {
+	// RemoveCredentialStore removes one factory-managed credential volume and
+	// treats an already-absent volume as success.
+	RemoveCredentialStore(context.Context, RemoveCredentialStoreRequest) error
+}
+
 // DockerRuntime implements WorkerRuntime with the host Docker executable.
 // Docker container names are derived privately from RunID and never appear in
 // the WorkerRuntime interface or its results.
@@ -791,6 +811,27 @@ func (r *DockerRuntime) Cleanup(ctx context.Context, request CleanupRequest) err
 	}
 	if err := removeCleanupStoredOutputs(request.StoredOutputs); err != nil {
 		return fmt.Errorf("remove stored worker outputs: %w", err)
+	}
+	return nil
+}
+
+// RemoveCredentialStore removes the factory-managed credential volume named by
+// one persisted credential-store identity. Ordinary cleanup retains this
+// volume, so only a complete installation reset reaches this method. An
+// already-absent volume is a successful result, keeping a partially completed
+// reset safely retryable.
+func (r *DockerRuntime) RemoveCredentialStore(ctx context.Context, request RemoveCredentialStoreRequest) error {
+	if err := validateRunID(request.RunID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(request.CredentialStoreID) != "" {
+		if err := validateRunID(request.CredentialStoreID); err != nil {
+			return fmt.Errorf("credential store id %q: %w", request.CredentialStoreID, err)
+		}
+	}
+	volume := credentialVolumeName(request.RunID, request.CredentialStoreID)
+	if _, err := r.runDocker(ctx, []string{"volume", "rm", volume}); err != nil && !isDockerResourceNotFound(err) {
+		return fmt.Errorf("remove factory-managed credential storage: %w", dockerStderrDetail(err))
 	}
 	return nil
 }
