@@ -201,7 +201,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 <table>
 <thead><tr><th>Package</th><th>Layer</th><th>Files</th><th>Responsibility in one line</th></tr></thead>
 <tbody>
-<tr><td class="nowrap"><code>internal/factory</code></td><td><span class="pill p-coord">coordinator</span></td><td class="nowrap">34</td><td>The complete run coordinator: claim, stages, gates, effects, repair, recovery.</td></tr>
+<tr><td class="nowrap"><code>internal/factory</code></td><td><span class="pill p-coord">coordinator</span></td><td class="nowrap">40</td><td>The complete run coordinator: claim, stages, gates, effects, repair, recovery.</td></tr>
 <tr><td class="nowrap"><code>internal/store</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">4</td><td>SQLite operational store, effect journal, and evaluation summaries.</td></tr>
 <tr><td class="nowrap"><code>internal/worker</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Docker-backed isolated execution environment for one run.</td></tr>
 <tr><td class="nowrap"><code>internal/cli</code></td><td><span class="pill p-entry">entry</span></td><td class="nowrap">1</td><td>Command table, flag parsing, and operator-facing rendering.</td></tr>
@@ -209,12 +209,12 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 <tr><td class="nowrap"><code>internal/config</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">2</td><td>Host YAML and checked-in repository YAML, with validation.</td></tr>
 <tr><td class="nowrap"><code>internal/report</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">1</td><td>The structured report envelope exchanged between harness and coordinator.</td></tr>
 <tr><td class="nowrap"><code>internal/prompt</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Embedded versioned role prompts and craft substitution.</td></tr>
-<tr><td class="nowrap"><code>internal/harness</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">6</td><td>Codex and Claude Code adapters behind one lifecycle seam.</td></tr>
+<tr><td class="nowrap"><code>internal/harness</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">7</td><td>Codex and Claude Code adapters behind one lifecycle seam.</td></tr>
 <tr><td class="nowrap"><code>internal/git</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>Host Git: worktrees, checkpoints, base sync, push, guidance reads.</td></tr>
 <tr><td class="nowrap"><code>internal/terminal</code></td><td><span class="pill p-adapter">adapter</span></td><td class="nowrap">2</td><td>cmux workspaces and operator-visible surfaces.</td></tr>
 <tr><td class="nowrap"><code>internal/gate</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Ordered setup-and-gate suite execution against an exact checkpoint.</td></tr>
 <tr><td class="nowrap"><code>internal/workflow</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">2</td><td>Factory-owned role, stage, and route registry.</td></tr>
-<tr><td class="nowrap"><code>internal/effect</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Durable effect journal protocol and replay dispatcher.</td></tr>
+<tr><td class="nowrap"><code>internal/effect</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">16</td><td>Durable effect journal protocol, and one handler per external mutation.</td></tr>
 <tr><td class="nowrap"><code>internal/reportcli</code></td><td><span class="pill p-entry">entry</span></td><td class="nowrap">1</td><td>The <code>factory-report</code> command that runs inside the worker.</td></tr>
 <tr><td class="nowrap"><code>internal/command</code></td><td><span class="pill p-policy">policy</span></td><td class="nowrap">1</td><td>Grammar for structured <code>/factory</code> supervision comments.</td></tr>
 <tr><td class="nowrap"><code>internal/doctor</code></td><td><span class="pill p-found">foundation</span></td><td class="nowrap">1</td><td>Neutral startup-diagnosis result type and composition.</td></tr>
@@ -513,20 +513,26 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 </div>
 
 <h3 id="b-coord">4.2 Coordinator</h3>
-<p><code>internal/factory</code> is 34 source files and about 20,600 lines of source, matched by an equal weight of tests. It is one package on purpose: every file needs the same run projection and the same store transaction discipline, and splitting it would only move the coupling into exported types. The files below are the real sub-blocks.</p>
+<p><code>internal/factory</code> is 40 source files and about 19,700 lines of source, matched by an equal weight of tests. It is one package on purpose: every file needs the same run projection and the same store transaction discipline, and splitting it would only move the coupling into exported types. The files below are the real sub-blocks.</p>
 
 <div class="tablewrap">
 <table>
 <thead><tr><th>File</th><th>Owns</th></tr></thead>
 <tbody>
-<tr><td class="nowrap"><code>factory.go</code></td><td>The composition root. <code>Factory</code> interface <span class="t-xs">:26</span>, <code>Dependencies</code> <span class="t-xs">:137</span>, <code>Service</code> <span class="t-xs">:175</span>, and <code>New</code> <span class="t-xs">:275</span>. Every adapter enters here and nowhere else.</td></tr>
+<tr><td class="nowrap"><code>factory.go</code></td><td>The composition root. <code>Factory</code> interface <span class="t-xs">:26</span>, <code>Dependencies</code> <span class="t-xs">:143</span>, <code>Service</code> <span class="t-xs">:181</span>, and <code>New</code> <span class="t-xs">:281</span>. Every adapter enters here and nowhere else.</td></tr>
+<tr><td class="nowrap"><code>adapters.go</code></td><td>Resolving the task-oriented Git and pull-request seams out of <code>Dependencies</code>, keeping the foundation adapters as a compatibility fallback.</td></tr>
 <tr><td class="nowrap"><code>claim.go</code></td><td>Claiming an authorized issue and freezing the specification packet: issue snapshot, route, guidance, role craft, branch, worktree, worker image digest.</td></tr>
+<tr><td class="nowrap"><code>run_access.go</code></td><td>Reading the one configured repository registration and opening its operational store as a <code>RunStore</code>.</td></tr>
+<tr><td class="nowrap"><code>run_persistence.go</code></td><td>The shared run write: the label, comment, and store state transition, its pre-journal fallback, and the agent-state persistence every stage goes through.</td></tr>
 <tr><td class="nowrap"><code>route.go</code></td><td>Reading the one bounded route marker from the frozen issue and recording the selected workflow route.</td></tr>
 <tr><td class="nowrap"><code>repository_guidance.go</code></td><td>Capturing <code>AGENTS.md</code>, <code>CONTEXT.md</code>, and <code>docs/agents/*</code> from the exact base checkpoint as untrusted input.</td></tr>
 <tr><td class="nowrap"><code>repository_craft.go</code></td><td>Freezing configured <code>role_craft</code> files and their SHA-256 identity at claim time.</td></tr>
 <tr><td class="nowrap"><code>specification_view.go</code></td><td>The read-only projection of the frozen packet handed to a role.</td></tr>
-<tr><td class="nowrap"><code>agent.go</code>, <code>agent_launch.go</code></td><td>Selecting a role, building its invocation packet, launching the harness, and accepting its structured report.</td></tr>
+<tr><td class="nowrap"><code>agent.go</code>, <code>agent_launch.go</code></td><td>The role entry points — <code>StartAgent</code>, <code>AcceptAgentReport</code>, <code>RunAgent</code> — the shared request and result types, and the four-phase launch that builds an invocation packet and starts the harness.</td></tr>
+<tr><td class="nowrap"><code>agent_policy.go</code></td><td>Validating a role request against the factory-owned registry and freezing the repository harness, model, and reasoning-effort policy for it.</td></tr>
+<tr><td class="nowrap"><code>report_acceptance.go</code>, <code>report_acceptance_service.go</code></td><td>Accepting one structured agent report in four phases: gather, admission, projection, commitment. Admission and projection are pure over the gathered snapshot.</td></tr>
 <tr><td class="nowrap"><code>invocation_lifecycle.go</code>, <code>invocation_lifecycle_service.go</code></td><td>The immutable invocation record: creation, active set, result readiness, supersession, and native-session identity. The largest single file in the tree.</td></tr>
+<tr><td class="nowrap"><code>invocation_materialisation.go</code></td><td>Streaming the exact-checkpoint review diff into an invocation-owned artifact, hashing it in the same pass so the packet keeps only its identity.</td></tr>
 <tr><td class="nowrap"><code>test_stage.go</code></td><td>The independent test role: protected test paths, the test-stage handoff, exemptions, and the bounded objection cycle.</td></tr>
 <tr><td class="nowrap"><code>gate.go</code></td><td>Binding a gate suite to an exact checkpoint, persisting results, and publishing commit statuses.</td></tr>
 <tr><td class="nowrap"><code>repair.go</code></td><td>The bounded check-repair loop after a failing gate.</td></tr>
@@ -534,7 +540,7 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
 <tr><td class="nowrap"><code>review.go</code>, <code>review_repair.go</code></td><td>The two concurrent review axes and the bounded review-repair loop that consumes their blockers.</td></tr>
 <tr><td class="nowrap"><code>human_review.go</code></td><td>Building a human repair packet from <code>CHANGES_REQUESTED</code> reviews or a <code>/factory repair</code> comment, outside the bounded budgets.</td></tr>
 <tr><td class="nowrap"><code>readiness.go</code></td><td>Moving a reviewed pull request out of draft.</td></tr>
-<tr><td class="nowrap"><code>effects.go</code>, <code>effect_replay.go</code></td><td>Every journaled external mutation and its replay handler.</td></tr>
+<tr><td class="nowrap"><code>journal.go</code></td><td>Building the durable-effect journal from the coordinator's current adapters, and the issue projection it renders. The handlers themselves live in <code>internal/effect</code>.</td></tr>
 <tr><td class="nowrap"><code>recovery.go</code></td><td>Recovery diagnosis and reconciliation: comparing the persisted run with Git, GitHub, worker, and terminal projections.</td></tr>
 <tr><td class="nowrap"><code>progression.go</code></td><td>One unattended progression pass: a closed set of typed actions, bounded at 32 steps.</td></tr>
 <tr><td class="nowrap"><code>polling.go</code></td><td>The persistent coordinator loop, the issue queue, and the visible GitHub lease.</td></tr>
@@ -601,17 +607,17 @@ dl.terms dd{margin:3px 0 0 0; color:var(--muted); max-width:88ch}
   </div>
   <div class="card l-policy">
     <h5>internal/effect</h5>
-    <p class="role">policy · 1 file</p>
-    <p><strong>Owns</strong> the durable effect journal protocol: reserve, apply, clear. It is a small kernel — effect-specific work stays outside it, behind <code>EffectApplier</code> and <code>ReplayHandler</code>.</p>
+    <p class="role">policy · 16 files</p>
+    <p><strong>Owns</strong> the durable effect journal protocol — reserve, apply, clear — and one handler per external mutation. Each kind's handler is an unexported struct holding only the adapters that kind uses; <code>Journal</code> constructs and registers them.</p>
     <dl>
-      <dt>Key types</dt><dd><code>PendingEffectStore</code>, <code>EffectApplier</code>, <code>ReplayHandler</code>, <code>Dispatcher</code>, <code>PendingEffectID</code>, <code>UnknownKindError</code></dd>
+      <dt>Key types</dt><dd><code>Journal</code>, <code>Adapters</code>, <code>PendingEffectStore</code>, <code>PendingEffectAbandoner</code>, <code>StateTransition</code>, <code>UnknownKindError</code></dd>
       <dt>Identity</dt><dd><code>sha256(runID \0 kind \0 identity)</code>, prefixed by kind. The NUL-delimited input is part of the persisted protocol and must stay byte-identical across upgrades.</dd>
       <dt>Talks to</dt><dd><code>store</code></dd>
     </dl>
   </div>
   <div class="card l-policy">
     <h5>internal/harness</h5>
-    <p class="role">policy · 6 files</p>
+    <p class="role">policy · 7 files</p>
     <p><strong>Owns</strong> the interactive coding tools behind one lifecycle: <code>Capabilities</code>, <code>Start</code>, <code>Resume</code>, <code>Finish</code>. <code>New</code> <span class="t-xs">harness.go:135</span> is the only place a declared harness name becomes an implementation.</p>
     <dl>
       <dt>Key types</dt><dd><code>Runtime</code>, <code>Capabilities</code>, <code>Session</code>, <code>LaunchFailure</code>, <code>NativeSessionInspector</code>, <code>NativeSessionLivenessInspector</code></dd>
