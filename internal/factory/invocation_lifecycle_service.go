@@ -35,6 +35,7 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 			resetStartup:             s.resetStartupStateProjection,
 			materialiseReviewDiff:    s.materialiseReviewDiff,
 		},
+		s.deps.HeadlessHarness,
 	)
 	return s.lifecycle
 }
@@ -88,6 +89,9 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 	}
 	if request.RunID != "" && request.RunID != run.ID {
 		return ResumeResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	}
+	if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, *run); err != nil {
+		return ResumeResult{Run: *run}, fmt.Errorf("recover headless native session identity before resume: %w", err)
 	}
 	result, err := s.lifecycleModule().Resume(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run, NewInvocationID: s.newInvocationID, EvaluationRecorder: launchEvaluationRecorderForRunStore(runStore)})
 	if err == nil && result.Invocation.ID != "" {

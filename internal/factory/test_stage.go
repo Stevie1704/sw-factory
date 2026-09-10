@@ -1221,12 +1221,14 @@ func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, regis
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {
-		_, harnessRuntime, err := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+		_, harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test revision: %w", err)
 		}
 		if err := harnessRuntime.Finish(ctx, harness.Session{
 			InvocationID:    invocation.ID,
+			RunID:           invocation.RunID,
+			WorkerID:        workerIDForInvocation(*invocation),
 			NativeSessionID: invocation.NativeSessionID,
 			Surface:         invocationSurface(*invocation),
 		}); err != nil {
@@ -1257,12 +1259,14 @@ func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration 
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {
-		_, harnessRuntime, err := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+		_, harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test report: %w", err)
 		}
 		if err := harnessRuntime.Finish(ctx, harness.Session{
 			InvocationID:    invocation.ID,
+			RunID:           invocation.RunID,
+			WorkerID:        workerIDForInvocation(*invocation),
 			NativeSessionID: invocation.NativeSessionID,
 			Surface:         invocationSurface(*invocation),
 		}); err != nil {

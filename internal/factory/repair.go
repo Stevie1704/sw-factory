@@ -484,12 +484,13 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if roleErr != nil || roleDefinition.Name != workflow.RoleImplementation {
 		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no resumable role identity", ErrCheckRepairSessionUnavailable)
 	}
-	if previous.WorkspaceID == "" || invocationSurface(*previous).ID == "" {
-		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no recoverable surface", ErrCheckRepairSessionUnavailable)
-	}
-	terminalRuntime, harnessRuntime, err := s.lifecycleModule().ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(previous.Harness))
+	terminalRuntime, harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(previous.Harness))
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("%w: %v", ErrCheckRepairSessionUnavailable, err)
+	}
+	headless := coordinatorUsesHeadless(harnessRuntime)
+	if !headless && (previous.WorkspaceID == "" || invocationSurface(*previous).ID == "") {
+		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no recoverable surface", ErrCheckRepairSessionUnavailable)
 	}
 	// A native session belongs to the harness that created it, so a repair
 	// continues in that harness or not at all. This is what makes mid-session
@@ -576,29 +577,31 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		credentialStoreID = configuredCredentialStoreID
 	}
 	invocation = store.Invocation{
-		ID:                      invocationID,
-		RunID:                   run.ID,
-		Harness:                 previous.Harness,
-		Role:                    previous.Role,
-		Stage:                   store.StageImplementation,
-		Model:                   previous.Model,
-		ReasoningEffort:         previous.ReasoningEffort,
-		CredentialStoreID:       credentialStoreID,
-		NativeSessionID:         previous.NativeSessionID,
-		WorkspaceID:             previous.WorkspaceID,
-		StatusSurfaceID:         previous.StatusSurfaceID,
-		RoleSurfaceID:           string(invocationSurface(*previous).ID),
-		ImplementationSurfaceID: previous.ImplementationSurfaceID,
-		ChecksSurfaceID:         previous.ChecksSurfaceID,
-		InvocationDirectory:     packetDirectory,
-		ResultDirectory:         resultDirectory,
-		PermittedPaths:          append([]string(nil), previous.PermittedPaths...),
-		PromptVersion:           promptVersion,
-		PromptCraftSourcePath:   craftSourcePath,
-		PromptCraftSHA256:       craftSHA256,
-		Status:                  store.InvocationStatusActive,
-		CreatedAt:               createdAt,
-		UpdatedAt:               createdAt,
+		ID:                    invocationID,
+		RunID:                 run.ID,
+		Harness:               previous.Harness,
+		Role:                  previous.Role,
+		Stage:                 store.StageImplementation,
+		Model:                 previous.Model,
+		ReasoningEffort:       previous.ReasoningEffort,
+		CredentialStoreID:     credentialStoreID,
+		NativeSessionID:       previous.NativeSessionID,
+		InvocationDirectory:   packetDirectory,
+		ResultDirectory:       resultDirectory,
+		PermittedPaths:        append([]string(nil), previous.PermittedPaths...),
+		PromptVersion:         promptVersion,
+		PromptCraftSourcePath: craftSourcePath,
+		PromptCraftSHA256:     craftSHA256,
+		Status:                store.InvocationStatusActive,
+		CreatedAt:             createdAt,
+		UpdatedAt:             createdAt,
+	}
+	if !headless {
+		invocation.WorkspaceID = previous.WorkspaceID
+		invocation.StatusSurfaceID = previous.StatusSurfaceID
+		invocation.RoleSurfaceID = string(invocationSurface(*previous).ID)
+		invocation.ImplementationSurfaceID = previous.ImplementationSurfaceID
+		invocation.ChecksSurfaceID = previous.ChecksSurfaceID
 	}
 	persisted := false
 	workerStarted := false
@@ -614,7 +617,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		if workerStarted && !(journaled && resumeStarted) {
-			_ = s.deps.Worker.Stop(rollbackContext, run.ID)
+			_ = s.deps.Worker.Stop(rollbackContext, workerIDForInvocation(invocation))
 		}
 		if journaled && resumeStarted {
 			// A journaled resume crossed an external boundary. Leave its active
@@ -661,20 +664,22 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 			return store.Invocation{}, run, fmt.Errorf("record local evaluation invocation for check repair: %w", err)
 		}
 	}
-	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
-		Name:             controlWorkspaceName(registration),
-		Description:      "software factory coordinator",
-		WorkingDirectory: registration.Path,
-	})
-	if err != nil {
-		return store.Invocation{}, run, fmt.Errorf("ensure check-repair control workspace: %w", err)
-	}
-	if err := terminalRuntime.Notify(ctx, terminal.Notification{
-		WorkspaceID: control.ID,
-		Title:       "factory check repair started",
-		Body:        fmt.Sprintf("%s implementation repair attempt %d/%d resumed", run.ID, repairPacket.Attempt, repairPacket.Budget),
-	}); err != nil {
-		return store.Invocation{}, run, fmt.Errorf("notify check-repair start: %w", err)
+	if !headless {
+		control, terminalErr := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
+			Name:             controlWorkspaceName(registration),
+			Description:      "software factory coordinator",
+			WorkingDirectory: registration.Path,
+		})
+		if terminalErr != nil {
+			return store.Invocation{}, run, fmt.Errorf("ensure check-repair control workspace: %w", terminalErr)
+		}
+		if terminalErr := terminalRuntime.Notify(ctx, terminal.Notification{
+			WorkspaceID: control.ID,
+			Title:       "factory check repair started",
+			Body:        fmt.Sprintf("%s implementation repair attempt %d/%d resumed", run.ID, repairPacket.Attempt, repairPacket.Budget),
+		}); terminalErr != nil {
+			return store.Invocation{}, run, fmt.Errorf("notify check-repair start: %w", terminalErr)
+		}
 	}
 	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
 	if err != nil {
@@ -682,6 +687,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	}
 	workerRequest := worker.StartRequest{
 		RunID:             run.ID,
+		WorkerID:          workerIDForInvocation(invocation),
 		WorktreePath:      run.Worktree,
 		GitMetadataPath:   gitMetadataPath,
 		Image:             packet.RepositoryConfig.WorkerBuild.Image,
@@ -718,14 +724,17 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	resumeRequest := harness.StartRequest{
 		InvocationID:    invocation.ID,
 		RunID:           run.ID,
+		WorkerID:        workerIDForInvocation(invocation),
 		Role:            previous.Role,
 		Stage:           string(store.StageImplementation),
-		WorkspaceID:     terminal.WorkspaceID(previous.WorkspaceID),
-		Surface:         invocationSurface(*previous),
 		Prompt:          promptText,
 		Model:           previous.Model,
 		ReasoningEffort: previous.ReasoningEffort,
 		ResumeSessionID: previous.NativeSessionID,
+	}
+	if !headless {
+		resumeRequest.WorkspaceID = terminal.WorkspaceID(previous.WorkspaceID)
+		resumeRequest.Surface = invocationSurface(*previous)
 	}
 	resumedInvocation, resumeErr := s.journal().ResumeHarness(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
 	if resumedInvocation.RecoveryResumeCount > invocation.RecoveryResumeCount {

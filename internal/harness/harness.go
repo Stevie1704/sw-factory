@@ -65,6 +65,12 @@ type StartRequest struct {
 type Session struct {
 	// InvocationID identifies the invocation owning the session.
 	InvocationID string
+	// RunID identifies the logical worker run for a headless finalization.
+	// Interactive adapters leave it empty because their surface carries the
+	// worker selection.
+	RunID string
+	// WorkerID identifies the invocation-isolated worker for headless cleanup.
+	WorkerID string
 	// NativeSessionID is the harness-native continuation identity. Codex
 	// persists it and the adapter discovers it; Claude Code accepts an
 	// adapter-assigned identifier at launch.
@@ -83,6 +89,10 @@ type Capabilities struct {
 	// InteractiveResume reports whether interrupted sessions can be resumed
 	// through the adapter's native lifecycle.
 	InteractiveResume bool
+	// Headless reports that the adapter owns a terminal-free worker process
+	// protocol. InteractiveResume remains true for native resume support, but a
+	// headless adapter never requires a terminal workspace or surface.
+	Headless bool
 }
 
 // NativeSessionRequest identifies the worker-backed native session projection
@@ -90,6 +100,8 @@ type Capabilities struct {
 type NativeSessionRequest struct {
 	// RunID identifies the worker run whose native session is checked.
 	RunID string
+	// InvocationID identifies the headless process projection being inspected.
+	InvocationID string
 	// WorkerID selects the invocation-isolated worker whose session is checked.
 	WorkerID string
 	// Harness identifies the adapter-owned session format.
@@ -111,6 +123,16 @@ type NativeSessionLivenessInspector interface {
 	// NativeSessionRunning reports whether the persisted native session process
 	// is still running inside the worker.
 	NativeSessionRunning(context.Context, NativeSessionRequest) (bool, error)
+}
+
+// HeadlessFailureInspector is an optional adapter capability for classifying
+// a detached process after native session discovery has already completed.
+// The coordinator uses it only on a terminal process projection; it never
+// treats arbitrary model or stderr prose as a workflow outcome.
+type HeadlessFailureInspector interface {
+	// HeadlessFailureFor returns the typed failure represented by the persisted
+	// headless inspection, or nil while the process is still healthy/starting.
+	HeadlessFailureFor(context.Context, HeadlessInspectionRequest) error
 }
 
 // Runtime is the portable harness lifecycle seam used by the coordinator.

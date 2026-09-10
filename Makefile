@@ -6,7 +6,8 @@ BINDIR ?= bin
 BINARIES := \
 	$(BINDIR)/factory \
 	$(BINDIR)/factory-report \
-	$(BINDIR)/factory-worker-attach
+	$(BINDIR)/factory-worker-attach \
+	$(BINDIR)/factory-worker-headless
 
 .DEFAULT_GOAL := help
 
@@ -22,6 +23,7 @@ build: ## Build all command binaries into BINDIR (default: bin).
 	$(GO) build -o "$(BINDIR)/factory" ./cmd/factory
 	$(GO) build -o "$(BINDIR)/factory-report" ./cmd/factory-report
 	$(GO) build -o "$(BINDIR)/factory-worker-attach" ./cmd/factory-worker-attach
+	$(GO) build -o "$(BINDIR)/factory-worker-headless" ./cmd/factory-worker-headless
 
 test: ## Run the complete Go test suite.
 	$(GO) test ./...

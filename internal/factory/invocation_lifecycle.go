@@ -188,6 +188,7 @@ type invocationLifecycle struct {
 	worker              worker.WorkerRuntime
 	terminal            terminal.TerminalRuntime
 	harness             harness.Runtime
+	headlessHarness     harness.HeadlessRuntime
 	harnessCapabilities harness.CapabilityResolver
 	worktree            gitadapter.WorktreeInspector
 	clock               Clock
@@ -202,12 +203,13 @@ var _ InvocationLifecycle = (*invocationLifecycle)(nil)
 
 // newInvocationLifecycle constructs the module from explicit adapters and
 // hooks. It intentionally accepts only explicit adapters and effects.
-func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks) *invocationLifecycle {
+func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks, headless harness.HeadlessRuntime) *invocationLifecycle {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	return &invocationLifecycle{
 		journal: journal, worker: workerRuntime, terminal: terminalRuntime, harness: harnessRuntime,
+		headlessHarness:     headless,
 		harnessCapabilities: capabilities, worktree: worktree, clock: clock, hooks: hooks,
 		harnessRuntimes: make(map[config.Harness]harness.Runtime, 2),
 	}
@@ -301,7 +303,20 @@ func (l *invocationLifecycle) resumeActiveInvocation(ctx context.Context, reques
 		return l.resumeActiveInvocationError(ctx, request, run, active, updatedInvocation, resumeErr)
 	}
 	if !updatedInvocation.AttachRequired {
-		return ResumeResult{Run: run, Invocation: updatedInvocation}, nil
+		if run.Status == store.StatusActive {
+			return ResumeResult{Run: run, Invocation: updatedInvocation}, nil
+		}
+		next := run
+		next.Status = store.StatusActive
+		next.LifecycleReason = "manual native session resumed"
+		next.UpdatedAt = l.clock().UTC()
+		if next.Revision <= run.Revision {
+			next.Revision = run.Revision + 1
+		}
+		if err := l.persistLifecycleRun(ctx, request.Registration, request.RunStore, run, next); err != nil {
+			return ResumeResult{Run: next, Invocation: updatedInvocation}, err
+		}
+		return ResumeResult{Run: next, Invocation: updatedInvocation}, nil
 	}
 	next := run
 	next.Status = store.StatusWaitingForHuman
@@ -376,9 +391,12 @@ func (l *invocationLifecycle) Attach(ctx context.Context, request InvocationReco
 	if strings.TrimSpace(active.NativeSessionID) == "" {
 		return AttachResult{}, errors.New("active invocation has no persisted native session identifier")
 	}
-	terminalRuntime, _, err := l.ensureAgentRuntime(request.Registration.Cmux.SocketPath, config.Harness(active.Harness))
+	terminalRuntime, harnessRuntime, err := l.ensureCoordinatorHarnessRuntime(request.Registration.Cmux.SocketPath, config.Harness(active.Harness))
 	if err != nil {
 		return AttachResult{}, fmt.Errorf("ensure agent runtime for attach: %w", err)
+	}
+	if coordinatorUsesHeadless(harnessRuntime) {
+		return AttachResult{}, errors.New("headless invocation has no terminal attachment")
 	}
 	_, recovered, err := l.ensureWorkerForInvocation(ctx, request.Registration, request.RunStore, run, *active)
 	if err != nil {
@@ -1001,10 +1019,11 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
-	terminalRuntime, harnessRuntime, err := l.ensureAgentRuntime(request.Registration.Cmux.SocketPath, plan.Policy.Harness)
+	terminalRuntime, harnessRuntime, err := l.ensureCoordinatorHarnessRuntime(request.Registration.Cmux.SocketPath, plan.Policy.Harness)
 	if err != nil {
 		return AgentLaunchResult{}, fmt.Errorf("ensure agent runtime: %w", err)
 	}
+	headless := coordinatorUsesHeadless(harnessRuntime)
 	invocation := materialised.invocation
 	invocation.CredentialStoreID = credentialStoreID
 	materialised.workerRequest.CredentialStoreID = credentialStoreID
@@ -1034,19 +1053,24 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 			return AgentLaunchResult{}, newCredentialProjectionError(string(plan.Policy.Harness))
 		}
 	}
-	workspace, agentSurface, err := l.ensureLaunchTerminal(ctx, request.Registration, *request.Run, plan.RoleDefinition)
-	if err != nil {
-		return AgentLaunchResult{}, err
+	workspaceID := terminal.WorkspaceID("")
+	agentSurface := terminal.Surface{}
+	if !headless {
+		workspace, surface, terminalErr := l.ensureLaunchTerminal(ctx, request.Registration, *request.Run, plan.RoleDefinition)
+		if terminalErr != nil {
+			return AgentLaunchResult{}, terminalErr
+		}
+		workspaceID, agentSurface = workspace.run.ID, surface
+		cleanupSurface = agentSurface
+		applyLaunchSurfaces(&invocation, workspace, agentSurface)
+		if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
+			return AgentLaunchResult{}, fmt.Errorf("persist visible terminal handles: %w", err)
+		}
+		if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: workspace.control.ID, Title: "factory run started", Body: fmt.Sprintf("%s %s agent active", plan.Run.ID, plan.Request.Role)}); err != nil {
+			return AgentLaunchResult{}, err
+		}
 	}
-	cleanupSurface = agentSurface
-	applyLaunchSurfaces(&invocation, workspace, agentSurface)
-	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("persist visible terminal handles: %w", err)
-	}
-	if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: workspace.control.ID, Title: "factory run started", Body: fmt.Sprintf("%s %s agent active", plan.Run.ID, plan.Request.Role)}); err != nil {
-		return AgentLaunchResult{}, err
-	}
-	session, updatedInvocation, preserved, err := l.startLaunchHarness(ctx, request, plan, materialised, terminalRuntime, harnessRuntime, invocation, workspace.run.ID, agentSurface)
+	session, updatedInvocation, preserved, err := l.startLaunchHarness(ctx, request, plan, materialised, terminalRuntime, harnessRuntime, invocation, workspaceID, agentSurface)
 	if updatedInvocation.ID != "" {
 		invocation = updatedInvocation
 	}
@@ -1161,7 +1185,11 @@ func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request In
 		invocation.NativeSessionID = session.NativeSessionID
 	}
 	classified := harness.ClassifyError(err, string(plan.Policy.Harness))
-	if diagnostic := writeHarnessFailureDiagnostic(materialised.root, "launch", err, harness.LaunchTranscript(err), l.clock().UTC()); diagnostic != "" {
+	transcript := harness.LaunchTranscript(err)
+	if headlessDiagnostics := harness.HeadlessDiagnostics(err); headlessDiagnostics != "" {
+		transcript = headlessDiagnostics
+	}
+	if diagnostic := writeHarnessFailureDiagnostic(materialised.root, "launch", err, transcript, l.clock().UTC()); diagnostic != "" {
 		classified = fmt.Errorf("%w (launch diagnostic: %s)", classified, diagnostic)
 	}
 	if harness.IsRateLimited(classified) {
@@ -1254,6 +1282,11 @@ func (l *invocationLifecycle) rollbackLaunch(ctx context.Context, runStore RunSt
 			original = fmt.Errorf("%w; durable pending-effect lookup was indeterminate; invocation kept protected: %v", original, err)
 		}
 		if pending != nil {
+			if l.headlessCodexSelected(config.Harness(invocation.Harness)) {
+				cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				_ = l.cancelHeadlessInvocation(cleanupContext, invocation)
+				cancel()
+			}
 			return original
 		}
 	}
@@ -1345,6 +1378,56 @@ func (l *invocationLifecycle) ensureAgentRuntime(socketPath string, selected con
 	}
 	l.harnessRuntimes[selected] = harnessRuntime
 	return terminalRuntime, harnessRuntime, nil
+}
+
+// ensureCoordinatorHarnessRuntime resolves the lifecycle adapter used by
+// coordinator-owned launch, recovery, and acceptance effects. Codex selects
+// the terminal-free seam when available; Claude and explicitly injected
+// adapters retain the transitional interactive path.
+func (l *invocationLifecycle) ensureCoordinatorHarnessRuntime(socketPath string, selected config.Harness) (terminal.TerminalRuntime, harness.Runtime, error) {
+	if l.headlessCodexSelected(selected) {
+		capabilities := l.headlessHarness.Capabilities()
+		if capabilities.Name != string(selected) {
+			return nil, nil, fmt.Errorf("harness %q resolved to %q", selected, capabilities.Name)
+		}
+		return nil, harness.AdaptHeadlessRuntime(l.headlessHarness), nil
+	}
+	return l.ensureAgentRuntime(socketPath, selected)
+}
+
+// headlessCodexSelected reports whether the coordinator should use the
+// terminal-free Codex adapter for a selected role. It centralizes the adapter
+// identity and capability check used by lifecycle cleanup and diagnostics.
+func (l *invocationLifecycle) headlessCodexSelected(selected config.Harness) bool {
+	if selected != config.HarnessCodex || l.harness != nil || l.headlessHarness == nil {
+		return false
+	}
+	return coordinatorUsesHeadless(harness.AdaptHeadlessRuntime(l.headlessHarness))
+}
+
+// coordinatorUsesHeadless reports whether the selected adapter has no
+// terminal topology and therefore must bypass cmux effects.
+func coordinatorUsesHeadless(runtime harness.Runtime) bool {
+	return runtime != nil && runtime.Capabilities().Headless
+}
+
+// classifyHeadlessExit asks the headless adapter to interpret one terminal
+// process projection after liveness has gone false. The returned diagnostics
+// remain local-only; the returned error is already reduced to the factory's
+// typed harness vocabulary.
+func classifyHeadlessExit(runtime harness.Runtime, ctx context.Context, request harness.HeadlessInspectionRequest, harnessName string) (error, string, bool) {
+	if !coordinatorUsesHeadless(runtime) {
+		return nil, "", false
+	}
+	inspector, ok := runtime.(harness.HeadlessFailureInspector)
+	if !ok {
+		return nil, "", false
+	}
+	failure := inspector.HeadlessFailureFor(ctx, request)
+	if failure == nil {
+		return nil, "", false
+	}
+	return harness.ClassifyError(failure, harnessName), harness.HeadlessDiagnostics(failure), true
 }
 
 // credentialSeeding selects the registered, harness-specific source and
@@ -1537,10 +1620,11 @@ func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Cont
 	if err != nil {
 		return invocation, fmt.Errorf("decode specification packet for invocation recovery: %w", err)
 	}
-	terminalRuntime, harnessRuntime, err := l.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+	terminalRuntime, harnessRuntime, err := l.ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
 	if err != nil {
 		return invocation, err
 	}
+	headless := coordinatorUsesHeadless(harnessRuntime)
 	capabilities := harnessRuntime.Capabilities()
 	if capabilities.Name != invocation.Harness {
 		return invocation, fmt.Errorf("harness %q cannot resume persisted %q session", capabilities.Name, invocation.Harness)
@@ -1559,20 +1643,30 @@ func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Cont
 	if err := l.restoreCredentialProjection(ctx, registration, run, invocation); err != nil {
 		return invocation, err
 	}
-	workspaceID, roleSurface, statusSurface, checksSurface, restored, err := l.restoreInvocationTerminal(ctx, terminalRuntime, run, invocation)
-	if err != nil {
-		return invocation, err
-	}
-	if restored {
-		invocation.WorkspaceID = string(workspaceID)
-		invocation.StatusSurfaceID = string(statusSurface.ID)
-		setInvocationSurface(&invocation, roleSurface)
-		invocation.ChecksSurfaceID = string(checksSurface.ID)
-		if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
-			return invocation, fmt.Errorf("persist restored terminal handles: %w", err)
+	restored := false
+	workspaceID := terminal.WorkspaceID("")
+	roleSurface := terminal.Surface{}
+	if !headless {
+		var statusSurface, checksSurface terminal.Surface
+		workspaceID, roleSurface, statusSurface, checksSurface, restored, err = l.restoreInvocationTerminal(ctx, terminalRuntime, run, invocation)
+		if err != nil {
+			return invocation, err
+		}
+		if restored {
+			invocation.WorkspaceID = string(workspaceID)
+			invocation.StatusSurfaceID = string(statusSurface.ID)
+			setInvocationSurface(&invocation, roleSurface)
+			invocation.ChecksSurfaceID = string(checksSurface.ID)
+			if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
+				return invocation, fmt.Errorf("persist restored terminal handles: %w", err)
+			}
 		}
 	}
-	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), WorkspaceID: workspaceID, Surface: roleSurface, Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
+	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
+	if !headless {
+		resumeRequest.WorkspaceID = workspaceID
+		resumeRequest.Surface = roleSurface
+	}
 	if automatic {
 		if l.journal == nil {
 			return invocation, errors.New("harness resume hook is required")
@@ -1670,7 +1764,11 @@ func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, regist
 	}
 	next := run
 	next.Status = store.StatusWaitingForHuman
-	next.LifecycleReason = fmt.Sprintf("automatic harness recovery exhausted (%s); manual resume and attach required", harnessName)
+	manualAction := "manual resume and attach required"
+	if l.headlessCodexSelected(config.Harness(harnessName)) {
+		manualAction = "manual native resume required"
+	}
+	next.LifecycleReason = fmt.Sprintf("automatic harness recovery exhausted (%s); %s", harnessName, manualAction)
 	next.Revision = run.Revision + 1
 	next.UpdatedAt = l.clock().UTC()
 	var err error
@@ -1726,8 +1824,12 @@ func (l *invocationLifecycle) stopActiveRunWorkers(ctx context.Context, runStore
 	}
 	workerIDs := make([]string, 0, len(activeValues))
 	seen := make(map[string]struct{}, len(activeValues))
+	var stopErr error
 	if supported {
 		for _, invocation := range activeValues {
+			if err := l.cancelHeadlessInvocation(ctx, invocation); err != nil {
+				stopErr = errors.Join(stopErr, err)
+			}
 			workerID := workerIDForInvocation(invocation)
 			if _, exists := seen[workerID]; exists {
 				continue
@@ -1741,11 +1843,30 @@ func (l *invocationLifecycle) stopActiveRunWorkers(ctx context.Context, runStore
 	if len(workerIDs) == 0 {
 		workerIDs = append(workerIDs, run.ID)
 	}
-	var stopErr error
 	for _, workerID := range workerIDs {
 		stopErr = errors.Join(stopErr, l.stopRunWorker(ctx, workerID))
 	}
 	return stopErr
+}
+
+// cancelHeadlessInvocation requests process cancellation before its worker is
+// stopped. The worker stop remains the outer idempotent cleanup boundary, but
+// this explicit step lets a detached Codex helper persist its cancelled state
+// for recovery and prevents a later restart from mistaking it for a lost run.
+func (l *invocationLifecycle) cancelHeadlessInvocation(ctx context.Context, invocation store.Invocation) error {
+	if !l.headlessCodexSelected(config.Harness(invocation.Harness)) {
+		return nil
+	}
+	if err := l.headlessHarness.CancelHeadless(ctx, harness.HeadlessSession{
+		InvocationID:    invocation.ID,
+		RunID:           invocation.RunID,
+		WorkerID:        workerIDForInvocation(invocation),
+		Role:            invocation.Role,
+		NativeSessionID: invocation.NativeSessionID,
+	}); err != nil {
+		return fmt.Errorf("cancel headless %s invocation %q: %w", invocation.Harness, invocation.ID, err)
+	}
+	return nil
 }
 
 // ensureInvocationAttached enforces the durable manual-resume gate before
@@ -1803,9 +1924,19 @@ func (l *invocationLifecycle) resetStartupState() {
 	}
 }
 
-// recordSessionExitDiagnostic captures bounded terminal output before recovery
-// stops the worker and returns only the local diagnostic path.
+// recordSessionExitDiagnostic captures adapter-bounded process output before
+// recovery stops the worker and returns only the local diagnostic path.
 func (l *invocationLifecycle) recordSessionExitDiagnostic(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) string {
+	if l.headlessCodexSelected(config.Harness(invocation.Harness)) {
+		_, transcript, classified := classifyHeadlessExit(harness.AdaptHeadlessRuntime(l.headlessHarness), ctx, harness.HeadlessInspectionRequest{
+			InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role,
+		}, invocation.Harness)
+		if classified {
+			cause := fmt.Errorf("%s native session %q exited before reporting", invocation.Harness, invocation.NativeSessionID)
+			return writeHarnessFailureDiagnostic(invocationRoot(run, invocation.ID), "headless session exit", cause, transcript, l.clock().UTC())
+		}
+		return ""
+	}
 	terminalRuntime := l.terminal
 	if terminalRuntime == nil {
 		terminalRuntime, _ = l.ensureTerminalRuntime(registration.Cmux.SocketPath)
@@ -1907,7 +2038,7 @@ func (l *invocationLifecycle) reconcileActiveHarnessLiveness(ctx context.Context
 		if active.AttachRequired || strings.TrimSpace(active.NativeSessionID) == "" {
 			continue
 		}
-		_, harnessRuntime, err := l.ensureAgentRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
+		_, harnessRuntime, err := l.ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
 		if err != nil {
 			return fmt.Errorf("ensure harness for liveness monitoring: %w", err)
 		}
@@ -1915,12 +2046,37 @@ func (l *invocationLifecycle) reconcileActiveHarnessLiveness(ctx context.Context
 		if !ok {
 			continue
 		}
-		running, err := inspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, WorkerID: workerIDForInvocation(active), Harness: active.Harness})
+		running, err := inspector.NativeSessionRunning(ctx, harness.NativeSessionRequest{RunID: run.ID, InvocationID: active.ID, WorkerID: workerIDForInvocation(active), Harness: active.Harness})
 		if err != nil {
 			return fmt.Errorf("check native session liveness: %w", err)
 		}
 		if running {
 			continue
+		}
+		if coordinatorUsesHeadless(harnessRuntime) {
+			presence, presenceErr := structuredReportPresenceForInvocation(active)
+			if presenceErr == nil && presence == structuredReportPresent {
+				// The detached process may have exited after publishing the
+				// authoritative report. Progression owns validation and
+				// acceptance, so recovery must leave this report observable.
+				continue
+			}
+			failure, diagnostics, classified := classifyHeadlessExit(harnessRuntime, ctx, harness.HeadlessInspectionRequest{
+				InvocationID: active.ID, RunID: run.ID, WorkerID: workerIDForInvocation(active), Role: active.Role,
+			}, active.Harness)
+			if classified {
+				if diagnostics != "" {
+					_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, l.clock().UTC())
+				}
+				if harness.IsRateLimited(failure) {
+					_, pauseErr := l.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
+					return pauseErr
+				}
+				if harness.IsAuthenticationExpired(failure) {
+					_, pauseErr := l.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
+					return pauseErr
+				}
+			}
 		}
 		diagnostic := l.recordSessionExitDiagnostic(ctx, registration, run, active)
 		if l.hooks.reconcileInterrupted == nil {

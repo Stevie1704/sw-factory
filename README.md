@@ -3,9 +3,9 @@
 Software Factory is a local, supervised coordinator for taking an authorized
 GitHub issue through an isolated, AI-assisted change process and into a draft
 pull request. It combines a frozen issue and repository policy with a
-host-owned Git workspace, a pinned Docker worker, visible Codex or Claude Code
-sessions, deterministic gates, structured reports, and restart-safe local
-state.
+host-owned Git workspace, a pinned Docker worker, headless Codex or visible
+Claude Code sessions, deterministic gates, structured reports, and restart-safe
+local state.
 
 The command-line coordinator is <code>factory</code>. It is intentionally an
 operator tool, not a hosted service: GitHub remains the source of issue and
@@ -72,10 +72,10 @@ advisory: implementation-owned red/green/refactor -> checkpoint gates -> ...
 ~~~
 
 The coordinator owns workflow state, GitHub projections, worktrees, worker
-identity, terminal surfaces, report validation, checkpoint commits, gates,
-pushes, and draft pull requests. A harness is a visible proposal-maker. It
-does not own workflow transitions, Git history, GitHub mutations, or the final
-interpretation of terminal output.
+identity, optional terminal surfaces, report validation, checkpoint commits,
+gates, pushes, and draft pull requests. A harness is a proposal-maker—headless
+Codex or visible Claude Code. It does not own workflow transitions, Git history,
+GitHub mutations, or the final interpretation of model output.
 
 Factory does not merge pull requests, silently alter repository policy, pull a
 mutable worker image at run time, or delete remote branches during cleanup.
@@ -89,7 +89,7 @@ operational store, GitHub comments, and the documentation.
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Run**                  | One supervised execution for one issue. It owns the frozen packet, branch, worktree, invocations, checkpoints, gates, and pull request.                        |
 | **Specification packet** | The immutable snapshot of the issue, resolved repository policy, and packet version used by an invocation. A clarification or refresh creates a new version.   |
-| **Invocation**           | One visible role-agent execution against a run. It has a role, stage, harness, model, prompt version, worker identity, terminal surface, and result directory. |
+| **Invocation**           | One role-agent execution against a run. It has a role, stage, harness, model, prompt version, worker identity, optional terminal surface, and result directory. |
 | **Worker**               | The pinned Docker execution boundary. It contains the repository worktree and approved tools, but no host GitHub credentials or Git remote.                    |
 | **Surface**              | A visible cmux terminal workspace or role surface used by an invocation.                                                                                       |
 | **Checkpoint**           | An immutable commit used as a stage boundary. Test and implementation checkpoints are separate.                                                                |
@@ -97,7 +97,7 @@ operational store, GitHub comments, and the documentation.
 | **Operational store**    | A private SQLite database that records run state, identities, effects, reports, gate results, and content-free evaluation summaries.                           |
 | **Baseline**             | The pre-edit setup and gate result for the frozen packet. It proves what the repository looked like before agent edits.                                        |
 | **Test objection cycle** | A bounded implementation-to-test dispute: implementation supplies a test claim and evidence, the original test session accepts or rejects it, and an accepted revision must pass independent red verification. Automation is pilot-gated and bounded by the repository's `retry_limits.test_revision` value. |
-| **Recovery diagnosis**   | A read-only comparison of durable state against Git, GitHub, the worktree, worker, terminal, harness, and operational store.                                   |
+| **Recovery diagnosis**   | A read-only comparison of durable state against Git, GitHub, the worktree, worker, optional terminal, harness, and operational store.                                   |
 | **Reconciliation**       | A deliberate restart pass that replays an exact pending effect or pauses for human inspection when external state is ambiguous.                                |
 
 There is only one active non-terminal run per registered repository. Stage and
@@ -222,8 +222,9 @@ Every stage also has an orthogonal status:
 
 ## Prerequisites
 
-Factory is designed for a macOS operator workflow with cmux, Docker, GitHub,
-and a visible agent harness.
+Factory is designed for a macOS operator workflow with Docker, GitHub, and a
+configured agent harness. cmux is required only for mixed or interactive
+Claude/legacy repositories; an all-Codex repository runs headlessly.
 
 You need:
 
@@ -236,7 +237,9 @@ You need:
 4. The GitHub CLI, <code>gh</code>, authenticated to an account that can read
    and update the configured repository, issues, labels, comments, commit
    statuses, and pull requests.
-5. A running cmux session for visible control, run, checks, and role surfaces.
+5. A running cmux session for visible control, run, checks, and role surfaces
+   when the repository uses Claude Code, a legacy interactive adapter, or a
+   mixed harness policy. All-Codex repositories do not require cmux.
 6. At least one configured harness. The checked-in example uses Codex for all
    roles; Claude Code is also supported by the same harness-neutral runtime.
 7. A host authentication source for the selected harness, if that harness
@@ -643,7 +646,7 @@ contains an explicit <code>factory-baseline-target</code> marker permitted by
 the baseline policy. The supported target values are <code>setup</code>,
 <code>test</code>, and <code>all</code>.
 
-### 3. Start the visible role
+### 3. Start the role
 
 Start the role selected by the active stage:
 
@@ -653,14 +656,17 @@ factory agent \
   --run-id <run-id>
 ~~~
 
-The output reports:
+For all-Codex repositories this starts `codex exec --json` inside the pinned
+worker and reports no terminal handles. Claude, mixed, and explicitly
+interactive legacy runs retain their visible terminal surfaces. The output
+reports:
 
 - invocation ID;
 - run ID;
 - role and stage;
 - frozen test policy and workflow route;
-- worker-backed workspace ID; and
-- opaque cmux surface IDs.
+- worker-backed workspace ID, when the role is interactive; and
+- opaque cmux surface IDs, when the role is interactive.
 
 The invocation receives a read-only specification packet at
 <code>/invocation</code> and a writable, invocation-specific results directory

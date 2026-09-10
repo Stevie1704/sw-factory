@@ -49,7 +49,7 @@ func (c *Claude) NativeSessionID(ctx context.Context, request NativeSessionReque
 	if !ok {
 		return "", errors.New("worker runtime does not support native session inspection")
 	}
-	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameClaude})
+	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameClaude})
 }
 
 // NativeSessionRunning reports whether a Claude Code process is still running
@@ -58,7 +58,7 @@ func (c *Claude) NativeSessionRunning(ctx context.Context, request NativeSession
 	if request.Harness != "" && request.Harness != NameClaude {
 		return false, fmt.Errorf("Claude adapter cannot inspect harness %q", request.Harness)
 	}
-	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameClaude}, `[c]laude`)
+	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameClaude}, `[c]laude`)
 }
 
 // Start launches a fresh Claude Code TUI with an adapter-assigned native

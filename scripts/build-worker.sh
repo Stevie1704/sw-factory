@@ -66,6 +66,7 @@ echo "Verifying local image reference $local_reference"
   test -d /work && test -d /git && test -d /cache && test -d /invocation && test -d /results
   test ! -w /run/factory-auth
   test -x /usr/local/bin/factory-report
+  test -x /usr/local/bin/factory-worker-headless
   command -v codex >/dev/null
   command -v claude >/dev/null
   command -v git >/dev/null
@@ -93,6 +94,7 @@ tar -C "$repository_root" \
   --exclude='./.git' \
   --exclude='./.factory-worktrees' \
   --exclude='./.worker-build.*' \
+  --exclude='./.headless-verify.*' \
   --exclude='./.serena' \
   --exclude='./.ua' \
   --exclude='./spike' \
@@ -148,6 +150,9 @@ echo "Running repository setup and gates in $local_reference"
     scripts/worker-go.sh test ./... &&
     scripts/worker-go.sh build -o /tmp/factory ./cmd/factory
   '
+
+echo "Running real headless worker lifecycle verification"
+scripts/verify-headless-worker.sh "$local_reference"
 
 cat <<EOF
 

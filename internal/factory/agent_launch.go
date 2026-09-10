@@ -311,6 +311,12 @@ const harnessFailureDiagnosticName = "harness-failure.log"
 // the harness adapter applies when it captures a failing launch.
 const harnessTranscriptLines = 200
 
+// maxHarnessFailureDiagnosticBytes bounds coordinator-side retained harness
+// output, including output captured after a detached process has exited.
+const maxHarnessFailureDiagnosticBytes = 16 << 10
+
+const harnessDiagnosticTruncationMarker = "\n[truncated]\n"
+
 // writeHarnessFailureDiagnostic records what a harness printed beside its
 // invocation and returns the path it wrote, or an empty string when there was
 // nothing to record. The occasion names why the coordinator captured it, so a
@@ -325,11 +331,29 @@ func writeHarnessFailureDiagnostic(invocationRoot, occasion string, cause error,
 		return ""
 	}
 	path := filepath.Join(invocationRoot, harnessFailureDiagnosticName)
+	transcript = boundHarnessFailureTranscript(transcript)
 	body := fmt.Sprintf("observed at: %s\noccasion: %s\ncause: %v\n\nsurface output:\n%s\n", observedAt.Format(time.RFC3339), occasion, cause, transcript)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		return ""
 	}
 	return path
+}
+
+// boundHarnessFailureTranscript keeps both the beginning and end of a
+// coordinator-side capture. Failure events commonly arrive after a startup
+// banner, so retaining only a prefix can erase the category the coordinator
+// needs to diagnose.
+func boundHarnessFailureTranscript(transcript string) string {
+	if len(transcript) <= maxHarnessFailureDiagnosticBytes {
+		return transcript
+	}
+	retained := maxHarnessFailureDiagnosticBytes - len(harnessDiagnosticTruncationMarker)
+	if retained <= 0 {
+		return harnessDiagnosticTruncationMarker
+	}
+	head := retained / 2
+	tail := retained - head
+	return transcript[:head] + harnessDiagnosticTruncationMarker + transcript[len(transcript)-tail:]
 }
 
 // captureSurfaceTranscript reads a surface's recent output when the terminal

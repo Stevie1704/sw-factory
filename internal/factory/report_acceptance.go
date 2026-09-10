@@ -724,6 +724,8 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 		Harness:    harnessRuntime,
 		Session: harness.Session{
 			InvocationID:    projection.Invocation.ID,
+			RunID:           projection.Invocation.RunID,
+			WorkerID:        workerIDForInvocation(projection.Invocation),
 			NativeSessionID: projection.Invocation.NativeSessionID,
 			Surface:         invocationSurface(projection.Invocation),
 		},
@@ -745,7 +747,7 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 // journal. The harness session is finished first, so a failure leaves the
 // invocation active and the report re-acceptable.
 func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, outcome AcceptanceOutcome, projection acceptanceProjection) error {
-	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, NativeSessionID: projection.Invocation.NativeSessionID, Surface: invocationSurface(*invocation)}); err != nil {
+	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, RunID: invocation.RunID, WorkerID: workerIDForInvocation(*invocation), NativeSessionID: projection.Invocation.NativeSessionID, Surface: invocationSurface(*invocation)}); err != nil {
 		return fmt.Errorf("finish accepted harness session: %w", err)
 	}
 	if snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview {

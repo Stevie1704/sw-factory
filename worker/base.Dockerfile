@@ -12,7 +12,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /factory-report ./cmd/factory-report
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /factory-report ./cmd/factory-report \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /factory-worker-headless ./cmd/factory-worker-headless
 
 FROM node:22-bookworm-slim
 
@@ -42,7 +43,7 @@ RUN npm install --global \
       "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force
 
-# The npm shim always marks Codex as npm-managed, so its TUI opens an
+# The npm shim always marks Codex as npm-managed, so its CLI opens an
 # interactive "Update now (runs `npm install -g @openai/codex`)" prompt on
 # startup. A worker must never mutate its own pinned toolchain, and the prompt
 # also consumes the first keystrokes sent to the harness. Expose the vendored
@@ -54,6 +55,7 @@ RUN set -eu; \
     /usr/local/bin/codex --version
 
 COPY --from=factory-report-builder /factory-report /usr/local/bin/factory-report
+COPY --from=factory-report-builder /factory-worker-headless /usr/local/bin/factory-worker-headless
 
 # The worker adapter supplies this same PATH with env -i. Keep every command
 # used by setup, gates, and harnesses on it without relying on a profile.
@@ -74,7 +76,7 @@ RUN useradd --create-home --uid 10001 --user-group --shell /bin/bash factory \
     && chown -R factory:factory /home/factory /work /git /cache /invocation /results /run/factory-auth \
     && chown root:root /run/factory-auth \
     && chmod 0755 /run/factory-auth \
-    && chmod 0755 /usr/local/bin/factory-report
+    && chmod 0755 /usr/local/bin/factory-report /usr/local/bin/factory-worker-headless
 
 USER factory
 WORKDIR /work

@@ -51,8 +51,8 @@ func TestNativeSessionLivenessIsPartOfTheHarnessContract(t *testing.T) {
 			if dead {
 				t.Fatal("NativeSessionRunning() = true, want an exited process")
 			}
-			if !strings.Contains(workerRuntime.lastRequest.Command, test.marker) || workerRuntime.lastRequest.EnvironmentPolicy != worker.EnvironmentPolicyClean || workerRuntime.lastRequest.Role != "coordinator" {
-				t.Fatalf("liveness command request = %#v, want clean coordinator command for %s", workerRuntime.lastRequest, test.harness)
+			if !strings.Contains(workerRuntime.lastRequest.Command, test.marker) || workerRuntime.lastRequest.EnvironmentPolicy != worker.EnvironmentPolicyClean || workerRuntime.lastRequest.Role != "" {
+				t.Fatalf("liveness command request = %#v, want clean command without a registry role for %s", workerRuntime.lastRequest, test.harness)
 			}
 		})
 	}

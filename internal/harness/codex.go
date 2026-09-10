@@ -26,7 +26,7 @@ func NewCodex(runtime worker.WorkerRuntime, terminalRuntime terminal.TerminalRun
 
 // Capabilities reports the Codex adapter identity and native resume support.
 func (*Codex) Capabilities() Capabilities {
-	return Capabilities{Name: NameCodex, InteractiveResume: true}
+	return codexCapabilities(false)
 }
 
 // NativeSessionID returns the Codex session identity observed in the worker's
@@ -40,7 +40,7 @@ func (c *Codex) NativeSessionID(ctx context.Context, request NativeSessionReques
 	if !ok {
 		return "", errors.New("worker runtime does not support native session inspection")
 	}
-	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+	return provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 }
 
 // NativeSessionRunning reports whether a Codex process is still running in
@@ -49,7 +49,7 @@ func (c *Codex) NativeSessionRunning(ctx context.Context, request NativeSessionR
 	if request.Harness != "" && request.Harness != NameCodex {
 		return false, fmt.Errorf("Codex adapter cannot inspect harness %q", request.Harness)
 	}
-	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex}, `[c]odex`)
+	return nativeSessionRunning(ctx, c.Worker, NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex}, `[c]odex`)
 }
 
 // Start launches a fresh Codex TUI in a worker-backed terminal surface.
@@ -100,13 +100,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	// keeps the frozen, fenced copy the only guidance channel. It bounds project
 	// documents alone; the pinned worker skill set lives in the role home and
 	// stays available.
-	command := []string{"codex", "-a", "never", "-s", "danger-full-access", "-c", "project_doc_max_bytes=0"}
-	if request.Model != "" {
-		command = append(command, "-m", request.Model)
-	}
-	if request.ReasoningEffort != "" {
-		command = append(command, "-c", "model_reasoning_effort="+request.ReasoningEffort)
-	}
+	command := codexCommandOptions([]string{"codex", "-a", "never"}, request.Model, request.ReasoningEffort)
 	if request.ResumeSessionID != "" {
 		command = append(command, "resume", request.ResumeSessionID)
 	}
@@ -131,7 +125,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	if request.ResumeSessionID == "" {
 		if provider, ok := c.Worker.(worker.NativeSessionSnapshotProvider); ok {
 			snapshotProvider = provider
-			baseline, err = provider.NativeSessionIDs(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+			baseline, err = provider.NativeSessionIDs(ctx, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if err != nil {
 				return Session{}, fmt.Errorf("snapshot Codex native sessions: %w", err)
 			}
@@ -144,7 +138,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 	nativeSessionID := request.ResumeSessionID
 	if nativeSessionID == "" {
 		if snapshotProvider != nil {
-			discovered, discoverErr := discoverNativeSession(ctx, snapshotProvider, baseline, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+			discovered, discoverErr := discoverNativeSession(ctx, snapshotProvider, baseline, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if discoverErr != nil {
 				// Codex reports why it could not start on its surface, so the
 				// transcript is captured before the surface is closed.
@@ -154,7 +148,7 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 			}
 			nativeSessionID = discovered
 		} else if provider, ok := c.Worker.(worker.NativeSessionProvider); ok {
-			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, WorkerID: request.WorkerID, Harness: NameCodex})
+			discovered, discoverErr := provider.NativeSessionID(ctx, worker.NativeSessionRequest{RunID: request.RunID, InvocationID: request.InvocationID, WorkerID: request.WorkerID, Harness: NameCodex})
 			if discoverErr != nil {
 				failure := captureLaunchFailure(ctx, c.Terminal, surface.ID, fmt.Errorf("discover Codex native session: %w", discoverErr))
 				_ = c.Terminal.CloseSurface(ctx, surface.ID)
@@ -164,6 +158,27 @@ func (c *Codex) launch(ctx context.Context, request StartRequest) (Session, erro
 		}
 	}
 	return Session{InvocationID: request.InvocationID, NativeSessionID: nativeSessionID, Surface: surface}, nil
+}
+
+// codexCapabilities describes one Codex protocol surface without duplicating
+// the identity and native-resume fields between interactive and headless
+// adapters.
+func codexCapabilities(headless bool) Capabilities {
+	return Capabilities{Name: NameCodex, InteractiveResume: true, Headless: headless}
+}
+
+// codexCommandOptions appends the factory-owned Codex execution options shared
+// by interactive and headless launches. The caller supplies the surface-specific
+// command prefix and this function adds only validated policy values.
+func codexCommandOptions(command []string, model, reasoningEffort string) []string {
+	command = append(command, "-s", "danger-full-access", "-c", "project_doc_max_bytes=0")
+	if model != "" {
+		command = append(command, "-m", model)
+	}
+	if reasoningEffort != "" {
+		command = append(command, "-c", "model_reasoning_effort="+reasoningEffort)
+	}
+	return command
 }
 
 var _ Runtime = (*Codex)(nil)

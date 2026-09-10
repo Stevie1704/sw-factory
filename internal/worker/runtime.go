@@ -209,6 +209,10 @@ type CredentialSeedRequest struct {
 type NativeSessionRequest struct {
 	// RunID selects the worker whose role home is inspected.
 	RunID string
+	// InvocationID selects the headless process state belonging to one
+	// invocation. Interactive session discovery may leave it empty for
+	// compatibility with older workers.
+	InvocationID string
 	// WorkerID optionally selects the worker whose role home is inspected.
 	WorkerID string
 	// Harness identifies the session format being inspected.
@@ -688,7 +692,6 @@ func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSess
 		WorkerID:          request.WorkerID,
 		Command:           command,
 		EnvironmentPolicy: EnvironmentPolicyClean,
-		Role:              "coordinator",
 	})
 	if err != nil {
 		return nil, err
@@ -1545,10 +1548,14 @@ func validateCommandRequest(request CommandRequest) error {
 	if request.EnvironmentPolicy != EnvironmentPolicyClean && request.EnvironmentPolicy != EnvironmentPolicyRole {
 		return errors.New("worker environment policy must be clean or role")
 	}
-	if strings.TrimSpace(request.Role) == "" {
-		return errors.New("worker command role is required")
-	}
-	if !validName(request.Role) {
+	if request.EnvironmentPolicy == EnvironmentPolicyRole {
+		if strings.TrimSpace(request.Role) == "" {
+			return errors.New("worker command role is required")
+		}
+		if !validName(request.Role) {
+			return fmt.Errorf("worker command role %q contains unsafe characters", request.Role)
+		}
+	} else if request.Role != "" && !validName(request.Role) {
 		return fmt.Errorf("worker command role %q contains unsafe characters", request.Role)
 	}
 	for name, value := range request.Environment {
