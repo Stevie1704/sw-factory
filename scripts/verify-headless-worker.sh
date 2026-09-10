@@ -344,6 +344,30 @@ verify_harness() {
   echo "  native resume verified"
 }
 
+# assert_claude_loads_curated_skills runs the real pinned Claude Code binary in
+# the offline container. Asserting that the skill files exist would only prove
+# the image copied them; the harness's own init event is the only evidence that
+# a non-interactive launch actually discovers every curated skill. The run needs
+# no credential: the init event is emitted before the request that fails.
+assert_claude_loads_curated_skills() {
+  echo "Verifying that the pinned Claude Code binary discovers the curated skills"
+  stream="$temporary_root/claude-init.jsonl"
+  "$DOCKER" exec "$container_name" /bin/sh -c \
+    "claude -p --output-format stream-json --verbose \
+       --dangerously-skip-permissions --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' \
+       --session-id 5d1f2a83-0c4e-4f7a-9b2e-6a1c8d3e5f70 'noop' 2>/dev/null" > "$stream" || true
+  for skill in $("$DOCKER" exec "$container_name" ls /home/factory/.claude/skills); do
+    if ! jq -e --arg skill "$skill" \
+        'select(.type == "system" and .subtype == "init") | any(.skills[]?; . == $skill)' \
+        "$stream" >/dev/null; then
+      echo "the pinned Claude Code binary did not load the curated skill $skill" >&2
+      exit 1
+    fi
+  done
+  echo "  every curated worker skill reached the harness skill catalog"
+}
+
 verify_harness codex headless-verification-session '"type":"thread.started"'
 verify_harness claude 8f14e45f-ceea-467a-9575-1b0a4b2a4bd9 '"subtype":"init"'
+assert_claude_loads_curated_skills
 echo "Headless worker lifecycle verification passed for $WORKER_REFERENCE"
