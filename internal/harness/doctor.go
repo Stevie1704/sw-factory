@@ -40,7 +40,7 @@ func (e *CapabilityError) Error() string {
 func CapabilitiesFor(name string) (Capabilities, error) {
 	switch strings.TrimSpace(name) {
 	case NameCodex:
-		return Capabilities{Name: NameCodex, InteractiveResume: true, Headless: true}, nil
+		return (&Codex{}).Capabilities(), nil
 	case NameClaude:
 		return (&Claude{}).Capabilities(), nil
 	default:
@@ -154,27 +154,13 @@ func interactiveResumeCheck(request StartupRequest) doctor.Check {
 		if err := ValidateInteractiveResumeCapabilities(*policy, request.Resolve); err != nil {
 			return doctor.Failure("harness capability", err.Error(), "select an adapter with interactive resume support for every declared role")
 		}
-		if allRolesUseCodex(*policy) && request.HeadlessChecker != nil {
+		if config.AllRolesUseHarness(*policy, config.HarnessCodex) && request.HeadlessChecker != nil {
 			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {
 				return doctor.Failure("harness capability", "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
 			}
 		}
 		return doctor.Success("harness capability")
 	}
-}
-
-// allRolesUseCodex identifies the repository policy that can run without any
-// terminal topology. A mixed policy retains cmux for its Claude roles.
-func allRolesUseCodex(policy config.RepositoryConfig) bool {
-	if len(policy.RoleHarnessDefaults) == 0 {
-		return false
-	}
-	for _, selected := range policy.RoleHarnessDefaults {
-		if selected != config.HarnessCodex {
-			return false
-		}
-	}
-	return true
 }
 
 // executableCheck probes one selected harness in the exact pinned image.

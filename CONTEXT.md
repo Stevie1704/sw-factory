@@ -91,6 +91,15 @@ _Avoid_: Agent check, review
 The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, explicitly declared repository caches, and factory-managed credential copies.
 _Avoid_: Container in workflow decisions
 
+**Headless process seam**:
+The ADR 0008 worker-owned boundary for a terminal-free harness process. A
+`HeadlessRuntime` starts, resumes, inspects, cancels, and finishes one detached
+process inside the isolated worker; it owns process state and bounded output,
+while the coordinator receives only adapter-neutral lifecycle observations and
+typed outcomes. It never starts a harness process on the coordinator host or
+creates terminal topology.
+_Avoid_: Host-side agent, coordinator-owned PID, detached terminal
+
 **Worker skill set**:
 The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
 _Avoid_: Personal skill, installed skill

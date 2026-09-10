@@ -145,6 +145,24 @@ func TestCodexHeadlessClassifiesOnlyMachineReadableFailureCodes(t *testing.T) {
 	}
 }
 
+// TestCodexHeadlessClassifiesPostLaunchTurnFailures verifies the same typed
+// outcome path remains available after thread.started has already been seen.
+func TestCodexHeadlessClassifiesPostLaunchTurnFailures(t *testing.T) {
+	workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{
+		Status:   worker.HeadlessStatusExited,
+		ExitCode: 1,
+		Stdout: `{"type":"thread.started","thread_id":"` + headlessTestSession + `"}
+{"type":"turn.failed","error":{"message":"request exceeded the rate limit"}}
+`,
+	}}
+	err := harness.NewCodexHeadless(workerRuntime).HeadlessFailureFor(context.Background(), harness.HeadlessInspectionRequest{
+		InvocationID: "inv-headless-post-launch", RunID: "run-headless", WorkerID: "worker-headless",
+	})
+	if !errors.Is(err, harness.ErrRateLimited) {
+		t.Fatalf("HeadlessFailureFor() = %v, want rate-limited outcome", err)
+	}
+}
+
 // TestCodexHeadlessMapsLaunchFailuresToTheExistingTypedOutcome verifies a
 // worker launch failure cannot expose native or Docker prose as coordinator
 // error text.

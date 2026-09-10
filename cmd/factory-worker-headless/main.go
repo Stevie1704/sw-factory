@@ -29,7 +29,19 @@ const (
 	stateStdoutLimit  = "stdout_truncated"
 	stateStderrLimit  = "stderr_truncated"
 	stateCancelMarker = "cancelled"
+	stateLock         = "lock"
 	inspectionBytes   = 512 << 10
+)
+
+const outputTruncationMarker = "\n[...output truncated...]\n"
+
+var (
+	// headlessCancellationGrace is the time allowed for a detached process to
+	// handle SIGTERM before the helper escalates to SIGKILL.
+	headlessCancellationGrace = 5 * time.Second
+	// headlessCancellationPoll is the interval between process liveness checks
+	// during graceful termination and forced termination.
+	headlessCancellationPoll = 50 * time.Millisecond
 )
 
 // processStatus is the on-disk spelling shared with worker.HeadlessStatus.
@@ -46,12 +58,18 @@ const (
 
 // inspectionWire is the bounded JSON response consumed by the worker adapter.
 type inspectionWire struct {
-	Status          string `json:"status"`
-	ExitCode        int    `json:"exit_code"`
-	Stdout          string `json:"stdout"`
-	Stderr          string `json:"stderr"`
-	StdoutTruncated bool   `json:"stdout_truncated"`
-	StderrTruncated bool   `json:"stderr_truncated"`
+	// Status is the helper-owned process lifecycle state.
+	Status string `json:"status"`
+	// ExitCode is the child process exit code after termination.
+	ExitCode int `json:"exit_code"`
+	// Stdout is bounded machine-readable child output encoded as base64.
+	Stdout string `json:"stdout"`
+	// Stderr is bounded child diagnostic output encoded as base64.
+	Stderr string `json:"stderr"`
+	// StdoutTruncated reports that stdout exceeded the retained bound.
+	StdoutTruncated bool `json:"stdout_truncated"`
+	// StderrTruncated reports that stderr exceeded the retained bound.
+	StderrTruncated bool `json:"stderr_truncated"`
 }
 
 // main dispatches the fixed helper operations and keeps errors on stderr so
@@ -109,13 +127,23 @@ func runProcess(arguments []string) error {
 	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
 		return fmt.Errorf("create headless state: %w", err)
 	}
+	releaseStateLock, err := acquireStateLock(*stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = releaseStateLock() }()
+	status, err := readStatus(*stateDir)
+	if err != nil {
+		return err
+	}
 	if !*replace {
-		status, err := readStatus(*stateDir)
-		if err != nil {
-			return err
-		}
 		if status != statusMissing && status != statusLost {
 			return fmt.Errorf("headless process already has state %q", status)
+		}
+	} else if status == statusStarting || status == statusRunning || status == statusCancelled {
+		pid, pidErr := readPID(*stateDir)
+		if pidErr == nil && processAlive(pid) {
+			return errors.New("cannot replace a headless process that is still running")
 		}
 	}
 	if err := clearStateForReplacement(*stateDir); err != nil {
@@ -144,8 +172,10 @@ func runProcess(arguments []string) error {
 	defer func() { _ = stderr.Close() }()
 
 	commandProcess := exec.Command(command[0], command[1:]...)
-	commandProcess.Stdout = &boundedFileWriter{file: stdout, limit: worker.MaxCapturedOutputBytes}
-	commandProcess.Stderr = &boundedFileWriter{file: stderr, limit: worker.MaxCapturedOutputBytes}
+	stdoutWriter := &boundedFileWriter{file: stdout, limit: worker.MaxCapturedOutputBytes}
+	stderrWriter := &boundedFileWriter{file: stderr, limit: worker.MaxCapturedOutputBytes}
+	commandProcess.Stdout = stdoutWriter
+	commandProcess.Stderr = stderrWriter
 	commandProcess.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := commandProcess.Start(); err != nil {
 		_, _ = stderr.WriteString("process start failed\n")
@@ -167,33 +197,37 @@ func runProcess(arguments []string) error {
 	if readBoolean(statePath(*stateDir, stateCancelMarker)) {
 		_ = terminate(commandProcess.Process.Pid)
 	}
+	if err := releaseStateLock(); err != nil {
+		_ = killProcess(commandProcess.Process.Pid)
+		return err
+	}
 
 	wait := make(chan error, 1)
 	go func() { wait <- commandProcess.Wait() }()
 	interrupt := make(chan os.Signal, 1)
-	signalNotify(interrupt)
-	defer signalStop(interrupt)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
 	var waitErr error
 	select {
 	case waitErr = <-wait:
 	case <-interrupt:
 		_ = writeState(*stateDir, stateCancelMarker, "1")
 		_ = terminate(commandProcess.Process.Pid)
-		waitErr = <-wait
+		waitErr = waitForCommandExit(wait, commandProcess.Process.Pid)
 	}
 
+	_ = stdoutWriter.finalize()
+	_ = stderrWriter.finalize()
 	if _, err := os.Stat(statePath(*stateDir, stateCancelMarker)); err == nil {
 		_ = writeState(*stateDir, stateStatus, string(statusCancelled))
 	} else {
 		_ = writeState(*stateDir, stateStatus, string(statusExited))
 	}
 	_ = writeState(*stateDir, stateExitCode, strconv.Itoa(exitCode(waitErr)))
-	writer, _ := commandProcess.Stdout.(*boundedFileWriter)
-	if writer != nil && writer.truncated {
+	if stdoutWriter.truncated {
 		_ = writeState(*stateDir, stateStdoutLimit, "1")
 	}
-	errorWriter, _ := commandProcess.Stderr.(*boundedFileWriter)
-	if errorWriter != nil && errorWriter.truncated {
+	if stderrWriter.truncated {
 		_ = writeState(*stateDir, stateStderrLimit, "1")
 	}
 	return nil
@@ -210,11 +244,14 @@ func inspectProcess(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	if status == statusStarting || status == statusRunning {
+	if status == statusStarting || status == statusRunning || status == statusCancelled {
 		pid, pidErr := readPID(stateDir)
 		if pidErr == nil && processAlive(pid) {
 			status = statusRunning
-		} else if pidErr == nil {
+			if readStatusValue, _ := readStatus(stateDir); readStatusValue == statusCancelled {
+				_ = writeState(stateDir, stateStatus, string(statusRunning))
+			}
+		} else if pidErr == nil && status != statusCancelled {
 			status = statusLost
 			_ = writeState(stateDir, stateStatus, string(statusLost))
 		}
@@ -235,18 +272,37 @@ func inspectProcess(arguments []string) error {
 	return json.NewEncoder(os.Stdout).Encode(wire)
 }
 
-// cancelProcess signals a running detached command and returns once its state
-// is terminal or the bounded cancellation wait expires.
+// cancelProcess signals a running detached command and returns only after the
+// child has stopped. It escalates from SIGTERM to SIGKILL and leaves the state
+// running when the process cannot be proven dead.
 func cancelProcess(arguments []string) error {
 	stateDir, err := parseStateDir(arguments)
 	if err != nil {
 		return err
 	}
+	if _, err := os.Stat(stateDir); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			return fmt.Errorf("create headless state for cancellation: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("inspect headless state directory: %w", err)
+	}
+	releaseStateLock, err := acquireStateLock(stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = releaseStateLock() }()
 	status, err := readStatus(stateDir)
 	if err != nil {
 		return err
 	}
 	if status != statusStarting && status != statusRunning {
+		if status == statusMissing {
+			// Reserve cancellation before a detached helper creates its state.
+			// A concurrent launcher waits on the same lock and will reject the
+			// cancelled reservation instead of starting after this command returns.
+			return writeState(stateDir, stateStatus, string(statusCancelled))
+		}
 		return nil
 	}
 	pid, err := readPID(stateDir)
@@ -255,19 +311,13 @@ func cancelProcess(arguments []string) error {
 		return nil
 	}
 	_ = writeState(stateDir, stateCancelMarker, "1")
-	if processAlive(pid) {
-		_ = terminate(pid)
+	if err := releaseStateLock(); err != nil {
+		return err
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if !processAlive(pid) {
-			_ = writeState(stateDir, stateStatus, string(statusCancelled))
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
+	if err := cancelPID(pid); err != nil {
+		return err
 	}
-	_ = writeState(stateDir, stateStatus, string(statusCancelled))
-	return nil
+	return writeState(stateDir, stateStatus, string(statusCancelled))
 }
 
 // parseStateDir parses the one fixed helper path argument.
@@ -308,6 +358,31 @@ func clearStateForReplacement(stateDir string) error {
 		}
 	}
 	return nil
+}
+
+// acquireStateLock serializes the launch reservation and cancellation marker
+// update across detached helper processes. The kernel releases the advisory
+// lock if a helper is killed, so a coordinator restart cannot inherit a stale
+// lock directory.
+func acquireStateLock(stateDir string) (func() error, error) {
+	file, err := os.OpenFile(statePath(stateDir, stateLock), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open headless state lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock headless state: %w", err)
+	}
+	released := false
+	return func() error {
+		if released {
+			return nil
+		}
+		released = true
+		unlockErr := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		closeErr := file.Close()
+		return errors.Join(unlockErr, closeErr)
+	}, nil
 }
 
 // readStatus reads the durable state marker, treating an absent state as
@@ -371,7 +446,23 @@ func readBounded(path string, limit int) ([]byte, bool) {
 	if len(data) <= limit {
 		return data, false
 	}
-	return data[:limit], true
+	if limit <= 0 {
+		return nil, true
+	}
+	marker := []byte(outputTruncationMarker)
+	if limit <= len(marker) {
+		return append([]byte(nil), marker[:limit]...), true
+	}
+	retained := limit - len(marker)
+	headLimit := retained / 2
+	tailLimit := retained - headLimit
+	result := make([]byte, 0, headLimit+len(marker)+tailLimit)
+	result = append(result, data[:headLimit]...)
+	result = append(result, marker...)
+	if tailLimit > 0 {
+		result = append(result, data[len(data)-tailLimit:]...)
+	}
+	return result, true
 }
 
 // writeState atomically replaces one small state marker.
@@ -411,6 +502,25 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+// cancelPID stops one detached command without claiming success while its
+// process is still observable. It first gives the process group a graceful
+// window, then escalates to SIGKILL and reports an unresolved process to the
+// caller rather than publishing a false terminal state.
+func cancelPID(pid int) error {
+	if !processAlive(pid) {
+		return nil
+	}
+	_ = terminate(pid)
+	if waitForProcessExit(pid, headlessCancellationGrace) {
+		return nil
+	}
+	_ = killProcess(pid)
+	if waitForProcessExit(pid, headlessCancellationGrace) {
+		return nil
+	}
+	return errors.New("headless process did not stop after cancellation")
+}
+
 // terminate sends a graceful signal to the command's process group and then
 // falls back to the direct child when a platform does not expose the group.
 func terminate(pid int) error {
@@ -418,6 +528,44 @@ func terminate(pid int) error {
 		return nil
 	}
 	return syscall.Kill(pid, syscall.SIGTERM)
+}
+
+// killProcess forcefully terminates a command's process group and falls back
+// to the direct child on platforms without process-group support.
+func killProcess(pid int) error {
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err == nil {
+		return nil
+	}
+	return syscall.Kill(pid, syscall.SIGKILL)
+}
+
+// waitForProcessExit polls until the process disappears or the supplied grace
+// period expires.
+func waitForProcessExit(pid int, grace time.Duration) bool {
+	deadline := time.Now().Add(grace)
+	for {
+		if !processAlive(pid) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(headlessCancellationPoll)
+	}
+}
+
+// waitForCommandExit waits for a supervisor child and escalates when it ignores
+// SIGTERM, keeping the helper itself responsive to cancellation.
+func waitForCommandExit(wait <-chan error, pid int) error {
+	timer := time.NewTimer(headlessCancellationGrace)
+	defer timer.Stop()
+	select {
+	case err := <-wait:
+		return err
+	case <-timer.C:
+		_ = killProcess(pid)
+		return <-wait
+	}
 }
 
 // exitCode maps command wait failures to a stable shell-like code.
@@ -435,40 +583,104 @@ func exitCode(err error) int {
 	return 1
 }
 
-// boundedFileWriter drains a native process stream while retaining only the
-// configured prefix, preventing a runaway process from blocking on a pipe.
+// boundedFileWriter drains a native process stream while retaining its head
+// and tail, preventing a runaway process from blocking on a pipe.
 type boundedFileWriter struct {
 	file      *os.File
 	limit     int
-	written   int
+	head      []byte
+	tail      []byte
+	total     int
 	truncated bool
+	finalized bool
 }
 
-// Write persists at most the configured prefix and reports a complete write so
-// the child process can continue draining output after the bound is reached.
+// Write drains the complete native stream while retaining its head and tail,
+// so a late failure event remains inspectable after the capture bound is hit.
 func (w *boundedFileWriter) Write(data []byte) (int, error) {
 	originalLength := len(data)
-	remaining := w.limit - w.written
-	if remaining <= 0 {
-		w.truncated = true
+	if w.limit <= 0 {
+		w.total += originalLength
+		w.truncated = w.total > w.limit
 		return originalLength, nil
 	}
-	if len(data) > remaining {
-		w.truncated = true
-		data = data[:remaining]
+	headLimit := boundedHeadLimit(w.limit)
+	if remaining := headLimit - len(w.head); remaining > 0 {
+		count := remaining
+		if count > len(data) {
+			count = len(data)
+		}
+		w.head = append(w.head, data[:count]...)
+		if _, err := w.file.Write(data[:count]); err != nil {
+			return originalLength, err
+		}
+		data = data[count:]
 	}
-	written, err := w.file.Write(data)
-	w.written += written
-	return originalLength, err
+	tailLimit := w.limit - headLimit
+	if len(data) > 0 && tailLimit > 0 {
+		w.tail = append(w.tail, data...)
+		if len(w.tail) > tailLimit {
+			w.tail = append([]byte(nil), w.tail[len(w.tail)-tailLimit:]...)
+		}
+	}
+	w.total += originalLength
+	w.truncated = w.total > w.limit
+	return originalLength, nil
 }
 
-// signalNotify and signalStop keep signal setup isolated for the helper's
-// short-lived detached process supervisor.
-func signalNotify(channel chan<- os.Signal) {
-	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
+// finalize publishes the retained head and tail to the state file after the
+// child exits. The file remains bounded while the pipe is being drained.
+func (w *boundedFileWriter) finalize() error {
+	if w.finalized || w.file == nil {
+		return nil
+	}
+	w.finalized = true
+	if _, err := w.file.Seek(0, 0); err != nil {
+		return err
+	}
+	if err := w.file.Truncate(0); err != nil {
+		return err
+	}
+	marker := []byte(outputTruncationMarker)
+	if w.truncated && w.limit <= len(marker) {
+		if w.limit <= 0 {
+			return nil
+		}
+		_, err := w.file.Write(marker[:w.limit])
+		return err
+	}
+	if _, err := w.file.Write(w.head); err != nil {
+		return err
+	}
+	tail := w.tail
+	if w.truncated {
+		if w.limit <= 0 {
+			return nil
+		}
+		if _, err := w.file.Write(marker); err != nil {
+			return err
+		}
+		tailLimit := w.limit - len(w.head) - len(marker)
+		if tailLimit < 0 {
+			tailLimit = 0
+		}
+		if len(tail) > tailLimit {
+			tail = tail[len(tail)-tailLimit:]
+		}
+	}
+	_, err := w.file.Write(tail)
+	return err
 }
 
-// signalStop unregisters helper signal delivery.
-func signalStop(channel chan<- os.Signal) {
-	signal.Stop(channel)
+// boundedHeadLimit leaves enough room for the truncation marker when a small
+// capture limit is used. Normal production limits still split retained bytes
+// evenly between the head and tail.
+func boundedHeadLimit(limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if limit <= len(outputTruncationMarker) {
+		return limit / 2
+	}
+	return (limit - len(outputTruncationMarker)) / 2
 }

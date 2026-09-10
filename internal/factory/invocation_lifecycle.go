@@ -203,17 +203,13 @@ var _ InvocationLifecycle = (*invocationLifecycle)(nil)
 
 // newInvocationLifecycle constructs the module from explicit adapters and
 // hooks. It intentionally accepts only explicit adapters and effects.
-func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks, headless ...harness.HeadlessRuntime) *invocationLifecycle {
+func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks, headless harness.HeadlessRuntime) *invocationLifecycle {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
-	var headlessRuntime harness.HeadlessRuntime
-	if len(headless) != 0 {
-		headlessRuntime = headless[0]
-	}
 	return &invocationLifecycle{
 		journal: journal, worker: workerRuntime, terminal: terminalRuntime, harness: harnessRuntime,
-		headlessHarness:     headlessRuntime,
+		headlessHarness:     headless,
 		harnessCapabilities: capabilities, worktree: worktree, clock: clock, hooks: hooks,
 		harnessRuntimes: make(map[config.Harness]harness.Runtime, 2),
 	}
@@ -1286,6 +1282,11 @@ func (l *invocationLifecycle) rollbackLaunch(ctx context.Context, runStore RunSt
 			original = fmt.Errorf("%w; durable pending-effect lookup was indeterminate; invocation kept protected: %v", original, err)
 		}
 		if pending != nil {
+			if l.headlessCodexSelected(config.Harness(invocation.Harness)) {
+				cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				_ = l.cancelHeadlessInvocation(cleanupContext, invocation)
+				cancel()
+			}
 			return original
 		}
 	}
@@ -1384,7 +1385,7 @@ func (l *invocationLifecycle) ensureAgentRuntime(socketPath string, selected con
 // the terminal-free seam when available; Claude and explicitly injected
 // adapters retain the transitional interactive path.
 func (l *invocationLifecycle) ensureCoordinatorHarnessRuntime(socketPath string, selected config.Harness) (terminal.TerminalRuntime, harness.Runtime, error) {
-	if selected == config.HarnessCodex && l.harness == nil && l.headlessHarness != nil {
+	if l.headlessCodexSelected(selected) {
 		capabilities := l.headlessHarness.Capabilities()
 		if capabilities.Name != string(selected) {
 			return nil, nil, fmt.Errorf("harness %q resolved to %q", selected, capabilities.Name)
@@ -1394,10 +1395,39 @@ func (l *invocationLifecycle) ensureCoordinatorHarnessRuntime(socketPath string,
 	return l.ensureAgentRuntime(socketPath, selected)
 }
 
+// headlessCodexSelected reports whether the coordinator should use the
+// terminal-free Codex adapter for a selected role. It centralizes the adapter
+// identity and capability check used by lifecycle cleanup and diagnostics.
+func (l *invocationLifecycle) headlessCodexSelected(selected config.Harness) bool {
+	if selected != config.HarnessCodex || l.harness != nil || l.headlessHarness == nil {
+		return false
+	}
+	return coordinatorUsesHeadless(harness.AdaptHeadlessRuntime(l.headlessHarness))
+}
+
 // coordinatorUsesHeadless reports whether the selected adapter has no
 // terminal topology and therefore must bypass cmux effects.
 func coordinatorUsesHeadless(runtime harness.Runtime) bool {
 	return runtime != nil && runtime.Capabilities().Headless
+}
+
+// classifyHeadlessExit asks the headless adapter to interpret one terminal
+// process projection after liveness has gone false. The returned diagnostics
+// remain local-only; the returned error is already reduced to the factory's
+// typed harness vocabulary.
+func classifyHeadlessExit(runtime harness.Runtime, ctx context.Context, request harness.HeadlessInspectionRequest, harnessName string) (error, string, bool) {
+	if !coordinatorUsesHeadless(runtime) {
+		return nil, "", false
+	}
+	inspector, ok := runtime.(harness.HeadlessFailureInspector)
+	if !ok {
+		return nil, "", false
+	}
+	failure := inspector.HeadlessFailureFor(ctx, request)
+	if failure == nil {
+		return nil, "", false
+	}
+	return harness.ClassifyError(failure, harnessName), harness.HeadlessDiagnostics(failure), true
 }
 
 // credentialSeeding selects the registered, harness-specific source and
@@ -1735,7 +1765,7 @@ func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, regist
 	next := run
 	next.Status = store.StatusWaitingForHuman
 	manualAction := "manual resume and attach required"
-	if l.headlessHarness != nil && l.harness == nil && harnessName == string(config.HarnessCodex) {
+	if l.headlessCodexSelected(config.Harness(harnessName)) {
 		manualAction = "manual native resume required"
 	}
 	next.LifecycleReason = fmt.Sprintf("automatic harness recovery exhausted (%s); %s", harnessName, manualAction)
@@ -1824,7 +1854,7 @@ func (l *invocationLifecycle) stopActiveRunWorkers(ctx context.Context, runStore
 // this explicit step lets a detached Codex helper persist its cancelled state
 // for recovery and prevents a later restart from mistaking it for a lost run.
 func (l *invocationLifecycle) cancelHeadlessInvocation(ctx context.Context, invocation store.Invocation) error {
-	if l.headlessHarness == nil || l.harness != nil || invocation.Harness != string(config.HarnessCodex) {
+	if !l.headlessCodexSelected(config.Harness(invocation.Harness)) {
 		return nil
 	}
 	if err := l.headlessHarness.CancelHeadless(ctx, harness.HeadlessSession{
@@ -1894,21 +1924,14 @@ func (l *invocationLifecycle) resetStartupState() {
 	}
 }
 
-// recordSessionExitDiagnostic captures bounded terminal output before recovery
-// stops the worker and returns only the local diagnostic path.
+// recordSessionExitDiagnostic captures adapter-bounded process output before
+// recovery stops the worker and returns only the local diagnostic path.
 func (l *invocationLifecycle) recordSessionExitDiagnostic(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) string {
-	if invocation.Harness == string(config.HarnessCodex) && l.harness == nil && l.headlessHarness != nil {
-		inspection, err := l.headlessHarness.InspectHeadless(ctx, harness.HeadlessInspectionRequest{
+	if l.headlessCodexSelected(config.Harness(invocation.Harness)) {
+		_, transcript, classified := classifyHeadlessExit(harness.AdaptHeadlessRuntime(l.headlessHarness), ctx, harness.HeadlessInspectionRequest{
 			InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role,
-		})
-		if err == nil {
-			transcript := strings.TrimSpace(inspection.Stdout)
-			if strings.TrimSpace(inspection.Stderr) != "" {
-				if transcript != "" {
-					transcript += "\n"
-				}
-				transcript += "stderr: " + strings.TrimSpace(inspection.Stderr)
-			}
+		}, invocation.Harness)
+		if classified {
 			cause := fmt.Errorf("%s native session %q exited before reporting", invocation.Harness, invocation.NativeSessionID)
 			return writeHarnessFailureDiagnostic(invocationRoot(run, invocation.ID), "headless session exit", cause, transcript, l.clock().UTC())
 		}
@@ -2037,6 +2060,22 @@ func (l *invocationLifecycle) reconcileActiveHarnessLiveness(ctx context.Context
 				// authoritative report. Progression owns validation and
 				// acceptance, so recovery must leave this report observable.
 				continue
+			}
+			failure, diagnostics, classified := classifyHeadlessExit(harnessRuntime, ctx, harness.HeadlessInspectionRequest{
+				InvocationID: active.ID, RunID: run.ID, WorkerID: workerIDForInvocation(active), Role: active.Role,
+			}, active.Harness)
+			if classified {
+				if diagnostics != "" {
+					_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, l.clock().UTC())
+				}
+				if harness.IsRateLimited(failure) {
+					_, pauseErr := l.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
+					return pauseErr
+				}
+				if harness.IsAuthenticationExpired(failure) {
+					_, pauseErr := l.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
+					return pauseErr
+				}
 			}
 		}
 		diagnostic := l.recordSessionExitDiagnostic(ctx, registration, run, active)

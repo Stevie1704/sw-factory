@@ -42,12 +42,14 @@ The Docker adapter uses these stable paths regardless of the host checkout:
 
 Headless process state is kept in the role volume at
 `/home/factory/.factory-headless/<invocation-id>`. The helper atomically records
-`starting`, `running`, `exited`, `cancelled`, or `lost`, retains bounded native
-stdout/stderr, and can be inspected or cancelled after the coordinator
-restarts. A fresh launch is idempotent once state exists; an exact native
-resume may replace only an exited or lost process. The role volume survives
-worker recreation, while the worker image remains pinned by the existing
-`image@digest` contract.
+`starting`, `running`, `exited`, `cancelled`, or `lost`, retains bounded
+head-and-tail native stdout/stderr, and can be inspected or cancelled after the
+coordinator restarts. A state lock makes fresh launch and cancellation
+idempotent across concurrent Docker exec calls. Exact native resume may replace
+only an exited, cancelled, or lost process whose recorded PID is no longer
+alive. Cancellation waits through SIGTERM and SIGKILL escalation before it
+publishes `cancelled`; the role volume survives worker recreation, while the
+worker image remains pinned by the existing `image@digest` contract.
 
 Workers run as uid/gid `10001:10001`, drop all capabilities, disable privilege
 escalation, and use the ordinary bridge network for public research access.
@@ -104,9 +106,11 @@ to decide success.
 
 The adapter buffers at most 8 MiB of standard output and 8 MiB of standard
 error for every Docker invocation, including worker commands and lifecycle or
-inspection calls. A stream that writes past this capture limit returns a typed
-output-limit failure instead of a command result. `docs/agent-runtime.md`
-records how a role observes that failure.
+inspection calls. Headless inspection retains at most 512 KiB per stream and
+preserves both the beginning and end; coordinator-side harness diagnostics are
+bounded again to 16 KiB. A stream that writes past the command capture limit
+returns a typed output-limit failure instead of a command result.
+`docs/agent-runtime.md` records how a role observes that failure.
 
 The contract tests use a controlled Docker executable. Live Docker, harness,
 and terminal checks remain environment checks and are not ordinary unit-test

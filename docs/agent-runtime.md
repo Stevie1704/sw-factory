@@ -44,8 +44,11 @@ adapter asks the existing per-invocation Docker worker to run
 coordinator host. The worker uses `docker exec -d` with neither a TTY nor
 attached stdin, and stores bounded stdout/stderr in the invocation's private
 role-home process state. JSON events are control-plane input only: the
-`thread.started` event supplies the opaque native identity and explicit error
-codes classify capacity or authentication outcomes. Model text is never a
+`thread.started` event supplies the opaque native identity, and structured
+`error` or `turn.failed` events classify capacity or authentication outcomes
+from their code, status, or documented error message. The adapter repeats that
+classification on terminal inspection, so a failure arriving after launch
+discovery still reaches the factory's typed outcome. Model text is never a
 workflow result.
 
 The coordinator still accepts exactly one authoritative result: the

@@ -125,6 +125,16 @@ type NativeSessionLivenessInspector interface {
 	NativeSessionRunning(context.Context, NativeSessionRequest) (bool, error)
 }
 
+// HeadlessFailureInspector is an optional adapter capability for classifying
+// a detached process after native session discovery has already completed.
+// The coordinator uses it only on a terminal process projection; it never
+// treats arbitrary model or stderr prose as a workflow outcome.
+type HeadlessFailureInspector interface {
+	// HeadlessFailureFor returns the typed failure represented by the persisted
+	// headless inspection, or nil while the process is still healthy/starting.
+	HeadlessFailureFor(context.Context, HeadlessInspectionRequest) error
+}
+
 // Runtime is the portable harness lifecycle seam used by the coordinator.
 type Runtime interface {
 	// Capabilities reports the adapter identity and supported lifecycle.

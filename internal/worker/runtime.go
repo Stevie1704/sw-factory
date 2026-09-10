@@ -692,7 +692,6 @@ func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSess
 		WorkerID:          request.WorkerID,
 		Command:           command,
 		EnvironmentPolicy: EnvironmentPolicyClean,
-		Role:              "coordinator",
 	})
 	if err != nil {
 		return nil, err
@@ -1549,10 +1548,14 @@ func validateCommandRequest(request CommandRequest) error {
 	if request.EnvironmentPolicy != EnvironmentPolicyClean && request.EnvironmentPolicy != EnvironmentPolicyRole {
 		return errors.New("worker environment policy must be clean or role")
 	}
-	if strings.TrimSpace(request.Role) == "" {
-		return errors.New("worker command role is required")
-	}
-	if !validName(request.Role) {
+	if request.EnvironmentPolicy == EnvironmentPolicyRole {
+		if strings.TrimSpace(request.Role) == "" {
+			return errors.New("worker command role is required")
+		}
+		if !validName(request.Role) {
+			return fmt.Errorf("worker command role %q contains unsafe characters", request.Role)
+		}
+	} else if request.Role != "" && !validName(request.Role) {
 		return fmt.Errorf("worker command role %q contains unsafe characters", request.Role)
 	}
 	for name, value := range request.Environment {

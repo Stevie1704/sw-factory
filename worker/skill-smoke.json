@@ -2,6 +2,28 @@
   "schema_version": 1,
   "records": [
     {
+      "image_digest": "sha256:036fb0f0d17d8da879b85a1df9c5a016af715fff7081506a59c19c26ca8570ed",
+      "harness": "claude",
+      "harness_version": "2.1.232 (Claude Code)",
+      "skills": [
+        "implement",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-09-10T11:07:01Z"
+    },
+    {
+      "image_digest": "sha256:036fb0f0d17d8da879b85a1df9c5a016af715fff7081506a59c19c26ca8570ed",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "implement",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-09-10T11:06:18Z"
+    },
+    {
       "image_digest": "sha256:238d1ef93894612ab4caaa195b52ed88a67f4651c937e2ba9492fbf3d2f1ff58",
       "harness": "claude",
       "harness_version": "2.1.232 (Claude Code)",

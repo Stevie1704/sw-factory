@@ -349,7 +349,11 @@ building for a platform different from the Docker daemon.
 
 After the image smoke checks, the same command mounts this checkout and runs
 the configured setup, format, vet, test, and build gates under the worker's
-clean baseline environment.
+clean baseline environment. After those repository gates, it runs
+`scripts/verify-headless-worker.sh` in the newly built image. That offline,
+real-Docker check uses a deterministic Codex stand-in to verify the pinned
+skill roots, exact prompt delivery, report production, cancellation, fresh
+coordinator-process inspection, and native resume.
 
 The worker image also carries the curated skill set from `worker/skills`, which
 it installs into both harness role homes. The digest recorded here therefore

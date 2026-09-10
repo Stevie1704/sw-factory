@@ -110,17 +110,17 @@ type HeadlessRuntime interface {
 // process extension. No Codex command is ever started on the coordinator host.
 type CodexHeadless struct {
 	// Worker owns Docker translation, process state, and bounded capture.
-	Worker worker.WorkerRuntime
+	Worker worker.HeadlessProcessRuntime
 }
 
 // NewCodexHeadless creates a terminal-free Codex adapter.
-func NewCodexHeadless(runtime worker.WorkerRuntime) *CodexHeadless {
+func NewCodexHeadless(runtime worker.HeadlessProcessRuntime) *CodexHeadless {
 	return &CodexHeadless{Worker: runtime}
 }
 
 // Capabilities reports Codex's headless native-resume support.
 func (*CodexHeadless) Capabilities() Capabilities {
-	return Capabilities{Name: NameCodex, InteractiveResume: true, Headless: true}
+	return codexCapabilities(true)
 }
 
 // StartHeadless launches a fresh Codex exec process and waits for its machine
@@ -143,14 +143,13 @@ func (c *CodexHeadless) ResumeHeadless(ctx context.Context, request HeadlessStar
 
 // InspectHeadless reads the worker-owned detached process projection.
 func (c *CodexHeadless) InspectHeadless(ctx context.Context, request HeadlessInspectionRequest) (HeadlessInspection, error) {
-	process, ok := c.Worker.(worker.HeadlessProcessRuntime)
-	if !ok {
+	if c.Worker == nil {
 		return HeadlessInspection{}, errors.New("worker runtime does not support headless processes")
 	}
-	result, err := process.InspectHeadless(ctx, worker.HeadlessRequest{
+	result, err := c.Worker.InspectHeadless(ctx, worker.HeadlessRequest{
 		RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID,
-		EnvironmentPolicy: worker.EnvironmentPolicyClean, Role: defaultHeadlessRole(request.Role),
-		Mode: worker.HeadlessLaunchFresh,
+		EnvironmentPolicy: worker.EnvironmentPolicyClean,
+		Mode:              worker.HeadlessLaunchFresh,
 	})
 	if err != nil {
 		return HeadlessInspection{}, err
@@ -161,21 +160,19 @@ func (c *CodexHeadless) InspectHeadless(ctx context.Context, request HeadlessIns
 // CancelHeadless delegates idempotent cancellation to the worker process
 // owner, preserving the logical identity needed after coordinator restart.
 func (c *CodexHeadless) CancelHeadless(ctx context.Context, session HeadlessSession) error {
-	process, ok := c.Worker.(worker.HeadlessProcessRuntime)
-	if !ok {
+	if c.Worker == nil {
 		return errors.New("worker runtime does not support headless processes")
 	}
-	return process.CancelHeadless(ctx, c.workerRequestForSession(session))
+	return c.Worker.CancelHeadless(ctx, c.workerRequestForSession(session))
 }
 
 // FinishHeadless delegates accepted-completion shutdown to the worker and is
 // safe to replay after a response-loss boundary.
 func (c *CodexHeadless) FinishHeadless(ctx context.Context, session HeadlessSession) error {
-	process, ok := c.Worker.(worker.HeadlessProcessRuntime)
-	if !ok {
+	if c.Worker == nil {
 		return errors.New("worker runtime does not support headless processes")
 	}
-	return process.FinishHeadless(ctx, c.workerRequestForSession(session))
+	return c.Worker.FinishHeadless(ctx, c.workerRequestForSession(session))
 }
 
 // NativeSessionID returns the Codex thread identity recorded in the durable
@@ -220,23 +217,43 @@ func (c *CodexHeadless) NativeSessionRunning(ctx context.Context, request Native
 	}
 }
 
+// HeadlessFailureFor classifies a terminal detached-process inspection after
+// the native thread identity is known. It closes the post-launch gap where a
+// turn.failed event arrives after the launch polling window.
+func (c *CodexHeadless) HeadlessFailureFor(ctx context.Context, request HeadlessInspectionRequest) error {
+	inspection, err := c.InspectHeadless(ctx, request)
+	if err != nil {
+		return normalizeHeadlessError(err)
+	}
+	if inspection.Status == worker.HeadlessStatusMissing || inspection.Status == worker.HeadlessStatusStarting || inspection.Status == worker.HeadlessStatusRunning {
+		return nil
+	}
+	if failure := classifyHeadlessInspection(inspection); failure != nil {
+		failure.Diagnostics = BoundedHeadlessDiagnostics(inspection)
+		return failure
+	}
+	switch inspection.Status {
+	case worker.HeadlessStatusCancelled:
+		return &HeadlessFailure{Cause: context.Canceled, ExitCode: inspection.ExitCode, Diagnostics: BoundedHeadlessDiagnostics(inspection)}
+	case worker.HeadlessStatusExited, worker.HeadlessStatusLost:
+		// Preserve the process code for local diagnostics without putting it in
+		// the redacted coordinator-visible error category.
+		return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), ExitCode: inspection.ExitCode, Diagnostics: BoundedHeadlessDiagnostics(inspection)}
+	default:
+		return fmt.Errorf("unknown Codex headless process state %q", inspection.Status)
+	}
+}
+
 // launch translates one neutral request into the documented Codex exec JSONL
 // command and waits for the first machine-readable thread identity.
 func (c *CodexHeadless) launch(ctx context.Context, request HeadlessStartRequest, mode worker.HeadlessLaunchMode) (HeadlessSession, error) {
 	if err := validateHeadlessStartRequest(request); err != nil {
 		return HeadlessSession{}, err
 	}
-	process, ok := c.Worker.(worker.HeadlessProcessRuntime)
-	if !ok {
+	if c.Worker == nil {
 		return HeadlessSession{}, errors.New("worker runtime does not support headless processes")
 	}
-	command := []string{"codex", "exec", "--json", "--skip-git-repo-check", "-s", "danger-full-access", "-c", "project_doc_max_bytes=0"}
-	if request.Model != "" {
-		command = append(command, "-m", request.Model)
-	}
-	if request.ReasoningEffort != "" {
-		command = append(command, "-c", "model_reasoning_effort="+request.ReasoningEffort)
-	}
+	command := codexCommandOptions([]string{"codex", "exec", "--json"}, request.Model, request.ReasoningEffort)
 	if request.ResumeSessionID != "" {
 		command = append(command, "resume", request.ResumeSessionID)
 	}
@@ -248,7 +265,7 @@ func (c *CodexHeadless) launch(ctx context.Context, request HeadlessStartRequest
 	if request.ReasoningEffort != "" {
 		environment["FACTORY_REASONING_EFFORT"] = request.ReasoningEffort
 	}
-	_, err := process.StartHeadless(ctx, worker.HeadlessRequest{
+	_, err := c.Worker.StartHeadless(ctx, worker.HeadlessRequest{
 		RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID,
 		Command: command, EnvironmentPolicy: worker.EnvironmentPolicyRole, Role: request.Role,
 		Environment: environment, Mode: mode,
@@ -258,12 +275,27 @@ func (c *CodexHeadless) launch(ctx context.Context, request HeadlessStartRequest
 	}
 	_, nativeID, err := c.waitForThreadStarted(ctx, request)
 	if err != nil {
+		c.cancelAfterLaunchFailure(ctx, request, nativeID)
 		return HeadlessSession{}, err
 	}
 	if mode == worker.HeadlessLaunchResume && nativeID != request.ResumeSessionID {
+		c.cancelAfterLaunchFailure(ctx, request, nativeID)
 		return HeadlessSession{}, &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: "Codex resume returned a different native thread identity"}
 	}
 	return HeadlessSession{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, NativeSessionID: nativeID}, nil
+}
+
+// cancelAfterLaunchFailure closes a helper that reached the detached worker
+// but failed before returning a usable native identity. It uses a fresh cleanup
+// context so a discovery timeout cannot leave the native process mutating the
+// worktree after the coordinator has rejected the launch.
+func (c *CodexHeadless) cancelAfterLaunchFailure(ctx context.Context, request HeadlessStartRequest, nativeSessionID string) {
+	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	_ = c.CancelHeadless(cleanupContext, HeadlessSession{
+		InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID,
+		Role: request.Role, NativeSessionID: nativeSessionID,
+	})
 }
 
 // waitForThreadStarted polls worker-owned state until Codex emits its JSONL
@@ -283,16 +315,16 @@ func (c *CodexHeadless) waitForThreadStarted(ctx context.Context, request Headle
 		if nativeID := threadStartedID(inspection.Stdout); nativeID != "" {
 			return inspection, nativeID, nil
 		}
-		if failure := classifyHeadlessEvents(inspection.Stdout); failure != nil && inspection.Status != worker.HeadlessStatusRunning && inspection.Status != worker.HeadlessStatusStarting {
-			failure.Diagnostics = boundedHeadlessDiagnostics(inspection)
+		if failure := classifyHeadlessInspection(inspection); failure != nil && inspection.Status != worker.HeadlessStatusRunning && inspection.Status != worker.HeadlessStatusStarting {
+			failure.Diagnostics = BoundedHeadlessDiagnostics(inspection)
 			return inspection, "", failure
 		}
 		switch inspection.Status {
 		case worker.HeadlessStatusExited, worker.HeadlessStatusLost:
-			failure := &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: boundedHeadlessDiagnostics(inspection)}
+			failure := &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: BoundedHeadlessDiagnostics(inspection)}
 			return inspection, "", failure
 		case worker.HeadlessStatusCancelled:
-			return inspection, "", &HeadlessFailure{Cause: context.Canceled, Diagnostics: boundedHeadlessDiagnostics(inspection)}
+			return inspection, "", &HeadlessFailure{Cause: context.Canceled, Diagnostics: BoundedHeadlessDiagnostics(inspection)}
 		case worker.HeadlessStatusMissing:
 			// docker exec -d returns before the helper has created its state
 			// directory. Keep polling through that expected startup race.
@@ -306,7 +338,7 @@ func (c *CodexHeadless) waitForThreadStarted(ctx context.Context, request Headle
 				default:
 				}
 			}
-			return inspection, "", &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: boundedHeadlessDiagnostics(inspection)}
+			return inspection, "", &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: BoundedHeadlessDiagnostics(inspection)}
 		case <-timer.C:
 			if delay < headlessDiscoveryMaximumDelay {
 				delay *= 2
@@ -316,6 +348,17 @@ func (c *CodexHeadless) waitForThreadStarted(ctx context.Context, request Headle
 			}
 		}
 	}
+}
+
+// classifyHeadlessInspection classifies structured events from both retained
+// process streams. Codex normally emits JSONL on stdout, but an adapter-owned
+// stderr event must remain visible when stdout is empty or truncated.
+func classifyHeadlessInspection(inspection HeadlessInspection) *HeadlessFailure {
+	output := inspection.Stdout
+	if strings.TrimSpace(inspection.Stderr) != "" {
+		output += "\n" + inspection.Stderr
+	}
+	return classifyHeadlessEvents(output)
 }
 
 // threadStartedID extracts only a valid thread.started machine event and never
@@ -336,39 +379,63 @@ func threadStartedID(output string) string {
 	return ""
 }
 
-// classifyHeadlessEvents maps explicit Codex event codes to existing typed
-// coordinator outcomes. Raw stderr and prose are intentionally ignored.
+// classifyHeadlessEvents maps structured Codex failure events to existing
+// typed coordinator outcomes. Human-readable text is considered only when it
+// is carried by a documented failure event, never when it is standalone prose.
 func classifyHeadlessEvents(output string) *HeadlessFailure {
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 4096), maxHeadlessEventLineBytes)
 	for scanner.Scan() {
 		var event struct {
-			Type  string `json:"type"`
-			Code  string `json:"code"`
-			Error struct {
-				Code string `json:"code"`
-				Type string `json:"type"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Error   struct {
+				Code       string `json:"code"`
+				Type       string `json:"type"`
+				Message    string `json:"message"`
+				Status     int    `json:"status"`
+				StatusCode int    `json:"status_code"`
+				CodexError struct {
+					Code    string `json:"code"`
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"codex_error_info"`
 			} `json:"error"`
+			Status     int `json:"status"`
+			StatusCode int `json:"status_code"`
 		}
 		if json.Unmarshal([]byte(scanner.Text()), &event) != nil {
 			continue
 		}
-		code := strings.ToLower(strings.TrimSpace(event.Code))
-		if code == "" {
-			code = strings.ToLower(strings.TrimSpace(event.Error.Code))
+		code := strings.ToLower(strings.TrimSpace(event.Code + " " + event.Error.Code + " " + event.Error.Type + " " + event.Error.CodexError.Code + " " + event.Error.CodexError.Type))
+		message := strings.ToLower(strings.TrimSpace(event.Message + " " + event.Error.Message + " " + event.Error.CodexError.Message))
+		status := event.Status
+		if status == 0 {
+			status = event.StatusCode
 		}
-		if code == "" {
-			code = strings.ToLower(strings.TrimSpace(event.Error.Type))
+		if status == 0 {
+			status = event.Error.Status
 		}
-		if event.Type == "error" || code != "" {
-			switch {
-			case containsAny(code, "rate_limit", "rate-limit", "too_many_requests", "capacity", "quota"):
-				return &HeadlessFailure{Cause: NewRateLimitError(NameCodex)}
-			case containsAny(code, "unauthorized", "authentication", "auth_required", "invalid_api_key", "credential", "token_expired"):
-				return &HeadlessFailure{Cause: NewAuthenticationExpiredError(NameCodex)}
-			case containsAny(code, "cancel", "aborted"):
-				return &HeadlessFailure{Cause: context.Canceled}
-			}
+		if status == 0 {
+			status = event.Error.StatusCode
+		}
+		if event.Type != "error" && event.Type != "turn.failed" && strings.TrimSpace(code) == "" && status == 0 {
+			continue
+		}
+		failureText := code + " " + message
+		if status != 0 {
+			failureText += fmt.Sprintf(" status %d", status)
+		}
+		switch {
+		case containsAny(failureText, "rate_limit", "rate-limit", "rate limit", "too_many_requests", "too many requests", "capacity", "quota", "status 429", "http 429"):
+			return &HeadlessFailure{Cause: NewRateLimitError(NameCodex)}
+		case containsAny(failureText, "unauthorized", "authentication", "auth_required", "invalid_api_key", "invalid api key", "credential", "token_expired", "token expired", "status 401", "http 401"):
+			return &HeadlessFailure{Cause: NewAuthenticationExpiredError(NameCodex)}
+		case containsAny(failureText, "cancel", "aborted"):
+			return &HeadlessFailure{Cause: context.Canceled}
+		case event.Type == "error" || event.Type == "turn.failed":
+			return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex)}
 		}
 	}
 	return nil
@@ -404,6 +471,9 @@ func normalizeHeadlessError(err error) error {
 type HeadlessFailure struct {
 	// Cause is a typed failure or context cancellation.
 	Cause error
+	// ExitCode is the detached process exit code when the process reached a
+	// terminal state. It is retained for local diagnosis, not Error().
+	ExitCode int
 	// Diagnostics is bounded JSONL/stderr retained for local troubleshooting.
 	Diagnostics string
 }
@@ -510,6 +580,16 @@ func (a *headlessRuntimeAdapter) NativeSessionRunning(ctx context.Context, reque
 	return inspector.NativeSessionRunning(ctx, request)
 }
 
+// HeadlessFailureFor forwards terminal detached-process classification through
+// the compatibility bridge used by journal replay and lifecycle monitoring.
+func (a *headlessRuntimeAdapter) HeadlessFailureFor(ctx context.Context, request HeadlessInspectionRequest) error {
+	inspector, ok := a.runtime.(HeadlessFailureInspector)
+	if !ok {
+		return nil
+	}
+	return inspector.HeadlessFailureFor(ctx, request)
+}
+
 // headlessRequest translates the legacy prompt contract to the headless seam.
 func headlessRequest(request StartRequest) HeadlessStartRequest {
 	return HeadlessStartRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Prompt: request.Prompt, Model: request.Model, ReasoningEffort: request.ReasoningEffort, ResumeSessionID: request.ResumeSessionID}
@@ -523,16 +603,7 @@ func sessionFromHeadless(session HeadlessSession) Session {
 // workerRequestForSession rebuilds only the logical worker identity for
 // idempotent cancellation and finish after durable replay.
 func (c *CodexHeadless) workerRequestForSession(session HeadlessSession) worker.HeadlessRequest {
-	return worker.HeadlessRequest{RunID: session.RunID, WorkerID: session.WorkerID, InvocationID: session.InvocationID, EnvironmentPolicy: worker.EnvironmentPolicyClean, Role: defaultHeadlessRole(session.Role), Mode: worker.HeadlessLaunchFresh}
-}
-
-// defaultHeadlessRole supplies a safe role for inspection/finalization, whose
-// process state path is invocation-scoped rather than role-scoped.
-func defaultHeadlessRole(role string) string {
-	if strings.TrimSpace(role) == "" {
-		return "implementation"
-	}
-	return role
+	return worker.HeadlessRequest{RunID: session.RunID, WorkerID: session.WorkerID, InvocationID: session.InvocationID, EnvironmentPolicy: worker.EnvironmentPolicyClean, Mode: worker.HeadlessLaunchFresh}
 }
 
 // validateHeadlessStartRequest validates the coordinator-owned launch fields.
@@ -600,8 +671,9 @@ func safeHeadlessIdentifier(value string) bool {
 	return true
 }
 
-// boundedHeadlessDiagnostics joins limited native streams for local capture.
-func boundedHeadlessDiagnostics(inspection HeadlessInspection) string {
+// BoundedHeadlessDiagnostics joins the retained native streams for local
+// capture and enforces the coordinator's diagnostic byte bound.
+func BoundedHeadlessDiagnostics(inspection HeadlessInspection) string {
 	var builder strings.Builder
 	appendDiagnostic := func(label, value string) {
 		value = strings.TrimSpace(value)
@@ -621,7 +693,14 @@ func boundedHeadlessDiagnostics(inspection HeadlessInspection) string {
 	if len(diagnostic) <= maxHeadlessDiagnosticBytes {
 		return diagnostic
 	}
-	return diagnostic[:maxHeadlessDiagnosticBytes] + "\n[truncated]"
+	marker := "\n[truncated]\n"
+	retained := maxHeadlessDiagnosticBytes - len(marker)
+	if retained <= 0 {
+		return marker[:maxHeadlessDiagnosticBytes]
+	}
+	head := retained / 2
+	tail := retained - head
+	return diagnostic[:head] + marker + diagnostic[len(diagnostic)-tail:]
 }
 
 // containsAny reports whether value contains one of the machine event code
@@ -638,4 +717,5 @@ func containsAny(value string, markers ...string) bool {
 var _ HeadlessRuntime = (*CodexHeadless)(nil)
 var _ NativeSessionInspector = (*CodexHeadless)(nil)
 var _ NativeSessionLivenessInspector = (*CodexHeadless)(nil)
+var _ HeadlessFailureInspector = (*CodexHeadless)(nil)
 var _ Runtime = (*headlessRuntimeAdapter)(nil)

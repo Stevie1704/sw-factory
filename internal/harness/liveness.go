@@ -24,7 +24,6 @@ func nativeSessionRunning(ctx context.Context, runtime worker.WorkerRuntime, req
 		WorkerID:          request.WorkerID,
 		Command:           fmt.Sprintf(`ps -eo pid=,args= | awk -v me="$$" '$1 != me && $0 ~ /%s/ { found = 1 } END { exit found ? 0 : 1 }'`, processPattern),
 		EnvironmentPolicy: worker.EnvironmentPolicyClean,
-		Role:              "coordinator",
 	})
 	if err != nil {
 		return false, fmt.Errorf("run native session liveness command: %w", err)

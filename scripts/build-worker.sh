@@ -94,6 +94,7 @@ tar -C "$repository_root" \
   --exclude='./.git' \
   --exclude='./.factory-worktrees' \
   --exclude='./.worker-build.*' \
+  --exclude='./.headless-verify.*' \
   --exclude='./.serena' \
   --exclude='./.ua' \
   --exclude='./spike' \
@@ -149,6 +150,9 @@ echo "Running repository setup and gates in $local_reference"
     scripts/worker-go.sh test ./... &&
     scripts/worker-go.sh build -o /tmp/factory ./cmd/factory
   '
+
+echo "Running real headless worker lifecycle verification"
+scripts/verify-headless-worker.sh "$local_reference"
 
 cat <<EOF
 

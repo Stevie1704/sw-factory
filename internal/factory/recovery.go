@@ -117,6 +117,11 @@ type RecoveryDiagnosis struct {
 	// workflowCause preserves a typed deterministic cause for callers that need
 	// to classify a recovery refusal beyond its bounded discrepancy projection.
 	workflowCause error
+	// headlessFailure preserves a typed post-launch detached-process outcome for
+	// the coordinator's capacity and authentication recovery paths.
+	headlessFailure error
+	// headlessFailureHarness identifies the selected adapter for that outcome.
+	headlessFailureHarness string
 }
 
 // RecoveryResult contains the durable run after an explicit reconciliation
@@ -746,6 +751,19 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 						// native session.
 						return
 					}
+					failure, diagnostics, classified := classifyHeadlessExit(harnessRuntime, ctx, harness.HeadlessInspectionRequest{
+						InvocationID: active.ID, RunID: run.ID, WorkerID: workerIDForInvocation(*active), Role: active.Role,
+					}, active.Harness)
+					if classified {
+						if diagnostics != "" {
+							_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, s.lifecycleModule().clock().UTC())
+						}
+						if harness.IsRateLimited(failure) || harness.IsAuthenticationExpired(failure) {
+							diagnosis.headlessFailure = failure
+							diagnosis.headlessFailureHarness = active.Harness
+							return
+						}
+					}
 				}
 				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 					Kind:        RecoveryDiscrepancyInfrastructure,
@@ -1203,6 +1221,22 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 	diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
 	if pending, err := journal.PendingEffect(ctx, run.ID); err == nil {
 		diagnosis.PendingEffect = pending
+	}
+	if diagnosis.headlessFailure != nil {
+		if harness.IsRateLimited(diagnosis.headlessFailure) {
+			paused, waitErr := s.lifecycleModule().pauseForHarnessCapacity(ctx, registration, runStore, run, diagnosis.headlessFailureHarness)
+			if waitErr != nil {
+				return paused, diagnosis, RecoveryOutcomeWaitingForHarness, errors.Join(diagnosis.headlessFailure, waitErr)
+			}
+			return paused, diagnosis, RecoveryOutcomeWaitingForHarness, nil
+		}
+		if harness.IsAuthenticationExpired(diagnosis.headlessFailure) {
+			paused, pauseErr := s.lifecycleModule().pauseForAuthentication(ctx, registration, runStore, run, diagnosis.headlessFailureHarness)
+			if pauseErr != nil {
+				return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(diagnosis.headlessFailure, pauseErr)
+			}
+			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, diagnosis.headlessFailure
+		}
 	}
 	if diagnosis.SourcesAgree && run.Status == store.StatusActive {
 		activeValues, activeSupported, activeErr := activeInvocationsForRun(ctx, runStore, run.ID)

@@ -59,7 +59,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	})...)
 
 	headlessChecker := s.doctorHeadlessChecker()
-	if s.deps.Harness != nil || !repositoryUsesHeadlessCodex(repositoryPolicy, headlessChecker) {
+	if s.deps.Harness != nil || !headlessStartupCheckApplies(repositoryPolicy, headlessChecker) {
 		terminalChecker := s.deps.Terminal
 		if terminalChecker == nil {
 			terminalChecker = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
@@ -141,19 +141,10 @@ func (s *Service) doctorHeadlessChecker() worker.HeadlessChecker {
 	return checker
 }
 
-// repositoryUsesHeadlessCodex reports whether startup can avoid terminal
-// diagnosis because every configured role selects Codex and the worker image
-// has the helper capability needed to execute it.
-func repositoryUsesHeadlessCodex(policy *config.RepositoryConfig, checker worker.HeadlessChecker) bool {
-	if checker == nil || policy == nil || len(policy.RoleHarnessDefaults) == 0 {
-		return false
-	}
-	for _, selected := range policy.RoleHarnessDefaults {
-		if selected != config.HarnessCodex {
-			return false
-		}
-	}
-	return true
+// headlessStartupCheckApplies reports whether startup may omit terminal
+// diagnosis because the policy is all-Codex and the helper can be checked.
+func headlessStartupCheckApplies(policy *config.RepositoryConfig, checker worker.HeadlessChecker) bool {
+	return checker != nil && policy != nil && config.AllRolesUseHarness(*policy, config.HarnessCodex)
 }
 
 // skillEvidencePath resolves the recorded worker skill smoke evidence inside

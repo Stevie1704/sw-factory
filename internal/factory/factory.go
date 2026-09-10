@@ -365,8 +365,8 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		dependencies.HarnessCapabilities = harness.CapabilitiesFor
 	}
 	if dependencies.HeadlessHarness == nil && dependencies.Harness == nil {
-		if _, ok := dependencies.Worker.(worker.HeadlessProcessRuntime); ok {
-			dependencies.HeadlessHarness = harness.NewCodexHeadless(dependencies.Worker)
+		if processRuntime, ok := dependencies.Worker.(worker.HeadlessProcessRuntime); ok {
+			dependencies.HeadlessHarness = harness.NewCodexHeadless(processRuntime)
 		}
 	}
 	if dependencies.Now == nil {

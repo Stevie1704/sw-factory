@@ -111,10 +111,6 @@ type HeadlessProcessRuntime interface {
 	FinishHeadless(context.Context, HeadlessRequest) error
 }
 
-// HeadlessRuntime is the compatibility name for the detached worker
-// extension used by headless harness adapters.
-type HeadlessRuntime = HeadlessProcessRuntime
-
 // StartHeadless launches a detached helper process without allocating a TTY or
 // attaching the coordinator's standard streams.
 func (r *DockerRuntime) StartHeadless(ctx context.Context, request HeadlessRequest) (HeadlessExecution, error) {
@@ -225,7 +221,7 @@ func (r *DockerRuntime) inspectHeadless(ctx context.Context, request HeadlessReq
 	result, err := r.RunCommand(ctx, CommandRequest{
 		RunID: request.RunID, WorkerID: request.WorkerID,
 		Command:           "/usr/local/bin/factory-worker-headless inspect --state-dir " + shellQuote(headlessStatePath(request.InvocationID)),
-		EnvironmentPolicy: EnvironmentPolicyClean, Role: "coordinator",
+		EnvironmentPolicy: EnvironmentPolicyClean,
 	})
 	if err != nil {
 		return HeadlessInspection{}, fmt.Errorf("inspect headless process state: %w", err)
@@ -257,7 +253,7 @@ func (r *DockerRuntime) finishHeadless(ctx context.Context, request HeadlessRequ
 	result, err := r.RunCommand(ctx, CommandRequest{
 		RunID: request.RunID, WorkerID: request.WorkerID,
 		Command:           "/usr/local/bin/factory-worker-headless cancel --state-dir " + shellQuote(headlessStatePath(request.InvocationID)),
-		EnvironmentPolicy: EnvironmentPolicyClean, Role: "coordinator",
+		EnvironmentPolicy: EnvironmentPolicyClean,
 	})
 	if err != nil {
 		return fmt.Errorf("%s headless process: %w", operation, err)
@@ -271,12 +267,18 @@ func (r *DockerRuntime) finishHeadless(ctx context.Context, request HeadlessRequ
 // headlessInspectionWire is the bounded JSON protocol emitted by the worker
 // helper. Base64 keeps arbitrary native output out of the JSON framing.
 type headlessInspectionWire struct {
-	Status          string `json:"status"`
-	ExitCode        int    `json:"exit_code"`
-	Stdout          string `json:"stdout"`
-	Stderr          string `json:"stderr"`
-	StdoutTruncated bool   `json:"stdout_truncated"`
-	StderrTruncated bool   `json:"stderr_truncated"`
+	// Status is the helper-owned detached process state.
+	Status string `json:"status"`
+	// ExitCode is the child exit code after termination.
+	ExitCode int `json:"exit_code"`
+	// Stdout is bounded machine-readable child output encoded as base64.
+	Stdout string `json:"stdout"`
+	// Stderr is bounded child diagnostic output encoded as base64.
+	Stderr string `json:"stderr"`
+	// StdoutTruncated reports incomplete retained machine output.
+	StdoutTruncated bool `json:"stdout_truncated"`
+	// StderrTruncated reports incomplete retained diagnostic output.
+	StderrTruncated bool `json:"stderr_truncated"`
 }
 
 // toInspection validates the worker helper's neutral wire values.
@@ -323,8 +325,12 @@ func validateHeadlessRequest(request HeadlessRequest, requireCommand bool) error
 	if request.EnvironmentPolicy != EnvironmentPolicyClean && request.EnvironmentPolicy != EnvironmentPolicyRole {
 		return errors.New("headless environment policy must be clean or role")
 	}
-	if strings.TrimSpace(request.Role) == "" || !validName(request.Role) {
-		return errors.New("headless role is required and must be safe")
+	if request.EnvironmentPolicy == EnvironmentPolicyRole {
+		if strings.TrimSpace(request.Role) == "" || !validName(request.Role) {
+			return errors.New("headless role is required and must be safe")
+		}
+	} else if request.Role != "" && !validName(request.Role) {
+		return errors.New("headless role contains unsafe characters")
 	}
 	for name, value := range request.Environment {
 		if err := validateInteractiveEnvironmentEntry(name, value); err != nil {
