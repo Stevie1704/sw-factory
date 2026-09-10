@@ -201,6 +201,9 @@ type headlessTestWorker struct {
 	startErr     error
 	cancelCalls  int
 	finishCalls  int
+	// respond derives the projection from the recorded launch, so a test can
+	// verify that an adapter-assigned native identity round-trips.
+	respond func(worker.HeadlessRequest) worker.HeadlessInspection
 }
 
 // Start implements the base worker seam.
@@ -234,6 +237,9 @@ func (w *headlessTestWorker) StartHeadless(_ context.Context, request worker.Hea
 // InspectHeadless returns the controlled process state.
 func (w *headlessTestWorker) InspectHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessInspection, error) {
 	w.inspectCalls++
+	if w.respond != nil && len(w.starts) > 0 {
+		return w.respond(w.starts[len(w.starts)-1]), nil
+	}
 	if len(w.inspections) > 0 {
 		inspection := w.inspections[0]
 		w.inspections = w.inspections[1:]
@@ -255,3 +261,106 @@ func (w *headlessTestWorker) FinishHeadless(context.Context, worker.HeadlessRequ
 }
 
 var _ worker.HeadlessProcessRuntime = (*headlessTestWorker)(nil)
+
+// TestHeadlessAdaptersShareOneLifecycleContract verifies both production
+// adapters satisfy the same terminal-free seam: headless capabilities, a
+// detached launch that needs no workspace, exact-session resume, idempotent
+// cleanup, and a refusal to inspect another harness's native session.
+func TestHeadlessAdaptersShareOneLifecycleContract(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		build   func(worker.HeadlessProcessRuntime) harness.HeadlessRuntime
+		stdout  string
+		session string
+	}{
+		{
+			name: harness.NameCodex,
+			build: func(runtime worker.HeadlessProcessRuntime) harness.HeadlessRuntime {
+				return harness.NewCodexHeadless(runtime)
+			},
+			stdout:  `{"type":"thread.started","thread_id":"` + headlessTestSession + `"}` + "\n",
+			session: headlessTestSession,
+		},
+		{
+			name: harness.NameClaude,
+			build: func(runtime worker.HeadlessProcessRuntime) harness.HeadlessRuntime {
+				adapter := harness.NewClaudeHeadless(runtime)
+				adapter.NewSessionID = func() (string, error) { return headlessTestSession, nil }
+				return adapter
+			},
+			stdout:  `{"type":"system","subtype":"init","session_id":"` + headlessTestSession + `"}` + "\n",
+			session: headlessTestSession,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: test.stdout}}
+			runtime := test.build(workerRuntime)
+			capabilities := runtime.Capabilities()
+			if capabilities.Name != test.name || !capabilities.Headless || !capabilities.InteractiveResume {
+				t.Fatalf("Capabilities() = %#v, want a headless resumable %s adapter", capabilities, test.name)
+			}
+			request := harness.HeadlessStartRequest{
+				InvocationID: "inv-contract-" + test.name, RunID: "run-contract", WorkerID: "worker-contract",
+				Role: "implementation", Stage: "implementation", Prompt: "Implement the frozen issue.",
+			}
+			session, err := runtime.StartHeadless(context.Background(), request)
+			if err != nil {
+				t.Fatalf("StartHeadless() error = %v", err)
+			}
+			if session.NativeSessionID != test.session || session.InvocationID != request.InvocationID {
+				t.Fatalf("session = %#v, want the invocation's native identity", session)
+			}
+			if strings.Contains(strings.Join(workerRuntime.starts[0].Command, " "), "-it") {
+				t.Fatalf("headless command allocated a terminal: %#v", workerRuntime.starts[0].Command)
+			}
+			resume := request
+			resume.ResumeSessionID = test.session
+			if _, err := runtime.ResumeHeadless(context.Background(), resume); err != nil {
+				t.Fatalf("ResumeHeadless() error = %v", err)
+			}
+			if workerRuntime.starts[1].Mode != worker.HeadlessLaunchResume {
+				t.Fatalf("resume mode = %q, want exact-session replacement", workerRuntime.starts[1].Mode)
+			}
+			missing := request
+			missing.Prompt = ""
+			if _, err := runtime.StartHeadless(context.Background(), missing); err == nil {
+				t.Fatal("StartHeadless() accepted an empty prompt, want a refused launch")
+			}
+			if err := runtime.CancelHeadless(context.Background(), session); err != nil {
+				t.Fatalf("CancelHeadless() error = %v", err)
+			}
+			if err := runtime.FinishHeadless(context.Background(), session); err != nil {
+				t.Fatalf("FinishHeadless() error = %v", err)
+			}
+			if workerRuntime.cancelCalls != 1 || workerRuntime.finishCalls != 1 {
+				t.Fatalf("cleanup calls = cancel %d, finish %d; want one each", workerRuntime.cancelCalls, workerRuntime.finishCalls)
+			}
+			inspector, ok := runtime.(harness.NativeSessionInspector)
+			if !ok {
+				t.Fatalf("%s headless adapter does not support native session inspection", test.name)
+			}
+			if _, err := inspector.NativeSessionID(context.Background(), harness.NativeSessionRequest{
+				InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Harness: "other",
+			}); err == nil {
+				t.Fatal("NativeSessionID() inspected a foreign harness, want a refusal")
+			}
+		})
+	}
+}
+
+// TestHeadlessAdaptersResolveToTheHarnessTheyAreKeyedBy verifies the one
+// declaration that maps a repository-declared harness onto its terminal-free
+// implementation cannot cross-wire a role. A mixed per-role repository
+// dispatches through this map alone.
+func TestHeadlessAdaptersResolveToTheHarnessTheyAreKeyedBy(t *testing.T) {
+	adapters := harness.NewHeadlessAdapters(&headlessTestWorker{})
+	if len(adapters) != 2 {
+		t.Fatalf("headless adapters = %#v, want both production harnesses", adapters)
+	}
+	for selected, adapter := range adapters {
+		capabilities := adapter.Capabilities()
+		if capabilities.Name != string(selected) || !capabilities.Headless {
+			t.Fatalf("adapter for %q reports %#v, want a headless adapter of that identity", selected, capabilities)
+		}
+	}
+}

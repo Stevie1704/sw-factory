@@ -3,7 +3,6 @@ package harness
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,6 +18,9 @@ const (
 	headlessDiscoveryMaximumDelay = 500 * time.Millisecond
 	maxHeadlessDiagnosticBytes    = 16 << 10
 	maxHeadlessEventLineBytes     = 1 << 20
+	// headlessCleanupTimeout bounds the cancellation issued after a launch that
+	// reached the worker but never produced a usable native identity.
+	headlessCleanupTimeout = 30 * time.Second
 )
 
 // HeadlessStartRequest contains coordinator-owned identity, prompt, policy,
@@ -42,7 +44,7 @@ type HeadlessStartRequest struct {
 	Model string
 	// ReasoningEffort is the repository-selected reasoning policy.
 	ReasoningEffort string
-	// ResumeSessionID is the exact native Codex thread to continue.
+	// ResumeSessionID is the exact native session to continue.
 	ResumeSessionID string
 }
 
@@ -56,7 +58,7 @@ type HeadlessSession struct {
 	WorkerID string
 	// Role identifies the role home used by the process.
 	Role string
-	// NativeSessionID is the Codex thread identity read from a JSON event.
+	// NativeSessionID is the native identity read from a machine-readable event.
 	NativeSessionID string
 }
 
@@ -79,7 +81,7 @@ type HeadlessInspection struct {
 	Status worker.HeadlessStatus
 	// ExitCode is meaningful after process termination.
 	ExitCode int
-	// Stdout is bounded Codex JSONL output.
+	// Stdout is bounded machine-readable harness output.
 	Stdout string
 	// Stderr is bounded diagnostic output.
 	Stderr string
@@ -106,47 +108,42 @@ type HeadlessRuntime interface {
 	FinishHeadless(context.Context, HeadlessSession) error
 }
 
-// CodexHeadless implements HeadlessRuntime through the worker's detached
-// process extension. No Codex command is ever started on the coordinator host.
-type CodexHeadless struct {
-	// Worker owns Docker translation, process state, and bounded capture.
-	Worker worker.HeadlessProcessRuntime
+// headlessProtocol carries the only harness-specific parts of a terminal-free
+// lifecycle: the adapter identity used by typed outcomes, the machine event
+// that reveals the native session, and the event classification that maps a
+// native failure onto the factory's existing vocabulary. Everything else in a
+// headless launch is shared, so adapters compose this instead of repeating the
+// worker protocol.
+type headlessProtocol struct {
+	// name is the harness identity recorded on an invocation.
+	name string
+	// nativeSessionID extracts the native identity from machine output and
+	// returns an empty string while no such event has been observed.
+	nativeSessionID func(output string) string
+	// classify maps machine-readable native events to a typed failure and
+	// returns nil while nothing in the output names a failure.
+	classify func(output string) *HeadlessFailure
+	// environment adds adapter-owned non-secret process settings to the
+	// coordinator's invocation identity values.
+	environment map[string]string
 }
 
-// NewCodexHeadless creates a terminal-free Codex adapter.
-func NewCodexHeadless(runtime worker.HeadlessProcessRuntime) *CodexHeadless {
-	return &CodexHeadless{Worker: runtime}
-}
-
-// Capabilities reports Codex's headless native-resume support.
-func (*CodexHeadless) Capabilities() Capabilities {
-	return codexCapabilities(true)
-}
-
-// StartHeadless launches a fresh Codex exec process and waits for its machine
-// readable thread-start event before returning the native identity.
-func (c *CodexHeadless) StartHeadless(ctx context.Context, request HeadlessStartRequest) (HeadlessSession, error) {
-	if strings.TrimSpace(request.ResumeSessionID) != "" {
-		return HeadlessSession{}, errors.New("fresh Codex headless start cannot include a resume session")
-	}
-	return c.launch(ctx, request, worker.HeadlessLaunchFresh)
-}
-
-// ResumeHeadless launches Codex exec resume for the exact persisted native
-// thread identity and never substitutes a newly generated session.
-func (c *CodexHeadless) ResumeHeadless(ctx context.Context, request HeadlessStartRequest) (HeadlessSession, error) {
-	if strings.TrimSpace(request.ResumeSessionID) == "" {
-		return HeadlessSession{}, errors.New("Codex headless resume session id is required")
-	}
-	return c.launch(ctx, request, worker.HeadlessLaunchResume)
+// headless owns the adapter-neutral half of HeadlessRuntime. It never starts a
+// harness process on the coordinator host; every operation is one call into
+// the worker's detached process extension.
+type headless struct {
+	// worker owns Docker translation, process state, and bounded capture.
+	worker worker.HeadlessProcessRuntime
+	// protocol supplies the harness-specific command output vocabulary.
+	protocol headlessProtocol
 }
 
 // InspectHeadless reads the worker-owned detached process projection.
-func (c *CodexHeadless) InspectHeadless(ctx context.Context, request HeadlessInspectionRequest) (HeadlessInspection, error) {
-	if c.Worker == nil {
+func (h *headless) InspectHeadless(ctx context.Context, request HeadlessInspectionRequest) (HeadlessInspection, error) {
+	if h.worker == nil {
 		return HeadlessInspection{}, errors.New("worker runtime does not support headless processes")
 	}
-	result, err := c.Worker.InspectHeadless(ctx, worker.HeadlessRequest{
+	result, err := h.worker.InspectHeadless(ctx, worker.HeadlessRequest{
 		RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID,
 		EnvironmentPolicy: worker.EnvironmentPolicyClean,
 		Mode:              worker.HeadlessLaunchFresh,
@@ -159,31 +156,31 @@ func (c *CodexHeadless) InspectHeadless(ctx context.Context, request HeadlessIns
 
 // CancelHeadless delegates idempotent cancellation to the worker process
 // owner, preserving the logical identity needed after coordinator restart.
-func (c *CodexHeadless) CancelHeadless(ctx context.Context, session HeadlessSession) error {
-	if c.Worker == nil {
+func (h *headless) CancelHeadless(ctx context.Context, session HeadlessSession) error {
+	if h.worker == nil {
 		return errors.New("worker runtime does not support headless processes")
 	}
-	return c.Worker.CancelHeadless(ctx, c.workerRequestForSession(session))
+	return h.worker.CancelHeadless(ctx, h.workerRequestForSession(session))
 }
 
 // FinishHeadless delegates accepted-completion shutdown to the worker and is
 // safe to replay after a response-loss boundary.
-func (c *CodexHeadless) FinishHeadless(ctx context.Context, session HeadlessSession) error {
-	if c.Worker == nil {
+func (h *headless) FinishHeadless(ctx context.Context, session HeadlessSession) error {
+	if h.worker == nil {
 		return errors.New("worker runtime does not support headless processes")
 	}
-	return c.Worker.FinishHeadless(ctx, c.workerRequestForSession(session))
+	return h.worker.FinishHeadless(ctx, h.workerRequestForSession(session))
 }
 
-// NativeSessionID returns the Codex thread identity recorded in the durable
-// detached-process output. The worker remains the only component that reads
-// the process state or role home, and the process-associated event prevents a
-// coordinator restart from accidentally adopting an older role-home session.
-func (c *CodexHeadless) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
-	if request.Harness != "" && request.Harness != NameCodex {
-		return "", fmt.Errorf("Codex headless adapter cannot inspect harness %q", request.Harness)
+// NativeSessionID returns the native identity recorded in the durable detached
+// process output. The worker remains the only component that reads the process
+// state or role home, and the process-associated event prevents a coordinator
+// restart from accidentally adopting an older role-home session.
+func (h *headless) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
+	if err := h.expectHarness(request.Harness); err != nil {
+		return "", err
 	}
-	inspection, err := c.InspectHeadless(ctx, HeadlessInspectionRequest{
+	inspection, err := h.InspectHeadless(ctx, HeadlessInspectionRequest{
 		InvocationID: request.InvocationID,
 		RunID:        request.RunID,
 		WorkerID:     request.WorkerID,
@@ -191,19 +188,19 @@ func (c *CodexHeadless) NativeSessionID(ctx context.Context, request NativeSessi
 	if err != nil {
 		return "", err
 	}
-	if nativeID := threadStartedID(inspection.Stdout); nativeID != "" {
+	if nativeID := h.protocol.nativeSessionID(inspection.Stdout); nativeID != "" {
 		return nativeID, nil
 	}
-	return "", errors.New("Codex headless process has no thread.started identity")
+	return "", fmt.Errorf("%s headless process has no native session event", h.protocol.name)
 }
 
 // NativeSessionRunning maps the durable detached process state to the
 // coordinator's liveness observation without inspecting terminal output.
-func (c *CodexHeadless) NativeSessionRunning(ctx context.Context, request NativeSessionRequest) (bool, error) {
-	if request.Harness != "" && request.Harness != NameCodex {
-		return false, fmt.Errorf("Codex headless adapter cannot inspect harness %q", request.Harness)
+func (h *headless) NativeSessionRunning(ctx context.Context, request NativeSessionRequest) (bool, error) {
+	if err := h.expectHarness(request.Harness); err != nil {
+		return false, err
 	}
-	inspection, err := c.InspectHeadless(ctx, HeadlessInspectionRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID})
+	inspection, err := h.InspectHeadless(ctx, HeadlessInspectionRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID})
 	if err != nil {
 		return false, err
 	}
@@ -213,22 +210,22 @@ func (c *CodexHeadless) NativeSessionRunning(ctx context.Context, request Native
 	case worker.HeadlessStatusMissing, worker.HeadlessStatusExited, worker.HeadlessStatusCancelled, worker.HeadlessStatusLost:
 		return false, nil
 	default:
-		return false, fmt.Errorf("unknown Codex headless process state %q", inspection.Status)
+		return false, fmt.Errorf("unknown %s headless process state %q", h.protocol.name, inspection.Status)
 	}
 }
 
 // HeadlessFailureFor classifies a terminal detached-process inspection after
-// the native thread identity is known. It closes the post-launch gap where a
-// turn.failed event arrives after the launch polling window.
-func (c *CodexHeadless) HeadlessFailureFor(ctx context.Context, request HeadlessInspectionRequest) error {
-	inspection, err := c.InspectHeadless(ctx, request)
+// the native session identity is known. It closes the post-launch gap where a
+// failure event arrives after the launch polling window.
+func (h *headless) HeadlessFailureFor(ctx context.Context, request HeadlessInspectionRequest) error {
+	inspection, err := h.InspectHeadless(ctx, request)
 	if err != nil {
-		return normalizeHeadlessError(err)
+		return normalizeHeadlessError(h.protocol.name, err)
 	}
 	if inspection.Status == worker.HeadlessStatusMissing || inspection.Status == worker.HeadlessStatusStarting || inspection.Status == worker.HeadlessStatusRunning {
 		return nil
 	}
-	if failure := classifyHeadlessInspection(inspection); failure != nil {
+	if failure := h.classifyInspection(inspection); failure != nil {
 		failure.Diagnostics = BoundedHeadlessDiagnostics(inspection)
 		return failure
 	}
@@ -238,49 +235,49 @@ func (c *CodexHeadless) HeadlessFailureFor(ctx context.Context, request Headless
 	case worker.HeadlessStatusExited, worker.HeadlessStatusLost:
 		// Preserve the process code for local diagnostics without putting it in
 		// the redacted coordinator-visible error category.
-		return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), ExitCode: inspection.ExitCode, Diagnostics: BoundedHeadlessDiagnostics(inspection)}
+		return &HeadlessFailure{Cause: NewUnexpectedExitError(h.protocol.name), ExitCode: inspection.ExitCode, Diagnostics: BoundedHeadlessDiagnostics(inspection)}
 	default:
-		return fmt.Errorf("unknown Codex headless process state %q", inspection.Status)
+		return fmt.Errorf("unknown %s headless process state %q", h.protocol.name, inspection.Status)
 	}
 }
 
-// launch translates one neutral request into the documented Codex exec JSONL
-// command and waits for the first machine-readable thread identity.
-func (c *CodexHeadless) launch(ctx context.Context, request HeadlessStartRequest, mode worker.HeadlessLaunchMode) (HeadlessSession, error) {
-	if err := validateHeadlessStartRequest(request); err != nil {
+// launch runs one already-translated native command in the detached worker and
+// returns only after the harness has revealed its native session identity.
+// expectedSessionID is the identity the caller requires, empty when the harness
+// assigns one that the adapter must discover.
+func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, command []string, mode worker.HeadlessLaunchMode, expectedSessionID string) (HeadlessSession, error) {
+	if err := validateHeadlessStartRequest(h.protocol.name, request); err != nil {
 		return HeadlessSession{}, err
 	}
-	if c.Worker == nil {
+	if h.worker == nil {
 		return HeadlessSession{}, errors.New("worker runtime does not support headless processes")
 	}
-	command := codexCommandOptions([]string{"codex", "exec", "--json"}, request.Model, request.ReasoningEffort)
-	if request.ResumeSessionID != "" {
-		command = append(command, "resume", request.ResumeSessionID)
-	}
-	command = append(command, strings.TrimSpace(request.Prompt))
-	environment := invocationEnvironment(NameCodex, StartRequest{
+	environment := invocationEnvironment(h.protocol.name, StartRequest{
 		InvocationID: request.InvocationID, RunID: request.RunID, Role: request.Role,
 		Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Model: request.Model,
 	})
 	if request.ReasoningEffort != "" {
 		environment["FACTORY_REASONING_EFFORT"] = request.ReasoningEffort
 	}
-	_, err := c.Worker.StartHeadless(ctx, worker.HeadlessRequest{
+	for name, value := range h.protocol.environment {
+		environment[name] = value
+	}
+	_, err := h.worker.StartHeadless(ctx, worker.HeadlessRequest{
 		RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID,
 		Command: command, EnvironmentPolicy: worker.EnvironmentPolicyRole, Role: request.Role,
 		Environment: environment, Mode: mode,
 	})
 	if err != nil {
-		return HeadlessSession{}, normalizeHeadlessError(err)
+		return HeadlessSession{}, normalizeHeadlessError(h.protocol.name, err)
 	}
-	_, nativeID, err := c.waitForThreadStarted(ctx, request)
+	nativeID, err := h.waitForNativeSession(ctx, request)
 	if err != nil {
-		c.cancelAfterLaunchFailure(ctx, request, nativeID)
+		h.cancelAfterLaunchFailure(ctx, request, nativeID)
 		return HeadlessSession{}, err
 	}
-	if mode == worker.HeadlessLaunchResume && nativeID != request.ResumeSessionID {
-		c.cancelAfterLaunchFailure(ctx, request, nativeID)
-		return HeadlessSession{}, &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: "Codex resume returned a different native thread identity"}
+	if expectedSessionID != "" && nativeID != expectedSessionID {
+		h.cancelAfterLaunchFailure(ctx, request, nativeID)
+		return HeadlessSession{}, &HeadlessFailure{Cause: NewUnexpectedExitError(h.protocol.name), Diagnostics: h.protocol.name + " returned a different native session identity"}
 	}
 	return HeadlessSession{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, NativeSessionID: nativeID}, nil
 }
@@ -289,42 +286,43 @@ func (c *CodexHeadless) launch(ctx context.Context, request HeadlessStartRequest
 // but failed before returning a usable native identity. It uses a fresh cleanup
 // context so a discovery timeout cannot leave the native process mutating the
 // worktree after the coordinator has rejected the launch.
-func (c *CodexHeadless) cancelAfterLaunchFailure(ctx context.Context, request HeadlessStartRequest, nativeSessionID string) {
-	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+func (h *headless) cancelAfterLaunchFailure(ctx context.Context, request HeadlessStartRequest, nativeSessionID string) {
+	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), headlessCleanupTimeout)
 	defer cancel()
-	_ = c.CancelHeadless(cleanupContext, HeadlessSession{
+	_ = h.CancelHeadless(cleanupContext, HeadlessSession{
 		InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID,
 		Role: request.Role, NativeSessionID: nativeSessionID,
 	})
 }
 
-// waitForThreadStarted polls worker-owned state until Codex emits its JSONL
-// thread.started event or a typed process outcome becomes observable.
-func (c *CodexHeadless) waitForThreadStarted(ctx context.Context, request HeadlessStartRequest) (HeadlessInspection, string, error) {
+// waitForNativeSession polls worker-owned state until the harness emits the
+// machine event carrying its native session identity or a typed process
+// outcome becomes observable.
+func (h *headless) waitForNativeSession(ctx context.Context, request HeadlessStartRequest) (string, error) {
 	inspectionContext, cancel := context.WithTimeout(ctx, headlessDiscoveryTimeout)
 	defer cancel()
 	delay := headlessDiscoveryInitialDelay
 	for {
-		inspection, err := c.InspectHeadless(inspectionContext, HeadlessInspectionRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role})
+		inspection, err := h.InspectHeadless(inspectionContext, HeadlessInspectionRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role})
 		if err != nil {
 			if inspectionContext.Err() != nil {
-				return HeadlessInspection{}, "", normalizeHeadlessError(inspectionContext.Err())
+				return "", normalizeHeadlessError(h.protocol.name, inspectionContext.Err())
 			}
-			return HeadlessInspection{}, "", normalizeHeadlessError(err)
+			return "", normalizeHeadlessError(h.protocol.name, err)
 		}
-		if nativeID := threadStartedID(inspection.Stdout); nativeID != "" {
-			return inspection, nativeID, nil
+		if nativeID := h.protocol.nativeSessionID(inspection.Stdout); nativeID != "" {
+			return nativeID, nil
 		}
-		if failure := classifyHeadlessInspection(inspection); failure != nil && inspection.Status != worker.HeadlessStatusRunning && inspection.Status != worker.HeadlessStatusStarting {
+		settled := inspection.Status != worker.HeadlessStatusRunning && inspection.Status != worker.HeadlessStatusStarting
+		if failure := h.classifyInspection(inspection); failure != nil && settled {
 			failure.Diagnostics = BoundedHeadlessDiagnostics(inspection)
-			return inspection, "", failure
+			return "", failure
 		}
 		switch inspection.Status {
 		case worker.HeadlessStatusExited, worker.HeadlessStatusLost:
-			failure := &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: BoundedHeadlessDiagnostics(inspection)}
-			return inspection, "", failure
+			return "", &HeadlessFailure{Cause: NewUnexpectedExitError(h.protocol.name), Diagnostics: BoundedHeadlessDiagnostics(inspection)}
 		case worker.HeadlessStatusCancelled:
-			return inspection, "", &HeadlessFailure{Cause: context.Canceled, Diagnostics: BoundedHeadlessDiagnostics(inspection)}
+			return "", &HeadlessFailure{Cause: context.Canceled, Diagnostics: BoundedHeadlessDiagnostics(inspection)}
 		case worker.HeadlessStatusMissing:
 			// docker exec -d returns before the helper has created its state
 			// directory. Keep polling through that expected startup race.
@@ -338,7 +336,7 @@ func (c *CodexHeadless) waitForThreadStarted(ctx context.Context, request Headle
 				default:
 				}
 			}
-			return inspection, "", &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex), Diagnostics: BoundedHeadlessDiagnostics(inspection)}
+			return "", &HeadlessFailure{Cause: NewUnexpectedExitError(h.protocol.name), Diagnostics: BoundedHeadlessDiagnostics(inspection)}
 		case <-timer.C:
 			if delay < headlessDiscoveryMaximumDelay {
 				delay *= 2
@@ -350,100 +348,48 @@ func (c *CodexHeadless) waitForThreadStarted(ctx context.Context, request Headle
 	}
 }
 
-// classifyHeadlessInspection classifies structured events from both retained
-// process streams. Codex normally emits JSONL on stdout, but an adapter-owned
-// stderr event must remain visible when stdout is empty or truncated.
-func classifyHeadlessInspection(inspection HeadlessInspection) *HeadlessFailure {
+// classifyInspection classifies structured events from both retained process
+// streams. A harness normally emits its machine events on stdout, but an
+// adapter-owned stderr event must remain visible when stdout is empty or
+// truncated.
+func (h *headless) classifyInspection(inspection HeadlessInspection) *HeadlessFailure {
 	output := inspection.Stdout
 	if strings.TrimSpace(inspection.Stderr) != "" {
 		output += "\n" + inspection.Stderr
 	}
-	return classifyHeadlessEvents(output)
+	return h.protocol.classify(output)
 }
 
-// threadStartedID extracts only a valid thread.started machine event and never
-// treats human-readable output as a native session identity.
-func threadStartedID(output string) string {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 4096), maxHeadlessEventLineBytes)
-	for scanner.Scan() {
-		var event struct {
-			Type     string `json:"type"`
-			ThreadID string `json:"thread_id"`
-		}
-		if json.Unmarshal([]byte(scanner.Text()), &event) != nil || event.Type != "thread.started" || !validNativeSessionID(event.ThreadID) {
-			continue
-		}
-		return event.ThreadID
-	}
-	return ""
-}
-
-// classifyHeadlessEvents maps structured Codex failure events to existing
-// typed coordinator outcomes. Human-readable text is considered only when it
-// is carried by a documented failure event, never when it is standalone prose.
-func classifyHeadlessEvents(output string) *HeadlessFailure {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	scanner.Buffer(make([]byte, 4096), maxHeadlessEventLineBytes)
-	for scanner.Scan() {
-		var event struct {
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-			Message string `json:"message"`
-			Error   struct {
-				Code       string `json:"code"`
-				Type       string `json:"type"`
-				Message    string `json:"message"`
-				Status     int    `json:"status"`
-				StatusCode int    `json:"status_code"`
-				CodexError struct {
-					Code    string `json:"code"`
-					Type    string `json:"type"`
-					Message string `json:"message"`
-				} `json:"codex_error_info"`
-			} `json:"error"`
-			Status     int `json:"status"`
-			StatusCode int `json:"status_code"`
-		}
-		if json.Unmarshal([]byte(scanner.Text()), &event) != nil {
-			continue
-		}
-		code := strings.ToLower(strings.TrimSpace(event.Code + " " + event.Error.Code + " " + event.Error.Type + " " + event.Error.CodexError.Code + " " + event.Error.CodexError.Type))
-		message := strings.ToLower(strings.TrimSpace(event.Message + " " + event.Error.Message + " " + event.Error.CodexError.Message))
-		status := event.Status
-		if status == 0 {
-			status = event.StatusCode
-		}
-		if status == 0 {
-			status = event.Error.Status
-		}
-		if status == 0 {
-			status = event.Error.StatusCode
-		}
-		if event.Type != "error" && event.Type != "turn.failed" && strings.TrimSpace(code) == "" && status == 0 {
-			continue
-		}
-		failureText := code + " " + message
-		if status != 0 {
-			failureText += fmt.Sprintf(" status %d", status)
-		}
-		switch {
-		case containsAny(failureText, "rate_limit", "rate-limit", "rate limit", "too_many_requests", "too many requests", "capacity", "quota", "status 429", "http 429"):
-			return &HeadlessFailure{Cause: NewRateLimitError(NameCodex)}
-		case containsAny(failureText, "unauthorized", "authentication", "auth_required", "invalid_api_key", "invalid api key", "credential", "token_expired", "token expired", "status 401", "http 401"):
-			return &HeadlessFailure{Cause: NewAuthenticationExpiredError(NameCodex)}
-		case containsAny(failureText, "cancel", "aborted"):
-			return &HeadlessFailure{Cause: context.Canceled}
-		case event.Type == "error" || event.Type == "turn.failed":
-			return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex)}
-		}
+// expectHarness refuses an inspection addressed to a different adapter, so a
+// native session is never read through the harness that did not create it.
+func (h *headless) expectHarness(name string) error {
+	if name != "" && name != h.protocol.name {
+		return fmt.Errorf("%s headless adapter cannot inspect harness %q", h.protocol.name, name)
 	}
 	return nil
 }
 
+// workerRequestForSession rebuilds only the logical worker identity for
+// idempotent cancellation and finish after durable replay.
+func (h *headless) workerRequestForSession(session HeadlessSession) worker.HeadlessRequest {
+	return worker.HeadlessRequest{RunID: session.RunID, WorkerID: session.WorkerID, InvocationID: session.InvocationID, EnvironmentPolicy: worker.EnvironmentPolicyClean, Mode: worker.HeadlessLaunchFresh}
+}
+
+// forEachHeadlessEvent visits every complete machine-readable line of bounded
+// process output and stops early when the visitor returns false.
+func forEachHeadlessEvent(output string, visit func(line string) bool) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	scanner.Buffer(make([]byte, 4096), maxHeadlessEventLineBytes)
+	for scanner.Scan() {
+		if !visit(scanner.Text()) {
+			return
+		}
+	}
+}
+
 // normalizeHeadlessError maps worker and process-boundary failures to the
 // existing redacted coordinator vocabulary without classifying human prose.
-func normalizeHeadlessError(err error) error {
+func normalizeHeadlessError(harnessName string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -451,19 +397,16 @@ func normalizeHeadlessError(err error) error {
 	if errors.As(err, &failure) {
 		return err
 	}
-	if errors.Is(err, context.Canceled) {
+	switch {
+	case errors.Is(err, context.Canceled):
 		return &HeadlessFailure{Cause: context.Canceled}
+	case errors.Is(err, ErrRateLimited):
+		return &HeadlessFailure{Cause: NewRateLimitError(harnessName)}
+	case errors.Is(err, ErrAuthenticationExpired):
+		return &HeadlessFailure{Cause: NewAuthenticationExpiredError(harnessName)}
+	default:
+		return &HeadlessFailure{Cause: NewUnexpectedExitError(harnessName)}
 	}
-	if errors.Is(err, ErrRateLimited) {
-		return &HeadlessFailure{Cause: NewRateLimitError(NameCodex)}
-	}
-	if errors.Is(err, ErrAuthenticationExpired) {
-		return &HeadlessFailure{Cause: NewAuthenticationExpiredError(NameCodex)}
-	}
-	if errors.Is(err, ErrUnexpectedExit) {
-		return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex)}
-	}
-	return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex)}
 }
 
 // HeadlessFailure carries local bounded diagnostics separately from the typed
@@ -600,14 +543,10 @@ func sessionFromHeadless(session HeadlessSession) Session {
 	return Session{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID}
 }
 
-// workerRequestForSession rebuilds only the logical worker identity for
-// idempotent cancellation and finish after durable replay.
-func (c *CodexHeadless) workerRequestForSession(session HeadlessSession) worker.HeadlessRequest {
-	return worker.HeadlessRequest{RunID: session.RunID, WorkerID: session.WorkerID, InvocationID: session.InvocationID, EnvironmentPolicy: worker.EnvironmentPolicyClean, Mode: worker.HeadlessLaunchFresh}
-}
-
 // validateHeadlessStartRequest validates the coordinator-owned launch fields.
-func validateHeadlessStartRequest(request HeadlessStartRequest) error {
+// The harness name only labels a refusal; every adapter enforces the same
+// neutral contract.
+func validateHeadlessStartRequest(harnessName string, request HeadlessStartRequest) error {
 	for field, value := range map[string]string{
 		"invocation id": request.InvocationID, "run id": request.RunID,
 		"worker id": request.WorkerID, "role": request.Role,
@@ -617,23 +556,26 @@ func validateHeadlessStartRequest(request HeadlessStartRequest) error {
 			continue
 		}
 		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("Codex headless %s is required", field)
+			return fmt.Errorf("%s headless %s is required", harnessName, field)
 		}
 		if field != "prompt" && strings.ContainsAny(value, "\x00\r\n") {
-			return fmt.Errorf("Codex headless %s must be a single line", field)
+			return fmt.Errorf("%s headless %s must be a single line", harnessName, field)
 		}
 	}
 	if len(request.Prompt) > maxPromptBytes {
-		return &PromptTooLargeError{Harness: NameCodex, Bytes: len(request.Prompt), Limit: maxPromptBytes}
+		return &PromptTooLargeError{Harness: harnessName, Bytes: len(request.Prompt), Limit: maxPromptBytes}
+	}
+	if request.ResumeSessionID != "" && !safeHeadlessIdentifier(request.ResumeSessionID) {
+		return fmt.Errorf("%s headless resume session id is unsafe", harnessName)
 	}
 	if request.WorkerID != "" && !safeHeadlessIdentifier(request.WorkerID) {
-		return errors.New("Codex headless worker id is unsafe")
+		return fmt.Errorf("%s headless worker id is unsafe", harnessName)
 	}
 	if request.Model != "" && strings.ContainsAny(request.Model, "\x00\r\n ") {
-		return errors.New("Codex headless model contains unsafe characters")
+		return fmt.Errorf("%s headless model contains unsafe characters", harnessName)
 	}
 	if request.ReasoningEffort != "" && strings.ContainsAny(request.ReasoningEffort, "\x00\r\n ") {
-		return errors.New("Codex headless reasoning effort contains unsafe characters")
+		return fmt.Errorf("%s headless reasoning effort contains unsafe characters", harnessName)
 	}
 	return nil
 }
@@ -714,8 +656,4 @@ func containsAny(value string, markers ...string) bool {
 	return false
 }
 
-var _ HeadlessRuntime = (*CodexHeadless)(nil)
-var _ NativeSessionInspector = (*CodexHeadless)(nil)
-var _ NativeSessionLivenessInspector = (*CodexHeadless)(nil)
-var _ HeadlessFailureInspector = (*CodexHeadless)(nil)
 var _ Runtime = (*headlessRuntimeAdapter)(nil)

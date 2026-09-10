@@ -28,14 +28,14 @@ func TestClassifyHeadlessEventsRecognizesTurnFailedMessages(t *testing.T) {
 	}
 }
 
-// TestClassifyHeadlessInspectionIncludesStderr verifies adapter-owned stream
+// TestClassifyInspectionIncludesStderr verifies adapter-owned stream
 // classification does not lose a structured failure emitted on stderr.
-func TestClassifyHeadlessInspectionIncludesStderr(t *testing.T) {
-	failure := classifyHeadlessInspection(HeadlessInspection{
+func TestClassifyInspectionIncludesStderr(t *testing.T) {
+	failure := NewCodexHeadless(nil).classifyInspection(HeadlessInspection{
 		Status: worker.HeadlessStatusExited,
 		Stderr: `{"type":"turn.failed","error":{"message":"authentication token expired"}}`,
 	})
 	if failure == nil || !errors.Is(failure, ErrAuthenticationExpired) {
-		t.Fatalf("classifyHeadlessInspection() = %v, want authentication-expired outcome", failure)
+		t.Fatalf("classifyInspection() = %v, want authentication-expired outcome", failure)
 	}
 }

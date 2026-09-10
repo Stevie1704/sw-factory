@@ -188,7 +188,7 @@ type invocationLifecycle struct {
 	worker              worker.WorkerRuntime
 	terminal            terminal.TerminalRuntime
 	harness             harness.Runtime
-	headlessHarness     harness.HeadlessRuntime
+	headlessHarnesses   map[config.Harness]harness.HeadlessRuntime
 	harnessCapabilities harness.CapabilityResolver
 	worktree            gitadapter.WorktreeInspector
 	clock               Clock
@@ -203,13 +203,13 @@ var _ InvocationLifecycle = (*invocationLifecycle)(nil)
 
 // newInvocationLifecycle constructs the module from explicit adapters and
 // hooks. It intentionally accepts only explicit adapters and effects.
-func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks, headless harness.HeadlessRuntime) *invocationLifecycle {
+func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime, harnessRuntime harness.Runtime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks, headless map[config.Harness]harness.HeadlessRuntime) *invocationLifecycle {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	return &invocationLifecycle{
 		journal: journal, worker: workerRuntime, terminal: terminalRuntime, harness: harnessRuntime,
-		headlessHarness:     headless,
+		headlessHarnesses:   headless,
 		harnessCapabilities: capabilities, worktree: worktree, clock: clock, hooks: hooks,
 		harnessRuntimes: make(map[config.Harness]harness.Runtime, 2),
 	}
@@ -1282,7 +1282,7 @@ func (l *invocationLifecycle) rollbackLaunch(ctx context.Context, runStore RunSt
 			original = fmt.Errorf("%w; durable pending-effect lookup was indeterminate; invocation kept protected: %v", original, err)
 		}
 		if pending != nil {
-			if l.headlessCodexSelected(config.Harness(invocation.Harness)) {
+			if l.headlessAdapter(config.Harness(invocation.Harness)) != nil {
 				cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 				_ = l.cancelHeadlessInvocation(cleanupContext, invocation)
 				cancel()
@@ -1381,28 +1381,33 @@ func (l *invocationLifecycle) ensureAgentRuntime(socketPath string, selected con
 }
 
 // ensureCoordinatorHarnessRuntime resolves the lifecycle adapter used by
-// coordinator-owned launch, recovery, and acceptance effects. Codex selects
-// the terminal-free seam when available; Claude and explicitly injected
-// adapters retain the transitional interactive path.
+// coordinator-owned launch, recovery, and acceptance effects. A harness with a
+// migrated headless adapter uses the terminal-free seam; an explicitly
+// injected adapter retains the transitional interactive path.
 func (l *invocationLifecycle) ensureCoordinatorHarnessRuntime(socketPath string, selected config.Harness) (terminal.TerminalRuntime, harness.Runtime, error) {
-	if l.headlessCodexSelected(selected) {
-		capabilities := l.headlessHarness.Capabilities()
+	if adapter := l.headlessAdapter(selected); adapter != nil {
+		capabilities := adapter.Capabilities()
 		if capabilities.Name != string(selected) {
 			return nil, nil, fmt.Errorf("harness %q resolved to %q", selected, capabilities.Name)
 		}
-		return nil, harness.AdaptHeadlessRuntime(l.headlessHarness), nil
+		return nil, harness.AdaptHeadlessRuntime(adapter), nil
 	}
 	return l.ensureAgentRuntime(socketPath, selected)
 }
 
-// headlessCodexSelected reports whether the coordinator should use the
-// terminal-free Codex adapter for a selected role. It centralizes the adapter
-// identity and capability check used by lifecycle cleanup and diagnostics.
-func (l *invocationLifecycle) headlessCodexSelected(selected config.Harness) bool {
-	if selected != config.HarnessCodex || l.harness != nil || l.headlessHarness == nil {
-		return false
+// headlessAdapter returns the terminal-free adapter for a selected harness, or
+// nil when that harness still uses the interactive path. It centralizes the
+// adapter identity and capability check used by lifecycle cleanup and
+// diagnostics.
+func (l *invocationLifecycle) headlessAdapter(selected config.Harness) harness.HeadlessRuntime {
+	if l.harness != nil {
+		return nil
 	}
-	return coordinatorUsesHeadless(harness.AdaptHeadlessRuntime(l.headlessHarness))
+	adapter, exists := l.headlessHarnesses[selected]
+	if !exists || adapter == nil || !adapter.Capabilities().Headless {
+		return nil
+	}
+	return adapter
 }
 
 // coordinatorUsesHeadless reports whether the selected adapter has no
@@ -1765,7 +1770,7 @@ func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, regist
 	next := run
 	next.Status = store.StatusWaitingForHuman
 	manualAction := "manual resume and attach required"
-	if l.headlessCodexSelected(config.Harness(harnessName)) {
+	if l.headlessAdapter(config.Harness(harnessName)) != nil {
 		manualAction = "manual native resume required"
 	}
 	next.LifecycleReason = fmt.Sprintf("automatic harness recovery exhausted (%s); %s", harnessName, manualAction)
@@ -1851,13 +1856,14 @@ func (l *invocationLifecycle) stopActiveRunWorkers(ctx context.Context, runStore
 
 // cancelHeadlessInvocation requests process cancellation before its worker is
 // stopped. The worker stop remains the outer idempotent cleanup boundary, but
-// this explicit step lets a detached Codex helper persist its cancelled state
+// this explicit step lets a detached harness helper persist its cancelled state
 // for recovery and prevents a later restart from mistaking it for a lost run.
 func (l *invocationLifecycle) cancelHeadlessInvocation(ctx context.Context, invocation store.Invocation) error {
-	if !l.headlessCodexSelected(config.Harness(invocation.Harness)) {
+	adapter := l.headlessAdapter(config.Harness(invocation.Harness))
+	if adapter == nil {
 		return nil
 	}
-	if err := l.headlessHarness.CancelHeadless(ctx, harness.HeadlessSession{
+	if err := adapter.CancelHeadless(ctx, harness.HeadlessSession{
 		InvocationID:    invocation.ID,
 		RunID:           invocation.RunID,
 		WorkerID:        workerIDForInvocation(invocation),
@@ -1927,8 +1933,8 @@ func (l *invocationLifecycle) resetStartupState() {
 // recordSessionExitDiagnostic captures adapter-bounded process output before
 // recovery stops the worker and returns only the local diagnostic path.
 func (l *invocationLifecycle) recordSessionExitDiagnostic(ctx context.Context, registration config.RepositoryRegistration, run store.Run, invocation store.Invocation) string {
-	if l.headlessCodexSelected(config.Harness(invocation.Harness)) {
-		_, transcript, classified := classifyHeadlessExit(harness.AdaptHeadlessRuntime(l.headlessHarness), ctx, harness.HeadlessInspectionRequest{
+	if adapter := l.headlessAdapter(config.Harness(invocation.Harness)); adapter != nil {
+		_, transcript, classified := classifyHeadlessExit(harness.AdaptHeadlessRuntime(adapter), ctx, harness.HeadlessInspectionRequest{
 			InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role,
 		}, invocation.Harness)
 		if classified {

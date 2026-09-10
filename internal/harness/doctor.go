@@ -100,8 +100,13 @@ type StartupRequest struct {
 	// SkillEvidencePath is the host path of the recorded worker skill smoke
 	// evidence.
 	SkillEvidencePath string
-	// HeadlessChecker verifies the worker process helper for all-Codex policy.
+	// HeadlessChecker verifies the worker process helper used by the migrated
+	// terminal-free adapters.
 	HeadlessChecker worker.HeadlessChecker
+	// AllRolesHeadless reports that every declared role selects a harness the
+	// coordinator runs without a terminal, so the worker process helper is a
+	// blocking prerequisite.
+	AllRolesHeadless bool
 }
 
 // StartupChecks returns independent capability, executable, and authentication
@@ -154,7 +159,7 @@ func interactiveResumeCheck(request StartupRequest) doctor.Check {
 		if err := ValidateInteractiveResumeCapabilities(*policy, request.Resolve); err != nil {
 			return doctor.Failure("harness capability", err.Error(), "select an adapter with interactive resume support for every declared role")
 		}
-		if config.AllRolesUseHarness(*policy, config.HarnessCodex) && request.HeadlessChecker != nil {
+		if request.AllRolesHeadless && request.HeadlessChecker != nil {
 			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {
 				return doctor.Failure("harness capability", "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
 			}

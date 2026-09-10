@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -295,3 +296,110 @@ var _ worker.HarnessChecker = (*factoryDoctorWorker)(nil)
 var _ worker.HarnessAuthenticationChecker = (*factoryDoctorWorker)(nil)
 var _ terminal.TerminalRuntime = (*factoryDoctorTerminal)(nil)
 var _ terminal.DoctorChecker = (*factoryDoctorTerminal)(nil)
+
+// TestDoctorOmitsTerminalDiagnosisWhenEveryRoleUsesAMigratedAdapter verifies a
+// repository whose roles all select a headless harness is diagnosed without
+// cmux and gains the worker process-helper prerequisite instead. The policy
+// deliberately mixes both production adapters.
+func TestDoctorOmitsTerminalDiagnosisWhenEveryRoleUsesAMigratedAdapter(t *testing.T) {
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	writeSkillSmokeEvidence(t, repositoryPath)
+	configPathOnDisk := filepath.Join(repositoryPath, config.RepositoryConfigFileName)
+	body, err := os.ReadFile(configPathOnDisk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := strings.Replace(string(body), "  implementation: codex", "  implementation: claude", 1)
+	mixed = strings.Replace(mixed, "  implementation: [gpt-5]", "  implementation: [claude-opus-5]", 1)
+	if err := os.WriteFile(configPathOnDisk, []byte(mixed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "host", "config.yaml")
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	if err := config.SaveHost(configPath, config.HostConfig{
+		SchemaVersion: config.CurrentSchemaVersion,
+		Repositories: []config.RepositoryRegistration{{
+			Path:                 repositoryPath,
+			GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+			AuthorizedUsers:      []string{"alice"},
+			Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+			OperationalDataPath:  operationalPath,
+			RepositoryConfigPath: configPathOnDisk,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Open().Close() error = %v", err)
+	}
+
+	gitWorkspace := &factoryDoctorGitWorkspace{}
+	workerRuntime := &factoryHeadlessDoctorWorker{}
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{
+		GitHub:       &fakeGitHub{},
+		GitWorkspace: gitWorkspace,
+		Worktree:     gitWorkspace,
+		Worker:       workerRuntime,
+	})
+
+	result, err := service.Doctor(context.Background())
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if len(result.Report.Failures()) != 0 {
+		t.Fatalf("Doctor() failures = %#v, want a ready terminal-free diagnosis", result.Report.Failures())
+	}
+	for _, check := range result.Report.Results {
+		if strings.HasPrefix(check.Name, "cmux") {
+			t.Fatalf("Doctor() checked %q for an all-headless repository", check.Name)
+		}
+	}
+	if workerRuntime.headlessChecks != 1 {
+		t.Fatalf("headless helper probes = %d, want one", workerRuntime.headlessChecks)
+	}
+}
+
+// factoryHeadlessDoctorWorker adds the detached process extension to the
+// composition worker, so the coordinator resolves migrated headless adapters.
+type factoryHeadlessDoctorWorker struct {
+	factoryDoctorWorker
+	headlessChecks int
+}
+
+// CheckHeadless implements the worker-owned process helper probe seam.
+func (w *factoryHeadlessDoctorWorker) CheckHeadless(context.Context, worker.HeadlessCheckRequest) error {
+	w.headlessChecks++
+	return nil
+}
+
+// StartHeadless implements the detached process extension.
+func (*factoryHeadlessDoctorWorker) StartHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessExecution, error) {
+	return worker.HeadlessExecution{}, nil
+}
+
+// InspectHeadless implements the detached process extension.
+func (*factoryHeadlessDoctorWorker) InspectHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessInspection, error) {
+	return worker.HeadlessInspection{Status: worker.HeadlessStatusMissing}, nil
+}
+
+// CancelHeadless implements the detached process extension.
+func (*factoryHeadlessDoctorWorker) CancelHeadless(context.Context, worker.HeadlessRequest) error {
+	return nil
+}
+
+// FinishHeadless implements the detached process extension.
+func (*factoryHeadlessDoctorWorker) FinishHeadless(context.Context, worker.HeadlessRequest) error {
+	return nil
+}
+
+var _ worker.HeadlessProcessRuntime = (*factoryHeadlessDoctorWorker)(nil)
+var _ worker.HeadlessChecker = (*factoryHeadlessDoctorWorker)(nil)
