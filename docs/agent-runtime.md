@@ -7,13 +7,14 @@ mutations, Git history, or workflow transitions.
 
 ## Harness adapters
 
-Codex and Claude Code are interchangeable at the role-selection boundary. The
-transitional interactive adapters implement the `Runtime` seam: capability
-discovery, launch, native session identification, resume, and graceful stop.
-Codex additionally implements the factory-owned `HeadlessRuntime` seam used by
-new production launches. An adapter translates one harness-neutral invocation
-into native commands and owns no workflow, Git, retry, or terminal-layout
-decision.
+Codex and Claude Code are interchangeable at the role-selection boundary. Both
+implement the factory-owned `HeadlessRuntime` seam used by every production
+launch: capability discovery, terminal-free launch, exact native resume,
+running/exited inspection, cancellation, and accepted-completion shutdown. The
+superseded interactive adapters still implement the `Runtime` seam for an
+explicitly injected legacy runtime. An adapter translates one harness-neutral
+invocation into native commands and owns no workflow, Git, retry, or
+terminal-layout decision.
 
 The coordinator resolves the adapter from the frozen repository policy for the
 role, so workflow code never names a tool. `Capabilities` reports the adapter
@@ -34,22 +35,34 @@ The two adapters differ in how a native session identity is obtained:
 | --- | --- | --- |
 | Codex interactive | Persisted by Codex; the adapter snapshots the role home before launch and discovers the new session file | `codex ... resume <uuid>` with the global flags first |
 | Codex headless | Read from the machine-readable `thread.started` event emitted by `codex exec --json` and retained in the invocation | `codex exec --json ... resume <uuid>` with the exec flags before the subcommand |
-| Claude Code | Assigned by the adapter with `--session-id <uuid>` before launch, which removes the discovery race | `claude ... --resume <uuid>` |
+| Claude Code interactive | Assigned by the adapter with `--session-id <uuid>` before launch, which removes the discovery race | `claude ... --resume <uuid>` |
+| Claude Code headless | Assigned with `--session-id <uuid>` and confirmed by the `system`/`init` event's `session_id` in the `stream-json` output | `claude -p ... --resume <uuid>`, refused when the confirmed identity differs |
 
-### Terminal-free Codex execution
+### Terminal-free execution
 
-An all-Codex repository launches each role through `HeadlessRuntime`. The
-adapter asks the existing per-invocation Docker worker to run
-`codex exec --json`; it never starts Codex or a harness helper on the
-coordinator host. The worker uses `docker exec -d` with neither a TTY nor
-attached stdin, and stores bounded stdout/stderr in the invocation's private
-role-home process state. JSON events are control-plane input only: the
-`thread.started` event supplies the opaque native identity, and structured
-`error` or `turn.failed` events classify capacity or authentication outcomes
-from their code, status, or documented error message. The adapter repeats that
-classification on terminal inspection, so a failure arriving after launch
-discovery still reaches the factory's typed outcome. Model text is never a
-workflow result.
+A repository whose declared roles all select a harness with a headless adapter
+launches every role through `HeadlessRuntime`, and per-role selection may mix
+Codex and Claude Code. The adapter asks the existing per-invocation Docker
+worker to run the harness; it never starts a harness, SDK loop, file operation,
+or shell command on the coordinator host. The worker uses `docker exec -d` with
+neither a TTY nor attached stdin, and stores bounded stdout/stderr in the
+invocation's private role-home process state.
+
+Each adapter owns its own native command, session assignment, and event
+vocabulary:
+
+| | Codex | Claude Code |
+| --- | --- | --- |
+| Command | `codex exec --json` | `claude -p --output-format stream-json --verbose` |
+| Launch event | `thread.started` | `system` / `init` |
+| Failure events | `error` and `turn.failed`, classified from code, status, or documented message | the machine `error` category on an `api_retry` system event or an API-error message, applied only when the run also ended in a failed `result` |
+
+Machine output is control-plane input only. Claude Code retries a failed API
+request before it gives up, so a retry category becomes a coordinator outcome
+only when the final `result` event reports `is_error`; the result text itself is
+never a category. Both adapters repeat that classification on terminal
+inspection, so a failure arriving after launch discovery still reaches the
+factory's typed outcome. Model text is never a workflow result.
 
 The coordinator still accepts exactly one authoritative result: the
 schema-versioned `factory-report` under `/results`. It validates that report
@@ -58,11 +71,35 @@ paths, and size contract. A detached process may exit before report acceptance;
 recovery distinguishes an exited process with a report from an exited process
 that needs the bounded native-resume policy.
 
-The headless path is intentionally additive while issue #164 moves Claude Code
-onto the same seam. Issue #165 can then remove the interactive terminal
-orchestration once no persisted invocation needs it. Until those migrations are
-complete, Claude and explicitly injected legacy adapters retain the interactive
-runtime and `factory attach` behavior.
+With both production adapters headless, issue #165 can remove the interactive
+terminal orchestration once no persisted invocation needs it. Until then, only
+an explicitly injected legacy adapter retains the interactive runtime and
+`factory attach` behavior; `factory attach` refuses a headless invocation
+because it has no terminal attachment.
+
+### Harness authentication
+
+Both harnesses read credentials the coordinator projects into a factory-managed
+worker volume from the registered host path (`codex_auth_path`,
+`claude_auth_path`). Neither source file is ever written by the factory, and
+neither credential reaches a coordinator-owned process argument or environment
+value.
+
+For Claude Code this means the worker runs on the CLI's own subscription
+credentials, and its `init` event reports `apiKeySource: "none"`. That choice
+keeps the run on the operator's existing login, and it also means an expired
+OAuth credential is an operator event: the adapter classifies it as an
+authentication failure, the coordinator pauses the run, and `factory auth
+refresh` reseeds the volume from the re-authenticated host file.
+
+An SDK or API-key integration would instead authenticate with
+`ANTHROPIC_API_KEY`. The factory does not support that today, and the difference
+is deliberate rather than incidental: the worker's explicit environment carries
+only non-secret coordinator protocol values, so an API key would need a new
+secret projection with its own rotation and redaction rules. The CLI's `--bare`
+mode, which is the documented API-key path for scripted runs, is also
+unavailable to the factory because it skips skill discovery and would remove the
+curated worker skill set the role prompts mandate.
 
 Both adapters disable the harness's own approval gates, because the worker is
 the security boundary and an inner gate would stall an unattended invocation.
@@ -168,9 +205,9 @@ factory auth refresh --config /Users/me/.config/factory/config.yaml --run-id run
 without spending the automatic recovery allowance. A manually resumed
 interactive session sets a durable attach gate; workflow progression and report
 acceptance remain blocked until `factory attach` restores the worker and visible
-terminal topology and clears that gate. A manually resumed headless Codex
-session has no attach gate: its worker state and native identity are already
-coordinator-owned and progression can continue unattended. `factory auth refresh` reads the explicitly
+terminal topology and clears that gate. A manually resumed headless session has
+no attach gate, for either harness: its worker state and native identity are
+already coordinator-owned and progression can continue unattended. `factory auth refresh` reads the explicitly
 registered host credential source and reseeds only the factory-managed worker
 credential volume; it never writes the source file or host harness directory.
 
@@ -218,11 +255,19 @@ The Claude adapter does not close it yet, so a Claude invocation still
 auto-discovers `CLAUDE.md` and its local variants from the worktree. The
 harness offers only `--bare` and `--safe-mode`, and neither is usable here:
 `--safe-mode` disables the pinned worker skills along with the project file,
-and `--bare` additionally drops hooks, plugins, and every credential source
-except `ANTHROPIC_API_KEY`, which the factory-managed credential store does not
-supply. Until the harness exposes a narrower control, a Claude role can read
-mutable worktree guidance that the factory did not freeze, and the prompt's
-precedence rule is the only bound on it.
+and `--bare` additionally drops skills, hooks, plugins, and every credential
+source except `ANTHROPIC_API_KEY`, which the factory-managed credential store
+does not supply. Until the harness exposes a narrower control, a Claude role
+can read mutable worktree guidance that the factory did not freeze, and the
+prompt's precedence rule is the only bound on it.
+
+The headless launch does not widen that channel, but it does move one more
+worktree-owned input inside it: a non-interactive Claude run executes the hooks
+declared in the worktree's `.claude/settings.json` without a workspace-trust
+prompt. The strict empty MCP configuration still keeps every declared MCP
+server out, and the isolated worker remains the security boundary for anything
+such a hook could run, so the exposure is the same mutable-guidance limitation
+rather than a new privilege.
 
 A check repair, a review repair, and a test-objection revision resume the
 harness session that already read the role's first prompt. Such a launch builds

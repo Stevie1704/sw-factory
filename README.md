@@ -3,8 +3,8 @@
 Software Factory is a local, supervised coordinator for taking an authorized
 GitHub issue through an isolated, AI-assisted change process and into a draft
 pull request. It combines a frozen issue and repository policy with a
-host-owned Git workspace, a pinned Docker worker, headless Codex or visible
-Claude Code sessions, deterministic gates, structured reports, and restart-safe
+host-owned Git workspace, a pinned Docker worker, headless Codex or Claude Code
+sessions, deterministic gates, structured reports, and restart-safe
 local state.
 
 The command-line coordinator is <code>factory</code>. It is intentionally an
@@ -74,7 +74,7 @@ advisory: implementation-owned red/green/refactor -> checkpoint gates -> ...
 The coordinator owns workflow state, GitHub projections, worktrees, worker
 identity, optional terminal surfaces, report validation, checkpoint commits,
 gates, pushes, and draft pull requests. A harness is a proposal-maker—headless
-Codex or visible Claude Code. It does not own workflow transitions, Git history,
+Codex or headless Claude Code. It does not own workflow transitions, Git history,
 GitHub mutations, or the final interpretation of model output.
 
 Factory does not merge pull requests, silently alter repository policy, pull a
@@ -223,8 +223,10 @@ Every stage also has an orthogonal status:
 ## Prerequisites
 
 Factory is designed for a macOS operator workflow with Docker, GitHub, and a
-configured agent harness. cmux is required only for mixed or interactive
-Claude/legacy repositories; an all-Codex repository runs headlessly.
+configured agent harness. cmux is required only for a repository that selects a
+harness without a headless adapter, or that injects a legacy interactive
+adapter; a repository whose roles all select Codex or Claude Code runs
+headlessly.
 
 You need:
 
@@ -656,9 +658,10 @@ factory agent \
   --run-id <run-id>
 ~~~
 
-For all-Codex repositories this starts `codex exec --json` inside the pinned
-worker and reports no terminal handles. Claude, mixed, and explicitly
-interactive legacy runs retain their visible terminal surfaces. The output
+This starts the role's harness inside the pinned worker without a terminal:
+`codex exec --json` for Codex and `claude -p --output-format stream-json` for
+Claude Code. Per-role selection may mix both. Only an explicitly injected
+legacy interactive adapter retains a visible terminal surface. The output
 reports:
 
 - invocation ID;
