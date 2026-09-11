@@ -403,3 +403,120 @@ func (*factoryHeadlessDoctorWorker) FinishHeadless(context.Context, worker.Headl
 
 var _ worker.HeadlessProcessRuntime = (*factoryHeadlessDoctorWorker)(nil)
 var _ worker.HeadlessChecker = (*factoryHeadlessDoctorWorker)(nil)
+
+// TestDoctorKeepsTerminalDiagnosisWhenAnAdapterIsNotUsableHeadlessly verifies
+// startup diagnosis and lifecycle dispatch cannot disagree. An injected adapter
+// that reports another identity, or no headless support, is not a migrated
+// adapter, so cmux stays a prerequisite instead of being skipped for a role the
+// coordinator would then launch through the terminal.
+func TestDoctorKeepsTerminalDiagnosisWhenAnAdapterIsNotUsableHeadlessly(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		capabilities harness.Capabilities
+	}{
+		{name: "identity mismatch", capabilities: harness.Capabilities{Name: "codex", InteractiveResume: true, Headless: true}},
+		{name: "no headless support", capabilities: harness.Capabilities{Name: "claude", InteractiveResume: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			repositoryPath := filepath.Join(root, "repository")
+			if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeRepositoryConfig(t, repositoryPath)
+			writeSkillSmokeEvidence(t, repositoryPath)
+			configPathOnDisk := filepath.Join(repositoryPath, config.RepositoryConfigFileName)
+			body, err := os.ReadFile(configPathOnDisk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claudePolicy := strings.Replace(string(body), "  implementation: codex", "  implementation: claude", 1)
+			claudePolicy = strings.Replace(claudePolicy, "  implementation: [gpt-5]", "  implementation: [claude-opus-5]", 1)
+			if err := os.WriteFile(configPathOnDisk, []byte(claudePolicy), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			configPath := filepath.Join(root, "host", "config.yaml")
+			operationalPath := filepath.Join(root, "state", "factory.db")
+			if err := config.SaveHost(configPath, config.HostConfig{
+				SchemaVersion: config.CurrentSchemaVersion,
+				Repositories: []config.RepositoryRegistration{{
+					Path:                 repositoryPath,
+					GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+					AuthorizedUsers:      []string{"alice"},
+					Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+					OperationalDataPath:  operationalPath,
+					RepositoryConfigPath: configPathOnDisk,
+				}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			opened, err := store.Open(context.Background(), operationalPath)
+			if err != nil {
+				t.Fatalf("Open() error = %v", err)
+			}
+			if err := opened.Close(); err != nil {
+				t.Fatalf("Open().Close() error = %v", err)
+			}
+			gitWorkspace := &factoryDoctorGitWorkspace{}
+			service := factory.NewWithDependencies(configPath, factory.Dependencies{
+				GitHub:       &fakeGitHub{},
+				GitWorkspace: gitWorkspace,
+				Worktree:     gitWorkspace,
+				Worker:       &factoryHeadlessDoctorWorker{},
+				Terminal:     &factoryDoctorTerminal{},
+				HeadlessHarnesses: map[config.Harness]harness.HeadlessRuntime{
+					config.HarnessClaude: &mismatchedHeadlessHarness{capabilities: test.capabilities},
+				},
+			})
+			result, err := service.Doctor(context.Background())
+			if err != nil {
+				t.Fatalf("Doctor() error = %v", err)
+			}
+			checkedTerminal := false
+			for _, check := range result.Report.Results {
+				if strings.HasPrefix(check.Name, "cmux") {
+					checkedTerminal = true
+				}
+			}
+			if !checkedTerminal {
+				t.Fatalf("Doctor() omitted cmux for an adapter that cannot run this role headlessly: %#v", result.Report.Results)
+			}
+		})
+	}
+}
+
+// mismatchedHeadlessHarness reports capabilities that do not qualify it to run
+// the harness it is registered under.
+type mismatchedHeadlessHarness struct {
+	capabilities harness.Capabilities
+}
+
+// Capabilities reports the controlled adapter identity.
+func (h *mismatchedHeadlessHarness) Capabilities() harness.Capabilities { return h.capabilities }
+
+// StartHeadless implements the terminal-free seam.
+func (*mismatchedHeadlessHarness) StartHeadless(context.Context, harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
+	return harness.HeadlessSession{}, nil
+}
+
+// ResumeHeadless implements the terminal-free seam.
+func (*mismatchedHeadlessHarness) ResumeHeadless(context.Context, harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
+	return harness.HeadlessSession{}, nil
+}
+
+// InspectHeadless implements the terminal-free seam.
+func (*mismatchedHeadlessHarness) InspectHeadless(context.Context, harness.HeadlessInspectionRequest) (harness.HeadlessInspection, error) {
+	return harness.HeadlessInspection{}, nil
+}
+
+// CancelHeadless implements the terminal-free seam.
+func (*mismatchedHeadlessHarness) CancelHeadless(context.Context, harness.HeadlessSession) error {
+	return nil
+}
+
+// FinishHeadless implements the terminal-free seam.
+func (*mismatchedHeadlessHarness) FinishHeadless(context.Context, harness.HeadlessSession) error {
+	return nil
+}
+
+var _ harness.HeadlessRuntime = (*mismatchedHeadlessHarness)(nil)

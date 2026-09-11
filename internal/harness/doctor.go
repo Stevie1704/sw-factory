@@ -187,7 +187,11 @@ func executableCheck(checker worker.HarnessChecker, image worker.ImageReference,
 func credentialCheck(name, path string, image worker.ImageReference, checker worker.HarnessAuthenticationChecker) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		if strings.TrimSpace(path) == "" {
-			return doctor.Warning(name+" authentication", "no host credential file is configured", "authenticate during the first worker session or configure a private credential file")
+			// ADR 0002 keeps a host source optional: a harness without one runs
+			// on the credential its own role volume already holds. An
+			// unattended headless run cannot log in for itself, though, so the
+			// action names the two things that actually produce one.
+			return doctor.Warning(name+" authentication", "no host credential file is configured", "configure a private credential file, or keep the credential this harness already persisted in its worker role volume")
 		}
 		info, err := os.Lstat(path)
 		if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") || err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 || info.Size() == 0 {

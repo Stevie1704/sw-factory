@@ -1386,25 +1386,31 @@ func (l *invocationLifecycle) ensureAgentRuntime(socketPath string, selected con
 // injected adapter retains the transitional interactive path.
 func (l *invocationLifecycle) ensureCoordinatorHarnessRuntime(socketPath string, selected config.Harness) (terminal.TerminalRuntime, harness.Runtime, error) {
 	if adapter := l.headlessAdapter(selected); adapter != nil {
-		capabilities := adapter.Capabilities()
-		if capabilities.Name != string(selected) {
-			return nil, nil, fmt.Errorf("harness %q resolved to %q", selected, capabilities.Name)
-		}
 		return nil, harness.AdaptHeadlessRuntime(adapter), nil
 	}
 	return l.ensureAgentRuntime(socketPath, selected)
 }
 
 // headlessAdapter returns the terminal-free adapter for a selected harness, or
-// nil when that harness still uses the interactive path. It centralizes the
-// adapter identity and capability check used by lifecycle cleanup and
-// diagnostics.
+// nil when that harness still uses the interactive path.
 func (l *invocationLifecycle) headlessAdapter(selected config.Harness) harness.HeadlessRuntime {
 	if l.harness != nil {
 		return nil
 	}
-	adapter, exists := l.headlessHarnesses[selected]
-	if !exists || adapter == nil || !adapter.Capabilities().Headless {
+	return headlessAdapterFor(l.headlessHarnesses, selected)
+}
+
+// headlessAdapterFor returns the adapter that may run one selected harness
+// without a terminal. An adapter qualifies only when it reports the identity it
+// is keyed by and reports headless support, so a diagnosis that omits cmux and
+// a launch that skips the terminal can never disagree about the same role.
+func headlessAdapterFor(adapters map[config.Harness]harness.HeadlessRuntime, selected config.Harness) harness.HeadlessRuntime {
+	adapter, exists := adapters[selected]
+	if !exists || adapter == nil {
+		return nil
+	}
+	capabilities := adapter.Capabilities()
+	if !capabilities.Headless || capabilities.Name != string(selected) {
 		return nil
 	}
 	return adapter

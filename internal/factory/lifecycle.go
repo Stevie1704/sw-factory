@@ -429,7 +429,7 @@ func (s *Service) allRolesHeadless(policy config.RepositoryConfig) bool {
 		return false
 	}
 	for _, selected := range policy.RoleHarnessDefaults {
-		if s.deps.HeadlessHarnesses[selected] == nil {
+		if headlessAdapterFor(s.deps.HeadlessHarnesses, selected) == nil {
 			return false
 		}
 	}
