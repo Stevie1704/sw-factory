@@ -240,8 +240,8 @@ You need:
    and update the configured repository, issues, labels, comments, commit
    statuses, and pull requests.
 5. A running cmux session for visible control, run, checks, and role surfaces
-   when the repository uses Claude Code, a legacy interactive adapter, or a
-   mixed harness policy. All-Codex repositories do not require cmux.
+   only when the repository injects a legacy interactive adapter. Codex and
+   Claude Code, in any per-role mix, run headlessly and do not require cmux.
 6. At least one configured harness. The checked-in example uses Codex for all
    roles; Claude Code is also supported by the same harness-neutral runtime.
 7. A host authentication source for the selected harness, if that harness
@@ -691,9 +691,9 @@ invocation is the <code>implementation</code> role. On the
 <code>acceptance</code> route it is the <code>test</code> role; on the
 <code>design-acceptance</code> route it is the <code>architecture</code> role,
 whose accepted design is then handed to the test role. For an advisory run with
-no route marker, use the visible implementation surface to own the complete
-red/green/refactor loop, including a focused behavioral test when practical,
-then submit the common implementation report from inside that worker
+no route marker, the implementation role owns the complete red/green/refactor
+loop, including a focused behavioral test when practical, and submits the common
+implementation report from inside that worker
 (see [Structured agent reports](#structured-agent-reports)). Accept it from the
 host:
 
@@ -710,8 +710,7 @@ reason in the command output. Once verified, it creates the test checkpoint,
 protects the reported test paths, and automatically starts a fresh
 implementation invocation. The accepted command output identifies the test
 invocation that was submitted; record the new implementation invocation ID from
-the newly created visible surface or its coordinator output before accepting the
-implementation report. Do not submit an implementation report using the test
+the coordinator output before accepting the implementation report. Do not submit an implementation report using the test
 invocation ID.
 
 If the test report requests clarification or cannot be verified, the run is
@@ -1109,9 +1108,11 @@ factory auth refresh \
 - When restart reconciliation has paused a coordinator-owned <code>check</code>
   stage, <code>resume</code> re-enters check evaluation without launching a new
   implementation agent; run <code>factory draft-pr</code> afterward.
-- A manually resumed native session sets an attach gate. <code>attach</code>
-  restores the worker and visible terminal topology and clears that gate before
-  report acceptance or workflow progression can continue.
+- A manually resumed native session sets an attach gate only for an
+  interactive invocation. <code>attach</code> restores the worker and visible
+  terminal topology and clears that gate before report acceptance or workflow
+  progression can continue. A headless invocation sets no gate and refuses
+  <code>attach</code>, because it has no terminal attachment.
 - <code>auth refresh</code> reseeds only the factory-managed credential volume
   for the selected invocation harness. It never modifies the registered host
   source.
@@ -1718,7 +1719,9 @@ resolve the external state before continuing.
 
 Use <code>factory resume</code> for a retryable harness problem. Refresh the
 selected credential with <code>factory auth refresh</code> when authentication
-has expired. If a manual native resume was performed, finish with
+has expired; that command needs a registered host credential source for the
+selected harness. A manual native resume of a headless invocation needs no
+further step. If the invocation uses an interactive adapter, finish with
 <code>factory attach</code> so the coordinator can verify the visible worker and
 terminal topology.
 

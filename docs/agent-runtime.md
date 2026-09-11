@@ -79,18 +79,25 @@ because it has no terminal attachment.
 
 ### Harness authentication
 
-Both harnesses read credentials the coordinator projects into a factory-managed
-worker volume from the registered host path (`codex_auth_path`,
-`claude_auth_path`). Neither source file is ever written by the factory, and
-neither credential reaches a coordinator-owned process argument or environment
-value.
+Each harness names its own optional host credential source (`codex_auth_path`,
+`claude_auth_path`). When one is registered, the coordinator projects it into a
+factory-managed worker volume; it never writes the source file, and no
+credential reaches a coordinator-owned process argument or environment value.
+A harness with no registered source is not misconfigured: per ADR 0002 it keeps
+the credential its own role volume already holds, which is why startup
+diagnosis reports a missing source as a warning rather than a failure. That case
+is real for Claude Code on macOS, where the login credential lives in the
+Keychain rather than in a file a host can hand over.
 
-For Claude Code this means the worker runs on the CLI's own subscription
-credentials, and its `init` event reports `apiKeySource: "none"`. That choice
-keeps the run on the operator's existing login, and it also means an expired
-OAuth credential is an operator event: the adapter classifies it as an
-authentication failure, the coordinator pauses the run, and `factory auth
-refresh` reseeds the volume from the re-authenticated host file.
+Either way the worker runs on the CLI's own subscription credentials, and its
+`init` event reports `apiKeySource: "none"`. That keeps the run on the
+operator's existing login, and it makes an expired credential an operator
+event: the adapter classifies it as an authentication failure and the
+coordinator pauses the run. Repair depends on where the credential came from.
+`factory auth refresh` reseeds the worker volume from a registered host source,
+so a repository relying on volume-persisted credentials has to register one, or
+reseed the role volume, before an unattended headless run can recover — a
+headless run cannot complete an interactive login for itself.
 
 An SDK or API-key integration would instead authenticate with
 `ANTHROPIC_API_KEY`. The factory does not support that today, and the difference
@@ -261,13 +268,21 @@ does not supply. Until the harness exposes a narrower control, a Claude role
 can read mutable worktree guidance that the factory did not freeze, and the
 prompt's precedence rule is the only bound on it.
 
-The headless launch does not widen that channel, but it does move one more
-worktree-owned input inside it: a non-interactive Claude run executes the hooks
-declared in the worktree's `.claude/settings.json` without a workspace-trust
-prompt. The strict empty MCP configuration still keeps every declared MCP
-server out, and the isolated worker remains the security boundary for anything
-such a hook could run, so the exposure is the same mutable-guidance limitation
-rather than a new privilege.
+A non-interactive Claude run would otherwise widen that channel from mutable
+guidance to executable commands: it runs the hooks declared in the worktree's
+own `.claude/settings.json` with no workspace-trust prompt. Hooks are therefore
+withheld explicitly. The launch passes `--settings {"disableAllHooks":true}`,
+and the command-line settings layer outranks the worktree file, so a repository
+cannot switch its own hooks back on by declaring `"disableAllHooks": false`.
+That option withholds only hooks, a custom status line, and a custom file
+suggestion command; the curated worker skills stay in the session. The strict
+empty MCP configuration keeps every declared MCP server out on the same
+principle. Both refusals are verified against the pinned binary by
+`scripts/verify-headless-worker.sh`.
+
+What remains is the documented limitation itself: a Claude role can still read
+mutable `CLAUDE.md` guidance the factory did not freeze. That is guidance the
+model may weigh, not commands the worktree can run.
 
 A check repair, a review repair, and a test-objection revision resume the
 harness session that already read the role's first prompt. Such a launch builds

@@ -30,6 +30,14 @@ the same disabled self-update, and the same separately seeded credential
 material as the interactive Claude path it replaces. No Claude SDK, CLI tool
 loop, file operation, or shell command runs on the coordinator host.
 
+Hooks declared by the worktree are withheld. A non-interactive run executes
+them with no workspace-trust prompt, so the launch passes an explicit
+command-line settings layer disabling all hooks. That layer outranks the
+worktree settings file, so a repository cannot re-enable its own hooks, and it
+withholds nothing the factory depends on: the curated worker skills stay in the
+session. This keeps the mutable-worktree exposure at guidance the model may
+weigh rather than commands the worktree can run.
+
 The adapter owns its native session protocol. A fresh launch assigns
 `--session-id` and reads the `system`/`init` event to learn the identity the
 process actually holds; it deliberately does not demand its freshly generated
@@ -55,10 +63,14 @@ lifecycle dispatch, operator notification, and restart recovery share that one
 definition, so a mixed per-role Codex and Claude selection runs through the same
 workflow path.
 
-The factory keeps Claude Code on the CLI's own seeded credentials rather than an
-SDK or API-key integration. The worker's explicit environment carries only
-non-secret coordinator protocol values, and the CLI's API-key path (`--bare`)
-also drops the curated worker skill set that role prompts mandate.
+The factory keeps Claude Code on the CLI's own credentials rather than an SDK or
+API-key integration. The worker's explicit environment carries only non-secret
+coordinator protocol values, and the CLI's API-key path (`--bare`) also drops
+the curated worker skill set that role prompts mandate. ADR 0002's optional
+per-harness source is unchanged: a harness with no registered host source keeps
+the credential its own role volume holds. An unattended run cannot log in for
+itself, so recovering an expired credential needs a registered source or a
+reseeded role volume, and startup diagnosis says so.
 
 ## Consequences
 
@@ -73,11 +85,12 @@ contributes only its command translation, its session event, and its
 classification. The real-Docker worker verification exercises that core once per
 production adapter.
 
-An expired Claude OAuth credential remains an operator event repaired with
-`factory auth refresh`, and the documented limitation around mutable Claude
-project guidance is unchanged: a headless run still auto-discovers `CLAUDE.md`
-from the mounted worktree, and it also runs worktree-declared hooks without a
-trust prompt, bounded by the isolated worker rather than by the harness.
+An expired Claude credential remains an operator event, repaired with
+`factory auth refresh` where a host source is registered. The documented
+limitation around mutable Claude project guidance is unchanged in scope: a
+headless run still auto-discovers `CLAUDE.md` from the mounted worktree. It does
+not grow into executable input, because the same launch withholds
+worktree-declared hooks.
 
 ADR 0008's terminal coexistence is now bounded only by issue #165, which can
 remove interactive terminal orchestration once no persisted invocation needs it.
