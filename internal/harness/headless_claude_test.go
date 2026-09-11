@@ -10,6 +10,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
+// claudeHeadlessSession is the fixed native session identity the Claude
+// headless tests assign, resume, and expect back from a stream event.
 const claudeHeadlessSession = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 
 // TestClaudeHeadlessLaunchesPrintModeWithTheAssignedSession verifies the
@@ -33,7 +35,7 @@ func TestClaudeHeadlessLaunchesPrintModeWithTheAssignedSession(t *testing.T) {
 	if assigned == "" || session.NativeSessionID != assigned {
 		t.Fatalf("native session = %q, want the assigned identity %q", session.NativeSessionID, assigned)
 	}
-	for _, wanted := range []string{"claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--strict-mcp-config", "--mcp-config", "--model", "claude-opus-5", "--effort", "high"} {
+	for _, wanted := range []string{"claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--strict-mcp-config", "--mcp-config", "--settings", "--model", "claude-opus-5", "--effort", "high"} {
 		if !containsHeadlessArgument(start.Command, wanted) {
 			t.Fatalf("headless command = %#v, want %q", start.Command, wanted)
 		}
@@ -256,5 +258,23 @@ func TestClaudeHeadlessRefusesAResumeIdentityItCouldNotHaveAssigned(t *testing.T
 	}
 	if len(workerRuntime.starts) != 0 {
 		t.Fatalf("headless launches = %#v, want the refusal before any worker call", workerRuntime.starts)
+	}
+}
+
+// TestClaudeHeadlessWithholdsWorktreeDeclaredHooks verifies the launch passes
+// the settings layer that keeps a repository's own hooks out of the session.
+// A non-interactive run otherwise executes them without a trust prompt, which
+// would turn mutable worktree content into commands.
+func TestClaudeHeadlessWithholdsWorktreeDeclaredHooks(t *testing.T) {
+	workerRuntime := &headlessTestWorker{respond: claudeInitEvent}
+	if _, err := harness.NewClaudeHeadless(workerRuntime).StartHeadless(context.Background(), harness.HeadlessStartRequest{
+		InvocationID: "inv-claude-hooks", RunID: "run-claude-headless", Role: "implementation",
+		Stage: "implementation", Prompt: "Implement the frozen issue.",
+	}); err != nil {
+		t.Fatalf("StartHeadless() error = %v", err)
+	}
+	command := workerRuntime.starts[0].Command
+	if headlessOptionValue(command, "--settings") != `{"disableAllHooks":true}` {
+		t.Fatalf("headless command = %#v, want the hook-withholding settings layer", command)
 	}
 }

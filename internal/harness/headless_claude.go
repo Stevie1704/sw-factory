@@ -10,6 +10,15 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
+// disabledHookSettings is the explicit settings layer passed on the command
+// line. A non-interactive Claude Code run otherwise executes the hooks a
+// repository declares in its own worktree settings, with no workspace-trust
+// prompt, which would let a mutable run input run commands. The command-line
+// layer outranks the worktree file, so a repository cannot switch its own hooks
+// back on. It withholds only hooks, a custom status line, and a custom file
+// suggestion command; the curated worker skills stay in the session.
+const disabledHookSettings = `{"disableAllHooks":true}`
+
 // ClaudeHeadless implements HeadlessRuntime through the worker's detached
 // process extension. No Claude Code command, SDK loop, file operation, or
 // shell command ever runs on the coordinator host.
@@ -94,6 +103,7 @@ func claudeHeadlessCommand(request HeadlessStartRequest, sessionID string, resum
 	command := []string{
 		"claude", "-p", "--output-format", "stream-json", "--verbose",
 		"--dangerously-skip-permissions", "--strict-mcp-config", "--mcp-config", emptyMCPConfiguration,
+		"--settings", disabledHookSettings,
 	}
 	if resume {
 		command = append(command, "--resume", sessionID)
