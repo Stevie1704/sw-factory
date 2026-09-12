@@ -406,12 +406,10 @@ func (s *Service) notifyWorkspace(ctx context.Context, registration config.Repos
 }
 
 // headlessCoordinatorMode determines whether operator notifications must remain
-// terminal-free for an all-Codex repository. A mixed or legacy adapter still
-// uses the registered terminal runtime.
+// terminal-free. A repository qualifies when every declared role selects a
+// harness with a migrated headless adapter; a legacy injected adapter or an
+// unmigrated selection still uses the registered terminal runtime.
 func (s *Service) headlessCoordinatorMode(registration config.RepositoryRegistration) bool {
-	if s.deps.Harness != nil || s.deps.HeadlessHarness == nil {
-		return false
-	}
 	if s.deps.LoadRepository == nil || strings.TrimSpace(registration.RepositoryConfigPath) == "" {
 		return false
 	}
@@ -419,7 +417,23 @@ func (s *Service) headlessCoordinatorMode(registration config.RepositoryRegistra
 	if err != nil {
 		return false
 	}
-	return config.AllRolesUseHarness(policy, config.HarnessCodex)
+	return s.allRolesHeadless(policy)
+}
+
+// allRolesHeadless reports whether the repository declares at least one role
+// and every declared role selects a harness this coordinator runs without a
+// terminal. It is the single definition of terminal-free repository policy,
+// shared by startup diagnosis and operator notification.
+func (s *Service) allRolesHeadless(policy config.RepositoryConfig) bool {
+	if s.deps.Harness != nil || len(policy.RoleHarnessDefaults) == 0 {
+		return false
+	}
+	for _, selected := range policy.RoleHarnessDefaults {
+		if headlessAdapterFor(s.deps.HeadlessHarnesses, selected) == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // controlWorkspaceName resolves the registered coordinator workspace name, or

@@ -59,7 +59,8 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	})...)
 
 	headlessChecker := s.doctorHeadlessChecker()
-	if s.deps.Harness != nil || !headlessStartupCheckApplies(repositoryPolicy, headlessChecker) {
+	allRolesHeadless := repositoryPolicy != nil && s.allRolesHeadless(*repositoryPolicy)
+	if !allRolesHeadless || headlessChecker == nil {
 		terminalChecker := s.deps.Terminal
 		if terminalChecker == nil {
 			terminalChecker = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
@@ -78,6 +79,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		SkillChecker:          s.doctorSkillContractChecker(),
 		SkillEvidencePath:     skillEvidencePath(registration.Path),
 		HeadlessChecker:       headlessChecker,
+		AllRolesHeadless:      allRolesHeadless,
 	})...)
 	checks = append(checks, store.StartupCheck(registration.OperationalDataPath))
 
@@ -139,12 +141,6 @@ func (s *Service) doctorSkillContractChecker() worker.SkillContractChecker {
 func (s *Service) doctorHeadlessChecker() worker.HeadlessChecker {
 	checker, _ := s.deps.Worker.(worker.HeadlessChecker)
 	return checker
-}
-
-// headlessStartupCheckApplies reports whether startup may omit terminal
-// diagnosis because the policy is all-Codex and the helper can be checked.
-func headlessStartupCheckApplies(policy *config.RepositoryConfig, checker worker.HeadlessChecker) bool {
-	return checker != nil && policy != nil && config.AllRolesUseHarness(*policy, config.HarnessCodex)
 }
 
 // skillEvidencePath resolves the recorded worker skill smoke evidence inside

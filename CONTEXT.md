@@ -92,7 +92,8 @@ The per-run isolated execution environment that exposes only the run worktree, r
 _Avoid_: Container in workflow decisions
 
 **Headless process seam**:
-The ADR 0008 worker-owned boundary for a terminal-free harness process. A
+The ADR 0008 and ADR 0009 worker-owned boundary for a terminal-free harness
+process, implemented by both production adapters. A
 `HeadlessRuntime` starts, resumes, inspects, cancels, and finishes one detached
 process inside the isolated worker; it owns process state and bounded output,
 while the coordinator receives only adapter-neutral lifecycle observations and
@@ -180,8 +181,8 @@ An operator-visible terminal pane owned by a `TerminalRuntime`; its handle is op
 _Avoid_: Screen scrape
 
 **Harness**:
-A configured interactive coding tool, such as Codex, launched through the harness seam with a role-specific prompt and native resume behavior.
-_Avoid_: Lead agent
+A configured coding tool, such as Codex or Claude Code, launched through the harness seam with a role-specific prompt and native resume behavior. Every production harness runs terminal-free; whether the coordinator uses a terminal is decided by the selected adapter's capability, never by the tool's name.
+_Avoid_: Lead agent, interactive tool
 
 **Role**:
 The coordinator-owned responsibility assigned to an invocation, such as implementation, architecture, test, or review. The factory-owned role registry couples each role to its invocation stage, embedded Markdown prompt version, default permitted paths, report contract, and visible surface strategy; repository guidance cannot change role ownership.

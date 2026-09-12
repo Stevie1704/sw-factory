@@ -745,7 +745,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 				if headless {
 					presence, presenceErr := structuredReportPresenceForInvocation(*active)
 					if presenceErr == nil && presence == structuredReportPresent {
-						// A detached Codex process may exit immediately after
+						// A detached harness process may exit immediately after
 						// writing the authoritative report. Report polling owns
 						// acceptance; recovery must not classify that as a lost
 						// native session.
@@ -945,7 +945,7 @@ func (s *Service) Reconcile(ctx context.Context) (RecoveryResult, error) {
 	return result, reconcileErr
 }
 
-// recoverHeadlessNativeSessionIdentities adopts a thread.started identity that
+// recoverHeadlessNativeSessionIdentities adopts a native session identity that
 // the worker durably captured before a coordinator could persist the same
 // value. This closes the response-loss window between detached process launch
 // and invocation persistence without ever launching a replacement process.
@@ -959,10 +959,10 @@ func (s *Service) recoverHeadlessNativeSessionIdentities(ctx context.Context, re
 		return err
 	}
 	for _, active := range activeValues {
-		if active.Status != store.InvocationStatusActive || strings.TrimSpace(active.NativeSessionID) != "" || active.Harness != string(config.HarnessCodex) {
+		if active.Status != store.InvocationStatusActive || strings.TrimSpace(active.NativeSessionID) != "" {
 			continue
 		}
-		_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.HarnessCodex)
+		_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
 		if runtimeErr != nil || !coordinatorUsesHeadless(harnessRuntime) {
 			continue
 		}

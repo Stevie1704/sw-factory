@@ -100,8 +100,13 @@ type StartupRequest struct {
 	// SkillEvidencePath is the host path of the recorded worker skill smoke
 	// evidence.
 	SkillEvidencePath string
-	// HeadlessChecker verifies the worker process helper for all-Codex policy.
+	// HeadlessChecker verifies the worker process helper used by the migrated
+	// terminal-free adapters.
 	HeadlessChecker worker.HeadlessChecker
+	// AllRolesHeadless reports that every declared role selects a harness the
+	// coordinator runs without a terminal, so the worker process helper is a
+	// blocking prerequisite.
+	AllRolesHeadless bool
 }
 
 // StartupChecks returns independent capability, executable, and authentication
@@ -154,7 +159,7 @@ func interactiveResumeCheck(request StartupRequest) doctor.Check {
 		if err := ValidateInteractiveResumeCapabilities(*policy, request.Resolve); err != nil {
 			return doctor.Failure("harness capability", err.Error(), "select an adapter with interactive resume support for every declared role")
 		}
-		if config.AllRolesUseHarness(*policy, config.HarnessCodex) && request.HeadlessChecker != nil {
+		if request.AllRolesHeadless && request.HeadlessChecker != nil {
 			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {
 				return doctor.Failure("harness capability", "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
 			}
@@ -182,7 +187,11 @@ func executableCheck(checker worker.HarnessChecker, image worker.ImageReference,
 func credentialCheck(name, path string, image worker.ImageReference, checker worker.HarnessAuthenticationChecker) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		if strings.TrimSpace(path) == "" {
-			return doctor.Warning(name+" authentication", "no host credential file is configured", "authenticate during the first worker session or configure a private credential file")
+			// ADR 0002 keeps a host source optional: a harness without one runs
+			// on the credential its own role volume already holds. An
+			// unattended headless run cannot log in for itself, though, so the
+			// action names the two things that actually produce one.
+			return doctor.Warning(name+" authentication", "no host credential file is configured", "configure a private credential file, or keep the credential this harness already persisted in its worker role volume")
 		}
 		info, err := os.Lstat(path)
 		if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") || err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 || info.Size() == 0 {

@@ -27,8 +27,9 @@ factory doctor --config /Users/me/.config/factory/config.yaml
 The doctor reports configuration, GitHub authentication and permissions, the
 factory labels, the checkout's remote/hooks/worktree support, Docker, the
 pinned worker image, both supported harness executables, harness capabilities,
-the headless worker helper for all-Codex policies, harness authentication
-sources, and SQLite. Mixed or interactive policies also require cmux. It runs every
+the headless worker helper, harness authentication sources, and SQLite. A
+repository that selects a harness without a headless adapter, or that injects a
+legacy interactive adapter, also requires cmux. It runs every
 contributor even after a failure and returns a nonzero exit status when any
 blocking prerequisite remains. Each failure includes a bounded problem and a
 corrective action; command output and credential contents are never rendered.
@@ -351,9 +352,9 @@ After the image smoke checks, the same command mounts this checkout and runs
 the configured setup, format, vet, test, and build gates under the worker's
 clean baseline environment. After those repository gates, it runs
 `scripts/verify-headless-worker.sh` in the newly built image. That offline,
-real-Docker check uses a deterministic Codex stand-in to verify the pinned
-skill roots, exact prompt delivery, report production, cancellation, fresh
-coordinator-process inspection, and native resume.
+real-Docker check uses a deterministic stand-in for each production harness to
+verify the pinned skill roots, exact prompt delivery, report production,
+cancellation, fresh coordinator-process inspection, and native resume.
 
 The worker image also carries the curated skill set from `worker/skills`, which
 it installs into both harness role homes. The digest recorded here therefore
@@ -533,10 +534,10 @@ the factory state label, edit the existing status comment, notify cmux, stop
 the worker without deleting retained state, and leave the branch and worktree
 available for cleanup or an explicit retry.
 
-After a claim, `factory agent` starts the selected role. All-Codex policies run
-Codex headlessly inside the pinned worker and print only logical invocation
-identities; Claude, mixed, and explicitly interactive policies retain workspace
-and surface handles. The role receives a read-only invocation packet and reports through `factory-report`; use
+After a claim, `factory agent` starts the selected role. Codex and Claude Code
+both run headlessly inside the pinned worker and print only logical invocation
+identities; a repository that injects a legacy interactive adapter retains
+workspace and surface handles. The role receives a read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Terminal output is never treated as a stage
 result. The operational store schema is version 30 and persists invocation
@@ -584,9 +585,9 @@ the branch, and opens a draft pull request.
 Before starting, prepare a dedicated GitHub repository with a checked-in
 `factory.yaml`, a fresh open issue carrying `agent-ready`, valid `gh` login,
 Docker with the configured worker image available, and the host Codex `auth.json`
-path registered in the host configuration. Mixed or Claude Code repositories
-also need a running cmux session. All-Codex repositories use the headless worker
-path and do not require cmux. Build the local commands from this checkout
+path registered in the host configuration. Codex and Claude Code repositories,
+including mixed per-role selections, use the headless worker path and do not
+require cmux. Build the local commands from this checkout
 (`factory`, `factory-report`, and `factory-worker-attach`) so the worker image
 can invoke the pinned report command; the headless worker helper is built into
 the image.
@@ -612,8 +613,7 @@ factory draft-pr \
 Record the command output and verify the demonstration at each boundary:
 
 - the issue has exactly one factory state label and one editable status comment;
-- the selected role reaches its worker process (headless Codex for all-Codex
-  policy, or a visible session for an interactive policy), while its container
+- the selected role reaches its headless worker process, while its container
   has no Git remote or GitHub credential access;
 - the run worktree contains one `factory: implementation checkpoint <run-id>`
   commit, and `git ls-remote` shows the pushed `factory/<run-id>` branch only

@@ -41,9 +41,10 @@ factory's typed failure mapping both during launch discovery and after a
 terminal process inspection.
 
 The interactive Claude path and explicitly injected legacy runtime remain
-temporarily supported. Issue #164 migrates Claude to this seam; issue #165
-removes terminal orchestration after that migration and after persisted
-interactive invocations have drained.
+temporarily supported. ADR 0009 migrated Claude to this seam and generalized the
+terminal-free decision from a Codex name to an adapter capability; issue #165
+removes terminal orchestration after persisted interactive invocations have
+drained.
 
 ## Consequences
 
@@ -58,6 +59,5 @@ The worker image carries one additional small helper binary and headless
 contract checks become part of Docker-backed diagnosis. The worker build also
 runs one offline real-Docker lifecycle verification covering skill roots,
 frozen prompts, reports, cancellation, coordinator-process restart inspection,
-and native resume. A mixed repository still needs the interactive terminal
-until issue #164 and issue #165 complete; the coexistence is deliberate and
-bounded by those follow-up issues.
+and native resume. A mixed repository needed the interactive terminal until
+ADR 0009; the coexistence is deliberate and now bounded by issue #165 alone.

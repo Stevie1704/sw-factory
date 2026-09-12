@@ -3,8 +3,8 @@
 Software Factory is a local, supervised coordinator for taking an authorized
 GitHub issue through an isolated, AI-assisted change process and into a draft
 pull request. It combines a frozen issue and repository policy with a
-host-owned Git workspace, a pinned Docker worker, headless Codex or visible
-Claude Code sessions, deterministic gates, structured reports, and restart-safe
+host-owned Git workspace, a pinned Docker worker, headless Codex or Claude Code
+sessions, deterministic gates, structured reports, and restart-safe
 local state.
 
 The command-line coordinator is <code>factory</code>. It is intentionally an
@@ -74,7 +74,7 @@ advisory: implementation-owned red/green/refactor -> checkpoint gates -> ...
 The coordinator owns workflow state, GitHub projections, worktrees, worker
 identity, optional terminal surfaces, report validation, checkpoint commits,
 gates, pushes, and draft pull requests. A harness is a proposal-maker—headless
-Codex or visible Claude Code. It does not own workflow transitions, Git history,
+Codex or headless Claude Code. It does not own workflow transitions, Git history,
 GitHub mutations, or the final interpretation of model output.
 
 Factory does not merge pull requests, silently alter repository policy, pull a
@@ -223,8 +223,10 @@ Every stage also has an orthogonal status:
 ## Prerequisites
 
 Factory is designed for a macOS operator workflow with Docker, GitHub, and a
-configured agent harness. cmux is required only for mixed or interactive
-Claude/legacy repositories; an all-Codex repository runs headlessly.
+configured agent harness. cmux is required only for a repository that selects a
+harness without a headless adapter, or that injects a legacy interactive
+adapter; a repository whose roles all select Codex or Claude Code runs
+headlessly.
 
 You need:
 
@@ -238,8 +240,8 @@ You need:
    and update the configured repository, issues, labels, comments, commit
    statuses, and pull requests.
 5. A running cmux session for visible control, run, checks, and role surfaces
-   when the repository uses Claude Code, a legacy interactive adapter, or a
-   mixed harness policy. All-Codex repositories do not require cmux.
+   only when the repository injects a legacy interactive adapter. Codex and
+   Claude Code, in any per-role mix, run headlessly and do not require cmux.
 6. At least one configured harness. The checked-in example uses Codex for all
    roles; Claude Code is also supported by the same harness-neutral runtime.
 7. A host authentication source for the selected harness, if that harness
@@ -656,9 +658,10 @@ factory agent \
   --run-id <run-id>
 ~~~
 
-For all-Codex repositories this starts `codex exec --json` inside the pinned
-worker and reports no terminal handles. Claude, mixed, and explicitly
-interactive legacy runs retain their visible terminal surfaces. The output
+This starts the role's harness inside the pinned worker without a terminal:
+`codex exec --json` for Codex and `claude -p --output-format stream-json` for
+Claude Code. Per-role selection may mix both. Only an explicitly injected
+legacy interactive adapter retains a visible terminal surface. The output
 reports:
 
 - invocation ID;
@@ -688,9 +691,9 @@ invocation is the <code>implementation</code> role. On the
 <code>acceptance</code> route it is the <code>test</code> role; on the
 <code>design-acceptance</code> route it is the <code>architecture</code> role,
 whose accepted design is then handed to the test role. For an advisory run with
-no route marker, use the visible implementation surface to own the complete
-red/green/refactor loop, including a focused behavioral test when practical,
-then submit the common implementation report from inside that worker
+no route marker, the implementation role owns the complete red/green/refactor
+loop, including a focused behavioral test when practical, and submits the common
+implementation report from inside that worker
 (see [Structured agent reports](#structured-agent-reports)). Accept it from the
 host:
 
@@ -707,8 +710,7 @@ reason in the command output. Once verified, it creates the test checkpoint,
 protects the reported test paths, and automatically starts a fresh
 implementation invocation. The accepted command output identifies the test
 invocation that was submitted; record the new implementation invocation ID from
-the newly created visible surface or its coordinator output before accepting the
-implementation report. Do not submit an implementation report using the test
+the coordinator output before accepting the implementation report. Do not submit an implementation report using the test
 invocation ID.
 
 If the test report requests clarification or cannot be verified, the run is
@@ -1106,9 +1108,11 @@ factory auth refresh \
 - When restart reconciliation has paused a coordinator-owned <code>check</code>
   stage, <code>resume</code> re-enters check evaluation without launching a new
   implementation agent; run <code>factory draft-pr</code> afterward.
-- A manually resumed native session sets an attach gate. <code>attach</code>
-  restores the worker and visible terminal topology and clears that gate before
-  report acceptance or workflow progression can continue.
+- A manually resumed native session sets an attach gate only for an
+  interactive invocation. <code>attach</code> restores the worker and visible
+  terminal topology and clears that gate before report acceptance or workflow
+  progression can continue. A headless invocation sets no gate and refuses
+  <code>attach</code>, because it has no terminal attachment.
 - <code>auth refresh</code> reseeds only the factory-managed credential volume
   for the selected invocation harness. It never modifies the registered host
   source.
@@ -1715,7 +1719,9 @@ resolve the external state before continuing.
 
 Use <code>factory resume</code> for a retryable harness problem. Refresh the
 selected credential with <code>factory auth refresh</code> when authentication
-has expired. If a manual native resume was performed, finish with
+has expired; that command needs a registered host credential source for the
+selected harness. A manual native resume of a headless invocation needs no
+further step. If the invocation uses an interactive adapter, finish with
 <code>factory attach</code> so the coordinator can verify the visible worker and
 terminal topology.
 

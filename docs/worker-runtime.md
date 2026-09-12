@@ -126,9 +126,8 @@ to the current process streams. A terminal adapter can therefore launch Codex
 in a real pseudo-terminal without learning Docker identifiers.
 
 The terminal surface is for observation and human input only. The coordinator
-does not scrape its output. A headless Codex process publishes no workflow
-completion through its JSON event stream; every harness publishes completion
-with
+does not scrape its output. A headless process publishes no workflow completion
+through its machine event stream; every harness publishes completion with
 `factory-report`, which atomically writes a schema-versioned JSON report below
 `/results`; the coordinator validates that report against the persisted
 invocation, current worktree, permitted paths, and stage invariants.
@@ -144,8 +143,8 @@ factory-managed credential volume survive that recreation; the invocation and
 result directories are mounted again from their persisted paths.
 
 Interactive harness adapters inspect the worker process table through the same
-command seam used by gates. Headless Codex uses the worker-owned process-state
-inspection instead. If the persisted native session process exits after launch,
+command seam used by gates. A headless adapter uses the worker-owned
+process-state inspection instead. If the persisted native session process exits after launch,
 the coordinator records that interruption and applies its bounded resume policy
 without using terminal text or model output as a correctness signal. An exited
 process with a regular report is left for normal report acceptance; only a

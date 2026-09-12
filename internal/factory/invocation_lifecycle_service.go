@@ -35,7 +35,7 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 			resetStartup:             s.resetStartupStateProjection,
 			materialiseReviewDiff:    s.materialiseReviewDiff,
 		},
-		s.deps.HeadlessHarness,
+		s.deps.HeadlessHarnesses,
 	)
 	return s.lifecycle
 }

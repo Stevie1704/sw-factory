@@ -183,22 +183,6 @@ const (
 	HarnessClaude Harness = "claude"
 )
 
-// AllRolesUseHarness reports whether the repository declares at least one role
-// and every declared role selects the supplied harness. The policy helper is
-// shared by startup diagnosis and lifecycle dispatch so terminal-free mode is
-// decided from one definition of the repository policy.
-func AllRolesUseHarness(policy RepositoryConfig, selected Harness) bool {
-	if len(policy.RoleHarnessDefaults) == 0 {
-		return false
-	}
-	for _, configured := range policy.RoleHarnessDefaults {
-		if configured != selected {
-			return false
-		}
-	}
-	return true
-}
-
 type OverrideName string
 
 const (

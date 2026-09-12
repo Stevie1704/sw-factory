@@ -479,7 +479,7 @@ func containsAdjacentArguments(arguments []string, flag, value string) bool {
 // newDispatchingAgentService recreates the coordinator around a persisted claim
 // without an injected harness runtime, so the service resolves the adapter for
 // the frozen repository policy itself.
-func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime *agentWorker, terminalRuntime *agentTerminal, policy config.RepositoryConfig, authentication config.AuthenticationConfig) *factory.Service {
+func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime worker.WorkerRuntime, terminalRuntime *agentTerminal, policy config.RepositoryConfig, authentication config.AuthenticationConfig) *factory.Service {
 	t.Helper()
 	if runStore.current == nil {
 		t.Fatal("dispatching coordinator fixture requires a persisted run")

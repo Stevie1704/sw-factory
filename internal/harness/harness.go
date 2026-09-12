@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -147,6 +148,17 @@ type Runtime interface {
 	// must make this operation idempotent because reconciliation may replay it
 	// after a response-loss boundary.
 	Finish(context.Context, Session) error
+}
+
+// NewHeadlessAdapters creates the terminal-free adapter for every harness the
+// factory supports, keyed by its repository-declared name. It is the only place
+// that maps a declared harness onto a headless implementation, so the set of
+// migrated adapters has exactly one definition.
+func NewHeadlessAdapters(processRuntime worker.HeadlessProcessRuntime) map[config.Harness]HeadlessRuntime {
+	return map[config.Harness]HeadlessRuntime{
+		config.HarnessCodex:  NewCodexHeadless(processRuntime),
+		config.HarnessClaude: NewClaudeHeadless(processRuntime),
+	}
 }
 
 // ErrUnknownHarness reports that no adapter implements the requested harness.
