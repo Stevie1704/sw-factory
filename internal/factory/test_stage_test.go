@@ -46,33 +46,30 @@ func TestTestStageAcceptsVerifiedRedTestsAndLaunchesImplementation(t *testing.T)
 	policy.ModelOptions["test"] = []string{"gpt-5"}
 	storeRuntime := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 1, Stdout: "expected behavior assertion"}}}
-	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
 	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: 12, Title: "Test stage", State: "open", Labels: []string{github.LabelAgentReady}}}
 	workspace := &testStageWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-test-stage", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-test-stage", HeadSHA: factoryGateCheckpoint},
 	}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
-		Cmux:                 config.CmuxConfig{ControlWorkspace: "factory-control"},
 		OperationalDataPath:  filepath.Join(root, "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
 	}}}
 	ids := []string{"run-test-stage", "test-invocation", "implementation-invocation"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config:         &fakeConfig{value: host},
-		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
-		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:         githubRuntime,
-		CommitStatuses: &gateStatuses{},
-		Worktree:       workspace,
-		GitWorkspace:   workspace,
-		Worker:         workerRuntime,
-		Terminal:       terminalRuntime,
-		Harness:        harnessRuntime,
-		Now:            func() time.Time { return time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC) },
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
+		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:            githubRuntime,
+		CommitStatuses:    &gateStatuses{},
+		Worktree:          workspace,
+		GitWorkspace:      workspace,
+		Worker:            workerRuntime,
+		HeadlessHarnesses: testHeadlessHarnesses(harnessRuntime),
+		Now:               func() time.Time { return time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC) },
 		NewRunID: func() (string, error) {
 			if len(ids) == 0 {
 				return "", errors.New("test-stage id fixture exhausted")
@@ -562,7 +559,6 @@ func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (
 	policy.ModelOptions["test"] = []string{"gpt-5"}
 	storeRuntime := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 1, Stdout: "expected behavior assertion"}}}
-	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
 	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: 13, Title: "Test objection", State: "open", Labels: []string{github.LabelAgentReady}}}
 	workspace := &testStageWorkspace{
@@ -571,28 +567,26 @@ func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (
 	}
 	storeRuntime.github = githubRuntime
 	storeRuntime.worktree = &inspectingWorktree{fakeWorktree: fakeWorktree{workspace: workspace.workspace}, state: workspace.state}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		AuthorizedUsers:      []string{"alice"},
-		Cmux:                 config.CmuxConfig{ControlWorkspace: "factory-control"},
 		OperationalDataPath:  filepath.Join(root, "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
 	}}}
 	ids := []string{"run-objection", "test-invocation", "implementation-invocation", "revision-invocation", "implementation-after-revision", "revision-invocation-2", "implementation-after-revision-2"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config:         &fakeConfig{value: host},
-		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
-		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:         githubRuntime,
-		Comments:       &pilotDecisionComments{comments: []github.Comment{{Author: "alice", Body: "Decision: proceed"}}},
-		CommitStatuses: &gateStatuses{},
-		Worktree:       workspace,
-		GitWorkspace:   workspace,
-		Worker:         workerRuntime,
-		Terminal:       terminalRuntime,
-		Harness:        harnessRuntime,
-		Now:            func() time.Time { return time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC) },
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
+		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:            githubRuntime,
+		Comments:          &pilotDecisionComments{comments: []github.Comment{{Author: "alice", Body: "Decision: proceed"}}},
+		CommitStatuses:    &gateStatuses{},
+		Worktree:          workspace,
+		GitWorkspace:      workspace,
+		Worker:            workerRuntime,
+		HeadlessHarnesses: testHeadlessHarnesses(harnessRuntime),
+		Now:               func() time.Time { return time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC) },
 		NewRunID: func() (string, error) {
 			if len(ids) == 0 {
 				return "", errors.New("objection-cycle id fixture exhausted")
@@ -638,7 +632,7 @@ func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (
 // malformed red-test evidence cannot leave the test run active for an
 // implementation bypass or an automated revision loop.
 func TestTestStagePausesAnUnverifiableCompletedReportForHumanDisposition(t *testing.T) {
-	service, runStore, workerRuntime, _, _ := newAgentService(t)
+	service, runStore, workerRuntime, _ := newAgentService(t)
 	run := *runStore.current
 	run.Stage = store.StageTest
 	run.Status = store.StatusActive
@@ -694,7 +688,7 @@ func TestTestStagePausesAnUnverifiableCompletedReportForHumanDisposition(t *test
 // technical exemption cannot turn an out-of-scope test edit into an
 // implementation handoff.
 func TestTestStageRejectsProductionChangesBeforeTechnicalExemption(t *testing.T) {
-	service, runStore, workerRuntime, _, _ := newAgentService(t)
+	service, runStore, workerRuntime, _ := newAgentService(t)
 	run := *runStore.current
 	run.Stage = store.StageTest
 	run.Status = store.StatusActive

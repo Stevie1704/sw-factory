@@ -40,7 +40,7 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 	policy := validRepositoryConfig()
 	policy.Setup = "setup-from-frozen-packet"
 	policy.Gates[0].Command = "gate-from-frozen-packet"
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		AuthorizedUsers:      []string{"alice"},

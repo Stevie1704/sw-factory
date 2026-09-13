@@ -296,7 +296,7 @@ func TestHeadlessAdaptersShareOneLifecycleContract(t *testing.T) {
 			workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: test.stdout}}
 			runtime := test.build(workerRuntime)
 			capabilities := runtime.Capabilities()
-			if capabilities.Name != test.name || !capabilities.Headless || !capabilities.InteractiveResume {
+			if capabilities.Name != test.name || !capabilities.Headless || !capabilities.NativeResume {
 				t.Fatalf("Capabilities() = %#v, want a headless resumable %s adapter", capabilities, test.name)
 			}
 			request := harness.HeadlessStartRequest{

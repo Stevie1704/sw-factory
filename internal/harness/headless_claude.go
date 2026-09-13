@@ -2,6 +2,8 @@ package harness
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,39 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
+
+// newSessionID returns an RFC 4122 version-four UUID for a fresh Claude Code
+// session.
+func newSessionID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	encoded := hex.EncodeToString(value[:])
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+}
+
+// validSessionID reports whether value is an RFC 4122 version-four UUID.
+func validSessionID(value string) bool {
+	if len(value) != 36 || value[14] != '4' {
+		return false
+	}
+	for index, character := range value {
+		switch index {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return false
+			}
+		default:
+			if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+				return false
+			}
+		}
+	}
+	return value[19] == '8' || value[19] == '9' || value[19] == 'a' || value[19] == 'b'
+}
 
 // disabledHookSettings is the explicit settings layer passed on the command
 // line. A non-interactive Claude Code run otherwise executes the hooks a
@@ -18,6 +53,10 @@ import (
 // back on. It withholds only hooks, a custom status line, and a custom file
 // suggestion command; the curated worker skills stay in the session.
 const disabledHookSettings = `{"disableAllHooks":true}`
+
+// emptyMCPConfiguration prevents ambient or repository MCP servers from
+// broadening a detached Claude Code invocation.
+const emptyMCPConfiguration = `{"mcpServers":{}}`
 
 // ClaudeHeadless implements HeadlessRuntime through the worker's detached
 // process extension. No Claude Code command, SDK loop, file operation, or
@@ -48,7 +87,7 @@ func NewClaudeHeadless(runtime worker.HeadlessProcessRuntime) *ClaudeHeadless {
 
 // Capabilities reports Claude Code's headless native-resume support.
 func (*ClaudeHeadless) Capabilities() Capabilities {
-	return Capabilities{Name: NameClaude, InteractiveResume: true, Headless: true}
+	return Capabilities{Name: NameClaude, NativeResume: true, Headless: true}
 }
 
 // StartHeadless launches a fresh non-interactive Claude Code process with an

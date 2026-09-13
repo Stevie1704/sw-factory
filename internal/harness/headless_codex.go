@@ -27,7 +27,7 @@ func NewCodexHeadless(runtime worker.HeadlessProcessRuntime) *CodexHeadless {
 
 // Capabilities reports Codex's headless native-resume support.
 func (*CodexHeadless) Capabilities() Capabilities {
-	return codexCapabilities(true)
+	return Capabilities{Name: NameCodex, NativeResume: true, Headless: true}
 }
 
 // StartHeadless launches a fresh Codex exec process and waits for its machine
@@ -57,6 +57,18 @@ func codexHeadlessCommand(request HeadlessStartRequest) []string {
 		command = append(command, "resume", request.ResumeSessionID)
 	}
 	return append(command, strings.TrimSpace(request.Prompt))
+}
+
+// codexCommandOptions appends factory-owned Codex execution policy.
+func codexCommandOptions(command []string, model, reasoningEffort string) []string {
+	command = append(command, "-s", "danger-full-access", "-c", "project_doc_max_bytes=0")
+	if model != "" {
+		command = append(command, "-m", model)
+	}
+	if reasoningEffort != "" {
+		command = append(command, "-c", "model_reasoning_effort="+reasoningEffort)
+	}
+	return command
 }
 
 // threadStartedID extracts only a valid thread.started machine event and never

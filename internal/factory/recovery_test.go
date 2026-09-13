@@ -216,7 +216,7 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: root, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
 	}}}
@@ -278,7 +278,7 @@ func recoveryRun(worktreePath string) store.Run {
 // recovery projections and mutation-recording test doubles.
 func newRecoveryService(t *testing.T, runStore *recoveryRunStore, githubAdapter *fakeGitHub, worktree *recoveryWorktree, pullRequests *fakePullRequests) *factory.Service {
 	t.Helper()
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: runStore.run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(t.TempDir(), "factory.db"), RepositoryConfigPath: filepath.Join(runStore.run.RepositoryPath, "factory.yaml"),
 	}}}

@@ -15,15 +15,15 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
-// TestValidateInteractiveResumeCapabilitiesRefusesAMissingCapability verifies
+// TestValidateNativeResumeCapabilitiesRefusesAMissingCapability verifies
 // a role cannot select an adapter that cannot recover an interactive session.
-func TestValidateInteractiveResumeCapabilitiesRefusesAMissingCapability(t *testing.T) {
+func TestValidateNativeResumeCapabilitiesRefusesAMissingCapability(t *testing.T) {
 	policy := config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex}}
-	err := harness.ValidateInteractiveResumeCapabilities(policy, func(string) (harness.Capabilities, error) {
+	err := harness.ValidateNativeResumeCapabilities(policy, func(string) (harness.Capabilities, error) {
 		return harness.Capabilities{Name: harness.NameCodex}, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "interactive resume") {
-		t.Fatalf("ValidateInteractiveResumeCapabilities() error = %v, want missing capability", err)
+	if err == nil || !strings.Contains(err.Error(), "native resume") {
+		t.Fatalf("ValidateNativeResumeCapabilities() error = %v, want missing capability", err)
 	}
 }
 

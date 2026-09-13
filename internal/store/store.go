@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 35
+const CurrentSchemaVersion = 36
 
 // maxPendingQuestions bounds the flattened operator question surface. Review
 // axes retain up to 32 questions independently, so the shared surface allows
@@ -342,7 +342,7 @@ type ReviewFinding struct {
 	SuggestedOwner string `json:"suggested_owner"`
 }
 
-// SourceEvent returns the maintainer surface and event identity behind a human
+// SourceEvent returns the maintainer source and event identity behind a human
 // repair packet. A packet written before supervision commands existed recorded
 // only its GitHub review identity, so that shape reads as a pull-request review
 // event and remains replayable without a migration.
@@ -433,7 +433,7 @@ const (
 	ReviewRepairSourceHuman ReviewRepairSource = "human"
 )
 
-// ReviewRepairSourceEvent identifies the maintainer surface that produced one
+// ReviewRepairSourceEvent identifies the maintainer source that produced one
 // human repair packet.
 type ReviewRepairSourceEvent string
 
@@ -459,7 +459,7 @@ type ReviewRepairPacket struct {
 	// packet and for a command-sourced packet; SourceEvent reads it so a packet
 	// persisted by an earlier coordinator stays replayable.
 	ReviewID string `json:"review_id,omitempty"`
-	// SourceEventKind identifies which maintainer surface produced a human
+	// SourceEventKind identifies which maintainer source produced a human
 	// packet. It is empty for a factory packet.
 	SourceEventKind ReviewRepairSourceEvent `json:"source_event_kind,omitempty"`
 	// SourceEventID is the identity of that surface's event, and is what makes
@@ -591,7 +591,8 @@ type Run struct {
 	// It remains stable while terminal notifications or status projections are
 	// retried, and is cleared when a terminal run is explicitly reopened.
 	TerminalAt time.Time
-	// LifecycleNotificationSent records successful cmux notification delivery.
+	// LifecycleNotificationSent is a retired compatibility marker retained for
+	// existing operational stores.
 	LifecycleNotificationSent bool
 	// ReadyNotificationSent records successful PR-readiness notification
 	// delivery for the current ready transition.
@@ -639,8 +640,8 @@ type Run struct {
 	// ClarificationCommentID identifies the question comment already published
 	// for the current pending clarification set.
 	ClarificationCommentID string
-	// ClarificationNotificationSent records successful cmux notification delivery
-	// for the current pending clarification set.
+	// ClarificationNotificationSent records completion of the non-blocking
+	// attention hook for the current pending clarification set.
 	ClarificationNotificationSent bool
 	CreatedAt                     time.Time
 	UpdatedAt                     time.Time
@@ -667,18 +668,6 @@ type Invocation struct {
 	CredentialStoreID string
 	// NativeSessionID is the harness-native continuation identity when known.
 	NativeSessionID string
-	// WorkspaceID is the opaque terminal workspace handle.
-	WorkspaceID string
-	// StatusSurfaceID is the opaque supervision status surface handle.
-	StatusSurfaceID string
-	// RoleSurfaceID is the opaque surface handle owned by this invocation's role.
-	RoleSurfaceID string
-	// ImplementationSurfaceID is the legacy opaque implementation surface handle.
-	// New code should use RoleSurfaceID; it remains populated for operational-store
-	// compatibility with runs created before role-owned surfaces were introduced.
-	ImplementationSurfaceID string
-	// ChecksSurfaceID is the opaque deterministic-check surface handle.
-	ChecksSurfaceID string
 	// InvocationDirectory is the host directory containing the frozen packet.
 	InvocationDirectory string
 	// ResultDirectory is the host directory containing report.json.
@@ -703,9 +692,9 @@ type Invocation struct {
 	// RecoveryResumeCount records the number of coordinator-owned native resume
 	// attempts completed for this invocation. Reconciliation permits one.
 	RecoveryResumeCount int
-	// AttachRequired blocks workflow progression until an operator has attached
-	// the manually resumed native session through the factory attach command.
-	AttachRequired bool
+	// ManualResumeCount is the durable generation reserved before each explicit
+	// operator-requested native resume. It prevents replay after response loss.
+	ManualResumeCount int
 	// CreatedAt is the immutable invocation creation time.
 	CreatedAt time.Time
 	// UpdatedAt is the latest coordinator update time.
@@ -2088,6 +2077,9 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	if invocation.RecoveryResumeCount < 0 {
 		return errors.New("invocation recovery resume count must not be negative")
 	}
+	if invocation.ManualResumeCount < 0 {
+		return errors.New("invocation manual resume count must not be negative")
+	}
 	if strings.ContainsAny(invocation.CredentialStoreID, "\x00\r\n") {
 		return errors.New("invocation credential store id contains control characters")
 	}
@@ -2100,17 +2092,6 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	if invocation.UpdatedAt.IsZero() {
 		invocation.UpdatedAt = invocation.CreatedAt
 	}
-	if invocation.RoleSurfaceID != "" && invocation.ImplementationSurfaceID != "" && invocation.RoleSurfaceID != invocation.ImplementationSurfaceID {
-		return errors.New("invocation role surface id conflicts with legacy implementation surface id")
-	}
-	roleSurfaceID := invocation.RoleSurfaceID
-	if roleSurfaceID == "" {
-		roleSurfaceID = invocation.ImplementationSurfaceID
-	}
-	implementationSurfaceID := invocation.ImplementationSurfaceID
-	if implementationSurfaceID == "" {
-		implementationSurfaceID = roleSurfaceID
-	}
 	permittedPathJSON, err := json.Marshal(invocation.PermittedPaths)
 	if err != nil {
 		return fmt.Errorf("encode invocation permitted paths: %w", err)
@@ -2118,10 +2099,10 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	_, err = s.db.ExecContext(ctx, `
 			INSERT INTO invocations (
 				id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
-				native_session_id, workspace_id, status_surface_id,
-				role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-				result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				native_session_id, invocation_directory, result_directory, permitted_paths,
+				prompt_version, prompt_craft_source_path, prompt_craft_sha256, status,
+				launch_voided, recovery_resume_count, manual_resume_count, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -2131,21 +2112,16 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			reasoning_effort = excluded.reasoning_effort,
 			credential_store_id = excluded.credential_store_id,
 			native_session_id = excluded.native_session_id,
-				workspace_id = excluded.workspace_id,
-				status_surface_id = excluded.status_surface_id,
-				role_surface_id = excluded.role_surface_id,
-				implementation_surface_id = excluded.implementation_surface_id,
-			checks_surface_id = excluded.checks_surface_id,
 			invocation_directory = excluded.invocation_directory,
 			result_directory = excluded.result_directory,
 				permitted_paths = excluded.permitted_paths,
 				prompt_version = excluded.prompt_version,
 				prompt_craft_source_path = excluded.prompt_craft_source_path,
 				prompt_craft_sha256 = excluded.prompt_craft_sha256,
-				status = excluded.status,
-				launch_voided = excluded.launch_voided,
-				recovery_resume_count = excluded.recovery_resume_count,
-				attach_required = excluded.attach_required,
+			status = excluded.status,
+			launch_voided = excluded.launch_voided,
+			recovery_resume_count = excluded.recovery_resume_count,
+			manual_resume_count = excluded.manual_resume_count,
 				updated_at = excluded.updated_at`,
 		invocation.ID,
 		invocation.RunID,
@@ -2156,11 +2132,6 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.ReasoningEffort,
 		invocation.CredentialStoreID,
 		invocation.NativeSessionID,
-		invocation.WorkspaceID,
-		invocation.StatusSurfaceID,
-		roleSurfaceID,
-		implementationSurfaceID,
-		invocation.ChecksSurfaceID,
 		invocation.InvocationDirectory,
 		invocation.ResultDirectory,
 		string(permittedPathJSON),
@@ -2170,7 +2141,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.Status,
 		invocation.LaunchVoided,
 		invocation.RecoveryResumeCount,
-		invocation.AttachRequired,
+		invocation.ManualResumeCount,
 		invocation.CreatedAt.UTC().Format(runTimestampLayout),
 		invocation.UpdatedAt.UTC().Format(runTimestampLayout),
 	)
@@ -2343,9 +2314,8 @@ func (s *Store) saveRunAndInvalidateResults(ctx context.Context, expectedRevisio
 func (s *Store) Invocation(ctx context.Context, runID, invocationID string) (*Invocation, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
-		       native_session_id, workspace_id, status_surface_id,
-		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
+		       native_session_id, invocation_directory, result_directory, permitted_paths,
+		       prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, manual_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND id = ?`, runID, invocationID)
 	return scanInvocation(row)
@@ -2360,9 +2330,8 @@ func (s *Store) LatestInvocation(ctx context.Context, runID string) (*Invocation
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
-		       native_session_id, workspace_id, status_surface_id,
-		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
+		       native_session_id, invocation_directory, result_directory, permitted_paths,
+		       prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, manual_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ?
 		ORDER BY updated_at DESC, id DESC
@@ -2382,9 +2351,8 @@ func (s *Store) LatestInvocationByRole(ctx context.Context, runID, role string) 
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
-		       native_session_id, workspace_id, status_surface_id,
-		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
+		       native_session_id, invocation_directory, result_directory, permitted_paths,
+		       prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, manual_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND role = ?
 		ORDER BY updated_at DESC, id DESC
@@ -2415,9 +2383,8 @@ func (s *Store) ActiveInvocation(ctx context.Context, runID string) (*Invocation
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
-		       native_session_id, workspace_id, status_surface_id,
-		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
+		       native_session_id, invocation_directory, result_directory, permitted_paths,
+		       prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, manual_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at DESC
@@ -2434,9 +2401,8 @@ func (s *Store) ActiveInvocations(ctx context.Context, runID string) ([]Invocati
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
-		       native_session_id, workspace_id, status_surface_id,
-		       role_surface_id, implementation_surface_id, checks_surface_id, invocation_directory,
-		       result_directory, permitted_paths, prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, attach_required, created_at, updated_at
+		       native_session_id, invocation_directory, result_directory, permitted_paths,
+		       prompt_version, prompt_craft_source_path, prompt_craft_sha256, status, launch_voided, recovery_resume_count, manual_resume_count, created_at, updated_at
 		FROM invocations
 		WHERE run_id = ? AND status = ?
 		ORDER BY updated_at, id`, runID, InvocationStatusActive)
@@ -2472,11 +2438,6 @@ func scanInvocation(row interface{ Scan(...any) error }) (*Invocation, error) {
 		&invocation.ReasoningEffort,
 		&invocation.CredentialStoreID,
 		&invocation.NativeSessionID,
-		&invocation.WorkspaceID,
-		&invocation.StatusSurfaceID,
-		&invocation.RoleSurfaceID,
-		&invocation.ImplementationSurfaceID,
-		&invocation.ChecksSurfaceID,
 		&invocation.InvocationDirectory,
 		&invocation.ResultDirectory,
 		&permittedPathJSON,
@@ -2486,7 +2447,7 @@ func scanInvocation(row interface{ Scan(...any) error }) (*Invocation, error) {
 		&invocation.Status,
 		&invocation.LaunchVoided,
 		&invocation.RecoveryResumeCount,
-		&invocation.AttachRequired,
+		&invocation.ManualResumeCount,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -2499,12 +2460,6 @@ func scanInvocation(row interface{ Scan(...any) error }) (*Invocation, error) {
 		if err := json.Unmarshal([]byte(permittedPathJSON), &invocation.PermittedPaths); err != nil {
 			return nil, fmt.Errorf("decode invocation permitted paths: %w", err)
 		}
-	}
-	if invocation.RoleSurfaceID == "" {
-		invocation.RoleSurfaceID = invocation.ImplementationSurfaceID
-	}
-	if invocation.ImplementationSurfaceID == "" {
-		invocation.ImplementationSurfaceID = invocation.RoleSurfaceID
 	}
 	var err error
 	invocation.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -3278,6 +3233,52 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 35:
 			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN accepted_implementation_checkpoint_sha TEXT NOT NULL DEFAULT ''"); err != nil {
 				return fmt.Errorf("apply store migration 35: %w", err)
+			}
+		case 36:
+			for _, statement := range []string{
+				`CREATE TABLE invocations_headless (
+					id TEXT PRIMARY KEY,
+					run_id TEXT NOT NULL,
+					harness TEXT NOT NULL,
+					role TEXT NOT NULL,
+					stage TEXT NOT NULL,
+					model TEXT NOT NULL DEFAULT '',
+					reasoning_effort TEXT NOT NULL DEFAULT '',
+					native_session_id TEXT NOT NULL DEFAULT '',
+					invocation_directory TEXT NOT NULL DEFAULT '',
+					result_directory TEXT NOT NULL DEFAULT '',
+					prompt_version TEXT NOT NULL DEFAULT '',
+					status TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					permitted_paths TEXT NOT NULL DEFAULT '',
+					credential_store_id TEXT NOT NULL DEFAULT '',
+					recovery_resume_count INTEGER NOT NULL DEFAULT 0,
+					manual_resume_count INTEGER NOT NULL DEFAULT 0,
+					prompt_craft_source_path TEXT NOT NULL DEFAULT '',
+					prompt_craft_sha256 TEXT NOT NULL DEFAULT '',
+					launch_voided INTEGER NOT NULL DEFAULT 0
+				)`,
+				`INSERT INTO invocations_headless (
+					id, run_id, harness, role, stage, model, reasoning_effort,
+					native_session_id, invocation_directory, result_directory,
+					prompt_version, status, created_at, updated_at, permitted_paths,
+					credential_store_id, recovery_resume_count, manual_resume_count,
+					prompt_craft_source_path, prompt_craft_sha256, launch_voided
+				) SELECT id, run_id, harness, role, stage, model, reasoning_effort,
+					native_session_id, invocation_directory, result_directory,
+					prompt_version, status, created_at, updated_at, permitted_paths,
+					credential_store_id, recovery_resume_count, 0,
+					prompt_craft_source_path, prompt_craft_sha256, launch_voided
+				FROM invocations`,
+				"DROP TABLE invocations",
+				"ALTER TABLE invocations_headless RENAME TO invocations",
+				"CREATE INDEX invocations_by_run ON invocations (run_id, updated_at)",
+				"CREATE UNIQUE INDEX one_active_invocation_per_role ON invocations (run_id, role) WHERE status = 'active'",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 36: %w", err)
+				}
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

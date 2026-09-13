@@ -2,6 +2,8 @@ package worker_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -14,6 +16,14 @@ import (
 )
 
 const testWorkerDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// testRoleVolumeName mirrors the stable role-home identity used in structured
+// Docker inspection fixtures.
+func testRoleVolumeName(runID, role string) string {
+	role = strings.ToLower(role)
+	digest := sha256.Sum256([]byte(runID + "\x00" + role))
+	return "factory-role-" + role + "-" + hex.EncodeToString(digest[:])[:16]
+}
 
 // TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam verifies that the
 // Docker adapter translates one run into a hardened worker without exposing

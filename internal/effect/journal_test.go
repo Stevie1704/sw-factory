@@ -38,10 +38,12 @@ var journalKinds = []store.PendingEffectKind{
 // journalStoreForTest records every reservation while answering the run and
 // invocation reads a handler performs before its external mutation.
 type journalStoreForTest struct {
-	run        store.Run
-	invocation store.Invocation
-	reserved   []store.PendingEffect
-	cleared    []string
+	run                  store.Run
+	invocation           store.Invocation
+	invocationSaves      int
+	failInvocationSaveAt int
+	reserved             []store.PendingEffect
+	cleared              []string
 }
 
 // CurrentRun returns the fixed run projection.
@@ -53,8 +55,15 @@ func (s *journalStoreForTest) CurrentRun(context.Context) (*store.Run, error) {
 // SaveRun accepts a run projection without persisting it.
 func (s *journalStoreForTest) SaveRun(context.Context, store.Run) error { return nil }
 
-// SaveInvocation accepts an invocation projection without persisting it.
-func (s *journalStoreForTest) SaveInvocation(context.Context, store.Invocation) error { return nil }
+// SaveInvocation persists the invocation projection and can inject response loss.
+func (s *journalStoreForTest) SaveInvocation(_ context.Context, invocation store.Invocation) error {
+	s.invocationSaves++
+	if s.failInvocationSaveAt == s.invocationSaves {
+		return errExternal
+	}
+	s.invocation = invocation
+	return nil
+}
 
 // Invocation returns the fixed invocation projection.
 func (s *journalStoreForTest) Invocation(context.Context, string, string) (*store.Invocation, error) {
@@ -307,6 +316,109 @@ func (journalHarnessForTest) Resume(context.Context, harness.StartRequest) (harn
 // Finish returns the injected external failure.
 func (journalHarnessForTest) Finish(context.Context, harness.Session) error { return errExternal }
 
+// countingResumeHarness records native resume calls and returns the persisted
+// native identity, modelling an idempotency boundary outside the coordinator.
+type countingResumeHarness struct{ resumes int }
+
+// Capabilities identifies a headless Codex adapter.
+func (*countingResumeHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: "codex", Headless: true, NativeResume: true}
+}
+
+// Start is unused by resume-effect tests.
+func (*countingResumeHarness) Start(context.Context, harness.StartRequest) (harness.Session, error) {
+	return harness.Session{}, errors.New("unexpected start")
+}
+
+// Resume records exactly one native continuation.
+func (h *countingResumeHarness) Resume(_ context.Context, request harness.StartRequest) (harness.Session, error) {
+	h.resumes++
+	return harness.Session{InvocationID: request.InvocationID, RunID: request.RunID, NativeSessionID: request.ResumeSessionID}, nil
+}
+
+// Finish is unused by resume-effect tests.
+func (*countingResumeHarness) Finish(context.Context, harness.Session) error { return nil }
+
+// responseLossHarness records finalization before losing the first response.
+type responseLossHarness struct {
+	finishes int
+	failOnce bool
+}
+
+// Capabilities identifies a headless Codex adapter.
+func (*responseLossHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: "codex", Headless: true, NativeResume: true}
+}
+
+// Start is unused by result-acceptance tests.
+func (*responseLossHarness) Start(context.Context, harness.StartRequest) (harness.Session, error) {
+	return harness.Session{}, errors.New("unexpected start")
+}
+
+// Resume is unused by result-acceptance tests.
+func (*responseLossHarness) Resume(context.Context, harness.StartRequest) (harness.Session, error) {
+	return harness.Session{}, errors.New("unexpected resume")
+}
+
+// Finish records the native mutation and can lose its first response.
+func (h *responseLossHarness) Finish(context.Context, harness.Session) error {
+	h.finishes++
+	if h.failOnce {
+		h.failOnce = false
+		return errExternal
+	}
+	return nil
+}
+
+// convergedIssuesForTest exposes an already-current GitHub projection.
+type convergedIssuesForTest struct {
+	issue   github.Issue
+	comment github.Comment
+}
+
+// Issue returns the current issue projection.
+func (i *convergedIssuesForTest) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+	return i.issue, nil
+}
+
+// ReplaceIssueLabels accepts an already-converged label projection.
+func (i *convergedIssuesForTest) ReplaceIssueLabels(_ context.Context, _ github.Repository, _ int, labels []string) error {
+	i.issue.Labels = append([]string(nil), labels...)
+	return nil
+}
+
+// CreateIssueComment is unused when the status comment already exists.
+func (*convergedIssuesForTest) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+	return github.Comment{}, errors.New("unexpected comment creation")
+}
+
+// FindStatusComment returns the existing coordinator-owned projection.
+func (i *convergedIssuesForTest) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+	return i.comment, nil
+}
+
+// EditIssueComment updates the fixture's status body.
+func (i *convergedIssuesForTest) EditIssueComment(_ context.Context, _ github.Repository, _ string, body string) error {
+	i.comment.Body = body
+	return nil
+}
+
+// resumeLifecycleForTest returns one shared headless adapter during replay.
+type resumeLifecycleForTest struct{ runtime harness.Runtime }
+
+// StopWorker is unused by resume-effect tests.
+func (resumeLifecycleForTest) StopWorker(context.Context, string) error { return nil }
+
+// StopActiveWorkers is unused by resume-effect tests.
+func (resumeLifecycleForTest) StopActiveWorkers(context.Context, effect.RunStore, store.Run) error {
+	return nil
+}
+
+// HarnessRuntime returns the shared counting adapter.
+func (l resumeLifecycleForTest) HarnessRuntime(string) (harness.Runtime, error) {
+	return l.runtime, nil
+}
+
 // journalLifecycleForTest refuses every lifecycle operation.
 type journalLifecycleForTest struct{}
 
@@ -319,7 +431,7 @@ func (journalLifecycleForTest) StopActiveWorkers(context.Context, effect.RunStor
 }
 
 // HarnessRuntime returns the deterministic test harness.
-func (journalLifecycleForTest) HarnessRuntime(string, string) (harness.Runtime, error) {
+func (journalLifecycleForTest) HarnessRuntime(string) (harness.Runtime, error) {
 	return journalHarnessForTest{}, nil
 }
 
@@ -423,7 +535,7 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 	next.Revision = run.Revision + 1
 	invocation := store.Invocation{
 		ID: "inv-1", RunID: run.ID, Role: "implementation", Stage: store.StageImplementation,
-		Status: store.InvocationStatusCompleted, Harness: "codex", RecoveryResumeCount: 2,
+		Status: store.InvocationStatusCompleted, Harness: "codex", RecoveryResumeCount: 2, ManualResumeCount: 2,
 	}
 	repository := github.Repository{Owner: "example", Name: "project"}
 	issue := github.Issue{Number: run.IssueNumber}
@@ -520,14 +632,14 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 			name: "harness resume", kind: store.PendingEffectKindHarnessResume,
 			identity: invocation.ID + "\x00" + fmt.Sprint(invocation.RecoveryResumeCount+1),
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_, _ = journal.ResumeHarness(ctx, runStore, runStore, "/socket", journalHarnessForTest{}, invocation, resumeRequest)
+				_, _ = journal.ResumeHarness(ctx, runStore, runStore, journalHarnessForTest{}, invocation, resumeRequest)
 			},
 		},
 		{
 			name: "manual harness resume", kind: store.PendingEffectKindHarnessResume,
-			identity: invocation.ID + "\x00manual",
+			identity: invocation.ID + "\x00manual\x00" + fmt.Sprint(invocation.ManualResumeCount+1),
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_, _ = journal.ResumeHarnessManually(ctx, runStore, runStore, "/socket", journalHarnessForTest{}, invocation, resumeRequest)
+				_, _ = journal.ResumeHarnessManually(ctx, runStore, runStore, journalHarnessForTest{}, invocation, resumeRequest)
 			},
 		},
 		{
@@ -535,7 +647,7 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 			identity: invocation.ID + "\x00" + string(invocation.Status) + "\x00" + fmt.Sprint(next.Revision),
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
 				_, _, _ = journal.AcceptResult(ctx, runStore, runStore, effect.ResultAcceptance{
-					Repository: repository, SocketPath: "/socket", WorkerID: run.ID,
+					Repository: repository, WorkerID: run.ID,
 					Harness: journalHarnessForTest{}, Session: harness.Session{InvocationID: invocation.ID},
 					Invocation: invocation, Previous: run, Next: next, Report: report.Report{},
 				})
@@ -560,6 +672,172 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 				t.Fatalf("reserved identity = %q, want %q derived from %q", reserved.ID, want, test.identity)
 			}
 		})
+	}
+}
+
+// TestManualHarnessResumeDoesNotRepeatAfterResponseLoss verifies the manual
+// generation is durable before the native process boundary. Replaying the
+// pending effect must acknowledge that generation without a second resume.
+func TestManualHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
+	ctx := context.Background()
+	run := journalRunForTest()
+	invocation := store.Invocation{
+		ID: "inv-manual", RunID: run.ID, Harness: "codex", Role: "implementation",
+		Stage: store.StageImplementation, Status: store.InvocationStatusActive,
+		NativeSessionID: "native-manual",
+	}
+	runStore := &journalStoreForTest{
+		run: run, invocation: invocation, failInvocationSaveAt: 2,
+	}
+	runtime := &countingResumeHarness{}
+	journal := effect.New(effect.Adapters{
+		Now:       func() time.Time { return time.Unix(10, 0).UTC() },
+		Projector: journalProjectorForTest{run: run},
+		Lifecycle: resumeLifecycleForTest{runtime: runtime},
+	})
+	request := harness.StartRequest{
+		InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
+		ResumeSessionID: invocation.NativeSessionID,
+	}
+
+	if _, err := journal.ResumeHarnessManually(ctx, runStore, runStore, runtime, invocation, request); err == nil {
+		t.Fatal("ResumeHarnessManually() error = nil, want injected post-resume persistence loss")
+	}
+	if runtime.resumes != 1 || runStore.invocation.ManualResumeCount != 1 {
+		t.Fatalf("first boundary = resumes %d generation %d, want 1/1", runtime.resumes, runStore.invocation.ManualResumeCount)
+	}
+	if len(runStore.reserved) != 1 || len(runStore.cleared) != 0 {
+		t.Fatalf("journal after response loss = reserved %#v cleared %#v", runStore.reserved, runStore.cleared)
+	}
+
+	runStore.failInvocationSaveAt = 0
+	if _, err := journal.Replay(ctx, runStore, runStore.reserved[0]); err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if runtime.resumes != 1 {
+		t.Fatalf("native resumes after replay = %d, want exactly one", runtime.resumes)
+	}
+	if len(runStore.cleared) != 1 {
+		t.Fatalf("cleared effects = %#v, want the ambiguous manual reservation acknowledged", runStore.cleared)
+	}
+}
+
+// TestAutomaticHarnessResumeDoesNotRepeatAfterResponseLoss verifies the
+// one-shot recovery generation prevents a second native continuation when the
+// coordinator loses the persistence response after the first continuation.
+func TestAutomaticHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
+	ctx := context.Background()
+	run := journalRunForTest()
+	invocation := store.Invocation{
+		ID: "inv-automatic", RunID: run.ID, Harness: "codex", Role: "implementation",
+		Stage: store.StageImplementation, Status: store.InvocationStatusActive,
+		NativeSessionID: "native-automatic",
+	}
+	runStore := &journalStoreForTest{run: run, invocation: invocation, failInvocationSaveAt: 2}
+	runtime := &countingResumeHarness{}
+	journal := effect.New(effect.Adapters{
+		Now:       func() time.Time { return time.Unix(10, 0).UTC() },
+		Projector: journalProjectorForTest{run: run},
+		Lifecycle: resumeLifecycleForTest{runtime: runtime},
+	})
+	request := harness.StartRequest{
+		InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role,
+		ResumeSessionID: invocation.NativeSessionID,
+	}
+
+	if _, err := journal.ResumeHarness(ctx, runStore, runStore, runtime, invocation, request); err == nil {
+		t.Fatal("ResumeHarness() error = nil, want injected post-resume persistence loss")
+	}
+	if runtime.resumes != 1 || runStore.invocation.RecoveryResumeCount != 1 {
+		t.Fatalf("first boundary = resumes %d generation %d, want 1/1", runtime.resumes, runStore.invocation.RecoveryResumeCount)
+	}
+	runStore.failInvocationSaveAt = 0
+	if _, err := journal.Replay(ctx, runStore, runStore.reserved[0]); err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if runtime.resumes != 1 || len(runStore.cleared) != 1 {
+		t.Fatalf("replay boundary = resumes %d cleared %#v, want one/no duplicate", runtime.resumes, runStore.cleared)
+	}
+}
+
+// TestResultAcceptanceReplayDoesNotRepeatFinalization verifies a persisted
+// terminal invocation is the durable boundary for an ambiguous native finish.
+func TestResultAcceptanceReplayDoesNotRepeatFinalization(t *testing.T) {
+	ctx := context.Background()
+	run := journalRunForTest()
+	invocation := store.Invocation{
+		ID: "inv-accept", RunID: run.ID, Harness: "codex", Role: "implementation",
+		Stage: store.StageImplementation, Status: store.InvocationStatusActive,
+		NativeSessionID: "native-accept",
+	}
+	accepted := invocation
+	accepted.Status = store.InvocationStatusCompleted
+	next := run
+	next.Revision++
+	runStore := &journalStoreForTest{run: run, invocation: invocation}
+	runtime := &responseLossHarness{failOnce: true}
+	issues := &convergedIssuesForTest{
+		issue:   github.Issue{Number: run.IssueNumber, Labels: []string{string(next.Status)}},
+		comment: github.Comment{ID: next.StatusCommentID, Body: journalPresentationForTest{}.StatusCommentBody(next)},
+	}
+	journal := effect.New(effect.Adapters{
+		Now: func() time.Time { return time.Unix(10, 0).UTC() }, Issues: issues,
+		Presentation: journalPresentationForTest{}, Projector: journalProjectorForTest{run: run},
+		Lifecycle: resumeLifecycleForTest{runtime: runtime},
+	})
+
+	_, _, err := journal.AcceptResult(ctx, runStore, runStore, effect.ResultAcceptance{
+		Repository: github.Repository{Owner: "example", Name: "project"}, Harness: runtime,
+		Session:    harness.Session{InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID},
+		Invocation: accepted, Previous: run, Next: next,
+		Report: report.Report{SchemaVersion: report.SchemaVersion, InvocationID: invocation.ID, RunID: run.ID},
+	})
+	if err == nil || runtime.finishes != 1 || runStore.invocation.Status != store.InvocationStatusCompleted {
+		t.Fatalf("AcceptResult() = %v, finishes %d invocation %#v; want lost response after one finish", err, runtime.finishes, runStore.invocation)
+	}
+	if _, err := journal.Replay(ctx, runStore, runStore.reserved[0]); err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if runtime.finishes != 1 || len(runStore.cleared) != 1 {
+		t.Fatalf("replay boundary = finishes %d cleared %#v, want one/no duplicate", runtime.finishes, runStore.cleared)
+	}
+}
+
+// TestResultAcceptanceReplayRejectsANewerRevisionBeforeSideEffects verifies a
+// stale journal cannot finish a harness or stop a worker after the run advances.
+func TestResultAcceptanceReplayRejectsANewerRevisionBeforeSideEffects(t *testing.T) {
+	ctx := context.Background()
+	run := journalRunForTest()
+	invocation := store.Invocation{
+		ID: "inv-stale", RunID: run.ID, Harness: "codex", Role: "implementation",
+		Stage: store.StageImplementation, Status: store.InvocationStatusActive,
+		NativeSessionID: "native-stale",
+	}
+	accepted := invocation
+	accepted.Status = store.InvocationStatusCompleted
+	next := run
+	next.Revision++
+	runStore := &journalStoreForTest{run: run, invocation: invocation}
+	runtime := &responseLossHarness{failOnce: true}
+	first := effect.New(effect.Adapters{
+		Now:       func() time.Time { return time.Unix(10, 0).UTC() },
+		Projector: journalProjectorForTest{run: run}, Lifecycle: resumeLifecycleForTest{runtime: runtime},
+	})
+	_, _, _ = first.AcceptResult(ctx, runStore, runStore, effect.ResultAcceptance{
+		Harness: runtime, Session: harness.Session{InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID},
+		Invocation: accepted, Previous: run, Next: next,
+	})
+	newer := next
+	newer.Revision++
+	restarted := effect.New(effect.Adapters{
+		Now:       func() time.Time { return time.Unix(11, 0).UTC() },
+		Projector: journalProjectorForTest{run: newer}, Lifecycle: resumeLifecycleForTest{runtime: runtime},
+	})
+	if _, err := restarted.Replay(ctx, runStore, runStore.reserved[0]); err == nil || !strings.Contains(err.Error(), "older than current revision") {
+		t.Fatalf("Replay() error = %v, want stale-revision refusal", err)
+	}
+	if runtime.finishes != 1 || len(runStore.cleared) != 0 {
+		t.Fatalf("stale replay effects = finishes %d cleared %#v, want unchanged pending effect", runtime.finishes, runStore.cleared)
 	}
 }
 

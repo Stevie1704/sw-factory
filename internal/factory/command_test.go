@@ -368,7 +368,7 @@ func commandRepositoryConfig() config.RepositoryConfig {
 
 // commandHost returns a single registered repository with one authorized user.
 func commandHost() config.HostConfig {
-	return config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: "/repo", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
+	return config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: "/repo", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
 }
 
 // newCommandService builds a service at the public command seam.
@@ -390,7 +390,6 @@ func newCommandServiceWithStoreAndWorktree(runStore factory.OperationalStore, gi
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		GitHub:    githubAdapter,
 		Comments:  comments,
-		Terminal:  &lifecycleTerminal{},
 		// A command test must never reach the real worker runtime: terminal
 		// lifecycle handling stops the run-scoped worker, and the default
 		// runtime would shell out to Docker on the developer's machine.

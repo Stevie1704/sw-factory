@@ -8,23 +8,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
-
-// resetWorkspaceCloseTimeout bounds one terminal workspace close so an
-// unresponsive terminal cannot stall the rest of a reset.
-const resetWorkspaceCloseTimeout = 10 * time.Second
-
-// resetControlWorkspaceCloseLimit bounds how many workspaces sharing the
-// registered control-workspace name reset will close, so an adapter that keeps
-// reporting the same name cannot loop forever.
-const resetControlWorkspaceCloseLimit = 8
 
 // resetFailureReasonLimit bounds one operator-facing failure explanation so an
 // adapter cannot spill an unbounded payload into a reset report.
@@ -40,7 +29,7 @@ var resetDatabaseSidecarSuffixes = []string{"-wal", "-shm", "-journal"}
 // retention without the operator consulting documentation.
 var resetRetainedResources = []string{
 	"the registered source checkout, its tracked files, factory.yaml, and ordinary local branches",
-	"installed factory, factory-report, and factory-worker-attach binaries",
+	"installed factory, factory-report, and factory-worker-headless binaries",
 	"Docker worker images",
 	"repository-declared cache directories",
 	"host Codex and Claude credential sources and host harness state",
@@ -65,8 +54,8 @@ type ResetRequest struct {
 // ResetRun describes every local target one persisted run contributes to a
 // reset plan.
 type ResetRun struct {
-	// runLocalResources carries the exact branch, worktree, workspace, worker,
-	// role, stored-output, and credential-store targets the shared validator
+	// runLocalResources carries the exact branch, worktree, worker, role,
+	// stored-output, and credential-store targets the shared validator
 	// derived, so the plan cannot drift from what was validated.
 	runLocalResources
 	// RunID identifies the run and its private worker resources.
@@ -130,8 +119,6 @@ type ResetPlan struct {
 	MigrationBackups []string
 	// CoordinatorLock is the exact lock file for the registered checkout.
 	CoordinatorLock string
-	// ControlWorkspace is the registered control workspace name to close.
-	ControlWorkspace string
 	// Runs contains every run's exact local targets.
 	Runs []ResetRun
 	// CredentialStores contains every distinct factory-managed credential
@@ -204,7 +191,7 @@ func (e *ResetIncompleteError) Error() string {
 
 // Reset previews and, when explicitly confirmed, returns one registered factory
 // installation to its pre-init local state. Without confirmation it performs no
-// filesystem, Git, Docker, terminal, store, configuration, or GitHub mutation.
+// filesystem, Git, Docker, worker, store, configuration, or GitHub mutation.
 //
 // Confirmation re-observes current state before deleting anything: it proves
 // that no coordinator holds the repository lock, carries every non-terminal run
@@ -271,7 +258,7 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	}
 	defer func() { _ = lock.release() }()
 	// The adapter preflight runs only on the confirmed path. A preview is
-	// read-only and must not depend on a reachable Docker or terminal host,
+	// read-only and must not depend on a reachable Docker worker,
 	// while a confirmed reset must not begin deletion with a known-unavailable
 	// adapter and leave a half-reset installation behind.
 	if err := s.checkResetAdapters(ctx, registration, plan); err != nil {
@@ -329,11 +316,10 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 }
 
 // soleRegistration loads the one registration reset is allowed to remove. Reset
-// deletes the whole host configuration and closes the control workspace that
-// configuration names, so it refuses a configuration holding more than one
-// registration rather than destroying a registration it never planned for.
-// Version one registers exactly one repository, so this is a guard against a
-// hand-edited configuration, not a supported multi-repository mode.
+// deletes the whole host configuration, so it refuses a configuration holding
+// more than one registration rather than destroying a registration it never
+// planned for. Host schema two registers exactly one repository, so this is a
+// guard against a hand-edited configuration, not a supported multi-repository mode.
 func (s *Service) soleRegistration() (config.RepositoryRegistration, error) {
 	if s.configPath == "" {
 		return config.RepositoryRegistration{}, errors.New("host configuration path is required")
@@ -427,7 +413,6 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 		OperationalDataPath:   filepath.Clean(registration.OperationalDataPath),
 		operationalDataTarget: databasePath,
 		CoordinatorLock:       lockPath,
-		ControlWorkspace:      controlWorkspaceName(registration),
 		Retained:              append([]string(nil), resetRetainedResources...),
 	}
 	plan.DatabaseSidecars = existingDatabaseSidecars(databasePath)
@@ -597,15 +582,11 @@ func (s *Service) applyResetLifecycleTransitions(ctx context.Context, registrati
 func (s *Service) checkResetAdapters(ctx context.Context, registration config.RepositoryRegistration, plan ResetPlan) error {
 	var blockers []ResetBlocker
 	needsWorker := false
-	needsTerminal := plan.ControlWorkspace != ""
 	needsGit := false
 	for _, run := range plan.Runs {
 		needsGit = true
 		if len(run.WorkerIDs) > 0 || len(run.Roles) > 0 || len(run.StoredOutputs) > 0 {
 			needsWorker = true
-		}
-		if len(run.WorkspaceIDs) > 0 {
-			needsTerminal = true
 		}
 	}
 	if len(plan.CredentialStores) > 0 {
@@ -635,33 +616,10 @@ func (s *Service) checkResetAdapters(ctx context.Context, registration config.Re
 			}
 		}
 	}
-	if needsTerminal {
-		terminalRuntime, err := s.resetTerminalRuntime(registration)
-		if err != nil {
-			blockers = append(blockers, ResetBlocker{Reason: resetFailureReason(fmt.Errorf("the terminal adapter is unavailable: %w", err)), Action: "start the terminal adapter, then repeat factory reset"})
-		} else if err := checkTerminalAvailability(ctx, terminalRuntime); err != nil {
-			blockers = append(blockers, ResetBlocker{Reason: resetFailureReason(fmt.Errorf("the terminal adapter is unavailable: %w", err)), Action: "start the terminal adapter, then repeat factory reset"})
-		}
-	}
 	if len(blockers) > 0 {
 		return &ResetBlockedError{Blockers: blockers}
 	}
 	return nil
-}
-
-// checkTerminalAvailability verifies both the terminal executable and its
-// control socket through the adapter's own diagnosis seam. An installed binary
-// without a reachable socket would otherwise pass the preflight and then fail
-// every workspace close.
-func checkTerminalAvailability(ctx context.Context, terminalRuntime terminal.TerminalRuntime) error {
-	checker, ok := terminalRuntime.(terminal.DoctorChecker)
-	if !ok {
-		return nil
-	}
-	if err := checker.CheckExecutable(ctx); err != nil {
-		return err
-	}
-	return checker.CheckSocket(ctx)
 }
 
 // executeReset removes every planned target except the operational store and
@@ -669,16 +627,6 @@ func checkTerminalAvailability(ctx context.Context, terminalRuntime terminal.Ter
 // long as possible. Independent targets are attempted individually so one
 // bounded failure cannot hide every later one.
 func (s *Service) executeReset(ctx context.Context, registration config.RepositoryRegistration, plan ResetPlan, result *ResetResult) {
-	terminalRuntime := s.availableTerminalRuntime(registration)
-	for _, run := range plan.Runs {
-		for _, workspaceID := range run.WorkspaceIDs {
-			s.closeResetWorkspace(ctx, terminalRuntime, workspaceID, result)
-		}
-	}
-	if plan.ControlWorkspace != "" {
-		s.closeResetControlWorkspace(ctx, terminalRuntime, plan.ControlWorkspace, result)
-	}
-
 	runtime, _ := s.deps.Worker.(worker.CleanupRuntime)
 	for _, run := range plan.Runs {
 		if runtime == nil {
@@ -738,82 +686,6 @@ func (s *Service) removeResetStore(plan ResetPlan, result *ResetResult) {
 		}
 		result.Removed = append(result.Removed, "operational store file "+path)
 	}
-}
-
-// closeResetWorkspace closes one run terminal workspace. An absent workspace is
-// a successful result, so a repeated reset completes idempotently.
-func (s *Service) closeResetWorkspace(ctx context.Context, terminalRuntime terminal.TerminalRuntime, workspaceID string, result *ResetResult) {
-	target := "terminal workspace " + workspaceID
-	if terminalRuntime == nil {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: "the terminal adapter is unavailable"})
-		return
-	}
-	// An unreachable terminal can accept the connection and never answer, so
-	// each close is bounded rather than allowed to stall the reset.
-	closeCtx, cancel := context.WithTimeout(ctx, resetWorkspaceCloseTimeout)
-	err := terminalRuntime.CloseWorkspace(closeCtx, terminal.WorkspaceID(workspaceID))
-	cancel()
-	if err != nil {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
-		return
-	}
-	result.Removed = append(result.Removed, target)
-}
-
-// closeResetControlWorkspace closes the registered control workspace. Version
-// one registers exactly one repository per host configuration, so removing that
-// configuration leaves no registration able to reference the workspace.
-func (s *Service) closeResetControlWorkspace(ctx context.Context, terminalRuntime terminal.TerminalRuntime, name string, result *ResetResult) {
-	target := "control workspace " + name
-	if terminalRuntime == nil {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: "the terminal adapter is unavailable"})
-		return
-	}
-	finder, ok := terminalRuntime.(terminal.WorkspaceFinder)
-	if !ok {
-		result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: "the terminal adapter cannot resolve a workspace by name"})
-		return
-	}
-	// A coordinator that ensured the control workspace in an earlier process
-	// can have created more than one workspace under the registered name, so
-	// every match is closed rather than only the first one the adapter reports.
-	before := len(result.Remaining)
-	for attempt := 0; attempt < resetControlWorkspaceCloseLimit; attempt++ {
-		found, exists, err := finder.FindWorkspace(ctx, name)
-		if err != nil {
-			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
-			return
-		}
-		if !exists {
-			result.Removed = append(result.Removed, target)
-			return
-		}
-		s.closeResetWorkspace(ctx, terminalRuntime, string(found.ID), result)
-		if len(result.Remaining) != before {
-			return
-		}
-	}
-	result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: "the terminal adapter still reports a workspace with this name after repeated closes"})
-}
-
-// resetTerminalRuntime resolves the terminal adapter without creating a
-// workspace, so a preview stays free of terminal mutation.
-func (s *Service) resetTerminalRuntime(registration config.RepositoryRegistration) (terminal.TerminalRuntime, error) {
-	if s.deps.Terminal != nil {
-		return s.deps.Terminal, nil
-	}
-	return s.lifecycleModule().ensureTerminalRuntime(registration.Cmux.SocketPath)
-}
-
-// availableTerminalRuntime resolves the terminal adapter, reporting an
-// unavailable adapter as a nil runtime so each affected target records its own
-// bounded failure instead of aborting the whole reset.
-func (s *Service) availableTerminalRuntime(registration config.RepositoryRegistration) terminal.TerminalRuntime {
-	terminalRuntime, err := s.resetTerminalRuntime(registration)
-	if err != nil {
-		return nil
-	}
-	return terminalRuntime
 }
 
 // resetFailureReason renders one adapter failure for an operator-facing plan.

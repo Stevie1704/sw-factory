@@ -168,32 +168,6 @@ type CommandResult struct {
 	Stderr string
 }
 
-// InteractiveRequest describes one visible harness command. The adapter
-// translates it into a host helper command without exposing a Docker name.
-type InteractiveRequest struct {
-	// RunID selects the worker receiving the interactive command.
-	RunID string
-	// WorkerID optionally selects the isolated worker receiving the command.
-	WorkerID string
-	// Command is the harness executable and its arguments inside the worker.
-	Command []string
-	// EnvironmentPolicy selects clean or role execution.
-	EnvironmentPolicy EnvironmentPolicy
-	// Role names the coordinator-defined workflow role.
-	Role string
-	// Environment contains explicit non-secret invocation values.
-	Environment map[string]string
-}
-
-// InteractiveCommand is a terminal-launch command whose executable runs on the
-// host and attaches to the worker without revealing its runtime identifier.
-type InteractiveCommand struct {
-	// Executable is the host attach helper.
-	Executable string
-	// Args are helper arguments; the worker adapter owns runtime translation.
-	Args []string
-}
-
 // CredentialSeedRequest selects one host-side Codex auth file to stream into a
 // worker-owned role home. The host directory is never mounted.
 type CredentialSeedRequest struct {
@@ -210,21 +184,12 @@ type NativeSessionRequest struct {
 	// RunID selects the worker whose role home is inspected.
 	RunID string
 	// InvocationID selects the headless process state belonging to one
-	// invocation. Interactive session discovery may leave it empty for
-	// compatibility with older workers.
+	// invocation.
 	InvocationID string
 	// WorkerID optionally selects the worker whose role home is inspected.
 	WorkerID string
 	// Harness identifies the session format being inspected.
 	Harness string
-}
-
-// InteractiveRuntime is the optional extension implemented by runtimes that
-// can provide a visible terminal attach command.
-type InteractiveRuntime interface {
-	WorkerRuntime
-	// InteractiveCommand returns a command for a terminal adapter to launch.
-	InteractiveCommand(context.Context, InteractiveRequest) (InteractiveCommand, error)
 }
 
 // CredentialSeeder is the optional extension for narrowly scoped auth seeding.
@@ -376,9 +341,6 @@ type DockerRuntime struct {
 	// DockerBinary overrides the executable name for controlled contract tests.
 	// An empty value uses docker from PATH.
 	DockerBinary string
-	// AttachBinary is the host helper used to attach a cmux surface. An empty
-	// value uses factory-worker-attach from PATH.
-	AttachBinary string
 }
 
 // NewDockerRuntime creates a Docker-backed WorkerRuntime adapter.
@@ -536,31 +498,6 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, err)
 }
 
-// InteractiveCommand returns a host helper invocation for a visible terminal
-// surface. Only the run/role identity and explicit non-secret protocol values
-// cross the seam; the private Docker name is derived later inside the worker
-// adapter/helper.
-func (r *DockerRuntime) InteractiveCommand(_ context.Context, request InteractiveRequest) (InteractiveCommand, error) {
-	if err := validateInteractiveRequest(request); err != nil {
-		return InteractiveCommand{}, err
-	}
-	binary := r.AttachBinary
-	if strings.TrimSpace(binary) == "" {
-		binary = "factory-worker-attach"
-	}
-	args := []string{"--run-id", request.RunID, "--role", request.Role}
-	if request.WorkerID != "" {
-		args = append(args, "--worker-id", request.WorkerID)
-	}
-	entries := explicitEnvironment(request.Environment)
-	for _, entry := range entries {
-		args = append(args, "--env", entry)
-	}
-	args = append(args, "--")
-	args = append(args, request.Command...)
-	return InteractiveCommand{Executable: binary, Args: args}, nil
-}
-
 // SeedCodexCredentials streams one explicit auth.json file into the separate
 // factory-managed credential volume and links only that file into Codex's role
 // home. It never mounts the host file or returns credential contents.
@@ -669,7 +606,7 @@ func dockerStderrDetail(err error) error {
 }
 
 // NativeSessionIDs discovers harness sessions from persisted role-home files,
-// never by scraping terminal output. An empty result means the harness has not
+// never by scraping process output. An empty result means the harness has not
 // persisted a session file yet.
 func (r *DockerRuntime) NativeSessionIDs(ctx context.Context, request NativeSessionRequest) ([]string, error) {
 	if err := validateRunID(request.RunID); err != nil {
@@ -730,36 +667,6 @@ func (r *DockerRuntime) NativeSessionID(ctx context.Context, request NativeSessi
 		return "", err
 	}
 	return identifiers[len(identifiers)-1], nil
-}
-
-// Attach connects the current process's standard streams to one interactive
-// worker harness. It is used by the small host attach helper launched by cmux.
-func (r *DockerRuntime) Attach(ctx context.Context, request InteractiveRequest) error {
-	if err := validateInteractiveRequest(request); err != nil {
-		return err
-	}
-	inspection, err := r.inspectContainer(ctx, containerName(workerResourceID(request.RunID, request.WorkerID)))
-	if err != nil {
-		return fmt.Errorf("inspect worker before interactive attach: %w", err)
-	}
-	if !inspection.Running {
-		return fmt.Errorf("worker %q is not running", request.RunID)
-	}
-	args := []string{"exec", "-it", "--workdir", WorktreePath}
-	for _, value := range commandEnvironment(CommandRequest{RunID: request.RunID, WorkerID: request.WorkerID, EnvironmentPolicy: request.EnvironmentPolicy, Role: request.Role, Environment: request.Environment}) {
-		args = append(args, "--env", value)
-	}
-	args = append(args, containerName(workerResourceID(request.RunID, request.WorkerID)))
-	args = append(args, request.Command...)
-	binary := r.DockerBinary
-	if strings.TrimSpace(binary) == "" {
-		binary = "docker"
-	}
-	command := exec.CommandContext(ctx, binary, args...)
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	return command.Run()
 }
 
 // Stop stops an existing worker while retaining its writable state and role
@@ -1600,15 +1507,15 @@ func validateEnvironmentEntry(name, value string) error {
 	return validateEnvironmentEntryWithProtocol(name, value, false)
 }
 
-// validateInteractiveEnvironmentEntry allows only the coordinator's
+// validateInvocationEnvironmentEntry allows only the coordinator's
 // invocation identity fields in addition to the ordinary non-secret values.
-func validateInteractiveEnvironmentEntry(name, value string) error {
+func validateInvocationEnvironmentEntry(name, value string) error {
 	return validateEnvironmentEntryWithProtocol(name, value, true)
 }
 
 // validateEnvironmentEntryWithProtocol validates one environment entry while
 // optionally allowing the small set of harness identity values that the
-// coordinator must pass to an interactive session.
+// coordinator must pass to a harness process.
 func validateEnvironmentEntryWithProtocol(name, value string, allowProtocol bool) error {
 	if !validEnvironmentName(name) {
 		return fmt.Errorf("environment name %q is invalid", name)
@@ -1619,7 +1526,7 @@ func validateEnvironmentEntryWithProtocol(name, value string, allowProtocol bool
 	if forbiddenEnvironmentName(name) {
 		return fmt.Errorf("environment variable %q is not allowed in a worker", name)
 	}
-	if reservedEnvironmentName(name) && (!allowProtocol || !interactiveProtocolEnvironmentName(name)) {
+	if reservedEnvironmentName(name) && (!allowProtocol || !invocationProtocolEnvironmentName(name)) {
 		return fmt.Errorf("environment variable %q is reserved by the worker", name)
 	}
 	return nil
@@ -1951,9 +1858,9 @@ func reservedEnvironmentName(name string) bool {
 	}
 }
 
-// interactiveProtocolEnvironmentName identifies values supplied by the
-// coordinator to a visible harness rather than arbitrary worker commands.
-func interactiveProtocolEnvironmentName(name string) bool {
+// invocationProtocolEnvironmentName identifies values supplied by the
+// coordinator to a detached harness rather than arbitrary worker commands.
+func invocationProtocolEnvironmentName(name string) bool {
 	switch strings.ToUpper(name) {
 	case "FACTORY_INVOCATION_ID", "FACTORY_HARNESS", "FACTORY_STAGE", "FACTORY_CHECKPOINT_SHA", "FACTORY_MODEL", "FACTORY_REASONING_EFFORT":
 		return true
@@ -2076,40 +1983,6 @@ func credentialVolumeName(runID, storeID string) string {
 	return "factory-auth-codex-" + hex.EncodeToString(digest[:])[:24]
 }
 
-// validateInteractiveRequest validates a harness command and its explicit
-// environment before it is handed to a terminal or Docker adapter. Arguments
-// may contain newlines because immutable harness prompts are passed as opaque
-// argv values; the executable itself and every argument still reject bytes
-// that could terminate or rewrite the transport record.
-func validateInteractiveRequest(request InteractiveRequest) error {
-	if err := validateRunID(request.RunID); err != nil {
-		return err
-	}
-	if err := validateOptionalWorkerID(request.WorkerID); err != nil {
-		return err
-	}
-	if len(request.Command) == 0 || strings.TrimSpace(request.Command[0]) == "" {
-		return errors.New("interactive harness command is required")
-	}
-	if request.EnvironmentPolicy != EnvironmentPolicyClean && request.EnvironmentPolicy != EnvironmentPolicyRole {
-		return errors.New("interactive environment policy must be clean or role")
-	}
-	if strings.TrimSpace(request.Role) == "" || !validName(request.Role) {
-		return errors.New("interactive harness role is required and must be safe")
-	}
-	for index, argument := range request.Command {
-		if strings.ContainsAny(argument, "\x00\r") || index == 0 && strings.ContainsRune(argument, '\n') {
-			return errors.New("interactive harness command contains control characters")
-		}
-	}
-	for name, value := range request.Environment {
-		if err := validateInteractiveEnvironmentEntry(name, value); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // isContainerNotFound reports whether err indicates that Docker could not find a
 // container.
 func isContainerNotFound(err error) bool {
@@ -2156,7 +2029,6 @@ func isDockerRuntimeFailure(commandErr *dockerCommandError) bool {
 }
 
 var _ WorkerRuntime = (*DockerRuntime)(nil)
-var _ InteractiveRuntime = (*DockerRuntime)(nil)
 var _ CredentialSeeder = (*DockerRuntime)(nil)
 var _ ClaudeCredentialSeeder = (*DockerRuntime)(nil)
 var _ NativeSessionSnapshotProvider = (*DockerRuntime)(nil)

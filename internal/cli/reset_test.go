@@ -43,9 +43,7 @@ func TestResetCommandPrintsRemovedAndRetainedResourcesBeforeConfirmation(t *test
 		"reset worktree: " + worktreePath,
 		"reset branch: factory/run-cli-reset (local only; remote retained)",
 		"reset git projection: ",
-		"reset terminal workspace: workspace-cli-reset",
 		"reset credential volume: " + repositoryPath,
-		"reset control workspace: factory-control",
 		"reset coordinator lock: ",
 		"reset database: " + operationalPath,
 		"reset config: " + configPath + " (removed last)",
@@ -55,6 +53,9 @@ func TestResetCommandPrintsRemovedAndRetainedResourcesBeforeConfirmation(t *test
 		if !strings.Contains(output.String(), fragment) {
 			t.Fatalf("reset output = %q, missing %q", output.String(), fragment)
 		}
+	}
+	if strings.Contains(output.String(), "workspace-cli-reset") || strings.Contains(output.String(), "factory-control") {
+		t.Fatalf("reset output = %q, want no removed local-UI projection", output.String())
 	}
 	for _, path := range []string{configPath, operationalPath, worktreePath} {
 		if _, err := os.Stat(path); err != nil {
@@ -84,7 +85,7 @@ func saveResetHost(t *testing.T, configPath, repositoryPath, operationalPath str
 	t.Helper()
 
 	if err := config.SaveHost(configPath, config.HostConfig{
-		SchemaVersion: 1,
+		SchemaVersion: config.CurrentHostSchemaVersion,
 		Repositories: []config.RepositoryRegistration{{
 			Path:                 repositoryPath,
 			GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
@@ -129,7 +130,6 @@ func saveResetRun(t *testing.T, operationalPath, repositoryPath, worktreePath st
 		Role:              "implementation",
 		Stage:             store.StageImplementation,
 		Status:            store.InvocationStatusCompleted,
-		WorkspaceID:       "workspace-cli-reset",
 		CredentialStoreID: repositoryPath,
 	}); err != nil {
 		t.Fatal(err)

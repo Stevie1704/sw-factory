@@ -177,13 +177,6 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	if request.IssueNumber != run.IssueNumber && request.IssueNumber != run.PullRequestNumber {
 		return CommandResult{Outcome: CommandRejected, Run: *run}, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("comment target #%d does not belong to run %q", request.IssueNumber, run.ID)}
 	}
-	if (run.Status == store.StatusComplete || run.Status == store.StatusCancelled) && !run.LifecycleNotificationSent {
-		updated, notificationErr := s.ensureTerminalNotification(ctx, registration, runStore, *run)
-		if notificationErr != nil {
-			return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: updated}, notificationErr
-		}
-		*run = updated
-	}
 	if githubIDAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
 	}
@@ -596,9 +589,6 @@ func resetRevisionProjection(run *store.Run, packet SpecificationPacket) {
 func (s *Service) resumeAfterRevision(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
-	}
-	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, run); err != nil {
-		return run, err
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {

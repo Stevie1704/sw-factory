@@ -333,7 +333,7 @@ func validateHeadlessRequest(request HeadlessRequest, requireCommand bool) error
 		return errors.New("headless role contains unsafe characters")
 	}
 	for name, value := range request.Environment {
-		if err := validateInteractiveEnvironmentEntry(name, value); err != nil {
+		if err := validateInvocationEnvironmentEntry(name, value); err != nil {
 			return err
 		}
 	}

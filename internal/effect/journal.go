@@ -80,15 +80,14 @@ type runProjector interface {
 }
 
 // lifecycle is the invocation-lifecycle behaviour the journal needs: worker
-// shutdown owned by a terminal transition, and harness runtime resolution for
-// a replayed native command.
+// shutdown and harness runtime resolution for a replayed native command.
 type lifecycle interface {
 	// StopWorker stops one worker by its identity.
 	StopWorker(context.Context, string) error
 	// StopActiveWorkers stops every worker delegated to a run.
 	StopActiveWorkers(context.Context, RunStore, store.Run) error
-	// HarnessRuntime resolves the named harness behind the run's terminal.
-	HarnessRuntime(socketPath, harnessName string) (harness.Runtime, error)
+	// HarnessRuntime resolves the named detached harness.
+	HarnessRuntime(harnessName string) (harness.Runtime, error)
 }
 
 // workerLauncher is the worker seam used by the worker-launch kind. Launching

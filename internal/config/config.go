@@ -17,8 +17,11 @@ import (
 )
 
 const (
-	CurrentSchemaVersion     = 1
-	RepositoryConfigFileName = "factory.yaml"
+	// CurrentHostSchemaVersion is the headless host registration schema.
+	CurrentHostSchemaVersion = 2
+	// CurrentRepositorySchemaVersion is independently versioned from host registration.
+	CurrentRepositorySchemaVersion = 1
+	RepositoryConfigFileName       = "factory.yaml"
 )
 
 type HostConfig struct {
@@ -31,7 +34,6 @@ type RepositoryRegistration struct {
 	GitHub          GitHubConfig  `yaml:"github"`
 	AuthorizedUsers []string      `yaml:"authorized_users"`
 	Polling         PollingConfig `yaml:"polling"`
-	Cmux            CmuxConfig    `yaml:"cmux"`
 	// Authentication contains optional narrowly scoped host credential sources.
 	Authentication       AuthenticationConfig `yaml:"authentication"`
 	OperationalDataPath  string               `yaml:"operational_data_path"`
@@ -46,11 +48,6 @@ type GitHubConfig struct {
 type PollingConfig struct {
 	Interval string `yaml:"interval"`
 	Backoff  string `yaml:"backoff"`
-}
-
-type CmuxConfig struct {
-	SocketPath       string `yaml:"socket_path"`
-	ControlWorkspace string `yaml:"control_workspace"`
 }
 
 // AuthenticationConfig identifies narrowly scoped host credential sources.
@@ -225,6 +222,17 @@ type UnknownSchemaVersionError struct {
 	Supported int
 }
 
+// PreviousHostSchemaError refuses the deliberate drained-run migration from
+// a schema-one local-UI registration before decoding or mutating its state.
+type PreviousHostSchemaError struct {
+	Version int
+}
+
+// Error gives the complete safe upgrade sequence for a previous registration.
+func (e *PreviousHostSchemaError) Error() string {
+	return fmt.Sprintf("host configuration schema_version %d requires a drained upgrade: finish or cancel every non-terminal run using the previous binary, stop the coordinator, then re-register with this binary", e.Version)
+}
+
 func (e *UnknownSchemaVersionError) Error() string {
 	field := e.Field
 	if field == "" {
@@ -246,7 +254,7 @@ func (e *ConfigFileError) Unwrap() error { return e.Err }
 
 // NewHostConfig creates an empty host configuration using the current schema version.
 func NewHostConfig() HostConfig {
-	return HostConfig{SchemaVersion: CurrentSchemaVersion, Repositories: []RepositoryRegistration{}}
+	return HostConfig{SchemaVersion: CurrentHostSchemaVersion, Repositories: []RepositoryRegistration{}}
 }
 
 // DefaultHostConfigPath returns the host configuration path from FACTORY_CONFIG when set,
@@ -276,6 +284,13 @@ func DefaultRepositoryConfigPath(repositoryPath string) string {
 // LoadHost loads and validates a host configuration from a YAML file.
 // It returns the configuration or an error if the file cannot be loaded or the configuration is invalid.
 func LoadHost(path string) (HostConfig, error) {
+	version, err := loadSchemaVersion(path)
+	if err != nil {
+		return HostConfig{}, err
+	}
+	if version > 0 && version < CurrentHostSchemaVersion {
+		return HostConfig{}, &PreviousHostSchemaError{Version: version}
+	}
 	var config HostConfig
 	if err := loadYAML(path, &config); err != nil {
 		return HostConfig{}, err
@@ -357,11 +372,14 @@ func CreateHost(path string) (HostConfig, error) {
 
 // ValidateHost validates a host configuration, including its schema version and repository registrations.
 func ValidateHost(config HostConfig) error {
-	if err := validateSchema("host", config.SchemaVersion); err != nil {
+	if config.SchemaVersion > 0 && config.SchemaVersion < CurrentHostSchemaVersion {
+		return &PreviousHostSchemaError{Version: config.SchemaVersion}
+	}
+	if err := validateSchema("host", config.SchemaVersion, CurrentHostSchemaVersion); err != nil {
 		return err
 	}
 	if len(config.Repositories) > 1 {
-		return validation("repositories", "version one supports one registered repository")
+		return validation("repositories", "host schema version two supports one registered repository")
 	}
 	for index, repository := range config.Repositories {
 		prefix := fmt.Sprintf("repositories[%d]", index)
@@ -375,7 +393,7 @@ func ValidateHost(config HostConfig) error {
 // ValidateRepository validates a repository configuration and reports the first invalid field.
 // It returns nil when the configuration satisfies all supported repository requirements.
 func ValidateRepository(config RepositoryConfig) error {
-	if err := validateSchema("repository", config.SchemaVersion); err != nil {
+	if err := validateSchema("repository", config.SchemaVersion, CurrentRepositorySchemaVersion); err != nil {
 		return err
 	}
 	if strings.TrimSpace(config.TargetBranch) == "" {
@@ -676,7 +694,7 @@ func validateTestPolicyPaths(field string, values []string) error {
 	return nil
 }
 
-// validateRegistration validates a repository registration and its associated paths, metadata, users, polling settings, and optional cmux socket.
+// validateRegistration validates a repository registration and its associated paths, metadata, users, and polling settings.
 func validateRegistration(prefix string, repository RepositoryRegistration) error {
 	if strings.TrimSpace(repository.Path) == "" {
 		return validation(prefix+".path", "is required")
@@ -705,9 +723,6 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	if !filepath.IsAbs(repository.OperationalDataPath) {
 		return validation(prefix+".operational_data_path", "must be absolute")
 	}
-	if repository.Cmux.SocketPath != "" && !filepath.IsAbs(repository.Cmux.SocketPath) {
-		return validation(prefix+".cmux.socket_path", "must be absolute when set")
-	}
 	for field, path := range map[string]string{
 		prefix + ".authentication.codex_auth_path":  repository.Authentication.CodexAuthPath,
 		prefix + ".authentication.claude_auth_path": repository.Authentication.ClaudeAuthPath,
@@ -733,17 +748,33 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 
 // validateSchema validates a configuration schema version and reports an error for missing,
 // non-positive, or unsupported versions.
-func validateSchema(kind string, version int) error {
+func validateSchema(kind string, version, supported int) error {
 	if version == 0 {
 		return validation("schema_version", "is required")
 	}
-	if version > CurrentSchemaVersion {
-		return &UnknownSchemaVersionError{Kind: kind, Field: "schema_version", Version: version, Supported: CurrentSchemaVersion}
+	if version > supported {
+		return &UnknownSchemaVersionError{Kind: kind, Field: "schema_version", Version: version, Supported: supported}
 	}
 	if version < 1 {
 		return validation("schema_version", "must be positive")
 	}
 	return nil
+}
+
+// loadSchemaVersion reads only the common version field so obsolete host
+// schemas fail with migration guidance before strict decoding sees retired keys.
+func loadSchemaVersion(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, &ConfigFileError{Path: path, Err: err}
+	}
+	var header struct {
+		SchemaVersion int `yaml:"schema_version"`
+	}
+	if err := yaml.Unmarshal(data, &header); err != nil {
+		return 0, &ConfigFileError{Path: path, Err: err}
+	}
+	return header.SchemaVersion, nil
 }
 
 // validateDuration validates that a duration value is positive, or empty when allowEmpty is true.

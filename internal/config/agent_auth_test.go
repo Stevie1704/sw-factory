@@ -10,7 +10,7 @@ import (
 // TestValidateHostRequiresAnAbsoluteCodexAuthSource verifies host configuration
 // stores only an explicit absolute credential-file path.
 func TestValidateHostRequiresAnAbsoluteCodexAuthSource(t *testing.T) {
-	value := config.HostConfig{SchemaVersion: config.CurrentSchemaVersion, Repositories: []config.RepositoryRegistration{{
+	value := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 "/Users/example/project",
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		AuthorizedUsers:      []string{"alice"},
@@ -36,7 +36,7 @@ func TestValidateHostRejectsControlCharactersInCodexAuthSource(t *testing.T) {
 		{name: "newline", control: "\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			value := config.HostConfig{SchemaVersion: config.CurrentSchemaVersion, Repositories: []config.RepositoryRegistration{{
+			value := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 				Path:                 "/Users/example/project",
 				GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 				AuthorizedUsers:      []string{"alice"},
@@ -55,7 +55,7 @@ func TestValidateHostRejectsControlCharactersInCodexAuthSource(t *testing.T) {
 // TestValidateHostRequiresAnAbsoluteClaudeAuthSource verifies the Claude
 // credential source is stored on the same narrow terms as the Codex source.
 func TestValidateHostRequiresAnAbsoluteClaudeAuthSource(t *testing.T) {
-	value := config.HostConfig{SchemaVersion: config.CurrentSchemaVersion, Repositories: []config.RepositoryRegistration{{
+	value := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 "/Users/example/project",
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		AuthorizedUsers:      []string{"alice"},
@@ -81,7 +81,7 @@ func TestValidateHostRejectsControlCharactersInClaudeAuthSource(t *testing.T) {
 		{name: "newline", control: "\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			value := config.HostConfig{SchemaVersion: config.CurrentSchemaVersion, Repositories: []config.RepositoryRegistration{{
+			value := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 				Path:                 "/Users/example/project",
 				GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 				AuthorizedUsers:      []string{"alice"},

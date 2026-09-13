@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -446,8 +445,8 @@ func HeadlessDiagnostics(err error) string {
 	return failure.Diagnostics
 }
 
-// AdaptHeadlessRuntime supplies the legacy Runtime shape to durable effect
-// replay while preserving the coordinator-owned terminal-free implementation.
+// AdaptHeadlessRuntime supplies the journal Runtime shape while preserving the
+// coordinator-owned terminal-free implementation.
 func AdaptHeadlessRuntime(runtime HeadlessRuntime) Runtime {
 	if runtime == nil {
 		return nil
@@ -455,8 +454,7 @@ func AdaptHeadlessRuntime(runtime HeadlessRuntime) Runtime {
 	return &headlessRuntimeAdapter{runtime: runtime}
 }
 
-// headlessRuntimeAdapter is the narrow compatibility bridge used by existing
-// effect journals while new lifecycle code resolves HeadlessRuntime directly.
+// headlessRuntimeAdapter bridges the detailed process seam to journal effects.
 type headlessRuntimeAdapter struct {
 	runtime HeadlessRuntime
 }
@@ -464,47 +462,32 @@ type headlessRuntimeAdapter struct {
 // Capabilities delegates static headless capabilities.
 func (a *headlessRuntimeAdapter) Capabilities() Capabilities {
 	capabilities := a.runtime.Capabilities()
-	// A HeadlessRuntime has no terminal topology by construction. Keep the
-	// compatibility capability true even for small embedding fakes that only
+	// A HeadlessRuntime is detached by construction. Keep the capability true
+	// even for small embedding fakes that only
 	// fill the adapter name and resume bit.
 	capabilities.Headless = true
 	return capabilities
 }
 
-// Start maps the legacy request and rejects any terminal topology.
+// Start maps a journal request to the detached process seam.
 func (a *headlessRuntimeAdapter) Start(ctx context.Context, request StartRequest) (Session, error) {
-	if hasTerminalTopology(request.WorkspaceID, request.Surface) {
-		return Session{}, errors.New("headless harness cannot receive terminal workspace or surface")
-	}
 	result, err := a.runtime.StartHeadless(ctx, headlessRequest(request))
 	return sessionFromHeadless(result), err
 }
 
-// Resume maps the legacy request and rejects any terminal topology.
+// Resume maps a journal request to native detached resume.
 func (a *headlessRuntimeAdapter) Resume(ctx context.Context, request StartRequest) (Session, error) {
-	if hasTerminalTopology(request.WorkspaceID, request.Surface) {
-		return Session{}, errors.New("headless harness cannot receive terminal workspace or surface")
-	}
 	result, err := a.runtime.ResumeHeadless(ctx, headlessRequest(request))
 	return sessionFromHeadless(result), err
 }
 
-// Finish maps legacy effect state to idempotent headless cleanup.
+// Finish maps journal state to idempotent detached-process cleanup.
 func (a *headlessRuntimeAdapter) Finish(ctx context.Context, session Session) error {
-	if hasTerminalTopology("", session.Surface) {
-		return errors.New("headless harness cannot finish a terminal session")
-	}
 	return a.runtime.FinishHeadless(ctx, HeadlessSession{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID})
 }
 
-// hasTerminalTopology reports whether a legacy-shaped request carries any
-// workspace or surface field that a headless adapter must reject.
-func hasTerminalTopology(workspaceID terminal.WorkspaceID, surface terminal.Surface) bool {
-	return workspaceID != "" || surface.ID != "" || surface.WorkspaceID != "" || strings.TrimSpace(surface.Name) != ""
-}
-
-// NativeSessionID forwards headless identity inspection through the legacy
-// effect adapter without exposing worker or terminal implementation details.
+// NativeSessionID forwards detached identity inspection through the journal
+// adapter without exposing worker implementation details.
 func (a *headlessRuntimeAdapter) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
 	inspector, ok := a.runtime.(NativeSessionInspector)
 	if !ok {
@@ -513,8 +496,8 @@ func (a *headlessRuntimeAdapter) NativeSessionID(ctx context.Context, request Na
 	return inspector.NativeSessionID(ctx, request)
 }
 
-// NativeSessionRunning forwards detached-process liveness through the legacy
-// effect adapter so restart diagnosis remains terminal-free.
+// NativeSessionRunning forwards detached-process liveness through the journal
+// adapter so restart diagnosis remains process-native.
 func (a *headlessRuntimeAdapter) NativeSessionRunning(ctx context.Context, request NativeSessionRequest) (bool, error) {
 	inspector, ok := a.runtime.(NativeSessionLivenessInspector)
 	if !ok {
@@ -523,8 +506,8 @@ func (a *headlessRuntimeAdapter) NativeSessionRunning(ctx context.Context, reque
 	return inspector.NativeSessionRunning(ctx, request)
 }
 
-// HeadlessFailureFor forwards terminal detached-process classification through
-// the compatibility bridge used by journal replay and lifecycle monitoring.
+// HeadlessFailureFor forwards settled-process classification through the
+// bridge used by journal replay and lifecycle monitoring.
 func (a *headlessRuntimeAdapter) HeadlessFailureFor(ctx context.Context, request HeadlessInspectionRequest) error {
 	inspector, ok := a.runtime.(HeadlessFailureInspector)
 	if !ok {
@@ -533,7 +516,7 @@ func (a *headlessRuntimeAdapter) HeadlessFailureFor(ctx context.Context, request
 	return inspector.HeadlessFailureFor(ctx, request)
 }
 
-// headlessRequest translates the legacy prompt contract to the headless seam.
+// headlessRequest translates the journal prompt contract to the process seam.
 func headlessRequest(request StartRequest) HeadlessStartRequest {
 	return HeadlessStartRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Prompt: request.Prompt, Model: request.Model, ReasoningEffort: request.ReasoningEffort, ResumeSessionID: request.ResumeSessionID}
 }

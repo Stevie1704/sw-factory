@@ -609,7 +609,7 @@ func newPollingService(root string, githubAdapter github.Client, issuePoller git
 		RepositoryConfigPath: filepath.Join(root, "repository", "factory.yaml"),
 	}
 	return factory.NewWithDependencies(filepath.Join(root, "config.yaml"), factory.Dependencies{
-		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}},
+		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) {
 			return runStore, nil
 		},
@@ -619,7 +619,6 @@ func newPollingService(root string, githubAdapter github.Client, issuePoller git
 		Lease:          lease,
 		Worktree:       worktree,
 		Comments:       comments,
-		Terminal:       &lifecycleTerminal{},
 		Now: func() time.Time {
 			return time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 		},

@@ -53,18 +53,6 @@ const (
 // RoleKind identifies the structured report contract a role uses.
 type RoleKind string
 
-const (
-	// SurfaceImplementation selects the run workspace's implementation surface.
-	SurfaceImplementation SurfaceKind = "implementation"
-	// SurfaceChecks selects the run workspace's deterministic-check surface.
-	SurfaceChecks SurfaceKind = "checks"
-	// SurfaceRole creates a fresh surface named for the role.
-	SurfaceRole SurfaceKind = "role"
-)
-
-// SurfaceKind identifies how a role receives its visible terminal surface.
-type SurfaceKind string
-
 // RoleDefinition is the complete factory-owned declaration for one role.
 type RoleDefinition struct {
 	// Name is the stable role identity recorded in packets and reports.
@@ -77,8 +65,6 @@ type RoleDefinition struct {
 	DefaultPermittedPaths []string
 	// Kind selects the structured report contract.
 	Kind RoleKind
-	// Surface selects the visible terminal surface strategy.
-	Surface SurfaceKind
 	// StartStages lists run stages from which this role may be explicitly started.
 	StartStages []store.Stage
 	// RunStages lists run stages for which this role is the automatic selection.
@@ -196,7 +182,6 @@ func DefaultRegistry() Registry {
 			PromptVersion:         PromptVersionTest,
 			DefaultPermittedPaths: []string{"."},
 			Kind:                  RoleKindTest,
-			Surface:               SurfaceChecks,
 			StartStages:           []store.Stage{store.StageTest},
 			RunStages:             []store.Stage{store.StageTest},
 		},
@@ -206,7 +191,6 @@ func DefaultRegistry() Registry {
 			PromptVersion:         PromptVersionImplementation,
 			DefaultPermittedPaths: []string{"."},
 			Kind:                  RoleKindHandoff,
-			Surface:               SurfaceImplementation,
 			StartStages:           []store.Stage{store.StageClaim, store.StageImplementation},
 			RunStages:             []store.Stage{store.StageClaim, store.StageImplementation},
 			RequiresTestHandoff:   true,
@@ -217,7 +201,6 @@ func DefaultRegistry() Registry {
 			PromptVersion:         PromptVersionArchitecture,
 			DefaultPermittedPaths: []string{"docs/architecture"},
 			Kind:                  RoleKindHandoff,
-			Surface:               SurfaceRole,
 			StartStages:           []store.Stage{store.StageArchitecture, store.StageImplementation},
 			RunStages:             []store.Stage{store.StageArchitecture},
 		},
@@ -227,7 +210,6 @@ func DefaultRegistry() Registry {
 			PromptVersion:         PromptVersionSpecificationReview,
 			DefaultPermittedPaths: []string{"."},
 			Kind:                  RoleKindReview,
-			Surface:               SurfaceRole,
 			StartStages:           []store.Stage{store.StageDraftPR, store.StageReview},
 			RunStages:             []store.Stage{store.StageDraftPR},
 		},
@@ -237,7 +219,6 @@ func DefaultRegistry() Registry {
 			PromptVersion:         PromptVersionStandardsReview,
 			DefaultPermittedPaths: []string{"."},
 			Kind:                  RoleKindReview,
-			Surface:               SurfaceRole,
 			StartStages:           []store.Stage{store.StageDraftPR, store.StageReview},
 			RunStages:             []store.Stage{StageStandardsReview},
 		},
@@ -425,11 +406,6 @@ func validateRoleDefinition(index int, definition RoleDefinition, registry Regis
 	case RoleKindHandoff, RoleKindTest, RoleKindReview:
 	default:
 		return fmt.Errorf("workflow role %q has unsupported report kind %q", definition.Name, definition.Kind)
-	}
-	switch definition.Surface {
-	case SurfaceImplementation, SurfaceChecks, SurfaceRole:
-	default:
-		return fmt.Errorf("workflow role %q has unsupported surface kind %q", definition.Name, definition.Surface)
 	}
 	if len(definition.DefaultPermittedPaths) == 0 {
 		return fmt.Errorf("workflow role %q must declare default permitted paths", definition.Name)

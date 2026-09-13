@@ -40,7 +40,7 @@ type CleanupDeletionResult struct {
 	GateResults int
 	// PendingEffects counts deleted resolved-effect reservations.
 	PendingEffects int
-	// LifecycleNotifications counts deleted terminal-notification rows.
+	// LifecycleNotifications counts deleted retired notification-marker rows.
 	LifecycleNotifications int
 }
 

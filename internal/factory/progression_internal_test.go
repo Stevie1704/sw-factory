@@ -464,7 +464,7 @@ type progressionDispatchConfig struct {
 
 // Load returns the controlled repository registration.
 func (c progressionDispatchConfig) Load(string) (config.HostConfig, error) {
-	return config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{c.registration}}, nil
+	return config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{c.registration}}, nil
 }
 
 // Save satisfies the configuration repository seam.

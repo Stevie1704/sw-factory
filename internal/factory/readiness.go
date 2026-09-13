@@ -210,14 +210,14 @@ func (s *Service) setPullRequestDraft(ctx context.Context, repository github.Rep
 	return updated, nil
 }
 
-// ensureReadyNotification sends one concise cmux readiness notice after the
-// ready state is durable and records its delivery in the run projection.
+// ensureReadyNotification records readiness only after its durable GitHub
+// projection succeeds.
 func (s *Service) ensureReadyNotification(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if run.ReadyNotificationSent {
 		return run, nil
 	}
 	body := fmt.Sprintf("%s pull request #%d is ready for human review: %s", run.ID, run.PullRequestNumber, run.PullRequestURL)
-	if err := s.notifyWorkspace(ctx, registration, "factory pull request ready", body); err != nil {
+	if err := s.notifyOperator(ctx, registration, "factory pull request ready", body); err != nil {
 		return run, fmt.Errorf("notify pull-request readiness: %w", err)
 	}
 	run.ReadyNotificationSent = true

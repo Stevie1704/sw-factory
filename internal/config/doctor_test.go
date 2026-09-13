@@ -21,7 +21,7 @@ func TestStartupCheckLoadsTheRegisteredRepositoryPolicy(t *testing.T) {
 	}
 	writeDoctorRepositoryConfig(t, repositoryPath)
 	hostPath := filepath.Join(root, "config.yaml")
-	host := `schema_version: 1
+	host := `schema_version: 2
 repositories:
   - path: ` + repositoryPath + `
     github:
@@ -64,7 +64,7 @@ func TestStartupCheckReportsAnInvalidRepositoryPolicyWithoutRawDetails(t *testin
 		t.Fatal(err)
 	}
 	hostPath := filepath.Join(root, "config.yaml")
-	host := `schema_version: 1
+	host := `schema_version: 2
 repositories:
   - path: ` + repositoryPath + `
     github:
@@ -95,7 +95,7 @@ repositories:
 // file containing credential paths remains private to the operator.
 func TestStartupCheckRejectsAGroupReadableHostConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("schema_version: 1\nrepositories: []\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("schema_version: 2\nrepositories: []\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, check := config.StartupCheck(path)
@@ -122,7 +122,7 @@ func TestStartupCheckRejectsASymlinkedRepositoryConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	hostPath := filepath.Join(root, "config.yaml")
-	host := `schema_version: 1
+	host := `schema_version: 2
 repositories:
   - path: ` + repositoryPath + `
     github:

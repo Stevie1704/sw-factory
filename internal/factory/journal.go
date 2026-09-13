@@ -139,10 +139,10 @@ func (l journalLifecycle) StopActiveWorkers(ctx context.Context, runStore effect
 	return l.service.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run)
 }
 
-// HarnessRuntime resolves the named harness behind the coordinator-owned
-// lifecycle seam. Codex may resolve to a terminal-free adapter.
-func (l journalLifecycle) HarnessRuntime(socketPath, harnessName string) (harness.Runtime, error) {
-	_, harnessRuntime, err := l.service.lifecycleModule().ensureCoordinatorHarnessRuntime(socketPath, config.Harness(harnessName))
+// HarnessRuntime resolves the named detached harness behind the coordinator's
+// lifecycle seam.
+func (l journalLifecycle) HarnessRuntime(harnessName string) (harness.Runtime, error) {
+	harnessRuntime, err := l.service.lifecycleModule().ensureCoordinatorHarnessRuntime(config.Harness(harnessName))
 	return harnessRuntime, err
 }
 
@@ -150,8 +150,8 @@ func (l journalLifecycle) HarnessRuntime(socketPath, harnessName string) (harnes
 // uses for the two external mutations it owns.
 type invocationJournal interface {
 	StartWorker(context.Context, effectkernel.RunStore, worker.StartRequest) error
-	ResumeHarness(context.Context, effectkernel.RunStore, effectkernel.InvocationStore, string, harness.Runtime, store.Invocation, harness.StartRequest) (store.Invocation, error)
-	ResumeHarnessManually(context.Context, effectkernel.RunStore, effectkernel.InvocationStore, string, harness.Runtime, store.Invocation, harness.StartRequest) (store.Invocation, error)
+	ResumeHarness(context.Context, effectkernel.RunStore, effectkernel.InvocationStore, harness.Runtime, store.Invocation, harness.StartRequest) (store.Invocation, error)
+	ResumeHarnessManually(context.Context, effectkernel.RunStore, effectkernel.InvocationStore, harness.Runtime, store.Invocation, harness.StartRequest) (store.Invocation, error)
 }
 
 // serviceJournal resolves the coordinator's journal on each call, so the
@@ -166,11 +166,11 @@ func (j serviceJournal) StartWorker(ctx context.Context, runStore effectkernel.R
 }
 
 // ResumeHarness reserves and performs one automatic native-session resume.
-func (j serviceJournal) ResumeHarness(ctx context.Context, runStore effectkernel.RunStore, invocationStore effectkernel.InvocationStore, socketPath string, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
-	return j.service.journal().ResumeHarness(ctx, runStore, invocationStore, socketPath, runtime, invocation, request)
+func (j serviceJournal) ResumeHarness(ctx context.Context, runStore effectkernel.RunStore, invocationStore effectkernel.InvocationStore, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
+	return j.service.journal().ResumeHarness(ctx, runStore, invocationStore, runtime, invocation, request)
 }
 
 // ResumeHarnessManually reserves and performs one operator-requested resume.
-func (j serviceJournal) ResumeHarnessManually(ctx context.Context, runStore effectkernel.RunStore, invocationStore effectkernel.InvocationStore, socketPath string, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
-	return j.service.journal().ResumeHarnessManually(ctx, runStore, invocationStore, socketPath, runtime, invocation, request)
+func (j serviceJournal) ResumeHarnessManually(ctx context.Context, runStore effectkernel.RunStore, invocationStore effectkernel.InvocationStore, runtime harness.Runtime, invocation store.Invocation, request harness.StartRequest) (store.Invocation, error) {
+	return j.service.journal().ResumeHarnessManually(ctx, runStore, invocationStore, runtime, invocation, request)
 }

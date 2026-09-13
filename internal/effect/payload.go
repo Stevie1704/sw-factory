@@ -133,12 +133,11 @@ type workerLaunchEffectPayload struct {
 // continuation. The target resume count lets recovery recognize a reservation
 // that crossed the harness boundary before the invocation row was finalized.
 type harnessResumeEffectPayload struct {
-	SocketPath        string
 	Request           harness.StartRequest
 	Invocation        store.Invocation
 	TargetResumeCount int
 	// Manual marks an operator-requested resume. It does not consume the
-	// automatic recovery ceiling and requires a later explicit attach.
+	// automatic recovery ceiling.
 	Manual bool
 }
 
@@ -146,7 +145,6 @@ type harnessResumeEffectPayload struct {
 // a validated visible report.
 type resultAcceptanceEffectPayload struct {
 	Repository github.Repository
-	SocketPath string
 	Issue      github.Issue
 	Session    harness.Session
 	Invocation store.Invocation

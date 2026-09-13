@@ -1,18 +1,14 @@
-// Package harness contains role-specific interactive harness adapters. An
-// adapter translates one harness-neutral invocation into the native commands
-// of a configured coding tool. It owns no workflow, Git, retry, or
-// terminal-layout decision; the coordinator owns all of those.
+// Package harness contains headless coding-tool adapters. Adapters
+// translate a harness-neutral invocation into a detached worker process and
+// expose only durable native-session state to the coordinator.
 package harness
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -21,139 +17,97 @@ const (
 	NameCodex = "codex"
 	// NameClaude identifies the Claude Code adapter.
 	NameClaude = "claude"
-	// maxPromptBytes bounds one launch prompt. Every adapter passes the prompt
-	// as a single command argument, and Linux refuses an argument longer than
-	// 32 pages (MAX_ARG_STRLEN, 128 KiB) with E2BIG. That refusal reaches the
-	// coordinator as an opaque "argument list too long" exec failure and an
-	// expired native-session deadline, so the launch is refused here instead,
-	// where the cause can be named. The headroom below the kernel limit covers
-	// the argument list a wrapper adds around the prompt.
+	// maxPromptBytes leaves headroom beneath Linux's single-argument limit.
 	maxPromptBytes = 96 << 10
 )
 
-// StartRequest contains the coordinator-owned identity and prompt for one
-// visible harness invocation.
+// StartRequest contains coordinator-owned identity, prompt, and policy for one
+// detached harness invocation.
 type StartRequest struct {
-	// InvocationID identifies the exact report-producing invocation.
+	// InvocationID is the factory-assigned identity for this attempt.
 	InvocationID string
-	// RunID identifies the worker run.
+	// RunID binds the invocation to its durable workflow run.
 	RunID string
-	// WorkerID selects an invocation-isolated worker when supplied.
+	// WorkerID selects the isolated worker process boundary.
 	WorkerID string
-	// Role identifies the workflow role.
-	Role string
-	// Stage identifies the workflow stage.
+	// Role and Stage are the factory-owned workflow selection.
+	Role  string
 	Stage string
-	// CheckpointSHA binds a review invocation to the exact commit under review.
-	// It is optional for non-review roles.
+	// CheckpointSHA is the immutable Git state supplied to the role.
 	CheckpointSHA string
-	// WorkspaceID identifies the terminal workspace receiving the surface.
-	WorkspaceID terminal.WorkspaceID
-	// Surface is an existing role surface in the run workspace. When empty, the
-	// adapter creates a role-named surface.
-	Surface terminal.Surface
-	// Prompt is the initial role prompt passed to the harness process.
+	// Prompt is the bounded factory-owned instruction envelope.
 	Prompt string
-	// Model is a validated repository-policy model selection.
-	Model string
-	// ReasoningEffort is a validated repository-policy setting.
+	// Model and ReasoningEffort are validated repository policy selections.
+	Model           string
 	ReasoningEffort string
-	// ResumeSessionID is set only when a native session is being resumed.
+	// ResumeSessionID requests an exact native continuation when nonempty.
 	ResumeSessionID string
 }
 
-// Session is the recoverable visible state returned after launch.
+// Session is the durable identity returned by a detached harness process.
 type Session struct {
-	// InvocationID identifies the invocation owning the session.
+	// InvocationID and RunID echo the coordinator identities.
 	InvocationID string
-	// RunID identifies the logical worker run for a headless finalization.
-	// Interactive adapters leave it empty because their surface carries the
-	// worker selection.
-	RunID string
-	// WorkerID identifies the invocation-isolated worker for headless cleanup.
+	RunID        string
+	// WorkerID identifies the detached worker process boundary.
 	WorkerID string
-	// NativeSessionID is the harness-native continuation identity. Codex
-	// persists it and the adapter discovers it; Claude Code accepts an
-	// adapter-assigned identifier at launch.
+	// NativeSessionID is the harness-owned continuation identity.
 	NativeSessionID string
-	// Surface is the opaque terminal surface carrying the session.
-	Surface terminal.Surface
 }
 
-// Capabilities describes a harness adapter, so the coordinator can decide
-// dispatch without naming a specific tool in workflow code.
+// Capabilities describes one supported harness adapter.
 type Capabilities struct {
-	// Name is the stable harness identity recorded on an invocation. A native
-	// session belongs to the harness that created it, so the coordinator
-	// compares this name before it resumes one.
+	// Name is the stable configured harness identifier.
 	Name string
-	// InteractiveResume reports whether interrupted sessions can be resumed
-	// through the adapter's native lifecycle.
-	InteractiveResume bool
-	// Headless reports that the adapter owns a terminal-free worker process
-	// protocol. InteractiveResume remains true for native resume support, but a
-	// headless adapter never requires a terminal workspace or surface.
+	// NativeResume reports exact native-session continuation support.
+	NativeResume bool
+	// Headless reports detached execution without coordinator stream attachment.
 	Headless bool
 }
 
-// NativeSessionRequest identifies the worker-backed native session projection
-// that an adapter may inspect during restart reconciliation.
+// NativeSessionRequest identifies one worker-backed native session.
 type NativeSessionRequest struct {
-	// RunID identifies the worker run whose native session is checked.
-	RunID string
-	// InvocationID identifies the headless process projection being inspected.
+	// RunID and InvocationID identify the durable factory attempt.
+	RunID        string
 	InvocationID string
-	// WorkerID selects the invocation-isolated worker whose session is checked.
+	// WorkerID identifies the detached worker process to inspect.
 	WorkerID string
-	// Harness identifies the adapter-owned session format.
+	// Harness selects the adapter-specific native identity protocol.
 	Harness string
 }
 
-// NativeSessionInspector is an optional adapter capability for comparing a
-// persisted native session identity with the current worker projection.
+// NativeSessionInspector observes the native identity owned by a process.
 type NativeSessionInspector interface {
-	// NativeSessionID returns the currently observed native session identity.
+	// NativeSessionID returns the native identity observed for the process.
 	NativeSessionID(context.Context, NativeSessionRequest) (string, error)
 }
 
-// NativeSessionLivenessInspector is an optional adapter capability for
-// detecting a native harness process that exited after launch. It deliberately
-// reports only liveness, leaving recovery policy and resume ceilings to the
-// coordinator.
+// NativeSessionLivenessInspector observes whether a native process is active.
 type NativeSessionLivenessInspector interface {
-	// NativeSessionRunning reports whether the persisted native session process
-	// is still running inside the worker.
+	// NativeSessionRunning reports whether the native process is still active.
 	NativeSessionRunning(context.Context, NativeSessionRequest) (bool, error)
 }
 
-// HeadlessFailureInspector is an optional adapter capability for classifying
-// a detached process after native session discovery has already completed.
-// The coordinator uses it only on a terminal process projection; it never
-// treats arbitrary model or stderr prose as a workflow outcome.
+// HeadlessFailureInspector classifies a settled detached process.
 type HeadlessFailureInspector interface {
-	// HeadlessFailureFor returns the typed failure represented by the persisted
-	// headless inspection, or nil while the process is still healthy/starting.
+	// HeadlessFailureFor returns the classified settled-process failure, if any.
 	HeadlessFailureFor(context.Context, HeadlessInspectionRequest) error
 }
 
-// Runtime is the portable harness lifecycle seam used by the coordinator.
+// Runtime is the detached harness lifecycle seam used by the coordinator and
+// durable effect journal.
 type Runtime interface {
-	// Capabilities reports the adapter identity and supported lifecycle.
+	// Capabilities identifies the adapter and supported lifecycle operations.
 	Capabilities() Capabilities
-	// Start launches a fresh interactive harness session.
+	// Start launches one new native harness session.
 	Start(context.Context, StartRequest) (Session, error)
-	// Resume launches a native-resume session.
+	// Resume continues exactly the supplied native session.
 	Resume(context.Context, StartRequest) (Session, error)
-	// Finish detaches the visible surface after accepted completion. Adapters
-	// must make this operation idempotent because reconciliation may replay it
-	// after a response-loss boundary.
+	// Finish releases adapter-owned state after report acceptance.
 	Finish(context.Context, Session) error
 }
 
-// NewHeadlessAdapters creates the terminal-free adapter for every harness the
-// factory supports, keyed by its repository-declared name. It is the only place
-// that maps a declared harness onto a headless implementation, so the set of
-// migrated adapters has exactly one definition.
+// NewHeadlessAdapters creates every supported headless adapter.
 func NewHeadlessAdapters(processRuntime worker.HeadlessProcessRuntime) map[config.Harness]HeadlessRuntime {
 	return map[config.Harness]HeadlessRuntime{
 		config.HarnessCodex:  NewCodexHeadless(processRuntime),
@@ -161,199 +115,20 @@ func NewHeadlessAdapters(processRuntime worker.HeadlessProcessRuntime) map[confi
 	}
 }
 
-// ErrUnknownHarness reports that no adapter implements the requested harness.
+// ErrUnknownHarness reports an unsupported repository harness selection.
 var ErrUnknownHarness = errors.New("no adapter implements the requested harness")
 
-// New creates the adapter for one validated harness name. It is the only place
-// that maps a repository-declared harness onto an implementation.
-func New(name string, workerRuntime worker.WorkerRuntime, terminalRuntime terminal.TerminalRuntime) (Runtime, error) {
-	switch name {
-	case NameCodex:
-		return NewCodex(workerRuntime, terminalRuntime), nil
-	case NameClaude:
-		return NewClaude(workerRuntime, terminalRuntime), nil
-	default:
+// New creates a headless adapter for a validated harness name.
+func New(name string, processRuntime worker.HeadlessProcessRuntime) (Runtime, error) {
+	adapters := NewHeadlessAdapters(processRuntime)
+	adapter, ok := adapters[config.Harness(name)]
+	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownHarness, name)
 	}
+	return AdaptHeadlessRuntime(adapter), nil
 }
 
-const (
-	// nativeSessionDiscoveryTimeout bounds how long a fresh launch waits for a
-	// harness to persist its native session file.
-	nativeSessionDiscoveryTimeout = 60 * time.Second
-	// nativeSessionDiscoveryInitialInterval avoids a tight polling loop while
-	// the harness initializes its role home.
-	nativeSessionDiscoveryInitialInterval = 100 * time.Millisecond
-	// nativeSessionDiscoveryMaxInterval keeps discovery responsive without
-	// repeatedly invoking the worker while the harness is still starting.
-	nativeSessionDiscoveryMaxInterval = 500 * time.Millisecond
-	// launchCaptureTimeout bounds the best-effort diagnostic read of a failing
-	// launch surface so capture never delays reporting the failure itself.
-	launchCaptureTimeout = 10 * time.Second
-)
-
-// launchTranscriptLines bounds the surface output captured when a launch
-// fails. It is large enough to hold a harness startup banner and its error,
-// and small enough to stay a readable diagnostic rather than a transcript.
-const launchTranscriptLines = 200
-
-// LaunchFailure reports a harness launch that failed after its surface existed,
-// carrying the output that surface was showing at the moment of failure.
-//
-// The transcript is deliberately absent from Error(). A launch error reaches
-// operator-visible projections such as the run lifecycle reason and the GitHub
-// status comment, which stay free of work content; the transcript belongs in
-// local diagnostics that only the operator running the coordinator can read.
-type LaunchFailure struct {
-	// Cause is the underlying launch failure.
-	Cause error
-	// Transcript is the captured surface output, empty when capture failed or
-	// the terminal adapter cannot read surfaces.
-	Transcript string
-}
-
-// Error returns the underlying cause without the captured transcript.
-func (e *LaunchFailure) Error() string {
-	if e == nil {
-		return "harness launch failed"
-	}
-	if e.Cause == nil {
-		return "harness launch failed"
-	}
-	return e.Cause.Error()
-}
-
-// Unwrap exposes the underlying cause so existing classification keeps working.
-func (e *LaunchFailure) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-// LaunchTranscript returns the surface output captured for a failed launch, or
-// an empty string when the error carries none.
-func LaunchTranscript(err error) string {
-	var failure *LaunchFailure
-	if !errors.As(err, &failure) || failure == nil {
-		return ""
-	}
-	return failure.Transcript
-}
-
-// captureLaunchFailure enriches a launch failure with the surface output that
-// diagnoses it. The surface is about to be closed by the caller, so this is the
-// only moment the harness's own error message is still readable. Capture is
-// best-effort: a diagnostic that cannot be read must never replace the failure
-// the caller is already reporting.
-func captureLaunchFailure(ctx context.Context, runtime terminal.TerminalRuntime, surfaceID terminal.SurfaceID, cause error) error {
-	reader, readable := runtime.(terminal.SurfaceReader)
-	if !readable || strings.TrimSpace(string(surfaceID)) == "" {
-		return &LaunchFailure{Cause: cause}
-	}
-	// The caller's context is commonly already past its deadline when a launch
-	// fails, so capture runs on its own bounded context.
-	captureContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), launchCaptureTimeout)
-	defer cancel()
-	transcript, err := reader.ReadSurface(captureContext, surfaceID, launchTranscriptLines)
-	if err != nil {
-		return &LaunchFailure{Cause: cause}
-	}
-	return &LaunchFailure{Cause: cause, Transcript: strings.TrimSpace(transcript)}
-}
-
-// ErrNativeSessionUnavailable reports that a fresh launch did not expose a
-// newly persisted native session before discovery timed out or was canceled.
-var ErrNativeSessionUnavailable = errors.New("native harness session was not discovered before the deadline")
-
-// discoverNativeSession returns a session identifier that was not present
-// before the prompt-bearing command was launched. It returns
-// ErrNativeSessionUnavailable when the harness does not persist a new session
-// before the bounded discovery window expires or the caller cancels discovery.
-func discoverNativeSession(ctx context.Context, provider worker.NativeSessionSnapshotProvider, baseline []string, request worker.NativeSessionRequest) (string, error) {
-	discoveryContext, cancel := context.WithTimeout(ctx, nativeSessionDiscoveryTimeout)
-	defer cancel()
-	known := make(map[string]struct{}, len(baseline))
-	for _, identifier := range baseline {
-		known[identifier] = struct{}{}
-	}
-	interval := nativeSessionDiscoveryInitialInterval
-	for {
-		if err := discoveryContext.Err(); err != nil {
-			return "", fmt.Errorf("%w: %v", ErrNativeSessionUnavailable, err)
-		}
-		identifiers, err := provider.NativeSessionIDs(discoveryContext, request)
-		if err != nil {
-			if discoveryContext.Err() != nil {
-				return "", fmt.Errorf("%w: %v", ErrNativeSessionUnavailable, discoveryContext.Err())
-			}
-			return "", err
-		}
-		for index := len(identifiers) - 1; index >= 0; index-- {
-			if strings.TrimSpace(identifiers[index]) == "" {
-				continue
-			}
-			if _, exists := known[identifiers[index]]; !exists {
-				return identifiers[index], nil
-			}
-		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-discoveryContext.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return "", fmt.Errorf("%w: %v", ErrNativeSessionUnavailable, discoveryContext.Err())
-		case <-timer.C:
-			if interval < nativeSessionDiscoveryMaxInterval {
-				interval *= 2
-				if interval > nativeSessionDiscoveryMaxInterval {
-					interval = nativeSessionDiscoveryMaxInterval
-				}
-			}
-		}
-	}
-}
-
-// validateStartRequest rejects incomplete identities before any terminal or
-// worker side effect occurs. The harness name only labels the refusal; every
-// adapter enforces the same neutral contract.
-func validateStartRequest(harnessName string, request StartRequest) error {
-	for field, value := range map[string]string{
-		"invocation id": request.InvocationID,
-		"run id":        request.RunID,
-		"role":          request.Role,
-		"stage":         request.Stage,
-		"prompt":        request.Prompt,
-	} {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("%s %s is required", harnessName, field)
-		}
-		if strings.ContainsAny(value, "\x00\r\n") && field != "prompt" {
-			return fmt.Errorf("%s %s must be a single line", harnessName, field)
-		}
-	}
-	if size := len(request.Prompt); size > maxPromptBytes {
-		return &PromptTooLargeError{Harness: harnessName, Bytes: size, Limit: maxPromptBytes}
-	}
-	if request.WorkspaceID == "" {
-		return fmt.Errorf("%s workspace id is required", harnessName)
-	}
-	if request.Model != "" && strings.ContainsAny(request.Model, "\x00\r\n ") {
-		return fmt.Errorf("%s model contains unsafe characters", harnessName)
-	}
-	if request.ReasoningEffort != "" && strings.ContainsAny(request.ReasoningEffort, "\x00\r\n ") {
-		return fmt.Errorf("%s reasoning effort contains unsafe characters", harnessName)
-	}
-	return nil
-}
-
-// invocationEnvironment builds the explicit non-secret identity values that a
-// visible harness receives. It contains no credential, host path, or GitHub
-// token, and every name is an accepted interactive protocol value.
+// invocationEnvironment builds the explicit non-secret invocation identity.
 func invocationEnvironment(harnessName string, request StartRequest) map[string]string {
 	environment := map[string]string{
 		"FACTORY_HARNESS":       harnessName,
@@ -367,42 +142,4 @@ func invocationEnvironment(harnessName string, request StartRequest) map[string]
 		environment["FACTORY_MODEL"] = request.Model
 	}
 	return environment
-}
-
-// launchSurface reuses the coordinator-owned role surface when one exists and
-// otherwise creates a role-named surface for the attach command. Layout choice
-// stays with the coordinator; the adapter only places its own command.
-func launchSurface(ctx context.Context, terminalRuntime terminal.TerminalRuntime, harnessName string, request StartRequest, attach worker.InteractiveCommand) (terminal.Surface, error) {
-	command := terminal.Command{Executable: attach.Executable, Args: append([]string(nil), attach.Args...)}
-	if request.Surface.ID == "" {
-		surface, err := terminalRuntime.CreateSurface(ctx, terminal.SurfaceRequest{
-			WorkspaceID: request.WorkspaceID,
-			Name:        request.Role,
-			Command:     command,
-		})
-		if err != nil {
-			return terminal.Surface{}, fmt.Errorf("create %s surface: %w", harnessName, err)
-		}
-		return surface, nil
-	}
-	if err := terminalRuntime.LaunchSurface(ctx, request.Surface.ID, command); err != nil {
-		return terminal.Surface{}, fmt.Errorf("launch %s surface: %w", harnessName, err)
-	}
-	return request.Surface, nil
-}
-
-// requestExit sends the harness's graceful exit command while leaving the
-// opaque surface open, so cmux can recover it and a later coordinator can
-// reattach or resume.
-func requestExit(ctx context.Context, terminalRuntime terminal.TerminalRuntime, harnessName string, session Session) error {
-	if terminalRuntime == nil {
-		return fmt.Errorf("%s terminal runtime is required", harnessName)
-	}
-	if session.Surface.ID == "" {
-		return fmt.Errorf("%s session surface is required", harnessName)
-	}
-	if err := terminalRuntime.SendInput(ctx, session.Surface.ID, []byte("/exit\n")); err != nil {
-		return fmt.Errorf("request %s session exit: %w", harnessName, err)
-	}
-	return nil
 }

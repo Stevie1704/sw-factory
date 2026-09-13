@@ -15,7 +15,7 @@ import (
 )
 
 // CapabilityResolver returns the static capabilities for one configured
-// harness. It performs no worker or terminal side effect.
+// harness. It performs no worker side effect.
 type CapabilityResolver func(string) (Capabilities, error)
 
 // CapabilityError identifies a role-to-harness capability refusal without
@@ -40,18 +40,17 @@ func (e *CapabilityError) Error() string {
 func CapabilitiesFor(name string) (Capabilities, error) {
 	switch strings.TrimSpace(name) {
 	case NameCodex:
-		return (&Codex{}).Capabilities(), nil
+		return Capabilities{Name: NameCodex, NativeResume: true, Headless: true}, nil
 	case NameClaude:
-		return (&Claude{}).Capabilities(), nil
+		return Capabilities{Name: NameClaude, NativeResume: true, Headless: true}, nil
 	default:
 		return Capabilities{}, fmt.Errorf("%w: %q", ErrUnknownHarness, name)
 	}
 }
 
-// ValidateInteractiveResumeCapabilities verifies every role-selected
-// harness can resume an interrupted interactive session before claim effects
-// begin.
-func ValidateInteractiveResumeCapabilities(policy config.RepositoryConfig, resolve CapabilityResolver) error {
+// ValidateNativeResumeCapabilities verifies every role-selected
+// harness can resume an interrupted native session before claim effects begin.
+func ValidateNativeResumeCapabilities(policy config.RepositoryConfig, resolve CapabilityResolver) error {
 	if len(policy.RoleHarnessDefaults) == 0 {
 		return errors.New("no role harnesses are configured")
 	}
@@ -72,8 +71,8 @@ func ValidateInteractiveResumeCapabilities(policy config.RepositoryConfig, resol
 		if capabilities.Name != selected {
 			return &CapabilityError{Role: role, Harness: selected, Reason: "resolved to a different adapter"}
 		}
-		if !capabilities.InteractiveResume {
-			return &CapabilityError{Role: role, Harness: selected, Reason: "does not support interactive resume"}
+		if !capabilities.NativeResume {
+			return &CapabilityError{Role: role, Harness: selected, Reason: "does not support native resume"}
 		}
 	}
 	return nil
@@ -112,7 +111,7 @@ type StartupRequest struct {
 // StartupChecks returns independent capability, executable, and authentication
 // checks. Every selected harness contributes a check before the run begins.
 func StartupChecks(request StartupRequest) []doctor.Check {
-	checks := []doctor.Check{interactiveResumeCheck(request)}
+	checks := []doctor.Check{nativeResumeCheck(request)}
 	selected := selectedHarnesses(request.Policy)
 	for _, name := range selected {
 		harnessName := name
@@ -148,16 +147,16 @@ func selectedHarnesses(policy *config.RepositoryConfig) []string {
 	return selected
 }
 
-// interactiveResumeCheck adapts the capability validation error to a bounded
+// nativeResumeCheck adapts the capability validation error to a bounded
 // operator-facing diagnosis without exposing implementation error details.
-func interactiveResumeCheck(request StartupRequest) doctor.Check {
+func nativeResumeCheck(request StartupRequest) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		policy := request.Policy
 		if policy == nil {
 			return doctor.Failure("harness capability", "repository harness policy is unavailable", "repair the checked-in role_harness_defaults configuration")
 		}
-		if err := ValidateInteractiveResumeCapabilities(*policy, request.Resolve); err != nil {
-			return doctor.Failure("harness capability", err.Error(), "select an adapter with interactive resume support for every declared role")
+		if err := ValidateNativeResumeCapabilities(*policy, request.Resolve); err != nil {
+			return doctor.Failure("harness capability", err.Error(), "select an adapter with native resume support for every declared role")
 		}
 		if request.AllRolesHeadless && request.HeadlessChecker != nil {
 			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {

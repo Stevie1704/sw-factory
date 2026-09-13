@@ -191,7 +191,7 @@ const (
 )
 
 // StartAgent prepares the frozen invocation packet, starts the pinned worker,
-// creates the visible run surfaces, and launches the selected factory role
+// creates the durable run projections, and launches the selected factory role
 // for testing, implementation, architecture, or immutable review work.
 func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result AgentLaunchResult, returnErr error) {
 	request = normalizeAgentRequest(request)
@@ -235,7 +235,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 }
 
 // RunAgent launches the visible agent and accepts a report when one is already
-// present. Interactive callers normally use StartAgent and accept later.
+// present. Long-running callers normally use StartAgent and accept later.
 func (s *Service) RunAgent(ctx context.Context, request AgentRequest) (AgentResult, error) {
 	launch, err := s.StartAgent(ctx, request)
 	if err != nil {

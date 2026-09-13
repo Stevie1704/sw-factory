@@ -92,15 +92,15 @@ func clarificationCommentBody(run store.Run, packetVersion int, questions []stor
 	return builder.String()
 }
 
-// notifyClarification raises a concise cmux notification after the questions
-// and waiting state have been durably projected.
+// notifyClarification preserves the non-blocking attention hook after the
+// questions and waiting state have been durably projected.
 func (s *Service) notifyClarification(ctx context.Context, registration config.RepositoryRegistration, run store.Run) error {
 	body := fmt.Sprintf("%s is waiting for answers to %d clarification question(s)", run.ID, len(run.PendingQuestions))
-	return s.notifyWorkspace(ctx, registration, "factory clarification requested", body)
+	return s.notifyOperator(ctx, registration, "factory clarification requested", body)
 }
 
 // ensureClarificationPublication retries the two external attention effects
-// from durable run markers, so a GitHub or cmux outage cannot strand a waiting
+// from durable run markers, so a GitHub outage cannot strand a waiting
 // run with no recoverable publication path.
 func (s *Service) ensureClarificationPublication(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if run.Status != store.StatusWaitingForHuman || len(run.PendingQuestions) == 0 {

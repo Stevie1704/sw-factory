@@ -11,52 +11,78 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
-// TestStartAgentLaunchesAClaudeRoleThroughTheHeadlessSeam verifies a
-// repository-declared Claude role reaches the detached worker protocol with no
-// terminal workspace, no surface, and the factory-assigned native session
-// identity persisted on the invocation.
-func TestStartAgentLaunchesAClaudeRoleThroughTheHeadlessSeam(t *testing.T) {
-	_, runStore, runtime, terminalRuntime, _ := newAgentService(t)
-	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
-	policy := validRepositoryConfig()
-	policy.RoleHarnessDefaults["implementation"] = config.HarnessClaude
-	policy.ModelOptions["implementation"] = []string{"claude-opus-5"}
-	claudeAuth := filepath.Join(t.TempDir(), ".credentials.json")
-	service := newDispatchingAgentService(t, runStore, headlessWorker, terminalRuntime, policy, config.AuthenticationConfig{
-		CodexAuthPath:  filepath.Join(t.TempDir(), "auth.json"),
-		ClaudeAuthPath: claudeAuth,
-	})
+// TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam verifies both
+// production adapters cross only the detached worker protocol and persist a
+// harness-native identity without any local-UI dependency.
+func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
+	tests := []struct {
+		name, model string
+		harness     config.Harness
+		command     []string
+	}{
+		{name: "Codex", harness: config.HarnessCodex, model: "gpt-5", command: []string{"codex", "exec", "--json"}},
+		{name: "Claude", harness: config.HarnessClaude, model: "claude-opus-5", command: []string{"claude", "-p", "stream-json", "--verbose", "--session-id"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, runStore, runtime, _ := newAgentService(t)
+			headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+			policy := validRepositoryConfig()
+			policy.RoleHarnessDefaults["implementation"] = test.harness
+			policy.ModelOptions["implementation"] = []string{test.model}
+			codexAuth := filepath.Join(t.TempDir(), "auth.json")
+			claudeAuth := filepath.Join(t.TempDir(), ".credentials.json")
+			service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{
+				CodexAuthPath: codexAuth, ClaudeAuthPath: claudeAuth,
+			})
 
-	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
-	if err != nil {
-		t.Fatalf("StartAgent() error = %v", err)
-	}
-	if launch.Invocation.Harness != string(config.HarnessClaude) {
-		t.Fatalf("invocation harness = %q, want the role's declared Claude harness", launch.Invocation.Harness)
-	}
-	if len(headlessWorker.headlessStarts) != 1 {
-		t.Fatalf("headless launches = %#v, want exactly one detached Claude process", headlessWorker.headlessStarts)
-	}
-	command := headlessWorker.headlessStarts[0].Command
-	for _, wanted := range []string{"claude", "-p", "stream-json", "--verbose", "--session-id"} {
-		if !strings.Contains(strings.Join(command, " "), wanted) {
-			t.Fatalf("headless command = %#v, want %q", command, wanted)
-		}
-	}
-	if len(runtime.interactive) != 0 {
-		t.Fatalf("interactive worker commands = %#v, want none for a headless role", runtime.interactive)
-	}
-	if launch.Invocation.WorkspaceID != "" || launch.Invocation.RoleSurfaceID != "" || launch.Invocation.ImplementationSurfaceID != "" {
-		t.Fatalf("invocation terminal handles = %#v, want a terminal-free headless invocation", launch.Invocation)
-	}
-	if len(terminalRuntime.notifications) != 0 {
-		t.Fatalf("terminal notifications = %#v, want none for a headless role", terminalRuntime.notifications)
-	}
-	if launch.Invocation.NativeSessionID == "" {
-		t.Fatal("invocation has no native session id, want the adapter-assigned Claude session")
-	}
-	if len(runtime.claudeSeeds) != 1 || runtime.claudeSeeds[0].AuthPath != claudeAuth {
-		t.Fatalf("Claude credential seeds = %#v, want only the registered Claude source", runtime.claudeSeeds)
+			launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+			if err != nil {
+				t.Fatalf("StartAgent() error = %v", err)
+			}
+			if launch.Invocation.Harness != string(test.harness) {
+				t.Fatalf("invocation harness = %q, want %q", launch.Invocation.Harness, test.harness)
+			}
+			if len(headlessWorker.headlessStarts) != 1 {
+				t.Fatalf("headless launches = %#v, want exactly one detached process", headlessWorker.headlessStarts)
+			}
+			command := strings.Join(headlessWorker.headlessStarts[0].Command, " ")
+			for _, wanted := range test.command {
+				if !strings.Contains(command, wanted) {
+					t.Fatalf("headless command = %q, want %q", command, wanted)
+				}
+			}
+			if launch.Invocation.NativeSessionID == "" {
+				t.Fatal("invocation has no harness-native session id")
+			}
+			for key := range headlessWorker.headlessStarts[0].Environment {
+				if key == "TERM" {
+					t.Fatalf("headless environment unexpectedly exposes %q", key)
+				}
+			}
+			for _, removed := range []string{"attach", "cmux", "tmux"} {
+				if strings.Contains(command, removed) {
+					t.Fatalf("headless command = %q, unexpectedly contains removed local-UI token %q", command, removed)
+				}
+			}
+			if test.harness == config.HarnessCodex && (len(runtime.codexSeeds) != 1 || runtime.codexSeeds[0].AuthPath != codexAuth) {
+				t.Fatalf("Codex credential seeds = %#v, want registered source", runtime.codexSeeds)
+			}
+			if test.harness == config.HarnessClaude && (len(runtime.claudeSeeds) != 1 || runtime.claudeSeeds[0].AuthPath != claudeAuth) {
+				t.Fatalf("Claude credential seeds = %#v, want registered source", runtime.claudeSeeds)
+			}
+
+			resumed, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+			if err != nil {
+				t.Fatalf("Resume() error = %v", err)
+			}
+			if resumed.Invocation.NativeSessionID != launch.Invocation.NativeSessionID || resumed.Invocation.ManualResumeCount != 1 {
+				t.Fatalf("resumed invocation = %#v, want exact native identity and manual generation 1", resumed.Invocation)
+			}
+			if len(headlessWorker.headlessStarts) != 2 || headlessWorker.headlessStarts[1].Mode != worker.HeadlessLaunchResume {
+				t.Fatalf("headless launches after recovery = %#v, want one exact-session resume", headlessWorker.headlessStarts)
+			}
+		})
 	}
 }
 
@@ -80,15 +106,19 @@ func (w *headlessAgentWorker) InspectHeadless(context.Context, worker.HeadlessRe
 		return worker.HeadlessInspection{Status: worker.HeadlessStatusMissing}, nil
 	}
 	command := w.headlessStarts[len(w.headlessStarts)-1].Command
-	identity := ""
+	identity := "11111111-1111-4111-8111-111111111111"
 	for index, argument := range command {
-		if (argument == "--session-id" || argument == "--resume") && index+1 < len(command) {
+		if (argument == "--session-id" || argument == "--resume" || argument == "resume") && index+1 < len(command) {
 			identity = command[index+1]
 		}
 	}
+	output := `{"type":"thread.started","thread_id":"` + identity + `"}` + "\n"
+	if len(command) > 0 && command[0] == "claude" {
+		output = `{"type":"system","subtype":"init","session_id":"` + identity + `"}` + "\n"
+	}
 	return worker.HeadlessInspection{
 		Status: worker.HeadlessStatusRunning,
-		Stdout: `{"type":"system","subtype":"init","session_id":"` + identity + `"}` + "\n",
+		Stdout: output,
 	}, nil
 }
 

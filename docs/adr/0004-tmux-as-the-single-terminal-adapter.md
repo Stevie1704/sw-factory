@@ -1,8 +1,10 @@
 ---
-status: proposed
+status: superseded
 ---
 
 # ADR 0004: tmux as the single terminal adapter
+
+Superseded by accepted ADR 0010. No tmux adapter was implemented.
 
 ## Context
 

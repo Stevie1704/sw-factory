@@ -54,7 +54,7 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 	statuses := &gateStatuses{}
 	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}}
 
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
@@ -178,7 +178,7 @@ func TestCreateDraftPullRequestPublishesGateStatusesForAPushedCheckpoint(t *test
 	statuses := &unpushedCheckpointStatuses{workspace: workspace}
 	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 19, URL: "https://github.com/example/project/pull/19", State: "open", Draft: true, HeadBranch: "factory/run-unpushed", BaseBranch: "main"}}
 
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
@@ -258,7 +258,7 @@ func TestCreateDraftPullRequestReentersRecoveryPausedCheck(t *testing.T) {
 		Number: 20, URL: "https://github.com/example/project/pull/20", State: "open", Draft: true,
 		HeadBranch: "factory/run-recovered-check", BaseBranch: "main",
 	}}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
@@ -354,28 +354,26 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 		checkpointSHAs: []string{implementationCheckpoint, repairedImplementationCheckpoint},
 	}
 	runtime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 1}}}
-	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
 	statuses := &gateStatuses{}
 	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: "factory/run-repair", BaseBranch: "main"}}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
-		Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
 	ids := []string{"run-repair", "initial", "repair"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config:         &fakeConfig{value: host},
-		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:         &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
-		PullRequests:   pullRequests,
-		Worktree:       workspace,
-		GitWorkspace:   workspace,
-		Worker:         runtime,
-		Terminal:       terminalRuntime,
-		Harness:        harnessRuntime,
-		CommitStatuses: statuses,
-		Now:            func() time.Time { return time.Date(2026, 8, 21, 10, 1, 0, 0, time.UTC) },
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		PullRequests:      pullRequests,
+		Worktree:          workspace,
+		GitWorkspace:      workspace,
+		Worker:            runtime,
+		HeadlessHarnesses: testHeadlessHarnesses(harnessRuntime),
+		CommitStatuses:    statuses,
+		Now:               func() time.Time { return time.Date(2026, 8, 21, 10, 1, 0, 0, time.UTC) },
 		NewRunID: func() (string, error) {
 			if len(ids) == 0 {
 				return "", errors.New("repair test identifiers exhausted")
@@ -419,8 +417,8 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	if first.Repair.Packet.CheckpointSHA != implementationCheckpoint || len(first.Repair.Packet.Gates) != 1 || first.Repair.Packet.Gates[0].Outcome != "failed" {
 		t.Fatalf("repair packet = %#v, want all failed gates at the failed checkpoint", first.Repair.Packet)
 	}
-	if len(harnessRuntime.resumes) != 1 || harnessRuntime.resumes[0].ResumeSessionID != "session-initial" || harnessRuntime.resumes[0].Surface.ID != "surface-implementation" {
-		t.Fatalf("resume requests = %#v, want native session and existing surface", harnessRuntime.resumes)
+	if len(harnessRuntime.resumes) != 1 || harnessRuntime.resumes[0].ResumeSessionID != "session-initial" {
+		t.Fatalf("resume requests = %#v, want the existing native session", harnessRuntime.resumes)
 	}
 	// The repair turn enters a session that already read the first prompt, so it
 	// carries the repair packet without replaying the specification, the
@@ -479,7 +477,7 @@ func TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation(t *testin
 
 	policy := validRepositoryConfig()
 	runStore := &activeInvocationRunStore{fakeRunStore: &fakeRunStore{}, active: &store.Invocation{ID: "inv-active", RunID: "run-active", Status: store.InvocationStatusActive}}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: "/repo", OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: "/repo", OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
 	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-active", Worktree: "/worktree/run-active"}}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{

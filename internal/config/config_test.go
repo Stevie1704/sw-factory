@@ -102,7 +102,7 @@ func TestLoadRepositoryUnknownSchemaFailsClosed(t *testing.T) {
 	if !errors.As(err, &schemaErr) {
 		t.Fatalf("error = %v, want UnknownSchemaVersionError", err)
 	}
-	if schemaErr.Version != 99 || schemaErr.Supported != config.CurrentSchemaVersion {
+	if schemaErr.Version != 99 || schemaErr.Supported != config.CurrentRepositorySchemaVersion {
 		t.Fatalf("schema error = %#v", schemaErr)
 	}
 	if schemaErr.Field != "schema_version" {
@@ -309,7 +309,7 @@ func TestLoadHostRejectsTheOffendingField(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	contents := `schema_version: 1
+	contents := `schema_version: 2
 repositories:
   - path: relative/repository
     github:
@@ -353,11 +353,65 @@ func TestNewHostConfigUsesTheCurrentSchemaVersionAndNoRepositories(t *testing.T)
 	t.Parallel()
 
 	got := config.NewHostConfig()
-	if got.SchemaVersion != config.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion = %d, want %d", got.SchemaVersion, config.CurrentSchemaVersion)
+	if got.SchemaVersion != config.CurrentHostSchemaVersion {
+		t.Fatalf("SchemaVersion = %d, want %d", got.SchemaVersion, config.CurrentHostSchemaVersion)
 	}
 	if len(got.Repositories) != 0 {
 		t.Fatalf("Repositories = %#v, want none", got.Repositories)
+	}
+}
+
+func TestLoadHostRejectsVersionOneWithDrainedUpgradeInstructions(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := `schema_version: 1
+repositories:
+  - path: /work/repository
+    github:
+      owner: example
+      repository: project
+    authorized_users: [alice]
+    polling:
+      interval: 30s
+      backoff: 5m
+    cmux:
+      socket_path: /tmp/cmux.sock
+      control_workspace: factory-control
+    operational_data_path: /var/lib/factory/factory.db
+    repository_config_path: /work/repository/factory.yaml
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := config.LoadHost(path)
+	var upgradeErr *config.PreviousHostSchemaError
+	if !errors.As(err, &upgradeErr) {
+		t.Fatalf("LoadHost() error = %v, want PreviousHostSchemaError", err)
+	}
+	for _, instruction := range []string{"finish or cancel every non-terminal run", "previous binary", "stop the coordinator", "re-register"} {
+		if !strings.Contains(err.Error(), instruction) {
+			t.Fatalf("LoadHost() error = %q, want %q", err, instruction)
+		}
+	}
+}
+
+func TestSaveHostContainsNoTerminalConfiguration(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.SaveHost(path, config.NewHostConfig()); err != nil {
+		t.Fatalf("SaveHost() error = %v", err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{"cmux:", "terminal:"} {
+		if strings.Contains(string(contents), removed) {
+			t.Fatalf("host configuration = %q, must not contain %q", contents, removed)
+		}
 	}
 }
 
@@ -404,8 +458,8 @@ func TestCreateHostWritesAPrivateDefaultConfigurationAndRejectsAnExistingPath(t 
 	if err != nil {
 		t.Fatalf("CreateHost() error = %v", err)
 	}
-	if created.SchemaVersion != config.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion = %d, want %d", created.SchemaVersion, config.CurrentSchemaVersion)
+	if created.SchemaVersion != config.CurrentHostSchemaVersion {
+		t.Fatalf("SchemaVersion = %d, want %d", created.SchemaVersion, config.CurrentHostSchemaVersion)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -424,7 +478,7 @@ func TestSaveHostRejectsAnInvalidConfigurationWithoutWriting(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	invalid := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{
+	invalid := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{
 		{Path: "relative/repository"},
 	}}
 	err := config.SaveHost(path, invalid)
@@ -449,7 +503,7 @@ func TestSaveHostThenLoadHostRoundTripsARegisteredRepository(t *testing.T) {
 		OperationalDataPath:  "/var/lib/factory/factory.db",
 		RepositoryConfigPath: "/work/repository/factory.yaml",
 	}
-	want := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}
+	want := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}
 	if err := config.SaveHost(path, want); err != nil {
 		t.Fatalf("SaveHost() error = %v", err)
 	}
@@ -485,7 +539,7 @@ func TestValidateHostRejectsMoreThanOneRegisteredRepository(t *testing.T) {
 		OperationalDataPath:  "/var/lib/factory/factory.db",
 		RepositoryConfigPath: "/work/repository/factory.yaml",
 	}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration, registration}}
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration, registration}}
 	err := config.ValidateHost(host)
 	var validationErr *config.ValidationError
 	if !errors.As(err, &validationErr) {
@@ -538,15 +592,6 @@ func TestValidateHostRejectsMissingGitHubMetadataAndDuplicateAuthorizedUsers(t *
 			field: "repositories[0].authorized_users[1]",
 		},
 		{
-			name: "relative cmux socket path",
-			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
-				r.GitHub = config.GitHubConfig{Owner: "example", Repository: "project"}
-				r.Cmux = config.CmuxConfig{SocketPath: "relative/socket"}
-				return r
-			},
-			field: "repositories[0].cmux.socket_path",
-		},
-		{
 			name: "invalid polling interval",
 			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
 				r.GitHub = config.GitHubConfig{Owner: "example", Repository: "project"}
@@ -561,7 +606,7 @@ func TestValidateHostRejectsMissingGitHubMetadataAndDuplicateAuthorizedUsers(t *
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{tc.mutate(base)}}
+			host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{tc.mutate(base)}}
 			err := config.ValidateHost(host)
 			var validationErr *config.ValidationError
 			if !errors.As(err, &validationErr) {

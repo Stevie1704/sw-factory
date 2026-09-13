@@ -489,16 +489,16 @@ func TestBootstrapLabelsIsTheExplicitLabelCreationPath(t *testing.T) {
 	}
 }
 
-// TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects
+// TestClaimIssueRefusesAnAdapterWithoutNativeResumeBeforeGitHubEffects
 // verifies the startup capability guard runs before an issue is read or a
 // worktree is created.
-func TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects(t *testing.T) {
+func TestClaimIssueRefusesAnAdapterWithoutNativeResumeBeforeGitHubEffects(t *testing.T) {
 	t.Parallel()
 
 	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 			Path: "/repo", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 			AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"},
 			OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml",
@@ -513,8 +513,8 @@ func TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects(t
 	})
 
 	_, err := service.ClaimIssue(context.Background(), 42)
-	if err == nil || !strings.Contains(err.Error(), "interactive resume") {
-		t.Fatalf("ClaimIssue() error = %v, want interactive-resume refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "native resume") {
+		t.Fatalf("ClaimIssue() error = %v, want native-resume refusal", err)
 	}
 	if githubAdapter.issueCalls != 0 || worktree.called {
 		t.Fatalf("claim effects: issue calls=%d worktree=%t, want none", githubAdapter.issueCalls, worktree.called)
@@ -523,7 +523,7 @@ func TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects(t
 
 // newClaimService constructs a deterministic service for claim seam tests.
 func newClaimService(githubAdapter *fakeGitHub, worktree *fakeWorktree, runStore *fakeRunStore, repositoryConfig config.RepositoryConfig) *factory.Service {
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 "/repo",
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		AuthorizedUsers:      []string{"alice"},

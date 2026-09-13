@@ -9,7 +9,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 )
 
 // LifecycleRequest selects the run whose GitHub lifecycle should be observed.
@@ -125,14 +124,7 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 		return LifecycleResult{Outcome: LifecycleUnchanged}, nil
 	}
 	if store.IsTerminalStatus(run.Status) {
-		if run.Status == store.StatusFailed {
-			return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run, Reason: run.LifecycleReason}, nil
-		}
-		updated, notificationErr := s.ensureTerminalNotification(ctx, registration, runStore, *run)
-		if notificationErr != nil {
-			return LifecycleResult{Outcome: LifecycleUnchanged, Run: updated, Reason: updated.LifecycleReason}, notificationErr
-		}
-		return LifecycleResult{Outcome: LifecycleUnchanged, Run: updated, Reason: updated.LifecycleReason}, nil
+		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run, Reason: run.LifecycleReason}, nil
 	}
 
 	observation, err := s.observeGitHubLifecycle(ctx, registration, *run)
@@ -282,9 +274,8 @@ func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.Rep
 	return issueOpen, nil
 }
 
-// transitionTerminal stops the worker, projects the terminal state to GitHub,
-// persists it, and raises one operator notification. It deliberately leaves
-// terminal surfaces, sessions, branches, worktrees, and logs in place.
+// transitionTerminal stops active workers and projects the final state to
+// durable GitHub and store surfaces. Branches, worktrees, and logs remain.
 func (s *Service) transitionTerminal(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run, issue github.Issue) (store.Run, error) {
 	if store.IsTerminalStatus(previous.Status) {
 		return previous, nil
@@ -317,115 +308,13 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 	if err != nil {
 		return updated, err
 	}
-	return s.ensureTerminalNotification(ctx, registration, runStore, updated)
-}
-
-// ensureTerminalNotification delivers and records the one terminal cmux
-// notification, including after a prior delivery failure or restart.
-// It uses a durable claim table to prevent duplicate notifications when
-// notification succeeds but the subsequent run save fails.
-func (s *Service) ensureTerminalNotification(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
-	if run.LifecycleNotificationSent {
-		return run, nil
-	}
-	// Atomically claim the right to send this notification. If the claim already
-	// exists, the notification was already delivered (even if the run flag wasn't
-	// persisted due to a prior save failure), so skip delivery.
-	claimed, err := runStore.ClaimLifecycleNotification(ctx, run.ID, run.Status)
-	if err != nil {
-		return run, fmt.Errorf("claim lifecycle notification: %w", err)
-	}
-	if !claimed {
-		// Notification already delivered by a prior attempt. Update the in-memory
-		// flag and persist it without re-sending the notification.
-		run.LifecycleNotificationSent = true
-		run.UpdatedAt = s.deps.Now().UTC()
-		if err := saveRunWithRetry(ctx, runStore, run); err != nil {
-			return run, fmt.Errorf("persist lifecycle notification flag after skipped delivery: %w", err)
-		}
-		return run, nil
-	}
-	// Claim succeeded. Attempt notification delivery.
-	if err := s.notifyTerminal(ctx, registration, run); err != nil {
-		// Delivery failed. Release the claim so a future retry can attempt delivery again.
-		if releaseErr := runStore.ReleaseLifecycleNotification(ctx, run.ID, run.Status); releaseErr != nil {
-			return run, fmt.Errorf("notify lifecycle transition: %w (also failed to release claim: %v)", err, releaseErr)
-		}
-		return run, err
-	}
-	// Notification delivered successfully. Keep the claim (it now durably records
-	// that delivery happened) and persist the flag in the run record.
-	run.LifecycleNotificationSent = true
-	run.UpdatedAt = s.deps.Now().UTC()
-	if err := saveRunWithRetry(ctx, runStore, run); err != nil {
-		// The claim table already records successful delivery, so a retry won't
-		// re-send the notification even though the run flag wasn't persisted.
-		return run, fmt.Errorf("persist lifecycle notification flag: %w", err)
-	}
-	return run, nil
-}
-
-// notifyTerminal sends one concise cmux notification while retaining all run
-// surfaces for later inspection or explicit resume.
-func (s *Service) notifyTerminal(ctx context.Context, registration config.RepositoryRegistration, run store.Run) error {
-	title := "factory run cancelled"
-	body := fmt.Sprintf("%s cancelled: %s", run.ID, safeStatusCommentValue(run.LifecycleReason))
-	if run.Status == store.StatusComplete {
-		title = "factory run completed"
-		body = fmt.Sprintf("%s completed after pull request #%d merged", run.ID, run.PullRequestNumber)
-	}
-	return s.notifyWorkspace(ctx, registration, title, body)
-}
-
-// notifyWorkspace sends one concise coordinator notification through the
-// registered control workspace, lazily constructing the runtime when needed.
-func (s *Service) notifyWorkspace(ctx context.Context, registration config.RepositoryRegistration, title, body string) error {
-	if s.headlessCoordinatorMode(registration) {
-		return nil
-	}
-	terminalRuntime := s.deps.Terminal
-	if terminalRuntime == nil {
-		var err error
-		terminalRuntime, err = s.lifecycleModule().ensureTerminalRuntime(registration.Cmux.SocketPath)
-		if err != nil {
-			return fmt.Errorf("ensure terminal runtime for notification: %w", err)
-		}
-	}
-	control, err := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
-		Name:             controlWorkspaceName(registration),
-		Description:      "software factory coordinator",
-		WorkingDirectory: registration.Path,
-	})
-	if err != nil {
-		return fmt.Errorf("ensure control workspace for notification: %w", err)
-	}
-	if err := terminalRuntime.Notify(ctx, terminal.Notification{WorkspaceID: control.ID, Title: title, Body: body}); err != nil {
-		return fmt.Errorf("notify coordinator: %w", err)
-	}
-	return nil
-}
-
-// headlessCoordinatorMode determines whether operator notifications must remain
-// terminal-free. A repository qualifies when every declared role selects a
-// harness with a migrated headless adapter; a legacy injected adapter or an
-// unmigrated selection still uses the registered terminal runtime.
-func (s *Service) headlessCoordinatorMode(registration config.RepositoryRegistration) bool {
-	if s.deps.LoadRepository == nil || strings.TrimSpace(registration.RepositoryConfigPath) == "" {
-		return false
-	}
-	policy, err := s.deps.LoadRepository(registration.RepositoryConfigPath)
-	if err != nil {
-		return false
-	}
-	return s.allRolesHeadless(policy)
+	return updated, nil
 }
 
 // allRolesHeadless reports whether the repository declares at least one role
-// and every declared role selects a harness this coordinator runs without a
-// terminal. It is the single definition of terminal-free repository policy,
-// shared by startup diagnosis and operator notification.
+// and every declared role selects a supported headless harness.
 func (s *Service) allRolesHeadless(policy config.RepositoryConfig) bool {
-	if s.deps.Harness != nil || len(policy.RoleHarnessDefaults) == 0 {
+	if len(policy.RoleHarnessDefaults) == 0 {
 		return false
 	}
 	for _, selected := range policy.RoleHarnessDefaults {
@@ -436,8 +325,9 @@ func (s *Service) allRolesHeadless(policy config.RepositoryConfig) bool {
 	return true
 }
 
-// controlWorkspaceName resolves the registered coordinator workspace name, or
-// the factory default when a registration leaves it unset.
-func controlWorkspaceName(registration config.RepositoryRegistration) string {
-	return defaultString(registration.Cmux.ControlWorkspace, "factory-control")
+// notifyOperator is a no-op compatibility hook for paths whose durable
+// attention surface is GitHub. Local notification availability cannot affect
+// workflow progress.
+func (s *Service) notifyOperator(context.Context, config.RepositoryRegistration, string, string) error {
+	return nil
 }

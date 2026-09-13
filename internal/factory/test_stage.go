@@ -565,7 +565,7 @@ func (s *Service) finishImplementationTestObjection(ctx context.Context, registr
 		}
 	}
 	if run.Status == store.StatusWaitingForHuman {
-		if err := s.notifyWorkspace(ctx, registration, "factory test objection waiting", run.LifecycleReason); err != nil {
+		if err := s.notifyOperator(ctx, registration, "factory test objection waiting", run.LifecycleReason); err != nil {
 			return AgentResult{}, err
 		}
 		return AgentResult{Invocation: *invocation, Report: value}, nil
@@ -1207,7 +1207,7 @@ func (s *Service) pauseTestRevisionForHuman(ctx context.Context, registration co
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist test objection human pause: %w", err)
 	}
-	if err := s.notifyWorkspace(ctx, registration, "factory test objection waiting", run.ID+" is waiting for human test-objection disposition"); err != nil {
+	if err := s.notifyOperator(ctx, registration, "factory test objection waiting", run.ID+" is waiting for human test-objection disposition"); err != nil {
 		return AgentResult{}, err
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
@@ -1221,7 +1221,7 @@ func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, regis
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {
-		_, harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+		harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(config.Harness(invocation.Harness))
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test revision: %w", err)
 		}
@@ -1230,7 +1230,6 @@ func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, regis
 			RunID:           invocation.RunID,
 			WorkerID:        workerIDForInvocation(*invocation),
 			NativeSessionID: invocation.NativeSessionID,
-			Surface:         invocationSurface(*invocation),
 		}); err != nil {
 			return AgentResult{}, fmt.Errorf("finish unverifiable test revision session: %w", err)
 		}
@@ -1259,7 +1258,7 @@ func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration 
 		return AgentResult{}, err
 	}
 	if invocation.NativeSessionID != "" {
-		_, harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(invocation.Harness))
+		harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(config.Harness(invocation.Harness))
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test report: %w", err)
 		}
@@ -1268,7 +1267,6 @@ func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration 
 			RunID:           invocation.RunID,
 			WorkerID:        workerIDForInvocation(*invocation),
 			NativeSessionID: invocation.NativeSessionID,
-			Surface:         invocationSurface(*invocation),
 		}); err != nil {
 			return AgentResult{}, fmt.Errorf("finish unverifiable test session: %w", err)
 		}
@@ -1300,7 +1298,7 @@ func (s *Service) pauseTestForHuman(ctx context.Context, registration config.Rep
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist test dispute state: %w", err)
 	}
-	if err := s.notifyWorkspace(ctx, registration, "factory test stage waiting", run.ID+" is waiting for human test-stage disposition"); err != nil {
+	if err := s.notifyOperator(ctx, registration, "factory test stage waiting", run.ID+" is waiting for human test-stage disposition"); err != nil {
 		return AgentResult{}, err
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil

@@ -14,20 +14,18 @@ import (
 )
 
 // ResultAcceptance is the complete durable intent for accepting one validated
-// visible report. The caller resolves its repository registration to the
-// repository, socket path, and worker identity before reserving the effect.
+// visible report. The caller resolves repository and worker identity before
+// reserving the effect.
 type ResultAcceptance struct {
 	// Repository is the tracked GitHub repository.
 	Repository github.Repository
-	// SocketPath locates the terminal a replayed harness command reattaches to.
-	SocketPath string
 	// WorkerID identifies the worker that owns the accepted invocation.
 	WorkerID string
 	// Harness finalizes the accepted native session.
 	Harness harness.Runtime
 	// Session is the native session being finalized.
 	Session harness.Session
-	// Invocation is the terminal invocation projection.
+	// Invocation is the accepted invocation projection.
 	Invocation store.Invocation
 	// Previous and Next are the run revisions the acceptance moves between.
 	Previous store.Run
@@ -70,7 +68,6 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 	}
 	payload := resultAcceptanceEffectPayload{
 		Repository:     request.Repository,
-		SocketPath:     request.SocketPath,
 		Issue:          github.Issue{Number: next.IssueNumber},
 		Session:        request.Session,
 		Invocation:     invocation,
@@ -203,7 +200,7 @@ func (h resultAcceptanceHandler) Replay(ctx context.Context, request replayReque
 		return store.Run{}, workflowProjectionFailuref("invocation %q changed during result acceptance replay", payload.Invocation.ID)
 	}
 	if finishNeeded {
-		harnessRuntime, runtimeErr := h.lifecycle.HarnessRuntime(payload.SocketPath, payload.Invocation.Harness)
+		harnessRuntime, runtimeErr := h.lifecycle.HarnessRuntime(payload.Invocation.Harness)
 		if runtimeErr != nil {
 			return store.Run{}, fmt.Errorf("ensure harness for result acceptance replay: %w", runtimeErr)
 		}

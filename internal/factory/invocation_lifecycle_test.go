@@ -23,7 +23,7 @@ func TestGatherLaunchPerformsNoMutation(t *testing.T) {
 	}
 	storeValue := &gatherReadOnlyStore{}
 	run := &store.Run{ID: "run-gather", Status: store.StatusActive, Stage: store.StageImplementation, Worktree: "/worktree", SpecificationPacket: string(packetData), TestStageSkipped: true}
-	module := newInvocationLifecycle(nil, nil, nil, nil, nil, nil, nil, invocationLifecycleHooks{}, nil)
+	module := newInvocationLifecycle(nil, nil, nil, nil, nil, invocationLifecycleHooks{}, nil)
 	_, err = module.gatherLaunch(context.Background(), InvocationLaunchRequest{RunStore: storeValue, Run: run, Request: AgentRequest{Role: workflow.RoleImplementation, Stage: store.StageImplementation}, InvocationID: "inv-gather"})
 	if err != nil {
 		t.Fatalf("gatherLaunch() error = %v", err)
@@ -53,7 +53,7 @@ func TestGatherReviewLaunchReadsGatesAndWorktreeWithoutMutation(t *testing.T) {
 		Worktree: "/worktree", SpecificationPacket: string(packetData), PullRequestNumber: 17,
 		CheckpointSHA: checkpoint, BaseCheckpointSHA: checkpoint, TestStageSkipped: true,
 	}
-	module := newInvocationLifecycle(nil, nil, nil, nil, nil, worktree, nil, invocationLifecycleHooks{}, nil)
+	module := newInvocationLifecycle(nil, nil, nil, worktree, nil, invocationLifecycleHooks{}, nil)
 	_, err = module.gatherLaunch(context.Background(), InvocationLaunchRequest{
 		RunStore: storeValue, Run: run,
 		Request:      AgentRequest{Role: workflow.RoleSpecificationReview, Stage: store.StageReview},

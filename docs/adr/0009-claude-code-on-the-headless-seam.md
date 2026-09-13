@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # ADR 0009: Run Claude Code on the headless seam and make terminal-free execution harness-neutral
+
+Superseded by ADR 0010, which removes the transitional terminal control plane.
 
 ## Context
 

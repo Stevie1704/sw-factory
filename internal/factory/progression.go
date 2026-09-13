@@ -421,11 +421,6 @@ func progressionStep(state progressionState, registry workflow.Registry) (progre
 	}
 	if len(activeInvocations) > 0 {
 		for _, active := range activeInvocations {
-			if active.AttachRequired {
-				return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("invocation %q requires `factory attach`", active.ID)}
-			}
-		}
-		for _, active := range activeInvocations {
 			if !state.ReadyInvocationIDs[active.ID] {
 				continue
 			}
