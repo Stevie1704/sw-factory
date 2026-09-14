@@ -123,13 +123,15 @@ func TestStartupChecksDoNotRenderWorkerAuthenticationErrors(t *testing.T) {
 
 // harnessDoctorChecker records worker-image harness probes.
 type harnessDoctorChecker struct {
-	err        error
-	calls      int
-	authCalls  int
-	authError  error
-	skillCalls int
-	skillError error
-	version    string
+	err           error
+	calls         int
+	authCalls     int
+	authError     error
+	skillCalls    int
+	skillError    error
+	headlessCalls int
+	headlessError error
+	version       string
 }
 
 // CheckHarness implements the worker harness diagnosis seam.
@@ -142,6 +144,12 @@ func (c *harnessDoctorChecker) CheckHarness(context.Context, worker.HarnessCheck
 func (c *harnessDoctorChecker) CheckHarnessAuthentication(context.Context, worker.HarnessAuthenticationCheckRequest) error {
 	c.authCalls++
 	return c.authError
+}
+
+// CheckHeadless implements the worker headless helper diagnosis seam.
+func (c *harnessDoctorChecker) CheckHeadless(context.Context, worker.HeadlessCheckRequest) error {
+	c.headlessCalls++
+	return c.headlessError
 }
 
 // CheckSkillContract implements the worker skill contract diagnosis seam.
@@ -160,6 +168,7 @@ func (c *harnessDoctorChecker) CheckSkillContract(_ context.Context, request wor
 var _ worker.HarnessChecker = (*harnessDoctorChecker)(nil)
 var _ worker.HarnessAuthenticationChecker = (*harnessDoctorChecker)(nil)
 var _ worker.SkillContractChecker = (*harnessDoctorChecker)(nil)
+var _ worker.HeadlessChecker = (*harnessDoctorChecker)(nil)
 
 // probedHarnessVersion is the harness version a fake worker probe reports.
 const probedHarnessVersion = "1.2.3"
@@ -255,4 +264,47 @@ func skillContractFailures(report doctor.Report) int {
 		}
 	}
 	return failures
+}
+
+// TestStartupChecksReportACaptureLimitOverflow verifies every harness-owned
+// worker probe reports an output-capture overflow as itself, so an operator is
+// not told the image lacks an executable, a credential, or a skill the probe
+// never finished reading.
+func TestStartupChecksReportACaptureLimitOverflow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(path, []byte("credential contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	overflow := &worker.OutputLimitExceededError{
+		Operation: "worker lifecycle operation",
+		Stream:    "stderr",
+		Limit:     worker.MaxCapturedOutputBytes,
+	}
+	checker := &harnessDoctorChecker{err: overflow, authError: overflow, skillError: overflow, headlessError: overflow}
+	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy: &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{
+			"implementation": config.HarnessClaude,
+		}},
+		Authentication:        config.AuthenticationConfig{CodexAuthPath: path},
+		Image:                 probedImage,
+		Checker:               checker,
+		AuthenticationChecker: checker,
+		SkillChecker:          checker,
+		HeadlessChecker:       checker,
+		AllRolesHeadless:      true,
+	})...)
+	if report.Ready() {
+		t.Fatal("harness report = ready, want blocking overflow failures")
+	}
+	if checker.headlessCalls != 1 {
+		t.Fatalf("headless checks = %d, want the migrated helper probe", checker.headlessCalls)
+	}
+	for _, result := range report.Failures() {
+		if !strings.Contains(result.Problem, "capture limit") || result.Action == "" {
+			t.Fatalf("harness result = %#v, want the overflow named with an operator action", result)
+		}
+		if strings.Contains(result.Problem, "not usable") || strings.Contains(result.Problem, "skill contract") {
+			t.Fatalf("harness result = %#v, want no unrelated diagnosis", result)
+		}
+	}
 }

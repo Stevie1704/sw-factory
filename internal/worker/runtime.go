@@ -580,14 +580,14 @@ func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request Credenti
 		name, "/bin/sh", "-c",
 		"umask 077; rm -f \"" + credentialPath + "\"; cat > \"" + credentialPath + "\"; chmod 0444 \"" + credentialPath + "\"",
 	}, data); err != nil {
-		return fmt.Errorf("seed %s credentials: credential projection failed", credential.Harness)
+		return fmt.Errorf("seed %s credentials: %w", credential.Harness, redactCause(err, "credential projection failed"))
 	}
 	if _, err := r.runDocker(ctx, []string{
 		"exec", "--user", WorkerUser, "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
 		"mkdir -p \"" + credential.RoleHome + "\"; rm -f \"" + linkPath + "\"; ln -s \"" + credentialPath + "\" \"" + linkPath + "\"",
 	}); err != nil {
-		return fmt.Errorf("link %s credentials into the role home: credential projection failed", credential.Harness)
+		return fmt.Errorf("link %s credentials into the role home: %w", credential.Harness, redactCause(err, "credential projection failed"))
 	}
 	return nil
 }
@@ -1219,6 +1219,20 @@ type OutputLimitExceededError struct {
 // Error reports the operation, stream, and limit without any captured output.
 func (e *OutputLimitExceededError) Error() string {
 	return fmt.Sprintf("%s exceeded the %d byte %s capture limit", e.Operation, e.Limit, e.Stream)
+}
+
+// redactCause returns a content-free failure for one Docker invocation. A
+// capture-limit overflow survives as a typed cause, because
+// *OutputLimitExceededError carries only an operation name, a stream name, and
+// the configured limit. Every other cause is replaced by diagnosis, so Docker
+// output, arguments, container names, host paths, and credential content never
+// reach an operator message.
+func redactCause(err error, diagnosis string) error {
+	var limitErr *OutputLimitExceededError
+	if errors.As(err, &limitErr) {
+		return limitErr
+	}
+	return errors.New(diagnosis)
 }
 
 // workerOperation names one invocation in the seam's own vocabulary, so an

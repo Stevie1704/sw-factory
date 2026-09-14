@@ -81,7 +81,7 @@ func StartupChecks(checker DoctorChecker, image ImageReference) []doctor.Check {
 				return doctor.Failure("docker daemon", "the Docker diagnosis adapter is unavailable", "configure the Docker worker runtime")
 			}
 			if err := checker.CheckDocker(ctx); err != nil {
-				return doctor.Failure("docker daemon", "the coordinator cannot reach a usable Docker daemon", "start Docker and verify the coordinator account can access it")
+				return ProbeFailure("docker daemon", err, "the coordinator cannot reach a usable Docker daemon", "start Docker and verify the coordinator account can access it")
 			}
 			return doctor.Success("docker daemon")
 		},
@@ -90,11 +90,28 @@ func StartupChecks(checker DoctorChecker, image ImageReference) []doctor.Check {
 				return doctor.Failure("worker image", "the Docker diagnosis adapter is unavailable", "configure the Docker worker runtime")
 			}
 			if err := checker.CheckImage(ctx, image); err != nil {
-				return doctor.Failure("worker image", "the configured worker image@sha256 digest is not available locally", "build or load the configured worker image at the exact digest; doctor never pulls images")
+				return ProbeFailure("worker image", err, "the configured worker image@sha256 digest is not available locally", "build or load the configured worker image at the exact digest; doctor never pulls images")
 			}
 			return doctor.Success("worker image")
 		},
 	}
+}
+
+// outputLimitAction is the operator action for a capture-limit overflow. A
+// probe that writes past the limit produces no partial result, so the only
+// correction is to make the probe write less.
+const outputLimitAction = "reduce the output of the probed worker operation; the factory refuses a result it cannot buffer completely"
+
+// ProbeFailure renders one worker-probe failure as an operator diagnosis. A
+// capture-limit overflow reports the overflow itself, because the check's own
+// problem statement would name a verdict the probe never reached. Every other
+// failure keeps the check's fixed problem and action.
+func ProbeFailure(name string, err error, problem, action string) doctor.Result {
+	var limitErr *OutputLimitExceededError
+	if errors.As(err, &limitErr) {
+		return doctor.Failure(name, limitErr.Error(), outputLimitAction)
+	}
+	return doctor.Failure(name, problem, action)
 }
 
 // CheckDocker verifies the Docker executable and daemon without displaying
@@ -108,7 +125,7 @@ func (r *DockerRuntime) CheckDocker(ctx context.Context) error {
 		return errors.New("Docker executable is unavailable")
 	}
 	if _, err := r.runDocker(ctx, []string{"version", "--format", "{{.Server.Version}}"}); err != nil {
-		return errors.New("Docker daemon is unavailable")
+		return redactCause(err, "Docker daemon is unavailable")
 	}
 	return nil
 }
@@ -121,7 +138,7 @@ func (r *DockerRuntime) CheckImage(ctx context.Context, image ImageReference) er
 	}
 	result, err := r.runDocker(ctx, []string{"image", "inspect", "--format", "{{json .}}", imageReference(image.Name, image.Digest)})
 	if err != nil {
-		return errors.New("worker image inspection failed")
+		return redactCause(err, "worker image inspection failed")
 	}
 	if strings.TrimSpace(result.Stdout) == "" {
 		return errors.New("worker image inspection returned no image")
@@ -145,7 +162,7 @@ func (r *DockerRuntime) CheckHarness(ctx context.Context, request HarnessCheckRe
 		"--entrypoint", "/bin/sh",
 		imageReference(request.Image.Name, request.Image.Digest), "-c", command,
 	}); err != nil {
-		return errors.New("harness executable is not usable in the worker image")
+		return redactCause(err, "harness executable is not usable in the worker image")
 	}
 	return nil
 }
@@ -175,7 +192,7 @@ func (r *DockerRuntime) CheckHarnessAuthentication(ctx context.Context, request 
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--entrypoint", "/bin/sh", imageReference(request.Image.Name, request.Image.Digest), "-c", probe,
 	}, data); err != nil {
-		return errors.New("harness authentication is not usable in the worker image")
+		return redactCause(err, "harness authentication is not usable in the worker image")
 	}
 	return nil
 }
@@ -192,7 +209,7 @@ func (r *DockerRuntime) CheckHeadless(ctx context.Context, request HeadlessCheck
 		"--entrypoint", "/bin/sh", imageReference(request.Image.Name, request.Image.Digest), "-c",
 		"test -x /usr/local/bin/factory-worker-headless",
 	}); err != nil {
-		return errors.New("headless worker process helper is not usable in the worker image")
+		return redactCause(err, "headless worker process helper is not usable in the worker image")
 	}
 	return nil
 }
@@ -314,7 +331,7 @@ func (r *DockerRuntime) CheckSkillContract(ctx context.Context, request SkillCon
 		imageReference(request.Image.Name, request.Image.Digest), "-c", probe,
 	})
 	if err != nil {
-		return SkillContract{}, errors.New("the worker image does not satisfy the harness skill contract")
+		return SkillContract{}, redactCause(err, "the worker image does not satisfy the harness skill contract")
 	}
 	version := harnessVersionLine(result.Stdout)
 	if version == "" {
