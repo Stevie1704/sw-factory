@@ -25,7 +25,6 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 		s.deps.Now,
 		invocationLifecycleHooks{
 			persistRun:               s.persistAgentRunState,
-			notifyOperator:           s.notifyOperator,
 			publishReviewStatus:      s.publishReviewStatus,
 			refreshReviewPullRequest: s.refreshSpecificationReviewPullRequest,
 			reconcileInterrupted:     s.reconcileInterruptedRunWithMode,

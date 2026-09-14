@@ -347,7 +347,7 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 	return 0
 }
 
-// runAgent starts the visible agent for the active run, selecting the frozen
+// runAgent starts the harness invocation for the active run, selecting the frozen
 // policy's independent test stage or implementation-owned TDD path.
 func runAgent(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
@@ -392,7 +392,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 	return 0
 }
 
-// runAgentReport accepts the structured report written by one visible agent.
+// runAgentReport accepts the structured report written by one harness invocation.
 func runAgentReport(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("agent-report", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)

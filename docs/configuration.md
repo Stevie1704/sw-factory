@@ -237,7 +237,7 @@ another harness's option names.
 
 ## Factory-owned role, prompt, and stage registry
 
-Roles, invocation stages, prompt versions, default permitted paths, visible
+Roles, invocation stages, prompt versions, default permitted paths, active
 role ownership and report-outcome transitions are declared by the factory
 in `internal/workflow`. Repository configuration may select harness and model
 policy for a declared role, but `factory.yaml` cannot add or redefine

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -301,26 +302,12 @@ func cleanupPlansEqual(left, right CleanupPlan) bool {
 	}
 	for index := range left.Runs {
 		leftRun, rightRun := left.Runs[index], right.Runs[index]
-		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !stringSlicesEqual(leftRun.WorkerIDs, rightRun.WorkerIDs) || !stringSlicesEqual(leftRun.StoredOutputs, rightRun.StoredOutputs) || !stringSlicesEqual(leftRun.Roles, rightRun.Roles) {
+		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !slices.Equal(leftRun.WorkerIDs, rightRun.WorkerIDs) || !slices.Equal(leftRun.StoredOutputs, rightRun.StoredOutputs) || !slices.Equal(leftRun.Roles, rightRun.Roles) {
 			return false
 		}
 	}
 	for index := range left.Skipped {
 		if left.Skipped[index] != right.Skipped[index] {
-			return false
-		}
-	}
-	return true
-}
-
-// stringSlicesEqual compares ordered cleanup target fields without exposing a
-// mutable alias through the plan comparison.
-func stringSlicesEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
 			return false
 		}
 	}

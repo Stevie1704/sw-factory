@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -466,7 +467,7 @@ func (s *Service) stopCheckWorker(ctx context.Context, runID string) error {
 func (s *Service) startCheckRepair(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket, repairPacket CheckRepairPacket) (invocation store.Invocation, updated store.Run, returnErr error) {
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
-		return store.Invocation{}, run, errors.New("operational store does not support visible invocations")
+		return store.Invocation{}, run, errors.New("operational store does not support harness invocations")
 	}
 	historyStore, ok := runStore.(LatestInvocationStore)
 	if !ok {
@@ -703,7 +704,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		ReasoningEffort: previous.ReasoningEffort,
 		ResumeSessionID: previous.NativeSessionID,
 	}
-	resumedInvocation, resumeErr := s.journal().ResumeHarness(ctx, runStore, invocationStore, harnessRuntime, invocation, resumeRequest)
+	resumedInvocation, resumeErr := s.journal().ResumeHarness(ctx, runStore, invocationStore, effectkernel.HarnessResume{Runtime: harnessRuntime, Invocation: invocation, Request: resumeRequest})
 	if resumedInvocation.RecoveryResumeCount > invocation.RecoveryResumeCount {
 		resumeStarted = true
 	}

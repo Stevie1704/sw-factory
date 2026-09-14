@@ -40,11 +40,11 @@ type Factory interface {
 	// RunBaseline evaluates the frozen repository gate model before agent edits.
 	RunBaseline(context.Context, BaselineRequest) (BaselineResult, error)
 	RunGate(context.Context, RunGateRequest) (gate.Result, error)
-	// StartAgent launches the visible Codex test, implementation, or review role for an active run.
+	// StartAgent launches the Codex or Claude test, implementation, or review role for an active run.
 	StartAgent(context.Context, AgentRequest) (AgentLaunchResult, error)
-	// AcceptAgentReport validates and accepts one structured visible-agent handoff.
+	// AcceptAgentReport validates and accepts one structured invocation handoff.
 	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
-	// RunAgent launches a visible agent and accepts its already-written report.
+	// RunAgent launches a harness invocation and accepts its already-written report.
 	RunAgent(context.Context, AgentRequest) (AgentResult, error)
 	// Resume performs an explicit native-session or harness-capacity recovery,
 	// or re-enters a coordinator-owned check paused by restart reconciliation.
@@ -110,8 +110,6 @@ type OperationalStore interface {
 type RunStore interface {
 	OperationalStore
 	SaveRun(context.Context, store.Run) error
-	ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error)
-	ReleaseLifecycleNotification(context.Context, string, store.Status) error
 }
 
 // LatestRunStore extends the operational-store seam with the most recently

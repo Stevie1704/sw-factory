@@ -2,6 +2,7 @@ package factory_test
 
 import (
 	"context"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +26,12 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("PATH", t.TempDir())
+			for _, removedBinary := range []string{"cmux", "tmux"} {
+				if path, err := exec.LookPath(removedBinary); err == nil {
+					t.Fatalf("terminal-free test PATH unexpectedly resolves %s at %q", removedBinary, path)
+				}
+			}
 			_, runStore, runtime, _ := newAgentService(t)
 			headlessWorker := &headlessAgentWorker{agentWorker: runtime}
 			policy := validRepositoryConfig()
@@ -72,6 +79,19 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 				t.Fatalf("Claude credential seeds = %#v, want registered source", runtime.claudeSeeds)
 			}
 
+			refreshed, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID})
+			if err != nil {
+				t.Fatalf("RefreshAuth() error = %v", err)
+			}
+			if refreshed.Harness != test.harness || refreshed.Invocation.CredentialStoreID == "" {
+				t.Fatalf("RefreshAuth() result = %#v, want %s managed credentials", refreshed, test.harness)
+			}
+			if test.harness == config.HarnessCodex && (len(runtime.codexSeeds) != 2 || runtime.codexSeeds[1].AuthPath != codexAuth) {
+				t.Fatalf("Codex credential refreshes = %#v, want the registered source reseeded", runtime.codexSeeds)
+			}
+			if test.harness == config.HarnessClaude && (len(runtime.claudeSeeds) != 2 || runtime.claudeSeeds[1].AuthPath != claudeAuth) {
+				t.Fatalf("Claude credential refreshes = %#v, want the registered source reseeded", runtime.claudeSeeds)
+			}
 			resumed, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
 			if err != nil {
 				t.Fatalf("Resume() error = %v", err)

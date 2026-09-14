@@ -28,11 +28,11 @@ func reviewReadinessEligible(run store.Run) bool {
 // anything, so unattended progression must publish the human disposition it is
 // waiting for instead of reporting a stalled transition.
 func reviewReadinessSettled(run store.Run) bool {
-	return run.Stage == store.StageReady && run.ReadyNotificationSent && reviewReadinessEligible(run)
+	return run.Stage == store.StageReady && reviewReadinessEligible(run)
 }
 
 // finalizeReviewReadiness performs the final target synchronization, explicit
-// PR readiness transition, durable ready state, and operator notification.
+// PR readiness transition, and durable ready state.
 // A target change returns the run to checks so every gate and reviewer starts
 // again from the new exact checkpoint.
 func (s *Service) finalizeReviewReadiness(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
@@ -91,7 +91,6 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 			next.StandardsReview = nil
 			next.ReviewRepairPendingAttempt = 0
 			next.ReviewRepairPacket = nil
-			next.ReadyNotificationSent = false
 			next.LifecycleReason = "target branch advanced before readiness; rerunning gates and independent reviews"
 			next.Revision = run.Revision + 1
 			next.UpdatedAt = s.deps.Now().UTC()
@@ -126,9 +125,6 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	next.Stage = store.StageReady
 	next.Status = store.StatusActive
 	next.LifecycleReason = "all configured reviews passed; pull request is ready for human merge"
-	if run.Stage != store.StageReady || run.Status != store.StatusActive || run.LifecycleReason != next.LifecycleReason {
-		next.ReadyNotificationSent = false
-	}
 	if next.Stage != run.Stage || next.Status != run.Status || next.LifecycleReason != run.LifecycleReason {
 		next.Revision = run.Revision + 1
 		next.UpdatedAt = s.deps.Now().UTC()
@@ -136,7 +132,7 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 			return run, fmt.Errorf("persist ready state: %w", err)
 		}
 	}
-	return s.ensureReadyNotification(ctx, registration, runStore, next)
+	return next, nil
 }
 
 // rejectUnreviewedPullRequestHead keeps a mismatched remote head non-ready and
@@ -159,7 +155,7 @@ func (s *Service) rejectUnreviewedPullRequestHead(ctx context.Context, repositor
 
 // retryReviewReadiness reopens the active run through the normal startup
 // seam and retries the complete finalization boundary after a transient
-// GitHub, base-synchronization, PR-readiness, or notification failure.
+// GitHub, base-synchronization, or PR-readiness failure.
 func (s *Service) retryReviewReadiness(ctx context.Context, runID string) error {
 	registration, runStore, run, err := s.openActiveRunStore(ctx)
 	if err != nil {
@@ -208,22 +204,4 @@ func (s *Service) setPullRequestDraft(ctx context.Context, repository github.Rep
 	}
 	updated.Draft = draft
 	return updated, nil
-}
-
-// ensureReadyNotification records readiness only after its durable GitHub
-// projection succeeds.
-func (s *Service) ensureReadyNotification(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
-	if run.ReadyNotificationSent {
-		return run, nil
-	}
-	body := fmt.Sprintf("%s pull request #%d is ready for human review: %s", run.ID, run.PullRequestNumber, run.PullRequestURL)
-	if err := s.notifyOperator(ctx, registration, "factory pull request ready", body); err != nil {
-		return run, fmt.Errorf("notify pull-request readiness: %w", err)
-	}
-	run.ReadyNotificationSent = true
-	run.UpdatedAt = s.deps.Now().UTC()
-	if err := saveRunWithRetry(ctx, runStore, run); err != nil {
-		return run, fmt.Errorf("persist pull-request readiness notification: %w", err)
-	}
-	return run, nil
 }

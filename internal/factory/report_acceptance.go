@@ -183,7 +183,7 @@ type ReportAcceptanceRequest struct {
 func (a *reportAcceptance) Accept(ctx context.Context, request ReportAcceptanceRequest) (AgentResult, error) {
 	invocationStore, ok := request.RunStore.(InvocationStore)
 	if !ok {
-		return AgentResult{}, errors.New("operational store does not support visible invocations")
+		return AgentResult{}, errors.New("operational store does not support harness invocations")
 	}
 	invocation, roleDefinition, err := a.identify(ctx, invocationStore, request)
 	if err != nil {
@@ -742,7 +742,7 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 // journal. The harness session is finished first, so a failure leaves the
 // invocation active and the report re-acceptable.
 func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, outcome AcceptanceOutcome, projection acceptanceProjection) error {
-	if err := harnessRuntime.Finish(ctx, harness.Session{InvocationID: invocation.ID, RunID: invocation.RunID, WorkerID: workerIDForInvocation(*invocation), NativeSessionID: projection.Invocation.NativeSessionID}); err != nil {
+	if err := harnessRuntime.FinishHeadless(ctx, harness.Session{InvocationID: invocation.ID, RunID: invocation.RunID, WorkerID: workerIDForInvocation(*invocation), NativeSessionID: projection.Invocation.NativeSessionID}); err != nil {
 		return fmt.Errorf("finish accepted harness session: %w", err)
 	}
 	if snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview {
@@ -817,7 +817,7 @@ func reviewCanBeAcceptedWhileWaiting(run store.Run, invocation store.Invocation)
 
 // acceptedInvocationStatus maps a validated report outcome to its durable
 // invocation lifecycle state, keeping result acceptance consistent across all
-// visible roles.
+// harness roles.
 func acceptedInvocationStatus(outcome report.Outcome) store.InvocationStatus {
 	switch outcome {
 	case report.OutcomeCompleted:
@@ -868,7 +868,6 @@ func agentReportRunProjection(previous store.Run, invocationStage store.Stage, v
 		next.PendingQuestions = nil
 	}
 	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
 	return next
 }
 

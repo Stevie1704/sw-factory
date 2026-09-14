@@ -636,6 +636,9 @@ func (f *fakeGitHub) FindStatusComment(_ context.Context, _ github.Repository, _
 // EditIssueComment records edits to the persisted status comment.
 func (f *fakeGitHub) EditIssueComment(_ context.Context, _ github.Repository, id, body string) error {
 	f.editedComments = append(f.editedComments, editedComment{id: id, body: body})
+	if f.statusComment.ID == id {
+		f.statusComment.Body = body
+	}
 	return nil
 }
 
@@ -705,10 +708,9 @@ func (f *fakeWorktree) Remove(context.Context, string, gitadapter.Workspace) err
 
 // fakeRunStore keeps run records in insertion order for coordinator tests.
 type fakeRunStore struct {
-	saved           []store.Run
-	saveErrors      []error
-	lifecycleClaims map[string]map[store.Status]bool
-	currentRun      func(context.Context) (*store.Run, error)
+	saved      []store.Run
+	saveErrors []error
+	currentRun func(context.Context) (*store.Run, error)
 }
 
 // CurrentRun returns the newest non-terminal record.
@@ -736,29 +738,6 @@ func (f *fakeRunStore) SaveRun(_ context.Context, run store.Run) error {
 		}
 	}
 	f.saved = append(f.saved, run)
-	return nil
-}
-
-// ClaimLifecycleNotification atomically claims notification delivery.
-func (f *fakeRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
-	if f.lifecycleClaims == nil {
-		f.lifecycleClaims = make(map[string]map[store.Status]bool)
-	}
-	if f.lifecycleClaims[runID] == nil {
-		f.lifecycleClaims[runID] = make(map[store.Status]bool)
-	}
-	if f.lifecycleClaims[runID][terminalStatus] {
-		return false, nil
-	}
-	f.lifecycleClaims[runID][terminalStatus] = true
-	return true, nil
-}
-
-// ReleaseLifecycleNotification removes a notification claim.
-func (f *fakeRunStore) ReleaseLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) error {
-	if f.lifecycleClaims != nil && f.lifecycleClaims[runID] != nil {
-		delete(f.lifecycleClaims[runID], terminalStatus)
-	}
 	return nil
 }
 

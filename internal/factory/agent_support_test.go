@@ -51,16 +51,6 @@ func (s *agentRunStore) SaveRun(_ context.Context, run store.Run) error {
 	return nil
 }
 
-// ClaimLifecycleNotification accepts the retired non-blocking marker seam.
-func (*agentRunStore) ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error) {
-	return true, nil
-}
-
-// ReleaseLifecycleNotification releases the retired marker seam.
-func (*agentRunStore) ReleaseLifecycleNotification(context.Context, string, store.Status) error {
-	return nil
-}
-
 // SaveInvocation persists one fixture invocation.
 func (s *agentRunStore) SaveInvocation(_ context.Context, invocation store.Invocation) error {
 	if s.invocations == nil {
@@ -272,40 +262,28 @@ func (*agentHarness) Capabilities() harness.Capabilities {
 	return harness.Capabilities{Name: harness.NameCodex, NativeResume: true, Headless: true}
 }
 
-// Start records one fixture harness launch.
-func (h *agentHarness) Start(_ context.Context, request harness.StartRequest) (harness.Session, error) {
+// StartHeadless records one fixture harness launch.
+func (h *agentHarness) StartHeadless(_ context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
 	h.starts = append(h.starts, request)
 	if h.startErr != nil {
-		return harness.Session{}, h.startErr
+		return harness.HeadlessSession{}, h.startErr
 	}
-	return harness.Session{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID}, nil
+	return harness.HeadlessSession{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID}, nil
 }
 
-// Resume records one fixture native-session continuation.
-func (h *agentHarness) Resume(_ context.Context, request harness.StartRequest) (harness.Session, error) {
+// ResumeHeadless records one fixture native-session continuation.
+func (h *agentHarness) ResumeHeadless(_ context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
 	h.resumes = append(h.resumes, request)
 	if h.resumeErr != nil {
-		return harness.Session{}, h.resumeErr
+		return harness.HeadlessSession{}, h.resumeErr
 	}
-	return harness.Session{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, NativeSessionID: "session-repaired"}, nil
+	return harness.HeadlessSession{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, NativeSessionID: "session-repaired"}, nil
 }
 
-// Finish records accepted harness completion.
-func (h *agentHarness) Finish(_ context.Context, session harness.Session) error {
+// FinishHeadless records accepted harness completion.
+func (h *agentHarness) FinishHeadless(_ context.Context, session harness.HeadlessSession) error {
 	h.finished = append(h.finished, session)
 	return nil
-}
-
-// StartHeadless adapts the fixture's neutral start operation.
-func (h *agentHarness) StartHeadless(ctx context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
-	session, err := h.Start(ctx, toStartRequest(request))
-	return toHeadlessSession(session), err
-}
-
-// ResumeHeadless adapts the fixture's neutral resume operation.
-func (h *agentHarness) ResumeHeadless(ctx context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
-	session, err := h.Resume(ctx, toStartRequest(request))
-	return toHeadlessSession(session), err
 }
 
 // InspectHeadless reports a running fixture process.
@@ -315,21 +293,6 @@ func (*agentHarness) InspectHeadless(context.Context, harness.HeadlessInspection
 
 // CancelHeadless accepts fixture cancellation.
 func (*agentHarness) CancelHeadless(context.Context, harness.HeadlessSession) error { return nil }
-
-// FinishHeadless adapts accepted fixture completion.
-func (h *agentHarness) FinishHeadless(ctx context.Context, session harness.HeadlessSession) error {
-	return h.Finish(ctx, harness.Session{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID})
-}
-
-// toStartRequest converts the headless fixture request to its compatibility shape.
-func toStartRequest(request harness.HeadlessStartRequest) harness.StartRequest {
-	return harness.StartRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Prompt: request.Prompt, Model: request.Model, ReasoningEffort: request.ReasoningEffort, ResumeSessionID: request.ResumeSessionID}
-}
-
-// toHeadlessSession converts the compatibility result to the headless shape.
-func toHeadlessSession(session harness.Session) harness.HeadlessSession {
-	return harness.HeadlessSession{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID}
-}
 
 // testHeadlessHarnesses maps both supported names to one recording adapter.
 func testHeadlessHarnesses(runtime *agentHarness) map[config.Harness]harness.HeadlessRuntime {
@@ -398,6 +361,7 @@ func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime w
 	run := *runStore.current
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Authentication: authentication, OperationalDataPath: filepath.Join(filepath.Dir(run.RepositoryPath), "state", "factory.db"), RepositoryConfigPath: filepath.Join(run.RepositoryPath, "factory.yaml")}}}
 	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}}
+	runStore.github = githubRuntime
 	worktree := &inspectingWorktree{fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}}, state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{Config: &fakeConfig{value: host}, OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil }, LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil }, Worker: runtime, GitHub: githubRuntime, Worktree: worktree, Now: func() time.Time { return time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC) }, NewRunID: func() (string, error) { return "generated-dispatch", nil }})
 }

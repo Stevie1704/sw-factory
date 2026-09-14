@@ -529,16 +529,6 @@ func (s *progressionDispatchStore) SaveRun(_ context.Context, run store.Run) err
 	return nil
 }
 
-// ClaimLifecycleNotification satisfies the run-store notification seam.
-func (*progressionDispatchStore) ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error) {
-	return true, nil
-}
-
-// ReleaseLifecycleNotification satisfies the run-store notification seam.
-func (*progressionDispatchStore) ReleaseLifecycleNotification(context.Context, string, store.Status) error {
-	return nil
-}
-
 // Close satisfies the operational-store seam.
 func (*progressionDispatchStore) Close() error { return nil }
 
@@ -567,7 +557,7 @@ func (s *progressionDispatchStore) GateResults(context.Context, string, store.Ga
 	return nil, s.gateResultsErr
 }
 
-// SaveInvocation satisfies the visible-invocation persistence seam.
+// SaveInvocation satisfies the harness-invocation persistence seam.
 func (*progressionDispatchStore) SaveInvocation(context.Context, store.Invocation) error {
 	return nil
 }

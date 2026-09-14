@@ -142,7 +142,7 @@ type harnessResumeEffectPayload struct {
 }
 
 // resultAcceptanceEffectPayload is the complete durable intent for accepting
-// a validated visible report.
+// a validated structured report.
 type resultAcceptanceEffectPayload struct {
 	Repository github.Repository
 	Issue      github.Issue

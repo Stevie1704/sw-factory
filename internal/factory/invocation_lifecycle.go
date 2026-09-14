@@ -65,7 +65,7 @@ type LaunchSnapshot struct {
 	ReviewContext *prompt.ReviewContext
 }
 
-// LaunchPlan is the pure admission decision for one visible invocation.
+// LaunchPlan is the pure admission decision for one harness invocation.
 type LaunchPlan struct {
 	// Outcome identifies whether activation launches or adopts an invocation.
 	Outcome LaunchOutcome
@@ -167,7 +167,6 @@ type InvocationLifecycle interface {
 // the module. The module never receives the coordinator's dependency bundle.
 type invocationLifecycleHooks struct {
 	persistRun               func(context.Context, config.RepositoryRegistration, RunStore, store.Run, store.Run) error
-	notifyOperator           func(context.Context, config.RepositoryRegistration, string, string) error
 	publishReviewStatus      func(context.Context, config.RepositoryRegistration, RunStore, store.Run, string, github.CommitStatusState, string) error
 	refreshReviewPullRequest func(context.Context, config.RepositoryRegistration, RunStore, store.Run) error
 	reconcileInterrupted     func(context.Context, config.RepositoryRegistration, RunStore, store.Run, bool) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error)
@@ -204,7 +203,7 @@ func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.Work
 }
 
 // Resume restores an active native session, retries a harness-capacity wait,
-// or launches the next visible role after reconciling a durable interruption.
+// or launches the next role after reconciling a durable interruption.
 func (l *invocationLifecycle) Resume(ctx context.Context, request InvocationRecoveryRequest) (ResumeResult, error) {
 	if request.Run == nil {
 		return ResumeResult{}, errors.New("no persisted run")
@@ -332,7 +331,7 @@ func (l *invocationLifecycle) resumeActiveInvocationError(ctx context.Context, r
 		return ResumeResult{Run: paused, Invocation: updated}, errors.Join(classified, pauseErr)
 	}
 	if harness.IsUnexpectedExit(classified) {
-		paused, pauseErr := l.pauseForManualRecovery(ctx, request.Registration, request.RunStore, run, active.Harness, classified)
+		paused, pauseErr := l.pauseForManualRecovery(ctx, request.Registration, request.RunStore, run, active.Harness)
 		return ResumeResult{Run: paused, Invocation: updated}, errors.Join(classified, pauseErr)
 	}
 	return ResumeResult{Run: run, Invocation: updated}, resumeErr
@@ -394,7 +393,7 @@ func (l *invocationLifecycle) Stop(ctx context.Context, request InvocationStopRe
 }
 
 // Launch gathers the read-only snapshot, plans admission, materialises the
-// packet, and activates one visible invocation in that order.
+// packet, and activates one harness invocation in that order.
 func (l *invocationLifecycle) Launch(ctx context.Context, request InvocationLaunchRequest) (AgentLaunchResult, error) {
 	snapshot, err := l.gatherLaunch(ctx, request)
 	if err != nil {
@@ -419,7 +418,7 @@ func (l *invocationLifecycle) Launch(ctx context.Context, request InvocationLaun
 func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request InvocationLaunchRequest) (LaunchSnapshot, error) {
 	invocationStore, ok := request.RunStore.(InvocationStore)
 	if !ok {
-		return LaunchSnapshot{}, errors.New("operational store does not support visible invocations")
+		return LaunchSnapshot{}, errors.New("operational store does not support harness invocations")
 	}
 	if request.Run == nil {
 		return LaunchSnapshot{}, errors.New("no active run")
@@ -531,7 +530,7 @@ func (l *invocationLifecycle) gatherResumeSource(ctx context.Context, runStore R
 func (l *invocationLifecycle) gatherActiveInvocations(ctx context.Context, invocationStore InvocationStore, runID string, startedHere func(string) bool) ([]ActiveLaunchObservation, bool, error) {
 	active, supported, err := activeInvocationsForRun(ctx, invocationStore, runID)
 	if err != nil {
-		return nil, supported, fmt.Errorf("look up active visible invocations: %w", err)
+		return nil, supported, fmt.Errorf("look up active harness invocations: %w", err)
 	}
 	observations := make([]ActiveLaunchObservation, 0, len(active))
 	for _, invocation := range active {
@@ -645,12 +644,12 @@ func validateLaunchRun(snapshot LaunchSnapshot, request AgentRequest) error {
 		return fmt.Errorf("check-repair attempt %d is pending reconciliation", snapshot.Run.CheckRepairPendingAttempt)
 	}
 	if snapshot.Run.Status != store.StatusActive {
-		return fmt.Errorf("cannot start visible agent from run status %q", snapshot.Run.Status)
+		return fmt.Errorf("cannot start harness invocation from run status %q", snapshot.Run.Status)
 	}
 	registry := workflow.DefaultRegistry()
 	if _, exists := registry.RoleForRunStage(snapshot.Run.Stage); !exists {
 		if _, invocationStage := registry.RoleForInvocationStage(snapshot.Run.Stage); !invocationStage {
-			return fmt.Errorf("cannot start visible agent from run stage %q", snapshot.Run.Stage)
+			return fmt.Errorf("cannot start harness invocation from run stage %q", snapshot.Run.Stage)
 		}
 	}
 	if !filepath.IsAbs(snapshot.Run.Worktree) {
@@ -875,7 +874,7 @@ func buildLaunchPacket(plan LaunchPlan, invocation store.Invocation, craft *Repo
 func (l *invocationLifecycle) activateLaunch(ctx context.Context, request InvocationLaunchRequest, plan LaunchPlan, materialised launchMaterialisation) (result AgentLaunchResult, returnErr error) {
 	invocationStore, ok := request.RunStore.(InvocationStore)
 	if !ok {
-		return AgentLaunchResult{}, errors.New("operational store does not support visible invocations")
+		return AgentLaunchResult{}, errors.New("operational store does not support harness invocations")
 	}
 	if plan.RoleDefinition.Kind == workflow.RoleKindReview {
 		if l.hooks.publishReviewStatus == nil {
@@ -903,7 +902,7 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 		}
 	}()
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("persist visible invocation: %w", err)
+		return AgentLaunchResult{}, fmt.Errorf("persist harness invocation: %w", err)
 	}
 	invocationPersisted = true
 	if err := l.recordLaunchEvaluation(ctx, request.EvaluationRecorder, *request.Run, invocation); err != nil {
@@ -913,7 +912,7 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 		return AgentLaunchResult{}, errors.New("worker runtime is required")
 	}
 	if err := l.journal.StartWorker(ctx, request.RunStore, materialised.workerRequest); err != nil {
-		return AgentLaunchResult{}, fmt.Errorf("start worker for visible agent: %w", err)
+		return AgentLaunchResult{}, fmt.Errorf("start worker for harness invocation: %w", err)
 	}
 	workerStarted = true
 	if seedCredentials != nil {
@@ -965,7 +964,7 @@ func (l *invocationLifecycle) recordLaunchEvaluation(ctx context.Context, record
 func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request InvocationLaunchRequest, plan LaunchPlan, materialised launchMaterialisation, harnessRuntime harness.Runtime, invocation store.Invocation) (harness.Session, store.Invocation, bool, error) {
 	invocationStore, ok := request.RunStore.(InvocationStore)
 	if !ok {
-		return harness.Session{}, store.Invocation{}, false, errors.New("operational store does not support visible invocations")
+		return harness.Session{}, store.Invocation{}, false, errors.New("operational store does not support harness invocations")
 	}
 	if harnessRuntime == nil {
 		return harness.Session{}, store.Invocation{}, false, errors.New("harness runtime is required")
@@ -981,9 +980,9 @@ func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request In
 	var err error
 	if plan.ResumeSource != nil {
 		startRequest.ResumeSessionID = plan.ResumeSource.NativeSessionID
-		session, err = harnessRuntime.Resume(ctx, startRequest)
+		session, err = harnessRuntime.ResumeHeadless(ctx, startRequest)
 	} else {
-		session, err = harnessRuntime.Start(ctx, startRequest)
+		session, err = harnessRuntime.StartHeadless(ctx, startRequest)
 	}
 	if err == nil {
 		return session, invocation, false, nil
@@ -1008,7 +1007,7 @@ func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request In
 	}
 	if harness.IsUnexpectedExit(classified) {
 		return l.retainLaunchAfterHarnessFailure(ctx, request, plan, invocationStore, invocation, classified, func() (store.Run, error) {
-			return l.pauseForManualRecovery(ctx, request.Registration, request.RunStore, plan.Run, string(plan.Policy.Harness), classified)
+			return l.pauseForManualRecovery(ctx, request.Registration, request.RunStore, plan.Run, string(plan.Policy.Harness))
 		})
 	}
 	return harness.Session{}, store.Invocation{}, false, fmt.Errorf("launch %s %s agent: %w", plan.Policy.Harness, invocation.Role, classified)
@@ -1138,7 +1137,7 @@ func (l *invocationLifecycle) ensureCoordinatorHarnessRuntime(selected config.Ha
 	if adapter == nil {
 		return nil, fmt.Errorf("harness %q does not provide the required headless adapter", selected)
 	}
-	return harness.AdaptHeadlessRuntime(adapter), nil
+	return adapter, nil
 }
 
 // headlessAdapter returns the detached adapter for a selected harness.
@@ -1162,20 +1161,11 @@ func headlessAdapterFor(adapters map[config.Harness]harness.HeadlessRuntime, sel
 	return adapter
 }
 
-// coordinatorUsesHeadless reports whether the selected adapter has no
-// coordinator-side process attachment.
-func coordinatorUsesHeadless(runtime harness.Runtime) bool {
-	return runtime != nil && runtime.Capabilities().Headless
-}
-
 // classifyHeadlessExit asks the headless adapter to interpret one detached
 // process projection after liveness has gone false. The returned diagnostics
 // remain local-only; the returned error is already reduced to the factory's
 // typed harness vocabulary.
 func classifyHeadlessExit(runtime harness.Runtime, ctx context.Context, request harness.HeadlessInspectionRequest, harnessName string) (error, string, bool) {
-	if !coordinatorUsesHeadless(runtime) {
-		return nil, "", false
-	}
 	inspector, ok := runtime.(harness.HeadlessFailureInspector)
 	if !ok {
 		return nil, "", false
@@ -1358,12 +1348,12 @@ func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Cont
 		if l.journal == nil {
 			return invocation, errors.New("harness resume hook is required")
 		}
-		return l.journal.ResumeHarness(ctx, runStore, invocationStore, harnessRuntime, invocation, resumeRequest)
+		return l.journal.ResumeHarness(ctx, runStore, invocationStore, effectkernel.HarnessResume{Runtime: harnessRuntime, Invocation: invocation, Request: resumeRequest})
 	}
 	if l.journal == nil {
 		return invocation, errors.New("manual harness resume hook is required")
 	}
-	return l.journal.ResumeHarnessManually(ctx, runStore, invocationStore, harnessRuntime, invocation, resumeRequest)
+	return l.journal.ResumeHarnessManually(ctx, runStore, invocationStore, effectkernel.HarnessResume{Runtime: harnessRuntime, Invocation: invocation, Request: resumeRequest})
 }
 
 // resumePersistedInvocation performs the bounded automatic native resume.
@@ -1408,9 +1398,6 @@ func (l *invocationLifecycle) pauseForHarnessCapacity(ctx context.Context, regis
 	if err := l.persistLifecycleRun(ctx, registration, runStore, run, next); err != nil {
 		return next, err
 	}
-	if err := l.notifyLifecycle(ctx, registration, "factory harness capacity", fmt.Sprintf("%s is waiting for %s harness capacity", run.ID, harnessName)); err != nil {
-		return next, err
-	}
 	return next, nil
 }
 
@@ -1432,15 +1419,12 @@ func (l *invocationLifecycle) pauseForAuthentication(ctx context.Context, regist
 	if err := l.persistLifecycleRun(ctx, registration, runStore, run, next); err != nil {
 		return next, err
 	}
-	if err := l.notifyLifecycle(ctx, registration, "factory authentication expired", fmt.Sprintf("%s requires `factory auth refresh` for %s", run.ID, harnessName)); err != nil {
-		return next, err
-	}
 	return next, nil
 }
 
 // pauseForManualRecovery records the bounded automatic-recovery boundary and
 // leaves the native session for an explicit operator-requested resume.
-func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string, cause error) (store.Run, error) {
+func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
 	if err := l.stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
@@ -1470,9 +1454,6 @@ func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, regist
 	if err != nil {
 		return next, err
 	}
-	if notifyErr := l.notifyLifecycle(ctx, registration, "factory harness recovery exhausted", fmt.Sprintf("%s requires manual harness recovery", run.ID)); notifyErr != nil {
-		return next, errors.Join(cause, notifyErr)
-	}
 	return next, nil
 }
 
@@ -1483,15 +1464,6 @@ func (l *invocationLifecycle) persistLifecycleRun(ctx context.Context, registrat
 		return errors.New("run persistence hook is required")
 	}
 	return l.hooks.persistRun(ctx, registration, runStore, previous, next)
-}
-
-// notifyLifecycle sends a bounded operator notification through the explicit
-// coordinator notification hook.
-func (l *invocationLifecycle) notifyLifecycle(ctx context.Context, registration config.RepositoryRegistration, title, body string) error {
-	if l.hooks.notifyOperator == nil {
-		return nil
-	}
-	return l.hooks.notifyOperator(ctx, registration, title, body)
 }
 
 // stopActiveRunWorkers stops every currently delegated worker for a run and
@@ -1592,7 +1564,7 @@ func (l *invocationLifecycle) resetStartupState() {
 // recovery stops the worker and returns only the local diagnostic path.
 func (l *invocationLifecycle) recordSessionExitDiagnostic(ctx context.Context, _ config.RepositoryRegistration, run store.Run, invocation store.Invocation) string {
 	if adapter := l.headlessAdapter(config.Harness(invocation.Harness)); adapter != nil {
-		_, transcript, classified := classifyHeadlessExit(harness.AdaptHeadlessRuntime(adapter), ctx, harness.HeadlessInspectionRequest{
+		_, transcript, classified := classifyHeadlessExit(adapter, ctx, harness.HeadlessInspectionRequest{
 			InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role,
 		}, invocation.Harness)
 		if classified {
@@ -1621,7 +1593,7 @@ func (l *invocationLifecycle) retryWaitingForHarness(ctx context.Context, regist
 	}
 	if active != nil && strings.TrimSpace(active.NativeSessionID) != "" {
 		if active.RecoveryResumeCount > 0 {
-			_, pauseErr := l.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
+			_, pauseErr := l.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
 			return pauseErr
 		}
 		updated, resumeErr := l.resumePersistedInvocation(ctx, registration, runStore, run, *active)
@@ -1670,7 +1642,7 @@ func (l *invocationLifecycle) handleRetryResumeError(ctx context.Context, regist
 		return err
 	}
 	if harness.IsUnexpectedExit(classified) {
-		_, err := l.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, classified)
+		_, err := l.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
 		return err
 	}
 	return resumeErr
@@ -1708,29 +1680,27 @@ func (l *invocationLifecycle) reconcileActiveHarnessLiveness(ctx context.Context
 		if running {
 			continue
 		}
-		if coordinatorUsesHeadless(harnessRuntime) {
-			presence, presenceErr := structuredReportPresenceForInvocation(active)
-			if presenceErr == nil && presence == structuredReportPresent {
-				// The detached process may have exited after publishing the
-				// authoritative report. Progression owns validation and
-				// acceptance, so recovery must leave this report observable.
-				continue
+		presence, presenceErr := structuredReportPresenceForInvocation(active)
+		if presenceErr == nil && presence == structuredReportPresent {
+			// The detached process may have exited after publishing the
+			// authoritative report. Progression owns validation and
+			// acceptance, so recovery must leave this report observable.
+			continue
+		}
+		failure, diagnostics, classified := classifyHeadlessExit(harnessRuntime, ctx, harness.HeadlessInspectionRequest{
+			InvocationID: active.ID, RunID: run.ID, WorkerID: workerIDForInvocation(active), Role: active.Role,
+		}, active.Harness)
+		if classified {
+			if diagnostics != "" {
+				_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, l.clock().UTC())
 			}
-			failure, diagnostics, classified := classifyHeadlessExit(harnessRuntime, ctx, harness.HeadlessInspectionRequest{
-				InvocationID: active.ID, RunID: run.ID, WorkerID: workerIDForInvocation(active), Role: active.Role,
-			}, active.Harness)
-			if classified {
-				if diagnostics != "" {
-					_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, l.clock().UTC())
-				}
-				if harness.IsRateLimited(failure) {
-					_, pauseErr := l.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
-					return pauseErr
-				}
-				if harness.IsAuthenticationExpired(failure) {
-					_, pauseErr := l.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
-					return pauseErr
-				}
+			if harness.IsRateLimited(failure) {
+				_, pauseErr := l.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)
+				return pauseErr
+			}
+			if harness.IsAuthenticationExpired(failure) {
+				_, pauseErr := l.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
+				return pauseErr
 			}
 		}
 		diagnostic := l.recordSessionExitDiagnostic(ctx, registration, run, active)

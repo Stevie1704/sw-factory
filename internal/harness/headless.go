@@ -93,12 +93,7 @@ type HeadlessInspection struct {
 // HeadlessRuntime is the factory-owned lifecycle seam for terminal-free
 // harnesses. It contains no workspace, surface, keystroke, or screen concept.
 type HeadlessRuntime interface {
-	// Capabilities reports the headless adapter identity and resume support.
-	Capabilities() Capabilities
-	// StartHeadless launches a fresh native process.
-	StartHeadless(context.Context, HeadlessStartRequest) (HeadlessSession, error)
-	// ResumeHeadless launches the exact recorded native session.
-	ResumeHeadless(context.Context, HeadlessStartRequest) (HeadlessSession, error)
+	Runtime
 	// InspectHeadless reads process state and bounded machine output.
 	InspectHeadless(context.Context, HeadlessInspectionRequest) (HeadlessInspection, error)
 	// CancelHeadless requests idempotent process cancellation.
@@ -251,7 +246,7 @@ func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, com
 	if h.worker == nil {
 		return HeadlessSession{}, errors.New("worker runtime does not support headless processes")
 	}
-	environment := invocationEnvironment(h.protocol.name, StartRequest{
+	environment := invocationEnvironment(h.protocol.name, HeadlessStartRequest{
 		InvocationID: request.InvocationID, RunID: request.RunID, Role: request.Role,
 		Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Model: request.Model,
 	})
@@ -445,87 +440,6 @@ func HeadlessDiagnostics(err error) string {
 	return failure.Diagnostics
 }
 
-// AdaptHeadlessRuntime supplies the journal Runtime shape while preserving the
-// coordinator-owned terminal-free implementation.
-func AdaptHeadlessRuntime(runtime HeadlessRuntime) Runtime {
-	if runtime == nil {
-		return nil
-	}
-	return &headlessRuntimeAdapter{runtime: runtime}
-}
-
-// headlessRuntimeAdapter bridges the detailed process seam to journal effects.
-type headlessRuntimeAdapter struct {
-	runtime HeadlessRuntime
-}
-
-// Capabilities delegates static headless capabilities.
-func (a *headlessRuntimeAdapter) Capabilities() Capabilities {
-	capabilities := a.runtime.Capabilities()
-	// A HeadlessRuntime is detached by construction. Keep the capability true
-	// even for small embedding fakes that only
-	// fill the adapter name and resume bit.
-	capabilities.Headless = true
-	return capabilities
-}
-
-// Start maps a journal request to the detached process seam.
-func (a *headlessRuntimeAdapter) Start(ctx context.Context, request StartRequest) (Session, error) {
-	result, err := a.runtime.StartHeadless(ctx, headlessRequest(request))
-	return sessionFromHeadless(result), err
-}
-
-// Resume maps a journal request to native detached resume.
-func (a *headlessRuntimeAdapter) Resume(ctx context.Context, request StartRequest) (Session, error) {
-	result, err := a.runtime.ResumeHeadless(ctx, headlessRequest(request))
-	return sessionFromHeadless(result), err
-}
-
-// Finish maps journal state to idempotent detached-process cleanup.
-func (a *headlessRuntimeAdapter) Finish(ctx context.Context, session Session) error {
-	return a.runtime.FinishHeadless(ctx, HeadlessSession{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID})
-}
-
-// NativeSessionID forwards detached identity inspection through the journal
-// adapter without exposing worker implementation details.
-func (a *headlessRuntimeAdapter) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
-	inspector, ok := a.runtime.(NativeSessionInspector)
-	if !ok {
-		return "", errors.New("headless harness does not support native session inspection")
-	}
-	return inspector.NativeSessionID(ctx, request)
-}
-
-// NativeSessionRunning forwards detached-process liveness through the journal
-// adapter so restart diagnosis remains process-native.
-func (a *headlessRuntimeAdapter) NativeSessionRunning(ctx context.Context, request NativeSessionRequest) (bool, error) {
-	inspector, ok := a.runtime.(NativeSessionLivenessInspector)
-	if !ok {
-		return false, errors.New("headless harness does not support native session liveness")
-	}
-	return inspector.NativeSessionRunning(ctx, request)
-}
-
-// HeadlessFailureFor forwards settled-process classification through the
-// bridge used by journal replay and lifecycle monitoring.
-func (a *headlessRuntimeAdapter) HeadlessFailureFor(ctx context.Context, request HeadlessInspectionRequest) error {
-	inspector, ok := a.runtime.(HeadlessFailureInspector)
-	if !ok {
-		return nil
-	}
-	return inspector.HeadlessFailureFor(ctx, request)
-}
-
-// headlessRequest translates the journal prompt contract to the process seam.
-func headlessRequest(request StartRequest) HeadlessStartRequest {
-	return HeadlessStartRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Prompt: request.Prompt, Model: request.Model, ReasoningEffort: request.ReasoningEffort, ResumeSessionID: request.ResumeSessionID}
-}
-
-// sessionFromHeadless translates one headless identity into the effect seam.
-func sessionFromHeadless(session HeadlessSession) Session {
-	return Session{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID}
-}
-
 // validateHeadlessStartRequest validates the coordinator-owned launch fields.
 // The harness name only labels a refusal; every adapter enforces the same
 // neutral contract.
@@ -638,5 +552,3 @@ func containsAny(value string, markers ...string) bool {
 	}
 	return false
 }
-
-var _ Runtime = (*headlessRuntimeAdapter)(nil)

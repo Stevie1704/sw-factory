@@ -34,7 +34,7 @@ type ReviewRepairResult struct {
 	Budget int
 	// Remaining is the unused budget after a start decision.
 	Remaining int
-	// Invocation is populated when a visible implementation repair launched.
+	// Invocation is populated when an implementation repair invocation launched.
 	Invocation *store.Invocation
 }
 
@@ -48,7 +48,7 @@ const (
 	// reviewRepairDecisionEscalate preserves the blocker for human disposition.
 	reviewRepairDecisionEscalate reviewRepairDecisionKind = "escalate"
 	// reviewRepairDecisionWait preserves an unresolved reservation or disabled
-	// policy without attempting another visible edit.
+	// policy without attempting another implementation invocation.
 	reviewRepairDecisionWait reviewRepairDecisionKind = "wait"
 )
 
@@ -517,20 +517,19 @@ func (s *Service) routeReviewRepair(ctx context.Context, registration config.Rep
 		next.Status = store.StatusActive
 		next.LifecycleReason = fmt.Sprintf("blocking review findings routed to implementation repair attempt %d of %d", decision.Attempt, run.ReviewRepairBudget)
 		// Reserve the round without consuming it. The attempt count advances
-		// only when the visible implementation invocation actually launches,
+		// only when the implementation invocation actually launches,
 		// so an interrupted launch stays distinguishable from a used attempt.
 		next.ReviewRepairPendingAttempt = decision.Attempt
 		next.ReviewRepairPacket = packet
 		next.ReviewRepairHistory = reviewRepairHistoryWithOutcome(run.ReviewRepairHistory, decision.Attempt, store.ReviewRepairPending, packet)
 		next.PendingQuestions = nil
 		next.ClarificationCommentID = ""
-		next.ClarificationNotificationSent = false
 		next.UpdatedAt = s.deps.Now().UTC()
 		if _, ok := runStore.(InvocationStore); !ok {
 			next.ReviewRepairPendingAttempt = 0
 			next.Stage = store.StageReview
 			next.Status = store.StatusWaitingForHuman
-			next.LifecycleReason = "review repair requires a visible implementation invocation"
+			next.LifecycleReason = "review repair requires an implementation invocation"
 			next.ReviewRepairHistory = reviewRepairHistoryWithOutcome(next.ReviewRepairHistory, decision.Attempt, store.ReviewRepairWaitingForHuman, packet)
 			next.UpdatedAt = s.deps.Now().UTC()
 			if err := s.persistAgentRunState(ctx, registration, runStore, run, next); err != nil {

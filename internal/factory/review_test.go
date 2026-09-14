@@ -109,8 +109,8 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if fixture.pullRequests.existing.Draft {
 		t.Fatal("ready pull request remained draft")
 	}
-	if !fixture.runStore.current.ReadyNotificationSent || len(fixture.runStore.current.ActiveInvocationIDs) != 0 {
-		t.Fatalf("ready projection = %#v, want durable notification and no active invocation", fixture.runStore.current)
+	if len(fixture.runStore.current.ActiveInvocationIDs) != 0 {
+		t.Fatalf("ready projection = %#v, want no active invocation", fixture.runStore.current)
 	}
 	if len(fixture.statuses.values) != 2 || fixture.statuses.values[1].State != github.CommitStatusSuccess {
 		t.Fatalf("review statuses after acceptance = %#v, want pending then success", fixture.statuses.values)

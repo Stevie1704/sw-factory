@@ -470,7 +470,7 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 }
 
 // TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation verifies
-// the coordinator does not checkpoint while the visible agent still owns the
+// the coordinator does not checkpoint while the harness invocation still owns the
 // implementation stage.
 func TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation(t *testing.T) {
 	t.Parallel()
@@ -518,7 +518,7 @@ type activeInvocationRunStore struct {
 	active *store.Invocation
 }
 
-// ActiveInvocation returns the configured active visible implementation.
+// ActiveInvocation returns the configured active implementation invocation.
 func (s *activeInvocationRunStore) ActiveInvocation(context.Context, string) (*store.Invocation, error) {
 	return s.active, nil
 }

@@ -21,39 +21,11 @@ const (
 	maxPromptBytes = 96 << 10
 )
 
-// StartRequest contains coordinator-owned identity, prompt, and policy for one
-// detached harness invocation.
-type StartRequest struct {
-	// InvocationID is the factory-assigned identity for this attempt.
-	InvocationID string
-	// RunID binds the invocation to its durable workflow run.
-	RunID string
-	// WorkerID selects the isolated worker process boundary.
-	WorkerID string
-	// Role and Stage are the factory-owned workflow selection.
-	Role  string
-	Stage string
-	// CheckpointSHA is the immutable Git state supplied to the role.
-	CheckpointSHA string
-	// Prompt is the bounded factory-owned instruction envelope.
-	Prompt string
-	// Model and ReasoningEffort are validated repository policy selections.
-	Model           string
-	ReasoningEffort string
-	// ResumeSessionID requests an exact native continuation when nonempty.
-	ResumeSessionID string
-}
+// StartRequest is the canonical request for a detached harness invocation.
+type StartRequest = HeadlessStartRequest
 
-// Session is the durable identity returned by a detached harness process.
-type Session struct {
-	// InvocationID and RunID echo the coordinator identities.
-	InvocationID string
-	RunID        string
-	// WorkerID identifies the detached worker process boundary.
-	WorkerID string
-	// NativeSessionID is the harness-owned continuation identity.
-	NativeSessionID string
-}
+// Session is the canonical durable identity of a detached harness process.
+type Session = HeadlessSession
 
 // Capabilities describes one supported harness adapter.
 type Capabilities struct {
@@ -99,12 +71,12 @@ type HeadlessFailureInspector interface {
 type Runtime interface {
 	// Capabilities identifies the adapter and supported lifecycle operations.
 	Capabilities() Capabilities
-	// Start launches one new native harness session.
-	Start(context.Context, StartRequest) (Session, error)
-	// Resume continues exactly the supplied native session.
-	Resume(context.Context, StartRequest) (Session, error)
-	// Finish releases adapter-owned state after report acceptance.
-	Finish(context.Context, Session) error
+	// StartHeadless launches one new native harness session.
+	StartHeadless(context.Context, StartRequest) (Session, error)
+	// ResumeHeadless continues exactly the supplied native session.
+	ResumeHeadless(context.Context, StartRequest) (Session, error)
+	// FinishHeadless releases adapter-owned state after report acceptance.
+	FinishHeadless(context.Context, Session) error
 }
 
 // NewHeadlessAdapters creates every supported headless adapter.
@@ -125,7 +97,7 @@ func New(name string, processRuntime worker.HeadlessProcessRuntime) (Runtime, er
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownHarness, name)
 	}
-	return AdaptHeadlessRuntime(adapter), nil
+	return adapter, nil
 }
 
 // invocationEnvironment builds the explicit non-secret invocation identity.

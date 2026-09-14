@@ -891,7 +891,7 @@ func (s *Service) recoverHeadlessNativeSessionIdentities(ctx context.Context, re
 			continue
 		}
 		harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(config.Harness(active.Harness))
-		if runtimeErr != nil || !coordinatorUsesHeadless(harnessRuntime) {
+		if runtimeErr != nil {
 			continue
 		}
 		inspector, inspectable := harnessRuntime.(harness.NativeSessionInspector)
@@ -1202,7 +1202,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 						if credentialErr := s.lifecycleModule().restoreCredentialProjection(ctx, registration, run, repairedInvocation); credentialErr != nil {
 							return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
 						}
-						paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
+						paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
 						if pauseErr != nil {
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, pauseErr
 						}
@@ -1231,7 +1231,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, classified
 						}
 						if harness.IsUnexpectedExit(classified) {
-							paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, classified)
+							paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
 							if pauseErr != nil {
 								return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
 							}

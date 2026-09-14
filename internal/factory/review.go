@@ -515,7 +515,6 @@ func applyReviewResultProjection(run *store.Run, role string, value report.Repor
 	run.Stage = store.StageReview
 	run.PendingQuestions = reviewQuestionsForRun(*run)
 	run.ClarificationCommentID = ""
-	run.ClarificationNotificationSent = false
 	return nil
 }
 

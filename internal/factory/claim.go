@@ -525,7 +525,7 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 }
 
 // ensureAgentStartup permits only clean claim/test or explicitly skipped-test
-// states to cross into their first visible invocation. A clean draft checkpoint
+// states to cross into their first harness invocation. A clean draft checkpoint
 // may also cross into its independent immutable review. Journaled interrupted
 // runs have already passed reconciliation before this seam is reached; legacy
 // stores retain the typed #24 refusal.

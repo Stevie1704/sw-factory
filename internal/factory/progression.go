@@ -663,9 +663,6 @@ func progressionAdvancedMany(previous store.Run, previousInvocations []*store.In
 	if previous.CheckpointSHA != next.CheckpointSHA || previous.PullRequestNumber != next.PullRequestNumber {
 		return true
 	}
-	if previous.ReadyNotificationSent != next.ReadyNotificationSent {
-		return true
-	}
 	if len(previousInvocations) != len(nextInvocations) {
 		return true
 	}

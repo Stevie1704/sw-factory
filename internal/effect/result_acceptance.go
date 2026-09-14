@@ -14,7 +14,7 @@ import (
 )
 
 // ResultAcceptance is the complete durable intent for accepting one validated
-// visible report. The caller resolves repository and worker identity before
+// structured report. The caller resolves repository and worker identity before
 // reserving the effect.
 type ResultAcceptance struct {
 	// Repository is the tracked GitHub repository.
@@ -109,7 +109,7 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 		if request.Harness == nil {
 			return errors.New("harness runtime is required to accept result")
 		}
-		if err := request.Harness.Finish(ctx, request.Session); err != nil {
+		if err := request.Harness.FinishHeadless(ctx, request.Session); err != nil {
 			// Fail-closed: return immediately without clearing the pending effect.
 			// Worker shutdown and workflow projection will not advance while native
 			// exit delivery remains unconfirmed. The pending effect remains until
@@ -204,7 +204,7 @@ func (h resultAcceptanceHandler) Replay(ctx context.Context, request replayReque
 		if runtimeErr != nil {
 			return store.Run{}, fmt.Errorf("ensure harness for result acceptance replay: %w", runtimeErr)
 		}
-		if err := harnessRuntime.Finish(ctx, payload.Session); err != nil {
+		if err := harnessRuntime.FinishHeadless(ctx, payload.Session); err != nil {
 			// Fail-closed: do not advance worker shutdown or workflow projection
 			// while native exit delivery remains unconfirmed. Retain the pending
 			// effect so a subsequent reconciliation can retry or require explicit

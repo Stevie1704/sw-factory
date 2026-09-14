@@ -891,8 +891,8 @@ detection takes precedence over a closed PR state.
 
 ## Structured agent reports
 
-<code>factory-report</code> is the only supported result boundary for a visible
-worker. The coordinator injects identity and result-path variables into the
+<code>factory-report</code> is the only supported result boundary for a harness
+invocation. The coordinator injects identity and result-path variables into the
 worker:
 
 ~~~text
@@ -1603,8 +1603,8 @@ internal/workflow            factory-owned roles, stages, and transitions
 The effect module's callable interface is fourteen `Journal` methods (thirteen
 typed apply operations plus `Replay`), its constructor, and four package
 functions used by compatibility and recovery paths. Including its input and
-store-seam types, it has twenty-nine caller-visible named declarations; a
-source-level contract test keeps that surface below the thirty coordinator
+store-seam types, it has thirty caller-visible named declarations; a
+source-level contract test ensures that interface does not exceed the thirty coordinator
 methods the module replaced.
 
 Run the standard local checks before submitting a change:

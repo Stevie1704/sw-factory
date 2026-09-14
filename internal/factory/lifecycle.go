@@ -149,7 +149,6 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run}, nil
 	}
 	next.LifecycleReason = decision.Reason
-	next.LifecycleNotificationSent = false
 	next.UpdatedAt = s.deps.Now().UTC()
 	updated, transitionErr := s.transitionTerminal(ctx, registration, runStore, *run, next, issue)
 	return LifecycleResult{Outcome: decision.Outcome, Run: updated, Reason: decision.Reason}, transitionErr
@@ -323,11 +322,4 @@ func (s *Service) allRolesHeadless(policy config.RepositoryConfig) bool {
 		}
 	}
 	return true
-}
-
-// notifyOperator is a no-op compatibility hook for paths whose durable
-// attention surface is GitHub. Local notification availability cannot affect
-// workflow progress.
-func (s *Service) notifyOperator(context.Context, config.RepositoryRegistration, string, string) error {
-	return nil
 }

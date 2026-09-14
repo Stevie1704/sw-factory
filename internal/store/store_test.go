@@ -72,6 +72,18 @@ func TestCurrentInvocationSchemaContainsNoTerminalProjection(t *testing.T) {
 			t.Fatalf("current invocations table still contains retired column %q", retired)
 		}
 	}
+	for _, retired := range []string{"lifecycle_notification_sent", "ready_notification_sent", "clarification_notification_sent"} {
+		if testOperationalRunsColumnExists(t, database, retired) {
+			t.Fatalf("current operational_runs table still contains retired column %q", retired)
+		}
+	}
+	var notificationTables int
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'lifecycle_notifications'`).Scan(&notificationTables); err != nil {
+		t.Fatalf("inspect lifecycle notification table: %v", err)
+	}
+	if notificationTables != 0 {
+		t.Fatal("current schema still contains retired lifecycle_notifications table")
+	}
 }
 
 // TestSchema36MigrationPreservesHeadlessInvocationState verifies the table
@@ -655,16 +667,15 @@ func TestRunTerminalProjectionSurvivesStoreReopen(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	run := store.Run{
-		ID:                        "run-terminal",
-		RepositoryPath:            "/work/repository",
-		IssueNumber:               42,
-		Stage:                     store.StageReady,
-		Status:                    store.StatusComplete,
-		PullRequestNumber:         17,
-		PullRequestURL:            "https://github.com/example/project/pull/17",
-		MergeCommitSHA:            "0123456789abcdef0123456789abcdef0123456789",
-		LifecycleReason:           "pull request #17 merged",
-		LifecycleNotificationSent: true,
+		ID:                "run-terminal",
+		RepositoryPath:    "/work/repository",
+		IssueNumber:       42,
+		Stage:             store.StageReady,
+		Status:            store.StatusComplete,
+		PullRequestNumber: 17,
+		PullRequestURL:    "https://github.com/example/project/pull/17",
+		MergeCommitSHA:    "0123456789abcdef0123456789abcdef0123456789",
+		LifecycleReason:   "pull request #17 merged",
 	}
 	if err := opened.SaveRun(context.Background(), run); err != nil {
 		_ = opened.Close()
@@ -683,7 +694,7 @@ func TestRunTerminalProjectionSurvivesStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestRun() error = %v", err)
 	}
-	if latest == nil || latest.MergeCommitSHA != run.MergeCommitSHA || latest.LifecycleReason != run.LifecycleReason || !latest.LifecycleNotificationSent {
+	if latest == nil || latest.MergeCommitSHA != run.MergeCommitSHA || latest.LifecycleReason != run.LifecycleReason {
 		t.Fatalf("LatestRun() = %#v, want terminal lifecycle projection", latest)
 	}
 }
@@ -1381,23 +1392,22 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	wanted := store.Run{
-		ID:                            "run-claim",
-		RepositoryPath:                "/work/repository",
-		IssueNumber:                   42,
-		Stage:                         store.StageClaim,
-		Status:                        store.StatusActive,
-		Branch:                        "factory/run-claim",
-		Worktree:                      "/worktrees/run-claim",
-		CheckpointSHA:                 "0123456789abcdef",
-		ImageDigest:                   "sha256:worker",
-		Coordinator:                   "host-a",
-		StatusCommentID:               "12345",
-		SpecificationPacket:           `{"version":1,"issue":{"number":42}}`,
-		PendingQuestions:              []store.PendingQuestion{{ID: "clarification-1", Prompt: "Which behavior is intended?"}},
-		ClarificationCommentID:        "67890",
-		ClarificationNotificationSent: true,
-		CreatedAt:                     time.Unix(100, 0).UTC(),
-		UpdatedAt:                     time.Unix(200, 0).UTC(),
+		ID:                     "run-claim",
+		RepositoryPath:         "/work/repository",
+		IssueNumber:            42,
+		Stage:                  store.StageClaim,
+		Status:                 store.StatusActive,
+		Branch:                 "factory/run-claim",
+		Worktree:               "/worktrees/run-claim",
+		CheckpointSHA:          "0123456789abcdef",
+		ImageDigest:            "sha256:worker",
+		Coordinator:            "host-a",
+		StatusCommentID:        "12345",
+		SpecificationPacket:    `{"version":1,"issue":{"number":42}}`,
+		PendingQuestions:       []store.PendingQuestion{{ID: "clarification-1", Prompt: "Which behavior is intended?"}},
+		ClarificationCommentID: "67890",
+		CreatedAt:              time.Unix(100, 0).UTC(),
+		UpdatedAt:              time.Unix(200, 0).UTC(),
 	}
 	if err := opened.SaveRun(context.Background(), wanted); err != nil {
 		_ = opened.Close()
@@ -1419,7 +1429,7 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 	if got == nil {
 		t.Fatal("CurrentRun() = nil, want persisted run")
 	}
-	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket || len(got.PendingQuestions) != 1 || got.ClarificationCommentID != wanted.ClarificationCommentID || !got.ClarificationNotificationSent {
+	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket || len(got.PendingQuestions) != 1 || got.ClarificationCommentID != wanted.ClarificationCommentID {
 		t.Fatalf("persisted claim metadata = %#v, want coordinator/comment/packet/clarification state from %#v", got, wanted)
 	}
 }

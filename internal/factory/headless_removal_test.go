@@ -11,6 +11,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -114,6 +115,55 @@ func TestResetPreflightsGitBeforeDeletingHeadlessResources(t *testing.T) {
 	}
 	if len(fixture.worker.cleanups) != 0 || len(fixture.git.removed) != 0 {
 		t.Fatalf("destructive calls after failed preflight = worker %#v Git %#v", fixture.worker.cleanups, fixture.git.removed)
+	}
+	for _, path := range []string{fixture.configPath, fixture.databasePath, fixture.worktreePath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("failed reset removed %q: %v", path, err)
+		}
+	}
+}
+
+// TestResetRefusesALiveGitHubRunBeforeDeletingHeadlessResources verifies reset
+// cannot invent a terminal outcome for an open supervised run.
+func TestResetRefusesALiveGitHubRunBeforeDeletingHeadlessResources(t *testing.T) {
+	fixture := newHeadlessRemovalFixture(t, config.HarnessCodex)
+	opened, err := store.Open(t.Context(), fixture.databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := opened.LatestRun(t.Context())
+	if err != nil || run == nil {
+		t.Fatalf("LatestRun() = %#v, %v", run, err)
+	}
+	run.Status = store.StatusActive
+	run.Stage = store.StageImplementation
+	run.TerminalAt = time.Time{}
+	if err := opened.SaveRun(t.Context(), *run); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.service.Reset(t.Context(), factory.ResetRequest{Confirm: true})
+	var blocked *factory.ResetBlockedError
+	if !errors.As(err, &blocked) || len(blocked.Blockers) != 1 || blocked.Blockers[0].RunID != run.ID {
+		t.Fatalf("Reset(confirm) = %#v, %v; want live-run blocker", result, err)
+	}
+	if len(fixture.worker.cleanups) != 0 || len(fixture.git.removed) != 0 {
+		t.Fatalf("live-run refusal made destructive calls: worker %#v Git %#v", fixture.worker.cleanups, fixture.git.removed)
+	}
+}
+
+// TestResetRefusesAnUnavailableWorkerBeforeDeletingHeadlessResources verifies
+// adapter preflight retains every target when Docker cannot be reached.
+func TestResetRefusesAnUnavailableWorkerBeforeDeletingHeadlessResources(t *testing.T) {
+	fixture := newHeadlessRemovalFixture(t, config.HarnessClaude)
+	fixture.worker.dockerErr = errors.New("Docker unavailable")
+	if _, err := fixture.service.Reset(t.Context(), factory.ResetRequest{Confirm: true}); err == nil {
+		t.Fatal("Reset(confirm) error = nil, want worker preflight refusal")
+	}
+	if len(fixture.worker.cleanups) != 0 || len(fixture.git.removed) != 0 {
+		t.Fatalf("worker refusal made destructive calls: worker %#v Git %#v", fixture.worker.cleanups, fixture.git.removed)
 	}
 	for _, path := range []string{fixture.configPath, fixture.databasePath, fixture.worktreePath} {
 		if _, err := os.Stat(path); err != nil {
@@ -235,7 +285,9 @@ func newHeadlessRemovalFixture(t *testing.T, harnessName config.Harness) headles
 		OpenStoreReadOnly: func(ctx context.Context, path string) (factory.OperationalStore, error) {
 			return store.OpenReadOnly(ctx, path)
 		},
-		Worker: runtime, GitWorkspace: gitRuntime, Now: func() time.Time { return time.Now().UTC() },
+		Worker: runtime, GitWorkspace: gitRuntime,
+		GitHub: &fakeGitHub{issueValue: github.Issue{Number: 165, State: "open"}},
+		Now:    func() time.Time { return time.Now().UTC() },
 	})
 	return headlessRemovalFixture{
 		service: service, worker: runtime, git: gitRuntime, configPath: configPath,
@@ -248,6 +300,7 @@ type headlessRemovalWorker struct {
 	cleanups    []worker.CleanupRequest
 	credentials []worker.RemoveCredentialStoreRequest
 	cleanupErr  error
+	dockerErr   error
 }
 
 // Start is unused by removal tests.
@@ -290,7 +343,7 @@ func (w *headlessRemovalWorker) RemoveCredentialStore(_ context.Context, request
 }
 
 // CheckDocker reports the injected worker adapter ready for reset.
-func (*headlessRemovalWorker) CheckDocker(context.Context) error { return nil }
+func (w *headlessRemovalWorker) CheckDocker(context.Context) error { return w.dockerErr }
 
 // headlessRemovalGit records and performs exact temporary worktree removal.
 type headlessRemovalGit struct {

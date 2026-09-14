@@ -127,7 +127,7 @@ func testStageHumanExemption(packet SpecificationPacket) (*store.TestExemption, 
 	return &store.TestExemption{Kind: "human", Justification: justification}, true
 }
 
-// testStageShouldRun reports whether the frozen packet requires a visible test
+// testStageShouldRun reports whether the frozen packet requires a test
 // role before implementation.
 func testStageShouldRun(packet SpecificationPacket) bool {
 	if !independentTestStageDeclared(packet) {
@@ -504,7 +504,6 @@ func projectImplementationTestObjection(previous store.Run, value report.Report,
 	next.RoleHandoff = roleHandoffFromReport(*value.Handoff)
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
 	clearActiveInvocations(&next)
 	next.TestStageSkipped = false
 	if !automated {
@@ -565,9 +564,6 @@ func (s *Service) finishImplementationTestObjection(ctx context.Context, registr
 		}
 	}
 	if run.Status == store.StatusWaitingForHuman {
-		if err := s.notifyOperator(ctx, registration, "factory test objection waiting", run.LifecycleReason); err != nil {
-			return AgentResult{}, err
-		}
 		return AgentResult{Invocation: *invocation, Report: value}, nil
 	}
 	if run.Status != store.StatusActive || run.Stage != store.StageTest {
@@ -834,7 +830,7 @@ func protectedTestPathsForCheckpoint(worktree string, paths []string) ([]store.P
 func (s *Service) acceptTestStageReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report, state gitadapter.WorktreeState) (AgentResult, error) {
 	_, ok := runStore.(InvocationStore)
 	if !ok {
-		return AgentResult{}, errors.New("operational store does not support visible invocations")
+		return AgentResult{}, errors.New("operational store does not support harness invocations")
 	}
 	if run.TestObjection != nil {
 		return s.acceptTestRevisionReport(ctx, registration, runStore, run, invocation, value, state)
@@ -851,7 +847,6 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 		run.Stage = store.StageTest
 		run.PendingQuestions = pendingQuestionsFromReport(value.Questions)
 		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
 		run.LifecycleReason = "test agent requested clarification"
 		run.UpdatedAt = s.deps.Now().UTC()
 		if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
@@ -1017,7 +1012,6 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 		run.Stage = store.StageTest
 		run.PendingQuestions = pendingQuestionsFromReport(value.Questions)
 		run.ClarificationCommentID = ""
-		run.ClarificationNotificationSent = false
 		run.LifecycleReason = "test role requested clarification during objection revision"
 		run.Revision = previous.Revision + 1
 		run.UpdatedAt = s.deps.Now().UTC()
@@ -1148,7 +1142,6 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 	next.Status = transition.Status
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
 	next.LifecycleReason = fmt.Sprintf("test objection accepted; revised protected handoff ready for implementation (revision %d/%d)", next.TestRevisionAttempts, next.TestRevisionBudget)
 	next.Revision = previous.Revision + 1
 	next.UpdatedAt = s.deps.Now().UTC()
@@ -1207,9 +1200,6 @@ func (s *Service) pauseTestRevisionForHuman(ctx context.Context, registration co
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist test objection human pause: %w", err)
 	}
-	if err := s.notifyOperator(ctx, registration, "factory test objection waiting", run.ID+" is waiting for human test-objection disposition"); err != nil {
-		return AgentResult{}, err
-	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
 }
 
@@ -1225,7 +1215,7 @@ func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, regis
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test revision: %w", err)
 		}
-		if err := harnessRuntime.Finish(ctx, harness.Session{
+		if err := harnessRuntime.FinishHeadless(ctx, harness.Session{
 			InvocationID:    invocation.ID,
 			RunID:           invocation.RunID,
 			WorkerID:        workerIDForInvocation(*invocation),
@@ -1251,7 +1241,7 @@ func (s *Service) pauseUnverifiableTestRevisionReport(ctx context.Context, regis
 	return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "test objection revision report is unverifiable")
 }
 
-// pauseUnverifiableTestReport stops the visible test execution before placing
+// pauseUnverifiableTestReport stops the test invocation before placing
 // a structurally invalid completed test report in human disposition.
 func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
 	if err := s.lifecycleModule().stopRunWorker(ctx, run.ID); err != nil {
@@ -1262,7 +1252,7 @@ func (s *Service) pauseUnverifiableTestReport(ctx context.Context, registration 
 		if err != nil {
 			return AgentResult{}, fmt.Errorf("ensure agent runtime for unverifiable test report: %w", err)
 		}
-		if err := harnessRuntime.Finish(ctx, harness.Session{
+		if err := harnessRuntime.FinishHeadless(ctx, harness.Session{
 			InvocationID:    invocation.ID,
 			RunID:           invocation.RunID,
 			WorkerID:        workerIDForInvocation(*invocation),
@@ -1297,9 +1287,6 @@ func (s *Service) pauseTestForHuman(ctx context.Context, registration config.Rep
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, previous, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("persist test dispute state: %w", err)
-	}
-	if err := s.notifyOperator(ctx, registration, "factory test stage waiting", run.ID+" is waiting for human test-stage disposition"); err != nil {
-		return AgentResult{}, err
 	}
 	return AgentResult{Invocation: *invocation, Report: value}, nil
 }

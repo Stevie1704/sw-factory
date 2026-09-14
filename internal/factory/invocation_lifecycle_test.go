@@ -28,8 +28,8 @@ func TestGatherLaunchPerformsNoMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gatherLaunch() error = %v", err)
 	}
-	if storeValue.saveRuns != 0 || storeValue.saveInvocations != 0 || storeValue.saveGates != 0 || storeValue.claimNotifications != 0 {
-		t.Fatalf("gather mutations = runs:%d invocations:%d gates:%d notifications:%d, want none", storeValue.saveRuns, storeValue.saveInvocations, storeValue.saveGates, storeValue.claimNotifications)
+	if storeValue.saveRuns != 0 || storeValue.saveInvocations != 0 || storeValue.saveGates != 0 {
+		t.Fatalf("gather mutations = runs:%d invocations:%d gates:%d, want none", storeValue.saveRuns, storeValue.saveInvocations, storeValue.saveGates)
 	}
 	if storeValue.gateResultReads != 1 {
 		t.Fatalf("baseline gate reads = %d, want one read", storeValue.gateResultReads)
@@ -68,8 +68,8 @@ func TestGatherReviewLaunchReadsGatesAndWorktreeWithoutMutation(t *testing.T) {
 	if worktree.inspectCalls != 1 || worktree.inspectedPath != "/worktree" {
 		t.Fatalf("worktree inspections = %d at %q, want one inspection at /worktree", worktree.inspectCalls, worktree.inspectedPath)
 	}
-	if storeValue.saveRuns != 0 || storeValue.saveInvocations != 0 || storeValue.saveGates != 0 || storeValue.claimNotifications != 0 {
-		t.Fatalf("review gather mutations = runs:%d invocations:%d gates:%d notifications:%d, want none", storeValue.saveRuns, storeValue.saveInvocations, storeValue.saveGates, storeValue.claimNotifications)
+	if storeValue.saveRuns != 0 || storeValue.saveInvocations != 0 || storeValue.saveGates != 0 {
+		t.Fatalf("review gather mutations = runs:%d invocations:%d gates:%d, want none", storeValue.saveRuns, storeValue.saveInvocations, storeValue.saveGates)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestPlanLaunchRejectsAnInactiveRunFromAGatheredSnapshot(t *testing.T) {
 		Run: store.Run{ID: "run-admission", Status: store.StatusWaitingForHuman},
 	}
 	_, err := PlanLaunch(snapshot, AgentRequest{Role: "implementation", Stage: store.StageImplementation})
-	if err == nil || !strings.Contains(err.Error(), `cannot start visible agent from run status "waiting_for_human"`) {
+	if err == nil || !strings.Contains(err.Error(), `cannot start harness invocation from run status "waiting_for_human"`) {
 		t.Fatalf("PlanLaunch() error = %v, want inactive-run rejection", err)
 	}
 }
@@ -145,8 +145,8 @@ func launchPlanningPacket() SpecificationPacket {
 // gatherReadOnlyStore is the smallest invocation/gate projection used to
 // prove that gather only invokes read seams.
 type gatherReadOnlyStore struct {
-	saveRuns, saveInvocations, saveGates, claimNotifications int
-	gateResultReads                                          int
+	saveRuns, saveInvocations, saveGates int
+	gateResultReads                      int
 }
 
 // gatherReadOnlyWorktree records read-only review worktree observations.
@@ -172,18 +172,6 @@ func (*gatherReadOnlyStore) Close() error { return nil }
 // SaveRun records an attempted run mutation for the gather assertion.
 func (s *gatherReadOnlyStore) SaveRun(context.Context, store.Run) error {
 	s.saveRuns++
-	return nil
-}
-
-// ClaimLifecycleNotification records an attempted notification mutation for
-// the gather assertion.
-func (s *gatherReadOnlyStore) ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error) {
-	s.claimNotifications++
-	return true, nil
-}
-
-// ReleaseLifecycleNotification leaves the read-only store double unchanged.
-func (*gatherReadOnlyStore) ReleaseLifecycleNotification(context.Context, string, store.Status) error {
 	return nil
 }
 

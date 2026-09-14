@@ -129,13 +129,11 @@ func humanRepairProjection(run store.Run, event store.ReviewRepairSourceEvent, i
 	next.SpecificationReview = nil
 	next.StandardsReview = nil
 	next.ReviewRepairPendingAttempt = 0
-	next.ReadyNotificationSent = false
 	// An outstanding reviewer question was asked about the superseded
 	// checkpoint, and the maintainer has now given direction for it. Clearing
 	// it matches how a factory repair round supersedes the same question.
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
 	// Both surfaces admit a repair only after the invocation history reports no
 	// active session, so the denormalized activity list is stale by definition
 	// and must not follow the run into implementation.

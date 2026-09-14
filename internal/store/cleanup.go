@@ -40,8 +40,6 @@ type CleanupDeletionResult struct {
 	GateResults int
 	// PendingEffects counts deleted resolved-effect reservations.
 	PendingEffects int
-	// LifecycleNotifications counts deleted retired notification-marker rows.
-	LifecycleNotifications int
 }
 
 // CleanupTransaction reserves one terminal run for external artifact cleanup
@@ -204,9 +202,6 @@ func (t *cleanupTransaction) Delete(ctx context.Context) (CleanupDeletionResult,
 	if result.PendingEffects, err = deleteCleanupRows(ctx, t.tx, "pending_effects", t.runID); err != nil {
 		return result, fmt.Errorf("delete pending effects for run %q: %w", t.runID, err)
 	}
-	if result.LifecycleNotifications, err = deleteCleanupRows(ctx, t.tx, "lifecycle_notifications", t.runID); err != nil {
-		return result, fmt.Errorf("delete lifecycle notifications for run %q: %w", t.runID, err)
-	}
 	if result.GateResults, err = deleteCleanupRows(ctx, t.tx, "gate_results", t.runID); err != nil {
 		return result, fmt.Errorf("delete gate results for run %q: %w", t.runID, err)
 	}
@@ -242,14 +237,14 @@ func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
 		       active_invocation_ids,
 		       image_digest, coordinator, status_comment_id,
 		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason, lifecycle_notification_sent, ready_notification_sent,
+		       lifecycle_reason,
 		       revision, processed_comment_id, processed_comment_revision,
 		       processed_review_id, processed_review_revision,
 		       last_command_name, last_command_outcome, last_command_message,
 		       harness_override, check_repair_attempts, check_repair_budget,
 		       check_repair_pending_attempt,
 		       specification_packet, pending_questions, clarification_comment_id,
-		       clarification_notification_sent, terminal_at, created_at, updated_at
+		       terminal_at, created_at, updated_at
 		FROM operational_runs
 		WHERE id = ?`, runID)
 	return scanRun(row)

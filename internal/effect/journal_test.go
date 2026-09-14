@@ -303,18 +303,20 @@ func (journalHarnessForTest) Capabilities() harness.Capabilities {
 	return harness.Capabilities{Name: "codex"}
 }
 
-// Start returns the injected external failure.
-func (journalHarnessForTest) Start(context.Context, harness.StartRequest) (harness.Session, error) {
+// StartHeadless returns the injected external failure.
+func (journalHarnessForTest) StartHeadless(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, errExternal
 }
 
-// Resume returns the injected external failure.
-func (journalHarnessForTest) Resume(context.Context, harness.StartRequest) (harness.Session, error) {
+// ResumeHeadless returns the injected external failure.
+func (journalHarnessForTest) ResumeHeadless(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, errExternal
 }
 
-// Finish returns the injected external failure.
-func (journalHarnessForTest) Finish(context.Context, harness.Session) error { return errExternal }
+// FinishHeadless returns the injected external failure.
+func (journalHarnessForTest) FinishHeadless(context.Context, harness.Session) error {
+	return errExternal
+}
 
 // countingResumeHarness records native resume calls and returns the persisted
 // native identity, modelling an idempotency boundary outside the coordinator.
@@ -325,19 +327,19 @@ func (*countingResumeHarness) Capabilities() harness.Capabilities {
 	return harness.Capabilities{Name: "codex", Headless: true, NativeResume: true}
 }
 
-// Start is unused by resume-effect tests.
-func (*countingResumeHarness) Start(context.Context, harness.StartRequest) (harness.Session, error) {
+// StartHeadless is unused by resume-effect tests.
+func (*countingResumeHarness) StartHeadless(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, errors.New("unexpected start")
 }
 
-// Resume records exactly one native continuation.
-func (h *countingResumeHarness) Resume(_ context.Context, request harness.StartRequest) (harness.Session, error) {
+// ResumeHeadless records exactly one native continuation.
+func (h *countingResumeHarness) ResumeHeadless(_ context.Context, request harness.StartRequest) (harness.Session, error) {
 	h.resumes++
 	return harness.Session{InvocationID: request.InvocationID, RunID: request.RunID, NativeSessionID: request.ResumeSessionID}, nil
 }
 
-// Finish is unused by resume-effect tests.
-func (*countingResumeHarness) Finish(context.Context, harness.Session) error { return nil }
+// FinishHeadless is unused by resume-effect tests.
+func (*countingResumeHarness) FinishHeadless(context.Context, harness.Session) error { return nil }
 
 // responseLossHarness records finalization before losing the first response.
 type responseLossHarness struct {
@@ -350,18 +352,18 @@ func (*responseLossHarness) Capabilities() harness.Capabilities {
 	return harness.Capabilities{Name: "codex", Headless: true, NativeResume: true}
 }
 
-// Start is unused by result-acceptance tests.
-func (*responseLossHarness) Start(context.Context, harness.StartRequest) (harness.Session, error) {
+// StartHeadless is unused by result-acceptance tests.
+func (*responseLossHarness) StartHeadless(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, errors.New("unexpected start")
 }
 
-// Resume is unused by result-acceptance tests.
-func (*responseLossHarness) Resume(context.Context, harness.StartRequest) (harness.Session, error) {
+// ResumeHeadless is unused by result-acceptance tests.
+func (*responseLossHarness) ResumeHeadless(context.Context, harness.StartRequest) (harness.Session, error) {
 	return harness.Session{}, errors.New("unexpected resume")
 }
 
-// Finish records the native mutation and can lose its first response.
-func (h *responseLossHarness) Finish(context.Context, harness.Session) error {
+// FinishHeadless records the native mutation and can lose its first response.
+func (h *responseLossHarness) FinishHeadless(context.Context, harness.Session) error {
 	h.finishes++
 	if h.failOnce {
 		h.failOnce = false
@@ -632,14 +634,14 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 			name: "harness resume", kind: store.PendingEffectKindHarnessResume,
 			identity: invocation.ID + "\x00" + fmt.Sprint(invocation.RecoveryResumeCount+1),
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_, _ = journal.ResumeHarness(ctx, runStore, runStore, journalHarnessForTest{}, invocation, resumeRequest)
+				_, _ = journal.ResumeHarness(ctx, runStore, runStore, effect.HarnessResume{Runtime: journalHarnessForTest{}, Invocation: invocation, Request: resumeRequest})
 			},
 		},
 		{
 			name: "manual harness resume", kind: store.PendingEffectKindHarnessResume,
 			identity: invocation.ID + "\x00manual\x00" + fmt.Sprint(invocation.ManualResumeCount+1),
 			reserve: func(journal *effect.Journal, runStore *journalStoreForTest) {
-				_, _ = journal.ResumeHarnessManually(ctx, runStore, runStore, journalHarnessForTest{}, invocation, resumeRequest)
+				_, _ = journal.ResumeHarnessManually(ctx, runStore, runStore, effect.HarnessResume{Runtime: journalHarnessForTest{}, Invocation: invocation, Request: resumeRequest})
 			},
 		},
 		{
@@ -700,7 +702,7 @@ func TestManualHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
 		ResumeSessionID: invocation.NativeSessionID,
 	}
 
-	if _, err := journal.ResumeHarnessManually(ctx, runStore, runStore, runtime, invocation, request); err == nil {
+	if _, err := journal.ResumeHarnessManually(ctx, runStore, runStore, effect.HarnessResume{Runtime: runtime, Invocation: invocation, Request: request}); err == nil {
 		t.Fatal("ResumeHarnessManually() error = nil, want injected post-resume persistence loss")
 	}
 	if runtime.resumes != 1 || runStore.invocation.ManualResumeCount != 1 {
@@ -745,7 +747,7 @@ func TestAutomaticHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
 		ResumeSessionID: invocation.NativeSessionID,
 	}
 
-	if _, err := journal.ResumeHarness(ctx, runStore, runStore, runtime, invocation, request); err == nil {
+	if _, err := journal.ResumeHarness(ctx, runStore, runStore, effect.HarnessResume{Runtime: runtime, Invocation: invocation, Request: request}); err == nil {
 		t.Fatal("ResumeHarness() error = nil, want injected post-resume persistence loss")
 	}
 	if runtime.resumes != 1 || runStore.invocation.RecoveryResumeCount != 1 {
