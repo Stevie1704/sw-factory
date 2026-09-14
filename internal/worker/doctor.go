@@ -81,7 +81,7 @@ func StartupChecks(checker DoctorChecker, image ImageReference) []doctor.Check {
 				return doctor.Failure("docker daemon", "the Docker diagnosis adapter is unavailable", "configure the Docker worker runtime")
 			}
 			if err := checker.CheckDocker(ctx); err != nil {
-				return DiagnoseFailure("docker daemon", err, "the coordinator cannot reach a usable Docker daemon", "start Docker and verify the coordinator account can access it")
+				return ProbeFailure("docker daemon", err, "the coordinator cannot reach a usable Docker daemon", "start Docker and verify the coordinator account can access it")
 			}
 			return doctor.Success("docker daemon")
 		},
@@ -90,23 +90,23 @@ func StartupChecks(checker DoctorChecker, image ImageReference) []doctor.Check {
 				return doctor.Failure("worker image", "the Docker diagnosis adapter is unavailable", "configure the Docker worker runtime")
 			}
 			if err := checker.CheckImage(ctx, image); err != nil {
-				return DiagnoseFailure("worker image", err, "the configured worker image@sha256 digest is not available locally", "build or load the configured worker image at the exact digest; doctor never pulls images")
+				return ProbeFailure("worker image", err, "the configured worker image@sha256 digest is not available locally", "build or load the configured worker image at the exact digest; doctor never pulls images")
 			}
 			return doctor.Success("worker image")
 		},
 	}
 }
 
-// outputLimitAction is the operator action for a capture-limit overflow. The
-// factory refuses a result it cannot buffer completely rather than diagnosing
-// a truncated one.
+// outputLimitAction is the operator action for a capture-limit overflow. A
+// probe that writes past the limit produces no partial result, so the only
+// correction is to make the probe write less.
 const outputLimitAction = "reduce the output of the probed worker operation; the factory refuses a result it cannot buffer completely"
 
-// DiagnoseFailure renders one worker-probe failure as an operator diagnosis.
-// A capture-limit overflow reports the overflow itself, because the check's
-// own problem statement would name a verdict the probe never reached. Every
-// other failure keeps the check's fixed problem and action.
-func DiagnoseFailure(name string, err error, problem, action string) doctor.Result {
+// ProbeFailure renders one worker-probe failure as an operator diagnosis. A
+// capture-limit overflow reports the overflow itself, because the check's own
+// problem statement would name a verdict the probe never reached. Every other
+// failure keeps the check's fixed problem and action.
+func ProbeFailure(name string, err error, problem, action string) doctor.Result {
 	var limitErr *OutputLimitExceededError
 	if errors.As(err, &limitErr) {
 		return doctor.Failure(name, limitErr.Error(), outputLimitAction)

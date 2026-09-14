@@ -160,7 +160,7 @@ func nativeResumeCheck(request StartupRequest) doctor.Check {
 		}
 		if request.AllRolesHeadless && request.HeadlessChecker != nil {
 			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {
-				return worker.DiagnoseFailure("harness capability", err, "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
+				return worker.ProbeFailure("harness capability", err, "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
 			}
 		}
 		return doctor.Success("harness capability")
@@ -174,7 +174,7 @@ func executableCheck(checker worker.HarnessChecker, image worker.ImageReference,
 			return doctor.Failure(name+" worker executable", "the worker harness diagnosis adapter is unavailable", "configure the Docker worker runtime")
 		}
 		if err := checker.CheckHarness(ctx, worker.HarnessCheckRequest{Image: image, Name: name}); err != nil {
-			return worker.DiagnoseFailure(name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness")
+			return worker.ProbeFailure(name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness")
 		}
 		return doctor.Success(name + " worker executable")
 	}
@@ -200,7 +200,7 @@ func credentialCheck(name, path string, image worker.ImageReference, checker wor
 			return doctor.Failure(name+" authentication", "the worker authentication diagnosis adapter is unavailable", "configure the Docker worker runtime to verify the credential inside the pinned image")
 		}
 		if err := checker.CheckHarnessAuthentication(ctx, worker.HarnessAuthenticationCheckRequest{Image: image, Name: name, AuthPath: path}); err != nil {
-			return worker.DiagnoseFailure(name+" authentication", err, "the configured credential is not usable by the worker harness", "authenticate the "+name+" harness and provide a valid private credential source")
+			return worker.ProbeFailure(name+" authentication", err, "the configured credential is not usable by the worker harness", "authenticate the "+name+" harness and provide a valid private credential source")
 		}
 		return doctor.Success(name + " authentication")
 	}
@@ -221,7 +221,7 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		required := MandatorySkills()
 		contract, err := request.SkillChecker.CheckSkillContract(ctx, worker.SkillContractRequest{Image: request.Image, Harness: name, Skills: required})
 		if err != nil {
-			return worker.DiagnoseFailure(diagnosis, err, "the pinned worker image does not satisfy the role-mandated skill contract for "+name, "rebuild the worker image so each role-mandated skill appears once per discovery root and stays model-visible, and verify the configured image digest")
+			return worker.ProbeFailure(diagnosis, err, "the pinned worker image does not satisfy the role-mandated skill contract for "+name, "rebuild the worker image so each role-mandated skill appears once per discovery root and stays model-visible, and verify the configured image digest")
 		}
 		evidence, err := LoadSkillSmokeEvidence(request.SkillEvidencePath)
 		if err != nil {
