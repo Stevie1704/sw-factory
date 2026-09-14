@@ -13,7 +13,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
-// InvocationStore is the operational-store seam required by visible agent
+// InvocationStore is the operational-store seam required by harness invocation
 // launch and structured report acceptance.
 type InvocationStore interface {
 	RunStore
@@ -22,12 +22,12 @@ type InvocationStore interface {
 }
 
 // InvocationHistoryStore is the operational-store seam used to distinguish a
-// completed claim from a run that has ever attempted a visible invocation.
+// completed claim from a run that has ever attempted a harness invocation.
 type InvocationHistoryStore interface {
 	HasInvocation(context.Context, string) (bool, error)
 }
 
-// AgentRequest selects one coordinator-owned visible role invocation.
+// AgentRequest selects one coordinator-owned role invocation.
 type AgentRequest struct {
 	// RunID selects the active factory run. Empty selects the only active run.
 	RunID string
@@ -191,7 +191,7 @@ const (
 )
 
 // StartAgent prepares the frozen invocation packet, starts the pinned worker,
-// creates the visible run surfaces, and launches the selected factory role
+// creates the durable run projections, and launches the selected factory role
 // for testing, implementation, architecture, or immutable review work.
 func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result AgentLaunchResult, returnErr error) {
 	request = normalizeAgentRequest(request)
@@ -234,8 +234,8 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	})
 }
 
-// RunAgent launches the visible agent and accepts a report when one is already
-// present. Interactive callers normally use StartAgent and accept later.
+// RunAgent launches the harness invocation and accepts a report when one is already
+// present. Long-running callers normally use StartAgent and accept later.
 func (s *Service) RunAgent(ctx context.Context, request AgentRequest) (AgentResult, error) {
 	launch, err := s.StartAgent(ctx, request)
 	if err != nil {

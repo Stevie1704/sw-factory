@@ -177,13 +177,6 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	if request.IssueNumber != run.IssueNumber && request.IssueNumber != run.PullRequestNumber {
 		return CommandResult{Outcome: CommandRejected, Run: *run}, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("comment target #%d does not belong to run %q", request.IssueNumber, run.ID)}
 	}
-	if (run.Status == store.StatusComplete || run.Status == store.StatusCancelled) && !run.LifecycleNotificationSent {
-		updated, notificationErr := s.ensureTerminalNotification(ctx, registration, runStore, *run)
-		if notificationErr != nil {
-			return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: updated}, notificationErr
-		}
-		*run = updated
-	}
 	if githubIDAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
 	}
@@ -274,7 +267,6 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	resetTestProjectionForPacketChange(&next, packet)
 	next.PendingQuestions = removePendingQuestion(run.PendingQuestions, parsed.QuestionID)
 	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
 	next.UpdatedAt = s.deps.Now().UTC()
 	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
 	processedCommentID := next.ProcessedCommentID
@@ -428,7 +420,6 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	resetTestProjectionForPacketChange(&next, refreshedPacket)
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
 	markAcceptedCheckpointPacketRestart(&next, run, restartFromCheckpoint)
 	next.UpdatedAt = s.deps.Now().UTC()
 	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
@@ -535,9 +526,6 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 	resetRevisionProjection(&next, packet)
 	next.PendingQuestions = nil
 	next.ClarificationCommentID = ""
-	next.ClarificationNotificationSent = false
-	next.ReadyNotificationSent = false
-	next.LifecycleNotificationSent = false
 	next.LifecycleReason = fmt.Sprintf("authorized specification amendment v%d; implementation restarted at checkpoint", packet.Version)
 	next.UpdatedAt = s.deps.Now().UTC()
 	// The command watermark commits with the amendment and complete result
@@ -596,9 +584,6 @@ func resetRevisionProjection(run *store.Run, packet SpecificationPacket) {
 func (s *Service) resumeAfterRevision(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if _, ok := runStore.(InvocationStore); !ok {
 		return run, nil
-	}
-	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, run); err != nil {
-		return run, err
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
@@ -667,7 +652,7 @@ func (s *Service) supersedeFailedRevisionInvocation(ctx context.Context, runStor
 }
 
 // resumeAfterPacketChange launches the implementation role when the store has
-// the visible-invocation seam; reduced command-test stores still receive the
+// the harness-invocation seam; reduced command-test stores still receive the
 // durable packet/state projection and can resume through StartAgent later.
 func (s *Service) resumeAfterPacketChange(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if _, ok := runStore.(InvocationStore); !ok {
@@ -1101,7 +1086,6 @@ func (s *Service) handleCancelCommand(ctx context.Context, registration config.R
 	next.Status = store.StatusCancelled
 	next.LifecycleReason = "authorized cancel command"
 	next.MergeCommitSHA = ""
-	next.LifecycleNotificationSent = false
 	next.UpdatedAt = s.deps.Now().UTC()
 	updated, err := s.transitionTerminal(ctx, registration, runStore, run, next, issue)
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
@@ -1270,7 +1254,6 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 	next.Status = store.StatusActive
 	next.MergeCommitSHA = ""
 	next.LifecycleReason = ""
-	next.LifecycleNotificationSent = false
 	next.TerminalAt = time.Time{}
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
 		Repository:           repository,

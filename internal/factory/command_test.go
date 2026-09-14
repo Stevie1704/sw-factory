@@ -368,7 +368,7 @@ func commandRepositoryConfig() config.RepositoryConfig {
 
 // commandHost returns a single registered repository with one authorized user.
 func commandHost() config.HostConfig {
-	return config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{Path: "/repo", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
+	return config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: "/repo", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
 }
 
 // newCommandService builds a service at the public command seam.
@@ -390,7 +390,6 @@ func newCommandServiceWithStoreAndWorktree(runStore factory.OperationalStore, gi
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		GitHub:    githubAdapter,
 		Comments:  comments,
-		Terminal:  &lifecycleTerminal{},
 		// A command test must never reach the real worker runtime: terminal
 		// lifecycle handling stops the run-scoped worker, and the default
 		// runtime would shell out to Docker on the developer's machine.
@@ -422,8 +421,6 @@ type commandRunStore struct {
 	closeCount int
 	// saveErrors allows tests to inject save failures.
 	saveErrors []error
-	// lifecycleClaims tracks claimed notification deliveries.
-	lifecycleClaims map[string]map[store.Status]bool
 	// allInvalidations records complete specification-amendment invalidations.
 	allInvalidations []string
 	// invalidations records downstream packet-change invalidations.
@@ -488,29 +485,6 @@ func (s *commandRunStore) InvalidateRunResults(_ context.Context, runID string) 
 // reduced command store, which has no separate invocation or gate tables.
 func (s *commandRunStore) InvalidateAllRunResults(_ context.Context, runID string) error {
 	s.allInvalidations = append(s.allInvalidations, runID)
-	return nil
-}
-
-// ClaimLifecycleNotification atomically claims notification delivery.
-func (s *commandRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
-	if s.lifecycleClaims == nil {
-		s.lifecycleClaims = make(map[string]map[store.Status]bool)
-	}
-	if s.lifecycleClaims[runID] == nil {
-		s.lifecycleClaims[runID] = make(map[store.Status]bool)
-	}
-	if s.lifecycleClaims[runID][terminalStatus] {
-		return false, nil
-	}
-	s.lifecycleClaims[runID][terminalStatus] = true
-	return true, nil
-}
-
-// ReleaseLifecycleNotification removes a notification claim.
-func (s *commandRunStore) ReleaseLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) error {
-	if s.lifecycleClaims != nil && s.lifecycleClaims[runID] != nil {
-		delete(s.lifecycleClaims[runID], terminalStatus)
-	}
 	return nil
 }
 
@@ -705,7 +679,7 @@ func claimStageCommandRun(t *testing.T, status store.Status) store.Run {
 	return run
 }
 
-// commandInvocationRunStore adds the visible-invocation seam to the command
+// commandInvocationRunStore adds the harness-invocation seam to the command
 // fixture so packet-change resumption takes its agent-launching path.
 type commandInvocationRunStore struct {
 	*commandRunStore
@@ -1033,7 +1007,7 @@ type repairRunStore struct {
 	active []store.Invocation
 }
 
-// ActiveInvocations returns the run's active visible invocations.
+// ActiveInvocations returns the run's active harness invocations.
 func (s *repairRunStore) ActiveInvocations(context.Context, string) ([]store.Invocation, error) {
 	return append([]store.Invocation(nil), s.active...), nil
 }

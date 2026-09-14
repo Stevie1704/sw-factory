@@ -27,9 +27,7 @@ factory doctor --config /Users/me/.config/factory/config.yaml
 The doctor reports configuration, GitHub authentication and permissions, the
 factory labels, the checkout's remote/hooks/worktree support, Docker, the
 pinned worker image, both supported harness executables, harness capabilities,
-the headless worker helper, harness authentication sources, and SQLite. A
-repository that selects a harness without a headless adapter, or that injects a
-legacy interactive adapter, also requires cmux. It runs every
+the headless worker helper, harness authentication sources, and SQLite. It runs every
 contributor even after a failure and returns a nonzero exit status when any
 blocking prerequisite remains. Each failure includes a bounded problem and a
 corrective action; command output and credential contents are never rendered.
@@ -75,10 +73,12 @@ operation; they are not part of routine unattended progression.
 
 ## Host configuration
 
-The generated host file contains the repository path, GitHub identity, authorized maintainers, polling settings, cmux settings, the checked-in repository configuration path, and the operational-data path.
+The generated host file uses schema version 2 and contains the repository path,
+GitHub identity, authorized maintainers, polling settings, credential sources,
+the checked-in repository configuration path, and the operational-data path.
 
 ```yaml
-schema_version: 1
+schema_version: 2
 repositories:
   - path: /Users/me/src/project
     github:
@@ -89,9 +89,6 @@ repositories:
     polling:
       interval: 30s
       backoff: 5m
-    cmux:
-      socket_path: ''
-      control_workspace: factory-control
     authentication:
       codex_auth_path: /Users/me/.codex/auth.json
       claude_auth_path: /Users/me/.claude/.credentials.json
@@ -101,9 +98,10 @@ repositories:
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 
-`cmux.socket_path` is optional and is passed to the cmux adapter as its
-connection endpoint; the coordinator still keeps cmux identifiers behind the
-`TerminalRuntime` seam.
+Host schema version 1 is deliberately not migrated in place. Before installing
+this binary, finish or cancel every non-terminal run with the previous binary,
+stop the previous coordinator, and re-register. Repository configuration keeps
+its independent schema version 1 authority.
 
 `authentication.codex_auth_path` and `authentication.claude_auth_path` are both
 optional and each names one host-side harness credential file. The factory
@@ -239,8 +237,8 @@ another harness's option names.
 
 ## Factory-owned role, prompt, and stage registry
 
-Roles, invocation stages, prompt versions, default permitted paths, visible
-surface ownership, and report-outcome transitions are declared by the factory
+Roles, invocation stages, prompt versions, default permitted paths, active
+role ownership and report-outcome transitions are declared by the factory
 in `internal/workflow`. Repository configuration may select harness and model
 policy for a declared role, but `factory.yaml` cannot add or redefine
 `roles`, `stages`, `prompts`, or `transitions`. Such fields are rejected as
@@ -258,8 +256,7 @@ factory sections, `allowed_overrides`, or workflow behavior.
 The optional architecture role is launched explicitly with the
 factory-declared architecture stage. Its default permitted path is
 `docs/architecture`, and its prompt requires a concise design document plus a
-normal structured handoff. The role gets a fresh role-owned visible surface;
-it does not reuse the implementation surface. Its accepted completed handoff
+normal structured handoff. The role gets a fresh invocation and role home. Its accepted completed handoff
 returns the run to the implementation stage.
 
 An authorized maintainer selects a harness for a later invocation with one
@@ -502,7 +499,7 @@ without duplicating polling or replay logic.
 When an implementation report requests clarification, the coordinator pauses
 the run with `agent-needs-input`, renders pending question IDs and prompts in
 the editable status comment, posts the questions on the issue (or tracked pull
-request), and notifies cmux. The question comment carries a marker scoped to
+request). The question comment carries a marker scoped to
 the run and its specification packet version, so an interrupted publication
 repairs that round's comment while an answered round's questions remain
 readable. A command such as
@@ -530,23 +527,22 @@ The poll command also observes the tracked pull request and issue lifecycle.
 A merged pull request completes the run and records its merge commit; closing
 the issue or an unmerged pull request cancels it. Merge detection takes
 precedence over the pull request's closed state. Terminal transitions replace
-the factory state label, edit the existing status comment, notify cmux, stop
+the factory state label, edit the existing status comment, stop
 the worker without deleting retained state, and leave the branch and worktree
 available for cleanup or an explicit retry.
 
 After a claim, `factory agent` starts the selected role. Codex and Claude Code
 both run headlessly inside the pinned worker and print only logical invocation
-identities; a repository that injects a legacy interactive adapter retains
-workspace and surface handles. The role receives a read-only invocation packet and reports through `factory-report`; use
+and native session identities. The role receives a read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
-and accept the structured report. Terminal output is never treated as a stage
-result. The operational store schema is version 30 and persists invocation
-identity, opaque surface handles, prompt version, result directory, native
+and accept the structured report. Native output is never treated as a stage
+result. The operational store schema is version 36 and persists invocation
+identity, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state. It
 also persists the draft pull-request number and URL so a restarted command can
 update the existing pull request instead of creating another one. Terminal runs
-retain merge commit, lifecycle reason, and terminal notification-delivery
-metadata for status rendering and restart-safe cmux notification retries.
+retain merge commit and lifecycle reason for status rendering and restart-safe
+GitHub projection retries.
 
 ## Creating the draft pull request
 
@@ -587,8 +583,8 @@ Before starting, prepare a dedicated GitHub repository with a checked-in
 Docker with the configured worker image available, and the host Codex `auth.json`
 path registered in the host configuration. Codex and Claude Code repositories,
 including mixed per-role selections, use the headless worker path and do not
-require cmux. Build the local commands from this checkout
-(`factory`, `factory-report`, and `factory-worker-attach`) so the worker image
+require no terminal software. Build the local commands from this checkout
+(`factory`, `factory-report`, and `factory-worker-headless`) so the worker image
 can invoke the pinned report command; the headless worker helper is built into
 the image.
 
@@ -599,7 +595,7 @@ factory bootstrap-labels --config /Users/me/.config/factory/config.yaml
 factory issue --config /Users/me/.config/factory/config.yaml <issue-number>
 factory agent --config /Users/me/.config/factory/config.yaml --run-id <run-id>
 
-# In the visible implementation surface, make the requested small change and
+# In the detached implementation invocation, make the requested small change and
 # submit its structured report with factory-report.
 factory agent-report \
   --config /Users/me/.config/factory/config.yaml \
@@ -703,7 +699,7 @@ factory reset --config /Users/me/.config/factory/config.yaml
 factory reset --config /Users/me/.config/factory/config.yaml --confirm
 ```
 
-The preview is read-only: it performs no filesystem, Git, Docker, terminal,
+The preview is read-only: it performs no filesystem, Git, Docker,
 store, configuration, or GitHub mutation, and it prints the removable targets
 separately from the deliberately retained resources. It opens the operational
 store through the read-only entry point, so previewing an installation never
@@ -720,7 +716,7 @@ so this guards a hand-edited configuration rather than a supported mode.
 Before deleting anything, reset proves that no coordinator owns the registered
 checkout's lock and refuses while `factory start` is running, directing the
 operator to `factory stop`; it never signals the coordinator itself. It then
-validates every persisted run, invocation, workspace, output, worker, role, and
+validates every persisted run, invocation, output, worker, role, and
 credential-store identity, refusing malformed identities, unsafe paths,
 symlinks that could redirect removal, pending effects, ownership ambiguity, and
 known required-adapter unavailability.
@@ -734,11 +730,11 @@ the supervised cancellation instruction; GitHub transport or authorization
 failure also blocks reset while a non-terminal run exists. This step is
 essential: deleting the SQLite database first would strand a closed or merged
 run with `agent-running` on GitHub, because the coordinator loses the
-status-comment and run identities needed to project its terminal outcome.
+status-comment and run identities needed to project its final outcome.
 
 The lifecycle transition is committed to the operational store before the final
-deletion plan is built. The confirmed sequence then closes terminal workspaces;
-removes worker containers, role volumes, and factory-managed credential
+deletion plan is built. The confirmed sequence removes worker containers,
+role volumes, and factory-managed credential
 volumes; removes generated invocation and result directories; removes run
 worktrees, local run branches, and private Git projections; removes the
 operational database with its SQLite sidecars and only the migration backups
@@ -763,7 +759,7 @@ still needed to retry remaining work.
 
 Reset retains the source checkout, its tracked files, `factory.yaml`, and
 ordinary local branches; the installed `factory`, `factory-report`, and
-`factory-worker-attach` binaries; Docker worker images; repository-declared
+`factory-worker-headless` binaries; Docker worker images; repository-declared
 cache directories; host Codex and Claude credential sources and host harness
 state; GitHub label definitions, issues, pull requests, reviews, comments,
 commit statuses, and merged history; and remote `factory/*` branches. Retained
@@ -776,4 +772,7 @@ After a successful reset the selected configuration path does not exist, its
 operational database does not exist, no planned local runtime artifact remains,
 and the ordinary fresh-host journey works again.
 
-The high-level `Factory` seam injects configuration, repository checking, GitHub, pull requests, `GitWorkspace`, worker, terminal, harness, clock, run-identity, and operational-store adapters. Foundation tests use a real temporary SQLite store and fake the external repository/configuration boundary; issue #4 adds focused fake-adapter tests for the claim seam and a real temporary Git repository test for worktree isolation. Issue #5 owns the `WorkerRuntime` adapter and coordinator worker ownership; issue #6 adds the portable `TerminalRuntime`, Codex harness, invocation packet, and structured report boundary; issue #7 adds host checkpoint, push, and draft-PR orchestration.
+The high-level `Factory` seam injects configuration, repository checking,
+GitHub, pull requests, `GitWorkspace`, worker, headless harness, clock,
+run-identity, and operational-store adapters. Contract tests exercise Docker
+and both detached adapters through controlled seams.

@@ -109,8 +109,8 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if fixture.pullRequests.existing.Draft {
 		t.Fatal("ready pull request remained draft")
 	}
-	if !fixture.runStore.current.ReadyNotificationSent || len(fixture.runStore.current.ActiveInvocationIDs) != 0 {
-		t.Fatalf("ready projection = %#v, want durable notification and no active invocation", fixture.runStore.current)
+	if len(fixture.runStore.current.ActiveInvocationIDs) != 0 {
+		t.Fatalf("ready projection = %#v, want no active invocation", fixture.runStore.current)
 	}
 	if len(fixture.statuses.values) != 2 || fixture.statuses.values[1].State != github.CommitStatusSuccess {
 		t.Fatalf("review statuses after acceptance = %#v, want pending then success", fixture.statuses.values)
@@ -813,25 +813,23 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	worktree := &reviewDiffWorktree{inspectingWorktree: baseWorktree, diff: "diff --git a/internal/factory/review.go b/internal/factory/review.go\n"}
 	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}, worktree: baseWorktree}
 	runtime := &agentWorker{}
-	terminalRuntime := &agentTerminal{}
 	harnessRuntime := &agentHarness{}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
-		Cmux: config.CmuxConfig{ControlWorkspace: "factory-control"}, OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
 	}}}
 	ids := []string{"run-review", "review-session", "standards-session", "repair-session"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config:         &fakeConfig{value: host},
-		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:         &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
-		PullRequests:   pullRequests,
-		Worktree:       worktree,
-		Worker:         runtime,
-		Terminal:       terminalRuntime,
-		Harness:        harnessRuntime,
-		CommitStatuses: statuses,
-		Now:            func() time.Time { return time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC) },
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		PullRequests:      pullRequests,
+		Worktree:          worktree,
+		Worker:            runtime,
+		HeadlessHarnesses: testHeadlessHarnesses(harnessRuntime),
+		CommitStatuses:    statuses,
+		Now:               func() time.Time { return time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC) },
 		NewRunID: func() (string, error) {
 			id := ids[0]
 			ids = ids[1:]

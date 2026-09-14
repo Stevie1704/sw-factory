@@ -1,8 +1,8 @@
 # Agent runtime
 
-Issues #6, #12, and #14 add the visible role-agent boundary. The coordinator
+Issues #6, #12, #14, and #165 define the role-agent boundary. The coordinator
 owns the run, invocation identity, stage, policy, and report decision. A
-harness is a headless or interactive proposal-maker; it does not own GitHub
+harness is a headless proposal-maker; it does not own GitHub
 mutations, Git history, or workflow transitions.
 
 ## Harness adapters
@@ -10,11 +10,9 @@ mutations, Git history, or workflow transitions.
 Codex and Claude Code are interchangeable at the role-selection boundary. Both
 implement the factory-owned `HeadlessRuntime` seam used by every production
 launch: capability discovery, terminal-free launch, exact native resume,
-running/exited inspection, cancellation, and accepted-completion shutdown. The
-superseded interactive adapters still implement the `Runtime` seam for an
-explicitly injected legacy runtime. An adapter translates one harness-neutral
-invocation into native commands and owns no workflow, Git, retry, or
-terminal-layout decision.
+running/exited inspection, cancellation, and accepted-completion shutdown. An
+adapter translates one harness-neutral invocation into native commands and
+owns no workflow, Git, or retry decision.
 
 The coordinator resolves the adapter from the frozen repository policy for the
 role, so workflow code never names a tool. `Capabilities` reports the adapter
@@ -33,12 +31,10 @@ The two adapters differ in how a native session identity is obtained:
 
 | Harness | Native session identity | Resume |
 | --- | --- | --- |
-| Codex interactive | Persisted by Codex; the adapter snapshots the role home before launch and discovers the new session file | `codex ... resume <uuid>` with the global flags first |
 | Codex headless | Read from the machine-readable `thread.started` event emitted by `codex exec --json` and retained in the invocation | `codex exec --json ... resume <uuid>` with the exec flags before the subcommand |
-| Claude Code interactive | Assigned by the adapter with `--session-id <uuid>` before launch, which removes the discovery race | `claude ... --resume <uuid>` |
 | Claude Code headless | Assigned with `--session-id <uuid>` and confirmed by the `system`/`init` event's `session_id` in the `stream-json` output | `claude -p ... --resume <uuid>`, refused when the confirmed identity differs |
 
-### Terminal-free execution
+### Headless execution
 
 A repository whose declared roles all select a harness with a headless adapter
 launches every role through `HeadlessRuntime`, and per-role selection may mix
@@ -60,7 +56,7 @@ vocabulary:
 Machine output is control-plane input only. Claude Code retries a failed API
 request before it gives up, so a retry category becomes a coordinator outcome
 only when the final `result` event reports `is_error`; the result text itself is
-never a category. Both adapters repeat that classification on terminal
+never a category. Both adapters repeat that classification on settled-process
 inspection, so a failure arriving after launch discovery still reaches the
 factory's typed outcome. Model text is never a workflow result.
 
@@ -71,11 +67,8 @@ paths, and size contract. A detached process may exit before report acceptance;
 recovery distinguishes an exited process with a report from an exited process
 that needs the bounded native-resume policy.
 
-With both production adapters headless, issue #165 can remove the interactive
-terminal orchestration once no persisted invocation needs it. Until then, only
-an explicitly injected legacy adapter retains the interactive runtime and
-`factory attach` behavior; `factory attach` refuses a headless invocation
-because it has no terminal attachment.
+ADR 0010 makes this the only production execution path. There is no attached
+client, local workspace topology, or compatibility adapter.
 
 ### Harness authentication
 
@@ -155,13 +148,10 @@ test role.
 The agent auth flags must name the same sources registered for the repository;
 distinct one-off sources are refused because recovery never persists host
 credential paths. Change the registered source with `factory register` instead.
-For a repository whose roles all select Codex, the command starts the role in
-the isolated worker without creating a cmux workspace or surface. Mixed and
-Claude repositories create or reuse the control workspace and one run workspace
-with role surfaces. Headless output is inspected only as bounded adapter
-diagnostic data; it is not a workflow result. The output reports the invocation
-identifier and run. Interactive launches additionally report opaque terminal
-handles; the coordinator never prints the role prompt or terminal contents.
+Every Codex, Claude, or mixed repository starts the selected role in its
+isolated worker. Harness output is inspected only as bounded adapter diagnostic
+data; it is not a workflow result. The command reports the invocation, run,
+and native session identity and never prints the role prompt or native output.
 
 ### Clean claim handoff and recovery boundary
 
@@ -178,7 +168,7 @@ claim or test handoff awaiting its first invocation, not an interrupted run.
 
 The exception applies only to first-agent startup. A persisted active invocation
 with a complete native-session identity is resumed once against its persisted
-worker and terminal handles. If the worker is missing or stopped, the
+worker. If the worker is missing or stopped, the
 coordinator recreates it from the frozen image digest and invocation mount
 identity while preserving the worktree and role volume. An unexpected native
 harness exit, including one observed after launch by the supervisor's worker-side
@@ -188,7 +178,7 @@ unexpected failure pauses the run for manual recovery. Rate limits enter a
 retried by the supervisor without consuming workflow or check-repair budget.
 Expired authentication enters `waiting_for_human` with a typed, redacted
 failure and tells the operator to refresh credentials. A missing native identity
-or any other recovery discrepancy pauses the run for a human. Terminal report
+or any other recovery discrepancy pauses the run for a human. Report
 acceptance is replayed from its durable effect record without finalizing the
 same invocation twice. Gates, reports, transitions, draft pull requests, and
 other progression paths reconcile the durable effect journal and external
@@ -204,26 +194,15 @@ recovery commands:
 
 ```sh
 factory resume --config /Users/me/.config/factory/config.yaml --run-id run-123
-factory attach --config /Users/me/.config/factory/config.yaml --run-id run-123
 factory auth refresh --config /Users/me/.config/factory/config.yaml --run-id run-123
 ```
 
 `factory resume` retries harness capacity or performs a manual native resume
-without spending the automatic recovery allowance. A manually resumed
-interactive session sets a durable attach gate; workflow progression and report
-acceptance remain blocked until `factory attach` restores the worker and visible
-terminal topology and clears that gate. A manually resumed headless session has
-no attach gate, for either harness: its worker state and native identity are
-already coordinator-owned and progression can continue unattended. `factory auth refresh` reads the explicitly
+without spending the automatic recovery allowance. Its worker state and native
+identity are already coordinator-owned, so progression can continue unattended.
+`factory auth refresh` reads the explicitly
 registered host credential source and reseeds only the factory-managed worker
 credential volume; it never writes the source file or host harness directory.
-
-The `TerminalRuntime` seam owns workspace, surface, input, notification, and
-lifecycle behavior. The macOS adapter invokes cmux; workflow code never sees
-cmux or macOS identifiers. The implementation surface launches
-`factory-worker-attach`, which receives only the run identifier and harness
-arguments. Docker container names and PTY setup remain inside the worker
-adapter.
 
 ## Invocation packet and report
 
@@ -375,7 +354,7 @@ After `factory draft-pr` creates the draft pull request, the coordinator starts
 the `spec_review` and `standards_review` roles against the same exact
 implementation checkpoint. Their external sessions run concurrently, while
 the coordinator applies reports serially. Each role receives a fresh
-read-only worker surface, private home and temporary storage, and its own
+read-only worker context, private home and temporary storage, and its own
 invocation identity. Neither role receives implementation or test handoffs,
 upstream harness transcripts, or the other reviewer's conclusions. A reviewer
 may receive only findings previously accepted for that same role and
@@ -449,15 +428,14 @@ may also pass `--input-tokens`, `--output-tokens`, `--total-tokens`,
 fixed-category `--exemption`, `--escalation`, or `--blocker` flags. Omitting
 usage leaves it explicitly unavailable; the coordinator never estimates it.
 
-Terminal rendering, scrollback, and screen text are never parsed for stage
-completion. A report is a proposal; only coordinator validation changes the
-run or invocation state.
+Native process output is never parsed for stage completion. A report is a
+proposal; only coordinator validation changes run or invocation state.
 
 An accepted `needs_clarification` report finishes the current harness session,
 stops the worker, and places the run in `waiting_for_human` without consuming a
 retry attempt. The coordinator publishes each question ID and prompt on the
-active issue or pull request, mirrors them in the editable status comment, and
-notifies cmux. An authorized maintainer answers with a structured GitHub
+active issue or pull request and mirrors them in the editable status comment.
+An authorized maintainer answers with a structured GitHub
 comment such as `/factory answer clarification-1 use the existing JSON format`.
 The answer is stored in the next specification-packet version, and a fresh
 invocation receives that packet. A `/factory refresh` command similarly
@@ -467,7 +445,7 @@ before resuming the role.
 A persisted invocation is void when its launch fails before it produces a native
 session identity and its result directory contains no regular `report.json`.
 The coordinator marks that invocation `superseded` while rolling back the
-worker and surface, before unattended progression publishes its waiting state,
+worker before unattended progression publishes its waiting state,
 and persists the void decision on the invocation. Restart reconciliation treats
 only that marked superseded launch as history with no live projection.
 A native session identity or report file protects the invocation history from
@@ -503,11 +481,10 @@ credential in the login Keychain rather than a file, so `--claude-auth` is
 supplied only where a credential file exists; without it, Claude Code uses the
 credential the worker itself persisted in its role volume.
 
-Codex native session identifiers are recovered from its persisted session files,
-not from the terminal screen. Claude Code accepts a coordinator-assigned
-identifier at launch, so no discovery is needed. Accepted reports retain the
-native session id and opaque surface handle so a later coordinator recovery
-operation can resume the session in the same harness.
+Codex native session identifiers are recovered from the invocation's retained
+machine event. Claude Code accepts a coordinator-assigned identifier at launch
+and confirms it in its init event. Accepted reports retain the native session
+identity so a later coordinator can resume the session in the same harness.
 
 ## Check-repair loop
 
@@ -519,8 +496,8 @@ reasons, and bounded command diagnostics. A setup or gate command that writes
 past the worker runtime's capture limit has no deterministic result:
 it is reported as `factory setup failed` or `factory gate execution failed`,
 and the packet records that failure without the command output. The next implementation invocation
-uses the existing worker role volume, implementation surface, and native
-session for the recorded harness through the harness resume seam.
+uses the existing worker role volume and native session for the recorded
+harness through the resume seam.
 
 The repository's `retry_limits.check_repair` value is frozen into the run. A
 repair reservation is durable before native resume, but the consumed attempt

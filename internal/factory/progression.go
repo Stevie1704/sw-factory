@@ -421,11 +421,6 @@ func progressionStep(state progressionState, registry workflow.Registry) (progre
 	}
 	if len(activeInvocations) > 0 {
 		for _, active := range activeInvocations {
-			if active.AttachRequired {
-				return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("invocation %q requires `factory attach`", active.ID)}
-			}
-		}
-		for _, active := range activeInvocations {
 			if !state.ReadyInvocationIDs[active.ID] {
 				continue
 			}
@@ -666,9 +661,6 @@ func progressionAdvancedMany(previous store.Run, previousInvocations []*store.In
 		return true
 	}
 	if previous.CheckpointSHA != next.CheckpointSHA || previous.PullRequestNumber != next.PullRequestNumber {
-		return true
-	}
-	if previous.ReadyNotificationSent != next.ReadyNotificationSent {
 		return true
 	}
 	if len(previousInvocations) != len(nextInvocations) {

@@ -8,7 +8,24 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/worker"
+	"github.com/google/uuid"
 )
+
+// newSessionID returns an RFC 4122 version-four UUID for a fresh Claude Code
+// session.
+func newSessionID() (string, error) {
+	value, err := uuid.NewRandom()
+	if err != nil {
+		return "", err
+	}
+	return value.String(), nil
+}
+
+// validSessionID reports whether value is an RFC 4122 version-four UUID.
+func validSessionID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 && parsed.String() == value
+}
 
 // disabledHookSettings is the explicit settings layer passed on the command
 // line. A non-interactive Claude Code run otherwise executes the hooks a
@@ -18,6 +35,10 @@ import (
 // back on. It withholds only hooks, a custom status line, and a custom file
 // suggestion command; the curated worker skills stay in the session.
 const disabledHookSettings = `{"disableAllHooks":true}`
+
+// emptyMCPConfiguration prevents ambient or repository MCP servers from
+// broadening a detached Claude Code invocation.
+const emptyMCPConfiguration = `{"mcpServers":{}}`
 
 // ClaudeHeadless implements HeadlessRuntime through the worker's detached
 // process extension. No Claude Code command, SDK loop, file operation, or
@@ -48,7 +69,7 @@ func NewClaudeHeadless(runtime worker.HeadlessProcessRuntime) *ClaudeHeadless {
 
 // Capabilities reports Claude Code's headless native-resume support.
 func (*ClaudeHeadless) Capabilities() Capabilities {
-	return Capabilities{Name: NameClaude, InteractiveResume: true, Headless: true}
+	return Capabilities{Name: NameClaude, NativeResume: true, Headless: true}
 }
 
 // StartHeadless launches a fresh non-interactive Claude Code process with an

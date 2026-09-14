@@ -72,7 +72,7 @@ advisory: implementation-owned red/green/refactor -> checkpoint gates -> ...
 ~~~
 
 The coordinator owns workflow state, GitHub projections, worktrees, worker
-identity, optional terminal surfaces, report validation, checkpoint commits,
+identity, native harness sessions, report validation, checkpoint commits,
 gates, pushes, and draft pull requests. A harness is a proposal-maker—headless
 Codex or headless Claude Code. It does not own workflow transitions, Git history,
 GitHub mutations, or the final interpretation of model output.
@@ -89,15 +89,14 @@ operational store, GitHub comments, and the documentation.
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Run**                  | One supervised execution for one issue. It owns the frozen packet, branch, worktree, invocations, checkpoints, gates, and pull request.                        |
 | **Specification packet** | The immutable snapshot of the issue, resolved repository policy, and packet version used by an invocation. A clarification or refresh creates a new version.   |
-| **Invocation**           | One role-agent execution against a run. It has a role, stage, harness, model, prompt version, worker identity, optional terminal surface, and result directory. |
+| **Invocation**           | One role-agent execution against a run. It has a role, stage, harness, model, prompt version, worker identity, native session identity, and result directory. |
 | **Worker**               | The pinned Docker execution boundary. It contains the repository worktree and approved tools, but no host GitHub credentials or Git remote.                    |
-| **Surface**              | A visible cmux terminal workspace or role surface used by an invocation.                                                                                       |
 | **Checkpoint**           | An immutable commit used as a stage boundary. Test and implementation checkpoints are separate.                                                                |
 | **Gate**                 | A deterministic repository command, such as formatting, vetting, testing, or building, run in the policy-defined environment.                                  |
 | **Operational store**    | A private SQLite database that records run state, identities, effects, reports, gate results, and content-free evaluation summaries.                           |
 | **Baseline**             | The pre-edit setup and gate result for the frozen packet. It proves what the repository looked like before agent edits.                                        |
 | **Test objection cycle** | A bounded implementation-to-test dispute: implementation supplies a test claim and evidence, the original test session accepts or rejects it, and an accepted revision must pass independent red verification. Automation is pilot-gated and bounded by the repository's `retry_limits.test_revision` value. |
-| **Recovery diagnosis**   | A read-only comparison of durable state against Git, GitHub, the worktree, worker, optional terminal, harness, and operational store.                                   |
+| **Recovery diagnosis**   | A read-only comparison of durable state against Git, GitHub, the worktree, worker, native harness session, report, and operational store.                              |
 | **Reconciliation**       | A deliberate restart pass that replays an exact pending effect or pauses for human inspection when external state is ambiguous.                                |
 
 There is only one active non-terminal run per registered repository. Stage and
@@ -222,11 +221,9 @@ Every stage also has an orthogonal status:
 
 ## Prerequisites
 
-Factory is designed for a macOS operator workflow with Docker, GitHub, and a
-configured agent harness. cmux is required only for a repository that selects a
-harness without a headless adapter, or that injects a legacy interactive
-adapter; a repository whose roles all select Codex or Claude Code runs
-headlessly.
+Factory is designed for an operator workflow with Docker, GitHub, and a
+configured headless agent harness. Codex and Claude Code are supported through
+the same detached worker-process contract; no terminal multiplexer is needed.
 
 You need:
 
@@ -239,19 +236,16 @@ You need:
 4. The GitHub CLI, <code>gh</code>, authenticated to an account that can read
    and update the configured repository, issues, labels, comments, commit
    statuses, and pull requests.
-5. A running cmux session for visible control, run, checks, and role surfaces
-   only when the repository injects a legacy interactive adapter. Codex and
-   Claude Code, in any per-role mix, run headlessly and do not require cmux.
-6. At least one configured harness. The checked-in example uses Codex for all
+5. At least one configured harness. The checked-in example uses Codex for all
    roles; Claude Code is also supported by the same harness-neutral runtime.
-7. A host authentication source for the selected harness, if that harness
+6. A host authentication source for the selected harness, if that harness
    needs one. Codex commonly uses an <code>auth.json</code> file; Claude Code
    may use a credentials file or macOS Keychain authentication.
 
 The <code>factory doctor</code> command checks these prerequisites together. It
 also checks the repository remote and hooks, worker image, harness executables
 and capabilities, the role-mandated worker skill set each harness advertises,
-cmux, authentication sources, and SQLite readiness. Run it before claiming an
+authentication sources, and SQLite readiness. Run it before claiming an
 issue rather than discovering a host problem after the issue has been
 relabeled.
 
@@ -271,7 +265,6 @@ make build
 | ---------------------------------- | ----------------------------------------------------------- |
 | <code>factory</code>               | Host coordinator CLI.                                       |
 | <code>factory-report</code>        | Worker-facing command that writes one structured report.    |
-| <code>factory-worker-attach</code> | Internal worker attachment helper used by visible surfaces. |
 
 To install the commands into Go's configured binary directory:
 
@@ -363,17 +356,15 @@ factory register \
   --authorized-user alice \
   --operational-data /Users/me/.local/share/factory/factory.db \
   --repository-config /Users/me/src/project/factory.yaml \
-  --cmux-workspace factory-control \
   --codex-auth /Users/me/.codex/auth.json
 ~~~
 
 <code>--authorized-user</code> can be repeated. Authentication paths are
-optional at registration time when the harness will authenticate through a
-visible session; provide them when a host source is available and the worker
-needs managed credentials. <code>register</code> validates the repository and
+optional at registration time; provide them when a host source is available
+and the worker needs managed credentials. <code>register</code> validates the repository and
 initializes the SQLite store. It does not contact GitHub or create labels.
 
-The v1 host configuration supports one repository registration. It stores
+The v2 host configuration supports one repository registration. It stores
 absolute paths and rejects an operational database inside the repository
 checkout. Keep the operational database outside the checkout so a worker or
 repository change cannot accidentally include coordinator state.
@@ -381,7 +372,7 @@ repository change cannot accidentally include coordinator state.
 A resulting host file looks like this:
 
 ~~~yaml
-schema_version: 1
+schema_version: 2
 repositories:
   - path: /Users/me/src/project
     github:
@@ -392,9 +383,6 @@ repositories:
     polling:
       interval: 30s
       backoff: 5m
-    cmux:
-      socket_path: ""
-      control_workspace: factory-control
     authentication:
       codex_auth_path: /Users/me/.codex/auth.json
       claude_auth_path: /Users/me/.claude/.credentials.json
@@ -660,21 +648,18 @@ factory agent \
 
 This starts the role's harness inside the pinned worker without a terminal:
 `codex exec --json` for Codex and `claude -p --output-format stream-json` for
-Claude Code. Per-role selection may mix both. Only an explicitly injected
-legacy interactive adapter retains a visible terminal surface. The output
-reports:
+Claude Code. Per-role selection may mix both. The output reports:
 
 - invocation ID;
 - run ID;
 - role and stage;
-- frozen test policy and workflow route;
-- worker-backed workspace ID, when the role is interactive; and
-- opaque cmux surface IDs, when the role is interactive.
+- frozen test policy and workflow route; and
+- the harness-native session ID.
 
 The invocation receives a read-only specification packet at
 <code>/invocation</code> and a writable, invocation-specific results directory
-at <code>/results</code>. The prompt and terminal content are not printed by
-the coordinator.
+at <code>/results</code>. Prompt and model output are not printed by the
+coordinator.
 
 The packet is the complete frozen claim; the prompt is a projection of it. The
 prompt fences the claimed issue, the accepted clarifications, and the frozen
@@ -743,7 +728,7 @@ factory agent-report \
 ~~~
 
 The coordinator validates report identity, schema, role, stage, permitted paths,
-worktree state, and native session identity. Terminal output is never treated
+worktree state, and native session identity. Raw model output is never treated
 as a result. An accepted implementation report leaves the run ready for the
 host-owned checkpoint and check sequence.
 
@@ -825,7 +810,7 @@ projection, intervention marker, and control commands.
 If a gate fails, the checkpoint remains pushed on the run branch and
 <code>draft-pr</code> returns the bounded check-repair decision without creating
 or updating the draft pull request. The next implementation invocation reuses
-the worker role volume and implementation surface, subject to the frozen repair
+the worker role volume and native session, subject to the frozen repair
 budget. After an accepted repair report, run <code>factory draft-pr</code> again.
 Infrastructure waits do not spend the check-repair budget; the repository's
 <code>retry_limits.check_repair</code> value is the only bound.
@@ -844,7 +829,7 @@ The automatic roles for <code>draft_pr</code> are <code>spec_review</code> and
 <code>standards_review</code>. Their external sessions run concurrently, but
 report acceptance is serialized by the coordinator. Each receives the exact
 immutable base-to-checkpoint diff and content-free gate metadata in a fresh,
-read-only worker surface with private home and temporary storage. Reviewers do
+read-only worker context with private home and temporary storage. Reviewers do
 not receive implementation/test handoffs, upstream transcripts, or the other
 reviewer's conclusions. A review finding has seven fields:
 
@@ -906,8 +891,8 @@ detection takes precedence over a closed PR state.
 
 ## Structured agent reports
 
-<code>factory-report</code> is the only supported result boundary for a visible
-worker. The coordinator injects identity and result-path variables into the
+<code>factory-report</code> is the only supported result boundary for a harness
+invocation. The coordinator injects identity and result-path variables into the
 worker:
 
 ~~~text
@@ -923,7 +908,7 @@ The agent does not need to construct these values.
 <code>factory-report</code> writes one schema-versioned <code>report.json</code>
 atomically, with a bounded size, into the invocation result directory. Do not
 run it from the host shell; the required identity environment is supplied only
-inside the worker surface.
+inside the worker.
 
 ### Common completed handoff
 
@@ -1080,8 +1065,8 @@ authorized structured commands. Repeating it is safe.
 
 Factory persists an effect journal around external mutations. Before advancing
 after a restart, it compares the run against the issue, factory label, status
-comment, branch, worktree, checkpoint, pull request, worker, terminal, native
-session, and operational store. If those sources disagree, factory pauses
+comment, branch, worktree, checkpoint, pull request, worker, native session,
+report, and operational store. If those sources disagree, factory pauses
 instead of guessing.
 
 ### Normal recovery
@@ -1091,10 +1076,6 @@ Use the following commands only after reading the current
 
 ~~~sh
 factory resume \
-  --config /Users/me/.config/factory/config.yaml \
-  --run-id <run-id>
-
-factory attach \
   --config /Users/me/.config/factory/config.yaml \
   --run-id <run-id>
 
@@ -1108,11 +1089,6 @@ factory auth refresh \
 - When restart reconciliation has paused a coordinator-owned <code>check</code>
   stage, <code>resume</code> re-enters check evaluation without launching a new
   implementation agent; run <code>factory draft-pr</code> afterward.
-- A manually resumed native session sets an attach gate only for an
-  interactive invocation. <code>attach</code> restores the worker and visible
-  terminal topology and clears that gate before report acceptance or workflow
-  progression can continue. A headless invocation sets no gate and refuses
-  <code>attach</code>, because it has no terminal attachment.
 - <code>auth refresh</code> reseeds only the factory-managed credential volume
   for the selected invocation harness. It never modifies the registered host
   source.
@@ -1256,7 +1232,7 @@ in the same pass, so a merge or a closure wins over a repair comment. Every
 other state is a typed rejection that changes no workflow state.
 
 The instruction becomes one blocking finding owned by implementation, and the
-packet records which surface produced it, so a review-sourced and a
+packet records which source produced it, so a review-sourced and a
 command-sourced repair stay distinguishable after a restart. While a review
 waits for disposition, the supervision comment names the exact command and
 whether it is currently admissible.
@@ -1286,9 +1262,8 @@ transition, so a terminal disposition always wins over further work.
 Either terminal outcome releases the one-active-run constraint. The same
 <code>factory start</code> process then claims the next oldest eligible issue
 without waiting for a full polling interval and without an operator restart.
-Retention is unchanged: the terminal workspace, branch, worktree, and worker
-survive the transition, and cleanup stays an explicit, separate seven-day
-operation.
+Retention is unchanged: the branch, worktree, worker, and stored outputs
+survive the transition; cleanup stays an explicit, separate seven-day operation.
 
 ### States that intentionally pause progression
 
@@ -1303,7 +1278,6 @@ reason is published in the editable status comment.
 | Repeated blocker or exhausted budget    | A human decision on the finding.                     |
 | Policy rejection                        | An authorized command or an issue change.            |
 | Harness rate limit or expired auth      | Harness infrastructure; the coordinator retries.     |
-| Invocation needing <code>factory attach</code> | An operator attaching the resumed session.    |
 | Ambiguous recovery discrepancy          | A human reconciliation decision.                     |
 
 ### Activity in status output
@@ -1390,7 +1364,7 @@ factory cleanup --config /Users/me/.config/factory/config.yaml
 ~~~
 
 The preview lists each selected worktree, local branch, worker target, role
-volume, stored output, and terminal workspace. The preview intentionally
+volume, and stored output. The preview intentionally
 returns exit status <code>2</code> when no <code>--confirm</code> flag is
 supplied. Confirm the displayed plan:
 
@@ -1400,7 +1374,7 @@ factory cleanup \
   --confirm
 ~~~
 
-To target one terminal run:
+To target one completed, cancelled, or failed run:
 
 ~~~sh
 factory cleanup \
@@ -1416,8 +1390,7 @@ Cleanup removes eligible run artifacts and keeps the installation. Reset
 returns one registered installation to its pre-`init` local state: every run
 worktree, local `factory/<run-id>` branch, private Git projection, generated
 invocation and result directory, worker container, role volume,
-factory-managed credential volume, factory-created terminal workspace, the
-registered control workspace, the repository's coordinator lock, the
+factory-managed credential volume, the repository's coordinator lock, the
 operational database with its SQLite sidecars and its own migration backups,
 the evaluation projection stored in that database, and finally the selected
 host configuration.
@@ -1467,17 +1440,10 @@ install binaries -> build worker image -> factory init -> factory register
 -> factory bootstrap-labels -> factory doctor -> factory start
 ~~~
 
-A pending effect, malformed run identity, malformed terminal workspace handle,
-unproven path scope, or a still-open pull request blocks cleanup for that run.
+A pending effect, malformed run identity, unproven path scope, or a still-open
+pull request blocks cleanup for that run.
 The confirmation pass refuses a changed plan, so the resources displayed in the
 preview are the resources being authorized for removal.
-
-Cleanup also closes the terminal workspaces the removed runs created, because
-the deleted invocation rows are the only durable record of those handles. A
-workspace close never blocks local deletion: when the terminal is unavailable
-or refuses the close, cleanup removes the local resources anyway and prints
-<code>cleanup retained terminal workspace</code> for each workspace the
-operator has to close by hand.
 
 ## Security and data boundaries
 
@@ -1515,7 +1481,7 @@ and cleanup effects after the coordinator validates the result.
 ### Reports, state, and telemetry
 
 Reports are bounded, schema-versioned, and identity-checked. The coordinator
-accepts structured handoffs, not terminal text. The SQLite store uses private
+accepts structured handoffs, not raw model text. The SQLite store uses private
 directory/file permissions, rejects newer or unknown schemas, and makes a
 timestamped backup before a supported migration.
 
@@ -1533,19 +1499,18 @@ supported by the installed binary.
 | Command                                     | Purpose                                                                                                                                                           |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | <code>factory init</code>                   | Create an empty host configuration.                                                                                                                               |
-| <code>factory register</code>               | Register the one repository, GitHub identity, authorized users, polling settings, cmux settings, auth sources, repository policy path, and SQLite path.           |
+| <code>factory register</code>               | Register the one repository, GitHub identity, authorized users, polling settings, auth sources, repository policy path, and SQLite path.                         |
 | <code>factory bootstrap-labels</code>       | Create the six factory-owned GitHub labels explicitly and idempotently.                                                                                           |
 | <code>factory doctor</code>                 | Run the complete startup diagnosis and print every problem/action.                                                                                                |
 | <code>factory start</code>                  | Run the persistent queue/lease supervisor, drive each claimed run through review, repair, and readiness, and continue with the next issue after a terminal outcome. |
 | <code>factory stop</code>                   | Stop a running supervisor without cancelling the active run.                                                                                                      |
 | <code>factory issue [--issue N] N</code>    | Diagnostic: claim one issue and run its baseline. The number may be positional or supplied with <code>--issue</code>, but not both.                               |
-| <code>factory agent</code>                  | Diagnostic: start the active stage's visible role, or select a validated role/stage/harness/model/reasoning override.                                             |
+| <code>factory agent</code>                  | Diagnostic: start the active stage's headless role, or select a validated role/stage/harness/model/reasoning override.                                            |
 | <code>factory agent-report</code>           | Diagnostic: validate and accept a report already written by one invocation. Requires <code>--run-id</code> and <code>--invocation-id</code>.                      |
 | <code>factory draft-pr</code>               | Diagnostic: checkpoint the implementation, push the branch, run gates, and create/update the draft PR. <code>--intervention</code> records a one-line marker.     |
 | <code>factory poll</code>                   | Process one lifecycle and structured-command observation for the current run.                                                                                     |
 | <code>factory status</code>                 | Show the selected host configuration, repository, latest run, its activity, and recovery diagnosis.                                                                |
 | <code>factory resume</code>                 | Perform explicit native-session or harness-capacity recovery, or re-enter a recovery-paused check stage.                                                          |
-| <code>factory attach</code>                 | Restore worker/terminal topology after a manual resume and clear the attach gate.                                                                                 |
 | <code>factory auth refresh</code>           | Reseed a managed worker credential for the active invocation harness.                                                                                             |
 | <code>factory reconcile</code>              | Run restart reconciliation, or abandon one inspected pending effect with <code>--abandon-effect</code> and <code>--reason</code>.                                 |
 | <code>factory evaluation</code>             | Read local content-free run summaries and aggregates.                                                                                                             |
@@ -1622,7 +1587,6 @@ The repository is a Go module named
 ~~~text
 cmd/factory                 host CLI entrypoint
 cmd/factory-report          worker report entrypoint
-cmd/factory-worker-attach   worker PTY attachment entrypoint
 internal/cli                command parsing and rendering
 internal/factory            workflow coordination and lifecycle transitions
 internal/effect             durable effect journal and kind-specific handlers
@@ -1631,7 +1595,6 @@ internal/store              private SQLite operational state
 internal/git                worktrees, checkpoints, push, and cleanup seams
 internal/github             GitHub issue, label, comment, status, and PR seams
 internal/worker              pinned Docker worker runtime
-internal/terminal            visible cmux terminal runtime
 internal/harness             Codex and Claude Code adapters
 internal/report              structured report schema and validation
 internal/workflow            factory-owned roles, stages, and transitions
@@ -1640,8 +1603,8 @@ internal/workflow            factory-owned roles, stages, and transitions
 The effect module's callable interface is fourteen `Journal` methods (thirteen
 typed apply operations plus `Replay`), its constructor, and four package
 functions used by compatibility and recovery paths. Including its input and
-store-seam types, it has twenty-nine caller-visible named declarations; a
-source-level contract test keeps that surface below the thirty coordinator
+store-seam types, it has thirty caller-visible named declarations; a
+source-level contract test ensures that interface does not exceed the thirty coordinator
 methods the module replaced.
 
 Run the standard local checks before submitting a change:
@@ -1678,8 +1641,8 @@ The domain vocabulary and ownership model are recorded in
 
 Read every reported <code>problem</code> and <code>action</code>; the command
 continues through all checks instead of stopping at the first error. Common
-causes are an unreachable Docker daemon, a missing pinned image digest, an
-unavailable cmux socket, missing <code>gh</code> permissions, an unsupported
+causes are an unreachable Docker daemon, a missing pinned image digest,
+missing <code>gh</code> permissions, an unsupported
 harness executable, or a repository/operational path that is not absolute and
 safely scoped.
 
@@ -1720,10 +1683,8 @@ resolve the external state before continuing.
 Use <code>factory resume</code> for a retryable harness problem. Refresh the
 selected credential with <code>factory auth refresh</code> when authentication
 has expired; that command needs a registered host credential source for the
-selected harness. A manual native resume of a headless invocation needs no
-further step. If the invocation uses an interactive adapter, finish with
-<code>factory attach</code> so the coordinator can verify the visible worker and
-terminal topology.
+selected harness. A manual native resume needs no further attachment step; the
+coordinator verifies the worker and native session directly.
 
 ### draft-pr refuses to run
 
@@ -1755,7 +1716,7 @@ truth. Cleanup never removes a remote branch.
 - [factory.yaml](factory.yaml) — checked-in policy for this Go repository.
 - [docs/configuration.md](docs/configuration.md) — complete host/repository
   configuration, claim protocol, gates, worker mounts, recovery, and cleanup.
-- [docs/agent-runtime.md](docs/agent-runtime.md) — visible harness lifecycle,
+- [docs/agent-runtime.md](docs/agent-runtime.md) — headless harness lifecycle,
   invocation packets, reports, test handoffs, draft PRs, and the demonstration
   path.
 - [docs/worker-runtime.md](docs/worker-runtime.md) — Docker worker contract,

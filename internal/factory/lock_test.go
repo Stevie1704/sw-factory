@@ -57,7 +57,7 @@ func TestStartAcquiresTheCoordinatorLockBeforeReconciliation(t *testing.T) {
 	defer func() { _ = owner.release() }()
 	openCalls := 0
 	service := &Service{configPath: "/host/config.yaml", deps: Dependencies{
-		Config: lockTestConfig{host: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}},
+		Config: lockTestConfig{host: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}},
 		OpenStore: func(context.Context, string) (OperationalStore, error) {
 			openCalls++
 			return nil, errors.New("operational store must remain unopened")

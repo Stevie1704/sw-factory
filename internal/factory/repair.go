@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -154,7 +154,7 @@ type checkRepairDecision struct {
 }
 
 // ErrCheckRepairSessionUnavailable identifies a missing native session or
-// visible surface that requires human recovery instead of a blind retry.
+// native session that requires human recovery instead of a blind retry.
 var ErrCheckRepairSessionUnavailable = errors.New("implementation session is unavailable for native check repair")
 
 // decideCheckRepair is the table-tested workflow decision boundary for the
@@ -467,7 +467,7 @@ func (s *Service) stopCheckWorker(ctx context.Context, runID string) error {
 func (s *Service) startCheckRepair(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket, repairPacket CheckRepairPacket) (invocation store.Invocation, updated store.Run, returnErr error) {
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
-		return store.Invocation{}, run, errors.New("operational store does not support visible invocations")
+		return store.Invocation{}, run, errors.New("operational store does not support harness invocations")
 	}
 	historyStore, ok := runStore.(LatestInvocationStore)
 	if !ok {
@@ -484,13 +484,9 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if roleErr != nil || roleDefinition.Name != workflow.RoleImplementation {
 		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no resumable role identity", ErrCheckRepairSessionUnavailable)
 	}
-	terminalRuntime, harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(previous.Harness))
+	harnessRuntime, err := s.lifecycleModule().ensureCoordinatorHarnessRuntime(config.Harness(previous.Harness))
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("%w: %v", ErrCheckRepairSessionUnavailable, err)
-	}
-	headless := coordinatorUsesHeadless(harnessRuntime)
-	if !headless && (previous.WorkspaceID == "" || invocationSurface(*previous).ID == "") {
-		return store.Invocation{}, run, fmt.Errorf("%w: latest implementation invocation has no recoverable surface", ErrCheckRepairSessionUnavailable)
 	}
 	// A native session belongs to the harness that created it, so a repair
 	// continues in that harness or not at all. This is what makes mid-session
@@ -596,13 +592,6 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		CreatedAt:             createdAt,
 		UpdatedAt:             createdAt,
 	}
-	if !headless {
-		invocation.WorkspaceID = previous.WorkspaceID
-		invocation.StatusSurfaceID = previous.StatusSurfaceID
-		invocation.RoleSurfaceID = string(invocationSurface(*previous).ID)
-		invocation.ImplementationSurfaceID = previous.ImplementationSurfaceID
-		invocation.ChecksSurfaceID = previous.ChecksSurfaceID
-	}
 	persisted := false
 	workerStarted := false
 	attemptReserved := false
@@ -664,23 +653,6 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 			return store.Invocation{}, run, fmt.Errorf("record local evaluation invocation for check repair: %w", err)
 		}
 	}
-	if !headless {
-		control, terminalErr := terminalRuntime.EnsureControlWorkspace(ctx, terminal.WorkspaceRequest{
-			Name:             controlWorkspaceName(registration),
-			Description:      "software factory coordinator",
-			WorkingDirectory: registration.Path,
-		})
-		if terminalErr != nil {
-			return store.Invocation{}, run, fmt.Errorf("ensure check-repair control workspace: %w", terminalErr)
-		}
-		if terminalErr := terminalRuntime.Notify(ctx, terminal.Notification{
-			WorkspaceID: control.ID,
-			Title:       "factory check repair started",
-			Body:        fmt.Sprintf("%s implementation repair attempt %d/%d resumed", run.ID, repairPacket.Attempt, repairPacket.Budget),
-		}); terminalErr != nil {
-			return store.Invocation{}, run, fmt.Errorf("notify check-repair start: %w", terminalErr)
-		}
-	}
 	gitMetadataPath, err := prepareGitMetadataProjection(run.ID, registration.Path, run.Worktree)
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("prepare check-repair Git metadata: %w", err)
@@ -732,11 +704,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		ReasoningEffort: previous.ReasoningEffort,
 		ResumeSessionID: previous.NativeSessionID,
 	}
-	if !headless {
-		resumeRequest.WorkspaceID = terminal.WorkspaceID(previous.WorkspaceID)
-		resumeRequest.Surface = invocationSurface(*previous)
-	}
-	resumedInvocation, resumeErr := s.journal().ResumeHarness(ctx, runStore, invocationStore, registration.Cmux.SocketPath, harnessRuntime, invocation, resumeRequest)
+	resumedInvocation, resumeErr := s.journal().ResumeHarness(ctx, runStore, invocationStore, effectkernel.HarnessResume{Runtime: harnessRuntime, Invocation: invocation, Request: resumeRequest})
 	if resumedInvocation.RecoveryResumeCount > invocation.RecoveryResumeCount {
 		resumeStarted = true
 	}

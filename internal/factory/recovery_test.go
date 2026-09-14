@@ -216,7 +216,7 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: root, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
 	}}}
@@ -278,7 +278,7 @@ func recoveryRun(worktreePath string) store.Run {
 // recovery projections and mutation-recording test doubles.
 func newRecoveryService(t *testing.T, runStore *recoveryRunStore, githubAdapter *fakeGitHub, worktree *recoveryWorktree, pullRequests *fakePullRequests) *factory.Service {
 	t.Helper()
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: runStore.run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(t.TempDir(), "factory.db"), RepositoryConfigPath: filepath.Join(runStore.run.RepositoryPath, "factory.yaml"),
 	}}}
@@ -308,9 +308,8 @@ func (w *recoveryWorktree) Inspect(context.Context, string) (gitadapter.Worktree
 
 // recoveryRunStore supplies one persisted run to status and progression seams.
 type recoveryRunStore struct {
-	run             store.Run
-	saved           []store.Run
-	lifecycleClaims map[string]map[store.Status]bool
+	run   store.Run
+	saved []store.Run
 }
 
 // CurrentRun returns the persisted non-terminal run.
@@ -328,29 +327,6 @@ func (s *recoveryRunStore) LatestRun(context.Context) (*store.Run, error) {
 // SaveRun records unexpected progression persistence.
 func (s *recoveryRunStore) SaveRun(_ context.Context, run store.Run) error {
 	s.saved = append(s.saved, run)
-	return nil
-}
-
-// ClaimLifecycleNotification atomically claims notification delivery.
-func (s *recoveryRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
-	if s.lifecycleClaims == nil {
-		s.lifecycleClaims = make(map[string]map[store.Status]bool)
-	}
-	if s.lifecycleClaims[runID] == nil {
-		s.lifecycleClaims[runID] = make(map[store.Status]bool)
-	}
-	if s.lifecycleClaims[runID][terminalStatus] {
-		return false, nil
-	}
-	s.lifecycleClaims[runID][terminalStatus] = true
-	return true, nil
-}
-
-// ReleaseLifecycleNotification removes a notification claim.
-func (s *recoveryRunStore) ReleaseLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) error {
-	if s.lifecycleClaims != nil && s.lifecycleClaims[runID] != nil {
-		delete(s.lifecycleClaims[runID], terminalStatus)
-	}
 	return nil
 }
 

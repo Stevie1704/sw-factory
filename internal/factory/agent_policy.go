@@ -177,18 +177,18 @@ func sameStrings(left, right []string) bool {
 	return true
 }
 
-// validateAgentRunState enforces the visible role's legal predecessor stages
+// validateAgentRunState enforces the role's legal predecessor stages
 // before it starts or resumes a harness session.
 func validateAgentRunState(run store.Run) error {
 	if run.Status != store.StatusActive {
-		return fmt.Errorf("cannot start visible agent from run status %q", run.Status)
+		return fmt.Errorf("cannot start harness invocation from run status %q", run.Status)
 	}
 	registry := workflow.DefaultRegistry()
 	if _, exists := registry.RoleForRunStage(run.Stage); !exists {
 		if _, invocationStage := registry.RoleForInvocationStage(run.Stage); invocationStage {
 			return nil
 		}
-		return fmt.Errorf("cannot start visible agent from run stage %q", run.Stage)
+		return fmt.Errorf("cannot start harness invocation from run stage %q", run.Stage)
 	}
 	return nil
 }

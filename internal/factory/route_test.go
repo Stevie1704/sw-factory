@@ -184,7 +184,7 @@ func TestSelectedRouteBlocksTheImplementationOwnedFastPath(t *testing.T) {
 // refuses an implementation launch that would skip a route's test stage, even
 // when the repository test policy alone would allow it.
 func TestSelectedRouteBlocksTheImplementationAgentAtClaim(t *testing.T) {
-	service, runStore, runtime, _, _ := newAgentService(t)
+	service, runStore, runtime, _ := newAgentService(t)
 	run := routedRun(t, runStore, workflow.RouteAcceptance)
 	run.Stage = store.StageClaim
 	run.TestStageSkipped = false
@@ -243,7 +243,7 @@ func TestDesignAcceptanceRouteRequiresArchitectureFirst(t *testing.T) {
 // architecture-to-test transition and the design handoff the test invocation
 // receives alongside the frozen specification packet.
 func TestDesignAcceptanceHandsTheAcceptedDesignToTheTestRole(t *testing.T) {
-	service, runStore, runtime, _, _ := newAgentService(t)
+	service, runStore, runtime, _ := newAgentService(t)
 	run := routedRun(t, runStore, workflow.RouteDesignAcceptance)
 	run.Stage = store.StageArchitecture
 	run.TestStageSkipped = false
@@ -315,7 +315,7 @@ func TestDesignAcceptanceHandsTheAcceptedDesignToTheTestRole(t *testing.T) {
 // TestRouteStaysFrozenAcrossASpecificationRefresh verifies a later issue edit
 // cannot change the route selected before claim.
 func TestRouteStaysFrozenAcrossASpecificationRefresh(t *testing.T) {
-	service, runStore, runtime, _, _ := newAgentService(t)
+	service, runStore, runtime, _ := newAgentService(t)
 	run := routedRun(t, runStore, workflow.RouteAcceptance)
 	run.Stage = store.StageTest
 	run.TestStageSkipped = false
@@ -369,7 +369,7 @@ func TestRoutedRunsRestartCleanlyFromTheirSelectedStage(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, runStore, runtime, terminalRuntime, harnessRuntime := newAgentService(t)
+			_, runStore, runtime, harnessRuntime := newAgentService(t)
 			run := routedRun(t, runStore, test.route)
 			run.Stage = test.stage
 			run.TestStageSkipped = false
@@ -381,7 +381,7 @@ func TestRoutedRunsRestartCleanlyFromTheirSelectedStage(t *testing.T) {
 				fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}},
 				state:        gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA},
 			}
-			fresh := newFreshAgentService(t, runStore, worktree, runtime, terminalRuntime, harnessRuntime)
+			fresh := newFreshAgentService(t, runStore, worktree, runtime, harnessRuntime)
 
 			launch, err := fresh.StartAgent(context.Background(), factory.AgentRequest{})
 			if err != nil {
@@ -457,26 +457,24 @@ func TestAcceptanceRouteRunsTheVerifiedRedHandoffUnderAdvisoryPolicy(t *testing.
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-routed", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-routed", HeadSHA: factoryGateCheckpoint},
 	}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
-		Cmux:                 config.CmuxConfig{ControlWorkspace: "factory-control"},
 		OperationalDataPath:  filepath.Join(root, "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
 	}}}
 	ids := []string{"run-routed", "test-invocation", "implementation-invocation"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config:         &fakeConfig{value: host},
-		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
-		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:         githubRuntime,
-		CommitStatuses: &gateStatuses{},
-		Worktree:       workspace,
-		GitWorkspace:   workspace,
-		Worker:         workerRuntime,
-		Terminal:       &agentTerminal{},
-		Harness:        &agentHarness{},
-		Now:            func() time.Time { return time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC) },
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
+		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:            githubRuntime,
+		CommitStatuses:    &gateStatuses{},
+		Worktree:          workspace,
+		GitWorkspace:      workspace,
+		Worker:            workerRuntime,
+		HeadlessHarnesses: testHeadlessHarnesses(&agentHarness{}),
+		Now:               func() time.Time { return time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC) },
 		NewRunID: func() (string, error) {
 			if len(ids) == 0 {
 				return "", errors.New("routed id fixture exhausted")

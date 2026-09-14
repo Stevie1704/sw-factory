@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -20,7 +19,7 @@ import (
 var destructiveWorkerRoles = factoryWorkerRoles()
 
 // factoryWorkerRoles derives destructive role identities from the factory
-// registry so a newly declared visible role cannot leave its worker home
+// registry so a newly declared role cannot leave its worker home
 // behind.
 func factoryWorkerRoles() []string {
 	roles := []string{"gate"}
@@ -39,8 +38,6 @@ type runLocalResources struct {
 	Branch string
 	// Worktree is the exact local worktree path.
 	Worktree string
-	// WorkspaceIDs contains the terminal workspace handles this run created.
-	WorkspaceIDs []string
 	// WorkerIDs contains the exact worker container identities for this run.
 	WorkerIDs []string
 	// StoredOutputs contains the exact generated invocation and result
@@ -128,8 +125,6 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 	}
 	workerIDs := []string{run.ID}
 	seenWorkerIDs := map[string]struct{}{run.ID: {}}
-	var workspaceIDs []string
-	seenWorkspaceIDs := make(map[string]struct{}, len(candidate.Invocations))
 	var credentialStoreIDs []string
 	unsafeCredentialStore := ""
 	seenCredentialStoreIDs := make(map[string]struct{}, len(candidate.Invocations))
@@ -157,25 +152,13 @@ func validateRunLocalResources(registration config.RepositoryRegistration, candi
 				credentialStoreIDs = append(credentialStoreIDs, storeID)
 			}
 		}
-		if invocation.WorkspaceID == "" {
-			continue
-		}
-		if !safeWorkspaceHandle(invocation.WorkspaceID) {
-			return runLocalResources{}, fmt.Sprintf("invocation %q has an unsafe terminal workspace handle", invocation.ID)
-		}
-		if _, exists := seenWorkspaceIDs[invocation.WorkspaceID]; !exists {
-			seenWorkspaceIDs[invocation.WorkspaceID] = struct{}{}
-			workspaceIDs = append(workspaceIDs, invocation.WorkspaceID)
-		}
 	}
 	sort.Strings(workerIDs)
 	sort.Strings(roles)
-	sort.Strings(workspaceIDs)
 	sort.Strings(credentialStoreIDs)
 	return runLocalResources{
 		Branch:                run.Branch,
 		Worktree:              worktree,
-		WorkspaceIDs:          workspaceIDs,
 		WorkerIDs:             workerIDs,
 		StoredOutputs:         storedOutputs,
 		Roles:                 roles,
@@ -218,23 +201,6 @@ func safeLocalIdentifier(value string) bool {
 			continue
 		}
 		return false
-	}
-	return true
-}
-
-// safeWorkspaceHandle accepts an opaque terminal workspace handle that is safe
-// to display in a plan and to pass as one command argument. Handles are
-// adapter-generated and never name a path, so this is deliberately wider than
-// safeLocalIdentifier: it rejects only empty, padded, option-shaped, and
-// control-character values.
-func safeWorkspaceHandle(value string) bool {
-	if value == "" || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") {
-		return false
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return false
-		}
 	}
 	return true
 }

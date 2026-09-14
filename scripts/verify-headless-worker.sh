@@ -40,6 +40,17 @@ cat > "$fake_codex" <<'EOF'
 # thread event, and uses the real in-image report command for completion.
 set -eu
 
+for terminal_binary in cmux tmux; do
+  if command -v "$terminal_binary" >/dev/null 2>&1; then
+    echo "headless Codex unexpectedly resolved $terminal_binary" >&2
+    exit 1
+  fi
+done
+if [ -t 0 ] || [ -t 1 ] || [ -t 2 ]; then
+  echo "headless Codex unexpectedly inherited a TTY" >&2
+  exit 1
+fi
+
 session="headless-verification-session"
 prompt=""
 resume=0
@@ -107,6 +118,17 @@ cat > "$fake_claude" <<'EOF'
 # emits the stream-json init event carrying the factory-assigned session, and
 # uses the real in-image report command for completion.
 set -eu
+
+for terminal_binary in cmux tmux; do
+  if command -v "$terminal_binary" >/dev/null 2>&1; then
+    echo "headless Claude unexpectedly resolved $terminal_binary" >&2
+    exit 1
+  fi
+done
+if [ -t 0 ] || [ -t 1 ] || [ -t 2 ]; then
+  echo "headless Claude unexpectedly inherited a TTY" >&2
+  exit 1
+fi
 
 session=""
 prompt=""
@@ -197,6 +219,12 @@ echo "Starting headless verification container from $WORKER_REFERENCE"
   --mount "type=bind,src=$results_directory,dst=/results" \
   --workdir /work \
   "$WORKER_REFERENCE" sleep infinity >/dev/null
+
+if "$DOCKER" exec "$container_name" /bin/sh -c \
+    'command -v cmux >/dev/null 2>&1 || command -v tmux >/dev/null 2>&1'; then
+  echo "the pinned worker image exposes a retired terminal multiplexer" >&2
+  exit 1
+fi
 
 inspection_status() {
   invocation_id="$1"

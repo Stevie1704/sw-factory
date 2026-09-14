@@ -141,7 +141,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err != nil {
 		return IssueResult{}, fmt.Errorf("load repository configuration: %w", err)
 	}
-	if err := harness.ValidateInteractiveResumeCapabilities(repositoryConfig, s.deps.HarnessCapabilities); err != nil {
+	if err := harness.ValidateNativeResumeCapabilities(repositoryConfig, s.deps.HarnessCapabilities); err != nil {
 		return IssueResult{}, fmt.Errorf("validate harness capabilities before claim: %w", err)
 	}
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
@@ -325,9 +325,6 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	}
 	if request.RunID != "" && request.RunID != run.ID {
 		return store.Run{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
-	}
-	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, *run); err != nil {
-		return store.Run{}, err
 	}
 	if request.Stage == store.StageTest || request.Stage == store.StageImplementation {
 		if strings.TrimSpace(run.SpecificationPacket) == "" {
@@ -524,15 +521,11 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 		return s.startupErr
 	}
 	*run = updated
-	if err := s.lifecycleModule().ensureInvocationAttached(ctx, runStore, *run); err != nil {
-		s.startupErr = err
-		return s.startupErr
-	}
 	return s.startupErr
 }
 
 // ensureAgentStartup permits only clean claim/test or explicitly skipped-test
-// states to cross into their first visible invocation. A clean draft checkpoint
+// states to cross into their first harness invocation. A clean draft checkpoint
 // may also cross into its independent immutable review. Journaled interrupted
 // runs have already passed reconciliation before this seam is reached; legacy
 // stores retain the typed #24 refusal.

@@ -35,7 +35,6 @@ var commandTable = []commandDefinition{
 	{name: "start", handler: runStart},
 	{name: "stop", handler: runStop},
 	{name: "resume", handler: runResume},
-	{name: "attach", handler: runAttach},
 	{name: "auth", handler: runAuth},
 	{name: "issue", handler: runIssue},
 	{name: "agent", handler: runAgent},
@@ -233,8 +232,7 @@ func runStop(ctx context.Context, args []string, defaultConfigPath string, outpu
 
 // runResume performs one explicit native-session or harness-capacity recovery
 // for the active run, or re-enters a coordinator-owned check after restart
-// reconciliation. A successful native resume remains behind the attach gate
-// until the operator acknowledges the visible terminal session.
+// reconciliation.
 func runResume(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -251,8 +249,6 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 	if result.Invocation.ID != "" {
 		status := "resumed"
 		switch {
-		case result.WaitingForAttach:
-			status = "resumed; attach required"
 		case result.Run.Status == store.StatusWaitingForHarness:
 			status = "waiting for harness capacity"
 		case result.Run.Status == store.StatusWaitingForHuman:
@@ -267,36 +263,7 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 		}
 	}
 	if err != nil {
-		var attachRequired *factory.ManualResumeRequiredError
-		if errors.As(err, &attachRequired) && result.WaitingForAttach {
-			return 0
-		}
 		writeError(errorsOutput, err)
-		return 1
-	}
-	return 0
-}
-
-// runAttach restores the worker and visible terminal topology, then releases
-// the manual native-session gate for the active run.
-func runAttach(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("attach", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
-	configPath := flags.String("config", defaultConfigPath, "host configuration path")
-	runID := flags.String("run-id", "", "active factory run identifier")
-	if err := flags.Parse(args); err != nil {
-		return 2
-	}
-	if flags.NArg() != 0 {
-		writeError(errorsOutput, errors.New("attach does not accept positional arguments"))
-		return 2
-	}
-	result, err := factory.New(*configPath).Attach(ctx, factory.AttachRequest{RunID: *runID})
-	if err != nil {
-		writeError(errorsOutput, err)
-		return 1
-	}
-	if !writeOutput(output, errorsOutput, "agent attached\nrun: %s\ninvocation: %s\nstatus: %s\n", result.Run.ID, result.Invocation.ID, result.Run.Status) {
 		return 1
 	}
 	return 0
@@ -380,7 +347,7 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 	return 0
 }
 
-// runAgent starts the visible agent for the active run, selecting the frozen
+// runAgent starts the harness invocation for the active run, selecting the frozen
 // policy's independent test stage or implementation-owned TDD path.
 func runAgent(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
@@ -418,21 +385,14 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 		writeError(errorsOutput, err)
 		return 1
 	}
-	agentSurfaceID := launch.Invocation.RoleSurfaceID
-	if agentSurfaceID == "" {
-		agentSurfaceID = launch.Invocation.ImplementationSurfaceID
-	}
-	message := fmt.Sprintf("agent started\nrun: %s\nrole: %s\nstage: %s\ntest policy: %s\nroute: %s\ninvocation: %s\nworkspace: %s\nagent surface: %s\n", launch.Invocation.RunID, launch.Invocation.Role, launch.Invocation.Stage, factory.TestPolicyDescription(launch.TestPolicyMode), launch.Route.Description(), launch.Invocation.ID, launch.Invocation.WorkspaceID, agentSurfaceID)
-	if launch.Invocation.ChecksSurfaceID != "" {
-		message += fmt.Sprintf("checks surface: %s\n", launch.Invocation.ChecksSurfaceID)
-	}
+	message := fmt.Sprintf("agent started\nrun: %s\nrole: %s\nstage: %s\ntest policy: %s\nroute: %s\ninvocation: %s\nnative session: %s\n", launch.Invocation.RunID, launch.Invocation.Role, launch.Invocation.Stage, factory.TestPolicyDescription(launch.TestPolicyMode), launch.Route.Description(), launch.Invocation.ID, launch.Invocation.NativeSessionID)
 	if !writeOutput(output, errorsOutput, "%s", message) {
 		return 1
 	}
 	return 0
 }
 
-// runAgentReport accepts the structured report written by one visible agent.
+// runAgentReport accepts the structured report written by one harness invocation.
 func runAgentReport(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("agent-report", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
@@ -593,8 +553,6 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	operationalDataPath := flags.String("operational-data", "", "SQLite operational data path")
 	pollingInterval := flags.String("poll-interval", "30s", "polling interval")
 	pollingBackoff := flags.String("poll-backoff", "5m", "transport backoff")
-	cmuxSocketPath := flags.String("cmux-socket", "", "cmux socket path")
-	cmuxWorkspace := flags.String("cmux-workspace", "", "cmux control workspace")
 	codexAuthPath := flags.String("codex-auth", "", "host Codex auth.json path")
 	claudeAuthPath := flags.String("claude-auth", "", "host Claude credential path")
 	repositoryConfigPath := flags.String("repository-config", "", "checked-in repository configuration path")
@@ -620,8 +578,6 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		OperationalDataPath:  *operationalDataPath,
 		PollingInterval:      *pollingInterval,
 		PollingBackoff:       *pollingBackoff,
-		CmuxSocketPath:       *cmuxSocketPath,
-		CmuxControlWorkspace: *cmuxWorkspace,
 		CodexAuthPath:        *codexAuthPath,
 		ClaudeAuthPath:       *claudeAuthPath,
 		RepositoryConfigPath: *repositoryConfigPath,
@@ -969,12 +925,6 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		Before:       preview.Plan.Before,
 		ExpectedPlan: &preview.Plan,
 	})
-	// Retained workspaces are reported before any failure, because a run
-	// cleaned earlier in the same pass may already have lost the invocation
-	// rows holding its handle.
-	if !writeRetainedWorkspaces(output, errorsOutput, result.Retained) {
-		return 1
-	}
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -983,17 +933,6 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		return 1
 	}
 	return 0
-}
-
-// writeRetainedWorkspaces names every terminal workspace the operator now has
-// to close by hand.
-func writeRetainedWorkspaces(output, errorsOutput io.Writer, retained []factory.CleanupRetainedWorkspace) bool {
-	for _, workspace := range retained {
-		if !writeOutput(output, errorsOutput, "cleanup retained terminal workspace: %s run=%s reason=%s (close it manually)\n", workspace.WorkspaceID, workspace.RunID, workspace.Reason) {
-			return false
-		}
-	}
-	return true
 }
 
 // writeCleanupPlan renders every exact target before any confirmed mutation.
@@ -1006,14 +945,6 @@ func writeCleanupPlan(output, errorsOutput io.Writer, plan factory.CleanupPlan) 
 			return false
 		}
 		if len(run.Roles) > 0 && !writeOutput(output, errorsOutput, "cleanup worker roles: %s\n", strings.Join(run.Roles, ", ")) {
-			return false
-		}
-		for _, workspaceID := range run.WorkspaceIDs {
-			if !writeOutput(output, errorsOutput, "cleanup terminal workspace: %s\n", workspaceID) {
-				return false
-			}
-		}
-		if len(run.WorkspaceIDs) == 0 && !writeOutput(output, errorsOutput, "cleanup terminal workspace: none\n") {
 			return false
 		}
 		for _, outputPath := range run.StoredOutputs {
@@ -1147,7 +1078,6 @@ func writeResetPlan(output, errorsOutput io.Writer, plan factory.ResetPlan) bool
 		}
 		if !writeResetTargets(output, errorsOutput, "reset worker", run.WorkerIDs) ||
 			!writeResetTargets(output, errorsOutput, "reset worker role", run.Roles) ||
-			!writeResetTargets(output, errorsOutput, "reset terminal workspace", run.WorkspaceIDs) ||
 			!writeResetTargets(output, errorsOutput, "reset stored output", run.StoredOutputs) {
 			return false
 		}
@@ -1160,7 +1090,7 @@ func writeResetPlan(output, errorsOutput io.Writer, plan factory.ResetPlan) bool
 	if len(plan.CredentialStores) == 0 && !writeOutput(output, errorsOutput, "reset credential volume: none\n") {
 		return false
 	}
-	if !writeOutput(output, errorsOutput, "reset control workspace: %s\nreset coordinator lock: %s\nreset database: %s\nreset evaluation summaries: %d\n", plan.ControlWorkspace, plan.CoordinatorLock, plan.OperationalDataPath, plan.EvaluationSummaries) {
+	if !writeOutput(output, errorsOutput, "reset coordinator lock: %s\nreset database: %s\nreset evaluation summaries: %d\n", plan.CoordinatorLock, plan.OperationalDataPath, plan.EvaluationSummaries) {
 		return false
 	}
 	if !writeResetTargets(output, errorsOutput, "reset database sidecar", plan.DatabaseSidecars) ||

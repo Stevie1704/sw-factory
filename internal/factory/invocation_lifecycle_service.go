@@ -20,14 +20,11 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 	s.lifecycle = newInvocationLifecycle(
 		serviceJournal{service: s},
 		s.deps.Worker,
-		s.deps.Terminal,
-		s.deps.Harness,
 		s.deps.HarnessCapabilities,
 		s.worktreeInspector(),
 		s.deps.Now,
 		invocationLifecycleHooks{
 			persistRun:               s.persistAgentRunState,
-			notifyWorkspace:          s.notifyWorkspace,
 			publishReviewStatus:      s.publishReviewStatus,
 			refreshReviewPullRequest: s.refreshSpecificationReviewPullRequest,
 			reconcileInterrupted:     s.reconcileInterruptedRunWithMode,
@@ -98,32 +95,6 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 		s.markInvocationStarted(result.Invocation.ID)
 	}
 	return result, err
-}
-
-// Attach is the coordinator entry point for terminal-topology restoration and
-// manual native-session acknowledgement.
-func (s *Service) Attach(ctx context.Context, request AttachRequest) (AttachResult, error) {
-	if err := validateOptionalRunID(request.RunID); err != nil {
-		return AttachResult{}, err
-	}
-	s.commandMu.Lock()
-	defer s.commandMu.Unlock()
-	registration, runStore, err := s.openRunStore(ctx)
-	if err != nil {
-		return AttachResult{}, err
-	}
-	defer func() { _ = runStore.Close() }()
-	run, err := readReconciliationRun(ctx, runStore)
-	if err != nil {
-		return AttachResult{}, fmt.Errorf("read run for attach: %w", err)
-	}
-	if run == nil {
-		return AttachResult{}, errors.New("no persisted run")
-	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return AttachResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
-	}
-	return s.lifecycleModule().Attach(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run})
 }
 
 // RefreshAuth is the coordinator entry point for managed credential

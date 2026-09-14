@@ -1,7 +1,6 @@
 package factory
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -307,10 +305,6 @@ func credentialHarnessLabel(harnessName string) string {
 // harness printed before the coordinator tore its session down.
 const harnessFailureDiagnosticName = "harness-failure.log"
 
-// harnessTranscriptLines bounds a diagnostic surface read, matching the bound
-// the harness adapter applies when it captures a failing launch.
-const harnessTranscriptLines = 200
-
 // maxHarnessFailureDiagnosticBytes bounds coordinator-side retained harness
 // output, including output captured after a detached process has exited.
 const maxHarnessFailureDiagnosticBytes = 16 << 10
@@ -332,7 +326,7 @@ func writeHarnessFailureDiagnostic(invocationRoot, occasion string, cause error,
 	}
 	path := filepath.Join(invocationRoot, harnessFailureDiagnosticName)
 	transcript = boundHarnessFailureTranscript(transcript)
-	body := fmt.Sprintf("observed at: %s\noccasion: %s\ncause: %v\n\nsurface output:\n%s\n", observedAt.Format(time.RFC3339), occasion, cause, transcript)
+	body := fmt.Sprintf("observed at: %s\noccasion: %s\ncause: %v\n\nharness output:\n%s\n", observedAt.Format(time.RFC3339), occasion, cause, transcript)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		return ""
 	}
@@ -354,24 +348,6 @@ func boundHarnessFailureTranscript(transcript string) string {
 	head := retained / 2
 	tail := retained - head
 	return transcript[:head] + harnessDiagnosticTruncationMarker + transcript[len(transcript)-tail:]
-}
-
-// captureSurfaceTranscript reads a surface's recent output when the terminal
-// adapter exposes that capability. It is the coordinator-side counterpart to
-// the harness adapter's launch capture, used where the coordinator, not the
-// adapter, is the first to observe that a session is gone.
-func captureSurfaceTranscript(ctx context.Context, runtime terminal.TerminalRuntime, surfaceID terminal.SurfaceID) string {
-	reader, readable := runtime.(terminal.SurfaceReader)
-	if !readable || strings.TrimSpace(string(surfaceID)) == "" {
-		return ""
-	}
-	captureContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	transcript, err := reader.ReadSurface(captureContext, surfaceID, harnessTranscriptLines)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(transcript)
 }
 
 // invocationRoot returns the private per-invocation directory holding one

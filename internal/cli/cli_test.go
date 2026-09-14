@@ -149,6 +149,18 @@ func TestRunRejectsAnUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestRunRejectsRemovedAttachCommand(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"attach"}, &output, &output); code != 2 {
+		t.Fatalf("attach exit code = %d, want unknown-command exit code 2", code)
+	}
+	if !strings.Contains(output.String(), `unknown command "attach"`) {
+		t.Fatalf("attach output = %q, want removed command diagnostic", output.String())
+	}
+}
+
 func TestRunRequiresACommand(t *testing.T) {
 	t.Parallel()
 
@@ -160,7 +172,7 @@ func TestRunRequiresACommand(t *testing.T) {
 	if !strings.Contains(output.String(), "a command is required") {
 		t.Fatalf("output = %q", output.String())
 	}
-	for _, command := range []string{"resume", "attach", "auth"} {
+	for _, command := range []string{"resume", "auth"} {
 		if !strings.Contains(output.String(), command) {
 			t.Fatalf("missing %q recovery command in help-like error: %q", command, output.String())
 		}

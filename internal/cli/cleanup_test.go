@@ -31,7 +31,7 @@ func TestCleanupCommandPrintsTargetsBeforeConfirmation(t *testing.T) {
 		}
 	}
 	if err := config.SaveHost(configPath, config.HostConfig{
-		SchemaVersion: 1,
+		SchemaVersion: config.CurrentHostSchemaVersion,
 		Repositories: []config.RepositoryRegistration{{
 			Path:                 repositoryPath,
 			GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
@@ -64,15 +64,14 @@ func TestCleanupCommandPrintsTargetsBeforeConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := opened.SaveInvocation(context.Background(), store.Invocation{
-		ID:          "invocation-cli-cleanup",
-		RunID:       "run-cli-cleanup",
-		Harness:     "codex",
-		Role:        "implementation",
-		Stage:       store.StageImplementation,
-		Status:      store.InvocationStatusCompleted,
-		WorkspaceID: "workspace-cli-cleanup",
-		CreatedAt:   now.Add(-8 * 24 * time.Hour),
-		UpdatedAt:   now.Add(-8 * 24 * time.Hour),
+		ID:        "invocation-cli-cleanup",
+		RunID:     "run-cli-cleanup",
+		Harness:   "codex",
+		Role:      "implementation",
+		Stage:     store.StageImplementation,
+		Status:    store.InvocationStatusCompleted,
+		CreatedAt: now.Add(-8 * 24 * time.Hour),
+		UpdatedAt: now.Add(-8 * 24 * time.Hour),
 	}); err != nil {
 		_ = opened.Close()
 		t.Fatal(err)
@@ -90,13 +89,15 @@ func TestCleanupCommandPrintsTargetsBeforeConfirmation(t *testing.T) {
 		"cleanup worktree: " + worktreePath,
 		"cleanup branch: factory/run-cli-cleanup (local only; remote retained)",
 		"cleanup container: run=run-cli-cleanup",
-		"cleanup terminal workspace: workspace-cli-cleanup",
 		"cleanup stored output:",
 		"cleanup requires --confirm; no resources removed",
 	} {
 		if !strings.Contains(output.String(), fragment) {
 			t.Fatalf("cleanup output = %q, missing %q", output.String(), fragment)
 		}
+	}
+	if strings.Contains(output.String(), "workspace-cli-cleanup") {
+		t.Fatalf("cleanup output = %q, want no removed local-UI projection", output.String())
 	}
 	if _, err := os.Stat(worktreePath); err != nil {
 		t.Fatalf("worktree after preview: %v", err)

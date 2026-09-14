@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -94,12 +93,7 @@ type HeadlessInspection struct {
 // HeadlessRuntime is the factory-owned lifecycle seam for terminal-free
 // harnesses. It contains no workspace, surface, keystroke, or screen concept.
 type HeadlessRuntime interface {
-	// Capabilities reports the headless adapter identity and resume support.
-	Capabilities() Capabilities
-	// StartHeadless launches a fresh native process.
-	StartHeadless(context.Context, HeadlessStartRequest) (HeadlessSession, error)
-	// ResumeHeadless launches the exact recorded native session.
-	ResumeHeadless(context.Context, HeadlessStartRequest) (HeadlessSession, error)
+	Runtime
 	// InspectHeadless reads process state and bounded machine output.
 	InspectHeadless(context.Context, HeadlessInspectionRequest) (HeadlessInspection, error)
 	// CancelHeadless requests idempotent process cancellation.
@@ -252,7 +246,7 @@ func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, com
 	if h.worker == nil {
 		return HeadlessSession{}, errors.New("worker runtime does not support headless processes")
 	}
-	environment := invocationEnvironment(h.protocol.name, StartRequest{
+	environment := invocationEnvironment(h.protocol.name, HeadlessStartRequest{
 		InvocationID: request.InvocationID, RunID: request.RunID, Role: request.Role,
 		Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Model: request.Model,
 	})
@@ -446,103 +440,6 @@ func HeadlessDiagnostics(err error) string {
 	return failure.Diagnostics
 }
 
-// AdaptHeadlessRuntime supplies the legacy Runtime shape to durable effect
-// replay while preserving the coordinator-owned terminal-free implementation.
-func AdaptHeadlessRuntime(runtime HeadlessRuntime) Runtime {
-	if runtime == nil {
-		return nil
-	}
-	return &headlessRuntimeAdapter{runtime: runtime}
-}
-
-// headlessRuntimeAdapter is the narrow compatibility bridge used by existing
-// effect journals while new lifecycle code resolves HeadlessRuntime directly.
-type headlessRuntimeAdapter struct {
-	runtime HeadlessRuntime
-}
-
-// Capabilities delegates static headless capabilities.
-func (a *headlessRuntimeAdapter) Capabilities() Capabilities {
-	capabilities := a.runtime.Capabilities()
-	// A HeadlessRuntime has no terminal topology by construction. Keep the
-	// compatibility capability true even for small embedding fakes that only
-	// fill the adapter name and resume bit.
-	capabilities.Headless = true
-	return capabilities
-}
-
-// Start maps the legacy request and rejects any terminal topology.
-func (a *headlessRuntimeAdapter) Start(ctx context.Context, request StartRequest) (Session, error) {
-	if hasTerminalTopology(request.WorkspaceID, request.Surface) {
-		return Session{}, errors.New("headless harness cannot receive terminal workspace or surface")
-	}
-	result, err := a.runtime.StartHeadless(ctx, headlessRequest(request))
-	return sessionFromHeadless(result), err
-}
-
-// Resume maps the legacy request and rejects any terminal topology.
-func (a *headlessRuntimeAdapter) Resume(ctx context.Context, request StartRequest) (Session, error) {
-	if hasTerminalTopology(request.WorkspaceID, request.Surface) {
-		return Session{}, errors.New("headless harness cannot receive terminal workspace or surface")
-	}
-	result, err := a.runtime.ResumeHeadless(ctx, headlessRequest(request))
-	return sessionFromHeadless(result), err
-}
-
-// Finish maps legacy effect state to idempotent headless cleanup.
-func (a *headlessRuntimeAdapter) Finish(ctx context.Context, session Session) error {
-	if hasTerminalTopology("", session.Surface) {
-		return errors.New("headless harness cannot finish a terminal session")
-	}
-	return a.runtime.FinishHeadless(ctx, HeadlessSession{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID})
-}
-
-// hasTerminalTopology reports whether a legacy-shaped request carries any
-// workspace or surface field that a headless adapter must reject.
-func hasTerminalTopology(workspaceID terminal.WorkspaceID, surface terminal.Surface) bool {
-	return workspaceID != "" || surface.ID != "" || surface.WorkspaceID != "" || strings.TrimSpace(surface.Name) != ""
-}
-
-// NativeSessionID forwards headless identity inspection through the legacy
-// effect adapter without exposing worker or terminal implementation details.
-func (a *headlessRuntimeAdapter) NativeSessionID(ctx context.Context, request NativeSessionRequest) (string, error) {
-	inspector, ok := a.runtime.(NativeSessionInspector)
-	if !ok {
-		return "", errors.New("headless harness does not support native session inspection")
-	}
-	return inspector.NativeSessionID(ctx, request)
-}
-
-// NativeSessionRunning forwards detached-process liveness through the legacy
-// effect adapter so restart diagnosis remains terminal-free.
-func (a *headlessRuntimeAdapter) NativeSessionRunning(ctx context.Context, request NativeSessionRequest) (bool, error) {
-	inspector, ok := a.runtime.(NativeSessionLivenessInspector)
-	if !ok {
-		return false, errors.New("headless harness does not support native session liveness")
-	}
-	return inspector.NativeSessionRunning(ctx, request)
-}
-
-// HeadlessFailureFor forwards terminal detached-process classification through
-// the compatibility bridge used by journal replay and lifecycle monitoring.
-func (a *headlessRuntimeAdapter) HeadlessFailureFor(ctx context.Context, request HeadlessInspectionRequest) error {
-	inspector, ok := a.runtime.(HeadlessFailureInspector)
-	if !ok {
-		return nil
-	}
-	return inspector.HeadlessFailureFor(ctx, request)
-}
-
-// headlessRequest translates the legacy prompt contract to the headless seam.
-func headlessRequest(request StartRequest) HeadlessStartRequest {
-	return HeadlessStartRequest{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Prompt: request.Prompt, Model: request.Model, ReasoningEffort: request.ReasoningEffort, ResumeSessionID: request.ResumeSessionID}
-}
-
-// sessionFromHeadless translates one headless identity into the effect seam.
-func sessionFromHeadless(session HeadlessSession) Session {
-	return Session{InvocationID: session.InvocationID, RunID: session.RunID, WorkerID: session.WorkerID, NativeSessionID: session.NativeSessionID}
-}
-
 // validateHeadlessStartRequest validates the coordinator-owned launch fields.
 // The harness name only labels a refusal; every adapter enforces the same
 // neutral contract.
@@ -655,5 +552,3 @@ func containsAny(value string, markers ...string) bool {
 	}
 	return false
 }
-
-var _ Runtime = (*headlessRuntimeAdapter)(nil)

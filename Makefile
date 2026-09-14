@@ -6,12 +6,11 @@ BINDIR ?= bin
 BINARIES := \
 	$(BINDIR)/factory \
 	$(BINDIR)/factory-report \
-	$(BINDIR)/factory-worker-attach \
 	$(BINDIR)/factory-worker-headless
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all build test test-race vet fmt fmt-check check deps tidy install run report attach worker-build clean
+.PHONY: help all build test test-race vet fmt fmt-check check deps tidy install run report worker-build clean
 
 help: ## Show the available development commands.
 	@awk 'BEGIN { FS = ":.*##"; print "Usage: make <target>\n"; print "Targets:" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -22,7 +21,6 @@ build: ## Build all command binaries into BINDIR (default: bin).
 	@mkdir -p "$(BINDIR)"
 	$(GO) build -o "$(BINDIR)/factory" ./cmd/factory
 	$(GO) build -o "$(BINDIR)/factory-report" ./cmd/factory-report
-	$(GO) build -o "$(BINDIR)/factory-worker-attach" ./cmd/factory-worker-attach
 	$(GO) build -o "$(BINDIR)/factory-worker-headless" ./cmd/factory-worker-headless
 
 test: ## Run the complete Go test suite.
@@ -60,9 +58,6 @@ run: ## Run the coordinator CLI; pass arguments with ARGS='status --help'.
 
 report: ## Run the structured-report CLI; pass arguments with ARGS='--help'.
 	$(GO) run ./cmd/factory-report $(ARGS)
-
-attach: ## Run the worker-attach CLI; pass arguments with ARGS='--help'.
-	$(GO) run ./cmd/factory-worker-attach $(ARGS)
 
 worker-build: ## Build and verify the pinned worker images, then print the config digest.
 	./scripts/build-worker.sh

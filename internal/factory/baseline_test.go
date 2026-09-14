@@ -343,7 +343,7 @@ func newBaselineFixture(t *testing.T, issueBody string, results []worker.Command
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-baseline", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{Branch: "factory/run-baseline", HeadSHA: factoryGateCheckpoint},
 	}
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath:  operationalPath,

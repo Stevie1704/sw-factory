@@ -16,7 +16,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"github.com/google/uuid"
@@ -41,17 +40,15 @@ type Factory interface {
 	// RunBaseline evaluates the frozen repository gate model before agent edits.
 	RunBaseline(context.Context, BaselineRequest) (BaselineResult, error)
 	RunGate(context.Context, RunGateRequest) (gate.Result, error)
-	// StartAgent launches the visible Codex test, implementation, or review role for an active run.
+	// StartAgent launches the Codex or Claude test, implementation, or review role for an active run.
 	StartAgent(context.Context, AgentRequest) (AgentLaunchResult, error)
-	// AcceptAgentReport validates and accepts one structured visible-agent handoff.
+	// AcceptAgentReport validates and accepts one structured invocation handoff.
 	AcceptAgentReport(context.Context, AgentReportRequest) (AgentResult, error)
-	// RunAgent launches a visible agent and accepts its already-written report.
+	// RunAgent launches a harness invocation and accepts its already-written report.
 	RunAgent(context.Context, AgentRequest) (AgentResult, error)
 	// Resume performs an explicit native-session or harness-capacity recovery,
 	// or re-enters a coordinator-owned check paused by restart reconciliation.
 	Resume(context.Context, ResumeRequest) (ResumeResult, error)
-	// Attach acknowledges and reattaches a manually resumed visible session.
-	Attach(context.Context, AttachRequest) (AttachResult, error)
 	// RefreshAuth reseeds one factory-managed harness credential from its host
 	// source without modifying the source.
 	RefreshAuth(context.Context, AuthRefreshRequest) (AuthRefreshResult, error)
@@ -113,8 +110,6 @@ type OperationalStore interface {
 type RunStore interface {
 	OperationalStore
 	SaveRun(context.Context, store.Run) error
-	ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error)
-	ReleaseLifecycleNotification(context.Context, string, store.Status) error
 }
 
 // LatestRunStore extends the operational-store seam with the most recently
@@ -173,16 +168,11 @@ type Dependencies struct {
 	// Comments lists issue and pull-request comments for command polling.
 	Comments github.CommentReader
 	Worker   worker.WorkerRuntime
-	// Terminal owns visible control and run workspaces.
-	Terminal terminal.TerminalRuntime
-	// Harness owns interactive role lifecycle and native session recovery.
-	Harness harness.Runtime
-	// HeadlessHarnesses own terminal-free role lifecycle, keyed by the
-	// repository-selected harness. They are used when no explicit legacy
-	// Harness adapter is injected.
+	// HeadlessHarnesses own detached role lifecycle, keyed by the
+	// repository-selected harness.
 	HeadlessHarnesses map[config.Harness]harness.HeadlessRuntime
 	// HarnessCapabilities resolves static adapter capabilities for startup and
-	// claim checks without launching a worker or terminal surface.
+	// claim checks without launching a worker process.
 	HarnessCapabilities harness.CapabilityResolver
 	Now                 Clock
 	NewRunID            RunIDGenerator
@@ -239,15 +229,13 @@ type InitResult struct {
 }
 
 type RegisterRequest struct {
-	RepositoryPath       string
-	GitHubOwner          string
-	GitHubRepository     string
-	AuthorizedUsers      []string
-	OperationalDataPath  string
-	PollingInterval      string
-	PollingBackoff       string
-	CmuxSocketPath       string
-	CmuxControlWorkspace string
+	RepositoryPath      string
+	GitHubOwner         string
+	GitHubRepository    string
+	AuthorizedUsers     []string
+	OperationalDataPath string
+	PollingInterval     string
+	PollingBackoff      string
 	// CodexAuthPath is an optional host-side Codex auth.json path.
 	CodexAuthPath string
 	// ClaudeAuthPath is an optional host-side Claude credential file path.
@@ -365,7 +353,7 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.HarnessCapabilities == nil {
 		dependencies.HarnessCapabilities = harness.CapabilitiesFor
 	}
-	if dependencies.HeadlessHarnesses == nil && dependencies.Harness == nil {
+	if dependencies.HeadlessHarnesses == nil {
 		if processRuntime, ok := dependencies.Worker.(worker.HeadlessProcessRuntime); ok {
 			dependencies.HeadlessHarnesses = harness.NewHeadlessAdapters(processRuntime)
 		}
@@ -441,7 +429,6 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		GitHub:               config.GitHubConfig{Owner: strings.TrimSpace(request.GitHubOwner), Repository: strings.TrimSpace(request.GitHubRepository)},
 		AuthorizedUsers:      request.AuthorizedUsers,
 		Polling:              config.PollingConfig{Interval: defaultString(request.PollingInterval, "30s"), Backoff: defaultString(request.PollingBackoff, "5m")},
-		Cmux:                 config.CmuxConfig{SocketPath: request.CmuxSocketPath, ControlWorkspace: request.CmuxControlWorkspace},
 		Authentication:       config.AuthenticationConfig{CodexAuthPath: request.CodexAuthPath, ClaudeAuthPath: request.ClaudeAuthPath},
 		OperationalDataPath:  operationalPath,
 		RepositoryConfigPath: repositoryConfigPath,

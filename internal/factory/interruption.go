@@ -24,24 +24,6 @@ type ResumeResult struct {
 	Run store.Run
 	// Invocation is the resumed or newly launched invocation.
 	Invocation store.Invocation
-	// WaitingForAttach reports that the native session must be acknowledged by
-	// factory attach before another workflow action can proceed.
-	WaitingForAttach bool
-}
-
-// AttachRequest selects the active run whose visible native session should be
-// reattached and released for workflow progression.
-type AttachRequest struct {
-	// RunID optionally selects one opaque factory run identifier.
-	RunID string
-}
-
-// AttachResult reports the run and invocation after an attach operation.
-type AttachResult struct {
-	// Run is the resulting durable run projection.
-	Run store.Run
-	// Invocation is the attached invocation.
-	Invocation store.Invocation
 }
 
 // AuthRefreshRequest selects the harness credential source to reseed into the
@@ -61,21 +43,6 @@ type AuthRefreshResult struct {
 	Invocation store.Invocation
 	// Harness identifies the refreshed adapter.
 	Harness config.Harness
-}
-
-// ManualResumeRequiredError reports that an explicit native resume completed
-// but the operator has not yet acknowledged the visible session.
-type ManualResumeRequiredError struct {
-	// RunID identifies the blocked run.
-	RunID string
-}
-
-// Error explains the attach gate without including any harness output.
-func (e *ManualResumeRequiredError) Error() string {
-	if e == nil {
-		return "manual harness resume requires attach"
-	}
-	return fmt.Sprintf("manual harness resume for run %q requires `factory attach` before progression", e.RunID)
 }
 
 // latestInvocationForAuthRefresh selects the active invocation or the latest
@@ -118,8 +85,7 @@ func validateOptionalRunID(runID string) error {
 	return nil
 }
 
-// resetStartupState lets a successful explicit attach reopen progression seams
-// in a long-lived embedded service that previously cached the attach gate.
+// resetStartupStateProjection clears a cached diagnosis after infrastructure changes.
 func (s *Service) resetStartupStateProjection() {
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()

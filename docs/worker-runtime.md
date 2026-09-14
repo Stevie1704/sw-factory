@@ -112,25 +112,14 @@ bounded again to 16 KiB. A stream that writes past the command capture limit
 returns a typed output-limit failure instead of a command result.
 `docs/agent-runtime.md` records how a role observes that failure.
 
-The contract tests use a controlled Docker executable. Live Docker, harness,
-and terminal checks remain environment checks and are not ordinary unit-test
-dependencies.
+The contract tests use a controlled Docker executable. Live Docker and harness
+checks remain environment checks and are not ordinary unit-test dependencies.
 
-## Visible harness attach
-
-`InteractiveRuntime` extends the worker seam with an opaque attach command. The
-Docker adapter returns the host helper `factory-worker-attach` plus a run
-identifier, role environment, and harness command. The helper derives the
-private container name inside the worker adapter and attaches `docker exec -it`
-to the current process streams. A terminal adapter can therefore launch Codex
-in a real pseudo-terminal without learning Docker identifiers.
-
-The terminal surface is for observation and human input only. The coordinator
-does not scrape its output. A headless process publishes no workflow completion
-through its machine event stream; every harness publishes completion with
-`factory-report`, which atomically writes a schema-versioned JSON report below
-`/results`; the coordinator validates that report against the persisted
-invocation, current worktree, permitted paths, and stage invariants.
+Every harness publishes completion with `factory-report`, which atomically
+writes a schema-versioned JSON report below `/results`; the coordinator
+validates that report against the persisted invocation, current worktree,
+permitted paths, and stage invariants. Machine events and captured output do
+not publish workflow completion.
 
 ## Recovery lifecycle
 
@@ -142,18 +131,16 @@ invocation mounts are stale, the adapter recreates it from the persisted
 factory-managed credential volume survive that recreation; the invocation and
 result directories are mounted again from their persisted paths.
 
-Interactive harness adapters inspect the worker process table through the same
-command seam used by gates. A headless adapter uses the worker-owned
-process-state inspection instead. If the persisted native session process exits after launch,
+Harness adapters use worker-owned process-state inspection. If the persisted
+native session process exits after launch,
 the coordinator records that interruption and applies its bounded resume policy
-without using terminal text or model output as a correctness signal. An exited
+without using native output or model text as a correctness signal. An exited
 process with a regular report is left for normal report acceptance; only a
 missing report enters native-resume recovery.
 
 When harness capacity is unavailable, the coordinator stops the worker and
 records `waiting_for_harness`; the polling supervisor retries after capacity
 returns. An expired credential stops the worker and waits for an explicit
-`factory auth refresh`. A native harness resume that needs operator judgment is
-followed by `factory attach`, which can recreate the worker or cmux workspace
-before releasing the workflow attach gate. No worker recreation or harness
-capacity wait changes the run's workflow retry budget.
+`factory auth refresh`. A manual `factory resume` restarts the exact persisted
+native session without changing the workflow retry budget. No worker
+recreation or harness-capacity wait changes that budget either.

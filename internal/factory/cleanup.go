@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -18,12 +18,6 @@ const (
 	// CleanupRetention is the minimum age of a terminal run before ordinary
 	// local run artifacts may be removed.
 	CleanupRetention = 7 * 24 * time.Hour
-	// cleanupWorkspaceCloseTimeout bounds one best-effort terminal workspace
-	// close so an unresponsive terminal cannot stall local deletion. The
-	// adapter adds its own wait delay after this deadline kills the command,
-	// so one close costs slightly more than this and a run costs one close per
-	// workspace it owns.
-	cleanupWorkspaceCloseTimeout = 10 * time.Second
 )
 
 // CleanupStore is the operational-store seam needed to list and delete local
@@ -64,10 +58,6 @@ type CleanupRun struct {
 	Branch string
 	// Worktree is the exact local worktree path to remove.
 	Worktree string
-	// WorkspaceIDs contains the opaque terminal workspace handles this run
-	// created. Cleanup is the last operation that knows them, because the
-	// deleted invocation rows are their only durable record.
-	WorkspaceIDs []string
 	// WorkerRunID is the logical worker identity passed to the runtime adapter;
 	// Docker names remain private to that adapter.
 	WorkerRunID string
@@ -100,19 +90,6 @@ type CleanupPlan struct {
 	Skipped []CleanupSkippedRun
 }
 
-// CleanupRetainedWorkspace reports one terminal workspace that survived a
-// confirmed cleanup. Its run's local resources are already removed, so the
-// operator has to close the workspace by hand.
-type CleanupRetainedWorkspace struct {
-	// RunID identifies the run that created the workspace.
-	RunID string
-	// WorkspaceID is the opaque terminal workspace handle left in place.
-	WorkspaceID string
-	// Reason is the single-line operator-facing explanation of why the close
-	// did not happen.
-	Reason string
-}
-
 // CleanupResult contains the preview and any operational rows removed after
 // confirmation.
 type CleanupResult struct {
@@ -120,9 +97,6 @@ type CleanupResult struct {
 	Plan CleanupPlan
 	// Deleted contains one row-count projection for each removed run.
 	Deleted []store.CleanupDeletionResult
-	// Retained contains every workspace that could not be closed. Local
-	// deletion continues regardless, so this is a report, not a failure.
-	Retained []CleanupRetainedWorkspace
 }
 
 // CleanupConfirmationRequiredError tells a CLI or embedder to display the
@@ -156,9 +130,7 @@ func (*CleanupPlanChangedError) Error() string { return "cleanup plan changed; p
 // Cleanup previews eligible local artifacts and removes them only when the
 // caller explicitly confirms the complete plan. It reads the lifecycle of a
 // tracked pull request but never mutates GitHub, deletes remote branches, or
-// removes local evaluation summaries. A confirmed cleanup also closes the
-// terminal workspaces of every removed run, because their handles live only in
-// the invocation rows this operation deletes.
+// removes local evaluation summaries.
 func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupResult, error) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
@@ -215,10 +187,6 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 			rollback()
 			return result, fmt.Errorf("clean worker for run %q: %w", target.RunID, err)
 		}
-		// The terminal workspace runs in the worktree that the next step
-		// removes, so it is closed first. A close failure never blocks local
-		// deletion; it is reported instead.
-		result.Retained = append(result.Retained, s.closeRunWorkspaces(ctx, registration.Cmux.SocketPath, target)...)
 		if err := workspace.Remove(ctx, registration.Path, gitadapter.Workspace{RunID: target.RunID, Branch: target.Branch, Worktree: target.Worktree}); err != nil {
 			rollback()
 			return result, fmt.Errorf("remove Git workspace for run %q: %w", target.RunID, err)
@@ -237,44 +205,6 @@ func (s *Service) Cleanup(ctx context.Context, request CleanupRequest) (CleanupR
 		}
 	}
 	return result, nil
-}
-
-// closeRunWorkspaces closes every terminal workspace one cleanup target owns
-// and returns the workspaces that survived. Cleanup must still remove local
-// resources when the terminal server is absent, so an unavailable runtime and
-// a rejected close are both reported rather than returned as errors.
-func (s *Service) closeRunWorkspaces(ctx context.Context, socketPath string, target CleanupRun) []CleanupRetainedWorkspace {
-	if len(target.WorkspaceIDs) == 0 {
-		return nil
-	}
-	terminalRuntime := s.deps.Terminal
-	if terminalRuntime == nil {
-		var err error
-		terminalRuntime, err = s.lifecycleModule().ensureTerminalRuntime(socketPath)
-		if err != nil {
-			retained := make([]CleanupRetainedWorkspace, 0, len(target.WorkspaceIDs))
-			reason := safeStatusCommentValue(fmt.Sprintf("ensure terminal runtime: %v", err))
-			for _, workspaceID := range target.WorkspaceIDs {
-				retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: reason})
-			}
-			return retained
-		}
-	}
-	var retained []CleanupRetainedWorkspace
-	for _, workspaceID := range target.WorkspaceIDs {
-		// An unreachable terminal can accept the connection and never answer,
-		// so each close is bounded rather than allowed to stall the removal of
-		// local resources that follows it.
-		closeCtx, cancel := context.WithTimeout(ctx, cleanupWorkspaceCloseTimeout)
-		err := terminalRuntime.CloseWorkspace(closeCtx, terminal.WorkspaceID(workspaceID))
-		cancel()
-		if err != nil {
-			// Adapter stderr reaches the operator's plan output verbatim, so a
-			// multi-line failure must not be able to forge a cleanup line.
-			retained = append(retained, CleanupRetainedWorkspace{RunID: target.RunID, WorkspaceID: workspaceID, Reason: safeStatusCommentValue(err.Error())})
-		}
-	}
-	return retained
 }
 
 // openCleanupStore loads the registered repository and opens its cleanup-capable
@@ -357,7 +287,6 @@ func (s *Service) cleanupTarget(ctx context.Context, registration config.Reposit
 		RepositoryPath: registration.Path,
 		Branch:         resources.Branch,
 		Worktree:       resources.Worktree,
-		WorkspaceIDs:   resources.WorkspaceIDs,
 		WorkerRunID:    run.ID,
 		WorkerIDs:      resources.WorkerIDs,
 		StoredOutputs:  resources.StoredOutputs,
@@ -373,26 +302,12 @@ func cleanupPlansEqual(left, right CleanupPlan) bool {
 	}
 	for index := range left.Runs {
 		leftRun, rightRun := left.Runs[index], right.Runs[index]
-		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !stringSlicesEqual(leftRun.WorkspaceIDs, rightRun.WorkspaceIDs) || !stringSlicesEqual(leftRun.WorkerIDs, rightRun.WorkerIDs) || !stringSlicesEqual(leftRun.StoredOutputs, rightRun.StoredOutputs) || !stringSlicesEqual(leftRun.Roles, rightRun.Roles) {
+		if leftRun.RunID != rightRun.RunID || leftRun.Status != rightRun.Status || !leftRun.EligibleAt.Equal(rightRun.EligibleAt) || leftRun.RepositoryPath != rightRun.RepositoryPath || leftRun.Branch != rightRun.Branch || leftRun.Worktree != rightRun.Worktree || leftRun.WorkerRunID != rightRun.WorkerRunID || !slices.Equal(leftRun.WorkerIDs, rightRun.WorkerIDs) || !slices.Equal(leftRun.StoredOutputs, rightRun.StoredOutputs) || !slices.Equal(leftRun.Roles, rightRun.Roles) {
 			return false
 		}
 	}
 	for index := range left.Skipped {
 		if left.Skipped[index] != right.Skipped[index] {
-			return false
-		}
-	}
-	return true
-}
-
-// stringSlicesEqual compares ordered cleanup target fields without exposing a
-// mutable alias through the plan comparison.
-func stringSlicesEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
 			return false
 		}
 	}

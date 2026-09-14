@@ -28,10 +28,10 @@ func TestWriteAtomicWritesOneInvocationReport(t *testing.T) {
 		Summary:       "implemented the requested behavior",
 		Handoff: &report.Handoff{
 			ChangeSummary:          "added the implementation",
-			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "visible agent", Evidence: "contract test"}},
+			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "harness invocation", Evidence: "contract test"}},
 			ProductionFilesChanged: []string{"internal/factory/agent.go"},
 			FocusedCommands:        []string{"go test ./internal/factory"},
-			KnownLimitations:       []string{"live cmux rendering needs an operator check"},
+			KnownLimitations:       []string{"external service availability needs an operator check"},
 		},
 		ReportedAt: time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC),
 	}

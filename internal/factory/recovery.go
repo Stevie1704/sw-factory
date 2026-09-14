@@ -17,7 +17,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -253,14 +252,14 @@ func (e *RecoveryRequiredError) Error() string {
 func (e *RecoveryRequiredError) Code() string { return RecoveryRequiredCode }
 
 // diagnoseInterruptedRun compares all available persisted and external
-// identity projections without mutating Git, GitHub, the worker, the terminal,
-// the harness, or operational workflow state.
+// identity projections without mutating Git, GitHub, the worker, the harness,
+// or operational workflow state.
 func (s *Service) diagnoseInterruptedRun(ctx context.Context, registration config.RepositoryRegistration, run store.Run) RecoveryDiagnosis {
 	return s.diagnoseInterruptedRunWithStore(ctx, registration, nil, run)
 }
 
 // diagnoseInterruptedRunWithStore extends the read-only recovery diagnosis
-// with persisted invocation, worker, terminal, native-session, and remote
+// with persisted invocation, worker, native-session, and remote
 // branch projections when the operational store exposes those identities.
 func (s *Service) diagnoseInterruptedRunWithStore(ctx context.Context, registration config.RepositoryRegistration, runStore OperationalStore, run store.Run) RecoveryDiagnosis {
 	diagnosis := newRecoveryDiagnosis(run.ID)
@@ -526,9 +525,9 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	}
 	if invocationProjectionNeverEstablished(*active) {
 		// The launch boundary rolled this invocation back before its agent
-		// started, so it owns no live worker, terminal, or harness projection.
-		// Any workspace or surface it had already reserved was torn down by the
-		// same rollback. Its identities are the durable result of that completed
+		// started, so it owns no live worker or harness projection. Any process it
+		// had already reserved was torn down by the same rollback. Its identities
+		// are the durable result of that completed
 		// rollback rather than restart drift, and comparing them with live
 		// projections would block every later start permanently.
 		return
@@ -543,7 +542,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			Observed: "empty",
 		})
 	}
-	if terminalInvocationProjectionExpectedStopped(run, *active) {
+	if completedInvocationProjectionExpectedStopped(run, *active) {
 		// A completed implementation invocation intentionally leaves its worker
 		// and native process stopped while the coordinator evaluates the check
 		// stage (and readiness similarly has no live agent). The worker adapter
@@ -660,7 +659,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			}
 		}
 	}
-	_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
+	harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(config.Harness(active.Harness))
 	if runtimeErr != nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 			Kind:     RecoveryDiscrepancyInfrastructure,
@@ -670,25 +669,6 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			Observed: runtimeErr.Error(),
 		})
 		return
-	}
-	headless := coordinatorUsesHeadless(harnessRuntime)
-	if !headless {
-		terminalRuntime := s.deps.Terminal
-		if terminalRuntime == nil {
-			terminalRuntime = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
-		}
-		terminalInspector, ok := terminalRuntime.(terminal.WorkspaceInspector)
-		if !ok {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-				Kind:     RecoveryDiscrepancyInfrastructure,
-				Source:   "cmux",
-				Field:    "inspection",
-				Expected: "read persisted workspace and surface identities",
-				Observed: "terminal inspector unavailable",
-			})
-		} else {
-			inspectTerminalProjection(ctx, diagnosis, terminalInspector, *active)
-		}
 	}
 	if !hasNativeSession {
 		return
@@ -742,27 +722,25 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 					Recoverable: workerProjectionLost,
 				})
 			} else if !running {
-				if headless {
-					presence, presenceErr := structuredReportPresenceForInvocation(*active)
-					if presenceErr == nil && presence == structuredReportPresent {
-						// A detached harness process may exit immediately after
-						// writing the authoritative report. Report polling owns
-						// acceptance; recovery must not classify that as a lost
-						// native session.
-						return
+				presence, presenceErr := structuredReportPresenceForInvocation(*active)
+				if presenceErr == nil && presence == structuredReportPresent {
+					// A detached harness process may exit immediately after
+					// writing the authoritative report. Report polling owns
+					// acceptance; recovery must not classify that as a lost
+					// native session.
+					return
+				}
+				failure, diagnostics, classified := classifyHeadlessExit(harnessRuntime, ctx, harness.HeadlessInspectionRequest{
+					InvocationID: active.ID, RunID: run.ID, WorkerID: workerIDForInvocation(*active), Role: active.Role,
+				}, active.Harness)
+				if classified {
+					if diagnostics != "" {
+						_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, s.lifecycleModule().clock().UTC())
 					}
-					failure, diagnostics, classified := classifyHeadlessExit(harnessRuntime, ctx, harness.HeadlessInspectionRequest{
-						InvocationID: active.ID, RunID: run.ID, WorkerID: workerIDForInvocation(*active), Role: active.Role,
-					}, active.Harness)
-					if classified {
-						if diagnostics != "" {
-							_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, s.lifecycleModule().clock().UTC())
-						}
-						if harness.IsRateLimited(failure) || harness.IsAuthenticationExpired(failure) {
-							diagnosis.headlessFailure = failure
-							diagnosis.headlessFailureHarness = active.Harness
-							return
-						}
+					if harness.IsRateLimited(failure) || harness.IsAuthenticationExpired(failure) {
+						diagnosis.headlessFailure = failure
+						diagnosis.headlessFailureHarness = active.Harness
+						return
 					}
 				}
 				addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
@@ -791,9 +769,8 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 // invocationProjectionNeverEstablished reports that a historical invocation was
 // rolled back at the launch boundary before its agent ever started. The native
 // session identifier is the anchor of every live projection, so a rolled-back
-// invocation without one owns no worker, terminal, or harness state to compare,
-// whether or not it had already reserved a workspace or a surface: the rollback
-// stops the worker and closes the surface it created. The coordinator must read
+// invocation without one owns no worker or harness state to compare: the
+// rollback stops the worker process. The coordinator must read
 // those identities as recorded history rather than as an infrastructure
 // discrepancy. A legacy cannot-proceed rollback is accepted for compatibility;
 // a superseded rollback is accepted only with the durable LaunchVoided marker
@@ -812,11 +789,11 @@ func invocationProjectionNeverEstablished(invocation store.Invocation) bool {
 	return invocation.Status == store.InvocationStatusSuperseded && invocation.LaunchVoided
 }
 
-// terminalInvocationProjectionExpectedStopped reports the coordinator-owned
+// completedInvocationProjectionExpectedStopped reports the coordinator-owned
 // boundaries where a completed invocation is historical rather than live. A
 // draft pull request may retain a gate worker whose contract deliberately
 // differs from the earlier implementation invocation.
-func terminalInvocationProjectionExpectedStopped(run store.Run, invocation store.Invocation) bool {
+func completedInvocationProjectionExpectedStopped(run store.Run, invocation store.Invocation) bool {
 	if invocation.Status == store.InvocationStatusActive {
 		return false
 	}
@@ -827,12 +804,12 @@ func terminalInvocationProjectionExpectedStopped(run store.Run, invocation store
 }
 
 // hasRecoverableInvocationLoss reports whether a previously consumed automatic
-// resume now has a worker, terminal, or harness projection that can be rebuilt
+// resume now has a worker or harness projection that can be rebuilt
 // from the durable invocation identity, but must still be escalated before
 // resuming.
 func hasRecoverableInvocationLoss(diagnosis RecoveryDiagnosis) bool {
 	for _, discrepancy := range diagnosis.Discrepancies {
-		if discrepancy.Recoverable && (discrepancy.Source == "worker" || discrepancy.Source == "cmux" || discrepancy.Source == "harness") {
+		if discrepancy.Recoverable && (discrepancy.Source == "worker" || discrepancy.Source == "harness") {
 			return true
 		}
 	}
@@ -869,55 +846,6 @@ func hasRecoverableInvocationLossFor(diagnosis RecoveryDiagnosis, invocationID s
 		}
 	}
 	return false
-}
-
-// inspectTerminalProjection compares every persisted non-empty cmux handle
-// with the current read-only topology.
-func inspectTerminalProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, inspector terminal.WorkspaceInspector, invocation store.Invocation) {
-	recoverable := invocation.Status == store.InvocationStatusActive && strings.TrimSpace(invocation.NativeSessionID) != ""
-	workspaceID := terminal.WorkspaceID(invocation.WorkspaceID)
-	if workspaceID == "" {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "workspace", Expected: "persisted workspace identity", Observed: "empty", Recoverable: recoverable})
-		return
-	}
-	observed, err := inspector.InspectWorkspace(ctx, workspaceID)
-	if err != nil {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "inspection", Expected: string(workspaceID), Observed: err.Error()})
-		return
-	}
-	if !observed.Exists {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "workspace", Expected: string(workspaceID), Observed: "missing", Recoverable: recoverable})
-		return
-	}
-	if observed.WorkspaceID != "" && observed.WorkspaceID != workspaceID {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: "workspace identity", Expected: string(workspaceID), Observed: string(observed.WorkspaceID)})
-	}
-	expectedSurfaces := []struct {
-		name string
-		id   string
-	}{
-		{name: "status", id: invocation.StatusSurfaceID},
-		{name: "role", id: string(invocationSurface(invocation).ID)},
-		{name: "checks", id: invocation.ChecksSurfaceID},
-	}
-	observedIDs := make(map[string]struct{}, len(observed.Surfaces))
-	observedSurfaces := make(map[string]terminal.Surface, len(observed.Surfaces))
-	for _, surface := range observed.Surfaces {
-		observedIDs[string(surface.ID)] = struct{}{}
-		observedSurfaces[string(surface.ID)] = surface
-	}
-	for _, expected := range expectedSurfaces {
-		if strings.TrimSpace(expected.id) == "" {
-			continue
-		}
-		if _, exists := observedIDs[expected.id]; !exists {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: expected.name + " surface", Expected: expected.id, Observed: "missing", Recoverable: recoverable})
-			continue
-		}
-		if surface := observedSurfaces[expected.id]; surface.WorkspaceID != "" && surface.WorkspaceID != workspaceID {
-			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Kind: RecoveryDiscrepancyInfrastructure, Source: "cmux", Field: expected.name + " workspace", Expected: string(workspaceID), Observed: string(surface.WorkspaceID)})
-		}
-	}
 }
 
 // Reconcile performs one explicit restart reconciliation for the registered
@@ -962,8 +890,8 @@ func (s *Service) recoverHeadlessNativeSessionIdentities(ctx context.Context, re
 		if active.Status != store.InvocationStatusActive || strings.TrimSpace(active.NativeSessionID) != "" {
 			continue
 		}
-		_, harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(registration.Cmux.SocketPath, config.Harness(active.Harness))
-		if runtimeErr != nil || !coordinatorUsesHeadless(harnessRuntime) {
+		harnessRuntime, runtimeErr := s.lifecycleModule().ensureCoordinatorHarnessRuntime(config.Harness(active.Harness))
+		if runtimeErr != nil {
 			continue
 		}
 		inspector, inspectable := harnessRuntime.(harness.NativeSessionInspector)
@@ -1250,7 +1178,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 					Observed: activeErr.Error(),
 				})
 				diagnosis.SourcesAgree = false
-			} else if active := recoveryTargetActiveInvocation(diagnosis, activeValues); active != nil && (allowSameProcessRecovery || !s.invocationStartedHere(active.ID)) && active.Status == store.InvocationStatusActive && !active.AttachRequired && strings.TrimSpace(active.NativeSessionID) != "" {
+			} else if active := recoveryTargetActiveInvocation(diagnosis, activeValues); active != nil && (allowSameProcessRecovery || !s.invocationStartedHere(active.ID)) && active.Status == store.InvocationStatusActive && strings.TrimSpace(active.NativeSessionID) != "" {
 				if diagnosis.SourcesAgree && active.RecoveryResumeCount > 0 && !hasRecoverableInvocationLoss(diagnosis) {
 					if credentialErr := s.lifecycleModule().restoreCredentialProjection(ctx, registration, run, *active); credentialErr != nil {
 						return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
@@ -1274,7 +1202,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 						if credentialErr := s.lifecycleModule().restoreCredentialProjection(ctx, registration, run, repairedInvocation); credentialErr != nil {
 							return s.pauseForCredentialProjection(ctx, registration, runStore, run, &diagnosis, active.Harness, credentialErr)
 						}
-						paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, harness.NewUnexpectedExitError(active.Harness))
+						paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
 						if pauseErr != nil {
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, pauseErr
 						}
@@ -1303,7 +1231,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, classified
 						}
 						if harness.IsUnexpectedExit(classified) {
-							paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness, classified)
+							paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
 							if pauseErr != nil {
 								return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
 							}
@@ -1472,7 +1400,7 @@ func harnessResumeWasAlreadyReserved(ctx context.Context, runStore RunStore, eff
 		return false
 	}
 	if record.Manual {
-		return invocation.AttachRequired
+		return invocation.ManualResumeCount >= record.TargetResumeCount
 	}
 	return invocation.RecoveryResumeCount >= record.TargetResumeCount
 }

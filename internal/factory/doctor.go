@@ -11,7 +11,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -60,14 +59,6 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 
 	headlessChecker := s.doctorHeadlessChecker()
 	allRolesHeadless := repositoryPolicy != nil && s.allRolesHeadless(*repositoryPolicy)
-	if !allRolesHeadless || headlessChecker == nil {
-		terminalChecker := s.deps.Terminal
-		if terminalChecker == nil {
-			terminalChecker = terminal.NewCmuxRuntime(nil, registration.Cmux.SocketPath)
-		}
-		checks = append(checks, terminal.StartupChecks(asTerminalDoctorChecker(terminalChecker))...)
-	}
-
 	checks = append(checks, worker.StartupChecks(s.doctorWorker(), image)...)
 	checks = append(checks, harness.StartupChecks(harness.StartupRequest{
 		Policy:                repositoryPolicy,
@@ -99,14 +90,6 @@ func (s *Service) doctorGitWorkspace() gitadapter.DoctorChecker {
 		return checker
 	}
 	checker, _ := s.deps.Worktree.(gitadapter.DoctorChecker)
-	return checker
-}
-
-// asTerminalDoctorChecker resolves terminal diagnosis without expanding the
-// portable TerminalRuntime interface for callers that provide their own
-// adapter.
-func asTerminalDoctorChecker(runtime terminal.TerminalRuntime) terminal.DoctorChecker {
-	checker, _ := runtime.(terminal.DoctorChecker)
 	return checker
 }
 

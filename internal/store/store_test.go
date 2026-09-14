@@ -51,6 +51,142 @@ func TestOpenCreatesVersionedStoreWithNoActiveRun(t *testing.T) {
 	}
 }
 
+func TestCurrentInvocationSchemaContainsNoTerminalProjection(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	for _, retired := range []string{"workspace_id", "status_surface_id", "role_surface_id", "implementation_surface_id", "checks_surface_id", "attach_required"} {
+		if testInvocationColumnExists(t, database, retired) {
+			t.Fatalf("current invocations table still contains retired column %q", retired)
+		}
+	}
+	for _, retired := range []string{"lifecycle_notification_sent", "ready_notification_sent", "clarification_notification_sent"} {
+		if testOperationalRunsColumnExists(t, database, retired) {
+			t.Fatalf("current operational_runs table still contains retired column %q", retired)
+		}
+	}
+	var notificationTables int
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'lifecycle_notifications'`).Scan(&notificationTables); err != nil {
+		t.Fatalf("inspect lifecycle notification table: %v", err)
+	}
+	if notificationTables != 0 {
+		t.Fatal("current schema still contains retired lifecycle_notifications table")
+	}
+}
+
+// TestSchema36MigrationPreservesHeadlessInvocationState verifies the table
+// rebuild removes only retired local-UI columns from a populated schema-35
+// database while retaining restart and uniqueness invariants.
+func TestSchema36MigrationPreservesHeadlessInvocationState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		"ALTER TABLE invocations DROP COLUMN manual_resume_count",
+		"ALTER TABLE invocations ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE invocations ADD COLUMN status_surface_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE invocations ADD COLUMN role_surface_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE invocations ADD COLUMN implementation_surface_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE invocations ADD COLUMN checks_surface_id TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE invocations ADD COLUMN attach_required INTEGER NOT NULL DEFAULT 0",
+		"UPDATE schema_metadata SET version = 35 WHERE singleton = 1",
+	}
+	for _, statement := range statements {
+		if _, err := database.ExecContext(t.Context(), statement); err != nil {
+			_ = database.Close()
+			t.Fatalf("prepare schema-35 fixture with %q: %v", statement, err)
+		}
+	}
+	created := "2026-08-20T10:00:00.000000000Z"
+	updated := "2026-08-20T10:01:00.000000000Z"
+	insert := "INSERT INTO invocations (" +
+		"id, run_id, harness, role, stage, model, reasoning_effort, " +
+		"credential_store_id, native_session_id, invocation_directory, " +
+		"result_directory, permitted_paths, prompt_version, " +
+		"prompt_craft_source_path, prompt_craft_sha256, status, " +
+		"launch_voided, recovery_resume_count, created_at, updated_at, " +
+		"workspace_id, status_surface_id, role_surface_id, " +
+		"implementation_surface_id, checks_surface_id, attach_required" +
+		") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	_, err = database.ExecContext(t.Context(), insert,
+		"inv-migrate", "run-migrate", "claude", "implementation", store.StageImplementation,
+		"claude-opus", "high", "/repo", "native-1", "/packet", "/results",
+		"[\"internal/factory\"]", "implementation-v8", "docs/craft.md", strings.Repeat("a", 64),
+		store.InvocationStatusActive, 1, 1, created, updated,
+		"workspace-old", "status-old", "role-old", "implementation-old", "checks-old", 1)
+	if err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open(schema 35) error = %v", err)
+	}
+	defer func() { _ = migrated.Close() }()
+	got, err := migrated.Invocation(t.Context(), "run-migrate", "inv-migrate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Harness != "claude" || got.NativeSessionID != "native-1" ||
+		got.CredentialStoreID != "/repo" || got.PromptVersion != "implementation-v8" ||
+		got.RecoveryResumeCount != 1 || got.ManualResumeCount != 0 || !got.LaunchVoided ||
+		len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
+		t.Fatalf("migrated invocation = %#v, want retained headless state", got)
+	}
+	wantCreated, wantUpdated := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 20, 10, 1, 0, 0, time.UTC)
+	if !got.CreatedAt.Equal(wantCreated) || !got.UpdatedAt.Equal(wantUpdated) {
+		t.Fatalf("migrated timestamps = %s/%s, want %s/%s", got.CreatedAt, got.UpdatedAt, created, updated)
+	}
+	if err := migrated.SaveInvocation(t.Context(), store.Invocation{
+		ID: "inv-conflict", RunID: "run-migrate", Harness: "codex",
+		Role: "implementation", Stage: store.StageImplementation,
+		Status: store.InvocationStatusActive,
+	}); err == nil || !strings.Contains(err.Error(), "active invocation already exists") {
+		t.Fatalf("active-role conflict error = %v", err)
+	}
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("migration backups = %v, %v; want one", backups, err)
+	}
+	verification, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = verification.Close() }()
+	for _, retired := range []string{"workspace_id", "status_surface_id", "role_surface_id", "implementation_surface_id", "checks_surface_id", "attach_required"} {
+		if testInvocationColumnExists(t, verification, retired) {
+			t.Fatalf("migrated invocations table still contains retired column %q", retired)
+		}
+	}
+}
+
 // TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice verifies
 // schema 32 rows retain every active invocation when the singular projection is
 // removed.
@@ -531,16 +667,15 @@ func TestRunTerminalProjectionSurvivesStoreReopen(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	run := store.Run{
-		ID:                        "run-terminal",
-		RepositoryPath:            "/work/repository",
-		IssueNumber:               42,
-		Stage:                     store.StageReady,
-		Status:                    store.StatusComplete,
-		PullRequestNumber:         17,
-		PullRequestURL:            "https://github.com/example/project/pull/17",
-		MergeCommitSHA:            "0123456789abcdef0123456789abcdef0123456789",
-		LifecycleReason:           "pull request #17 merged",
-		LifecycleNotificationSent: true,
+		ID:                "run-terminal",
+		RepositoryPath:    "/work/repository",
+		IssueNumber:       42,
+		Stage:             store.StageReady,
+		Status:            store.StatusComplete,
+		PullRequestNumber: 17,
+		PullRequestURL:    "https://github.com/example/project/pull/17",
+		MergeCommitSHA:    "0123456789abcdef0123456789abcdef0123456789",
+		LifecycleReason:   "pull request #17 merged",
 	}
 	if err := opened.SaveRun(context.Background(), run); err != nil {
 		_ = opened.Close()
@@ -559,7 +694,7 @@ func TestRunTerminalProjectionSurvivesStoreReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestRun() error = %v", err)
 	}
-	if latest == nil || latest.MergeCommitSHA != run.MergeCommitSHA || latest.LifecycleReason != run.LifecycleReason || !latest.LifecycleNotificationSent {
+	if latest == nil || latest.MergeCommitSHA != run.MergeCommitSHA || latest.LifecycleReason != run.LifecycleReason {
 		t.Fatalf("LatestRun() = %#v, want terminal lifecycle projection", latest)
 	}
 }
@@ -1257,23 +1392,22 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	wanted := store.Run{
-		ID:                            "run-claim",
-		RepositoryPath:                "/work/repository",
-		IssueNumber:                   42,
-		Stage:                         store.StageClaim,
-		Status:                        store.StatusActive,
-		Branch:                        "factory/run-claim",
-		Worktree:                      "/worktrees/run-claim",
-		CheckpointSHA:                 "0123456789abcdef",
-		ImageDigest:                   "sha256:worker",
-		Coordinator:                   "host-a",
-		StatusCommentID:               "12345",
-		SpecificationPacket:           `{"version":1,"issue":{"number":42}}`,
-		PendingQuestions:              []store.PendingQuestion{{ID: "clarification-1", Prompt: "Which behavior is intended?"}},
-		ClarificationCommentID:        "67890",
-		ClarificationNotificationSent: true,
-		CreatedAt:                     time.Unix(100, 0).UTC(),
-		UpdatedAt:                     time.Unix(200, 0).UTC(),
+		ID:                     "run-claim",
+		RepositoryPath:         "/work/repository",
+		IssueNumber:            42,
+		Stage:                  store.StageClaim,
+		Status:                 store.StatusActive,
+		Branch:                 "factory/run-claim",
+		Worktree:               "/worktrees/run-claim",
+		CheckpointSHA:          "0123456789abcdef",
+		ImageDigest:            "sha256:worker",
+		Coordinator:            "host-a",
+		StatusCommentID:        "12345",
+		SpecificationPacket:    `{"version":1,"issue":{"number":42}}`,
+		PendingQuestions:       []store.PendingQuestion{{ID: "clarification-1", Prompt: "Which behavior is intended?"}},
+		ClarificationCommentID: "67890",
+		CreatedAt:              time.Unix(100, 0).UTC(),
+		UpdatedAt:              time.Unix(200, 0).UTC(),
 	}
 	if err := opened.SaveRun(context.Background(), wanted); err != nil {
 		_ = opened.Close()
@@ -1295,7 +1429,7 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 	if got == nil {
 		t.Fatal("CurrentRun() = nil, want persisted run")
 	}
-	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket || len(got.PendingQuestions) != 1 || got.ClarificationCommentID != wanted.ClarificationCommentID || !got.ClarificationNotificationSent {
+	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket || len(got.PendingQuestions) != 1 || got.ClarificationCommentID != wanted.ClarificationCommentID {
 		t.Fatalf("persisted claim metadata = %#v, want coordinator/comment/packet/clarification state from %#v", got, wanted)
 	}
 }

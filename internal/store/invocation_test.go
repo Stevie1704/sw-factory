@@ -10,8 +10,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// TestStorePersistsRecoverableInvocationState verifies that surface and native
-// session identities survive coordinator restart in the operational store.
+// TestStorePersistsRecoverableInvocationState verifies that native session
+// identity survives coordinator restart in the operational store.
 func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data", "factory.db")
 	opened, err := store.Open(context.Background(), path)
@@ -20,30 +20,27 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	}
 	created := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	want := store.Invocation{
-		ID:                      "inv-1",
-		RunID:                   "run-1",
-		Harness:                 "codex",
-		Role:                    "implementation",
-		Stage:                   store.StageImplementation,
-		Model:                   "gpt-5",
-		ReasoningEffort:         "medium",
-		CredentialStoreID:       "/registered/repository",
-		NativeSessionID:         "session-1",
-		WorkspaceID:             "workspace-run",
-		StatusSurfaceID:         "surface-status",
-		RoleSurfaceID:           "surface-implementation",
-		ImplementationSurfaceID: "surface-implementation",
-		ChecksSurfaceID:         "surface-checks",
-		InvocationDirectory:     "/tmp/invocation",
-		ResultDirectory:         "/tmp/results",
-		PermittedPaths:          []string{"internal/factory"},
-		PromptVersion:           "implementation-v1",
-		PromptCraftSourcePath:   "docs/factory/craft/implementation.md",
-		PromptCraftSHA256:       strings.Repeat("a", 64),
-		Status:                  store.InvocationStatusActive,
-		LaunchVoided:            true,
-		CreatedAt:               created,
-		UpdatedAt:               created,
+		ID:                    "inv-1",
+		RunID:                 "run-1",
+		Harness:               "codex",
+		Role:                  "implementation",
+		Stage:                 store.StageImplementation,
+		Model:                 "gpt-5",
+		ReasoningEffort:       "medium",
+		CredentialStoreID:     "/registered/repository",
+		NativeSessionID:       "session-1",
+		InvocationDirectory:   "/tmp/invocation",
+		ResultDirectory:       "/tmp/results",
+		PermittedPaths:        []string{"internal/factory"},
+		PromptVersion:         "implementation-v1",
+		PromptCraftSourcePath: "docs/factory/craft/implementation.md",
+		PromptCraftSHA256:     strings.Repeat("a", 64),
+		Status:                store.InvocationStatusActive,
+		LaunchVoided:          true,
+		RecoveryResumeCount:   1,
+		ManualResumeCount:     2,
+		CreatedAt:             created,
+		UpdatedAt:             created,
 	}
 	if err := opened.SaveInvocation(context.Background(), want); err != nil {
 		t.Fatalf("SaveInvocation() error = %v", err)
@@ -60,35 +57,11 @@ func TestStorePersistsRecoverableInvocationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invocation() error = %v", err)
 	}
-	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.RoleSurfaceID != want.RoleSurfaceID || got.ImplementationSurfaceID != want.ImplementationSurfaceID || got.ResultDirectory != want.ResultDirectory || got.PromptCraftSourcePath != want.PromptCraftSourcePath || got.PromptCraftSHA256 != want.PromptCraftSHA256 || !got.LaunchVoided || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
+	if got == nil || got.NativeSessionID != want.NativeSessionID || got.CredentialStoreID != want.CredentialStoreID || got.ResultDirectory != want.ResultDirectory || got.PromptCraftSourcePath != want.PromptCraftSourcePath || got.PromptCraftSHA256 != want.PromptCraftSHA256 || !got.LaunchVoided || got.RecoveryResumeCount != 1 || got.ManualResumeCount != 2 || len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
 		t.Fatalf("Invocation() = %#v, want %#v", got, want)
 	}
 	if got.UpdatedAt.UTC() != created {
 		t.Fatalf("Invocation().UpdatedAt = %s, want %s", got.UpdatedAt.UTC(), created)
-	}
-}
-
-// TestStoreRejectsConflictingRoleSurfaceIdentities verifies legacy and
-// role-neutral surface columns cannot persist contradictory handles.
-func TestStoreRejectsConflictingRoleSurfaceIdentities(t *testing.T) {
-	opened, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "data", "factory.db"))
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	defer func() { _ = opened.Close() }()
-
-	err = opened.SaveInvocation(context.Background(), store.Invocation{
-		ID:                      "inv-conflicting-surface",
-		RunID:                   "run-conflicting-surface",
-		Harness:                 "codex",
-		Role:                    "architecture",
-		Stage:                   store.StageArchitecture,
-		RoleSurfaceID:           "surface-role",
-		ImplementationSurfaceID: "surface-implementation",
-		Status:                  store.InvocationStatusActive,
-	})
-	if err == nil || !strings.Contains(err.Error(), "conflicts") {
-		t.Fatalf("SaveInvocation() error = %v, want conflicting-surface rejection", err)
 	}
 }
 

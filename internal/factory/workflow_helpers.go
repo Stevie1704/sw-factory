@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/terminal"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -25,30 +24,6 @@ func roleDefinitionForInvocation(invocation store.Invocation) (workflow.RoleDefi
 func roleIsKind(invocation store.Invocation, wanted workflow.RoleKind) bool {
 	definition, err := roleDefinitionForInvocation(invocation)
 	return err == nil && definition.Kind == wanted
-}
-
-// invocationSurface returns the role-owned terminal surface, falling back to
-// the legacy implementation field for rows created before schema 25.
-func invocationSurface(invocation store.Invocation) terminal.Surface {
-	id := invocation.RoleSurfaceID
-	if id == "" {
-		id = invocation.ImplementationSurfaceID
-	}
-	return terminal.Surface{
-		ID:          terminal.SurfaceID(id),
-		WorkspaceID: terminal.WorkspaceID(invocation.WorkspaceID),
-		Name:        invocation.Role,
-	}
-}
-
-// setInvocationSurface records a role-owned surface while retaining the
-// legacy implementation column as a compatibility projection.
-func setInvocationSurface(invocation *store.Invocation, surface terminal.Surface) {
-	if invocation == nil {
-		return
-	}
-	invocation.RoleSurfaceID = string(surface.ID)
-	invocation.ImplementationSurfaceID = string(surface.ID)
 }
 
 // workerIDForInvocation gives each review invocation its own worker,

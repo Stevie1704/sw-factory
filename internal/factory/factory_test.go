@@ -41,14 +41,13 @@ func TestFactoryInitializesRegistersAndReportsAnEmptyRunStore(t *testing.T) {
 	}
 
 	registered, err := service.Register(context.Background(), factory.RegisterRequest{
-		RepositoryPath:       repositoryPath,
-		GitHubOwner:          "example",
-		GitHubRepository:     "project",
-		AuthorizedUsers:      []string{"alice"},
-		OperationalDataPath:  operationalPath,
-		PollingInterval:      "30s",
-		PollingBackoff:       "5m",
-		CmuxControlWorkspace: "factory-control",
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: operationalPath,
+		PollingInterval:     "30s",
+		PollingBackoff:      "5m",
 	})
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -176,7 +175,7 @@ func TestFactoryStatusRefusesAHandEditedOperationalStoreInsideTheRepositoryCheck
 		OperationalDataPath:  filepath.Join(repositoryPath, "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
 	}
-	if err := config.SaveHost(configPath, config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{registration}}); err != nil {
+	if err := config.SaveHost(configPath, config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -236,7 +235,7 @@ func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapt
 
 	operationalPath := filepath.Join(t.TempDir(), "data", "factory.db")
 	fake := &fakeConfigRepository{value: config.HostConfig{
-		SchemaVersion: 1,
+		SchemaVersion: config.CurrentHostSchemaVersion,
 		Repositories: []config.RepositoryRegistration{{
 			Path:                 "/work/repository",
 			GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
@@ -293,7 +292,7 @@ func TestFactoryStatusReportsTheLatestTerminalRun(t *testing.T) {
 
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config: &fakeConfigRepository{value: config.HostConfig{
-			SchemaVersion: 1,
+			SchemaVersion: config.CurrentHostSchemaVersion,
 			Repositories: []config.RepositoryRegistration{{
 				Path:                "/work/repository",
 				OperationalDataPath: operationalPath,

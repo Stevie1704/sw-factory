@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # ADR 0008: Run Codex through a headless worker seam during terminal migration
+
+Superseded by ADR 0010 after every production harness moved to the headless
+seam and coexistence ended.
 
 ## Context
 

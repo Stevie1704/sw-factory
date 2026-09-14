@@ -48,12 +48,6 @@ type gateOrdinalRunStore struct {
 func (s *gateOrdinalRunStore) CurrentRun(context.Context) (*store.Run, error) { return nil, nil }
 func (s *gateOrdinalRunStore) Close() error                                   { return nil }
 func (s *gateOrdinalRunStore) SaveRun(context.Context, store.Run) error       { return nil }
-func (s *gateOrdinalRunStore) ClaimLifecycleNotification(context.Context, string, store.Status) (bool, error) {
-	return true, nil
-}
-func (s *gateOrdinalRunStore) ReleaseLifecycleNotification(context.Context, string, store.Status) error {
-	return nil
-}
 func (s *gateOrdinalRunStore) SaveGateResults(_ context.Context, results []store.GateResult) error {
 	for _, result := range results {
 		s.results[result.GateName] = result

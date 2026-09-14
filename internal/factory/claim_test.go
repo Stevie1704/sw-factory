@@ -489,16 +489,16 @@ func TestBootstrapLabelsIsTheExplicitLabelCreationPath(t *testing.T) {
 	}
 }
 
-// TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects
+// TestClaimIssueRefusesAnAdapterWithoutNativeResumeBeforeGitHubEffects
 // verifies the startup capability guard runs before an issue is read or a
 // worktree is created.
-func TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects(t *testing.T) {
+func TestClaimIssueRefusesAnAdapterWithoutNativeResumeBeforeGitHubEffects(t *testing.T) {
 	t.Parallel()
 
 	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
-		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 			Path: "/repo", GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 			AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"},
 			OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml",
@@ -513,8 +513,8 @@ func TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects(t
 	})
 
 	_, err := service.ClaimIssue(context.Background(), 42)
-	if err == nil || !strings.Contains(err.Error(), "interactive resume") {
-		t.Fatalf("ClaimIssue() error = %v, want interactive-resume refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "native resume") {
+		t.Fatalf("ClaimIssue() error = %v, want native-resume refusal", err)
 	}
 	if githubAdapter.issueCalls != 0 || worktree.called {
 		t.Fatalf("claim effects: issue calls=%d worktree=%t, want none", githubAdapter.issueCalls, worktree.called)
@@ -523,7 +523,7 @@ func TestClaimIssueRefusesAnAdapterWithoutInteractiveResumeBeforeGitHubEffects(t
 
 // newClaimService constructs a deterministic service for claim seam tests.
 func newClaimService(githubAdapter *fakeGitHub, worktree *fakeWorktree, runStore *fakeRunStore, repositoryConfig config.RepositoryConfig) *factory.Service {
-	host := config.HostConfig{SchemaVersion: 1, Repositories: []config.RepositoryRegistration{{
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path:                 "/repo",
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		AuthorizedUsers:      []string{"alice"},
@@ -636,6 +636,9 @@ func (f *fakeGitHub) FindStatusComment(_ context.Context, _ github.Repository, _
 // EditIssueComment records edits to the persisted status comment.
 func (f *fakeGitHub) EditIssueComment(_ context.Context, _ github.Repository, id, body string) error {
 	f.editedComments = append(f.editedComments, editedComment{id: id, body: body})
+	if f.statusComment.ID == id {
+		f.statusComment.Body = body
+	}
 	return nil
 }
 
@@ -705,10 +708,9 @@ func (f *fakeWorktree) Remove(context.Context, string, gitadapter.Workspace) err
 
 // fakeRunStore keeps run records in insertion order for coordinator tests.
 type fakeRunStore struct {
-	saved           []store.Run
-	saveErrors      []error
-	lifecycleClaims map[string]map[store.Status]bool
-	currentRun      func(context.Context) (*store.Run, error)
+	saved      []store.Run
+	saveErrors []error
+	currentRun func(context.Context) (*store.Run, error)
 }
 
 // CurrentRun returns the newest non-terminal record.
@@ -736,29 +738,6 @@ func (f *fakeRunStore) SaveRun(_ context.Context, run store.Run) error {
 		}
 	}
 	f.saved = append(f.saved, run)
-	return nil
-}
-
-// ClaimLifecycleNotification atomically claims notification delivery.
-func (f *fakeRunStore) ClaimLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) (bool, error) {
-	if f.lifecycleClaims == nil {
-		f.lifecycleClaims = make(map[string]map[store.Status]bool)
-	}
-	if f.lifecycleClaims[runID] == nil {
-		f.lifecycleClaims[runID] = make(map[store.Status]bool)
-	}
-	if f.lifecycleClaims[runID][terminalStatus] {
-		return false, nil
-	}
-	f.lifecycleClaims[runID][terminalStatus] = true
-	return true, nil
-}
-
-// ReleaseLifecycleNotification removes a notification claim.
-func (f *fakeRunStore) ReleaseLifecycleNotification(_ context.Context, runID string, terminalStatus store.Status) error {
-	if f.lifecycleClaims != nil && f.lifecycleClaims[runID] != nil {
-		delete(f.lifecycleClaims[runID], terminalStatus)
-	}
 	return nil
 }
 

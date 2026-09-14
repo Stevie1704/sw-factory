@@ -47,7 +47,7 @@ func TestRecoveryRejectsAChangedCurrentReviewArtifact(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write review packet: %v", err)
 	}
-	runStore := &terminalProjectionStore{repairLaunchStore: &repairLaunchStore{run: run, invocations: map[string]store.Invocation{invocation.ID: invocation}}}
+	runStore := &reviewArtifactStore{run: run, invocation: invocation}
 	diagnosis := newRecoveryDiagnosis(run.ID)
 	(&Service{}).inspectInvocationProjection(context.Background(), &diagnosis, config.RepositoryRegistration{}, runStore, run)
 	if len(diagnosis.Discrepancies) != 1 || diagnosis.Discrepancies[0].Source != "review diff" || diagnosis.Discrepancies[0].Field != "artifact" {
@@ -60,6 +60,33 @@ func TestRecoveryRejectsAChangedCurrentReviewArtifact(t *testing.T) {
 	if string(artifact) != "changed artifact\n" {
 		t.Fatalf("recovery regenerated artifact = %q, want unchanged content", artifact)
 	}
+}
+
+// reviewArtifactStore supplies the read-only invocation projection needed by
+// review-artifact recovery diagnosis.
+type reviewArtifactStore struct {
+	gatherReadOnlyStore
+	run        store.Run
+	invocation store.Invocation
+}
+
+// CurrentRun returns the review run under diagnosis.
+func (s *reviewArtifactStore) CurrentRun(context.Context) (*store.Run, error) {
+	value := s.run
+	return &value, nil
+}
+
+// Invocation returns the persisted review invocation.
+func (s *reviewArtifactStore) Invocation(context.Context, string, string) (*store.Invocation, error) {
+	value := s.invocation
+	return &value, nil
+}
+
+// LatestInvocation returns the inactive review invocation whose artifact is
+// still part of restart diagnosis.
+func (s *reviewArtifactStore) LatestInvocation(context.Context, string) (*store.Invocation, error) {
+	value := s.invocation
+	return &value, nil
 }
 
 // TestValidatePersistedReviewDiffRejectsMissingAndNonRegularArtifacts verifies

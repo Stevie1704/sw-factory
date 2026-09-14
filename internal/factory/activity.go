@@ -70,7 +70,7 @@ func activityStatusComment(run store.Run) string {
 }
 
 // ActiveInvocationStore is the optional restart-safe lookup used to prevent
-// duplicate visible sessions for one active run.
+// duplicate harness sessions for one active run.
 type ActiveInvocationStore interface {
 	ActiveInvocation(context.Context, string) (*store.Invocation, error)
 }
@@ -128,7 +128,7 @@ func releaseActiveInvocation(run *store.Run, invocationID string) {
 }
 
 // clearActiveInvocations clears the current activity projection when a
-// transition ends every visible invocation for the run.
+// transition ends every active invocation for the run.
 func clearActiveInvocations(run *store.Run) {
 	if run == nil {
 		return

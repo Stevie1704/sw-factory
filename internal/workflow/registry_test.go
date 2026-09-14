@@ -23,9 +23,6 @@ func TestDefaultRegistryDeclaresArchitectureAsAFactoryOwnedRole(t *testing.T) {
 	if len(role.DefaultPermittedPaths) != 1 || role.DefaultPermittedPaths[0] != "docs/architecture" {
 		t.Fatalf("architecture permitted paths = %#v, want docs/architecture", role.DefaultPermittedPaths)
 	}
-	if role.Surface != workflow.SurfaceRole {
-		t.Fatalf("architecture surface = %q, want a role-owned surface", role.Surface)
-	}
 }
 
 // TestDefaultRegistryResolvesArchitectureReportTransitions verifies a new
@@ -84,7 +81,6 @@ func TestRegistryAcceptsAFactoryOwnedCustomRole(t *testing.T) {
 			PromptVersion:         "documentation-v1",
 			DefaultPermittedPaths: []string{"docs"},
 			Kind:                  workflow.RoleKindHandoff,
-			Surface:               workflow.SurfaceRole,
 			StartStages:           []store.Stage{customStage},
 			RunStages:             []store.Stage{customStage},
 		}},
@@ -126,7 +122,6 @@ func TestNewRegistryRejectsInvalidDeclarations(t *testing.T) {
 			PromptVersion:         "role-v1",
 			DefaultPermittedPaths: []string{"docs"},
 			Kind:                  workflow.RoleKindHandoff,
-			Surface:               workflow.SurfaceRole,
 			StartStages:           []store.Stage{stage},
 			RunStages:             []store.Stage{stage},
 		}
@@ -159,15 +154,6 @@ func TestNewRegistryRejectsInvalidDeclarations(t *testing.T) {
 			roles: []workflow.RoleDefinition{func() workflow.RoleDefinition {
 				role := validRole()
 				role.Kind = "unsupported"
-				return role
-			}()},
-			stages: []workflow.StageDefinition{validStage("role")},
-		},
-		{
-			name: "unsupported surface",
-			roles: []workflow.RoleDefinition{func() workflow.RoleDefinition {
-				role := validRole()
-				role.Surface = "unsupported"
 				return role
 			}()},
 			stages: []workflow.StageDefinition{validStage("role")},

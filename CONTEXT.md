@@ -80,7 +80,10 @@ A typed discrepancy result that reports the agreement state and discovered discr
 _Avoid_: Recovered run, implicit operator approval
 
 **Startup diagnosis**:
-A complete pre-claim report of host configuration, external access, repository, terminal, worker, harness, authentication, and operational-store readiness. Every subsystem contributes its own bounded check, including one independent target-branch resolution check for every configured `role_craft` entry and one skill-contract check for every harness the worker image ships, and the doctor reports all failures before a run can start.
+A complete pre-claim report of host configuration, external access, repository,
+GitHub, Docker worker isolation, selected headless harnesses, authentication,
+skills, and operational-store readiness. Every subsystem contributes its own
+bounded check, and the doctor reports all failures before a run can start.
 _Avoid_: First failure, mid-run diagnosis
 
 **Gate**:
@@ -92,14 +95,13 @@ The per-run isolated execution environment that exposes only the run worktree, r
 _Avoid_: Container in workflow decisions
 
 **Headless process seam**:
-The ADR 0008 and ADR 0009 worker-owned boundary for a terminal-free harness
-process, implemented by both production adapters. A
+The ADR 0010 worker-owned boundary for every production harness process. A
 `HeadlessRuntime` starts, resumes, inspects, cancels, and finishes one detached
 process inside the isolated worker; it owns process state and bounded output,
 while the coordinator receives only adapter-neutral lifecycle observations and
 typed outcomes. It never starts a harness process on the coordinator host or
-creates terminal topology.
-_Avoid_: Host-side agent, coordinator-owned PID, detached terminal
+creates a coordinator-side process or local UI topology.
+_Avoid_: Host-side agent, coordinator-owned PID, attached process
 
 **Worker skill set**:
 The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
@@ -139,7 +141,7 @@ holding their review bodies and inline findings, or one `/factory repair`
 supervision comment holding its instruction. Concurrent applicable reviews form
 one packet. Every human repair packet sits outside the bounded factory repair
 rounds, never consumes the review-repair budget, and records the maintainer
-surface and event identity that produced it.
+source and event identity that produced it.
 _Avoid_: Review reply, advisory feedback
 
 **Review diff**:
@@ -173,23 +175,26 @@ waiting state. The `agent-running` label alone cannot express it.
 _Avoid_: Agent-running label, run status
 
 **Invocation**:
-One immutable harness attempt within a run, with its own invocation packet, role-owned visible surface handles, factory prompt version, frozen repository role-craft source and SHA-256 identity when configured, and native session identifier when known.
-_Avoid_: Terminal transcript
-
-**Surface**:
-An operator-visible terminal pane owned by a `TerminalRuntime`; its handle is opaque to workflow code and its screen is never a correctness protocol.
-_Avoid_: Screen scrape
+One immutable harness attempt within a run, with its own invocation packet,
+factory prompt version, frozen repository role-craft source and SHA-256 identity
+when configured, and native session identifier when known.
+_Avoid_: Process transcript
 
 **Harness**:
-A configured coding tool, such as Codex or Claude Code, launched through the harness seam with a role-specific prompt and native resume behavior. Every production harness runs terminal-free; whether the coordinator uses a terminal is decided by the selected adapter's capability, never by the tool's name.
-_Avoid_: Lead agent, interactive tool
+A configured coding tool, such as Codex or Claude Code, launched through the
+headless harness seam with a role-specific prompt and native resume behavior.
+_Avoid_: Lead agent, attached tool
 
 **Role**:
-The coordinator-owned responsibility assigned to an invocation, such as implementation, architecture, test, or review. The factory-owned role registry couples each role to its invocation stage, embedded Markdown prompt version, default permitted paths, report contract, and visible surface strategy; repository guidance cannot change role ownership.
+The coordinator-owned responsibility assigned to an invocation, such as implementation, architecture, test, or review. The factory-owned role registry couples each role to its invocation stage, embedded Markdown prompt version, default permitted paths, and report contract; repository guidance cannot change role ownership.
 _Avoid_: Persona
 
 **Workflow registry**:
-The factory-owned declaration of roles, embedded role prompt identities, stages, visible surfaces, and report-outcome transitions. Specification and documented-standards review are separate concurrent axes with separate durable findings and statuses; repository configuration selects harness, model policy, and optional craft files for declared roles but cannot add or redefine workflow authority.
+The factory-owned declaration of roles, embedded role prompt identities, stages,
+and report-outcome transitions. Specification and documented-standards review
+are separate concurrent axes with separate durable findings and statuses;
+repository configuration selects harness, model policy, and optional craft
+files for declared roles but cannot add or redefine workflow authority.
 _Avoid_: Repository-defined workflow, prompt configuration
 
 **Invocation packet**:
@@ -198,7 +203,7 @@ _Avoid_: Live issue
 
 **Structured report**:
 The schema-versioned, content-limited proposal written by `factory-report`; the coordinator validates it before making any workflow decision.
-_Avoid_: Terminal output
+_Avoid_: Harness output
 
 **Credential store**:
 A factory-managed, harness-specific credential copy kept separate from role session state and never populated by mounting the host harness directory.
@@ -221,7 +226,9 @@ An evidence-gathering delivery phase that compares the supervised factory with a
 _Avoid_: Production readiness, tracer bullet
 
 **Host configuration**:
-Host-local YAML that registers the one repository, its GitHub identity, authorized users, polling and terminal settings, and the external operational-data location.
+Host-local schema-version-2 YAML that registers the one repository, its GitHub
+identity, authorized users, polling, credential sources, checked-in repository
+configuration path, and external operational-data location.
 _Avoid_: Repository policy
 
 **Repository configuration**:
@@ -234,30 +241,18 @@ tables are separate from repository configuration, disposable run artifacts,
 and the isolated local evaluation-summary projection.
 _Avoid_: Event journal, telemetry, transcript archive
 
-**Terminal workspace**:
-The visible workspace one run owns in the terminal adapter, identified by an
-opaque handle the adapter alone interprets. It holds the run's surfaces and
-uses the run worktree as its working directory. A terminal outcome retains it;
-only cleanup closes it. Distinct from the Git worktree and branch the
-coordinator removes at the same moment, and from the coordinator's own control
-workspace, which no run owns and cleanup never closes.
-_Avoid_: Terminal window, pane, tab, Git workspace
-
 **Cleanup**:
 The explicit, seven-day retention operation that previews and removes one or
-more terminal runs' local worktrees, local branches, workers, role sessions,
-terminal workspaces, generated outputs, and operational rows while retaining
-remote branches, credential stores, and local evaluation summaries. It is the
-last operation that knows a run's workspace handles, so a workspace it cannot
-close is reported for manual closure instead of being lost silently.
+more completed or cancelled runs' local worktrees, local branches, workers,
+role sessions, generated outputs, and operational rows while retaining remote
+branches, credential stores, and local evaluation summaries.
 _Avoid_: Remote branch deletion, automatic summary deletion
 
 **Reset**:
 The explicit, whole-installation operation that returns one registered factory
 installation to its pre-`init` local state: every run's worktree, local branch,
 Git projection, generated outputs, workers, and role volumes, plus the
-factory-managed credential volumes, the factory-created and registered terminal
-workspaces, the repository's coordinator lock, the operational database with
+factory-managed credential volumes, the repository's coordinator lock, the operational database with
 its sidecars and its own migration backups, the evaluation projection inside
 that database, and the host configuration last. It is not retention: it has no
 cutoff and selects every persisted run. It carries every non-terminal run to a
