@@ -501,6 +501,18 @@ func writeDockerStub(t *testing.T) (string, string, string) {
 	script := `#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$WORKER_DOCKER_LOG"
+if [ -n "${WORKER_DOCKER_FAIL:-}" ]; then
+  printf '%s\n' "$WORKER_DOCKER_FAIL" >&2
+  exit 1
+fi
+if [ "${WORKER_DOCKER_OVERFLOW_BYTES:-0}" -gt 0 ]; then
+  case "$*" in
+    *"${WORKER_DOCKER_OVERFLOW_MATCH:-}"*)
+      head -c "$WORKER_DOCKER_OVERFLOW_BYTES" /dev/zero | tr '\0' 'o'
+      exit 0
+      ;;
+  esac
+fi
 command_name="${1:-}"
 if [ "$command_name" = "container" ]; then
   command_name="${2:-}"
@@ -1012,3 +1024,23 @@ func TestDockerRuntimeRestartsAStoppedReviewWorker(t *testing.T) {
 }
 
 var _ worker.WorkerRuntime = (*worker.DockerRuntime)(nil)
+
+// assertCaptureLimitFailure requires that err stays identifiable as a capture
+// limit overflow, names the overflow instead of an unrelated diagnosis, and
+// publishes no captured output, Docker vocabulary, or forbidden detail.
+func assertCaptureLimitFailure(t *testing.T, err error, forbidden ...string) {
+	t.Helper()
+	var limitErr *worker.OutputLimitExceededError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("error = %v, want a typed output-limit error", err)
+	}
+	message := err.Error()
+	if !strings.Contains(message, "capture limit") || !strings.Contains(message, strconv.Itoa(worker.MaxCapturedOutputBytes)) {
+		t.Fatalf("error = %q, want the overflow and the limit named", message)
+	}
+	for _, value := range append(forbidden, strings.Repeat("o", 32), "docker", testWorkerDigest) {
+		if strings.Contains(message, value) {
+			t.Fatalf("error = %q, want no %q", message, value)
+		}
+	}
+}

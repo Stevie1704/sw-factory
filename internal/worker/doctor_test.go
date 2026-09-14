@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -220,4 +221,133 @@ func TestDockerRuntimeDoesNotSendContentsFromReplacedAuthenticationPath(t *testi
 			t.Fatalf("Docker received unexpected authentication input: %q", data)
 		}
 	}
+}
+
+// TestWorkerProbesKeepACaptureLimitFailureIdentifiable verifies every worker
+// diagnosis probe reports an output-capture overflow as itself instead of the
+// unrelated diagnosis it would report for any other cause.
+func TestWorkerProbesKeepACaptureLimitFailureIdentifiable(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"test-only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	for _, test := range []struct {
+		name      string
+		probe     func() error
+		diagnosis string
+	}{
+		{name: "docker daemon", diagnosis: "Docker daemon is unavailable", probe: func() error {
+			return runtime.CheckDocker(context.Background())
+		}},
+		{name: "worker image", diagnosis: "worker image inspection failed", probe: func() error {
+			return runtime.CheckImage(context.Background(), probedWorkerImage)
+		}},
+		{name: "harness executable", diagnosis: "harness executable is not usable in the worker image", probe: func() error {
+			return runtime.CheckHarness(context.Background(), worker.HarnessCheckRequest{Image: probedWorkerImage, Name: "codex"})
+		}},
+		{name: "harness authentication", diagnosis: "harness authentication is not usable in the worker image", probe: func() error {
+			return runtime.CheckHarnessAuthentication(context.Background(), worker.HarnessAuthenticationCheckRequest{
+				Image: probedWorkerImage, Name: "codex", AuthPath: authPath,
+			})
+		}},
+		{name: "headless helper", diagnosis: "headless worker process helper is not usable in the worker image", probe: func() error {
+			return runtime.CheckHeadless(context.Background(), worker.HeadlessCheckRequest{Image: probedWorkerImage})
+		}},
+		{name: "skill contract", diagnosis: "the worker image does not satisfy the harness skill contract", probe: func() error {
+			_, err := runtime.CheckSkillContract(context.Background(), worker.SkillContractRequest{
+				Image: probedWorkerImage, Harness: "codex", Skills: []string{"tdd"},
+			})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("WORKER_DOCKER_OVERFLOW_BYTES", strconv.Itoa(worker.MaxCapturedOutputBytes+1))
+			assertCaptureLimitFailure(t, test.probe(), authPath, test.diagnosis)
+		})
+	}
+}
+
+// TestWorkerProbesFlattenEveryOtherCause verifies that a Docker failure other
+// than an overflow keeps its fixed diagnosis and publishes no process output.
+func TestWorkerProbesFlattenEveryOtherCause(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"test-only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secret := "worker-probe-secret"
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	for _, test := range []struct {
+		name      string
+		probe     func() error
+		diagnosis string
+	}{
+		{name: "docker daemon", diagnosis: "Docker daemon is unavailable", probe: func() error {
+			return runtime.CheckDocker(context.Background())
+		}},
+		{name: "worker image", diagnosis: "worker image inspection failed", probe: func() error {
+			return runtime.CheckImage(context.Background(), probedWorkerImage)
+		}},
+		{name: "harness executable", diagnosis: "harness executable is not usable in the worker image", probe: func() error {
+			return runtime.CheckHarness(context.Background(), worker.HarnessCheckRequest{Image: probedWorkerImage, Name: "codex"})
+		}},
+		{name: "harness authentication", diagnosis: "harness authentication is not usable in the worker image", probe: func() error {
+			return runtime.CheckHarnessAuthentication(context.Background(), worker.HarnessAuthenticationCheckRequest{
+				Image: probedWorkerImage, Name: "codex", AuthPath: authPath,
+			})
+		}},
+		{name: "headless helper", diagnosis: "headless worker process helper is not usable in the worker image", probe: func() error {
+			return runtime.CheckHeadless(context.Background(), worker.HeadlessCheckRequest{Image: probedWorkerImage})
+		}},
+		{name: "skill contract", diagnosis: "the worker image does not satisfy the harness skill contract", probe: func() error {
+			_, err := runtime.CheckSkillContract(context.Background(), worker.SkillContractRequest{
+				Image: probedWorkerImage, Harness: "codex", Skills: []string{"tdd"},
+			})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("WORKER_DOCKER_FAIL", secret+" "+authPath)
+			err := test.probe()
+			if err == nil || err.Error() != test.diagnosis {
+				t.Fatalf("%s error = %v, want the fixed diagnosis %q", test.name, err, test.diagnosis)
+			}
+			var limitErr *worker.OutputLimitExceededError
+			if errors.As(err, &limitErr) {
+				t.Fatalf("%s error = %v, want no capture-limit cause", test.name, err)
+			}
+		})
+	}
+}
+
+// TestStartupChecksReportACaptureLimitOverflow verifies the operator-facing
+// worker diagnosis names the overflow rather than a daemon or image verdict
+// the probe never reached.
+func TestStartupChecksReportACaptureLimitOverflow(t *testing.T) {
+	overflow := &worker.OutputLimitExceededError{
+		Operation: "worker lifecycle operation",
+		Stream:    "stdout",
+		Limit:     worker.MaxCapturedOutputBytes,
+	}
+	checker := &fakeWorkerDoctorChecker{dockerErr: overflow, imageErr: overflow}
+	report := doctor.Run(context.Background(), worker.StartupChecks(checker, probedWorkerImage)...)
+	if report.Ready() || len(report.Failures()) != 2 {
+		t.Fatalf("worker report = %#v, want daemon and image failures", report)
+	}
+	for _, result := range report.Failures() {
+		if !strings.Contains(result.Problem, "capture limit") || result.Action == "" {
+			t.Fatalf("worker result = %#v, want the overflow named with an operator action", result)
+		}
+		if strings.Contains(result.Problem, "cannot reach a usable Docker daemon") || strings.Contains(result.Problem, "not available locally") {
+			t.Fatalf("worker result = %#v, want no unrelated diagnosis", result)
+		}
+	}
+}
+
+// probedWorkerImage is the pinned worker image used by the diagnosis probes.
+var probedWorkerImage = worker.ImageReference{
+	Name:   "ghcr.io/example/factory-worker",
+	Digest: testWorkerDigest,
 }

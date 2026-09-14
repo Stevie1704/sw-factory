@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -244,5 +245,34 @@ func TestDockerRuntimeRedactsCredentialSourceAndDockerErrors(t *testing.T) {
 	dockerErr := runtime.SeedCodexCredentials(context.Background(), worker.CredentialSeedRequest{RunID: "run-redacted-docker", AuthPath: authPath})
 	if dockerErr == nil || strings.Contains(dockerErr.Error(), authPath) || strings.Contains(dockerErr.Error(), "credential-secret") {
 		t.Fatalf("Docker credential projection error was absent or leaked details: %v", dockerErr)
+	}
+}
+
+// TestDockerRuntimeKeepsACaptureLimitFailureThroughCredentialSeeding verifies
+// that an overflow at either projection step stays identifiable instead of
+// being reported as a generic projection failure, and still publishes no
+// credential path or content.
+func TestDockerRuntimeKeepsACaptureLimitFailureThroughCredentialSeeding(t *testing.T) {
+	stub, _, _ := writeDockerStub(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"access_token":"test-only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	for _, test := range []struct{ name, match, step string }{
+		{name: "credential copy", match: "--user 0:0", step: "seed codex credentials"},
+		{name: "role home link", match: "ln -s", step: "link codex credentials into the role home"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("WORKER_DOCKER_OVERFLOW_MATCH", test.match)
+			t.Setenv("WORKER_DOCKER_OVERFLOW_BYTES", strconv.Itoa(worker.MaxCapturedOutputBytes+1))
+			err := runtime.SeedCodexCredentials(context.Background(), worker.CredentialSeedRequest{
+				RunID: "run-credential-overflow", AuthPath: authPath,
+			})
+			assertCaptureLimitFailure(t, err, authPath, "test-only", "credential projection failed")
+			if !strings.HasPrefix(err.Error(), test.step+": ") {
+				t.Fatalf("credential seed error = %q, want the %q step named", err, test.step)
+			}
+		})
 	}
 }
