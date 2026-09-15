@@ -427,18 +427,55 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 // generatedReviewSection renders every configured exact-checkpoint review,
 // including advisory findings that never gate readiness but must remain visible.
 func generatedReviewSection(run store.Run) string {
+	return generatedReviewSectionWithProgress(run, nil, nil)
+}
+
+// reviewUnitProgress is the content-free progress projection shown while a
+// persisted review axis is still collecting unit results.
+type reviewUnitProgress struct {
+	Completed int
+	Total     int
+}
+
+// generatedReviewSectionWithProgress renders the role-owned review sections
+// and, when a normalized round exists, its shared round identity and per-axis
+// completion counts. It never renders a per-unit status table.
+func generatedReviewSectionWithProgress(run store.Run, round *store.ReviewRound, progress map[string]reviewUnitProgress) string {
 	lines := []string{generatedReviewStart}
-	appendGeneratedReview(&lines, workflow.RoleSpecificationReview, "Specification review", run.SpecificationReview, run.Stage == store.StageReview, run.CheckpointSHA)
+	if round != nil {
+		lines = append(lines, "", "### Review round",
+			fmt.Sprintf("- round: `%s`", safeStatusCommentValue(round.ID)),
+			fmt.Sprintf("- status: `%s`", safeStatusCommentValue(round.Status)),
+		)
+	}
+	appendGeneratedReviewWithProgress(&lines, workflow.RoleSpecificationReview, "Specification review", run.SpecificationReview, run.Stage == store.StageReview, run.CheckpointSHA, reviewProgressPointer(progress, workflow.RoleSpecificationReview))
 	if standardsReviewConfigured(run) || run.StandardsReview != nil {
-		appendGeneratedReview(&lines, workflow.RoleStandardsReview, "Standards review", run.StandardsReview, run.Stage == store.StageReview, run.CheckpointSHA)
+		appendGeneratedReviewWithProgress(&lines, workflow.RoleStandardsReview, "Standards review", run.StandardsReview, run.Stage == store.StageReview, run.CheckpointSHA, reviewProgressPointer(progress, workflow.RoleStandardsReview))
 	}
 	lines = append(lines, generatedReviewEnd)
 	return strings.Join(lines, "\n")
 }
 
+// reviewProgressPointer returns one role's bounded progress when a normalized
+// manifest supplied it.
+func reviewProgressPointer(progress map[string]reviewUnitProgress, role string) *reviewUnitProgress {
+	value, ok := progress[role]
+	if !ok || value.Total <= 0 {
+		return nil
+	}
+	return &value
+}
+
 // appendGeneratedReview appends one role-owned review projection to a generated
 // pull-request section without exposing a reviewer's private session state.
 func appendGeneratedReview(lines *[]string, role, title string, review *store.ReviewResult, pending bool, checkpoint string) {
+	appendGeneratedReviewWithProgress(lines, role, title, review, pending, checkpoint, nil)
+}
+
+// appendGeneratedReviewWithProgress appends one role-owned review projection
+// and optional shared-manifest progress without exposing private invocation
+// state or treating units as independent review rounds.
+func appendGeneratedReviewWithProgress(lines *[]string, role, title string, review *store.ReviewResult, pending bool, checkpoint string, progress *reviewUnitProgress) {
 	*lines = append(*lines, "\n### "+title, "")
 	if review == nil {
 		if pending {
@@ -446,6 +483,7 @@ func appendGeneratedReview(lines *[]string, role, title string, review *store.Re
 		} else {
 			*lines = append(*lines, "- status: not run")
 		}
+		appendReviewUnitProgress(lines, progress)
 		return
 	}
 	blockers, advisories := reviewFindingCountsForRole(role, review.Findings)
@@ -453,21 +491,42 @@ func appendGeneratedReview(lines *[]string, role, title string, review *store.Re
 		fmt.Sprintf("- reviewed checkpoint: `%s`", safeStatusCommentValue(review.CheckpointSHA)),
 		fmt.Sprintf("- outcome: %d blocking findings, %d advisory findings", blockers, advisories),
 	)
+	appendReviewUnitProgress(lines, progress)
 	*lines = append(*lines, reviewProjectionDetails(*review)...)
 	if len(review.Findings) == 0 {
 		*lines = append(*lines, "- findings: none")
 		return
 	}
 	for index, finding := range review.Findings {
+		unit := ""
+		if finding.UnitID != "" {
+			unit = fmt.Sprintf("\n- unit: `%s`", safeStatusCommentValue(finding.UnitID))
+		}
 		*lines = append(*lines,
 			fmt.Sprintf("\n#### Finding %d — %s/%s", index+1, safeStatusCommentValue(finding.Severity), safeStatusCommentValue(finding.Category)),
 			fmt.Sprintf("- location: `%s`", safeStatusCommentValue(finding.Location)),
 			fmt.Sprintf("- claim: %s", safeStatusCommentValue(finding.Claim)),
 			fmt.Sprintf("- evidence: %s", safeStatusCommentValue(finding.Evidence)),
 			fmt.Sprintf("- suggested resolution: %s", safeStatusCommentValue(finding.SuggestedResolution)),
-			fmt.Sprintf("- suggested owner: `%s`", safeStatusCommentValue(finding.SuggestedOwner)),
+			fmt.Sprintf("- suggested owner: `%s`%s", safeStatusCommentValue(finding.SuggestedOwner), unit),
 		)
 	}
+}
+
+// appendReviewUnitProgress renders only aggregate completed/total counts, never
+// a per-unit status table.
+func appendReviewUnitProgress(lines *[]string, progress *reviewUnitProgress) {
+	if progress == nil || progress.Total <= 0 {
+		return
+	}
+	completed := progress.Completed
+	if completed < 0 {
+		completed = 0
+	}
+	if completed > progress.Total {
+		completed = progress.Total
+	}
+	*lines = append(*lines, fmt.Sprintf("- units: %d/%d complete", completed, progress.Total))
 }
 
 // mergeGeneratedPullRequestBody replaces only the marked factory section and

@@ -119,6 +119,7 @@ func Run(request Request) int {
 		return 1
 	}
 	reviewIdentity := isReviewIdentity(identity["role"], identity["stage"])
+	reviewUnitID := strings.TrimSpace(lookup("FACTORY_REVIEW_UNIT_ID"))
 	if len(findings) > 0 && !reviewIdentity {
 		writeError(request.ErrorsOutput, errors.New("--finding is only valid for review roles"))
 		return 1
@@ -143,7 +144,13 @@ func Run(request Request) int {
 	if reviewIdentity && (value.Outcome == report.OutcomeCompleted || len(findings) > 0) {
 		value.ReviewHandoff = &report.ReviewHandoff{
 			ReviewedSHA: lookup("FACTORY_CHECKPOINT_SHA"),
+			UnitID:      reviewUnitID,
 			Findings:    append([]report.ReviewFinding(nil), findings...),
+		}
+		for index := range value.ReviewHandoff.Findings {
+			if value.ReviewHandoff.Findings[index].UnitID == "" {
+				value.ReviewHandoff.Findings[index].UnitID = reviewUnitID
+			}
 		}
 	}
 	for _, item := range exemptions {

@@ -183,6 +183,19 @@ The number of review units in one review round. Each configured review axis
 runs one invocation for every unit in that shared manifest.
 _Avoid_: Concurrency, review count
 
+**Review concurrency**:
+The number of review invocations one host runs at the same time across both
+axes. It describes local machine and harness capacity, never review coverage,
+and its ceiling is frozen when the review round is created.
+_Avoid_: Fan-out, parallel review depth
+
+**Authorized fan-out**:
+The larger review fan-out a maintainer explicitly approves for one exact
+manifest identity when it needs more units than the repository's normal
+fan-out. It raises the unit count only: it never enlarges a unit, changes an
+assignment, or repartitions the round.
+_Avoid_: Fan-out override, unit budget increase
+
 **Review watermark**:
 The persisted identity of the last human review a run applied. It makes
 repeated polling and a coordinator restart unable to apply the same review

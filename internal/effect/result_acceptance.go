@@ -34,6 +34,9 @@ type ResultAcceptance struct {
 	StopWorker bool
 	// Report is the accepted report snapshot encoded for deterministic replay.
 	Report report.Report
+	// ReviewUnitResult is the normalized per-axis result for a partitioned
+	// review invocation. It is nil for historical whole-diff acceptances.
+	ReviewUnitResult *store.ReviewUnitResult
 }
 
 // resultAcceptanceHandler owns harness finalization, invocation state, and the
@@ -67,15 +70,16 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 		return invocation, next, fmt.Errorf("encode accepted report for effect: %w", err)
 	}
 	payload := resultAcceptanceEffectPayload{
-		Repository:     request.Repository,
-		Issue:          github.Issue{Number: next.IssueNumber},
-		Session:        request.Session,
-		Invocation:     invocation,
-		WorkerID:       request.WorkerID,
-		Previous:       previous,
-		Next:           next,
-		StopWorker:     request.StopWorker,
-		AcceptedReport: string(acceptedReportJSON),
+		Repository:       request.Repository,
+		Issue:            github.Issue{Number: next.IssueNumber},
+		Session:          request.Session,
+		Invocation:       invocation,
+		WorkerID:         request.WorkerID,
+		Previous:         previous,
+		Next:             next,
+		StopWorker:       request.StopWorker,
+		AcceptedReport:   string(acceptedReportJSON),
+		ReviewUnitResult: request.ReviewUnitResult,
 	}
 	// Keep the issue snapshot in the payload so replay does not have to infer
 	// it from the mutable repository configuration.
@@ -123,6 +127,15 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 			}
 			if err := h.lifecycle.StopWorker(ctx, workerID); err != nil {
 				return err
+			}
+		}
+		if payload.ReviewUnitResult != nil {
+			unitResults, ok := runStore.(reviewUnitResultStore)
+			if !ok {
+				return errors.New("operational store does not support review unit results")
+			}
+			if err := unitResults.SaveReviewUnitResult(ctx, *payload.ReviewUnitResult); err != nil {
+				return fmt.Errorf("persist review unit result: %w", err)
 			}
 		}
 		if err := h.labels.applyStateTransition(ctx, &next, StateTransition{
@@ -225,6 +238,15 @@ func (h resultAcceptanceHandler) Replay(ctx context.Context, request replayReque
 			return store.Run{}, err
 		}
 	}
+	if payload.ReviewUnitResult != nil {
+		unitResults, ok := runStore.(reviewUnitResultStore)
+		if !ok {
+			return store.Run{}, errors.New("operational store does not support review unit results")
+		}
+		if err := unitResults.SaveReviewUnitResult(ctx, *payload.ReviewUnitResult); err != nil {
+			return store.Run{}, fmt.Errorf("persist replayed review unit result: %w", err)
+		}
+	}
 	if currentRun != nil && currentRun.Revision == next.Revision && currentRun.StatusCommentID != "" {
 		next.StatusCommentID = currentRun.StatusCommentID
 	}
@@ -257,6 +279,8 @@ type resultAcceptanceRecord struct {
 	// AcceptedReport is the JSON-encoded report snapshot. A journal entry
 	// written before the snapshot existed leaves it empty.
 	AcceptedReport string
+	// ReviewUnitResult is the normalized per-axis result, when present.
+	ReviewUnitResult *store.ReviewUnitResult
 }
 
 // ReadResultAcceptance decodes one result-acceptance journal entry.
@@ -268,5 +292,5 @@ func ReadResultAcceptance(pending store.PendingEffect) (resultAcceptanceRecord, 
 	if err := decodePendingEffect(pending, &payload); err != nil {
 		return resultAcceptanceRecord{}, fmt.Errorf("decode result acceptance payload: %w", err)
 	}
-	return resultAcceptanceRecord{Invocation: payload.Invocation, AcceptedReport: payload.AcceptedReport}, nil
+	return resultAcceptanceRecord{Invocation: payload.Invocation, AcceptedReport: payload.AcceptedReport, ReviewUnitResult: payload.ReviewUnitResult}, nil
 }

@@ -37,6 +37,12 @@ type HeadlessStartRequest struct {
 	Stage string
 	// CheckpointSHA binds review prompts to their immutable checkpoint.
 	CheckpointSHA string
+	// ReviewRoundID identifies the immutable review round, when this invocation
+	// belongs to a partitioned review.
+	ReviewRoundID string
+	// ReviewUnitID identifies the manifest assignment, when this invocation
+	// belongs to a partitioned review.
+	ReviewUnitID string
 	// Prompt is the frozen role prompt.
 	Prompt string
 	// Model is the repository-selected model.
@@ -248,7 +254,9 @@ func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, com
 	}
 	environment := invocationEnvironment(h.protocol.name, HeadlessStartRequest{
 		InvocationID: request.InvocationID, RunID: request.RunID, Role: request.Role,
-		Stage: request.Stage, CheckpointSHA: request.CheckpointSHA, Model: request.Model,
+		Stage: request.Stage, CheckpointSHA: request.CheckpointSHA,
+		ReviewRoundID: request.ReviewRoundID, ReviewUnitID: request.ReviewUnitID,
+		Model: request.Model,
 	})
 	if request.ReasoningEffort != "" {
 		environment["FACTORY_REASONING_EFFORT"] = request.ReasoningEffort

@@ -155,6 +155,35 @@ func TestParseRecognizesTheAuthorizedRevisionCommand(t *testing.T) {
 	}
 }
 
+// TestParseRecognizesReviewFanoutAuthorization verifies the explicit maintainer
+// command carries the approved manifest ceiling as a typed operand.
+func TestParseRecognizesReviewFanoutAuthorization(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"/factory authorize-review 6", "/factory authorize_review 8"} {
+		parsed, err := command.Parse(body)
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v", body, err)
+		}
+		if !parsed.Recognized || parsed.Command.Kind != command.AuthorizeReview || parsed.Command.ReviewUnits <= 0 {
+			t.Fatalf("Parse(%q) = %#v, want review authorization", body, parsed)
+		}
+	}
+}
+
+// TestParseRejectsMalformedReviewFanoutAuthorization verifies the authorization
+// ceiling cannot enter coordinator policy as zero, negative, or extra input.
+func TestParseRejectsMalformedReviewFanoutAuthorization(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"/factory authorize-review", "/factory authorize-review 0", "/factory authorize-review 4 extra"} {
+		parsed, err := command.Parse(body)
+		if !parsed.Recognized || err == nil {
+			t.Fatalf("Parse(%q) = %#v/%v, want recognized typed rejection", body, parsed, err)
+		}
+	}
+}
+
 // TestRepairCommandCarriesTheMaintainerInstruction verifies the requested
 // change survives parsing with its word boundaries intact, because the text
 // becomes the claim of a repair finding.

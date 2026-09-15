@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Stevie1704/sw-factory/internal/reviewunits"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"gopkg.in/yaml.v3"
 )
@@ -38,6 +39,9 @@ type RepositoryRegistration struct {
 	Authentication       AuthenticationConfig `yaml:"authentication"`
 	OperationalDataPath  string               `yaml:"operational_data_path"`
 	RepositoryConfigPath string               `yaml:"repository_config_path"`
+	// Review contains host-local concurrency and authorization ceilings. It is
+	// intentionally separate from repository review coverage policy.
+	Review ReviewHostConfig `yaml:"review,omitempty"`
 }
 
 type GitHubConfig struct {
@@ -48,6 +52,16 @@ type GitHubConfig struct {
 type PollingConfig struct {
 	Interval string `yaml:"interval"`
 	Backoff  string `yaml:"backoff"`
+}
+
+// ReviewHostConfig describes local harness capacity for partitioned reviews.
+// Zero values use the documented installation defaults.
+type ReviewHostConfig struct {
+	// Concurrency is the maximum number of review invocations running together.
+	Concurrency int `yaml:"concurrency,omitempty"`
+	// AuthorizedUnits is the installation ceiling a maintainer may authorize for
+	// one axis fan-out. It is bounded by the factory installation policy.
+	AuthorizedUnits int `yaml:"authorized_units,omitempty"`
 }
 
 // AuthenticationConfig identifies narrowly scoped host credential sources.
@@ -86,9 +100,63 @@ type RepositoryConfig struct {
 	Caches                 []CacheConfig       `yaml:"caches"`
 	WorkerBuild            WorkerBuildConfig   `yaml:"worker_build"`
 	BaseSynchronization    BaseSynchronization `yaml:"base_synchronization"`
+	// ReviewUnits freezes the repository-owned workload and normal fan-out
+	// policy. Zero values use the factory defaults.
+	ReviewUnits ReviewUnitConfig `yaml:"review_units,omitempty"`
 	// Evaluation controls explicit local evaluation-summary retention. A blank
 	// value retains summaries until a deliberate deletion command is run.
 	Evaluation EvaluationConfig `yaml:"evaluation"`
+}
+
+// ReviewUnitConfig controls how an exact review diff is partitioned. The host
+// registration controls concurrency and authorization separately.
+type ReviewUnitConfig struct {
+	// MaxUnitBytes is the UTF-8 byte workload bound for one self-contained unit.
+	MaxUnitBytes int `yaml:"max_unit_bytes,omitempty"`
+	// MaxUnits is the normal fan-out before explicit maintainer authorization.
+	MaxUnits int `yaml:"max_units,omitempty"`
+}
+
+const (
+	// DefaultReviewUnitBytes is the default self-contained review workload.
+	DefaultReviewUnitBytes = reviewunits.DefaultMaxUnitBytes
+	// DefaultReviewUnits is the normal review fan-out before explicit
+	// maintainer authorization.
+	DefaultReviewUnits = reviewunits.DefaultMaxUnits
+	// MaxReviewUnitBytes is the factory validation ceiling for repository-owned
+	// review workload configuration.
+	MaxReviewUnitBytes = 1 << 20
+	// MaxReviewConcurrency is the host ceiling for simultaneous review
+	// invocations across both axes.
+	MaxReviewConcurrency = 16
+	// MaxAuthorizedReviewUnits is the host installation ceiling for an
+	// explicitly authorized review fan-out. It mirrors the persistence bound in
+	// the operational store, which cannot import this package.
+	MaxAuthorizedReviewUnits = 8
+)
+
+// EffectiveReviewUnitConfig returns repository review-unit settings with
+// documented defaults applied.
+func EffectiveReviewUnitConfig(value ReviewUnitConfig) ReviewUnitConfig {
+	if value.MaxUnitBytes <= 0 {
+		value.MaxUnitBytes = DefaultReviewUnitBytes
+	}
+	if value.MaxUnits <= 0 {
+		value.MaxUnits = DefaultReviewUnits
+	}
+	return value
+}
+
+// EffectiveReviewHostConfig returns host review settings with safe defaults
+// and the installation authorization ceiling applied.
+func EffectiveReviewHostConfig(value ReviewHostConfig) ReviewHostConfig {
+	if value.Concurrency <= 0 {
+		value.Concurrency = 2
+	}
+	if value.AuthorizedUnits <= 0 || value.AuthorizedUnits > MaxAuthorizedReviewUnits {
+		value.AuthorizedUnits = MaxAuthorizedReviewUnits
+	}
+	return value
 }
 
 // EvaluationConfig contains repository-declared retention policy for the
@@ -408,6 +476,12 @@ func ValidateRepository(config RepositoryConfig) error {
 	if err := validateSetupFiles(config.SetupFiles); err != nil {
 		return err
 	}
+	if config.ReviewUnits.MaxUnitBytes < 0 || config.ReviewUnits.MaxUnitBytes > MaxReviewUnitBytes {
+		return validation("review_units.max_unit_bytes", "must be zero or between one and 1048576")
+	}
+	if config.ReviewUnits.MaxUnits < 0 || config.ReviewUnits.MaxUnits > 8 {
+		return validation("review_units.max_units", "must be zero or between one and eight")
+	}
 	if config.SetupEnvironmentPolicy != EnvironmentPolicyClean && config.SetupEnvironmentPolicy != EnvironmentPolicyRole {
 		return validation("setup_environment_policy", "must be clean or role")
 	}
@@ -716,6 +790,12 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	}
 	if err := validateDuration(prefix+".polling.backoff", repository.Polling.Backoff, false); err != nil {
 		return err
+	}
+	if repository.Review.Concurrency < 0 || repository.Review.Concurrency > MaxReviewConcurrency {
+		return validation(prefix+".review.concurrency", fmt.Sprintf("must be zero or between one and %d", MaxReviewConcurrency))
+	}
+	if repository.Review.AuthorizedUnits < 0 || repository.Review.AuthorizedUnits > MaxAuthorizedReviewUnits {
+		return validation(prefix+".review.authorized_units", fmt.Sprintf("must be zero or between one and %d", MaxAuthorizedReviewUnits))
 	}
 	if strings.TrimSpace(repository.OperationalDataPath) == "" {
 		return validation(prefix+".operational_data_path", "is required")

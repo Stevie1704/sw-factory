@@ -234,12 +234,18 @@ type ReviewFinding struct {
 	SuggestedResolution string `json:"suggested_resolution"`
 	// SuggestedOwner routes the finding to a coordinator-known role or human.
 	SuggestedOwner string `json:"suggested_owner"`
+	// UnitID identifies the manifest unit containing the finding's primary
+	// changed range. It is required for partitioned review invocations.
+	UnitID string `json:"unit_id,omitempty"`
 }
 
 // ReviewHandoff is the structured output of a review-stage invocation.
 type ReviewHandoff struct {
 	// ReviewedSHA binds the findings to the exact immutable commit inspected.
 	ReviewedSHA string `json:"reviewed_sha"`
+	// UnitID binds the handoff to the assigned manifest unit when the review
+	// round is partitioned. Historical whole-diff reports may omit it.
+	UnitID string `json:"unit_id,omitempty"`
 	// Findings contains zero or more complete actionable observations.
 	Findings []ReviewFinding `json:"findings"`
 }
@@ -391,6 +397,9 @@ type ValidationContext struct {
 	// coordinator accepts it. It may be blank while a worker writes its report;
 	// the coordinator supplies it during acceptance.
 	CheckpointSHA string
+	// ReviewUnitID is the exact manifest assignment expected from a partitioned
+	// review invocation. Empty retains the historical whole-diff contract.
+	ReviewUnitID string
 	// deferTestPathPolicy defers repository-specific ownership checks until the
 	// coordinator supplies the frozen configuration during report acceptance.
 	deferTestPathPolicy bool
@@ -1045,10 +1054,22 @@ func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error
 	if context.CheckpointSHA != "" && value.ReviewedSHA != context.CheckpointSHA {
 		return fmt.Errorf("review handoff reviewed_sha %q does not match checkpoint %q", value.ReviewedSHA, context.CheckpointSHA)
 	}
+	if value.UnitID != "" && !safeIdentifier(value.UnitID) {
+		return errors.New("review handoff unit_id contains unsafe characters")
+	}
+	if context.ReviewUnitID != "" && value.UnitID != context.ReviewUnitID {
+		return fmt.Errorf("review handoff unit_id %q does not match assigned unit %q", value.UnitID, context.ReviewUnitID)
+	}
 	if len(value.Findings) > maxReviewFindings {
 		return fmt.Errorf("review handoff findings exceeds %d entries", maxReviewFindings)
 	}
+	if context.ReviewUnitID != "" && len(value.Findings) > 16 {
+		return errors.New("partitioned review handoff findings exceeds 16 entries for one unit")
+	}
 	for index, finding := range value.Findings {
+		if finding.UnitID != "" && !safeIdentifier(finding.UnitID) {
+			return fmt.Errorf("review findings[%d].unit_id contains unsafe characters", index)
+		}
 		for field, text := range map[string]string{
 			"location":             finding.Location,
 			"claim":                finding.Claim,
@@ -1059,6 +1080,9 @@ func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error
 			if err := validateText(fmt.Sprintf("review findings[%d].%s", index, field), text, maxTextRunes, true); err != nil {
 				return err
 			}
+		}
+		if context.ReviewUnitID != "" && finding.UnitID != context.ReviewUnitID {
+			return fmt.Errorf("review findings[%d].unit_id %q does not match assigned unit %q", index, finding.UnitID, context.ReviewUnitID)
 		}
 		switch finding.Severity {
 		case ReviewSeverityBlocker, ReviewSeverityAdvisory:

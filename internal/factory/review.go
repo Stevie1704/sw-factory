@@ -339,6 +339,15 @@ func reviewHasBlockingFindingForRole(role string, findings []store.ReviewFinding
 	return false
 }
 
+// reviewFindingCount returns a nil-safe finding count for partial partitioned
+// review progress and the established whole-diff projection.
+func reviewFindingCount(review *store.ReviewResult) int {
+	if review == nil {
+		return 0
+	}
+	return len(review.Findings)
+}
+
 // reviewResultProjectionFromReport retains every durable review-axis field,
 // including an incomplete disposition, its operator-visible reason, and any
 // findings established before the reviewer stopped.
@@ -361,6 +370,7 @@ func reviewResultProjectionFromReport(value report.Report, checkpoint string) *s
 				Category:            string(finding.Category),
 				SuggestedResolution: finding.SuggestedResolution,
 				SuggestedOwner:      finding.SuggestedOwner,
+				UnitID:              finding.UnitID,
 			})
 		}
 	}
@@ -539,17 +549,76 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		return AgentResult{}, fmt.Errorf("invocation %q is not a review role", invocation.ID)
 	}
 	previous := *run
-	if err := applyReviewResultProjection(run, invocation.Role, value); err != nil {
+	unitPending := false
+	if invocation.ReviewRoundID != "" && invocation.ReviewUnitID != "" {
+		partitioned, ok := runStore.(store.ReviewRoundStore)
+		if !ok {
+			return AgentResult{}, errors.New("operational store does not support partitioned review results")
+		}
+		round, roundErr := partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA)
+		if roundErr != nil {
+			return AgentResult{}, fmt.Errorf("read review round after unit acceptance: %w", roundErr)
+		}
+		if round == nil || round.ID != invocation.ReviewRoundID {
+			return AgentResult{}, errors.New("accepted review unit does not match the persisted review round")
+		}
+		aggregate, axisComplete, aggregateErr := aggregateReviewUnitResults(ctx, partitioned, *round, invocation.Role, run.CheckpointSHA)
+		if aggregateErr != nil {
+			if statusErr := partitioned.UpdateReviewRoundStatus(ctx, round.ID, store.ReviewRoundStatusError); statusErr != nil {
+				return AgentResult{}, fmt.Errorf("mark review round aggregate error: %w", statusErr)
+			}
+			run.Status = store.StatusWaitingForHuman
+			run.LifecycleReason = fmt.Sprintf("%s review unit aggregate requires human recovery: %v", invocation.Role, aggregateErr)
+			run.UpdatedAt = s.deps.Now().UTC()
+			if statusErr := s.publishReviewStatus(ctx, registration, runStore, *run, invocation.Role, github.CommitStatusError, "review unit aggregate requires human recovery"); statusErr != nil {
+				return AgentResult{}, statusErr
+			}
+			if persistErr := s.persistAgentRunState(ctx, registration, runStore, previous, *run); persistErr != nil {
+				return AgentResult{}, persistErr
+			}
+			return AgentResult{Invocation: *invocation, Report: value}, nil
+		}
+		if axisComplete {
+			if err := setReviewResultForRole(run, invocation.Role, aggregate); err != nil {
+				return AgentResult{}, err
+			}
+			// Unit results stay isolated until an axis is complete. Once its
+			// aggregate exists, expose the questions through the same flattened
+			// operator projection used by the whole-diff path.
+			run.PendingQuestions = reviewQuestionsForRun(*run)
+			run.ClarificationCommentID = ""
+		} else {
+			unitPending = true
+		}
+		terminal, terminalErr := reviewManifestTerminal(ctx, partitioned, *round, *run)
+		if terminalErr != nil {
+			return AgentResult{}, terminalErr
+		}
+		if terminal && round.Status != store.ReviewRoundStatusComplete {
+			if err := partitioned.UpdateReviewRoundStatus(ctx, round.ID, store.ReviewRoundStatusComplete); err != nil {
+				return AgentResult{}, fmt.Errorf("mark review round complete: %w", err)
+			}
+		}
+	} else if err := applyReviewResultProjection(run, invocation.Role, value); err != nil {
 		return AgentResult{}, err
 	}
 	review := reviewResultForRole(*run, invocation.Role)
 	blocking := reviewHasBlockingResult(*run)
 	complete := reviewRoundComplete(*run)
 	incomplete := reviewHasIncompleteResult(*run)
-	ownBlocking := reviewHasBlockingFindingForRole(invocation.Role, review.Findings)
+	ownBlocking := review != nil && reviewHasBlockingFindingForRole(invocation.Role, review.Findings)
 	statusState := github.CommitStatusSuccess
-	statusDescription := fmt.Sprintf("%s passed; %d advisory findings", invocation.Role, len(review.Findings))
+	statusDescription := fmt.Sprintf("%s passed; %d advisory findings", invocation.Role, reviewFindingCount(review))
 	switch {
+	case incomplete && invocation.ReviewUnitID != "":
+		run.Status = store.StatusWaitingForHuman
+		run.LifecycleReason = reviewWaitingReason(*run)
+		if review == nil || !reviewIsIncomplete(review) {
+			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
+		} else {
+			statusState = github.CommitStatusError
+			statusDescription = fmt.Sprintf("%s reported %s; human disposition required", invocation.Role, effectiveReviewOutcome(review))
+		}
 	case complete && blocking:
 		run.Status = store.StatusActive
 		run.LifecycleReason = fmt.Sprintf("review round has blocking violations; routing repair (%s)", invocation.Role)
@@ -572,7 +641,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	case incomplete:
 		run.Status = store.StatusWaitingForHuman
 		run.LifecycleReason = reviewWaitingReason(*run)
-		if !reviewIsIncomplete(review) {
+		if review == nil || !reviewIsIncomplete(review) {
 			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
 		} else {
 			statusState = github.CommitStatusError
@@ -590,6 +659,10 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		run.LifecycleReason = fmt.Sprintf("%s passed; waiting for the other review", invocation.Role)
 		statusDescription = fmt.Sprintf("%s passed; waiting for the other review", invocation.Role)
 	}
+	if unitPending {
+		statusState = github.CommitStatusPending
+		statusDescription = fmt.Sprintf("%s unit complete; waiting for remaining review units", invocation.Role)
+	}
 	run.UpdatedAt = s.deps.Now().UTC()
 	if err := s.publishReviewStatus(ctx, registration, runStore, *run, invocation.Role, statusState, statusDescription); err != nil {
 		return AgentResult{}, fmt.Errorf("publish %s status: %w", invocation.Role, err)
@@ -600,7 +673,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	if err := s.refreshSpecificationReviewPullRequest(ctx, registration, runStore, *run); err != nil {
 		return AgentResult{}, fmt.Errorf("refresh pull request after %s: %w", invocation.Role, err)
 	}
-	if complete {
+	if complete && (!incomplete || invocation.ReviewUnitID == "") {
 		if blocking {
 			repair, repairErr := s.routeReviewRepair(ctx, registration, runStore, *run)
 			if repairErr != nil {
@@ -644,7 +717,11 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 	if existing.Number == 0 || existing.Number != run.PullRequestNumber {
 		return fmt.Errorf("tracked pull request #%d was not found for review projection", run.PullRequestNumber)
 	}
-	body := mergeGeneratedReviewSection(existing.Body, generatedReviewSection(run))
+	section, err := generatedReviewSectionForStore(ctx, runStore, run)
+	if err != nil {
+		return fmt.Errorf("build review progress projection: %w", err)
+	}
+	body := mergeGeneratedReviewSection(existing.Body, section)
 	updateRequest := github.PullRequestRequest{
 		Title:      defaultString(existing.Title, defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number))),
 		Body:       body,
@@ -670,6 +747,39 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 		return errors.New("review pull-request update returned no pull-request identity")
 	}
 	return nil
+}
+
+// generatedReviewSectionForStore adds durable round progress to the generated
+// pull-request section while retaining the legacy projection when a focused or
+// historical store has no normalized review manifest.
+func generatedReviewSectionForStore(ctx context.Context, runStore RunStore, run store.Run) (string, error) {
+	partitioned, ok := runStore.(store.ReviewRoundStore)
+	if !ok {
+		return generatedReviewSection(run), nil
+	}
+	round, err := partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA)
+	if err != nil {
+		return "", fmt.Errorf("read review round for pull-request progress: %w", err)
+	}
+	if round == nil {
+		return generatedReviewSection(run), nil
+	}
+	units, err := partitioned.ReviewUnits(ctx, round.ID)
+	if err != nil {
+		return "", fmt.Errorf("read review units for pull-request progress: %w", err)
+	}
+	progress := make(map[string]reviewUnitProgress)
+	for _, role := range reviewAxisRoles {
+		if !reviewRoleConfigured(run, role) && reviewResultForRole(run, role) == nil {
+			continue
+		}
+		results, resultErr := partitioned.ReviewUnitResults(ctx, round.ID, role)
+		if resultErr != nil {
+			return "", fmt.Errorf("read %s review progress: %w", role, resultErr)
+		}
+		progress[role] = reviewUnitProgress{Completed: len(results), Total: len(units)}
+	}
+	return generatedReviewSectionWithProgress(run, round, progress), nil
 }
 
 // reviewHasBlockingResult reports whether either isolated reviewer has a

@@ -44,6 +44,9 @@ timeouts:
   agent: 90m
   gate: 10m
   review: 30m
+review_units:
+  max_unit_bytes: 65536
+  max_units: 4
 retry_limits:
   check_repair: 3
   review_repair: 4

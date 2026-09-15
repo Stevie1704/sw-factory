@@ -19,7 +19,18 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 36
+const CurrentSchemaVersion = 39
+
+const (
+	// MaxReviewFindings bounds the findings one review axis may retain.
+	MaxReviewFindings = 64
+	// MaxReviewQuestions bounds the clarification questions one axis may retain.
+	MaxReviewQuestions = 32
+	// MaxReviewEvidence bounds the evidence entries one axis may retain.
+	MaxReviewEvidence = 32
+	// MaxReviewSummaryBytes bounds one axis summary.
+	MaxReviewSummaryBytes = 4000
+)
 
 // maxPendingQuestions bounds the flattened operator question surface. Review
 // axes retain up to 32 questions independently, so the shared surface allows
@@ -340,6 +351,8 @@ type ReviewFinding struct {
 	SuggestedResolution string `json:"suggested_resolution"`
 	// SuggestedOwner identifies the suggested repair owner.
 	SuggestedOwner string `json:"suggested_owner"`
+	// UnitID identifies the exact review unit that owns this finding.
+	UnitID string `json:"unit_id,omitempty"`
 }
 
 // SourceEvent returns the maintainer source and event identity behind a human
@@ -686,6 +699,12 @@ type Invocation struct {
 	// ManualResumeCount is the durable generation reserved before each explicit
 	// operator-requested native resume. It prevents replay after response loss.
 	ManualResumeCount int
+	// ReviewRoundID identifies the exact review round for a partitioned review
+	// invocation. It is empty for non-review and historical invocations.
+	ReviewRoundID string
+	// ReviewUnitID identifies the manifest unit assigned to this invocation. It
+	// is empty for non-review and historical invocations.
+	ReviewUnitID string
 	// CreatedAt is the immutable invocation creation time.
 	CreatedAt time.Time
 	// UpdatedAt is the latest coordinator update time.
@@ -1654,11 +1673,11 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 	default:
 		return fmt.Errorf("unsupported %s review outcome %q", label, review.Outcome)
 	}
-	if len(review.Summary) > 4000 || strings.ContainsAny(review.Summary, "\x00\r\n") {
+	if len(review.Summary) > MaxReviewSummaryBytes || strings.ContainsAny(review.Summary, "\x00\r\n") {
 		return fmt.Errorf("%s review summary is invalid", label)
 	}
-	if len(review.Questions) > 32 {
-		return fmt.Errorf("%s review questions exceed 32 entries", label)
+	if len(review.Questions) > MaxReviewQuestions {
+		return fmt.Errorf("%s review questions exceed %d entries", label, MaxReviewQuestions)
 	}
 	seenQuestions := make(map[string]struct{}, len(review.Questions))
 	for index, question := range review.Questions {
@@ -1670,16 +1689,16 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 		}
 		seenQuestions[question.ID] = struct{}{}
 	}
-	if len(review.Evidence) > 32 {
-		return fmt.Errorf("%s review evidence exceeds 32 entries", label)
+	if len(review.Evidence) > MaxReviewEvidence {
+		return fmt.Errorf("%s review evidence exceeds %d entries", label, MaxReviewEvidence)
 	}
 	for index, evidence := range review.Evidence {
 		if strings.TrimSpace(evidence.Kind) == "" || strings.TrimSpace(evidence.Detail) == "" || strings.ContainsAny(evidence.Kind+evidence.Detail, "\x00\r\n") {
 			return fmt.Errorf("%s review evidence %d is invalid", label, index)
 		}
 	}
-	if len(review.Findings) > 64 {
-		return fmt.Errorf("%s review findings exceed 64 entries", label)
+	if len(review.Findings) > MaxReviewFindings {
+		return fmt.Errorf("%s review findings exceed %d entries", label, MaxReviewFindings)
 	}
 	for index, finding := range review.Findings {
 		if err := validateReviewFinding(label, index, finding); err != nil {
@@ -1692,6 +1711,9 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 // validateReviewFinding applies the shared nested finding contract to both
 // exact-checkpoint reviews and review-repair packets.
 func validateReviewFinding(label string, index int, finding ReviewFinding) error {
+	if finding.UnitID != "" && !safeQuestionIdentifier(finding.UnitID) {
+		return fmt.Errorf("%s review finding %d unit_id is unsafe", label, index)
+	}
 	for field, value := range map[string]string{
 		"location": finding.Location, "claim": finding.Claim, "evidence": finding.Evidence,
 		"suggested_resolution": finding.SuggestedResolution, "suggested_owner": finding.SuggestedOwner,
@@ -2037,7 +2059,8 @@ const saveRunIfRevisionStatement = `
 const invocationColumns = `id, run_id, harness, role, stage, model, reasoning_effort, credential_store_id,
 	native_session_id, invocation_directory, result_directory, permitted_paths,
 	prompt_version, prompt_craft_source_path, prompt_craft_sha256, status,
-	launch_voided, recovery_resume_count, manual_resume_count, created_at, updated_at`
+	launch_voided, recovery_resume_count, manual_resume_count, review_round_id,
+	review_unit_id, created_at, updated_at`
 
 // SaveInvocation validates and upserts one recoverable harness invocation.
 func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error {
@@ -2065,6 +2088,12 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	if invocation.ManualResumeCount < 0 {
 		return errors.New("invocation manual resume count must not be negative")
 	}
+	if (invocation.ReviewRoundID == "") != (invocation.ReviewUnitID == "") {
+		return errors.New("invocation review round and unit ids must be supplied together")
+	}
+	if invocation.ReviewRoundID != "" && (!safeQuestionIdentifier(invocation.ReviewRoundID) || !safeQuestionIdentifier(invocation.ReviewUnitID)) {
+		return errors.New("invocation review round and unit ids are unsafe")
+	}
 	if strings.ContainsAny(invocation.CredentialStoreID, "\x00\r\n") {
 		return errors.New("invocation credential store id contains control characters")
 	}
@@ -2083,7 +2112,7 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 	}
 	_, err = s.db.ExecContext(ctx, `
 			INSERT INTO invocations (`+invocationColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			harness = excluded.harness,
@@ -2103,6 +2132,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 			launch_voided = excluded.launch_voided,
 			recovery_resume_count = excluded.recovery_resume_count,
 			manual_resume_count = excluded.manual_resume_count,
+			review_round_id = excluded.review_round_id,
+			review_unit_id = excluded.review_unit_id,
 				updated_at = excluded.updated_at`,
 		invocation.ID,
 		invocation.RunID,
@@ -2123,6 +2154,8 @@ func (s *Store) SaveInvocation(ctx context.Context, invocation Invocation) error
 		invocation.LaunchVoided,
 		invocation.RecoveryResumeCount,
 		invocation.ManualResumeCount,
+		invocation.ReviewRoundID,
+		invocation.ReviewUnitID,
 		invocation.CreatedAt.UTC().Format(runTimestampLayout),
 		invocation.UpdatedAt.UTC().Format(runTimestampLayout),
 	)
@@ -2213,6 +2246,15 @@ func (s *Store) invalidateRunResults(ctx context.Context, runID string, includeB
 	if _, err := tx.ExecContext(ctx, deleteStatement, deleteArguments...); err != nil {
 		return fmt.Errorf("invalidate gate results for run %q: %w", runID, err)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM review_unit_results WHERE round_id IN (SELECT id FROM review_rounds WHERE run_id = ?)`, runID); err != nil {
+		return fmt.Errorf("invalidate review unit results for run %q: %w", runID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM review_units WHERE round_id IN (SELECT id FROM review_rounds WHERE run_id = ?)`, runID); err != nil {
+		return fmt.Errorf("invalidate review units for run %q: %w", runID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM review_rounds WHERE run_id = ?`, runID); err != nil {
+		return fmt.Errorf("invalidate review rounds for run %q: %w", runID, err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit run-result invalidation: %w", err)
 	}
@@ -2283,6 +2325,15 @@ func (s *Store) saveRunAndInvalidateResults(ctx context.Context, expectedRevisio
 	}
 	if _, err := tx.ExecContext(ctx, deleteStatement, deleteArguments...); err != nil {
 		return fmt.Errorf("invalidate gate results for run %q: %w", run.ID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM review_unit_results WHERE round_id IN (SELECT id FROM review_rounds WHERE run_id = ?)`, run.ID); err != nil {
+		return fmt.Errorf("invalidate review unit results for run %q: %w", run.ID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM review_units WHERE round_id IN (SELECT id FROM review_rounds WHERE run_id = ?)`, run.ID); err != nil {
+		return fmt.Errorf("invalidate review units for run %q: %w", run.ID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM review_rounds WHERE run_id = ?`, run.ID); err != nil {
+		return fmt.Errorf("invalidate review rounds for run %q: %w", run.ID, err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -2414,6 +2465,8 @@ func scanInvocation(row interface{ Scan(...any) error }) (*Invocation, error) {
 		&invocation.LaunchVoided,
 		&invocation.RecoveryResumeCount,
 		&invocation.ManualResumeCount,
+		&invocation.ReviewRoundID,
+		&invocation.ReviewUnitID,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -3205,6 +3258,87 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS lifecycle_notifications"); err != nil {
 				return fmt.Errorf("apply store migration 36: drop lifecycle notifications: %w", err)
 			}
+		case 37:
+			for _, column := range []string{"review_round_id", "review_unit_id"} {
+				if err := addInvocationColumnIfMissing(ctx, tx, column); err != nil {
+					return fmt.Errorf("apply store migration 37: %w", err)
+				}
+			}
+			for _, statement := range []string{
+				"DROP INDEX IF EXISTS one_active_invocation_per_role",
+				"CREATE UNIQUE INDEX IF NOT EXISTS one_active_invocation_per_review_unit ON invocations (run_id, role, review_unit_id) WHERE status = 'active'",
+				`CREATE TABLE IF NOT EXISTS review_rounds (
+					id TEXT PRIMARY KEY,
+					run_id TEXT NOT NULL,
+					base_checkpoint_sha TEXT NOT NULL,
+					checkpoint_sha TEXT NOT NULL,
+					diff_path TEXT NOT NULL,
+					diff_bytes INTEGER NOT NULL,
+					diff_sha256 TEXT NOT NULL,
+					manifest_sha256 TEXT NOT NULL,
+					schema_version INTEGER NOT NULL,
+					policy_version TEXT NOT NULL,
+					max_unit_bytes INTEGER NOT NULL,
+					max_units INTEGER NOT NULL,
+					context_lines INTEGER NOT NULL,
+					concurrency INTEGER NOT NULL DEFAULT 2,
+					authorized_max_units INTEGER NOT NULL DEFAULT 0,
+					status TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
+				)`,
+				"CREATE UNIQUE INDEX IF NOT EXISTS review_rounds_by_run_checkpoint ON review_rounds (run_id, checkpoint_sha)",
+				`CREATE TABLE IF NOT EXISTS review_units (
+					round_id TEXT NOT NULL,
+					unit_id TEXT NOT NULL,
+					ordinal INTEGER NOT NULL,
+					workload_bytes INTEGER NOT NULL,
+					diff_sha256 TEXT NOT NULL,
+					segments TEXT NOT NULL,
+					primary_ranges TEXT NOT NULL,
+					context_ranges TEXT NOT NULL,
+					primary_non_text_files TEXT NOT NULL,
+					changed_lines INTEGER NOT NULL,
+					PRIMARY KEY (round_id, unit_id),
+					UNIQUE (round_id, ordinal)
+				)`,
+				"CREATE INDEX IF NOT EXISTS review_units_by_round ON review_units (round_id, ordinal)",
+				`CREATE TABLE IF NOT EXISTS review_unit_results (
+					round_id TEXT NOT NULL,
+					role TEXT NOT NULL,
+					unit_id TEXT NOT NULL,
+					invocation_id TEXT NOT NULL,
+					checkpoint_sha TEXT NOT NULL,
+					outcome TEXT NOT NULL,
+					summary TEXT NOT NULL DEFAULT '',
+					questions TEXT NOT NULL,
+					evidence TEXT NOT NULL,
+					findings TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL,
+					PRIMARY KEY (round_id, role, unit_id)
+				)`,
+				"CREATE INDEX IF NOT EXISTS review_unit_results_by_round_role ON review_unit_results (round_id, role, unit_id)",
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 37: %w", err)
+				}
+			}
+		case 38:
+			if err := addReviewRoundColumnIfMissing(ctx, tx, "concurrency"); err != nil {
+				return fmt.Errorf("apply store migration 38: %w", err)
+			}
+		case 39:
+			for _, column := range []string{
+				"review_diff_bytes", "review_changed_lines", "review_unit_count",
+				"review_largest_unit_bytes", "review_invocation_count", "review_duration_nanos",
+				"review_finding_counts", "review_incomplete_unit_count",
+				"review_cannot_proceed_unit_count", "review_over_budget_count",
+			} {
+				if err := addEvaluationSummaryColumnIfMissing(ctx, tx, column); err != nil {
+					return fmt.Errorf("apply store migration 39: %w", err)
+				}
+			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
 		}
@@ -3257,6 +3391,141 @@ func dropOperationalRunColumnIfPresent(ctx context.Context, tx *sql.Tx, column s
 	default:
 		return fmt.Errorf("refuse unknown operational run column %q", column)
 	}
+}
+
+// addInvocationColumnIfMissing keeps the newest migration compatible with
+// test and operator fixtures that already contain a partially-created review
+// projection while their schema metadata still names an older version.
+func addInvocationColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(invocations)")
+	if err != nil {
+		return fmt.Errorf("inspect invocation columns: %w", err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan invocation column: %w", err)
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read invocation columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close invocation columns: %w", err)
+	}
+	if found {
+		return nil
+	}
+	if column != "review_round_id" && column != "review_unit_id" {
+		return fmt.Errorf("unsupported invocation migration column %q", column)
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("add invocation column %q: %w", column, err)
+	}
+	return nil
+}
+
+// addReviewRoundColumnIfMissing keeps schema migration idempotent for a
+// database whose metadata was rolled back after a partially completed
+// review-round migration.
+func addReviewRoundColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
+	if column != "concurrency" {
+		return fmt.Errorf("unsupported review round migration column %q", column)
+	}
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(review_rounds)")
+	if err != nil {
+		return fmt.Errorf("inspect review round columns: %w", err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan review round column: %w", err)
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read review round columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close review round columns: %w", err)
+	}
+	if found {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE review_rounds ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 2"); err != nil {
+		return fmt.Errorf("add review round column %q: %w", column, err)
+	}
+	return nil
+}
+
+// addEvaluationSummaryColumnIfMissing keeps the content-free review telemetry
+// migration safe to retry after an interrupted schema update.
+func addEvaluationSummaryColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(evaluation_summaries)")
+	if err != nil {
+		return fmt.Errorf("inspect evaluation summary columns: %w", err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan evaluation summary column: %w", err)
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read evaluation summary columns: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close evaluation summary columns: %w", err)
+	}
+	if found {
+		return nil
+	}
+	definitions := map[string]string{
+		"review_diff_bytes":                "INTEGER NOT NULL DEFAULT 0",
+		"review_changed_lines":             "INTEGER NOT NULL DEFAULT 0",
+		"review_unit_count":                "INTEGER NOT NULL DEFAULT 0",
+		"review_largest_unit_bytes":        "INTEGER NOT NULL DEFAULT 0",
+		"review_invocation_count":          "INTEGER NOT NULL DEFAULT 0",
+		"review_duration_nanos":            "INTEGER NOT NULL DEFAULT 0",
+		"review_finding_counts":            "TEXT NOT NULL DEFAULT '{}'",
+		"review_incomplete_unit_count":     "INTEGER NOT NULL DEFAULT 0",
+		"review_cannot_proceed_unit_count": "INTEGER NOT NULL DEFAULT 0",
+		"review_over_budget_count":         "INTEGER NOT NULL DEFAULT 0",
+	}
+	definition, supported := definitions[column]
+	if !supported {
+		return fmt.Errorf("unsupported evaluation summary migration column %q", column)
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE evaluation_summaries ADD COLUMN "+column+" "+definition); err != nil {
+		return fmt.Errorf("add evaluation summary column %q: %w", column, err)
+	}
+	return nil
 }
 
 // reconcileDuplicateRuns keeps the newest non-terminal run per repository
@@ -3426,6 +3695,7 @@ func isActiveInvocationConflict(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "one_active_invocation_per_run") ||
 		strings.Contains(message, "one_active_invocation_per_role") ||
+		strings.Contains(message, "one_active_invocation_per_review_unit") ||
 		strings.Contains(message, "unique constraint failed: invocations.run_id, invocations.role")
 }
 

@@ -489,6 +489,10 @@ timeouts:
   gate: 10m
   review: 15m
 
+review_units:
+  max_unit_bytes: 65536
+  max_units: 4
+
 retry_limits:
   check_repair: 3
   review_repair: 2
@@ -1045,6 +1049,7 @@ workflow state. Comments are processed once using a persisted watermark.
 | <code>/factory refresh</code>                                   | Re-reads the issue into a new packet version, preserves resolved answers, and invalidates downstream work that no longer matches.                                                  |
 | <code>/factory answer &lt;question-id&gt; &lt;answer&gt;</code> | Answers one pending question and starts a fresh invocation against the new packet. <code>question=</code>, <code>question-id=</code>, or <code>id=</code> forms are also accepted. |
 | <code>/factory repair &lt;instruction&gt;</code>               | Supplies one maintainer instruction for a review waiting on human disposition and resumes implementation from the current checkpoint. The supervision-comment equivalent of a <code>CHANGES_REQUESTED</code> review, and likewise unbudgeted. |
+| <code>/factory authorize-review &lt;units&gt;</code>          | Authorizes the exact persisted review manifest to use up to the specified unit fan-out, within the host ceiling. |
 | <code>/factory retry</code>                                     | Reopens the current failed or explicitly cancelled stage when policy permits.                                                                                                      |
 | <code>/factory cancel</code>                                    | Stops the worker and cancels the run while retaining artifacts.                                                                                                                    |
 | <code>/factory config harness=codex</code>                      | Selects a permitted harness for a later invocation only.                                                                                                                           |

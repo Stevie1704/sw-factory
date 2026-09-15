@@ -92,6 +92,9 @@ repositories:
     authentication:
       codex_auth_path: /Users/me/.codex/auth.json
       claude_auth_path: /Users/me/.claude/.credentials.json
+    review:
+      concurrency: 2
+      authorized_units: 8
     operational_data_path: /Users/me/.local/share/factory/factory.db
     repository_config_path: /Users/me/src/project/factory.yaml
 ```
@@ -163,6 +166,9 @@ timeouts:
   agent: 30m
   gate: 5m
   review: 10m
+review_units:
+  max_unit_bytes: 65536
+  max_units: 4
 retry_limits:
   check_repair: 3
   review_repair: 2
@@ -192,7 +198,7 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, optional `role_craft` entries for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, and optional positive `evaluation.retention`. `role_craft` paths must be nonempty, repository-relative Markdown paths without control characters, backslashes, absolute paths, or any `..` path segment. At claim time each selected file is read from the exact immutable base checkpoint; a missing file fails the claim. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, optional `role_craft` entries for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, bounded `review_units` values, and optional positive `evaluation.retention`. `review_units.max_unit_bytes` defaults to 65,536 bytes and is capped at 1 MiB by factory policy; `max_units` defaults to four and is capped at eight. The factory owns the ten-line context-overlap policy. A large exact checkpoint is persisted as one deterministic review manifest; the specification and standards axes receive separate fresh invocations over those shared units. The host `review.concurrency` defaults to two simultaneous invocations and `review.authorized_units` defaults to eight; a manifest above the normal repository fan-out pauses until an authorized maintainer comments `/factory authorize-review <units>`. `role_craft` paths must be nonempty, repository-relative Markdown paths without control characters, backslashes, absolute paths, or any `..` path segment. At claim time each selected file is read from the exact immutable base checkpoint; a missing file fails the claim. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 `test_policy.allow_automated_objections` is the evidence-gated switch for the
 implementation-to-test objection cycle. Keep it `false` until the measured

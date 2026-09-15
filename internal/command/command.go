@@ -4,6 +4,7 @@ package command
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -31,6 +32,8 @@ const (
 	Repair Kind = "repair"
 	// ConfigureHarness changes the selected harness for a later invocation.
 	ConfigureHarness Kind = "configure_harness"
+	// AuthorizeReview approves additional fan-out for the exact persisted review manifest.
+	AuthorizeReview Kind = "authorize_review"
 )
 
 // Harness identifies a harness value accepted by the command grammar.
@@ -55,6 +58,8 @@ type Request struct {
 	Answer string
 	// Instruction is set only for Repair and contains the requested change.
 	Instruction string
+	// ReviewUnits is set only for AuthorizeReview and names the approved limit.
+	ReviewUnits int
 }
 
 // ParseResult distinguishes ordinary discussion from a structured command.
@@ -89,6 +94,8 @@ const (
 	ParseErrorInvalidHarnessArgument ParseErrorCode = "invalid_harness_argument"
 	// ParseErrorUnsupportedHarness means the harness is outside the grammar.
 	ParseErrorUnsupportedHarness ParseErrorCode = "unsupported_harness"
+	// ParseErrorInvalidReviewUnits means the review fan-out limit is malformed.
+	ParseErrorInvalidReviewUnits ParseErrorCode = "invalid_review_units"
 	// ParseErrorControlCharacter means the command contains unsafe controls.
 	ParseErrorControlCharacter ParseErrorCode = "control_character"
 )
@@ -142,6 +149,8 @@ func Parse(body string) (ParseResult, error) {
 		return parseAnswer(result, fields[2:])
 	case string(Repair):
 		return parseRepair(result, fields[2:])
+	case "authorize-review", "authorize_review":
+		return parseReviewAuthorization(result, fields[2:])
 	case "config", "configure", "harness":
 		harness, parseErr := parseHarness(fields[2:])
 		if parseErr != nil {
@@ -152,6 +161,20 @@ func Parse(body string) (ParseResult, error) {
 	default:
 		return result, &ParseError{Code: ParseErrorUnknownVerb, Problem: fmt.Sprintf("command %q is not supported", fields[1])}
 	}
+}
+
+// parseReviewAuthorization parses the explicit unit-fan-out limit approved by
+// a maintainer for one already persisted review manifest.
+func parseReviewAuthorization(result ParseResult, arguments []string) (ParseResult, error) {
+	if len(arguments) != 1 {
+		return result, &ParseError{Code: ParseErrorUnexpectedArgument, Problem: "authorize-review requires one unit limit"}
+	}
+	units, err := strconv.Atoi(arguments[0])
+	if err != nil || units <= 0 {
+		return result, &ParseError{Code: ParseErrorInvalidReviewUnits, Problem: "the review unit limit must be a positive integer"}
+	}
+	result.Command = Request{Kind: AuthorizeReview, ReviewUnits: units}
+	return result, nil
 }
 
 // parseAnswer parses the question identifier and answer text from an answer

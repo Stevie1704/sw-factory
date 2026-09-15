@@ -29,6 +29,13 @@ type PendingEffectAbandoner interface {
 	AbandonPendingEffect(context.Context, string, string, string) error
 }
 
+// reviewUnitResultStore persists the axis-specific result carried by a
+// partitioned review acceptance. It is optional so historical compatibility
+// stores can continue to replay whole-diff review effects.
+type reviewUnitResultStore interface {
+	SaveReviewUnitResult(context.Context, store.ReviewUnitResult) error
+}
+
 // effectApplier performs the effect-specific external mutation wrapped by the
 // journal protocol.
 type effectApplier interface {

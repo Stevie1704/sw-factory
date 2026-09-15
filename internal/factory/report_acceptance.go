@@ -530,6 +530,7 @@ func acceptanceValidationContext(snapshot AcceptanceSnapshot) report.ValidationC
 		WorktreeObserved:        true,
 		RepositoryGuidancePaths: append([]string(nil), snapshot.Packet.RepositoryGuidancePaths...),
 		RepositoryGuidanceBound: invocation.Role == workflow.RoleStandardsReview && invocation.PromptVersion != "standards-review-v1",
+		ReviewUnitID:            invocation.ReviewUnitID,
 		TestPaths:               snapshot.Packet.RepositoryConfig.TestPolicy.TestPaths,
 		TestInfrastructurePaths: snapshot.Packet.RepositoryConfig.TestPolicy.InfrastructurePaths,
 	}
@@ -629,6 +630,9 @@ type acceptanceProjection struct {
 	// Error is a pure projection refusal. Commitment returns it after the
 	// evaluation and native-session checks that historically preceded projection.
 	Error error
+	// ReviewUnitResult is the normalized result that must be persisted with the
+	// acceptance effect before the role-level aggregate is recomputed.
+	ReviewUnitResult *store.ReviewUnitResult
 }
 
 // projectAcceptance builds the accepted invocation and the next run from an
@@ -657,7 +661,14 @@ func projectAcceptance(snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, n
 		next.Revision = previous.Revision + 1
 		next.UpdatedAt = now
 	case AcceptanceOutcomeReview:
-		if err := applyReviewResultProjection(&next, snapshot.Invocation.Role, snapshot.Report); err != nil {
+		if snapshot.Invocation.ReviewRoundID != "" && snapshot.Invocation.ReviewUnitID != "" {
+			result := reviewUnitResultFromReport(snapshot.Invocation, snapshot.Report, snapshot.Run.CheckpointSHA)
+			projection.ReviewUnitResult = &result
+			next.Stage = store.StageReview
+			next.Status = store.StatusActive
+			next.PendingQuestions = nil
+			next.ClarificationCommentID = ""
+		} else if err := applyReviewResultProjection(&next, snapshot.Invocation.Role, snapshot.Report); err != nil {
 			projection.Error = err
 			return projection
 		}
@@ -724,11 +735,12 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 			WorkerID:        workerIDForInvocation(projection.Invocation),
 			NativeSessionID: projection.Invocation.NativeSessionID,
 		},
-		Invocation: projection.Invocation,
-		Previous:   projection.Previous,
-		Next:       next,
-		StopWorker: snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview || outcome == AcceptanceOutcomeTestObjection,
-		Report:     snapshot.Report,
+		Invocation:       projection.Invocation,
+		Previous:         projection.Previous,
+		Next:             next,
+		StopWorker:       snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview || outcome == AcceptanceOutcomeTestObjection,
+		Report:           snapshot.Report,
+		ReviewUnitResult: projection.ReviewUnitResult,
 	})
 	if err != nil {
 		return err
@@ -748,6 +760,17 @@ func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAccep
 	if snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview {
 		if err := a.lifecycle.StopWorker(ctx, workerIDForInvocation(*invocation)); err != nil {
 			return err
+		}
+	}
+	if projection.ReviewUnitResult != nil {
+		unitResults, ok := request.RunStore.(interface {
+			SaveReviewUnitResult(context.Context, store.ReviewUnitResult) error
+		})
+		if !ok {
+			return errors.New("operational store does not support review unit results")
+		}
+		if err := unitResults.SaveReviewUnitResult(ctx, *projection.ReviewUnitResult); err != nil {
+			return fmt.Errorf("persist review unit result: %w", err)
 		}
 	}
 	*invocation = projection.Invocation

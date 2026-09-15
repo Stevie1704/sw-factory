@@ -63,6 +63,11 @@ type LaunchSnapshot struct {
 	ActiveInvocationsSupported bool
 	// ReviewContext is the read-only reviewer context gathered for a review role.
 	ReviewContext *prompt.ReviewContext
+	// ReviewConcurrency is the host-local simultaneous review limit.
+	ReviewConcurrency int
+	// ReviewAuthorizedUnits is the host-local maximum fan-out a maintainer may
+	// authorize for this installation.
+	ReviewAuthorizedUnits int
 }
 
 // LaunchPlan is the pure admission decision for one harness invocation.
@@ -212,6 +217,7 @@ func (l *invocationLifecycle) Resume(ctx context.Context, request InvocationReco
 	if store.IsTerminalStatus(run.Status) {
 		return ResumeResult{}, fmt.Errorf("cannot resume terminal run %q with status %q", run.ID, run.Status)
 	}
+	reconciled := false
 	if pending, journaled := request.RunStore.(PendingEffectStore); journaled {
 		effect, err := pending.PendingEffect(ctx, run.ID)
 		if err != nil {
@@ -226,6 +232,14 @@ func (l *invocationLifecycle) Resume(ctx context.Context, request InvocationReco
 			if reconcileErr != nil {
 				return ResumeResult{Run: run}, reconcileErr
 			}
+			reconciled = true
+		}
+	}
+	if run.Stage == store.StageReview && !reconciled && l.hooks.reconcileInterrupted != nil {
+		updated, _, _, reconcileErr := l.hooks.reconcileInterrupted(ctx, request.Registration, request.RunStore, run, false)
+		run = updated
+		if reconcileErr != nil {
+			return ResumeResult{Run: run}, reconcileErr
 		}
 	}
 	activeStore, ok := request.RunStore.(ActiveInvocationStore)
@@ -261,7 +275,11 @@ func (l *invocationLifecycle) resumeWithoutActiveInvocation(ctx context.Context,
 	}
 	launchRun := run
 	launchRun.Status = store.StatusActive
-	launch, err := l.Launch(ctx, InvocationLaunchRequest{Registration: request.Registration, RunStore: request.RunStore, Run: &launchRun, Request: normalizeAgentRequest(agentRequestForRun(run)), InvocationID: invocationID, EvaluationRecorder: request.EvaluationRecorder})
+	launchRequest, requestErr := reviewResumeAgentRequest(ctx, request.RunStore, run)
+	if requestErr != nil {
+		return ResumeResult{Run: run}, requestErr
+	}
+	launch, err := l.Launch(ctx, InvocationLaunchRequest{Registration: request.Registration, RunStore: request.RunStore, Run: &launchRun, Request: normalizeAgentRequest(launchRequest), InvocationID: invocationID, EvaluationRecorder: request.EvaluationRecorder})
 	if err != nil {
 		return ResumeResult{Run: run, Invocation: launch.Invocation}, err
 	}
@@ -271,6 +289,22 @@ func (l *invocationLifecycle) resumeWithoutActiveInvocation(ctx context.Context,
 // resumeActiveInvocation handles the manual-resume branch of Resume.
 func (l *invocationLifecycle) resumeActiveInvocation(ctx context.Context, request InvocationRecoveryRequest, run store.Run, active store.Invocation) (ResumeResult, error) {
 	if currentReviewInvocation(active) {
+		if active.ReviewRoundID != "" {
+			partitioned, ok := request.RunStore.(store.ReviewRoundStore)
+			if !ok {
+				return ResumeResult{Run: run, Invocation: active}, errors.New("operational store does not support partitioned review recovery")
+			}
+			round, roundErr := partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA)
+			if roundErr != nil {
+				return ResumeResult{Run: run, Invocation: active}, fmt.Errorf("read persisted review round for resume: %w", roundErr)
+			}
+			if round == nil || round.ID != active.ReviewRoundID {
+				return ResumeResult{Run: run, Invocation: active}, errors.New("active review invocation does not match the persisted review round")
+			}
+			if _, manifestErr := validatePersistedReviewManifest(ctx, partitioned, run, *round); manifestErr != nil {
+				return ResumeResult{Run: run, Invocation: active}, fmt.Errorf("validate persisted review manifest: %w", manifestErr)
+			}
+		}
 		if err := validatePersistedReviewDiff(active); err != nil {
 			return ResumeResult{Run: run, Invocation: active}, fmt.Errorf("validate persisted review diff: %w", err)
 		}
@@ -415,7 +449,7 @@ func (l *invocationLifecycle) Launch(ctx context.Context, request InvocationLaun
 	if plan.Outcome == LaunchOutcomeAdopt {
 		return adoptedLaunchResult(plan), nil
 	}
-	materialised, err := l.materialiseLaunch(ctx, request.Registration, plan)
+	materialised, err := l.materialiseLaunch(ctx, request.Registration, request.RunStore, plan)
 	if err != nil {
 		return AgentLaunchResult{}, err
 	}
@@ -465,6 +499,16 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 	if roleDefinition.Kind == workflow.RoleKindReview {
 		if err := l.gatherReview(ctx, request.RunStore, run, agentRequest.Role, &snapshot); err != nil {
 			return LaunchSnapshot{}, err
+		}
+		hostReview := config.EffectiveReviewHostConfig(request.Registration.Review)
+		snapshot.ReviewConcurrency = hostReview.Concurrency
+		snapshot.ReviewAuthorizedUnits = hostReview.AuthorizedUnits
+		if partitioned, ok := request.RunStore.(store.ReviewRoundStore); ok {
+			if round, roundErr := partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA); roundErr != nil {
+				return LaunchSnapshot{}, fmt.Errorf("read persisted review concurrency: %w", roundErr)
+			} else if round != nil && round.Concurrency > 0 && snapshot.ReviewConcurrency > round.Concurrency {
+				snapshot.ReviewConcurrency = round.Concurrency
+			}
 		}
 	}
 	if err := ensureBaselineReadyForLaunch(ctx, request.RunStore, run, packet); err != nil {
@@ -564,6 +608,26 @@ func (l *invocationLifecycle) gatherReview(ctx context.Context, runStore RunStor
 		return err
 	}
 	snapshot.ReviewContext = reviewContext
+	if partitioned, ok := runStore.(store.ReviewRoundStore); ok {
+		round, roundErr := partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA)
+		if roundErr != nil {
+			return fmt.Errorf("read persisted review round: %w", roundErr)
+		}
+		if round != nil {
+			unit, unitErr := nextReviewUnit(ctx, partitioned, run, *round, role, snapshot.Request.ReviewUnitID, snapshot.ActiveInvocations)
+			if unitErr != nil {
+				return unitErr
+			}
+			if unit != nil {
+				units, unitsErr := partitioned.ReviewUnits(ctx, round.ID)
+				if unitsErr != nil {
+					return fmt.Errorf("read persisted review unit count: %w", unitsErr)
+				}
+				snapshot.Request.ReviewUnitID = unit.UnitID
+				snapshot.ReviewContext = reviewContextWithUnit(*reviewContext, *round, *unit, len(units))
+			}
+		}
+	}
 	return nil
 }
 
@@ -590,6 +654,24 @@ func PlanLaunch(snapshot LaunchSnapshot, request AgentRequest) (LaunchPlan, erro
 	roleDefinition, exists := workflow.DefaultRegistry().Role(request.Role)
 	if !exists {
 		return LaunchPlan{}, fmt.Errorf("agent role %q is not declared by the workflow registry", request.Role)
+	}
+	if roleDefinition.Kind == workflow.RoleKindReview {
+		if request.ReviewUnitID != "" && !safeLaunchIdentifier(request.ReviewUnitID) {
+			return LaunchPlan{}, errors.New("review unit id is unsafe")
+		}
+		concurrency := snapshot.ReviewConcurrency
+		if concurrency <= 0 {
+			concurrency = config.EffectiveReviewHostConfig(config.ReviewHostConfig{}).Concurrency
+		}
+		activeReviews := 0
+		for _, active := range snapshot.ActiveInvocations {
+			if roleIsKind(active.Invocation, workflow.RoleKindReview) {
+				activeReviews++
+			}
+		}
+		if activeReviews >= concurrency {
+			return LaunchPlan{}, fmt.Errorf("review concurrency limit %d is already in use", concurrency)
+		}
 	}
 	testRevision, reviewRepair, implementationResume, err := launchModes(snapshot.Run, request, roleDefinition)
 	if err != nil {
@@ -653,7 +735,15 @@ func validateLaunchRun(snapshot LaunchSnapshot, request AgentRequest) error {
 		return fmt.Errorf("check-repair attempt %d is pending reconciliation", snapshot.Run.CheckRepairPendingAttempt)
 	}
 	if snapshot.Run.Status != store.StatusActive {
-		return fmt.Errorf("cannot start harness invocation from run status %q", snapshot.Run.Status)
+		partitionedReview := false
+		if request.ReviewUnitID != "" {
+			if definition, ok := workflow.DefaultRegistry().Role(request.Role); ok {
+				partitionedReview = definition.Kind == workflow.RoleKindReview && (snapshot.Run.Stage == store.StageDraftPR || snapshot.Run.Stage == store.StageReview) && (request.Stage == store.StageReview || request.Stage == workflow.StageStandardsReview)
+			}
+		}
+		if snapshot.Run.Status != store.StatusWaitingForHuman || !partitionedReview {
+			return fmt.Errorf("cannot start harness invocation from run status %q", snapshot.Run.Status)
+		}
 	}
 	registry := workflow.DefaultRegistry()
 	if _, exists := registry.RoleForRunStage(snapshot.Run.Stage); !exists {
@@ -727,8 +817,13 @@ func validateLaunchSources(snapshot LaunchSnapshot, testRevision, reviewRepair, 
 // validateLaunchHistory preserves duplicate-history and active-invocation
 // guards while making adoption a pure third admission outcome.
 func validateLaunchHistory(snapshot LaunchSnapshot, request AgentRequest, testRevision, reviewRepair, implementationResume bool, role workflow.RoleDefinition) (*store.Invocation, error) {
-	if snapshot.LatestInvocation != nil && !testRevision && !reviewRepair && !implementationResume && snapshot.LatestInvocation.Status != store.InvocationStatusSuperseded && snapshot.LatestInvocation.Role == request.Role && snapshot.LatestInvocation.Stage == request.Stage {
+	partitionedReview := role.Kind == workflow.RoleKindReview && request.ReviewUnitID != ""
+	latestSameReviewUnit := partitionedReview && snapshot.LatestInvocation != nil && snapshot.LatestInvocation.ReviewUnitID == request.ReviewUnitID
+	if snapshot.LatestInvocation != nil && !testRevision && !reviewRepair && !implementationResume && !partitionedReview && snapshot.LatestInvocation.Status != store.InvocationStatusSuperseded && snapshot.LatestInvocation.Role == request.Role && snapshot.LatestInvocation.Stage == request.Stage {
 		return nil, fmt.Errorf("run %q already has invocation history for %s/%s", snapshot.Run.ID, request.Role, request.Stage)
+	}
+	if latestSameReviewUnit && snapshot.LatestInvocation.Status != store.InvocationStatusSuperseded && snapshot.LatestInvocation.Role == request.Role && snapshot.LatestInvocation.Stage == request.Stage {
+		return nil, fmt.Errorf("run %q already has invocation history for %s/%s unit %s", snapshot.Run.ID, request.Role, request.Stage, request.ReviewUnitID)
 	}
 	if !snapshot.ActiveInvocationsSupported {
 		return nil, nil
@@ -736,6 +831,9 @@ func validateLaunchHistory(snapshot LaunchSnapshot, request AgentRequest, testRe
 	isReview := role.Kind == workflow.RoleKindReview
 	for _, active := range snapshot.ActiveInvocations {
 		if isReview && roleIsKind(active.Invocation, workflow.RoleKindReview) && active.Invocation.Role != request.Role {
+			continue
+		}
+		if partitionedReview && active.Invocation.Role == request.Role && active.Invocation.ReviewUnitID != request.ReviewUnitID {
 			continue
 		}
 		if !active.StartedHere && active.Invocation.RecoveryResumeCount > 0 && active.Invocation.Role == request.Role {
@@ -785,7 +883,7 @@ type launchContextValues struct {
 
 // materialiseLaunch creates the packet and result directories, writes the
 // immutable invocation packet, and prepares Git metadata for activation.
-func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registration config.RepositoryRegistration, plan LaunchPlan) (launchMaterialisation, error) {
+func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, plan LaunchPlan) (launchMaterialisation, error) {
 	root := invocationRoot(plan.Run, plan.InvocationID)
 	packetDirectory := filepath.Join(root, "packet")
 	resultDirectory := filepath.Join(root, "results")
@@ -827,6 +925,15 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 		reviewContext.ChangedPathsCommand = ""
 		reviewContext.DiffPathCommand = ""
 		plan.ReviewContext = &reviewContext
+		if partitioned, ok := runStore.(store.ReviewRoundStore); ok {
+			prepared, err := l.preparePartitionedReview(ctx, partitioned, plan.Run, invocation, *plan.ReviewContext, plan.Request.ReviewUnitID, registration)
+			if err != nil {
+				return launchMaterialisation{}, err
+			}
+			plan.ReviewContext = prepared
+			invocation.ReviewRoundID = prepared.ReviewRoundID
+			invocation.ReviewUnitID = prepared.ReviewUnitID
+		}
 	}
 	invocationPacket, promptText, err := buildLaunchPacket(plan, invocation, craft, contextValues)
 	if err != nil {
@@ -872,7 +979,7 @@ func buildLaunchPacket(plan LaunchPlan, invocation store.Invocation, craft *Repo
 	if err != nil {
 		return InvocationPacket{}, "", err
 	}
-	packet := InvocationPacket{SchemaVersion: invocationPacketVersion, InvocationID: invocation.ID, RunID: plan.Run.ID, Role: invocation.Role, Stage: invocation.Stage, SpecificationPacket: plan.Run.SpecificationPacket, PromptVersion: invocation.PromptVersion, PromptCraftSourcePath: invocation.PromptCraftSourcePath, PromptCraftSHA256: invocation.PromptCraftSHA256, TestPolicyMode: plan.Packet.RepositoryConfig.TestPolicy.Mode, Route: plan.Packet.Route, DesignHandoff: plan.DesignHandoff, PermittedPaths: append([]string(nil), invocation.PermittedPaths...), TestHandoff: values.testHandoff, TestObjection: values.testObjection, TestRevisionAttempt: values.testRevisionAttempt, TestRevisionBudget: values.testRevisionBudget, ProtectedTestPaths: values.protectedTestPaths, TestExemption: values.testExemption, ReviewRepair: values.reviewRepair, ReviewContext: plan.ReviewContext, Continuation: plan.ResumeSource != nil}
+	packet := InvocationPacket{SchemaVersion: invocationPacketVersion, InvocationID: invocation.ID, RunID: plan.Run.ID, Role: invocation.Role, Stage: invocation.Stage, SpecificationPacket: plan.Run.SpecificationPacket, PromptVersion: invocation.PromptVersion, PromptCraftSourcePath: invocation.PromptCraftSourcePath, PromptCraftSHA256: invocation.PromptCraftSHA256, TestPolicyMode: plan.Packet.RepositoryConfig.TestPolicy.Mode, Route: plan.Packet.Route, DesignHandoff: plan.DesignHandoff, PermittedPaths: append([]string(nil), invocation.PermittedPaths...), TestHandoff: values.testHandoff, TestObjection: values.testObjection, TestRevisionAttempt: values.testRevisionAttempt, TestRevisionBudget: values.testRevisionBudget, ProtectedTestPaths: values.protectedTestPaths, TestExemption: values.testExemption, ReviewRepair: values.reviewRepair, ReviewContext: plan.ReviewContext, ReviewRoundID: invocation.ReviewRoundID, ReviewUnitID: invocation.ReviewUnitID, Continuation: plan.ResumeSource != nil}
 	promptText, err := prompt.Build(prompt.Request{InvocationID: invocation.ID, RunID: plan.Run.ID, Role: invocation.Role, Stage: string(invocation.Stage), SpecificationPacket: specification, Continuation: packet.Continuation, RepositoryGuidance: plan.Packet.RepositoryGuidance, RepositoryCraft: repositoryCraftContent(craft), PromptVersion: invocation.PromptVersion, TestPolicyMode: string(plan.Packet.RepositoryConfig.TestPolicy.Mode), Route: plan.Packet.Route, DesignHandoff: plan.DesignHandoff, TestHandoff: values.testHandoff, TestObjection: values.testObjection, TestRevisionAttempt: values.testRevisionAttempt, TestRevisionBudget: values.testRevisionBudget, ProtectedTestPaths: values.protectedTestPaths, TestExemption: values.testExemption, ReviewRepair: values.reviewRepair, TestPaths: plan.Packet.RepositoryConfig.TestPolicy.TestPaths, TestInfrastructurePaths: plan.Packet.RepositoryConfig.TestPolicy.InfrastructurePaths, ReviewContext: plan.ReviewContext})
 	return packet, promptText, err
 }
@@ -982,8 +1089,9 @@ func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request In
 		InvocationID: invocation.ID, RunID: plan.Run.ID, WorkerID: materialised.workerID,
 		Role: invocation.Role, Stage: string(invocation.Stage),
 		CheckpointSHA: reviewCheckpointSHA(plan.RoleDefinition.Kind == workflow.RoleKindReview, plan.Run.CheckpointSHA),
-		Prompt:        materialised.promptText,
-		Model:         invocation.Model, ReasoningEffort: invocation.ReasoningEffort,
+		ReviewRoundID: invocation.ReviewRoundID, ReviewUnitID: invocation.ReviewUnitID,
+		Prompt: materialised.promptText,
+		Model:  invocation.Model, ReasoningEffort: invocation.ReasoningEffort,
 	}
 	var session harness.Session
 	var err error
@@ -1352,7 +1460,7 @@ func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Cont
 	if err := l.restoreCredentialProjection(ctx, registration, run, invocation); err != nil {
 		return invocation, err
 	}
-	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
+	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), ReviewRoundID: invocation.ReviewRoundID, ReviewUnitID: invocation.ReviewUnitID, Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
 	if automatic {
 		if l.journal == nil {
 			return invocation, errors.New("harness resume hook is required")

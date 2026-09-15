@@ -91,6 +91,9 @@ const (
 	// PolicyRejectionRouteUnavailable means repository policy declares no
 	// harness or model for a role the selected route runs.
 	PolicyRejectionRouteUnavailable PolicyRejectionCode = "route_unavailable"
+	// PolicyRejectionReviewAuthorization means review fan-out approval is not
+	// valid for the current persisted manifest or host ceiling.
+	PolicyRejectionReviewAuthorization PolicyRejectionCode = "review_authorization"
 )
 
 // PolicyRejection is returned after a recognized command is visibly recorded
@@ -210,6 +213,8 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		return s.handleCancelCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.ConfigureHarness:
 		return s.handleHarnessConfiguration(ctx, registration, runStore, *run, request.Comment, parsed.Command)
+	case commandlanguage.AuthorizeReview:
+		return s.handleReviewAuthorization(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Retry:
 		return s.handleRetryCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	default:
@@ -1262,6 +1267,66 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 		Next:                 next,
 		PersistBeforeEffects: true,
 	})
+	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
+}
+
+// handleReviewAuthorization records an authorized fan-out ceiling for the
+// exact current review manifest and reopens unattended progression.
+func (s *Service) handleReviewAuthorization(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+	if run.Stage != store.StageDraftPR && run.Stage != store.StageReview {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: fmt.Sprintf("review fan-out authorization is only available in draft_pr or review stage, not %q", run.Stage)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	rounds, ok := runStore.(store.ReviewRoundStore)
+	if !ok {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: "operational store does not support persisted review manifests"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	authorization, ok := runStore.(store.ReviewAuthorizationStore)
+	if !ok {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: "operational store does not support review fan-out authorization"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	round, err := rounds.ReviewRound(ctx, run.ID, run.CheckpointSHA)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read review round for authorization: %w", err)
+	}
+	if round == nil {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: "no persisted review manifest is awaiting authorization"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if round.Status != store.ReviewRoundStatusAwaitingAuthorization {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: fmt.Sprintf("review round %s is not awaiting authorization (status %q)", round.ID, round.Status)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	active, supported, err := activeInvocationsForRun(ctx, runStore, run.ID)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read active review invocations for authorization: %w", err)
+	}
+	if supported && len(active) != 0 {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: "review fan-out authorization requires no active review invocation"}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	units, err := rounds.ReviewUnits(ctx, round.ID)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("read review units for authorization: %w", err)
+	}
+	if parsed.ReviewUnits < len(units) {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: fmt.Sprintf("authorization limit %d is below the %d-unit manifest", parsed.ReviewUnits, len(units))}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	host := config.EffectiveReviewHostConfig(registration.Review)
+	if parsed.ReviewUnits > host.AuthorizedUnits {
+		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: fmt.Sprintf("authorization limit %d exceeds the host ceiling %d", parsed.ReviewUnits, host.AuthorizedUnits)}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	if err := authorization.AuthorizeReviewRound(ctx, round.ID, parsed.ReviewUnits); err != nil {
+		return CommandResult{}, fmt.Errorf("authorize review fan-out: %w", err)
+	}
+	next := commandProjection(run, comment, parsed, string(parsed.Kind), fmt.Sprintf("review round %s authorized through %d units", round.ID, parsed.ReviewUnits))
+	next.Status = store.StatusActive
+	next.LifecycleReason = fmt.Sprintf("review fan-out authorized for round %s; awaiting unit launches", round.ID)
+	updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, err
 }
 

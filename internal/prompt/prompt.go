@@ -149,7 +149,14 @@ const WorkerSpecificationPath = "/invocation/specification.json"
 
 // WorkerReviewDiffPath is the stable read-only location where a review
 // invocation sees the exact base-to-checkpoint diff.
-const WorkerReviewDiffPath = "/invocation/review.diff"
+const (
+	// WorkerReviewDiffPath is the complete immutable round artifact mounted in
+	// every review worker.
+	WorkerReviewDiffPath = "/invocation/review.diff"
+	// WorkerReviewUnitDiffPath is the bounded manifest-assigned artifact mounted
+	// beside the complete round artifact.
+	WorkerReviewUnitDiffPath = "/invocation/review-unit.diff"
+)
 
 // fenceMarkers are the delimiters that untrusted prompt content must not contain.
 var fenceMarkers = []string{
@@ -247,6 +254,29 @@ type ReviewLog struct {
 type ReviewContext struct {
 	// CheckpointSHA identifies the exact commit under review.
 	CheckpointSHA string `json:"checkpoint_sha"`
+	// ReviewRoundID identifies the immutable round assignment, when partitioned.
+	ReviewRoundID string `json:"review_round_id,omitempty"`
+	// ReviewUnitID identifies the exact manifest unit assigned to this invocation.
+	ReviewUnitID string `json:"review_unit_id,omitempty"`
+	// ReviewUnitOrdinal is the one-based position in the shared manifest.
+	ReviewUnitOrdinal int `json:"review_unit_ordinal,omitempty"`
+	// ReviewUnitCount is the number of ordered units in the shared manifest.
+	ReviewUnitCount int `json:"review_unit_count,omitempty"`
+	// ReviewUnitWorkloadBytes is the self-contained unit evidence size.
+	ReviewUnitWorkloadBytes int `json:"review_unit_workload_bytes,omitempty"`
+	// ReviewUnitDiffSHA256 identifies the bounded unit artifact.
+	ReviewUnitDiffSHA256 string `json:"review_unit_diff_sha256,omitempty"`
+	// ReviewManifestSHA256 identifies the complete durable assignment.
+	ReviewManifestSHA256 string `json:"review_manifest_sha256,omitempty"`
+	// ReviewPrimaryRanges are the changed ranges this invocation owns for
+	// findings. Context ranges never become finding ownership.
+	ReviewPrimaryRanges []store.ReviewUnitRange `json:"review_primary_ranges,omitempty"`
+	// ReviewContextRanges are bounded nearby ranges included for judgment only.
+	ReviewContextRanges []store.ReviewUnitRange `json:"review_context_ranges,omitempty"`
+	// ReviewPrimaryNonTextFiles lists the renames, mode changes, and binary
+	// summaries this unit owns. They carry no changed source line, so they are
+	// owned by file path rather than by range.
+	ReviewPrimaryNonTextFiles []string `json:"review_primary_non_text_files,omitempty"`
 	// DiffPath is the stable worker path of the exact review artifact. New
 	// packets set it to WorkerReviewDiffPath. It is required for new review
 	// packets but omitted by historical packets.
@@ -421,6 +451,9 @@ Review-repair packet (coordinator-owned):
 				return "", fmt.Errorf("encode review context: %w", err)
 			}
 			location := fmt.Sprintf("The exact review diff is mounted at %s. It contains %d bytes and has SHA-256 %s. Read it in bounded line windows, for example:\n`sed -n '1,200p' %s`\n`sed -n '201,400p' %s`\nUse `rg -n` or another line-numbered search against %s to find the next window.", WorkerReviewDiffPath, request.ReviewContext.DiffBytes, request.ReviewContext.DiffSHA256, WorkerReviewDiffPath, WorkerReviewDiffPath, WorkerReviewDiffPath)
+			if request.ReviewContext.ReviewUnitID != "" {
+				location += fmt.Sprintf("\nYour assigned review unit is %s (%d of %d), mounted at %s. It contains %d bytes and has SHA-256 %s. Review the complete artifact for bounded nearby context, but attribute findings only to primary changes in this unit; context ranges are judgment-only. Every finding must carry unit_id=%s.", request.ReviewContext.ReviewUnitID, request.ReviewContext.ReviewUnitOrdinal, request.ReviewContext.ReviewUnitCount, WorkerReviewUnitDiffPath, request.ReviewContext.ReviewUnitWorkloadBytes, request.ReviewContext.ReviewUnitDiffSHA256, request.ReviewContext.ReviewUnitID)
+			}
 			dynamicContext = fmt.Sprintf(`
 Read-only review context (coordinator-owned):
 %s
