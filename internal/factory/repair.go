@@ -426,6 +426,10 @@ func (s *Service) routeCheckRepair(ctx context.Context, registration config.Repo
 			next.Status = store.StatusWaitingForHuman
 			next.LifecycleReason = "implementation session unavailable for check repair"
 			baseResult.Outcome = CheckRepairWaitingForHuman
+		} else if credentialProjectionCaptureLimit(launchErr) {
+			next.Status = store.StatusWaitingForHuman
+			next.LifecycleReason = captureLimitRecoveryReason(credentialProjectionHarness(launchErr))
+			baseResult.Outcome = CheckRepairWaitingForHuman
 		} else {
 			next.Status = store.StatusWaitingForHarness
 			next.LifecycleReason = "check repair harness unavailable"
@@ -497,7 +501,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	}
 	seedCredentials, configuredCredentialStoreID, credentialErr := s.lifecycleModule().credentialSeeding(registration, AgentRequest{}, config.Harness(previous.Harness))
 	if credentialErr != nil || (strings.TrimSpace(previous.CredentialStoreID) != "" && seedCredentials == nil) {
-		return store.Invocation{}, run, newCredentialProjectionError(previous.Harness)
+		return store.Invocation{}, run, newCredentialProjectionError(previous.Harness, credentialErr)
 	}
 	identifier, err := s.deps.NewRunID()
 	if err != nil {
@@ -676,7 +680,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	workerStarted = true
 	if seedCredentials != nil {
 		if err := seedCredentials(ctx, run.ID, workerIDForInvocation(invocation)); err != nil {
-			return store.Invocation{}, run, newCredentialProjectionError(previous.Harness)
+			return store.Invocation{}, run, newCredentialProjectionError(previous.Harness, err)
 		}
 	}
 	next := run

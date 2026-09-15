@@ -1341,7 +1341,12 @@ func (s *Service) pauseAfterReplayedReviewProjectionError(ctx context.Context, r
 // used for an expired harness credential.
 func (s *Service) pauseForCredentialProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis *RecoveryDiagnosis, harnessName string, cause error) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error) {
 	recordCredentialProjectionDiscrepancy(diagnosis)
-	paused, pauseErr := s.lifecycleModule().pauseForAuthentication(ctx, registration, runStore, run, harnessName)
+	pause := s.lifecycleModule().pauseForAuthentication
+	var credentialErr *credentialProjectionError
+	if errors.As(cause, &credentialErr) && credentialErr.Cause != nil {
+		pause = s.lifecycleModule().pauseForCaptureLimit
+	}
+	paused, pauseErr := pause(ctx, registration, runStore, run, harnessName)
 	if diagnosis == nil {
 		return paused, RecoveryDiagnosis{}, RecoveryOutcomeWaitingForHuman, errors.Join(cause, pauseErr)
 	}

@@ -318,6 +318,10 @@ func (l *invocationLifecycle) recoveryInvocationID(request InvocationRecoveryReq
 func (l *invocationLifecycle) resumeActiveInvocationError(ctx context.Context, request InvocationRecoveryRequest, run store.Run, active, updated store.Invocation, resumeErr error) (ResumeResult, error) {
 	var credentialErr *credentialProjectionError
 	if errors.As(resumeErr, &credentialErr) {
+		if credentialErr.Cause != nil {
+			paused, pauseErr := l.pauseForCaptureLimit(ctx, request.Registration, request.RunStore, run, active.Harness)
+			return ResumeResult{Run: paused, Invocation: updated}, errors.Join(credentialErr, pauseErr)
+		}
 		paused, pauseErr := l.pauseForAuthentication(ctx, request.Registration, request.RunStore, run, active.Harness)
 		return ResumeResult{Run: paused, Invocation: updated}, errors.Join(credentialErr, pauseErr)
 	}
@@ -382,7 +386,7 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 	}
 	*invocation = recovered
 	if err := seed(ctx, run.ID, workerIDForInvocation(*invocation)); err != nil {
-		return AuthRefreshResult{}, newCredentialProjectionError(string(harnessName))
+		return AuthRefreshResult{}, newCredentialProjectionError(string(harnessName), err)
 	}
 	return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, nil
 }
@@ -917,7 +921,7 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 	workerStarted = true
 	if seedCredentials != nil {
 		if err := seedCredentials(ctx, request.Run.ID, materialised.workerID); err != nil {
-			return AgentLaunchResult{}, newCredentialProjectionError(string(plan.Policy.Harness))
+			return AgentLaunchResult{}, newCredentialProjectionError(string(plan.Policy.Harness), err)
 		}
 	}
 	session, updatedInvocation, preserved, err := l.startLaunchHarness(ctx, request, plan, materialised, harnessRuntime, invocation)
@@ -1216,7 +1220,7 @@ func (l *invocationLifecycle) credentialSeeding(registration config.RepositoryRe
 func (l *invocationLifecycle) ensureCredentialStoreIdentity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, invocation store.Invocation) (store.Invocation, error) {
 	_, credentialStoreID, err := l.credentialSeeding(registration, AgentRequest{}, config.Harness(invocation.Harness))
 	if err != nil {
-		return invocation, newCredentialProjectionError(invocation.Harness)
+		return invocation, newCredentialProjectionError(invocation.Harness, err)
 	}
 	if strings.TrimSpace(credentialStoreID) == "" || strings.TrimSpace(invocation.CredentialStoreID) != "" {
 		return invocation, nil
@@ -1241,10 +1245,10 @@ func (l *invocationLifecycle) restoreCredentialProjection(ctx context.Context, r
 		if err == nil && strings.TrimSpace(invocation.CredentialStoreID) == "" {
 			return nil
 		}
-		return newCredentialProjectionError(invocation.Harness)
+		return newCredentialProjectionError(invocation.Harness, err)
 	}
 	if err := seed(ctx, run.ID, workerIDForInvocation(invocation)); err != nil {
-		return newCredentialProjectionError(invocation.Harness)
+		return newCredentialProjectionError(invocation.Harness, err)
 	}
 	return nil
 }
@@ -1414,6 +1418,38 @@ func (l *invocationLifecycle) pauseForAuthentication(ctx context.Context, regist
 	next := run
 	next.Status = store.StatusWaitingForHuman
 	next.LifecycleReason = fmt.Sprintf("harness authentication expired (%s); run is waiting for `factory auth refresh`", harnessName)
+	next.Revision = run.Revision + 1
+	next.UpdatedAt = l.clock().UTC()
+	if err := l.persistLifecycleRun(ctx, registration, runStore, run, next); err != nil {
+		return next, err
+	}
+	return next, nil
+}
+
+// captureLimitRecoveryPrefix identifies the durable reason for the dedicated
+// capture-limit recovery state.
+const captureLimitRecoveryPrefix = "worker capture limit exceeded"
+
+// captureLimitRecoveryReason records the human-owned recovery decision for a
+// deterministic worker capture-limit failure without suggesting auth refresh.
+func captureLimitRecoveryReason(harnessName string) string {
+	return fmt.Sprintf("%s (%s); manual recovery required", captureLimitRecoveryPrefix, credentialHarnessLabel(harnessName))
+}
+
+// pauseForCaptureLimit stops delegated workers and records a deterministic
+// capture-limit failure as a human-waiting state. Retrying the same credential
+// projection cannot make the fixed per-stream capture limit sufficient.
+func (l *invocationLifecycle) pauseForCaptureLimit(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
+	if err := l.stopActiveRunWorkers(ctx, runStore, run); err != nil {
+		return run, err
+	}
+	changed := run.Status != store.StatusWaitingForHuman || !strings.HasPrefix(run.LifecycleReason, captureLimitRecoveryPrefix)
+	if !changed {
+		return run, nil
+	}
+	next := run
+	next.Status = store.StatusWaitingForHuman
+	next.LifecycleReason = captureLimitRecoveryReason(harnessName)
 	next.Revision = run.Revision + 1
 	next.UpdatedAt = l.clock().UTC()
 	if err := l.persistLifecycleRun(ctx, registration, runStore, run, next); err != nil {
