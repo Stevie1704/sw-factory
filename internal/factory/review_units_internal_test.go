@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/reviewunits"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -460,5 +461,53 @@ func TestOverBudgetReviewRoundLaunchesNothingUntilAuthorized(t *testing.T) {
 	role, unitID, ok := missingReviewUnit(state, workflow.DefaultRegistry())
 	if !ok || role != workflow.RoleSpecificationReview || unitID != "unit-001" {
 		t.Fatalf("missingReviewUnit() = %q/%q/%t, want the first unit after authorization", role, unitID, ok)
+	}
+}
+
+// TestMissingReviewUnitYieldsToAcceptanceDeadlinesAndTheHostCeiling verifies a
+// new paid session never outranks a report that is ready or a reviewer that
+// has passed its deadline, and that a host narrowed after the round froze
+// lowers the effective ceiling instead of proposing a launch the launch seam
+// would reject.
+func TestMissingReviewUnitYieldsToAcceptanceDeadlinesAndTheHostCeiling(t *testing.T) {
+	t.Parallel()
+
+	run := progressionRunWithConcurrentReviews(t)
+	run.Stage = store.StageReview
+	run.Status = store.StatusActive
+	run.CheckpointSHA = reviewResumeCheckpointSHA
+	units := []store.ReviewUnit{{UnitID: "unit-001", Ordinal: 1}, {UnitID: "unit-002", Ordinal: 2}}
+	now := time.Now().UTC()
+	specification := activeReviewInvocation(workflow.RoleSpecificationReview, store.StageReview, "unit-001")
+	specification.CreatedAt = now.Add(-time.Minute)
+
+	for _, test := range []struct {
+		name          string
+		hostCeiling   int
+		ready         map[string]bool
+		agentTimeout  time.Duration
+		wantScheduled bool
+	}{
+		{name: "headroom schedules the other axis", hostCeiling: 4, wantScheduled: true},
+		{name: "a ready report is accepted first", hostCeiling: 4, ready: map[string]bool{specification.ID: true}},
+		{name: "an expired reviewer stops scheduling", hostCeiling: 4, agentTimeout: time.Second},
+		{name: "a narrowed host lowers the frozen ceiling", hostCeiling: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := progressionState{
+				Run:                   &run,
+				ActiveInvocations:     []*store.Invocation{specification},
+				ReadyInvocationIDs:    test.ready,
+				AgentTimeout:          test.agentTimeout,
+				Now:                   now,
+				HostReviewConcurrency: test.hostCeiling,
+				ReviewRound:           &store.ReviewRound{ID: "rr-1", Status: store.ReviewRoundStatusActive, Concurrency: 2},
+				ReviewUnits:           units,
+			}
+			role, unitID, ok := missingReviewUnit(state, workflow.DefaultRegistry())
+			if ok != test.wantScheduled {
+				t.Fatalf("missingReviewUnit() = %q/%q/%t, want scheduled=%t", role, unitID, ok, test.wantScheduled)
+			}
+		})
 	}
 }

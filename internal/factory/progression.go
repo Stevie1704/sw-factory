@@ -89,6 +89,9 @@ type progressionState struct {
 	ReviewUnits []store.ReviewUnit
 	// ReviewUnitResults contains accepted results keyed by review role.
 	ReviewUnitResults map[string][]store.ReviewUnitResult
+	// HostReviewConcurrency is the current host capacity ceiling. It can be
+	// lower than the ceiling frozen in the round, and never raises it.
+	HostReviewConcurrency int
 }
 
 // progressionActionKind identifies one coordinator seam that can advance a
@@ -517,7 +520,10 @@ func missingReviewUnit(state progressionState, registry workflow.Registry) (stri
 		return "", "", false
 	}
 	inFlight, activeReviews := activeReviewAssignments(state, registry)
-	if activeReviews >= reviewRoundConcurrency(*state.ReviewRound) {
+	if activeReviews >= reviewConcurrencyCeiling(state) {
+		return "", "", false
+	}
+	if reviewNeedsAttentionBeforeLaunch(state, registry) {
 		return "", "", false
 	}
 	completed := make(map[reviewUnitAssignment]struct{})
@@ -546,14 +552,38 @@ func missingReviewUnit(state progressionState, registry workflow.Registry) (stri
 	return "", "", false
 }
 
-// reviewRoundConcurrency returns the simultaneous review-invocation ceiling
-// frozen when the round was created, falling back to the host default for a
-// historical round that recorded none.
-func reviewRoundConcurrency(round store.ReviewRound) int {
-	if round.Concurrency > 0 {
-		return round.Concurrency
+// reviewConcurrencyCeiling returns the simultaneous review-invocation ceiling
+// the launch seam will actually admit: the lower of the ceiling frozen when the
+// round was created and the current host capacity. A host that has since been
+// narrowed lowers the effective ceiling but never raises the persisted one.
+func reviewConcurrencyCeiling(state progressionState) int {
+	ceiling := state.ReviewRound.Concurrency
+	if ceiling <= 0 {
+		ceiling = config.EffectiveReviewHostConfig(config.ReviewHostConfig{}).Concurrency
 	}
-	return config.EffectiveReviewHostConfig(config.ReviewHostConfig{}).Concurrency
+	if state.HostReviewConcurrency > 0 && state.HostReviewConcurrency < ceiling {
+		return state.HostReviewConcurrency
+	}
+	return ceiling
+}
+
+// reviewNeedsAttentionBeforeLaunch reports whether a live reviewer already has
+// a report to accept or has passed its deadline. Both outrank a new paid
+// session, so scheduling waits for the coordinator to settle them first.
+func reviewNeedsAttentionBeforeLaunch(state progressionState, registry workflow.Registry) bool {
+	for _, invocation := range activeInvocationsFor(state) {
+		definition, declared := registry.Role(invocation.Role)
+		if !declared || definition.Kind != workflow.RoleKindReview {
+			continue
+		}
+		if state.ReadyInvocationIDs[invocation.ID] {
+			return true
+		}
+		if _, expired := agentInvocationExpired(*invocation, state.Now, state.AgentTimeout); expired {
+			return true
+		}
+	}
+	return false
 }
 
 // activeReviewAssignments reports the assignments that already have a live
@@ -671,7 +701,7 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 	if (!hasActive && !hasAllActive) || !hasLatest {
 		return progressionState{}, nil
 	}
-	state := progressionState{Run: run, Supported: true}
+	state := progressionState{Run: run, Supported: true, HostReviewConcurrency: config.EffectiveReviewHostConfig(registration.Review).Concurrency}
 	if run == nil {
 		return state, nil
 	}
