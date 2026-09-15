@@ -63,6 +63,27 @@ func TestBuildReviewPromptPointsAtTheMountedDiff(t *testing.T) {
 	}
 }
 
+// TestBuildHistoricalArtifactPromptKeepsFileDelivery verifies a later prompt
+// bump does not route an artifact-backed invocation through the inline branch.
+func TestBuildHistoricalArtifactPromptKeepsFileDelivery(t *testing.T) {
+	request := reviewRequestWithDiff("diff --git a/file b/file\n-old\n+new\n")
+	request.PromptVersion = "specification-review-v7"
+	value, err := prompt.Build(request)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	for _, present := range []string{prompt.WorkerReviewDiffPath, "diff_sha256", "sed -n '1,200p' /invocation/review.diff"} {
+		if !strings.Contains(value, present) {
+			t.Fatalf("historical artifact prompt missing %q:\n%s", present, value)
+		}
+	}
+	for _, absent := range []string{"changed nothing against its base", "current_diff", "omitted_diff_bytes"} {
+		if strings.Contains(value, absent) {
+			t.Fatalf("historical artifact prompt contains superseded delivery branch %q:\n%s", absent, value)
+		}
+	}
+}
+
 // TestBuildReviewPromptSizeDoesNotFollowTheDiff verifies a reviewed change can
 // grow without the prompt growing with it.
 func TestBuildReviewPromptSizeDoesNotFollowTheDiff(t *testing.T) {

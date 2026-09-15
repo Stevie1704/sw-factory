@@ -679,7 +679,7 @@ func (s *Service) recoverPartitionedReviewAggregates(ctx context.Context, regist
 	}
 	if supported {
 		for _, invocation := range active {
-			if currentReviewInvocation(invocation) {
+			if reviewRoleInvocation(invocation) {
 				return nil
 			}
 		}

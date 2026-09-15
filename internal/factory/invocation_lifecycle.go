@@ -288,7 +288,7 @@ func (l *invocationLifecycle) resumeWithoutActiveInvocation(ctx context.Context,
 
 // resumeActiveInvocation handles the manual-resume branch of Resume.
 func (l *invocationLifecycle) resumeActiveInvocation(ctx context.Context, request InvocationRecoveryRequest, run store.Run, active store.Invocation) (ResumeResult, error) {
-	if currentReviewInvocation(active) {
+	if reviewRoleInvocation(active) {
 		if active.ReviewRoundID != "" {
 			partitioned, ok := request.RunStore.(store.ReviewRoundStore)
 			if !ok {
@@ -1369,7 +1369,7 @@ func (l *invocationLifecycle) restoreCredentialProjection(ctx context.Context, r
 // ensureWorkerForInvocation validates or recreates the pinned worker and
 // returns the exact request used by the durable worker-launch effect.
 func (l *invocationLifecycle) ensureWorkerForInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (worker.StartRequest, store.Invocation, error) {
-	if currentReviewInvocation(invocation) {
+	if reviewRoleInvocation(invocation) {
 		if err := validatePersistedReviewDiff(invocation); err != nil {
 			return worker.StartRequest{}, invocation, fmt.Errorf("validate persisted review diff: %w", err)
 		}

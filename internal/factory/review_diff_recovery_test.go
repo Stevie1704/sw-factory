@@ -16,9 +16,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
-// TestRecoveryRejectsAChangedCurrentReviewArtifact verifies restart diagnosis
-// reports an artifact identity discrepancy and does not regenerate content.
-func TestRecoveryRejectsAChangedCurrentReviewArtifact(t *testing.T) {
+// TestRecoveryRejectsAChangedHistoricalArtifactReview verifies a prompt bump
+// cannot disable artifact validation for an already-persisted review packet.
+func TestRecoveryRejectsAChangedHistoricalArtifactReview(t *testing.T) {
 	directory := t.TempDir()
 	original := []byte("diff --git a/file b/file\n-old\n+new\n")
 	digest := sha256.Sum256(original)
@@ -28,11 +28,11 @@ func TestRecoveryRejectsAChangedCurrentReviewArtifact(t *testing.T) {
 	run := store.Run{ID: "run-review-artifact", CheckpointSHA: strings.Repeat("a", 64)}
 	invocation := store.Invocation{
 		ID: "inv-review-artifact", RunID: run.ID, Role: workflow.RoleSpecificationReview,
-		Stage: store.StageReview, PromptVersion: workflow.PromptVersionSpecificationReview,
+		Stage: store.StageReview, PromptVersion: "specification-review-v7",
 		InvocationDirectory: directory, Status: store.InvocationStatusCannotProceed,
 	}
 	if err := writeInvocationPacket(directory, InvocationPacket{
-		SchemaVersion: invocationPacketVersion,
+		SchemaVersion: reviewDiffArtifactPacketVersion - 1,
 		InvocationID:  invocation.ID,
 		RunID:         run.ID,
 		Role:          invocation.Role,
@@ -87,6 +87,24 @@ func (s *reviewArtifactStore) Invocation(context.Context, string, string) (*stor
 func (s *reviewArtifactStore) LatestInvocation(context.Context, string) (*store.Invocation, error) {
 	value := s.invocation
 	return &value, nil
+}
+
+// TestValidatePersistedReviewDiffAcceptsHistoricalInlinePackets verifies the
+// schema boundary keeps pre-artifact review packets readable after upgrade.
+func TestValidatePersistedReviewDiffAcceptsHistoricalInlinePackets(t *testing.T) {
+	directory := t.TempDir()
+	if err := writeInvocationPacket(directory, InvocationPacket{
+		SchemaVersion: reviewDiffArtifactPacketVersion - 1,
+		ReviewContext: &prompt.ReviewContext{
+			CheckpointSHA: strings.Repeat("a", 64),
+			CurrentDiff:   "diff --git a/file b/file\n-old\n+new\n",
+		},
+	}); err != nil {
+		t.Fatalf("write historical review packet: %v", err)
+	}
+	if err := validatePersistedReviewDiff(store.Invocation{InvocationDirectory: directory}); err != nil {
+		t.Fatalf("validatePersistedReviewDiff() historical packet error = %v", err)
+	}
 }
 
 // TestValidatePersistedReviewDiffRejectsMissingAndNonRegularArtifacts verifies
