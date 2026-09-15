@@ -50,6 +50,9 @@ type AgentRequest struct {
 	ClaudeAuthPath string
 	// PermittedPaths constrains production paths in the accepted handoff.
 	PermittedPaths []string
+	// ReviewUnitID optionally selects one persisted exact-checkpoint review unit.
+	// Empty lets the coordinator choose the next unassigned unit for the role.
+	ReviewUnitID string
 	// testRevision requests a native resume of the original test session for
 	// an automated objection cycle. It is coordinator-internal and never
 	// exposed as a user-selectable authority.
@@ -173,6 +176,10 @@ type InvocationPacket struct {
 	// ReviewContext contains the exact checkpoint and bounded review inputs for
 	// an isolated review invocation.
 	ReviewContext *prompt.ReviewContext `json:"review_context,omitempty"`
+	// ReviewRoundID identifies the immutable review round carried by this packet.
+	ReviewRoundID string `json:"review_round_id,omitempty"`
+	// ReviewUnitID identifies the exact manifest unit carried by this packet.
+	ReviewUnitID string `json:"review_unit_id,omitempty"`
 	// Continuation records that this invocation continued a harness session that
 	// already held the role's first prompt, so a rebuilt prompt keeps carrying
 	// only what changed.
@@ -184,8 +191,8 @@ const (
 	// packet shape retained for restart recovery.
 	invocationPacketMinimumSupportedVersion = 1
 	// invocationPacketVersion identifies the read-only invocation packet shape.
-	// Version ten records whether the prompt continued an existing session.
-	invocationPacketVersion = 10
+	// Version eleven records the exact review round and unit assignment.
+	invocationPacketVersion = 11
 	// invocationPacketFileName is the stable worker-visible packet filename.
 	invocationPacketFileName = "specification.json"
 )

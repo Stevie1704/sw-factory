@@ -174,17 +174,44 @@ type EvaluationSummary struct {
 	InvocationCount    int                           `json:"invocation_count"`
 	// GateCount counts gate executions, including repeated evaluations of one
 	// exact checkpoint whose durable result projection is idempotently upserted.
-	GateCount            int                            `json:"gate_count"`
-	CheckRepairCount     int                            `json:"check_repair_count"`
-	TestRevisionCount    int                            `json:"test_revision_count"`
-	ReviewRevisionCount  int                            `json:"review_revision_count"`
-	BudgetExhausted      bool                           `json:"budget_exhausted"`
-	Exemptions           []EvaluationExemption          `json:"exemptions,omitempty"`
-	EscalationCategories []EvaluationEscalationCategory `json:"escalation_categories,omitempty"`
-	RepeatedBlockers     []EvaluationBlocker            `json:"repeated_blockers,omitempty"`
-	Usage                EvaluationUsage                `json:"usage"`
-	CreatedAt            time.Time                      `json:"created_at"`
-	UpdatedAt            time.Time                      `json:"updated_at"`
+	GateCount           int `json:"gate_count"`
+	CheckRepairCount    int `json:"check_repair_count"`
+	TestRevisionCount   int `json:"test_revision_count"`
+	ReviewRevisionCount int `json:"review_revision_count"`
+	// ReviewDiffBytes is the total exact review-diff workload represented by
+	// the currently retained review rounds for this run.
+	ReviewDiffBytes int64 `json:"review_diff_bytes"`
+	// ReviewChangedLines is the content-free count of primary changed lines in
+	// the currently retained review rounds.
+	ReviewChangedLines int `json:"review_changed_lines"`
+	// ReviewUnitCount is the number of persisted review units in those rounds.
+	ReviewUnitCount int `json:"review_unit_count"`
+	// ReviewLargestUnitBytes is the largest persisted unit workload.
+	ReviewLargestUnitBytes int `json:"review_largest_unit_bytes"`
+	// ReviewInvocationCount counts invocations assigned to persisted review
+	// rounds, including both configured review axes.
+	ReviewInvocationCount int `json:"review_invocation_count"`
+	// ReviewDuration is the sum of bounded invocation lifetimes observed for
+	// the currently retained review rounds.
+	ReviewDuration time.Duration `json:"review_duration"`
+	// ReviewFindingCounts records only fixed severity counts, never finding
+	// locations or text.
+	ReviewFindingCounts map[string]int `json:"review_finding_counts,omitempty"`
+	// ReviewIncompleteUnitCount counts units that requested clarification or
+	// could not proceed.
+	ReviewIncompleteUnitCount int `json:"review_incomplete_unit_count"`
+	// ReviewCannotProceedUnitCount counts units that could not proceed.
+	ReviewCannotProceedUnitCount int `json:"review_cannot_proceed_unit_count"`
+	// ReviewOverBudgetCount counts retained rounds whose unit count exceeded
+	// their normal fan-out and therefore required authorization.
+	ReviewOverBudgetCount int                            `json:"review_over_budget_count"`
+	BudgetExhausted       bool                           `json:"budget_exhausted"`
+	Exemptions            []EvaluationExemption          `json:"exemptions,omitempty"`
+	EscalationCategories  []EvaluationEscalationCategory `json:"escalation_categories,omitempty"`
+	RepeatedBlockers      []EvaluationBlocker            `json:"repeated_blockers,omitempty"`
+	Usage                 EvaluationUsage                `json:"usage"`
+	CreatedAt             time.Time                      `json:"created_at"`
+	UpdatedAt             time.Time                      `json:"updated_at"`
 }
 
 // EvaluationDispositionRequest attaches a human disposition to an opaque
@@ -212,25 +239,35 @@ type EvaluationDispositionRecord struct {
 // EvaluationAggregate contains local aggregate counts, rates, durations, and
 // only the usage measurements that were actually available.
 type EvaluationAggregate struct {
-	RunCount              int                                      `json:"run_count"`
-	OutcomeCounts         map[EvaluationOutcome]int                `json:"outcome_counts"`
-	OutcomeRates          map[EvaluationOutcome]float64            `json:"outcome_rates"`
-	SuccessRate           float64                                  `json:"success_rate"`
-	BudgetExhaustionRate  float64                                  `json:"budget_exhaustion_rate"`
-	TotalWallTime         time.Duration                            `json:"total_wall_time"`
-	AverageTotalWallTime  time.Duration                            `json:"average_total_wall_time"`
-	StageDurations        map[Stage]time.Duration                  `json:"stage_durations"`
-	InvocationCount       int                                      `json:"invocation_count"`
-	GateCount             int                                      `json:"gate_count"`
-	CheckRepairCount      int                                      `json:"check_repair_count"`
-	TestRevisionCount     int                                      `json:"test_revision_count"`
-	ReviewRevisionCount   int                                      `json:"review_revision_count"`
-	EscalationCounts      map[EvaluationEscalationCategory]int     `json:"escalation_counts"`
-	EscalationRates       map[EvaluationEscalationCategory]float64 `json:"escalation_rates"`
-	DispositionCounts     map[EvaluationDisposition]int            `json:"disposition_counts"`
-	UsageAvailableRuns    int                                      `json:"usage_available_runs"`
-	UsageCostReportedRuns int                                      `json:"usage_cost_reported_runs"`
-	Usage                 EvaluationUsage                          `json:"usage"`
+	RunCount                     int                                      `json:"run_count"`
+	OutcomeCounts                map[EvaluationOutcome]int                `json:"outcome_counts"`
+	OutcomeRates                 map[EvaluationOutcome]float64            `json:"outcome_rates"`
+	SuccessRate                  float64                                  `json:"success_rate"`
+	BudgetExhaustionRate         float64                                  `json:"budget_exhaustion_rate"`
+	TotalWallTime                time.Duration                            `json:"total_wall_time"`
+	AverageTotalWallTime         time.Duration                            `json:"average_total_wall_time"`
+	StageDurations               map[Stage]time.Duration                  `json:"stage_durations"`
+	InvocationCount              int                                      `json:"invocation_count"`
+	GateCount                    int                                      `json:"gate_count"`
+	CheckRepairCount             int                                      `json:"check_repair_count"`
+	TestRevisionCount            int                                      `json:"test_revision_count"`
+	ReviewRevisionCount          int                                      `json:"review_revision_count"`
+	ReviewDiffBytes              int64                                    `json:"review_diff_bytes"`
+	ReviewChangedLines           int                                      `json:"review_changed_lines"`
+	ReviewUnitCount              int                                      `json:"review_unit_count"`
+	ReviewLargestUnitBytes       int                                      `json:"review_largest_unit_bytes"`
+	ReviewInvocationCount        int                                      `json:"review_invocation_count"`
+	ReviewDuration               time.Duration                            `json:"review_duration"`
+	ReviewFindingCounts          map[string]int                           `json:"review_finding_counts"`
+	ReviewIncompleteUnitCount    int                                      `json:"review_incomplete_unit_count"`
+	ReviewCannotProceedUnitCount int                                      `json:"review_cannot_proceed_unit_count"`
+	ReviewOverBudgetCount        int                                      `json:"review_over_budget_count"`
+	EscalationCounts             map[EvaluationEscalationCategory]int     `json:"escalation_counts"`
+	EscalationRates              map[EvaluationEscalationCategory]float64 `json:"escalation_rates"`
+	DispositionCounts            map[EvaluationDisposition]int            `json:"disposition_counts"`
+	UsageAvailableRuns           int                                      `json:"usage_available_runs"`
+	UsageCostReportedRuns        int                                      `json:"usage_cost_reported_runs"`
+	Usage                        EvaluationUsage                          `json:"usage"`
 }
 
 // EvaluationDeletionResult reports the visible effect of deliberate summary
@@ -296,12 +333,16 @@ func (s *Store) SaveEvaluationSummary(ctx context.Context, summary EvaluationSum
 			run_id, outcome, started_at, completed_at, total_wall_nanos,
 			stage_durations, invocation_versions, invocation_count, gate_count,
 			check_repair_count, test_revision_count, review_revision_count,
+			review_diff_bytes, review_changed_lines, review_unit_count,
+			review_largest_unit_bytes, review_invocation_count, review_duration_nanos,
+			review_finding_counts, review_incomplete_unit_count,
+			review_cannot_proceed_unit_count, review_over_budget_count,
 			budget_exhausted, exemptions, escalation_categories, repeated_blockers,
 			usage_available, usage_unavailable_reason, usage_input_tokens,
 			usage_output_tokens, usage_total_tokens, usage_cost_reported,
 			usage_cost_micros, usage_currency, active_stage,
 			active_stage_started_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(run_id) DO UPDATE SET
 			outcome = excluded.outcome,
 			started_at = excluded.started_at,
@@ -314,6 +355,16 @@ func (s *Store) SaveEvaluationSummary(ctx context.Context, summary EvaluationSum
 			check_repair_count = excluded.check_repair_count,
 			test_revision_count = excluded.test_revision_count,
 			review_revision_count = excluded.review_revision_count,
+			review_diff_bytes = excluded.review_diff_bytes,
+			review_changed_lines = excluded.review_changed_lines,
+			review_unit_count = excluded.review_unit_count,
+			review_largest_unit_bytes = excluded.review_largest_unit_bytes,
+			review_invocation_count = excluded.review_invocation_count,
+			review_duration_nanos = excluded.review_duration_nanos,
+			review_finding_counts = excluded.review_finding_counts,
+			review_incomplete_unit_count = excluded.review_incomplete_unit_count,
+			review_cannot_proceed_unit_count = excluded.review_cannot_proceed_unit_count,
+			review_over_budget_count = excluded.review_over_budget_count,
 			budget_exhausted = excluded.budget_exhausted,
 			exemptions = excluded.exemptions,
 			escalation_categories = excluded.escalation_categories,
@@ -369,18 +420,51 @@ func (s *Store) EnsureEvaluationSummary(ctx context.Context, run Run) error {
 			run_id, outcome, started_at, completed_at, total_wall_nanos,
 			stage_durations, invocation_versions, invocation_count, gate_count,
 			check_repair_count, test_revision_count, review_revision_count,
+			review_diff_bytes, review_changed_lines, review_unit_count,
+			review_largest_unit_bytes, review_invocation_count, review_duration_nanos,
+			review_finding_counts, review_incomplete_unit_count,
+			review_cannot_proceed_unit_count, review_over_budget_count,
 			budget_exhausted, exemptions, escalation_categories, repeated_blockers,
 			usage_available, usage_unavailable_reason, usage_input_tokens,
 			usage_output_tokens, usage_total_tokens, usage_cost_reported,
 			usage_cost_micros, usage_currency, active_stage,
 			active_stage_started_at, created_at, updated_at
-		) VALUES (?, ?, ?, '', 0, '[]', ?, 0, 0, 0, 0, 0, 0, '[]', '[]', '[]', 0, ?, 0, 0, 0, 0, 0, '', ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(run_id) DO NOTHING`,
 		run.ID,
 		EvaluationOutcomeActive,
 		startedAt.Format(runTimestampLayout),
+		"",
+		0,
+		"[]",
 		string(versionJSON),
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		"{}",
+		0,
+		0,
+		0,
+		false,
+		"[]",
+		"[]",
+		"[]",
+		false,
 		EvaluationUsageNotReported,
+		0,
+		0,
+		0,
+		false,
+		0,
+		"",
 		stage,
 		stageStarted,
 		startedAt.Format(runTimestampLayout),
@@ -395,6 +479,10 @@ func (s *Store) EnsureEvaluationSummary(ctx context.Context, run Run) error {
 const evaluationSummarySelect = `SELECT run_id, outcome, started_at, completed_at,
 	total_wall_nanos, stage_durations, invocation_versions, invocation_count,
 	gate_count, check_repair_count, test_revision_count, review_revision_count,
+	review_diff_bytes, review_changed_lines, review_unit_count,
+	review_largest_unit_bytes, review_invocation_count, review_duration_nanos,
+	review_finding_counts, review_incomplete_unit_count,
+	review_cannot_proceed_unit_count, review_over_budget_count,
 	budget_exhausted, exemptions, escalation_categories, repeated_blockers,
 	usage_available, usage_unavailable_reason, usage_input_tokens,
 	usage_output_tokens, usage_total_tokens, usage_cost_reported,
@@ -418,8 +506,10 @@ func scanEvaluationSummaryValues(scan func(...any) error) (*EvaluationSummary, e
 	var outcome string
 	var completedAt, startedAt, createdAt, updatedAt string
 	var totalWallNanos int64
+	var reviewDurationNanos int64
 	var stageDurationsJSON, invocationVersionsJSON, exemptionsJSON string
 	var escalationJSON, blockersJSON string
+	var reviewFindingCountsJSON string
 	var usageAvailable, usageCostReported int
 	var usageReason, usageCurrency string
 	var usageInput, usageOutput, usageTotal, usageCost int64
@@ -427,7 +517,11 @@ func scanEvaluationSummaryValues(scan func(...any) error) (*EvaluationSummary, e
 		&summary.RunID, &outcome, &startedAt, &completedAt, &totalWallNanos,
 		&stageDurationsJSON, &invocationVersionsJSON, &summary.InvocationCount,
 		&summary.GateCount, &summary.CheckRepairCount, &summary.TestRevisionCount,
-		&summary.ReviewRevisionCount, &summary.BudgetExhausted, &exemptionsJSON,
+		&summary.ReviewRevisionCount, &summary.ReviewDiffBytes, &summary.ReviewChangedLines,
+		&summary.ReviewUnitCount, &summary.ReviewLargestUnitBytes, &summary.ReviewInvocationCount,
+		&reviewDurationNanos, &reviewFindingCountsJSON, &summary.ReviewIncompleteUnitCount,
+		&summary.ReviewCannotProceedUnitCount, &summary.ReviewOverBudgetCount,
+		&summary.BudgetExhausted, &exemptionsJSON,
 		&escalationJSON, &blockersJSON, &usageAvailable, &usageReason,
 		&usageInput, &usageOutput, &usageTotal, &usageCostReported, &usageCost,
 		&usageCurrency, &createdAt, &updatedAt,
@@ -439,6 +533,7 @@ func scanEvaluationSummaryValues(scan func(...any) error) (*EvaluationSummary, e
 	}
 	summary.Outcome = EvaluationOutcome(outcome)
 	summary.TotalWallTime = time.Duration(totalWallNanos)
+	summary.ReviewDuration = time.Duration(reviewDurationNanos)
 	summary.Usage = EvaluationUsage{
 		Available:         usageAvailable != 0,
 		UnavailableReason: usageReason,
@@ -462,6 +557,9 @@ func scanEvaluationSummaryValues(scan func(...any) error) (*EvaluationSummary, e
 		return nil, err
 	}
 	if err := decodeEvaluationJSON("repeated blockers", blockersJSON, &summary.RepeatedBlockers); err != nil {
+		return nil, err
+	}
+	if err := decodeEvaluationJSON("review finding counts", reviewFindingCountsJSON, &summary.ReviewFindingCounts); err != nil {
 		return nil, err
 	}
 	var err error
@@ -524,6 +622,10 @@ func normalizeEvaluationSummary(summary EvaluationSummary) (EvaluationSummary, [
 	if err != nil {
 		return EvaluationSummary{}, nil, fmt.Errorf("encode evaluation blockers: %w", err)
 	}
+	findingCounts, err := json.Marshal(nonNilReviewFindingCounts(summary.ReviewFindingCounts))
+	if err != nil {
+		return EvaluationSummary{}, nil, fmt.Errorf("encode evaluation finding counts: %w", err)
+	}
 	completedAt := ""
 	if !summary.CompletedAt.IsZero() {
 		completedAt = summary.CompletedAt.UTC().Format(runTimestampLayout)
@@ -541,6 +643,16 @@ func normalizeEvaluationSummary(summary EvaluationSummary) (EvaluationSummary, [
 		summary.CheckRepairCount,
 		summary.TestRevisionCount,
 		summary.ReviewRevisionCount,
+		summary.ReviewDiffBytes,
+		summary.ReviewChangedLines,
+		summary.ReviewUnitCount,
+		summary.ReviewLargestUnitBytes,
+		summary.ReviewInvocationCount,
+		int64(summary.ReviewDuration),
+		string(findingCounts),
+		summary.ReviewIncompleteUnitCount,
+		summary.ReviewCannotProceedUnitCount,
+		summary.ReviewOverBudgetCount,
 		summary.BudgetExhausted,
 		string(exemptions),
 		string(escalations),
@@ -569,8 +681,11 @@ func validateEvaluationSummary(summary EvaluationSummary) error {
 	if err := validateEvaluationOutcome(summary.Outcome); err != nil {
 		return err
 	}
-	if summary.TotalWallTime < 0 {
-		return errors.New("evaluation total wall time must not be negative")
+	if summary.TotalWallTime < 0 || summary.ReviewDuration < 0 {
+		return errors.New("evaluation durations must not be negative")
+	}
+	if summary.ReviewDiffBytes < 0 || summary.ReviewChangedLines < 0 || summary.ReviewUnitCount < 0 || summary.ReviewLargestUnitBytes < 0 || summary.ReviewInvocationCount < 0 || summary.ReviewIncompleteUnitCount < 0 || summary.ReviewCannotProceedUnitCount < 0 || summary.ReviewOverBudgetCount < 0 {
+		return errors.New("evaluation review measurements must not be negative")
 	}
 	if !summary.CompletedAt.IsZero() && !summary.StartedAt.IsZero() && summary.CompletedAt.Before(summary.StartedAt) {
 		return errors.New("evaluation completion time must not precede start time")
@@ -613,6 +728,14 @@ func validateEvaluationSummary(summary EvaluationSummary) error {
 	} {
 		if value < 0 {
 			return fmt.Errorf("evaluation %s must not be negative", field)
+		}
+	}
+	for severity, count := range summary.ReviewFindingCounts {
+		if severity != "blocker" && severity != "advisory" {
+			return fmt.Errorf("unsupported review finding severity count %q", severity)
+		}
+		if count < 0 {
+			return fmt.Errorf("review finding severity count %q must not be negative", severity)
 		}
 	}
 	for _, exemption := range summary.Exemptions {
@@ -821,6 +944,15 @@ func nonNilBlockers(value []EvaluationBlocker) []EvaluationBlocker {
 	return value
 }
 
+// nonNilReviewFindingCounts keeps the severity-count JSON object stable across
+// persistence and makes an empty evaluation summary encode as `{}`.
+func nonNilReviewFindingCounts(value map[string]int) map[string]int {
+	if value == nil {
+		return map[string]int{}
+	}
+	return value
+}
+
 // appendUniqueEvaluationString appends a category only when it is new.
 func appendUniqueEvaluationString[T comparable](values []T, value T) []T {
 	for _, current := range values {
@@ -999,7 +1131,10 @@ func (s *Store) RecordEvaluationInvocation(ctx context.Context, runID string, in
 	}
 	summary.InvocationCount = len(summary.InvocationVersions)
 	summary.UpdatedAt = time.Now().UTC()
-	return s.updateEvaluationSummaryProjection(ctx, *summary)
+	if err := s.updateEvaluationSummaryProjection(ctx, *summary); err != nil {
+		return err
+	}
+	return s.refreshEvaluationReviewMetricsIfPresent(ctx, runID)
 }
 
 // RefreshEvaluationCounts derives invocation and gate counts from the existing
@@ -1034,6 +1169,222 @@ func (s *Store) RefreshEvaluationCounts(ctx context.Context, runID string) error
 		WHERE run_id = ?`, invocationCount, gateCount, time.Now().UTC().Format(runTimestampLayout), runID)
 	if err != nil {
 		return fmt.Errorf("refresh evaluation counts for %q: %w", runID, err)
+	}
+	return nil
+}
+
+// RecordEvaluationReviewRound refreshes the content-free review telemetry for
+// a newly persisted manifest. The manifest itself remains the source of truth;
+// this method only exposes bounded counts and byte measurements in the local
+// evaluation projection.
+func (s *Store) RecordEvaluationReviewRound(ctx context.Context, runID string, round ReviewRound, units []ReviewUnit) error {
+	if err := validateEvaluationRunID(runID); err != nil {
+		return err
+	}
+	if round.RunID != runID {
+		return errors.New("evaluation review round does not belong to the run")
+	}
+	if err := validateReviewRound(round); err != nil {
+		return err
+	}
+	if len(units) == 0 {
+		return errors.New("evaluation review round must contain at least one unit")
+	}
+	for index, unit := range units {
+		if err := validateReviewUnit(round.ID, unit, index); err != nil {
+			return err
+		}
+	}
+	return s.RefreshEvaluationReviewMetrics(ctx, runID)
+}
+
+// RefreshEvaluationReviewMetrics derives content-free review measurements from
+// the normalized round, unit, result, and invocation projections. It retains no
+// diff bytes, paths, finding text, prompts, or transcripts.
+func (s *Store) RefreshEvaluationReviewMetrics(ctx context.Context, runID string) error {
+	if err := validateEvaluationRunID(runID); err != nil {
+		return err
+	}
+	return s.refreshEvaluationReviewMetrics(ctx, runID, false)
+}
+
+// refreshEvaluationReviewMetricsIfPresent updates review telemetry when a run
+// has an evaluation summary and otherwise remains a no-op for compatibility
+// with focused stores and historical direct review fixtures.
+func (s *Store) refreshEvaluationReviewMetricsIfPresent(ctx context.Context, runID string) error {
+	return s.refreshEvaluationReviewMetrics(ctx, runID, true)
+}
+
+func (s *Store) refreshEvaluationReviewMetrics(ctx context.Context, runID string, allowMissingSummary bool) error {
+	summary, err := s.EvaluationSummary(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if summary == nil {
+		if allowMissingSummary {
+			return nil
+		}
+		return fmt.Errorf("evaluation summary %q does not exist", runID)
+	}
+	type roundMetric struct {
+		id        string
+		diffBytes int64
+		maxUnits  int
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, diff_bytes, max_units FROM review_rounds WHERE run_id = ? ORDER BY created_at, id`, runID)
+	if err != nil {
+		return fmt.Errorf("read review rounds for evaluation %q: %w", runID, err)
+	}
+	rounds := make([]roundMetric, 0)
+	for rows.Next() {
+		var value roundMetric
+		if err := rows.Scan(&value.id, &value.diffBytes, &value.maxUnits); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan review round for evaluation %q: %w", runID, err)
+		}
+		rounds = append(rounds, value)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read review rounds for evaluation %q: %w", runID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close review rounds for evaluation %q: %w", runID, err)
+	}
+
+	metrics := EvaluationSummary{ReviewFindingCounts: map[string]int{}}
+	for _, round := range rounds {
+		if round.diffBytes < 0 {
+			return fmt.Errorf("review round %q has negative diff bytes", round.id)
+		}
+		metrics.ReviewDiffBytes += round.diffBytes
+		unitRows, queryErr := s.db.QueryContext(ctx, `SELECT unit_id, workload_bytes, changed_lines FROM review_units WHERE round_id = ? ORDER BY ordinal`, round.id)
+		if queryErr != nil {
+			return fmt.Errorf("read review units for evaluation round %q: %w", round.id, queryErr)
+		}
+		unitCount := 0
+		for unitRows.Next() {
+			var unitID string
+			var workloadBytes, changedLines int
+			if scanErr := unitRows.Scan(&unitID, &workloadBytes, &changedLines); scanErr != nil {
+				_ = unitRows.Close()
+				return fmt.Errorf("scan review unit %q for evaluation: %w", unitID, scanErr)
+			}
+			if workloadBytes < 0 || changedLines < 0 {
+				_ = unitRows.Close()
+				return fmt.Errorf("review unit %q has negative evaluation measurements", unitID)
+			}
+			unitCount++
+			metrics.ReviewUnitCount++
+			metrics.ReviewChangedLines += changedLines
+			if workloadBytes > metrics.ReviewLargestUnitBytes {
+				metrics.ReviewLargestUnitBytes = workloadBytes
+			}
+		}
+		if err := unitRows.Err(); err != nil {
+			_ = unitRows.Close()
+			return fmt.Errorf("read review units for evaluation round %q: %w", round.id, err)
+		}
+		if err := unitRows.Close(); err != nil {
+			return fmt.Errorf("close review units for evaluation round %q: %w", round.id, err)
+		}
+		if round.maxUnits > 0 && unitCount > round.maxUnits {
+			metrics.ReviewOverBudgetCount++
+		}
+
+		resultRows, queryErr := s.db.QueryContext(ctx, `SELECT outcome, findings FROM review_unit_results WHERE round_id = ? ORDER BY role, unit_id`, round.id)
+		if queryErr != nil {
+			return fmt.Errorf("read review unit results for evaluation round %q: %w", round.id, queryErr)
+		}
+		for resultRows.Next() {
+			var outcome, findingsJSON string
+			if scanErr := resultRows.Scan(&outcome, &findingsJSON); scanErr != nil {
+				_ = resultRows.Close()
+				return fmt.Errorf("scan review unit result for evaluation round %q: %w", round.id, scanErr)
+			}
+			switch outcome {
+			case ReviewUnitOutcomeNeedsClarification, ReviewUnitOutcomeCannotProceed:
+				metrics.ReviewIncompleteUnitCount++
+			}
+			if outcome == ReviewUnitOutcomeCannotProceed {
+				metrics.ReviewCannotProceedUnitCount++
+			}
+			var findings []ReviewFinding
+			if err := json.Unmarshal([]byte(findingsJSON), &findings); err != nil {
+				_ = resultRows.Close()
+				return fmt.Errorf("decode review finding counts for evaluation round %q: %w", round.id, err)
+			}
+			for _, finding := range findings {
+				if finding.Severity == "blocker" || finding.Severity == "advisory" {
+					metrics.ReviewFindingCounts[finding.Severity]++
+				}
+			}
+		}
+		if err := resultRows.Err(); err != nil {
+			_ = resultRows.Close()
+			return fmt.Errorf("read review unit results for evaluation round %q: %w", round.id, err)
+		}
+		if err := resultRows.Close(); err != nil {
+			return fmt.Errorf("close review unit results for evaluation round %q: %w", round.id, err)
+		}
+	}
+
+	invocationRows, err := s.db.QueryContext(ctx, `SELECT i.created_at, i.updated_at FROM invocations i JOIN review_rounds r ON r.id = i.review_round_id WHERE i.run_id = ? AND i.review_unit_id <> '' ORDER BY i.created_at, i.id`, runID)
+	if err != nil {
+		return fmt.Errorf("read review invocations for evaluation %q: %w", runID, err)
+	}
+	for invocationRows.Next() {
+		var createdAt, updatedAt string
+		if err := invocationRows.Scan(&createdAt, &updatedAt); err != nil {
+			_ = invocationRows.Close()
+			return fmt.Errorf("scan review invocation for evaluation %q: %w", runID, err)
+		}
+		created, parseErr := time.Parse(time.RFC3339Nano, createdAt)
+		if parseErr != nil {
+			_ = invocationRows.Close()
+			return fmt.Errorf("parse review invocation start for evaluation %q: %w", runID, parseErr)
+		}
+		updated, parseErr := time.Parse(time.RFC3339Nano, updatedAt)
+		if parseErr != nil {
+			_ = invocationRows.Close()
+			return fmt.Errorf("parse review invocation update for evaluation %q: %w", runID, parseErr)
+		}
+		if updated.Before(created) {
+			_ = invocationRows.Close()
+			return fmt.Errorf("review invocation update precedes start for evaluation %q", runID)
+		}
+		metrics.ReviewInvocationCount++
+		metrics.ReviewDuration += updated.Sub(created)
+	}
+	if err := invocationRows.Err(); err != nil {
+		_ = invocationRows.Close()
+		return fmt.Errorf("read review invocations for evaluation %q: %w", runID, err)
+	}
+	if err := invocationRows.Close(); err != nil {
+		return fmt.Errorf("close review invocations for evaluation %q: %w", runID, err)
+	}
+
+	findingCounts, err := json.Marshal(nonNilReviewFindingCounts(metrics.ReviewFindingCounts))
+	if err != nil {
+		return fmt.Errorf("encode review finding counts for evaluation %q: %w", runID, err)
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE evaluation_summaries SET
+			review_diff_bytes = ?, review_changed_lines = ?, review_unit_count = ?,
+			review_largest_unit_bytes = ?, review_invocation_count = ?,
+			review_duration_nanos = ?, review_finding_counts = ?,
+			review_incomplete_unit_count = ?, review_cannot_proceed_unit_count = ?,
+			review_over_budget_count = ?, updated_at = ?
+		WHERE run_id = ?`, metrics.ReviewDiffBytes, metrics.ReviewChangedLines,
+		metrics.ReviewUnitCount, metrics.ReviewLargestUnitBytes, metrics.ReviewInvocationCount,
+		int64(metrics.ReviewDuration), string(findingCounts), metrics.ReviewIncompleteUnitCount,
+		metrics.ReviewCannotProceedUnitCount, metrics.ReviewOverBudgetCount,
+		time.Now().UTC().Format(runTimestampLayout), runID)
+	if err != nil {
+		return fmt.Errorf("save review evaluation metrics for %q: %w", runID, err)
+	}
+	if changed, rowsErr := result.RowsAffected(); rowsErr == nil && changed != 1 {
+		return fmt.Errorf("evaluation summary %q does not exist", runID)
 	}
 	return nil
 }
@@ -1426,15 +1777,19 @@ func (s *Store) updateEvaluationSummaryProjection(ctx context.Context, summary E
 	if err != nil {
 		return err
 	}
-	// The first 24 values are the public summary values through usage currency;
-	// the final two are internal active-stage placeholders and the final two are
-	// timestamps. This update intentionally leaves active_stage untouched.
+	// The normalized values include public summary fields, internal active-stage
+	// placeholders, and timestamps. This update intentionally leaves active_stage
+	// untouched.
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE evaluation_summaries SET
 			outcome = ?, started_at = ?, completed_at = ?, total_wall_nanos = ?,
 			stage_durations = ?, invocation_versions = ?, invocation_count = ?,
 			gate_count = ?, check_repair_count = ?, test_revision_count = ?,
-			review_revision_count = ?, budget_exhausted = ?, exemptions = ?,
+			review_revision_count = ?, review_diff_bytes = ?, review_changed_lines = ?,
+			review_unit_count = ?, review_largest_unit_bytes = ?, review_invocation_count = ?,
+			review_duration_nanos = ?, review_finding_counts = ?, review_incomplete_unit_count = ?,
+			review_cannot_proceed_unit_count = ?, review_over_budget_count = ?,
+			budget_exhausted = ?, exemptions = ?,
 			escalation_categories = ?, repeated_blockers = ?, usage_available = ?,
 			usage_unavailable_reason = ?, usage_input_tokens = ?, usage_output_tokens = ?,
 			usage_total_tokens = ?, usage_cost_reported = ?, usage_cost_micros = ?,
@@ -1442,7 +1797,9 @@ func (s *Store) updateEvaluationSummaryProjection(ctx context.Context, summary E
 		WHERE run_id = ?`, values[1], values[2], values[3], values[4], values[5], values[6],
 		values[7], values[8], values[9], values[10], values[11], values[12], values[13],
 		values[14], values[15], values[16], values[17], values[18], values[19], values[20],
-		values[21], values[22], values[23], normalized.UpdatedAt.UTC().Format(runTimestampLayout), normalized.RunID)
+		values[21], values[22], values[23], values[24], values[25], values[26],
+		values[27], values[28], values[29], values[30], values[31], values[32], values[33],
+		normalized.UpdatedAt.UTC().Format(runTimestampLayout), normalized.RunID)
 	if err != nil {
 		return fmt.Errorf("update evaluation summary %q: %w", normalized.RunID, err)
 	}
@@ -1566,13 +1923,14 @@ func (s *Store) AggregateEvaluation(ctx context.Context) (EvaluationAggregate, e
 		return EvaluationAggregate{}, err
 	}
 	aggregate := EvaluationAggregate{
-		OutcomeCounts:     map[EvaluationOutcome]int{},
-		OutcomeRates:      map[EvaluationOutcome]float64{},
-		StageDurations:    map[Stage]time.Duration{},
-		EscalationCounts:  map[EvaluationEscalationCategory]int{},
-		EscalationRates:   map[EvaluationEscalationCategory]float64{},
-		DispositionCounts: map[EvaluationDisposition]int{},
-		Usage:             EvaluationUsage{UnavailableReason: EvaluationUsageNotReported},
+		OutcomeCounts:       map[EvaluationOutcome]int{},
+		OutcomeRates:        map[EvaluationOutcome]float64{},
+		StageDurations:      map[Stage]time.Duration{},
+		ReviewFindingCounts: map[string]int{},
+		EscalationCounts:    map[EvaluationEscalationCategory]int{},
+		EscalationRates:     map[EvaluationEscalationCategory]float64{},
+		DispositionCounts:   map[EvaluationDisposition]int{},
+		Usage:               EvaluationUsage{UnavailableReason: EvaluationUsageNotReported},
 	}
 	aggregate.RunCount = len(summaries)
 	var usageCurrency string
@@ -1587,6 +1945,20 @@ func (s *Store) AggregateEvaluation(ctx context.Context) (EvaluationAggregate, e
 		aggregate.CheckRepairCount += summary.CheckRepairCount
 		aggregate.TestRevisionCount += summary.TestRevisionCount
 		aggregate.ReviewRevisionCount += summary.ReviewRevisionCount
+		aggregate.ReviewDiffBytes += summary.ReviewDiffBytes
+		aggregate.ReviewChangedLines += summary.ReviewChangedLines
+		aggregate.ReviewUnitCount += summary.ReviewUnitCount
+		if summary.ReviewLargestUnitBytes > aggregate.ReviewLargestUnitBytes {
+			aggregate.ReviewLargestUnitBytes = summary.ReviewLargestUnitBytes
+		}
+		aggregate.ReviewInvocationCount += summary.ReviewInvocationCount
+		aggregate.ReviewDuration += summary.ReviewDuration
+		aggregate.ReviewIncompleteUnitCount += summary.ReviewIncompleteUnitCount
+		aggregate.ReviewCannotProceedUnitCount += summary.ReviewCannotProceedUnitCount
+		aggregate.ReviewOverBudgetCount += summary.ReviewOverBudgetCount
+		for severity, count := range summary.ReviewFindingCounts {
+			aggregate.ReviewFindingCounts[severity] += count
+		}
 		if summary.BudgetExhausted {
 			aggregate.BudgetExhaustionRate++
 		}

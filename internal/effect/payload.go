@@ -150,11 +150,12 @@ type resultAcceptanceEffectPayload struct {
 	Invocation store.Invocation
 	// WorkerID identifies the worker that owns this invocation. Empty legacy
 	// payloads intentionally fall back to the run-scoped worker identity.
-	WorkerID       string
-	Previous       store.Run
-	Next           store.Run
-	StopWorker     bool
-	AcceptedReport string // JSON-encoded report.Report snapshot for deterministic replay
+	WorkerID         string
+	Previous         store.Run
+	Next             store.Run
+	StopWorker       bool
+	AcceptedReport   string // JSON-encoded report.Report snapshot for deterministic replay
+	ReviewUnitResult *store.ReviewUnitResult
 }
 
 // checkpointRequest converts a serialized checkpoint request back to the Git

@@ -231,6 +231,42 @@ func TestRunWritesTheSpecificationReviewFindingContract(t *testing.T) {
 	}
 }
 
+// TestRunCarriesTheAssignedReviewUnitIdentity verifies the worker-facing
+// report boundary copies the coordinator's unit identity to the handoff and
+// every finding in a partitioned review.
+func TestRunCarriesTheAssignedReviewUnitIdentity(t *testing.T) {
+	resultDirectory := t.TempDir()
+	var errorsOutput bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{
+			"--outcome", "completed", "--summary", "unit review complete",
+			"--finding", "internal/factory/review.go:1|behavior is incorrect|focused assertion|blocker|correctness|repair the behavior|implementation",
+		},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID":   "inv-review-unit",
+			"FACTORY_RUN_ID":          "run-review-unit",
+			"FACTORY_HARNESS":         "codex",
+			"FACTORY_ROLE":            "spec_review",
+			"FACTORY_STAGE":           "review",
+			"FACTORY_CHECKPOINT_SHA":  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"FACTORY_REVIEW_ROUND_ID": "rr-001",
+			"FACTORY_REVIEW_UNIT_ID":  "unit-002",
+			"FACTORY_RESULT_DIR":      resultDirectory,
+		},
+		Output: &bytes.Buffer{}, ErrorsOutput: &errorsOutput,
+	})
+	if status != 0 {
+		t.Fatalf("Run() status = %d, stderr = %s", status, errorsOutput.String())
+	}
+	value, err := report.Read(resultDirectory + "/report.json")
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if value.ReviewHandoff == nil || value.ReviewHandoff.UnitID != "unit-002" || len(value.ReviewHandoff.Findings) != 1 || value.ReviewHandoff.Findings[0].UnitID != "unit-002" {
+		t.Fatalf("review unit handoff = %#v, want unit-002 on handoff and finding", value.ReviewHandoff)
+	}
+}
+
 // TestRunCarriesFindingsForIncompleteReviewOutcomes verifies the CLI keeps
 // structured findings when the reviewer also reports a bounded interruption.
 func TestRunCarriesFindingsForIncompleteReviewOutcomes(t *testing.T) {

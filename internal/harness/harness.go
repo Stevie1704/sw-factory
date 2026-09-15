@@ -110,6 +110,12 @@ func invocationEnvironment(harnessName string, request StartRequest) map[string]
 	if request.CheckpointSHA != "" {
 		environment["FACTORY_CHECKPOINT_SHA"] = request.CheckpointSHA
 	}
+	if request.ReviewRoundID != "" {
+		environment["FACTORY_REVIEW_ROUND_ID"] = request.ReviewRoundID
+	}
+	if request.ReviewUnitID != "" {
+		environment["FACTORY_REVIEW_UNIT_ID"] = request.ReviewUnitID
+	}
 	if request.Model != "" {
 		environment["FACTORY_MODEL"] = request.Model
 	}

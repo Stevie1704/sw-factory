@@ -207,5 +207,43 @@ func validatePersistedReviewDiff(invocation store.Invocation) error {
 	if observed != reviewContext.DiffSHA256 {
 		return fmt.Errorf("review artifact SHA-256 %q does not match recorded identity", observed)
 	}
+	if invocation.ReviewUnitID != "" {
+		if reviewContext.ReviewRoundID != invocation.ReviewRoundID || reviewContext.ReviewUnitID != invocation.ReviewUnitID {
+			return errors.New("persisted review unit context does not match invocation identity")
+		}
+		if reviewContext.ReviewUnitWorkloadBytes < 0 || len(reviewContext.ReviewUnitDiffSHA256) != sha256.Size*2 {
+			return errors.New("persisted review unit artifact identity is invalid")
+		}
+		if _, err := hex.DecodeString(reviewContext.ReviewUnitDiffSHA256); err != nil {
+			return fmt.Errorf("review unit artifact SHA-256 is invalid: %w", err)
+		}
+		unitPath := filepath.Join(invocation.InvocationDirectory, reviewUnitArtifactName)
+		unitInfo, err := os.Lstat(unitPath)
+		if err != nil {
+			return fmt.Errorf("stat review unit artifact: %w", err)
+		}
+		if !unitInfo.Mode().IsRegular() {
+			return fmt.Errorf("review unit artifact is not a regular file (mode %s)", unitInfo.Mode())
+		}
+		if unitInfo.Size() != int64(reviewContext.ReviewUnitWorkloadBytes) {
+			return fmt.Errorf("review unit artifact size %d does not match recorded size %d", unitInfo.Size(), reviewContext.ReviewUnitWorkloadBytes)
+		}
+		unitArtifact, err := os.Open(unitPath)
+		if err != nil {
+			return fmt.Errorf("open review unit artifact: %w", err)
+		}
+		unitDigest := sha256.New()
+		unitBytes, copyErr := io.Copy(unitDigest, unitArtifact)
+		closeErr := unitArtifact.Close()
+		if copyErr != nil {
+			return fmt.Errorf("hash review unit artifact: %w", copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close review unit artifact: %w", closeErr)
+		}
+		if unitBytes != int64(reviewContext.ReviewUnitWorkloadBytes) || hex.EncodeToString(unitDigest.Sum(nil)) != reviewContext.ReviewUnitDiffSHA256 {
+			return errors.New("review unit artifact does not match recorded identity")
+		}
+	}
 	return nil
 }

@@ -83,6 +83,12 @@ type progressionState struct {
 	AgentTimeout time.Duration
 	// Now is the coordinator clock observation paired with AgentTimeout.
 	Now time.Time
+	// ReviewRound is the immutable partitioned review round, when one exists.
+	ReviewRound *store.ReviewRound
+	// ReviewUnits is the shared ordered manifest for ReviewRound.
+	ReviewUnits []store.ReviewUnit
+	// ReviewUnitResults contains accepted results keyed by review role.
+	ReviewUnitResults map[string][]store.ReviewUnitResult
 }
 
 // progressionActionKind identifies one coordinator seam that can advance a
@@ -119,6 +125,8 @@ type progressionAction struct {
 	role string
 	// stage optionally selects a specific invocation stage for an agent launch.
 	stage store.Stage
+	// reviewUnitID optionally selects the next immutable partition assignment.
+	reviewUnitID string
 	// invocationID identifies the report to accept.
 	invocationID string
 }
@@ -148,8 +156,8 @@ func (e *progressionActionError) Error() string {
 // validateNoAgentOperands rejects operands that belong only to agent-launch
 // or report-acceptance commands.
 func (a progressionAction) validateNoAgentOperands() error {
-	if a.role != "" || a.stage != "" || a.invocationID != "" {
-		return &progressionActionError{Action: a, Reason: "unexpected role, stage, or invocation operands"}
+	if a.role != "" || a.stage != "" || a.invocationID != "" || a.reviewUnitID != "" {
+		return &progressionActionError{Action: a, Reason: "unexpected role, stage, invocation, or review-unit operands"}
 	}
 	return nil
 }
@@ -176,6 +184,9 @@ func (a progressionAction) validate() error {
 		}
 		if a.invocationID != "" {
 			return &progressionActionError{Action: a, Reason: "agent launch cannot include an invocation id"}
+		}
+		if a.reviewUnitID != "" && !safeLaunchIdentifier(a.reviewUnitID) {
+			return &progressionActionError{Action: a, Reason: "agent launch review unit id is unsafe"}
 		}
 	case progressionActionAcceptAgentReport:
 		if strings.TrimSpace(a.invocationID) == "" {
@@ -252,7 +263,7 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 		var stepErr error
 		switch step.kind {
 		case progressionActionStartAgent:
-			_, stepErr = s.StartAgent(ctx, AgentRequest{RunID: step.runID, Role: step.role, Stage: step.stage})
+			_, stepErr = s.StartAgent(ctx, AgentRequest{RunID: step.runID, Role: step.role, Stage: step.stage, ReviewUnitID: step.reviewUnitID})
 		case progressionActionRunBaseline:
 			_, stepErr = s.RunBaseline(ctx, BaselineRequest{RunID: step.runID})
 		case progressionActionAcceptAgentReport:
@@ -372,6 +383,13 @@ func (s *Service) startReviewRound(ctx context.Context, runID string) error {
 // in state and registry.
 func progressionStep(state progressionState, registry workflow.Registry) (progressionAction, *progressionResult) {
 	run := *state.Run
+	if role, unitID, ok := missingReviewUnit(state, registry); ok {
+		definition, declared := registry.Role(role)
+		if !declared {
+			return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: fmt.Sprintf("workflow role %q is not declared by the workflow registry", role)}
+		}
+		return progressionAction{kind: progressionActionStartAgent, name: "start review unit " + unitID, runID: run.ID, role: definition.Name, stage: definition.Stage, reviewUnitID: unitID}, nil
+	}
 	if role, ok := missingConcurrentReviewRole(state, registry); ok {
 		definition, declared := registry.Role(role)
 		if !declared {
@@ -475,6 +493,36 @@ func missingConcurrentReviewRole(state progressionState, registry workflow.Regis
 	return "", false
 }
 
+// missingReviewUnit returns the next ordered manifest assignment after the
+// persisted round has started. It waits for active reviewers, while allowing
+// a run that is waiting on a completed unit disposition to finish its other
+// still-missing units.
+func missingReviewUnit(state progressionState, registry workflow.Registry) (string, string, bool) {
+	if state.Run == nil || state.Run.Stage != store.StageReview || state.ReviewRound == nil || len(state.ReviewUnits) == 0 || hasActiveReviewInvocations(state, registry) {
+		return "", "", false
+	}
+	switch state.ReviewRound.Status {
+	case store.ReviewRoundStatusAwaitingAuthorization, store.ReviewRoundStatusError, store.ReviewRoundStatusComplete:
+		return "", "", false
+	}
+	for _, role := range reviewAxisRoles {
+		if !reviewRoleConfigured(*state.Run, role) {
+			continue
+		}
+		results := state.ReviewUnitResults[role]
+		completed := make(map[string]struct{}, len(results))
+		for _, result := range results {
+			completed[result.UnitID] = struct{}{}
+		}
+		for _, unit := range state.ReviewUnits {
+			if _, exists := completed[unit.UnitID]; !exists {
+				return role, unit.UnitID, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // hasActiveReviewInvocations reports whether an otherwise human-waiting review
 // round still has an independent result that can be serialized and applied.
 func hasActiveReviewInvocations(state progressionState, registry workflow.Registry) bool {
@@ -570,6 +618,29 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 	state := progressionState{Run: run, Supported: true}
 	if run == nil {
 		return state, nil
+	}
+	if partitioned, ok := opened.(store.ReviewRoundStore); ok {
+		state.ReviewRound, err = partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA)
+		if err != nil {
+			return progressionState{}, fmt.Errorf("read review round for progression: %w", err)
+		}
+		if state.ReviewRound != nil {
+			state.ReviewUnits, err = partitioned.ReviewUnits(ctx, state.ReviewRound.ID)
+			if err != nil {
+				return progressionState{}, fmt.Errorf("read review units for progression: %w", err)
+			}
+			state.ReviewUnitResults = make(map[string][]store.ReviewUnitResult)
+			for _, role := range reviewAxisRoles {
+				if !reviewRoleConfigured(*run, role) {
+					continue
+				}
+				results, resultsErr := partitioned.ReviewUnitResults(ctx, state.ReviewRound.ID, role)
+				if resultsErr != nil {
+					return progressionState{}, fmt.Errorf("read %s review unit results for progression: %w", role, resultsErr)
+				}
+				state.ReviewUnitResults[role] = results
+			}
+		}
 	}
 	if allActiveStore, ok := opened.(ActiveInvocationsStore); ok {
 		active, activeErr := allActiveStore.ActiveInvocations(ctx, run.ID)

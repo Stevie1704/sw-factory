@@ -85,6 +85,28 @@ func TestPlanLaunchRejectsAnInactiveRunFromAGatheredSnapshot(t *testing.T) {
 	}
 }
 
+// TestPlanLaunchAllowsAnAuthorizedReviewUnitAfterDraftPause verifies a
+// manifest that paused before the first reviewer changed the run stage can
+// resume once its authorization command reopens the run.
+func TestPlanLaunchAllowsAnAuthorizedReviewUnitAfterDraftPause(t *testing.T) {
+	packet := launchPlanningPacket()
+	packet.RepositoryConfig.RoleHarnessDefaults[workflow.RoleSpecificationReview] = config.HarnessCodex
+	packet.RepositoryConfig.ModelOptions[workflow.RoleSpecificationReview] = []string{"model"}
+	snapshot := LaunchSnapshot{
+		Run:                        store.Run{ID: "run-review-authorization", Status: store.StatusWaitingForHuman, Stage: store.StageDraftPR, Worktree: "/worktree"},
+		Packet:                     packet,
+		ReviewConcurrency:          2,
+		ActiveInvocationsSupported: true,
+	}
+	plan, err := PlanLaunch(snapshot, AgentRequest{Role: workflow.RoleSpecificationReview, Stage: store.StageReview, ReviewUnitID: "unit-001"})
+	if err != nil {
+		t.Fatalf("PlanLaunch() error = %v", err)
+	}
+	if plan.Outcome != LaunchOutcomeLaunch || plan.Request.ReviewUnitID != "unit-001" {
+		t.Fatalf("PlanLaunch() = %#v, want an authorized unit launch", plan)
+	}
+}
+
 // TestPlanLaunchAdoptsARecoveredInvocationAsItsThirdOutcome verifies adoption
 // is distinct from both rejection and creation, and remains write-free.
 func TestPlanLaunchAdoptsARecoveredInvocationAsItsThirdOutcome(t *testing.T) {

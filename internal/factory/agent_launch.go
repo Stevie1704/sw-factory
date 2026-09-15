@@ -186,6 +186,12 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 			return errors.New("persisted invocation packet review-repair context does not match the run")
 		}
 	}
+	if (persisted.ReviewRoundID == "") != (persisted.ReviewUnitID == "") {
+		return errors.New("persisted invocation packet review round and unit ids must be supplied together")
+	}
+	if persisted.ReviewRoundID != invocation.ReviewRoundID || persisted.ReviewUnitID != invocation.ReviewUnitID {
+		return errors.New("persisted invocation packet review unit identity does not match the invocation")
+	}
 	if roleDefinition, ok := workflow.DefaultRegistry().Role(invocation.Role); ok && roleDefinition.Kind == workflow.RoleKindReview {
 		if persisted.ReviewContext == nil {
 			return fmt.Errorf("persisted %s invocation packet has no review context", invocation.Role)
@@ -195,6 +201,9 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 		}
 		if persisted.ReviewContext.CheckpointSHA != run.CheckpointSHA {
 			return fmt.Errorf("persisted %s invocation packet review checkpoint does not match the run", invocation.Role)
+		}
+		if invocation.ReviewRoundID != "" && (persisted.ReviewContext.ReviewRoundID != invocation.ReviewRoundID || persisted.ReviewContext.ReviewUnitID != invocation.ReviewUnitID) {
+			return fmt.Errorf("persisted %s invocation packet review unit context does not match the invocation", invocation.Role)
 		}
 	}
 	return nil

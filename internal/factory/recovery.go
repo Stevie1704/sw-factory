@@ -800,6 +800,9 @@ func completedInvocationProjectionExpectedStopped(run store.Run, invocation stor
 	if (run.Stage == store.StageCheck || run.Stage == store.StageDraftPR) && invocation.Stage == store.StageImplementation {
 		return true
 	}
+	if run.Stage == store.StageReview && roleIsKind(invocation, workflow.RoleKindReview) {
+		return true
+	}
 	return run.Stage == store.StageReady
 }
 
@@ -1136,6 +1139,11 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			return paused, resumeDiagnosis, RecoveryOutcomeWaitingForHuman, &InfrastructureDiscrepancyError{Diagnosis: resumeDiagnosis}
 		}
 	}
+	if run.Stage == store.StageReview {
+		if err := s.recoverPartitionedReviewAggregates(ctx, registration, runStore, &run); err != nil {
+			return s.pauseAfterReviewProjectionRecoveryError(ctx, registration, runStore, run, err)
+		}
+	}
 	if run.Status == store.StatusWaitingForHarness {
 		// Capacity waiting is an intentional coordinator state. Its active
 		// invocation may have no native identity yet, so ordinary interrupted
@@ -1326,6 +1334,26 @@ func (s *Service) pauseAfterReplayedReviewProjectionError(ctx context.Context, r
 		Source:   "pending effect",
 		Field:    "review result projection",
 		Expected: "replayed review result routed through the coordinator",
+		Observed: cause.Error(),
+	})
+	diagnosis.SourcesAgree = false
+	paused, pauseErr := s.pauseRunLocally(ctx, runStore, run, diagnosis)
+	if pauseErr != nil {
+		return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(recoveryErrorWithCause(diagnosis, cause), pauseErr)
+	}
+	return paused, diagnosis, RecoveryOutcomeWaitingForHuman, recoveryErrorWithCause(diagnosis, cause)
+}
+
+// pauseAfterReviewProjectionRecoveryError records a review-round discrepancy
+// discovered after restart. The persisted unit result remains intact for a
+// person to inspect, but no reviewer is relaunched from an unverified round.
+func (s *Service) pauseAfterReviewProjectionRecoveryError(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, cause error) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error) {
+	diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
+	addRecoveryDiscrepancy(&diagnosis, RecoveryDiscrepancy{
+		Kind:     RecoveryDiscrepancyWorkflow,
+		Source:   "review round",
+		Field:    "manifest or aggregate projection",
+		Expected: "persisted exact-SHA review manifest and normalized results to reconcile",
 		Observed: cause.Error(),
 	})
 	diagnosis.SourcesAgree = false
