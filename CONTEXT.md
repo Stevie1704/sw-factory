@@ -155,6 +155,34 @@ requires a regular file with the recorded size and SHA-256; a missing or
 changed artifact is a recovery discrepancy and is not regenerated.
 _Avoid_: Inline diff, diff limit
 
+**Review round**:
+The complete independent review of one immutable checkpoint against its base.
+Its specification and documented-standards axes remain separate even when each
+axis needs several review units.
+_Avoid_: Reviewer invocation, review checkpoint
+
+**Review unit**:
+One bounded, manifest-assigned portion of a review diff judged by a fresh
+invocation on one review axis. It partitions review workload without creating
+another checkpoint, review round, or independently published result.
+_Avoid_: Partial checkpoint, partial review
+
+**Review-unit manifest**:
+The durable ordered assignment of every changed line and non-text change in one
+review round to exactly one primary review unit. Both review axes use the same
+manifest, and bounded context may overlap between units.
+_Avoid_: Review plan, live partition
+
+**Review workload**:
+The UTF-8 byte size of the self-contained diff evidence assigned to a review
+unit, including its headers and overlapping context.
+_Avoid_: Token count, changed-line count
+
+**Review fan-out**:
+The number of review units in one review round. Each configured review axis
+runs one invocation for every unit in that shared manifest.
+_Avoid_: Concurrency, review count
+
 **Review watermark**:
 The persisted identity of the last human review a run applied. It makes
 repeated polling and a coordinator restart unable to apply the same review
