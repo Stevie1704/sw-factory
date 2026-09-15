@@ -1337,13 +1337,13 @@ func (s *Service) pauseAfterReplayedReviewProjectionError(ctx context.Context, r
 }
 
 // pauseForCredentialProjection records a bounded credential discrepancy and
-// transitions the run through the same stopped-worker authentication boundary
-// used for an expired harness credential.
+// transitions the run through the stopped-worker boundary selected for the
+// preserved cause: capture limits wait for manual recovery, while ordinary
+// projection failures retain the authentication-refresh route.
 func (s *Service) pauseForCredentialProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, diagnosis *RecoveryDiagnosis, harnessName string, cause error) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error) {
-	recordCredentialProjectionDiscrepancy(diagnosis)
+	recordCredentialProjectionDiscrepancy(diagnosis, cause)
 	pause := s.lifecycleModule().pauseForAuthentication
-	var credentialErr *credentialProjectionError
-	if errors.As(cause, &credentialErr) && credentialErr.Cause != nil {
+	if credentialProjectionCaptureLimit(cause) {
 		pause = s.lifecycleModule().pauseForCaptureLimit
 	}
 	paused, pauseErr := pause(ctx, registration, runStore, run, harnessName)
@@ -1370,16 +1370,20 @@ func (s *Service) pauseForCredentialProjectionError(ctx context.Context, registr
 // recordCredentialProjectionDiscrepancy adds only a bounded credential-store
 // observation to recovery diagnosis; source paths and adapter output stay out
 // of persisted or operator-visible recovery metadata.
-func recordCredentialProjectionDiscrepancy(diagnosis *RecoveryDiagnosis) {
+func recordCredentialProjectionDiscrepancy(diagnosis *RecoveryDiagnosis, cause error) {
 	if diagnosis == nil {
 		return
+	}
+	observed := "credential projection unavailable"
+	if credentialProjectionCaptureLimit(cause) {
+		observed = "worker capture limit exceeded"
 	}
 	addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 		Kind:        RecoveryDiscrepancyInfrastructure,
 		Source:      "credential store",
 		Field:       "projection",
 		Expected:    "configured credentials projected into the factory-managed store",
-		Observed:    "credential projection unavailable",
+		Observed:    observed,
 		Recoverable: false,
 	})
 	diagnosis.SourcesAgree = false
@@ -2024,7 +2028,7 @@ func recoveryErrorWithCause(diagnosis RecoveryDiagnosis, cause error) error {
 		return &WorkflowFailureError{RunID: diagnosis.RunID, Cause: errors.Join(cause, recoveryRequiredError(diagnosis))}
 	}
 	infrastructure := &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
-	if cause != nil && (harness.IsRateLimited(cause) || harness.IsAuthenticationExpired(cause) || harness.IsUnexpectedExit(cause)) {
+	if cause != nil && (credentialProjectionCaptureLimit(cause) || harness.IsRateLimited(cause) || harness.IsAuthenticationExpired(cause) || harness.IsUnexpectedExit(cause)) {
 		return errors.Join(cause, infrastructure)
 	}
 	return infrastructure

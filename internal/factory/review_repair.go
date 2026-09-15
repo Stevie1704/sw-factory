@@ -554,6 +554,19 @@ func (s *Service) routeReviewRepair(ctx context.Context, registration config.Rep
 					return result, fmt.Errorf("start review-repair implementation: %w", err)
 				}
 			}
+			if credentialProjectionCaptureLimit(err) {
+				failed := next
+				failed.ReviewRepairPendingAttempt = 0
+				failed.Stage = store.StageReview
+				failed.Status = store.StatusWaitingForHuman
+				failed.LifecycleReason = captureLimitRecoveryReason(credentialProjectionHarness(err))
+				failed.ReviewRepairHistory = reviewRepairHistoryWithOutcome(failed.ReviewRepairHistory, decision.Attempt, store.ReviewRepairWaitingForHuman, packet)
+				failed.UpdatedAt = s.deps.Now().UTC()
+				transitionErr := s.persistAgentRunState(ctx, registration, runStore, next, failed)
+				result.Run = failed
+				result.Outcome = store.ReviewRepairWaitingForHuman
+				return result, errors.Join(fmt.Errorf("start review-repair implementation: %w", err), transitionErr)
+			}
 			if harness.IsRateLimited(err) || harness.IsAuthenticationExpired(err) || harness.IsUnexpectedExit(err) {
 				if current, currentErr := runStore.CurrentRun(ctx); currentErr == nil && current != nil {
 					result.Run = *current

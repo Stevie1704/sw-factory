@@ -328,6 +328,35 @@ func TestSpecificationReviewBlocksOnlyConcreteViolations(t *testing.T) {
 	}
 }
 
+// TestSpecificationReviewRoutesCaptureLimitRepairFailureToHuman verifies a
+// review-repair projection overflow records capture-limit guidance instead of
+// the generic review-repair disposition.
+func TestSpecificationReviewRoutesCaptureLimitRepairFailureToHuman(t *testing.T) {
+	fixture := newReviewFixture(t)
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	reportValue := reviewReport(launch, []report.ReviewFinding{{
+		Location: "internal/factory/review.go:1", Claim: "checkpoint is not immutable", Evidence: "worktree can be changed", Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryCorrectness, SuggestedResolution: "reject changed paths", SuggestedOwner: "implementation",
+	}})
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, reportValue); err != nil {
+		t.Fatalf("write review report: %v", err)
+	}
+	fixture.worker.seedErr = testCaptureLimitError()
+	_, err = fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{InvocationID: launch.Invocation.ID})
+	if err == nil || !strings.Contains(err.Error(), "capture limit") {
+		t.Fatalf("AcceptAgentReport() error = %v, want capture-limit cause", err)
+	}
+	current := fixture.runStore.current
+	if current.Stage != store.StageReview || current.Status != store.StatusWaitingForHuman || !strings.Contains(current.LifecycleReason, "capture limit") || current.ReviewRepairPendingAttempt != 0 {
+		t.Fatalf("review-repair run = %#v, want capture-limit human state without pending attempt", current)
+	}
+	if len(current.ReviewRepairHistory) == 0 || current.ReviewRepairHistory[len(current.ReviewRepairHistory)-1].Outcome != store.ReviewRepairWaitingForHuman {
+		t.Fatalf("review-repair history = %#v, want human disposition", current.ReviewRepairHistory)
+	}
+}
+
 // TestConcurrentReviewRolesUseIndependentCheckpointSessions verifies that the
 // specification and standards reviewers can be live at once without sharing a
 // worker identity, prompt context, or durable result projection.
@@ -817,6 +846,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json")},
 	}}}
 	ids := []string{"run-review", "review-session", "standards-session", "repair-session"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{

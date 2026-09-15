@@ -19,18 +19,18 @@ import (
 func TestCredentialProjectionErrorPreservesSafeCaptureLimitCause(t *testing.T) {
 	t.Parallel()
 
-	captureLimit := &worker.OutputLimitExceededError{
-		Operation: "worker command",
-		Stream:    "stdout",
-		Limit:     worker.MaxCapturedOutputBytes,
-	}
+	captureLimit := testCredentialProjectionCaptureLimitError()
 	overflow := newCredentialProjectionError("codex", fmt.Errorf("worker projection: %w", captureLimit))
+	var expectedLimit *worker.OutputLimitExceededError
+	if !errors.As(captureLimit, &expectedLimit) {
+		t.Fatalf("test capture-limit error = %v, want OutputLimitExceededError", captureLimit)
+	}
 	var gotLimit *worker.OutputLimitExceededError
 	if !errors.As(overflow, &gotLimit) {
 		t.Fatalf("overflow error = %v, want OutputLimitExceededError", overflow)
 	}
-	if gotLimit == captureLimit || gotLimit.Operation != captureLimit.Operation || gotLimit.Stream != captureLimit.Stream || gotLimit.Limit != captureLimit.Limit {
-		t.Fatalf("preserved cause = %#v, want a safe copy of %#v", gotLimit, captureLimit)
+	if gotLimit == expectedLimit || gotLimit.Operation != expectedLimit.Operation || gotLimit.Stream != expectedLimit.Stream || gotLimit.Limit != expectedLimit.Limit {
+		t.Fatalf("preserved cause = %#v, want a safe copy of %#v", gotLimit, expectedLimit)
 	}
 	if harness.IsAuthenticationExpired(overflow) {
 		t.Fatalf("overflow error = %v, must not classify as authentication expired", overflow)
@@ -71,11 +71,7 @@ func TestCaptureLimitCredentialProjectionWaitsForHumanRecovery(t *testing.T) {
 	workerRuntime := &repairContractWorker{}
 	service := &Service{deps: Dependencies{Worker: workerRuntime}}
 	diagnosis := newRecoveryDiagnosis(run.ID)
-	cause := newCredentialProjectionError("codex", &worker.OutputLimitExceededError{
-		Operation: "worker command",
-		Stream:    "stdout",
-		Limit:     worker.MaxCapturedOutputBytes,
-	})
+	cause := newCredentialProjectionError("codex", testCredentialProjectionCaptureLimitError())
 
 	paused, _, outcome, err := service.pauseForCredentialProjection(t.Context(), config.RepositoryRegistration{}, runStore, run, &diagnosis, "codex", cause)
 	if err == nil {
@@ -95,6 +91,45 @@ func TestCaptureLimitCredentialProjectionWaitsForHumanRecovery(t *testing.T) {
 	}
 	if workerRuntime.stops != 1 || len(runStore.saved) != 1 {
 		t.Fatalf("recovery effects = stops:%d saves:%d, want one worker stop and one state save", workerRuntime.stops, len(runStore.saved))
+	}
+	if len(diagnosis.Discrepancies) != 1 || diagnosis.Discrepancies[0].Observed != "worker capture limit exceeded" {
+		t.Fatalf("recovery diagnosis = %#v, want capture-limit observation", diagnosis.Discrepancies)
+	}
+}
+
+// TestManualResumeCaptureLimitWaitsForHuman verifies an explicit native
+// resume preserves the dedicated capture-limit recovery state as well.
+func TestManualResumeCaptureLimitWaitsForHuman(t *testing.T) {
+	t.Parallel()
+
+	run := store.Run{
+		ID:                  "run-manual-capture-limit",
+		Stage:               store.StageImplementation,
+		Status:              store.StatusActive,
+		ActiveInvocationIDs: []string{"inv-manual-capture-limit"},
+	}
+	runStore := &retryCredentialProjectionStore{}
+	workerRuntime := &repairContractWorker{}
+	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, invocationLifecycleHooks{
+		persistRun: func(_ context.Context, _ config.RepositoryRegistration, target RunStore, _, next store.Run) error {
+			return target.SaveRun(context.Background(), next)
+		},
+	}, nil)
+	active := store.Invocation{ID: "inv-manual-capture-limit", RunID: run.ID, Harness: "codex"}
+	result, err := module.resumeActiveInvocationError(t.Context(), InvocationRecoveryRequest{
+		Registration: config.RepositoryRegistration{}, RunStore: runStore,
+	}, run, active, active, newCredentialProjectionError(active.Harness, testCredentialProjectionCaptureLimitError()))
+	if err == nil || !errors.As(err, new(*worker.OutputLimitExceededError)) {
+		t.Fatalf("resumeActiveInvocationError() error = %v, want capture-limit cause", err)
+	}
+	if harness.IsAuthenticationExpired(err) {
+		t.Fatalf("resumeActiveInvocationError() error = %v, must not classify as authentication expired", err)
+	}
+	if result.Run.Status != store.StatusWaitingForHuman || !strings.Contains(result.Run.LifecycleReason, "capture limit") {
+		t.Fatalf("manual resume result = %#v, want capture-limit human state", result.Run)
+	}
+	if workerRuntime.stops != 1 || len(runStore.saved) != 1 {
+		t.Fatalf("manual resume effects = stops:%d saves:%d, want one worker stop and one state save", workerRuntime.stops, len(runStore.saved))
 	}
 }
 
@@ -149,7 +184,7 @@ func TestRetryWaitingForHarnessRoutesCaptureLimitToHuman(t *testing.T) {
 	}, nil)
 
 	err := module.retryWaitingForHarness(t.Context(), config.RepositoryRegistration{}, runStore, run, func(store.Run) (AgentLaunchResult, error) {
-		return AgentLaunchResult{}, newCredentialProjectionError("codex", retryCaptureLimitError())
+		return AgentLaunchResult{}, newCredentialProjectionError("codex", testCredentialProjectionCaptureLimitError())
 	})
 	if err != nil {
 		t.Fatalf("retryWaitingForHarness() error = %v, want capture-limit pause", err)
@@ -178,7 +213,7 @@ func TestAutomaticHarnessRetryResumeRoutesCaptureLimitToHuman(t *testing.T) {
 	}, nil)
 	active := store.Invocation{ID: "inv-native-retry-capture-limit", RunID: run.ID, Harness: "codex"}
 
-	err := module.handleRetryResumeError(t.Context(), config.RepositoryRegistration{}, runStore, run, active, newCredentialProjectionError(active.Harness, retryCaptureLimitError()))
+	err := module.handleRetryResumeError(t.Context(), config.RepositoryRegistration{}, runStore, run, active, newCredentialProjectionError(active.Harness, testCredentialProjectionCaptureLimitError()))
 	if err != nil {
 		t.Fatalf("handleRetryResumeError() error = %v, want capture-limit pause", err)
 	}
@@ -191,6 +226,19 @@ func TestAutomaticHarnessRetryResumeRoutesCaptureLimitToHuman(t *testing.T) {
 	}
 }
 
+// TestRecoveryErrorWithCausePreservesCaptureLimit verifies the generic
+// infrastructure wrapper does not discard the safe capture-limit cause.
+func TestRecoveryErrorWithCausePreservesCaptureLimit(t *testing.T) {
+	t.Parallel()
+
+	cause := newCredentialProjectionError("codex", testCredentialProjectionCaptureLimitError())
+	err := recoveryErrorWithCause(newRecoveryDiagnosis("run-capture-limit-cause"), cause)
+	var captureLimit *worker.OutputLimitExceededError
+	if !errors.As(err, &captureLimit) {
+		t.Fatalf("recoveryErrorWithCause() error = %v, want OutputLimitExceededError", err)
+	}
+}
+
 // retryCredentialProjectionStore exposes no active invocation for a fresh
 // retry while retaining the small direct-routing store projection.
 type retryCredentialProjectionStore struct{ repairContractStore }
@@ -200,9 +248,9 @@ func (*retryCredentialProjectionStore) ActiveInvocation(context.Context, string)
 	return nil, nil
 }
 
-// retryCaptureLimitError returns the bounded worker failure used by retry
-// recovery tests.
-func retryCaptureLimitError() error {
+// testCredentialProjectionCaptureLimitError returns the bounded worker
+// failure used by credential projection recovery tests.
+func testCredentialProjectionCaptureLimitError() error {
 	return &worker.OutputLimitExceededError{
 		Operation: "worker command",
 		Stream:    "stdout",

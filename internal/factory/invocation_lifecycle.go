@@ -386,7 +386,12 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 	}
 	*invocation = recovered
 	if err := seed(ctx, run.ID, workerIDForInvocation(*invocation)); err != nil {
-		return AuthRefreshResult{}, newCredentialProjectionError(string(harnessName), err)
+		projectionErr := newCredentialProjectionError(string(harnessName), err)
+		if credentialProjectionCaptureLimit(projectionErr) {
+			paused, pauseErr := l.pauseForCaptureLimit(ctx, request.Registration, request.RunStore, run, credentialProjectionHarness(projectionErr))
+			return AuthRefreshResult{Run: paused, Invocation: *invocation, Harness: harnessName}, errors.Join(projectionErr, pauseErr)
+		}
+		return AuthRefreshResult{}, projectionErr
 	}
 	return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, nil
 }
@@ -1381,49 +1386,53 @@ func (l *invocationLifecycle) stopRunWorker(ctx context.Context, workerID string
 	return nil
 }
 
-// pauseForHarnessCapacity stops delegated workers and records a non-budgeted
-// capacity wait that polling may retry.
-func (l *invocationLifecycle) pauseForHarnessCapacity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	if strings.TrimSpace(harnessName) == "" {
-		harnessName = "harness"
-	}
-	changed := run.Status != store.StatusWaitingForHarness || !strings.HasPrefix(run.LifecycleReason, "harness capacity unavailable")
-	if err := l.stopActiveRunWorkers(ctx, runStore, run); err != nil {
+// pauseRunWithReason stops delegated workers and persists one idempotent run
+// waiting transition for the supplied status and bounded reason.
+func (l *invocationLifecycle) pauseRunWithReason(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, status store.Status, reasonPrefix, reason string) (store.Run, error) {
+	next, changed, err := l.prepareRunPause(ctx, runStore, run, status, reasonPrefix, reason)
+	if err != nil {
 		return run, err
 	}
 	if !changed {
 		return run, nil
 	}
-	next := run
-	next.Status = store.StatusWaitingForHarness
-	next.LifecycleReason = fmt.Sprintf("harness capacity unavailable (%s); waiting for capacity", harnessName)
-	next.Revision = run.Revision + 1
-	next.UpdatedAt = l.clock().UTC()
 	if err := l.persistLifecycleRun(ctx, registration, runStore, run, next); err != nil {
 		return next, err
 	}
 	return next, nil
 }
 
+// prepareRunPause stops delegated workers and builds one idempotent waiting
+// transition; callers choose how its durable transition is persisted.
+func (l *invocationLifecycle) prepareRunPause(ctx context.Context, runStore RunStore, run store.Run, status store.Status, reasonPrefix, reason string) (store.Run, bool, error) {
+	if err := l.stopActiveRunWorkers(ctx, runStore, run); err != nil {
+		return run, false, err
+	}
+	changed := run.Status != status || !strings.HasPrefix(run.LifecycleReason, reasonPrefix)
+	if !changed {
+		return run, false, nil
+	}
+	next := run
+	next.Status = status
+	next.LifecycleReason = reason
+	next.Revision = run.Revision + 1
+	next.UpdatedAt = l.clock().UTC()
+	return next, true, nil
+}
+
+// pauseForHarnessCapacity stops delegated workers and records a non-budgeted
+// capacity wait that polling may retry.
+func (l *invocationLifecycle) pauseForHarnessCapacity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
+	if strings.TrimSpace(harnessName) == "" {
+		harnessName = "harness"
+	}
+	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHarness, "harness capacity unavailable", fmt.Sprintf("harness capacity unavailable (%s); waiting for capacity", harnessName))
+}
+
 // pauseForAuthentication stops delegated workers and records a redacted
 // human-waiting credential state.
 func (l *invocationLifecycle) pauseForAuthentication(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	if err := l.stopActiveRunWorkers(ctx, runStore, run); err != nil {
-		return run, err
-	}
-	changed := run.Status != store.StatusWaitingForHuman || !strings.HasPrefix(run.LifecycleReason, "harness authentication expired")
-	if !changed {
-		return run, nil
-	}
-	next := run
-	next.Status = store.StatusWaitingForHuman
-	next.LifecycleReason = fmt.Sprintf("harness authentication expired (%s); run is waiting for `factory auth refresh`", harnessName)
-	next.Revision = run.Revision + 1
-	next.UpdatedAt = l.clock().UTC()
-	if err := l.persistLifecycleRun(ctx, registration, runStore, run, next); err != nil {
-		return next, err
-	}
-	return next, nil
+	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, "harness authentication expired", fmt.Sprintf("harness authentication expired (%s); run is waiting for `factory auth refresh`", harnessName))
 }
 
 // captureLimitRecoveryPrefix identifies the durable reason for the dedicated
@@ -1440,55 +1449,35 @@ func captureLimitRecoveryReason(harnessName string) string {
 // capture-limit failure as a human-waiting state. Retrying the same credential
 // projection cannot make the fixed per-stream capture limit sufficient.
 func (l *invocationLifecycle) pauseForCaptureLimit(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	if err := l.stopActiveRunWorkers(ctx, runStore, run); err != nil {
-		return run, err
-	}
-	changed := run.Status != store.StatusWaitingForHuman || !strings.HasPrefix(run.LifecycleReason, captureLimitRecoveryPrefix)
-	if !changed {
-		return run, nil
-	}
-	next := run
-	next.Status = store.StatusWaitingForHuman
-	next.LifecycleReason = captureLimitRecoveryReason(harnessName)
-	next.Revision = run.Revision + 1
-	next.UpdatedAt = l.clock().UTC()
-	if err := l.persistLifecycleRun(ctx, registration, runStore, run, next); err != nil {
-		return next, err
-	}
-	return next, nil
+	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, captureLimitRecoveryPrefix, captureLimitRecoveryReason(harnessName))
 }
 
 // pauseForManualRecovery records the bounded automatic-recovery boundary and
 // leaves the native session for an explicit operator-requested resume.
 func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	if err := l.stopActiveRunWorkers(ctx, runStore, run); err != nil {
+	next, changed, err := l.prepareRunPause(ctx, runStore, run, store.StatusWaitingForHuman, "automatic harness recovery exhausted", fmt.Sprintf("automatic harness recovery exhausted (%s); manual native resume required", harnessName))
+	if err != nil {
 		return run, err
 	}
-	changed := run.Status != store.StatusWaitingForHuman || !strings.HasPrefix(run.LifecycleReason, "automatic harness recovery exhausted")
 	if !changed {
 		return run, nil
 	}
-	next := run
-	next.Status = store.StatusWaitingForHuman
-	next.LifecycleReason = fmt.Sprintf("automatic harness recovery exhausted (%s); manual native resume required", harnessName)
-	next.Revision = run.Revision + 1
-	next.UpdatedAt = l.clock().UTC()
-	var err error
+	var persistErr error
 	if journal, ok := runStore.(PendingEffectStore); ok {
 		pending, pendingErr := journal.PendingEffect(ctx, run.ID)
 		if pendingErr != nil {
 			return run, fmt.Errorf("inspect pending effect before manual recovery pause: %w", pendingErr)
 		}
 		if pending != nil {
-			err = saveRunWithRetry(ctx, runStore, next)
+			persistErr = saveRunWithRetry(ctx, runStore, next)
 		} else {
-			err = l.persistLifecycleRun(ctx, registration, runStore, run, next)
+			persistErr = l.persistLifecycleRun(ctx, registration, runStore, run, next)
 		}
 	} else {
-		err = l.persistLifecycleRun(ctx, registration, runStore, run, next)
+		persistErr = l.persistLifecycleRun(ctx, registration, runStore, run, next)
 	}
-	if err != nil {
-		return next, err
+	if persistErr != nil {
+		return next, persistErr
 	}
 	return next, nil
 }

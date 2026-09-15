@@ -9,6 +9,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -27,6 +28,9 @@ func TestStartAgentPreservesCaptureLimitCauseThroughCredentialProjection(t *test
 
 	_, err := service.StartAgent(context.Background(), factory.AgentRequest{})
 	assertCaptureLimitCause(t, err, authPath)
+	if runStore.current.Status != store.StatusWaitingForHuman || !strings.Contains(runStore.current.LifecycleReason, "capture limit") || strings.Contains(runStore.current.LifecycleReason, "authentication expired") {
+		t.Fatalf("StartAgent() run = %#v, want capture-limit human state", runStore.current)
+	}
 }
 
 // TestRefreshAuthPreservesCaptureLimitCauseThroughCredentialProjection
@@ -46,8 +50,14 @@ func TestRefreshAuthPreservesCaptureLimitCauseThroughCredentialProjection(t *tes
 	}
 	runtime.seedErr = testCaptureLimitError()
 
-	_, err = service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID})
+	refreshed, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID})
 	assertCaptureLimitCause(t, err, authPath)
+	if refreshed.Run.Status != store.StatusWaitingForHuman || !strings.Contains(refreshed.Run.LifecycleReason, "capture limit") || strings.Contains(refreshed.Run.LifecycleReason, "authentication expired") {
+		t.Fatalf("RefreshAuth() result run = %#v, want capture-limit human state", refreshed.Run)
+	}
+	if runStore.current.Status != store.StatusWaitingForHuman || !strings.Contains(runStore.current.LifecycleReason, "capture limit") || strings.Contains(runStore.current.LifecycleReason, "authentication expired") {
+		t.Fatalf("RefreshAuth() persisted run = %#v, want capture-limit human state", runStore.current)
+	}
 }
 
 // assertCaptureLimitCause checks the safe coordinator-visible representation of
