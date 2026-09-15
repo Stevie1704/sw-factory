@@ -177,14 +177,14 @@ func testReviewRound() store.ReviewRound {
 // testReviewUnit returns one valid primary assignment for a store test round.
 func testReviewUnit(roundID string) store.ReviewUnit {
 	return store.ReviewUnit{
-		RoundID:       roundID,
-		UnitID:        "unit-001",
-		Ordinal:       1,
-		WorkloadBytes: 4,
-		DiffSHA256:    strings.Repeat("c", 64),
-		Segments:      []store.ReviewUnitSegment{{StartByte: 0, EndByte: 4}},
-		PrimaryRanges: []store.ReviewUnitRange{{Path: "src/main.go", Hunk: 1, Side: "new", StartLine: 1, EndLine: 1}},
-		PrimaryFiles:  []string{"src/main.go"},
-		ChangedLines:  1,
+		RoundID:             roundID,
+		UnitID:              "unit-001",
+		Ordinal:             1,
+		WorkloadBytes:       4,
+		DiffSHA256:          strings.Repeat("c", 64),
+		Segments:            []store.ReviewUnitSegment{{StartByte: 0, EndByte: 4}},
+		PrimaryRanges:       []store.ReviewUnitRange{{Path: "src/main.go", Hunk: 1, Side: "new", StartLine: 1, EndLine: 1}},
+		PrimaryNonTextFiles: []string{"src/main.go"},
+		ChangedLines:        1,
 	}
 }

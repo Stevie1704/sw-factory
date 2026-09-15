@@ -3286,7 +3286,7 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 					segments TEXT NOT NULL,
 					primary_ranges TEXT NOT NULL,
 					context_ranges TEXT NOT NULL,
-					primary_files TEXT NOT NULL,
+					primary_non_text_files TEXT NOT NULL,
 					changed_lines INTEGER NOT NULL,
 					PRIMARY KEY (round_id, unit_id),
 					UNIQUE (round_id, ordinal)

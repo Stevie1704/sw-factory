@@ -273,8 +273,10 @@ type ReviewContext struct {
 	ReviewPrimaryRanges []store.ReviewUnitRange `json:"review_primary_ranges,omitempty"`
 	// ReviewContextRanges are bounded nearby ranges included for judgment only.
 	ReviewContextRanges []store.ReviewUnitRange `json:"review_context_ranges,omitempty"`
-	// ReviewPrimaryFiles lists files with primary changes in this unit.
-	ReviewPrimaryFiles []string `json:"review_primary_files,omitempty"`
+	// ReviewPrimaryNonTextFiles lists the renames, mode changes, and binary
+	// summaries this unit owns. They carry no changed source line, so they are
+	// owned by file path rather than by range.
+	ReviewPrimaryNonTextFiles []string `json:"review_primary_non_text_files,omitempty"`
 	// DiffPath is the stable worker path of the exact review artifact. New
 	// packets set it to WorkerReviewDiffPath. It is required for new review
 	// packets but omitted by historical packets.

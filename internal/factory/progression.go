@@ -493,53 +493,109 @@ func missingConcurrentReviewRole(state progressionState, registry workflow.Regis
 	return "", false
 }
 
+// reviewUnitAssignment is the one manifest workload one review invocation
+// owns. Role and unit always travel together, so the scheduler, the launch
+// request, and the persisted result all address work by this pair.
+type reviewUnitAssignment struct {
+	// Role is the review axis that owns the findings for this assignment.
+	Role string
+	// UnitID is the ordered manifest unit the axis reviews.
+	UnitID string
+}
+
 // missingReviewUnit returns the next ordered manifest assignment after the
-// persisted round has started. It waits for active reviewers, while allowing
-// a run that is waiting on a completed unit disposition to finish its other
-// still-missing units.
+// persisted round has started. It fills the persisted concurrency ceiling
+// rather than waiting for the round to fall idle, so a partitioned round
+// launches its units in parallel up to that ceiling. A run waiting on a
+// completed unit disposition still finishes its other still-missing units.
 func missingReviewUnit(state progressionState, registry workflow.Registry) (string, string, bool) {
-	if state.Run == nil || state.Run.Stage != store.StageReview || state.ReviewRound == nil || len(state.ReviewUnits) == 0 || hasActiveReviewInvocations(state, registry) {
+	if state.Run == nil || state.Run.Stage != store.StageReview || state.ReviewRound == nil || len(state.ReviewUnits) == 0 {
 		return "", "", false
 	}
 	switch state.ReviewRound.Status {
 	case store.ReviewRoundStatusAwaitingAuthorization, store.ReviewRoundStatusError, store.ReviewRoundStatusComplete:
 		return "", "", false
 	}
-	for _, role := range reviewAxisRoles {
-		if !reviewRoleConfigured(*state.Run, role) {
-			continue
-		}
-		results := state.ReviewUnitResults[role]
-		completed := make(map[string]struct{}, len(results))
+	inFlight, activeReviews := activeReviewAssignments(state, registry)
+	if activeReviews >= reviewRoundConcurrency(*state.ReviewRound) {
+		return "", "", false
+	}
+	completed := make(map[reviewUnitAssignment]struct{})
+	for role, results := range state.ReviewUnitResults {
 		for _, result := range results {
-			completed[result.UnitID] = struct{}{}
+			completed[reviewUnitAssignment{Role: role, UnitID: result.UnitID}] = struct{}{}
 		}
-		for _, unit := range state.ReviewUnits {
-			if _, exists := completed[unit.UnitID]; !exists {
-				return role, unit.UnitID, true
+	}
+	// Manifest order is the outer loop so both axes advance together instead of
+	// one axis consuming the whole concurrency ceiling.
+	for _, unit := range state.ReviewUnits {
+		for _, role := range reviewAxisRoles {
+			if !reviewRoleConfigured(*state.Run, role) {
+				continue
 			}
+			assignment := reviewUnitAssignment{Role: role, UnitID: unit.UnitID}
+			if _, done := completed[assignment]; done {
+				continue
+			}
+			if _, live := inFlight[assignment]; live {
+				continue
+			}
+			return role, unit.UnitID, true
 		}
 	}
 	return "", "", false
 }
 
+// reviewRoundConcurrency returns the simultaneous review-invocation ceiling
+// frozen when the round was created, falling back to the host default for a
+// historical round that recorded none.
+func reviewRoundConcurrency(round store.ReviewRound) int {
+	if round.Concurrency > 0 {
+		return round.Concurrency
+	}
+	return config.EffectiveReviewHostConfig(config.ReviewHostConfig{}).Concurrency
+}
+
+// activeReviewAssignments reports the assignments that already have a live
+// review invocation and the total number of live review invocations. An
+// invocation without a unit identity still consumes concurrency.
+func activeReviewAssignments(state progressionState, registry workflow.Registry) (map[reviewUnitAssignment]struct{}, int) {
+	assignments := make(map[reviewUnitAssignment]struct{})
+	count := 0
+	for _, invocation := range activeInvocationsFor(state) {
+		definition, declared := registry.Role(invocation.Role)
+		if !declared || definition.Stage != invocation.Stage || definition.Kind != workflow.RoleKindReview {
+			continue
+		}
+		count++
+		if invocation.ReviewUnitID != "" {
+			assignments[reviewUnitAssignment{Role: invocation.Role, UnitID: invocation.ReviewUnitID}] = struct{}{}
+		}
+	}
+	return assignments, count
+}
+
 // hasActiveReviewInvocations reports whether an otherwise human-waiting review
 // round still has an independent result that can be serialized and applied.
 func hasActiveReviewInvocations(state progressionState, registry workflow.Registry) bool {
+	_, count := activeReviewAssignments(state, registry)
+	return count > 0
+}
+
+// activeInvocationsFor returns the non-nil invocations that may still produce a
+// report, preserving the single-invocation compatibility field.
+func activeInvocationsFor(state progressionState) []*store.Invocation {
 	active := state.ActiveInvocations
 	if len(active) == 0 && state.Active != nil {
 		active = []*store.Invocation{state.Active}
 	}
+	present := make([]*store.Invocation, 0, len(active))
 	for _, invocation := range active {
-		if invocation == nil {
-			continue
-		}
-		definition, declared := registry.Role(invocation.Role)
-		if declared && definition.Stage == invocation.Stage && definition.Kind == workflow.RoleKindReview {
-			return true
+		if invocation != nil {
+			present = append(present, invocation)
 		}
 	}
-	return false
+	return present
 }
 
 // progressionStageStep selects the transition the workflow registry declares

@@ -115,7 +115,7 @@ func reviewContextWithUnit(base prompt.ReviewContext, round store.ReviewRound, u
 	base.ReviewManifestSHA256 = round.ManifestSHA256
 	base.ReviewPrimaryRanges = append([]store.ReviewUnitRange(nil), unit.PrimaryRanges...)
 	base.ReviewContextRanges = append([]store.ReviewUnitRange(nil), unit.ContextRanges...)
-	base.ReviewPrimaryFiles = append([]string(nil), unit.PrimaryFiles...)
+	base.ReviewPrimaryNonTextFiles = append([]string(nil), unit.PrimaryNonTextFiles...)
 	return &base
 }
 
@@ -339,7 +339,7 @@ func sameReviewUnitManifest(left, right []store.ReviewUnit) bool {
 func reviewUnitsFromManifest(roundID string, manifest reviewunits.Manifest) []store.ReviewUnit {
 	units := make([]store.ReviewUnit, 0, len(manifest.Units))
 	for _, unit := range manifest.Units {
-		converted := store.ReviewUnit{RoundID: roundID, UnitID: unit.ID, Ordinal: unit.Ordinal, WorkloadBytes: unit.WorkloadBytes, DiffSHA256: unit.DiffSHA256, ChangedLines: unit.ChangedLines, PrimaryFiles: append([]string(nil), unit.PrimaryFiles...)}
+		converted := store.ReviewUnit{RoundID: roundID, UnitID: unit.ID, Ordinal: unit.Ordinal, WorkloadBytes: unit.WorkloadBytes, DiffSHA256: unit.DiffSHA256, ChangedLines: unit.ChangedLines, PrimaryNonTextFiles: append([]string(nil), unit.PrimaryNonTextFiles...)}
 		converted.Segments = make([]store.ReviewUnitSegment, 0, len(unit.Segments))
 		for _, segment := range unit.Segments {
 			converted.Segments = append(converted.Segments, store.ReviewUnitSegment{StartByte: segment.StartByte, EndByte: segment.EndByte})
@@ -358,7 +358,7 @@ func reviewUnitsFromManifest(roundID string, manifest reviewunits.Manifest) []st
 // reviewUnitForPartition converts a normalized store row to the partitioner
 // representation used to derive and verify its artifact.
 func reviewUnitForPartition(unit store.ReviewUnit) reviewunits.Unit {
-	converted := reviewunits.Unit{ID: unit.UnitID, Ordinal: unit.Ordinal, WorkloadBytes: unit.WorkloadBytes, DiffSHA256: unit.DiffSHA256, ChangedLines: unit.ChangedLines, PrimaryFiles: append([]string(nil), unit.PrimaryFiles...)}
+	converted := reviewunits.Unit{ID: unit.UnitID, Ordinal: unit.Ordinal, WorkloadBytes: unit.WorkloadBytes, DiffSHA256: unit.DiffSHA256, ChangedLines: unit.ChangedLines, PrimaryNonTextFiles: append([]string(nil), unit.PrimaryNonTextFiles...)}
 	for _, segment := range unit.Segments {
 		converted.Segments = append(converted.Segments, reviewunits.Segment{StartByte: segment.StartByte, EndByte: segment.EndByte})
 	}

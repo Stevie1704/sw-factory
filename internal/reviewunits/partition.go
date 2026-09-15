@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -65,8 +67,11 @@ type Unit struct {
 	Segments      []Segment `json:"segments"`
 	PrimaryRanges []Range   `json:"primary_ranges"`
 	ContextRanges []Range   `json:"context_ranges,omitempty"`
-	PrimaryFiles  []string  `json:"primary_files,omitempty"`
-	ChangedLines  int       `json:"changed_lines"`
+	// PrimaryNonTextFiles lists the renames, mode changes, and binary summaries
+	// this unit owns. A non-text change has no changed source line, so it is
+	// assigned to exactly one unit by file path instead of by range.
+	PrimaryNonTextFiles []string `json:"primary_non_text_files,omitempty"`
+	ChangedLines        int      `json:"changed_lines"`
 }
 
 // Manifest is the immutable ordered assignment for one review round.
@@ -108,18 +113,29 @@ type diffFile struct {
 	end   int
 	path  string
 	hunks []diffHunk
+	// nonText marks a rename, copy, mode change, binary summary, or any other
+	// section whose change is not expressed as changed source lines.
+	nonText bool
 }
 
+// fragment is one indivisible candidate assignment produced while splitting a
+// file section. Units are packed from fragments in diff order.
 type fragment struct {
-	segments      []Segment
-	primary       []Range
-	context       []Range
-	primaryFiles  []string
-	changedLines  int
-	workloadBytes int
+	segments            []Segment
+	primary             []Range
+	context             []Range
+	primaryNonTextFiles []string
+	changedLines        int
+	workloadBytes       int
 }
 
+// hunkHeaderPattern captures the old and new source-line starts of a unified
+// diff hunk header.
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// nonTextMarkers are the Git file-header prefixes that announce a change with
+// no changed source line of its own.
+var nonTextMarkers = []string{"rename from ", "rename to ", "copy from ", "copy to ", "old mode ", "new mode ", "Binary files ", "GIT binary patch"}
 
 // Build parses an exact Git unified diff and returns its deterministic ordered
 // review-unit manifest. It preserves file and hunk order and never reorders or
@@ -133,7 +149,7 @@ func Build(diff []byte, runID, baseSHA, checkpointSHA string, policy Policy) (Ma
 		return Manifest{}, errors.New("review unit manifest base and checkpoint SHAs are required")
 	}
 	if len(diff) == 0 {
-		manifest := emptyManifest(runID, baseSHA, checkpointSHA, policy)
+		manifest := newManifest(runID, baseSHA, checkpointSHA, policy)
 		manifest.Units = []Unit{{ID: unitID(1), Ordinal: 1, WorkloadBytes: 0, DiffSHA256: sha256Hex(nil), Segments: []Segment{}}}
 		return finalizeManifest(manifest)
 	}
@@ -154,7 +170,7 @@ func Build(diff []byte, runID, baseSHA, checkpointSHA string, policy Policy) (Ma
 		return Manifest{}, errors.New("review diff contains no partitionable file sections")
 	}
 
-	manifest := emptyManifest(runID, baseSHA, checkpointSHA, policy)
+	manifest := newManifest(runID, baseSHA, checkpointSHA, policy)
 	manifest.DiffBytes = len(diff)
 	manifest.DiffSHA256 = sha256Hex(diff)
 	var current *Unit
@@ -178,9 +194,9 @@ func Build(diff []byte, runID, baseSHA, checkpointSHA string, policy Policy) (Ma
 		current.PrimaryRanges = append(current.PrimaryRanges, part.primary...)
 		current.ContextRanges = append(current.ContextRanges, part.context...)
 		current.ChangedLines += part.changedLines
-		for _, path := range part.primaryFiles {
-			if !contains(current.PrimaryFiles, path) {
-				current.PrimaryFiles = append(current.PrimaryFiles, path)
+		for _, path := range part.primaryNonTextFiles {
+			if !slices.Contains(current.PrimaryNonTextFiles, path) {
+				current.PrimaryNonTextFiles = append(current.PrimaryNonTextFiles, path)
 			}
 		}
 	}
@@ -222,9 +238,9 @@ func normalizePolicy(policy Policy) Policy {
 	return policy
 }
 
-// emptyManifest creates the common immutable manifest fields for an empty or
+// newManifest creates the common immutable manifest fields for an empty or
 // parsed exact-checkpoint diff.
-func emptyManifest(runID, baseSHA, checkpointSHA string, policy Policy) Manifest {
+func newManifest(runID, baseSHA, checkpointSHA string, policy Policy) Manifest {
 	return Manifest{
 		SchemaVersion: policy.SchemaVersion,
 		PolicyVersion: policy.PolicyVersion,
@@ -285,9 +301,12 @@ func UnitDiff(diff []byte, unit Unit) ([]byte, error) {
 }
 
 // VerifyPrimaryCoverage checks that manifest primary assignments are unique and
-// ordered. Context overlap is intentionally excluded from this invariant.
+// ordered. Every changed line and every non-text file change is owned by
+// exactly one unit. Context overlap is intentionally excluded from this
+// invariant.
 func VerifyPrimaryCoverage(manifest Manifest) error {
 	seen := make(map[string]struct{})
+	seenNonTextFiles := make(map[string]struct{})
 	lastOrdinal := 0
 	for index, unit := range manifest.Units {
 		if unit.Ordinal != index+1 || unit.Ordinal <= lastOrdinal {
@@ -314,6 +333,15 @@ func VerifyPrimaryCoverage(manifest Manifest) error {
 		if unit.ChangedLines != changedLines {
 			return fmt.Errorf("review unit %d changed-line count is %d, primary ranges cover %d", unit.Ordinal, unit.ChangedLines, changedLines)
 		}
+		for _, path := range unit.PrimaryNonTextFiles {
+			if path == "" {
+				return fmt.Errorf("review unit %d has an empty primary non-text file", unit.Ordinal)
+			}
+			if _, exists := seenNonTextFiles[path]; exists {
+				return fmt.Errorf("review primary non-text file %q is assigned more than once", path)
+			}
+			seenNonTextFiles[path] = struct{}{}
+		}
 	}
 	return nil
 }
@@ -329,7 +357,8 @@ func parseFiles(diff []byte) ([]diffFile, error) {
 		}
 	}
 	if len(starts) == 0 {
-		return []diffFile{{start: 0, end: len(diff), path: "synthetic", hunks: parseHunks(lines, 0, len(lines))}}, nil
+		hunks := parseHunks(lines, 0, len(lines))
+		return []diffFile{{start: 0, end: len(diff), path: "synthetic", hunks: hunks, nonText: len(hunks) == 0}}, nil
 	}
 	files := make([]diffFile, 0, len(starts))
 	for index, startIndex := range starts {
@@ -342,6 +371,7 @@ func parseFiles(diff []byte) ([]diffFile, error) {
 			file.path = fmt.Sprintf("file-%d", index+1)
 		}
 		file.hunks = parseHunks(lines, startIndex, endIndex)
+		file.nonText = hasNonTextChange(lines[startIndex:endIndex]) || len(file.hunks) == 0
 		files = append(files, file)
 	}
 	return files, nil
@@ -372,6 +402,22 @@ func diffPath(header string) string {
 		return strings.TrimPrefix(header[marker+3:], "b/")
 	}
 	return strings.TrimSpace(strings.TrimPrefix(header, "diff --git "))
+}
+
+// hasNonTextChange reports whether a file section announces a rename, copy,
+// mode change, or binary summary before its first hunk.
+func hasNonTextChange(section []diffLine) bool {
+	for _, line := range section {
+		if strings.HasPrefix(line.text, "@@ ") {
+			return false
+		}
+		for _, marker := range nonTextMarkers {
+			if strings.HasPrefix(line.text, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseHunks parses ordered hunk headers and assigns old/new line identities
@@ -420,14 +466,12 @@ func parseHunks(lines []diffLine, start, end int) []diffHunk {
 	return hunks
 }
 
-// parsePositiveInt decodes a unified-diff line number and normalizes a zero
-// start used by an empty-side hunk to the first representable source line.
+// parsePositiveInt decodes a unified-diff line number and normalizes a zero or
+// absent start used by an empty-side hunk to the first representable source
+// line.
 func parsePositiveInt(value string) int {
-	result := 0
-	for _, character := range value {
-		result = result*10 + int(character-'0')
-	}
-	if result < 1 {
+	result, err := strconv.Atoi(value)
+	if err != nil || result < 1 {
 		return 1
 	}
 	return result
@@ -439,7 +483,7 @@ func fragmentsForFile(diff []byte, file diffFile, policy Policy) ([]fragment, er
 	if file.start < 0 || file.end > len(diff) || file.start >= file.end {
 		return nil, fmt.Errorf("review diff file %q has invalid byte bounds", file.path)
 	}
-	whole := fragment{segments: []Segment{{StartByte: file.start, EndByte: file.end}}, primaryFiles: []string{file.path}}
+	whole := fragment{segments: []Segment{{StartByte: file.start, EndByte: file.end}}, primaryNonTextFiles: nonTextOwnership(file)}
 	whole.primary, whole.context = rangesForAllHunks(file.path, file.hunks, policy.ContextLines)
 	whole.changedLines = len(whole.primary)
 	whole.workloadBytes = file.end - file.start
@@ -468,7 +512,7 @@ func fragmentsForFile(diff []byte, file diffFile, policy Policy) ([]fragment, er
 			if baseBytes > policy.MaxUnitBytes {
 				return nil, fmt.Errorf("review file %q hunk %d header exceeds %d bytes", file.path, hunkIndex+1, policy.MaxUnitBytes)
 			}
-			fragments = append(fragments, fragment{segments: prefix, primaryFiles: []string{file.path}, workloadBytes: baseBytes})
+			fragments = append(fragments, fragment{segments: prefix, workloadBytes: baseBytes})
 			continue
 		}
 		windows, err := hunkWindows(file.path, hunkIndex+1, hunk, prefix, baseBytes, policy)
@@ -487,7 +531,7 @@ func fragmentsForFile(diff []byte, file diffFile, policy Policy) ([]fragment, er
 				last.segments = append(last.segments, trailing)
 				last.workloadBytes += trailingBytes
 			} else if baseBytes+trailingBytes <= policy.MaxUnitBytes {
-				windows = append(windows, fragment{segments: append([]Segment(nil), prefix...), primaryFiles: []string{file.path}, workloadBytes: baseBytes + trailingBytes})
+				windows = append(windows, fragment{segments: append([]Segment(nil), prefix...), workloadBytes: baseBytes + trailingBytes})
 				windows[len(windows)-1].segments = append(windows[len(windows)-1].segments, trailing)
 			} else {
 				return nil, fmt.Errorf("review file %q trailing metadata exceeds %d bytes", file.path, policy.MaxUnitBytes)
@@ -495,7 +539,21 @@ func fragmentsForFile(diff []byte, file diffFile, policy Policy) ([]fragment, er
 		}
 		fragments = append(fragments, windows...)
 	}
+	if len(fragments) > 0 {
+		// A split file still announces its non-text change once, in the first
+		// fragment, which is the only one guaranteed to carry the file header.
+		fragments[0].primaryNonTextFiles = nonTextOwnership(file)
+	}
 	return fragments, nil
+}
+
+// nonTextOwnership returns the primary non-text assignment for a file section.
+// A section whose change is expressed only as changed source lines owns none.
+func nonTextOwnership(file diffFile) []string {
+	if !file.nonText {
+		return nil
+	}
+	return []string{file.path}
 }
 
 // hunkWindows creates maximal consecutive primary line windows with bounded
@@ -533,7 +591,6 @@ func hunkWindows(path string, hunkNumber int, hunk diffHunk, prefix []Segment, b
 		part := fragment{
 			segments:      append(append([]Segment(nil), prefix...), Segment{StartByte: hunk.body[contextStart].start, EndByte: hunk.body[contextEnd-1].end}),
 			workloadBytes: baseBytes + hunk.body[contextEnd-1].end - hunk.body[contextStart].start,
-			primaryFiles:  []string{path},
 		}
 		for index := cursor; index < end; index++ {
 			line := hunk.body[index]
@@ -592,21 +649,17 @@ func contextRange(path string, hunk int, line diffLine, body []diffLine, index, 
 	if len(line.text) == 0 || line.text[0] != ' ' || width <= 0 {
 		return Range{}, false
 	}
-	nearChange := false
 	for offset := 1; offset <= width; offset++ {
 		for _, candidate := range []int{index - offset, index + offset} {
-			if candidate >= 0 && candidate < len(body) {
-				if value, ok := changedRange(path, hunk, body[candidate]); ok {
-					_ = value
-					nearChange = true
-				}
+			if candidate < 0 || candidate >= len(body) {
+				continue
+			}
+			if _, changed := changedRange(path, hunk, body[candidate]); changed {
+				return Range{Path: path, Hunk: hunk, Side: "both", StartLine: line.newLine, EndLine: line.newLine}, true
 			}
 		}
 	}
-	if !nearChange {
-		return Range{}, false
-	}
-	return Range{Path: path, Hunk: hunk, Side: "both", StartLine: line.newLine, EndLine: line.newLine}, true
+	return Range{}, false
 }
 
 // rangeLineKey creates the stable uniqueness key for one primary source line.
@@ -618,16 +671,6 @@ func rangeLineKey(value Range, line int) string {
 func sha256Hex(value []byte) string {
 	digest := sha256.Sum256(value)
 	return hex.EncodeToString(digest[:])
-}
-
-// contains reports whether wanted is already present in values.
-func contains(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
 }
 
 // unionSegments returns the ordered byte coverage of fragments packed into

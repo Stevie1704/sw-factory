@@ -97,3 +97,70 @@ func TestBuildRejectsAnUnpartitionableSmallestFragment(t *testing.T) {
 		t.Fatal("Build() error = nil, want unpartitionable fragment error")
 	}
 }
+
+// TestBuildAssignsANonTextChangeToExactlyOneUnit verifies that a renamed file
+// whose body is split across several units announces its non-text change once,
+// as ADR 0012 requires for renames, mode changes, and binary summaries.
+func TestBuildAssignsANonTextChangeToExactlyOneUnit(t *testing.T) {
+	diff := []byte("diff --git a/old.txt b/new.txt\nsimilarity index 80%\nrename from old.txt\nrename to new.txt\n--- a/old.txt\n+++ b/new.txt\n@@ -1,8 +1,8 @@\n one\n-two\n+TWO\n three\n-four\n+FOUR\n five\n-six\n+SIX\n seven\n")
+	manifest, err := Build(diff, "run-1", strings.Repeat("a", 40), strings.Repeat("b", 40), Policy{MaxUnitBytes: 150, ContextLines: 1})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(manifest.Units) < 2 {
+		t.Fatalf("units = %d, want the renamed file split across units", len(manifest.Units))
+	}
+	owners := make([]string, 0, len(manifest.Units))
+	for _, unit := range manifest.Units {
+		for _, path := range unit.PrimaryNonTextFiles {
+			owners = append(owners, unit.ID+"/"+path)
+		}
+	}
+	if len(owners) != 1 || owners[0] != "unit-001/new.txt" {
+		t.Fatalf("non-text owners = %v, want only unit-001/new.txt", owners)
+	}
+	if err := VerifyPrimaryCoverage(manifest); err != nil {
+		t.Fatalf("VerifyPrimaryCoverage() error = %v", err)
+	}
+}
+
+// TestBuildOwnsABinarySummaryWithoutPrimaryRanges verifies that a change with
+// no changed source line is still owned, by path rather than by range.
+func TestBuildOwnsABinarySummaryWithoutPrimaryRanges(t *testing.T) {
+	diff := []byte("diff --git a/logo.png b/logo.png\nindex 1111111..2222222 100644\nBinary files a/logo.png and b/logo.png differ\n" +
+		"diff --git a/plain.txt b/plain.txt\n--- a/plain.txt\n+++ b/plain.txt\n@@ -1 +1 @@\n-old\n+new\n")
+	manifest, err := Build(diff, "run-1", strings.Repeat("a", 40), strings.Repeat("b", 40), Policy{MaxUnitBytes: 10_000, ContextLines: 10})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	owned := make([]string, 0)
+	for _, unit := range manifest.Units {
+		owned = append(owned, unit.PrimaryNonTextFiles...)
+	}
+	if len(owned) != 1 || owned[0] != "logo.png" {
+		t.Fatalf("non-text files = %v, want only the binary summary", owned)
+	}
+	for _, unit := range manifest.Units {
+		for _, primary := range unit.PrimaryRanges {
+			if primary.Path == "logo.png" {
+				t.Fatalf("binary summary claimed a primary source range: %+v", primary)
+			}
+		}
+	}
+	if err := VerifyPrimaryCoverage(manifest); err != nil {
+		t.Fatalf("VerifyPrimaryCoverage() error = %v", err)
+	}
+}
+
+// TestVerifyPrimaryCoverageRejectsADuplicatedNonTextFile guards the invariant
+// directly, so a hand-edited or migrated manifest cannot claim one non-text
+// change in two units.
+func TestVerifyPrimaryCoverageRejectsADuplicatedNonTextFile(t *testing.T) {
+	manifest := Manifest{Units: []Unit{
+		{ID: unitID(1), Ordinal: 1, PrimaryNonTextFiles: []string{"moved.txt"}},
+		{ID: unitID(2), Ordinal: 2, PrimaryNonTextFiles: []string{"moved.txt"}},
+	}}
+	if err := VerifyPrimaryCoverage(manifest); err == nil {
+		t.Fatal("VerifyPrimaryCoverage() error = nil, want a duplicated non-text assignment error")
+	}
+}

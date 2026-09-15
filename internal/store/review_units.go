@@ -82,8 +82,10 @@ type ReviewUnit struct {
 	Segments      []ReviewUnitSegment
 	PrimaryRanges []ReviewUnitRange
 	ContextRanges []ReviewUnitRange
-	PrimaryFiles  []string
-	ChangedLines  int
+	// PrimaryNonTextFiles lists the renames, mode changes, and binary summaries
+	// this unit owns. Each is assigned to exactly one unit in the manifest.
+	PrimaryNonTextFiles []string
+	ChangedLines        int
 }
 
 // ReviewUnitResult is one accepted axis-specific result for one unit. It is
@@ -394,14 +396,14 @@ func saveReviewUnitsTx(ctx context.Context, tx *sql.Tx, roundID string, units []
 		if err != nil {
 			return fmt.Errorf("encode review unit %q context ranges: %w", unit.UnitID, err)
 		}
-		files, err := json.Marshal(unit.PrimaryFiles)
+		files, err := json.Marshal(unit.PrimaryNonTextFiles)
 		if err != nil {
 			return fmt.Errorf("encode review unit %q primary files: %w", unit.UnitID, err)
 		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO review_units (
 				round_id, unit_id, ordinal, workload_bytes, diff_sha256,
-				segments, primary_ranges, context_ranges, primary_files, changed_lines
+				segments, primary_ranges, context_ranges, primary_non_text_files, changed_lines
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(round_id, unit_id) DO UPDATE SET
 				ordinal = excluded.ordinal,
@@ -410,7 +412,7 @@ func saveReviewUnitsTx(ctx context.Context, tx *sql.Tx, roundID string, units []
 				segments = excluded.segments,
 				primary_ranges = excluded.primary_ranges,
 				context_ranges = excluded.context_ranges,
-				primary_files = excluded.primary_files,
+				primary_non_text_files = excluded.primary_non_text_files,
 				changed_lines = excluded.changed_lines`,
 			roundID, unit.UnitID, unit.Ordinal, unit.WorkloadBytes, unit.DiffSHA256,
 			string(segments), string(primary), string(contextRanges), string(files), unit.ChangedLines)
@@ -425,7 +427,7 @@ func saveReviewUnitsTx(ctx context.Context, tx *sql.Tx, roundID string, units []
 func reviewUnitsTx(ctx context.Context, tx *sql.Tx, roundID string) ([]ReviewUnit, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT round_id, unit_id, ordinal,
 		workload_bytes, diff_sha256, segments, primary_ranges, context_ranges,
-		primary_files, changed_lines FROM review_units WHERE round_id = ?
+		primary_non_text_files, changed_lines FROM review_units WHERE round_id = ?
 		ORDER BY ordinal`, roundID)
 	if err != nil {
 		return nil, fmt.Errorf("read review units in manifest: %w", err)
@@ -452,7 +454,7 @@ func (s *Store) ReviewUnits(ctx context.Context, roundID string) ([]ReviewUnit, 
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT round_id, unit_id, ordinal,
 		workload_bytes, diff_sha256, segments, primary_ranges, context_ranges,
-		primary_files, changed_lines FROM review_units WHERE round_id = ?
+		primary_non_text_files, changed_lines FROM review_units WHERE round_id = ?
 		ORDER BY ordinal`, roundID)
 	if err != nil {
 		return nil, fmt.Errorf("read review units: %w", err)
@@ -838,7 +840,7 @@ func scanReviewUnit(row interface{ Scan(...any) error }) (*ReviewUnit, error) {
 	for _, value := range []struct {
 		value string
 		dest  any
-	}{{segmentsJSON, &unit.Segments}, {primaryJSON, &unit.PrimaryRanges}, {contextJSON, &unit.ContextRanges}, {filesJSON, &unit.PrimaryFiles}} {
+	}{{segmentsJSON, &unit.Segments}, {primaryJSON, &unit.PrimaryRanges}, {contextJSON, &unit.ContextRanges}, {filesJSON, &unit.PrimaryNonTextFiles}} {
 		if err := json.Unmarshal([]byte(value.value), value.dest); err != nil {
 			return nil, fmt.Errorf("decode review unit manifest: %w", err)
 		}
