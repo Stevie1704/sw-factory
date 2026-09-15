@@ -1656,6 +1656,10 @@ func (l *invocationLifecycle) retryWaitingForHarness(ctx context.Context, regist
 	launchRun.Status = store.StatusActive
 	launchResult, launchErr := launch(launchRun)
 	if launchErr != nil {
+		if credentialProjectionCaptureLimit(launchErr) {
+			_, pauseErr := l.pauseForCaptureLimit(ctx, registration, runStore, run, credentialProjectionHarness(launchErr))
+			return pauseErr
+		}
 		classified := classifyHarnessRuntimeErrorForInvocation(launchResult.Invocation, launchErr)
 		if harness.IsRateLimited(classified) || harness.IsAuthenticationExpired(classified) || harness.IsUnexpectedExit(classified) {
 			return nil
@@ -1668,6 +1672,10 @@ func (l *invocationLifecycle) retryWaitingForHarness(ctx context.Context, regist
 // handleRetryResumeError maps failed automatic native resume to its bounded
 // capacity, authentication, or manual-recovery projection.
 func (l *invocationLifecycle) handleRetryResumeError(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, active store.Invocation, resumeErr error) error {
+	if credentialProjectionCaptureLimit(resumeErr) {
+		_, err := l.pauseForCaptureLimit(ctx, registration, runStore, run, credentialProjectionHarness(resumeErr))
+		return err
+	}
 	classified := classifyHarnessRuntimeErrorForInvocation(active, resumeErr)
 	if harness.IsRateLimited(classified) {
 		_, err := l.pauseForHarnessCapacity(ctx, registration, runStore, run, active.Harness)

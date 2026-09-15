@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -123,5 +124,88 @@ func TestOrdinaryCredentialProjectionKeepsAuthenticationRecovery(t *testing.T) {
 	wantReason := "harness authentication expired (codex); run is waiting for `factory auth refresh`"
 	if paused.LifecycleReason != wantReason {
 		t.Fatalf("lifecycle reason = %q, want %q", paused.LifecycleReason, wantReason)
+	}
+}
+
+// TestRetryWaitingForHarnessRoutesCaptureLimitToHuman verifies a projection
+// failure returned by a fresh harness retry cannot leave the run waiting for
+// capacity after the worker reports a deterministic capture overflow.
+func TestRetryWaitingForHarnessRoutesCaptureLimitToHuman(t *testing.T) {
+	t.Parallel()
+
+	run := store.Run{ID: "run-retry-capture-limit", Status: store.StatusWaitingForHarness}
+	runStore := &retryCredentialProjectionStore{}
+	workerRuntime := &repairContractWorker{}
+	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, invocationLifecycleHooks{
+		persistRun: func(_ context.Context, _ config.RepositoryRegistration, target RunStore, previous, next store.Run) error {
+			if err := target.SaveRun(context.Background(), next); err != nil {
+				return err
+			}
+			if previous.ID != run.ID {
+				t.Fatalf("persisted previous run = %#v, want %q", previous, run.ID)
+			}
+			return nil
+		},
+	}, nil)
+
+	err := module.retryWaitingForHarness(t.Context(), config.RepositoryRegistration{}, runStore, run, func(store.Run) (AgentLaunchResult, error) {
+		return AgentLaunchResult{}, newCredentialProjectionError("codex", retryCaptureLimitError())
+	})
+	if err != nil {
+		t.Fatalf("retryWaitingForHarness() error = %v, want capture-limit pause", err)
+	}
+	if workerRuntime.stops != 1 || len(runStore.saved) != 1 {
+		t.Fatalf("retry effects = stops:%d saves:%d, want one worker stop and one state save", workerRuntime.stops, len(runStore.saved))
+	}
+	paused := runStore.saved[0]
+	if paused.Status != store.StatusWaitingForHuman || !strings.Contains(paused.LifecycleReason, "capture limit") {
+		t.Fatalf("paused run = %#v, want capture-limit human state", paused)
+	}
+}
+
+// TestAutomaticHarnessRetryResumeRoutesCaptureLimitToHuman verifies a native
+// resume failure uses the same capture-limit state and stops its worker.
+func TestAutomaticHarnessRetryResumeRoutesCaptureLimitToHuman(t *testing.T) {
+	t.Parallel()
+
+	run := store.Run{ID: "run-native-retry-capture-limit", Status: store.StatusWaitingForHarness}
+	runStore := &retryCredentialProjectionStore{}
+	workerRuntime := &repairContractWorker{}
+	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, invocationLifecycleHooks{
+		persistRun: func(_ context.Context, _ config.RepositoryRegistration, target RunStore, _, next store.Run) error {
+			return target.SaveRun(context.Background(), next)
+		},
+	}, nil)
+	active := store.Invocation{ID: "inv-native-retry-capture-limit", RunID: run.ID, Harness: "codex"}
+
+	err := module.handleRetryResumeError(t.Context(), config.RepositoryRegistration{}, runStore, run, active, newCredentialProjectionError(active.Harness, retryCaptureLimitError()))
+	if err != nil {
+		t.Fatalf("handleRetryResumeError() error = %v, want capture-limit pause", err)
+	}
+	if workerRuntime.stops != 1 || len(runStore.saved) != 1 {
+		t.Fatalf("native retry effects = stops:%d saves:%d, want one worker stop and one state save", workerRuntime.stops, len(runStore.saved))
+	}
+	paused := runStore.saved[0]
+	if paused.Status != store.StatusWaitingForHuman || !strings.Contains(paused.LifecycleReason, "capture limit") {
+		t.Fatalf("paused native retry = %#v, want capture-limit human state", paused)
+	}
+}
+
+// retryCredentialProjectionStore exposes no active invocation for a fresh
+// retry while retaining the small direct-routing store projection.
+type retryCredentialProjectionStore struct{ repairContractStore }
+
+// ActiveInvocation reports that a fresh retry has no persisted native session.
+func (*retryCredentialProjectionStore) ActiveInvocation(context.Context, string) (*store.Invocation, error) {
+	return nil, nil
+}
+
+// retryCaptureLimitError returns the bounded worker failure used by retry
+// recovery tests.
+func retryCaptureLimitError() error {
+	return &worker.OutputLimitExceededError{
+		Operation: "worker command",
+		Stream:    "stdout",
+		Limit:     worker.MaxCapturedOutputBytes,
 	}
 }
