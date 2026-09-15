@@ -756,7 +756,7 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 		version string
 		sha256  string
 	}{
-		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd"},
+		{name: "implementation", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: workflow.PromptVersionImplementation, sha256: "e0a6f046876022c8095a3bc161127e2b6ec0518ef51bbc57f0a753fb8a0ca998"},
 		{name: "test", role: workflow.RoleTest, stage: string(store.StageTest), version: workflow.PromptVersionTest, sha256: "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5"},
 		{name: "architecture", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: workflow.PromptVersionArchitecture, sha256: "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74"},
 		{name: "specification review", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: workflow.PromptVersionSpecificationReview, sha256: "9f07951a1a8ef748f8e4ef01032383b3191376fa5a321d8f460d425d8d7990a8"},
@@ -790,6 +790,7 @@ func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
 		{name: "implementation v3", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v3", marker: "Implementation craft:"},
 		{name: "implementation v4", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v4", marker: "Implementation craft:"},
 		{name: "implementation v5", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v5", marker: "Implementation craft:"},
+		{name: "implementation v8", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v8", marker: "Implementation craft:"},
 		{name: "test v2", role: workflow.RoleTest, stage: string(store.StageTest), version: "test-v2", marker: "Test-stage ownership:"},
 		{name: "architecture v1", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v1", marker: "Architecture-role ownership:"},
 		{name: "architecture v2", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v2", marker: "Architecture-role ownership:"},

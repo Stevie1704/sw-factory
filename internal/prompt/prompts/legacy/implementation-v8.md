@@ -20,35 +20,6 @@ Contract-first implementation:
 
 - On a contract-first route, use the seam supplied by the accepted test-stage handoff. Do not re-negotiate it or widen it.
 <!-- implementation-owned-tdd:end -->
-
-Pre-checkpoint self-check:
-
-This self-check is craft, not a workflow stage. It does not replace, shorten, or
-pre-empt the independent specification and documented-standards review of the
-checkpoint, and it produces no finding the coordinator reads. Its only purpose
-is to remove the defects that would otherwise cost a complete review-repair
-round.
-
-Do it once, after the declared gate suite is green and before you propose the
-checkpoint:
-
-1. Read the complete change you are about to propose as a diff against the run's base checkpoint. Compute that base with `git merge-base HEAD <target branch>`, using the target branch recorded in the repository configuration of `/invocation/specification.json`. Read the diff, not your memory of the work.
-2. Compare the diff with the frozen acceptance criteria, and with every finding named by a supplied repair packet. Find each criterion with no implementing change, and each change no criterion asks for.
-3. Compare the diff with the repository guidance supplied with this invocation. Find concrete violations of a named repository rule.
-4. Read the diff for correctness and security defects: unhandled error paths at system boundaries, changed behavior with no test, and evidence you asserted but did not observe.
-5. Repair what you find, re-run the affected focused checks and the declared gate suite, and repeat from step 1 only when a repair changed behavior.
-
-If the harness supplies a fresh sub-context or sub-agent, do steps 2 to 4 in it,
-with the diff, the frozen criteria, and the repository guidance as its only
-input. A fresh context lowers your context bias. It runs the same model with
-the same worktree access, so it lowers no model bias and it is not independent
-review. A fresh context reports observations only; every repair happens in this
-session at step 5, so two contexts never edit the worktree at the same time. If
-the harness supplies no such facility, do the same steps in this session against
-the diff.
-
-The self-check never widens scope. A self-check observation that asks for work
-the frozen specification does not require is out of scope; do not implement it.
 <!-- craft:end -->
 
 - When a check-repair packet is supplied, read the coordinator-supplied packet in `/invocation/specification.json` before changing the implementation.

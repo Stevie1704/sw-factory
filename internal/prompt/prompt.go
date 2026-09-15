@@ -69,6 +69,7 @@ var rolePromptVersions = map[string]map[string]string{
 		"implementation-v5":                  "prompts/legacy/implementation-v5.md",
 		"implementation-v6":                  "prompts/legacy/implementation-v6.md",
 		"implementation-v7":                  "prompts/legacy/implementation-v7.md",
+		"implementation-v8":                  "prompts/legacy/implementation-v8.md",
 		workflow.PromptVersionImplementation: rolePromptFiles[workflow.RoleImplementation],
 	},
 	workflow.RoleTest: {
@@ -106,7 +107,7 @@ var rolePromptVersions = map[string]map[string]string{
 // versioned role body. A body edit must update its prompt version and this
 // identity together.
 var expectedPromptSHA256 = map[string]string{
-	workflow.PromptVersionImplementation:      "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd",
+	workflow.PromptVersionImplementation:      "e0a6f046876022c8095a3bc161127e2b6ec0518ef51bbc57f0a753fb8a0ca998",
 	workflow.PromptVersionTest:                "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5",
 	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
 	"specification-review-v4":                 "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773",
@@ -125,6 +126,7 @@ var expectedPromptSHA256 = map[string]string{
 	"implementation-v5":                       "563454d454a86d5fe9b35c0c141430cac254c83097281e1c70b02711731d77a2",
 	"implementation-v6":                       "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939",
 	"implementation-v7":                       "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a",
+	"implementation-v8":                       "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd",
 	"architecture-v1":                         "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
 	"architecture-v2":                         "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70",
 	"test-v2":                                 "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
