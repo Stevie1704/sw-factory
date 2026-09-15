@@ -469,6 +469,98 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	}
 }
 
+// TestCreateDraftPullRequestPreservesCaptureLimitCauseThroughCheckRepair
+// verifies a credential overflow during native check repair remains typed and
+// routes the run to human recovery instead of harness-capacity waiting.
+func TestCreateDraftPullRequestPreservesCaptureLimitCauseThroughCheckRepair(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repo")
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(filepath.Join(repositoryPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repositoryPath, ".git", "HEAD"), []byte("ref: refs/heads/factory/run-repair-capture-limit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy := validRepositoryConfig()
+	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
+	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
+	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Repair credential projection", Body: "Keep capture-limit failures identifiable.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	workspace := &draftGitWorkspace{
+		workspace:      gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-repair-capture-limit", Worktree: worktreePath},
+		state:          gitadapter.WorktreeState{Branch: "factory/run-repair-capture-limit", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory/agent.go"}},
+		checkpointSHAs: []string{implementationCheckpoint},
+	}
+	runtime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 1}}}
+	harnessRuntime := &agentHarness{}
+	statuses := &gateStatuses{}
+	authPath := filepath.Join(root, "codex-auth.json")
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
+		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		Authentication:      config.AuthenticationConfig{CodexAuthPath: authPath},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+	}}}
+	ids := []string{"run-repair-capture-limit", "initial", "repair"}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
+		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		Worktree:          workspace,
+		GitWorkspace:      workspace,
+		Worker:            runtime,
+		HeadlessHarnesses: testHeadlessHarnesses(harnessRuntime),
+		CommitStatuses:    statuses,
+		Now:               func() time.Time { return time.Date(2026, 8, 21, 10, 1, 0, 0, time.UTC) },
+		NewRunID: func() (string, error) {
+			if len(ids) == 0 {
+				return "", errors.New("capture-limit repair test identifiers exhausted")
+			}
+			id := ids[0]
+			ids = ids[1:]
+			return id, nil
+		},
+	})
+	claimed, err := service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() fixture setup error = %v", err)
+	}
+	claimed.Run.TestStageSkipped = true
+	claimed.Run.TestExemption = &store.TestExemption{Kind: "human", Justification: "capture-limit repair fixture"}
+	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
+		t.Fatalf("save implementation repair fixture: %v", err)
+	}
+	runStore.gateResults[claimed.Run.ID] = []store.GateResult{{
+		RunID: claimed.Run.ID, CheckpointSHA: claimed.Run.CheckpointSHA, Phase: store.GatePhaseBaseline,
+		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
+		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+	}}
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+	initial := runStore.invocations[launch.Invocation.ID]
+	initial.NativeSessionID = "session-initial"
+	initial.Status = store.InvocationStatusCompleted
+	initial.UpdatedAt = initial.CreatedAt.Add(time.Minute)
+	runStore.invocations[launch.Invocation.ID] = initial
+	runtime.seedErr = testCaptureLimitError()
+
+	result, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
+	assertCaptureLimitCause(t, err, authPath)
+	if result.Repair == nil || result.Repair.Outcome != factory.CheckRepairWaitingForHuman || result.Run.Status != store.StatusWaitingForHuman {
+		t.Fatalf("check-repair result = %#v, want human-waiting capture-limit recovery", result)
+	}
+	if !strings.Contains(result.Run.LifecycleReason, "capture limit") || strings.Contains(result.Run.LifecycleReason, "authentication expired") || strings.Contains(result.Run.LifecycleReason, "waiting for capacity") {
+		t.Fatalf("check-repair lifecycle reason = %q, want capture-limit human guidance", result.Run.LifecycleReason)
+	}
+}
+
 // TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation verifies
 // the coordinator does not checkpoint while the harness invocation still owns the
 // implementation stage.

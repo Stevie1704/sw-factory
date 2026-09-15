@@ -13,6 +13,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -264,6 +265,9 @@ func reviewCheckpointSHA(review bool, checkpoint string) string {
 type credentialProjectionError struct {
 	// Harness identifies the non-secret adapter whose projection is unavailable.
 	Harness string
+	// Cause preserves the worker capture-limit classification, which is safe to
+	// expose and must not be mistaken for an authentication failure.
+	Cause *worker.OutputLimitExceededError
 }
 
 // Error returns bounded operator guidance for restoring the managed projection.
@@ -271,21 +275,54 @@ func (e *credentialProjectionError) Error() string {
 	if e == nil {
 		return "credential projection could not be restored; retry `factory auth refresh`"
 	}
+	if e.Cause != nil {
+		return fmt.Sprintf("%s credential projection failed: %s", credentialHarnessLabel(e.Harness), e.Cause.Error())
+	}
 	return fmt.Sprintf("%s credential projection could not be restored; restore the configured source and retry `factory auth refresh`", credentialHarnessLabel(e.Harness))
 }
 
-// Unwrap lets the normal recovery policy pause the run in the auth state.
+// Unwrap exposes the safe capture-limit cause or retains the legacy
+// authentication-expired recovery classification for every other cause.
 func (e *credentialProjectionError) Unwrap() error {
 	if e == nil {
 		return nil
+	}
+	if e.Cause != nil {
+		return e.Cause
 	}
 	return harness.NewAuthenticationExpiredError(credentialHarnessLabel(e.Harness))
 }
 
 // newCredentialProjectionError constructs the redacted credential recovery
-// error used at every host-source and worker-projection boundary.
-func newCredentialProjectionError(harnessName string) error {
-	return &credentialProjectionError{Harness: credentialHarnessLabel(harnessName)}
+// error used at every host-source and worker-projection boundary. Only the
+// worker's safe capture-limit type crosses the coordinator boundary; every
+// other cause retains the legacy authentication-expired classification without
+// exposing its message or adapter details.
+func newCredentialProjectionError(harnessName string, cause error) error {
+	projection := &credentialProjectionError{Harness: credentialHarnessLabel(harnessName)}
+	var captureLimit *worker.OutputLimitExceededError
+	if errors.As(cause, &captureLimit) && captureLimit != nil {
+		preserved := *captureLimit
+		projection.Cause = &preserved
+	}
+	return projection
+}
+
+// credentialProjectionCaptureLimit reports whether an error contains the
+// coordinator's safe capture-limit credential failure.
+func credentialProjectionCaptureLimit(err error) bool {
+	var projection *credentialProjectionError
+	return errors.As(err, &projection) && projection != nil && projection.Cause != nil
+}
+
+// credentialProjectionHarness returns the bounded harness identity from a
+// credential projection error for recovery-state guidance.
+func credentialProjectionHarness(err error) string {
+	var projection *credentialProjectionError
+	if !errors.As(err, &projection) || projection == nil {
+		return "harness"
+	}
+	return projection.Harness
 }
 
 // credentialHarnessLabel bounds the adapter identity included in recovery

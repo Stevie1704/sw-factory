@@ -208,7 +208,12 @@ func (s *Service) StartAgent(ctx context.Context, request AgentRequest) (result 
 		return AgentLaunchResult{}, err
 	}
 	defer func() { _ = runStore.Close() }()
-	return s.startAgentWithStore(ctx, registration, runStore, run, request)
+	result, err = s.startAgentWithStore(ctx, registration, runStore, run, request)
+	if err == nil || !credentialProjectionCaptureLimit(err) || run == nil {
+		return result, err
+	}
+	_, pauseErr := s.lifecycleModule().pauseForCaptureLimit(ctx, registration, runStore, *run, credentialProjectionHarness(err))
+	return result, errors.Join(err, pauseErr)
 }
 
 // AcceptAgentReport reads only the invocation report file, validates its
