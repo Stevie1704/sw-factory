@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Stevie1704/sw-factory/internal/reviewunits"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"gopkg.in/yaml.v3"
 )
@@ -118,10 +119,20 @@ type ReviewUnitConfig struct {
 
 const (
 	// DefaultReviewUnitBytes is the default self-contained review workload.
-	DefaultReviewUnitBytes = 64 << 10
+	DefaultReviewUnitBytes = reviewunits.DefaultMaxUnitBytes
+	// DefaultReviewUnits is the normal review fan-out before explicit
+	// maintainer authorization.
+	DefaultReviewUnits = reviewunits.DefaultMaxUnits
 	// MaxReviewUnitBytes is the factory validation ceiling for repository-owned
 	// review workload configuration.
 	MaxReviewUnitBytes = 1 << 20
+	// MaxReviewConcurrency is the host ceiling for simultaneous review
+	// invocations across both axes.
+	MaxReviewConcurrency = 16
+	// MaxAuthorizedReviewUnits is the host installation ceiling for an
+	// explicitly authorized review fan-out. It mirrors the persistence bound in
+	// the operational store, which cannot import this package.
+	MaxAuthorizedReviewUnits = 8
 )
 
 // EffectiveReviewUnitConfig returns repository review-unit settings with
@@ -131,7 +142,7 @@ func EffectiveReviewUnitConfig(value ReviewUnitConfig) ReviewUnitConfig {
 		value.MaxUnitBytes = DefaultReviewUnitBytes
 	}
 	if value.MaxUnits <= 0 {
-		value.MaxUnits = 4
+		value.MaxUnits = DefaultReviewUnits
 	}
 	return value
 }
@@ -142,11 +153,8 @@ func EffectiveReviewHostConfig(value ReviewHostConfig) ReviewHostConfig {
 	if value.Concurrency <= 0 {
 		value.Concurrency = 2
 	}
-	if value.AuthorizedUnits <= 0 {
-		value.AuthorizedUnits = 8
-	}
-	if value.AuthorizedUnits > 8 {
-		value.AuthorizedUnits = 8
+	if value.AuthorizedUnits <= 0 || value.AuthorizedUnits > MaxAuthorizedReviewUnits {
+		value.AuthorizedUnits = MaxAuthorizedReviewUnits
 	}
 	return value
 }
@@ -783,11 +791,11 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	if err := validateDuration(prefix+".polling.backoff", repository.Polling.Backoff, false); err != nil {
 		return err
 	}
-	if repository.Review.Concurrency < 0 || repository.Review.Concurrency > 16 {
-		return validation(prefix+".review.concurrency", "must be zero or between one and 16")
+	if repository.Review.Concurrency < 0 || repository.Review.Concurrency > MaxReviewConcurrency {
+		return validation(prefix+".review.concurrency", fmt.Sprintf("must be zero or between one and %d", MaxReviewConcurrency))
 	}
-	if repository.Review.AuthorizedUnits < 0 || repository.Review.AuthorizedUnits > 8 {
-		return validation(prefix+".review.authorized_units", "must be zero or between one and eight")
+	if repository.Review.AuthorizedUnits < 0 || repository.Review.AuthorizedUnits > MaxAuthorizedReviewUnits {
+		return validation(prefix+".review.authorized_units", fmt.Sprintf("must be zero or between one and %d", MaxAuthorizedReviewUnits))
 	}
 	if strings.TrimSpace(repository.OperationalDataPath) == "" {
 		return validation(prefix+".operational_data_path", "is required")

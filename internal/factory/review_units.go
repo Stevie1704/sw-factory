@@ -121,37 +121,38 @@ func reviewContextWithUnit(base prompt.ReviewContext, round store.ReviewRound, u
 
 // preparePartitionedReview creates or validates the immutable round manifest,
 // selects one axis unit, and writes the bounded worker artifact before packet
-// publication. It is used only by stores that expose the normalized projection;
+// publication. The returned context carries the assigned round and unit
+// identity. It is used only by stores that expose the normalized projection;
 // historical compatibility stores retain the whole-diff path.
-func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, rounds store.ReviewRoundStore, run store.Run, invocation store.Invocation, base prompt.ReviewContext, requested string, registration config.RepositoryRegistration) (*prompt.ReviewContext, string, string, error) {
+func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, rounds store.ReviewRoundStore, run store.Run, invocation store.Invocation, base prompt.ReviewContext, requested string, registration config.RepositoryRegistration) (*prompt.ReviewContext, error) {
 	sourcePath := filepath.Join(invocation.InvocationDirectory, reviewDiffFileName)
 	metadata, err := inspectReviewArtifact(sourcePath)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	if metadata.bytes < 0 {
-		return nil, "", "", errors.New("review diff has a negative byte count")
+		return nil, errors.New("review diff has a negative byte count")
 	}
 	hostPolicy := config.EffectiveReviewHostConfig(registration.Review)
 	round, err := rounds.ReviewRound(ctx, run.ID, run.CheckpointSHA)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("read review round: %w", err)
+		return nil, fmt.Errorf("read review round: %w", err)
 	}
 	units := []store.ReviewUnit(nil)
 	if round == nil {
 		data, readErr := os.ReadFile(sourcePath)
 		if readErr != nil {
-			return nil, "", "", fmt.Errorf("read exact review diff for partitioning: %w", readErr)
+			return nil, fmt.Errorf("read exact review diff for partitioning: %w", readErr)
 		}
 		policy := config.EffectiveReviewUnitConfig(runReviewUnitConfig(run))
 		manifest, buildErr := reviewunits.Build(data, run.ID, reviewDiffBase(run), run.CheckpointSHA, reviewunits.Policy{SchemaVersion: reviewunits.SchemaVersion, PolicyVersion: reviewunits.PolicyVersion, MaxUnitBytes: policy.MaxUnitBytes, MaxUnits: policy.MaxUnits, ContextLines: reviewDiffContextLines})
 		if buildErr != nil {
-			return nil, "", "", fmt.Errorf("partition exact review diff: %w", buildErr)
+			return nil, fmt.Errorf("partition exact review diff: %w", buildErr)
 		}
 		roundID := reviewRoundID(run, manifest.DiffSHA256)
 		canonicalPath := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, reviewRoundDirectoryName, reviewRoundArtifactName)
 		if copyErr := copyReviewArtifact(sourcePath, canonicalPath); copyErr != nil {
-			return nil, "", "", fmt.Errorf("persist canonical review diff: %w", copyErr)
+			return nil, fmt.Errorf("persist canonical review diff: %w", copyErr)
 		}
 		roundValue := store.ReviewRound{
 			ID:                 roundID,
@@ -174,39 +175,39 @@ func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, roun
 		units = reviewUnitsFromManifest(roundID, manifest)
 		if atomic, atomicOK := rounds.(store.ReviewManifestStore); atomicOK {
 			if err := atomic.SaveReviewManifest(ctx, roundValue, units); err != nil {
-				return nil, "", "", fmt.Errorf("persist review manifest: %w", err)
+				return nil, fmt.Errorf("persist review manifest: %w", err)
 			}
 		} else {
 			if err := rounds.SaveReviewRound(ctx, roundValue); err != nil {
-				return nil, "", "", fmt.Errorf("persist review round: %w", err)
+				return nil, fmt.Errorf("persist review round: %w", err)
 			}
 			if err := rounds.SaveReviewUnits(ctx, roundID, units); err != nil {
-				return nil, "", "", fmt.Errorf("persist review unit manifest: %w", err)
+				return nil, fmt.Errorf("persist review unit manifest: %w", err)
 			}
 		}
 		round = &roundValue
 	} else {
 		if round.SchemaVersion != reviewunits.SchemaVersion || round.PolicyVersion != reviewunits.PolicyVersion {
-			return nil, "", "", fmt.Errorf("persisted review round uses unsupported partition policy %q/%d", round.PolicyVersion, round.SchemaVersion)
+			return nil, fmt.Errorf("persisted review round uses unsupported partition policy %q/%d", round.PolicyVersion, round.SchemaVersion)
 		}
 		if round.CheckpointSHA != run.CheckpointSHA || round.BaseCheckpointSHA != reviewDiffBase(run) || round.DiffBytes != metadata.bytes || round.DiffSHA256 != metadata.sha256 {
-			return nil, "", "", errors.New("persisted review round does not match the exact checkpoint diff")
+			return nil, errors.New("persisted review round does not match the exact checkpoint diff")
 		}
 		if err := validateReviewArtifact(round.DiffPath, round.DiffBytes, round.DiffSHA256); err != nil {
-			return nil, "", "", fmt.Errorf("validate canonical review diff: %w", err)
+			return nil, fmt.Errorf("validate canonical review diff: %w", err)
 		}
 	}
 	units, err = validatePersistedReviewManifest(ctx, rounds, run, *round)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	if len(units) > hostPolicy.AuthorizedUnits {
 		if round.Status != store.ReviewRoundStatusAwaitingAuthorization {
 			if updateErr := rounds.UpdateReviewRoundStatus(ctx, round.ID, store.ReviewRoundStatusAwaitingAuthorization); updateErr != nil {
-				return nil, "", "", updateErr
+				return nil, updateErr
 			}
 		}
-		return nil, "", "", fmt.Errorf("review round requires %d units, above host authorization ceiling %d; human disposition is required", len(units), hostPolicy.AuthorizedUnits)
+		return nil, fmt.Errorf("review round requires %d units, above host authorization ceiling %d; human disposition is required", len(units), hostPolicy.AuthorizedUnits)
 	}
 	allowedUnits := round.MaxUnits
 	if round.AuthorizedMaxUnits > allowedUnits {
@@ -215,35 +216,35 @@ func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, roun
 	if len(units) > allowedUnits {
 		if round.Status != store.ReviewRoundStatusAwaitingAuthorization {
 			if updateErr := rounds.UpdateReviewRoundStatus(ctx, round.ID, store.ReviewRoundStatusAwaitingAuthorization); updateErr != nil {
-				return nil, "", "", updateErr
+				return nil, updateErr
 			}
 		}
-		return nil, "", "", fmt.Errorf("review round has %d units, above normal fan-out %d; explicit authorization is required", len(units), round.MaxUnits)
+		return nil, fmt.Errorf("review round has %d units, above normal fan-out %d; explicit authorization is required", len(units), round.MaxUnits)
 	}
 	unit, err := nextReviewUnit(ctx, rounds, run, *round, invocation.Role, requested, nil)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	if unit == nil {
-		return nil, "", "", fmt.Errorf("no review unit is available for %s", invocation.Role)
+		return nil, fmt.Errorf("no review unit is available for %s", invocation.Role)
 	}
 	if err := validateReviewArtifact(round.DiffPath, round.DiffBytes, round.DiffSHA256); err != nil {
-		return nil, "", "", fmt.Errorf("validate canonical review diff: %w", err)
+		return nil, fmt.Errorf("validate canonical review diff: %w", err)
 	}
 	canonical, err := os.ReadFile(round.DiffPath)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("read canonical review diff: %w", err)
+		return nil, fmt.Errorf("read canonical review diff: %w", err)
 	}
 	unitValue := reviewUnitForPartition(*unit)
 	evidence, err := reviewunits.UnitDiff(canonical, unitValue)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("derive review unit %q: %w", unit.UnitID, err)
+		return nil, fmt.Errorf("derive review unit %q: %w", unit.UnitID, err)
 	}
 	if err := writeReviewUnitArtifact(invocation.InvocationDirectory, evidence); err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	if err := rounds.UpdateReviewRoundStatus(ctx, round.ID, store.ReviewRoundStatusActive); err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	base.CheckpointSHA = run.CheckpointSHA
 	base.DiffPath = prompt.WorkerReviewDiffPath
@@ -253,7 +254,7 @@ func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, roun
 	base.OmittedDiffBytes = 0
 	base.ChangedPathsCommand = ""
 	base.DiffPathCommand = ""
-	return reviewContextWithUnit(base, *round, *unit, len(units)), round.ID, unit.UnitID, nil
+	return reviewContextWithUnit(base, *round, *unit, len(units)), nil
 }
 
 // runReviewUnitConfig extracts repository review policy from the frozen run
@@ -283,8 +284,8 @@ func validatePersistedReviewManifest(ctx context.Context, rounds store.ReviewRou
 	if round.SchemaVersion != reviewunits.SchemaVersion || round.PolicyVersion != reviewunits.PolicyVersion {
 		return nil, fmt.Errorf("review round %q uses unsupported partition policy %q/%d", round.ID, round.PolicyVersion, round.SchemaVersion)
 	}
-	if round.MaxUnitBytes <= 0 || round.MaxUnitBytes > config.MaxReviewUnitBytes || round.MaxUnits <= 0 || round.MaxUnits > store.MaxAuthorizedReviewUnits || round.ContextLines != reviewDiffContextLines || round.Concurrency <= 0 || round.Concurrency > 16 || round.AuthorizedMaxUnits < 0 || round.AuthorizedMaxUnits > store.MaxAuthorizedReviewUnits || (round.AuthorizedMaxUnits > 0 && round.AuthorizedMaxUnits < round.MaxUnits) {
-		return nil, fmt.Errorf("review round %q has unsupported partition bounds", round.ID)
+	if bound, ok := unsupportedPartitionBound(round); !ok {
+		return nil, fmt.Errorf("review round %q has unsupported %s", round.ID, bound)
 	}
 	if err := validateReviewArtifact(round.DiffPath, round.DiffBytes, round.DiffSHA256); err != nil {
 		return nil, fmt.Errorf("validate canonical review diff for round %q: %w", round.ID, err)
@@ -325,6 +326,26 @@ func validatePersistedReviewManifest(ctx context.Context, rounds store.ReviewRou
 	return units, nil
 }
 
+// unsupportedPartitionBound checks the frozen policy bounds of a persisted
+// round one at a time, so a rejected round names the bound it broke.
+func unsupportedPartitionBound(round store.ReviewRound) (string, bool) {
+	switch {
+	case round.MaxUnitBytes <= 0 || round.MaxUnitBytes > config.MaxReviewUnitBytes:
+		return "unit workload bound", false
+	case round.MaxUnits <= 0 || round.MaxUnits > store.MaxAuthorizedReviewUnits:
+		return "normal fan-out", false
+	case round.ContextLines != reviewDiffContextLines:
+		return "context width", false
+	case round.Concurrency <= 0 || round.Concurrency > config.MaxReviewConcurrency:
+		return "concurrency ceiling", false
+	case round.AuthorizedMaxUnits < 0 || round.AuthorizedMaxUnits > store.MaxAuthorizedReviewUnits:
+		return "authorized fan-out", false
+	case round.AuthorizedMaxUnits > 0 && round.AuthorizedMaxUnits < round.MaxUnits:
+		return "authorized fan-out below its normal fan-out", false
+	}
+	return "", true
+}
+
 // sameReviewUnitManifest compares normalized units without relying on the
 // partitioner's public JSON shape. Store rows and partition units have
 // different field tags, but their normalized store representation is exact.
@@ -344,12 +365,8 @@ func reviewUnitsFromManifest(roundID string, manifest reviewunits.Manifest) []st
 		for _, segment := range unit.Segments {
 			converted.Segments = append(converted.Segments, store.ReviewUnitSegment{StartByte: segment.StartByte, EndByte: segment.EndByte})
 		}
-		for _, value := range unit.PrimaryRanges {
-			converted.PrimaryRanges = append(converted.PrimaryRanges, store.ReviewUnitRange{Path: value.Path, Hunk: value.Hunk, Side: value.Side, StartLine: value.StartLine, EndLine: value.EndLine})
-		}
-		for _, value := range unit.ContextRanges {
-			converted.ContextRanges = append(converted.ContextRanges, store.ReviewUnitRange{Path: value.Path, Hunk: value.Hunk, Side: value.Side, StartLine: value.StartLine, EndLine: value.EndLine})
-		}
+		converted.PrimaryRanges = storeRanges(unit.PrimaryRanges)
+		converted.ContextRanges = storeRanges(unit.ContextRanges)
 		units = append(units, converted)
 	}
 	return units
@@ -362,11 +379,33 @@ func reviewUnitForPartition(unit store.ReviewUnit) reviewunits.Unit {
 	for _, segment := range unit.Segments {
 		converted.Segments = append(converted.Segments, reviewunits.Segment{StartByte: segment.StartByte, EndByte: segment.EndByte})
 	}
-	for _, value := range unit.PrimaryRanges {
-		converted.PrimaryRanges = append(converted.PrimaryRanges, reviewunits.Range{Path: value.Path, Hunk: value.Hunk, Side: value.Side, StartLine: value.StartLine, EndLine: value.EndLine})
+	converted.PrimaryRanges = partitionRanges(unit.PrimaryRanges)
+	converted.ContextRanges = partitionRanges(unit.ContextRanges)
+	return converted
+}
+
+// storeRanges converts partition ranges to their normalized store rows,
+// preserving the empty-versus-absent slice distinction the manifest digest
+// depends on.
+func storeRanges(values []reviewunits.Range) []store.ReviewUnitRange {
+	if values == nil {
+		return nil
 	}
-	for _, value := range unit.ContextRanges {
-		converted.ContextRanges = append(converted.ContextRanges, reviewunits.Range{Path: value.Path, Hunk: value.Hunk, Side: value.Side, StartLine: value.StartLine, EndLine: value.EndLine})
+	converted := make([]store.ReviewUnitRange, 0, len(values))
+	for _, value := range values {
+		converted = append(converted, store.ReviewUnitRange{Path: value.Path, Hunk: value.Hunk, Side: value.Side, StartLine: value.StartLine, EndLine: value.EndLine})
+	}
+	return converted
+}
+
+// partitionRanges converts normalized store rows back to partition ranges.
+func partitionRanges(values []store.ReviewUnitRange) []reviewunits.Range {
+	if values == nil {
+		return nil
+	}
+	converted := make([]reviewunits.Range, 0, len(values))
+	for _, value := range values {
+		converted = append(converted, reviewunits.Range{Path: value.Path, Hunk: value.Hunk, Side: value.Side, StartLine: value.StartLine, EndLine: value.EndLine})
 	}
 	return converted
 }
@@ -586,8 +625,8 @@ func aggregateReviewUnitResults(ctx context.Context, rounds store.ReviewRoundSto
 			result.Findings = append(result.Findings, finding)
 		}
 	}
-	if len(result.Findings) > 64 {
-		return nil, false, fmt.Errorf("%s review findings exceed the 64-entry axis limit", role)
+	if len(result.Findings) > store.MaxReviewFindings {
+		return nil, false, fmt.Errorf("%s review findings exceed the %d-entry axis limit", role, store.MaxReviewFindings)
 	}
 	if hasCannotProceed {
 		result.Outcome = store.ReviewUnitOutcomeCannotProceed
@@ -598,12 +637,12 @@ func aggregateReviewUnitResults(ctx context.Context, rounds store.ReviewRoundSto
 	} else {
 		result.Outcome = store.ReviewUnitOutcomeCompleted
 	}
-	if len(result.Questions) > 32 || len(result.Evidence) > 32 {
-		return nil, false, fmt.Errorf("%s review disposition exceeds its 32-entry aggregate limit", role)
+	if len(result.Questions) > store.MaxReviewQuestions || len(result.Evidence) > store.MaxReviewEvidence {
+		return nil, false, fmt.Errorf("%s review disposition exceeds its %d-entry aggregate limit", role, store.MaxReviewQuestions)
 	}
 	result.Summary = strings.Join(summaries, "; ")
-	if len(result.Summary) > 4000 {
-		result.Summary = result.Summary[:4000]
+	if len(result.Summary) > store.MaxReviewSummaryBytes {
+		result.Summary = result.Summary[:store.MaxReviewSummaryBytes]
 	}
 	return result, true, nil
 }

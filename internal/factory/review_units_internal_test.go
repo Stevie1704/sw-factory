@@ -189,12 +189,12 @@ func TestAggregateReviewUnitResultsKeepsAxesSeparate(t *testing.T) {
 // resumeReviewUnit returns a small valid unit fixture for restart selection.
 func resumeReviewUnit(roundID, unitID string, ordinal, startByte int) store.ReviewUnit {
 	return store.ReviewUnit{
-		RoundID:             roundID,
-		UnitID:              unitID,
-		Ordinal:             ordinal,
-		WorkloadBytes:       4,
-		DiffSHA256:          strings.Repeat("c", 64),
-		Segments:            []store.ReviewUnitSegment{{StartByte: startByte, EndByte: startByte + 4}},
+		RoundID:       roundID,
+		UnitID:        unitID,
+		Ordinal:       ordinal,
+		WorkloadBytes: 4,
+		DiffSHA256:    strings.Repeat("c", 64),
+		Segments:      []store.ReviewUnitSegment{{StartByte: startByte, EndByte: startByte + 4}},
 		PrimaryRanges: []store.ReviewUnitRange{{Path: "src/main.go", Hunk: 1, Side: "new", StartLine: ordinal, EndLine: ordinal}},
 		// Only the first unit owns the non-text change, as the manifest
 		// invariant requires exactly one primary assignment per file.
@@ -336,7 +336,7 @@ func TestAggregateReviewUnitResultsFailsOnARoleOwnedBlockingFinding(t *testing.T
 		Location: "src/main.go:1", Claim: "the handler drops the error", Evidence: "src/main.go:1",
 		Severity: "blocker", Category: "correctness",
 		SuggestedResolution: "return the error", SuggestedOwner: workflow.RoleImplementation,
-		UnitID:              "unit-001",
+		UnitID: "unit-001",
 	}
 	results := []store.ReviewUnitResult{
 		{Role: workflow.RoleSpecificationReview, UnitID: "unit-001", InvocationID: "inv-spec-001", Findings: []store.ReviewFinding{blocker}},

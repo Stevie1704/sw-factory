@@ -21,6 +21,17 @@ import (
 // CurrentSchemaVersion is the supported operational-store schema version.
 const CurrentSchemaVersion = 39
 
+const (
+	// MaxReviewFindings bounds the findings one review axis may retain.
+	MaxReviewFindings = 64
+	// MaxReviewQuestions bounds the clarification questions one axis may retain.
+	MaxReviewQuestions = 32
+	// MaxReviewEvidence bounds the evidence entries one axis may retain.
+	MaxReviewEvidence = 32
+	// MaxReviewSummaryBytes bounds one axis summary.
+	MaxReviewSummaryBytes = 4000
+)
+
 // maxPendingQuestions bounds the flattened operator question surface. Review
 // axes retain up to 32 questions independently, so the shared surface allows
 // both concurrent axes to remain visible without rejecting the second result.
@@ -1662,11 +1673,11 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 	default:
 		return fmt.Errorf("unsupported %s review outcome %q", label, review.Outcome)
 	}
-	if len(review.Summary) > 4000 || strings.ContainsAny(review.Summary, "\x00\r\n") {
+	if len(review.Summary) > MaxReviewSummaryBytes || strings.ContainsAny(review.Summary, "\x00\r\n") {
 		return fmt.Errorf("%s review summary is invalid", label)
 	}
-	if len(review.Questions) > 32 {
-		return fmt.Errorf("%s review questions exceed 32 entries", label)
+	if len(review.Questions) > MaxReviewQuestions {
+		return fmt.Errorf("%s review questions exceed %d entries", label, MaxReviewQuestions)
 	}
 	seenQuestions := make(map[string]struct{}, len(review.Questions))
 	for index, question := range review.Questions {
@@ -1678,16 +1689,16 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 		}
 		seenQuestions[question.ID] = struct{}{}
 	}
-	if len(review.Evidence) > 32 {
-		return fmt.Errorf("%s review evidence exceeds 32 entries", label)
+	if len(review.Evidence) > MaxReviewEvidence {
+		return fmt.Errorf("%s review evidence exceeds %d entries", label, MaxReviewEvidence)
 	}
 	for index, evidence := range review.Evidence {
 		if strings.TrimSpace(evidence.Kind) == "" || strings.TrimSpace(evidence.Detail) == "" || strings.ContainsAny(evidence.Kind+evidence.Detail, "\x00\r\n") {
 			return fmt.Errorf("%s review evidence %d is invalid", label, index)
 		}
 	}
-	if len(review.Findings) > 64 {
-		return fmt.Errorf("%s review findings exceed 64 entries", label)
+	if len(review.Findings) > MaxReviewFindings {
+		return fmt.Errorf("%s review findings exceed %d entries", label, MaxReviewFindings)
 	}
 	for index, finding := range review.Findings {
 		if err := validateReviewFinding(label, index, finding); err != nil {

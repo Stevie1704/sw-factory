@@ -1215,6 +1215,9 @@ func (s *Store) refreshEvaluationReviewMetricsIfPresent(ctx context.Context, run
 	return s.refreshEvaluationReviewMetrics(ctx, runID, true)
 }
 
+// refreshEvaluationReviewMetrics recomputes the content-free review telemetry
+// for one run. A run without an evaluation summary is an error unless
+// allowMissingSummary admits the compatibility no-op.
 func (s *Store) refreshEvaluationReviewMetrics(ctx context.Context, runID string, allowMissingSummary bool) error {
 	summary, err := s.EvaluationSummary(ctx, runID)
 	if err != nil {

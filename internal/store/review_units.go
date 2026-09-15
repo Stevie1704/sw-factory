@@ -32,6 +32,9 @@ const (
 	// MaxAuthorizedReviewUnits is the factory installation ceiling for one
 	// exact review manifest.
 	MaxAuthorizedReviewUnits = 8
+	// MaxReviewUnitFindings bounds the findings one review unit may retain, so
+	// no single unit can consume the whole axis budget.
+	MaxReviewUnitFindings = 16
 )
 
 // ReviewRound is the durable identity of one exact-checkpoint review round.
@@ -706,7 +709,7 @@ func validateReviewUnitResult(result ReviewUnitResult) error {
 	default:
 		return fmt.Errorf("unsupported review unit result outcome %q", result.Outcome)
 	}
-	if len(result.Questions) > 32 || len(result.Evidence) > 32 || len(result.Findings) > 16 {
+	if len(result.Questions) > MaxReviewQuestions || len(result.Evidence) > MaxReviewEvidence || len(result.Findings) > MaxReviewUnitFindings {
 		return errors.New("review unit result exceeds its bounded field limit")
 	}
 	switch result.Outcome {
@@ -723,7 +726,7 @@ func validateReviewUnitResult(result ReviewUnitResult) error {
 			return errors.New("review unit cannot-proceed result must retain evidence only")
 		}
 	}
-	if len(result.Summary) > 4000 || strings.ContainsAny(result.Summary, "\x00\r\n") {
+	if len(result.Summary) > MaxReviewSummaryBytes || strings.ContainsAny(result.Summary, "\x00\r\n") {
 		return errors.New("review unit result summary is invalid")
 	}
 	seenQuestions := make(map[string]struct{}, len(result.Questions))

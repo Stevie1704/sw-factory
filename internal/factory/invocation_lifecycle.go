@@ -926,13 +926,13 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 		reviewContext.DiffPathCommand = ""
 		plan.ReviewContext = &reviewContext
 		if partitioned, ok := runStore.(store.ReviewRoundStore); ok {
-			prepared, roundID, unitID, err := l.preparePartitionedReview(ctx, partitioned, plan.Run, invocation, *plan.ReviewContext, plan.Request.ReviewUnitID, registration)
+			prepared, err := l.preparePartitionedReview(ctx, partitioned, plan.Run, invocation, *plan.ReviewContext, plan.Request.ReviewUnitID, registration)
 			if err != nil {
 				return launchMaterialisation{}, err
 			}
 			plan.ReviewContext = prepared
-			invocation.ReviewRoundID = roundID
-			invocation.ReviewUnitID = unitID
+			invocation.ReviewRoundID = prepared.ReviewRoundID
+			invocation.ReviewUnitID = prepared.ReviewUnitID
 		}
 	}
 	invocationPacket, promptText, err := buildLaunchPacket(plan, invocation, craft, contextValues)
