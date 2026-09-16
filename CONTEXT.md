@@ -61,7 +61,7 @@ The repository-declared setup and gate suite evaluated against the claimed run's
 _Avoid_: Preflight assumption, agent diagnosis
 
 **Setup fingerprint**:
-The SHA-256 identity of the configured manifest and lockfile contents observed by setup for one run phase and exact checkpoint.
+The SHA-256 identity of the configured manifest and lockfile contents observed by setup for one run phase and exact checkpoint. A verifier reads that content from the checkpoint itself, because the working tree moves on when an agent edits a configured setup file.
 _Avoid_: Dependency cache key, mutable latest state
 
 **Recovery diagnosis**:

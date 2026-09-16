@@ -128,6 +128,15 @@ type RepositoryCraftReader interface {
 	ReadRepositoryCraft(context.Context, string, string, string) (GuidanceDocument, error)
 }
 
+// CheckpointFileReader is the optional exact-checkpoint read seam that reads
+// one tracked file as it was committed, without consulting the working tree.
+// Verifiers use it so a projection recorded at one checkpoint stays checkable
+// after later commits change the same file.
+type CheckpointFileReader interface {
+	// ReadFileAtCheckpoint reads one tracked file's bytes at an exact commit.
+	ReadFileAtCheckpoint(ctx context.Context, worktreePath, checkpointSHA, path string) ([]byte, error)
+}
+
 // WorktreeInspector is the optional read-only worktree observation seam.
 type WorktreeInspector interface {
 	// Inspect reads the current commit and changed paths without mutating Git.
@@ -303,6 +312,38 @@ func (m *LocalWorktreeManager) ReadRepositoryCraft(ctx context.Context, worktree
 		return GuidanceDocument{}, fmt.Errorf("read repository craft %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
 	}
 	return GuidanceDocument{Path: cleanPath, Content: string(content)}, nil
+}
+
+// ReadFileAtCheckpoint reads one tracked file's bytes at an exact commit. It
+// refuses anything that is not a regular file blob so a symbolic link cannot
+// present its target's bytes as the file's own content.
+func (m *LocalWorktreeManager) ReadFileAtCheckpoint(ctx context.Context, worktreePath, checkpointSHA, path string) ([]byte, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil, errors.New("worktree path is required")
+	}
+	if strings.TrimSpace(checkpointSHA) == "" {
+		return nil, errors.New("file checkpoint SHA is required")
+	}
+	if err := ref.ValidatePart(checkpointSHA); err != nil {
+		return nil, fmt.Errorf("file checkpoint SHA: %w", err)
+	}
+	if err := validateRepositoryRelativePath(path); err != nil {
+		return nil, fmt.Errorf("file path: %w", err)
+	}
+	cleanPath := filepath.ToSlash(path)
+	object := checkpointSHA + ":" + cleanPath
+	fileType, err := m.runner().Run(ctx, worktreePath, []string{"cat-file", "-t", object})
+	if err != nil {
+		return nil, fmt.Errorf("resolve %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
+	}
+	if strings.TrimSpace(string(fileType)) != "blob" {
+		return nil, fmt.Errorf("%q at checkpoint %q is not a regular file", cleanPath, checkpointSHA)
+	}
+	content, err := m.runner().Run(ctx, worktreePath, []string{"show", object})
+	if err != nil {
+		return nil, fmt.Errorf("read %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
+	}
+	return content, nil
 }
 
 // regularFileEntryPath returns the path of one `git ls-tree -z` entry when the
@@ -511,11 +552,20 @@ func validateCheckpointPath(path string) error {
 // validateRepositoryFilePath rejects repository file paths with traversal or
 // Git-metadata segments before they are combined with a checkpoint ref.
 func validateRepositoryFilePath(path string) error {
-	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
-		return errors.New("must be a safe repository-relative path")
+	if err := validateRepositoryRelativePath(path); err != nil {
+		return err
 	}
 	if !strings.EqualFold(filepath.Ext(path), ".md") {
 		return errors.New("must name a repository-relative Markdown file")
+	}
+	return nil
+}
+
+// validateRepositoryRelativePath accepts only a clean, traversal-free path that
+// stays inside the repository checkout and outside its Git metadata.
+func validateRepositoryRelativePath(path string) error {
+	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
+		return errors.New("must be a safe repository-relative path")
 	}
 	for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
 		if segment == ".." {

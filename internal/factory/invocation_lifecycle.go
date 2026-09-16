@@ -511,10 +511,18 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 			}
 		}
 	}
-	if err := ensureBaselineReadyForLaunch(ctx, request.RunStore, run, packet); err != nil {
+	if err := ensureBaselineReadyForLaunch(ctx, l.checkpointFileReader(), request.RunStore, run, packet); err != nil {
 		return LaunchSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+// checkpointFileReader resolves the exact-checkpoint read seam from the
+// configured worktree adapter, which the baseline verifier needs to read a
+// setup file as it stood at the base checkpoint.
+func (l *invocationLifecycle) checkpointFileReader() gitadapter.CheckpointFileReader {
+	reader, _ := l.worktree.(gitadapter.CheckpointFileReader)
+	return reader
 }
 
 // resolveLaunchRoleForGather supplies only the role information needed to

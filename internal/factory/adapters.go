@@ -34,6 +34,18 @@ func (s *Service) worktreeInspector() gitadapter.WorktreeInspector {
 	return inspector
 }
 
+// checkpointFileReader resolves the exact-checkpoint read seam used by the
+// baseline verifier. It returns nil when no configured adapter can read a
+// tracked file at a commit, and the verifier then refuses rather than falling
+// back to the working tree.
+func (s *Service) checkpointFileReader() gitadapter.CheckpointFileReader {
+	if reader, ok := s.deps.GitWorkspace.(gitadapter.CheckpointFileReader); ok {
+		return reader
+	}
+	reader, _ := s.deps.Worktree.(gitadapter.CheckpointFileReader)
+	return reader
+}
+
 // pullRequestClient resolves the dedicated pull-request adapter or a GitHub
 // client that implements it directly.
 func (s *Service) pullRequestClient() github.PullRequestClient {
