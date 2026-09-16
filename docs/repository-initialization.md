@@ -369,9 +369,13 @@ environment and the fixed `PATH`. The copy matters. The worker runs as uid
 checkout both writes build output the operator may not own and hides a command
 that depends on `.git`.
 
+The copy is created inside the checkout, because a Docker daemon can bind-mount
+only the host paths it shares. A macOS daemon in a virtual machine commonly
+shares `$HOME` and nothing else, so a system temporary directory is refused.
+
 ~~~sh
 cd <TARGET_REPO_PATH>
-worktree="$(mktemp -d)"
+worktree="$(mktemp -d "$(pwd)/.factory-proof.XXXXXX")"
 git archive HEAD | tar -x -C "$worktree"
 # The container writes as uid 10001, which does not own this copy.
 chmod -R a+rwX "$worktree"
@@ -386,7 +390,13 @@ docker run --rm --pull=never \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     /bin/sh -c 'npm ci && npm run lint && npm test && npm run build'
+rm -rf "$worktree"
 ~~~
+
+Remove the copy before the next proof. A gate that globs the whole tree would
+otherwise walk the dependencies the previous proof installed inside it. Ignore
+`.factory-proof.*` in the target repository so an interrupted proof cannot reach
+a commit.
 
 A command that needs an environment variable the worker does not supply, or a
 tool that is not on the fixed `PATH`, fails here rather than in the first
@@ -401,7 +411,9 @@ or fetches will not behave the same way in a run.
 
 ## Step 6: hand the host steps back to the operator
 
-Print these commands and let the operator run them from the target checkout:
+The coordinator binaries come from the Software Factory checkout; `make install`
+places them on the operator's Go bin path. Print these commands and let the
+operator run them from the target checkout:
 
 ~~~sh
 factory init
@@ -437,6 +449,12 @@ supported harness. A Claude-only repository therefore still needs a recorded
 Codex result, and the smoke needs both credential files to produce one. When
 only one credential exists, the smoke reports the missing harness and exits
 nonzero, and the diagnosis keeps blocking that harness.
+
+The smoke looks for `~/.codex/auth.json` and `~/.claude/.credentials.json`, and
+`CODEX_AUTH_PATH` and `CLAUDE_AUTH_PATH` override those defaults. A macOS
+operator whose Claude Code credential lives in the login Keychain has no file at
+the default path, and the smoke reports Claude as unrecorded until one is
+supplied.
 
 ## Verifying the result
 
