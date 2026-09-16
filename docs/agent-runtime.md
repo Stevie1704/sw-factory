@@ -147,7 +147,9 @@ route starts the architecture role first and hands its accepted design to the
 test role.
 The agent auth flags must name the same sources registered for the repository;
 distinct one-off sources are refused because recovery never persists host
-credential paths. Change the registered source with `factory register` instead.
+credential paths. Change the registered source with
+`factory register --update --codex-auth <path>` or
+`factory register --update --claude-auth <path>` instead.
 Every Codex, Claude, or mixed repository starts the selected role in its
 isolated worker. Harness output is inspected only as bounded adapter diagnostic
 data; it is not a workflow result. The command reports the invocation, run,
@@ -466,6 +468,15 @@ Registration may name one explicit host credential file per harness:
 factory register ... \
   --codex-auth /Users/me/.codex/auth.json \
   --claude-auth /Users/me/.claude/.credentials.json
+```
+
+To add or replace either source after the repository is registered, repeat the
+command with `--update` and the matching checkout. Unspecified harness sources
+remain unchanged:
+
+```sh
+factory register --update --repository /Users/me/src/project \
+  --codex-auth /Users/me/.codex/auth.json
 ```
 
 The worker adapter reads the one file belonging to the selected harness and

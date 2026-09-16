@@ -106,6 +106,34 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 	}
 }
 
+// TestRefreshAuthExplainsHowToRegisterAMissingCredentialSource verifies an
+// operator receives the registration remedy when no host source is configured.
+func TestRefreshAuthExplainsHowToRegisterAMissingCredentialSource(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	service := newDispatchingAgentService(t, runStore, headlessWorker, validRepositoryConfig(), config.AuthenticationConfig{})
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+
+	_, err = service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID})
+	if err == nil {
+		t.Fatal("RefreshAuth() error = nil, want missing-source guidance")
+	}
+	for _, want := range []string{
+		"no factory-managed codex credential source is registered",
+		"factory register --update --codex-auth <path>",
+		"factory auth refresh",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RefreshAuth() error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
 // headlessAgentWorker adds the detached process extension to the coordinator
 // test worker and replays the launched session identity the way Claude Code
 // confirms it in stream-json output.

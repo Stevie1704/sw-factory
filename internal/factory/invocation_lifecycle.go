@@ -405,7 +405,7 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 		return AuthRefreshResult{}, err
 	}
 	if seed == nil || strings.TrimSpace(credentialStoreID) == "" {
-		return AuthRefreshResult{}, fmt.Errorf("no factory-managed %s credential source is registered", harnessName)
+		return AuthRefreshResult{}, fmt.Errorf("no factory-managed %s credential source is registered; configure it with `factory register --update --%s-auth <path>` and retry `factory auth refresh`", harnessName, harnessName)
 	}
 	if invocation.CredentialStoreID == "" {
 		invocation.CredentialStoreID = credentialStoreID

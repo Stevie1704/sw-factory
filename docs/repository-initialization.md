@@ -476,15 +476,20 @@ operator run them from the target checkout:
 
 ~~~sh
 factory init
-factory register
+factory register \
+  --codex-auth <CODEX_AUTH_PATH> \
+  --claude-auth <CLAUDE_AUTH_PATH>
 factory bootstrap-labels
 factory doctor
 ~~~
 
 `factory register` infers the repository path, the GitHub owner and repository
 from the `origin` remote, and the authorized user from the authenticated `gh`
-account. See [Quick start](configuration.md#quick-start) for the explicit
-fallback flags.
+account. Replace each credential placeholder with an existing private regular
+credential file and omit the option when that harness has no host-side file.
+The authentication paths are never inferred. See [Quick start](configuration.md#quick-start)
+for the explicit fallback flags and the `--update` command for an existing
+registration.
 
 The skill smoke runs once per worker digest, from the Software Factory checkout,
 writing its evidence into the target repository:
