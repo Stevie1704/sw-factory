@@ -137,29 +137,11 @@ COPY --chown=factory:factory skills /home/factory/.claude/skills
 USER factory
 ~~~
 
-A repository that needs another toolchain copies it from an official image and
-links the commands its gates call onto the fixed `PATH`:
-
-~~~dockerfile
-ARG FACTORY_BASE_IMAGE=ghcr.io/stevie1704/sw-factory-base:v1
-ARG PYTHON_VERSION=3.13
-
-FROM python:${PYTHON_VERSION}-bookworm AS toolchain
-
-FROM ${FACTORY_BASE_IMAGE}
-
-USER root
-
-COPY --from=toolchain /usr/local/lib/python3.13 /usr/local/lib/python3.13
-COPY --from=toolchain /usr/local/bin/python3.13 /usr/local/bin/python3.13
-RUN ln -s /usr/local/bin/python3.13 /usr/local/bin/python3 \
-    && ln -s /usr/local/bin/python3.13 /usr/local/bin/python
-
-COPY --chown=factory:factory skills /home/factory/.codex/skills
-COPY --chown=factory:factory skills /home/factory/.claude/skills
-
-USER factory
-~~~
+A repository that needs another toolchain copies it from an official image in a
+second build stage and links the commands its gates call into `/usr/local/bin`.
+Copy everything that toolchain loads at runtime, not only its entry binary: a
+shared-library interpreter and its package manager are easy to leave behind, and
+the image contract check in Step 3 is where that shows up.
 
 `worker/Dockerfile` in the Software Factory checkout is the worked example for
 a compiled toolchain. Keep the build context at the `worker` directory, so the
@@ -381,13 +363,21 @@ compiled toolchain with a mandatory setup step.
 
 A gate is written into `factory.yaml` only after it has run inside the built
 image under the environment the worker actually supplies. Run each command the
-way the worker does, with an empty environment and the fixed `PATH`:
+way the worker does: against a sanitized copy of the checkout, with an empty
+environment and the fixed `PATH`. The copy matters. The worker runs as uid
+`10001` against a projection that carries no Git metadata, so mounting the live
+checkout both writes build output the operator may not own and hides a command
+that depends on `.git`.
 
 ~~~sh
 cd <TARGET_REPO_PATH>
+worktree="$(mktemp -d)"
+git archive HEAD | tar -x -C "$worktree"
+# The container writes as uid 10001, which does not own this copy.
+chmod -R a+rwX "$worktree"
 docker run --rm --pull=never \
   --cap-drop ALL --security-opt no-new-privileges \
-  --mount "type=bind,src=$(pwd),dst=/work" \
+  --mount "type=bind,src=$worktree,dst=/work" \
   --workdir /work \
   <IMAGE_NAME>@<DIGEST> /usr/bin/env -i \
     HOME=/home/factory \
@@ -403,9 +393,11 @@ tool that is not on the fixed `PATH`, fails here rather than in the first
 baseline suite of the first run. Repair the image definition, rebuild, and
 record the new digest.
 
-The production run reaches Git through a read-only projection at `/git` with no
-remotes, no hooks, and no credentials. A setup command or gate that contacts a
-network or reads Git configuration will not behave the same way in a run.
+A run uses the ordinary bridge network, so a setup command may install
+dependencies from a registry. It reaches Git through a read-only projection at
+`/git` that carries history, refs, and the run worktree state but no remotes, no
+hooks, and no Git configuration. A command that reads Git configuration, pushes,
+or fetches will not behave the same way in a run.
 
 ## Step 6: hand the host steps back to the operator
 
@@ -437,8 +429,14 @@ WORKER_DIGEST=<DIGEST> \
 It reads the operator's Codex and Claude Code credential files, invokes each
 harness in the image once per mandated skill, and records the result keyed by
 the digest and the harness version. Startup diagnosis reads that record instead
-of repeating the paid call, and a new digest invalidates it. Without a record,
-the diagnosis blocks every shipped harness.
+of repeating the paid call, and a new digest invalidates it.
+
+The diagnosis checks both shipped harnesses whatever the repository declares in
+`role_harness_defaults`, because a repository may later assign any role to any
+supported harness. A Claude-only repository therefore still needs a recorded
+Codex result, and the smoke needs both credential files to produce one. When
+only one credential exists, the smoke reports the missing harness and exits
+nonzero, and the diagnosis keeps blocking that harness.
 
 ## Verifying the result
 
