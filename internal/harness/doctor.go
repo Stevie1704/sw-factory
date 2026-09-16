@@ -126,8 +126,8 @@ func StartupChecks(request StartupRequest) []doctor.Check {
 }
 
 // selectedHarnesses returns both built-in harnesses plus any extra name in the
-// policy, in deterministic order. The worker image is therefore checked for
-// both supported adapters even when a repository currently selects only one.
+// policy, in deterministic order. The worker image is checked for both
+// supported adapters even when a repository currently selects only one.
 func selectedHarnesses(policy *config.RepositoryConfig) []string {
 	seen := map[string]struct{}{NameClaude: {}, NameCodex: {}}
 	if policy == nil {
@@ -145,6 +145,26 @@ func selectedHarnesses(policy *config.RepositoryConfig) []string {
 	}
 	sort.Strings(selected)
 	return selected
+}
+
+// requiresSkillSmoke reports whether one harness can run a repository role in
+// the current policy. An unavailable policy remains fail-closed because the
+// coordinator cannot safely determine which harnesses the repository permits.
+func requiresSkillSmoke(policy *config.RepositoryConfig, harnessName string) bool {
+	if policy == nil {
+		return true
+	}
+	for _, selected := range policy.RoleHarnessDefaults {
+		if strings.TrimSpace(string(selected)) == harnessName {
+			return true
+		}
+	}
+	for _, override := range policy.AllowedOverrides {
+		if override == config.OverrideHarness {
+			return true
+		}
+	}
+	return false
 }
 
 // nativeResumeCheck adapts the capability validation error to a bounded
@@ -209,12 +229,14 @@ func credentialCheck(name, path string, image worker.ImageReference, checker wor
 // skillContractCheck verifies one harness advertises every role-mandated skill
 // in the pinned worker image, and that a recorded smoke result proves a real
 // invocation of that exact image and harness build could use them. Startup
-// reads the recorded result rather than paying for a model call. Every shipped
-// harness must carry that evidence: a repository may assign any role to any
-// supported harness, so an unverified harness is not a safe run.
+// reads the recorded result rather than paying for a model call. Evidence is
+// blocking only when the repository can select the harness through its role
+// defaults or an allowed harness override; the deterministic image contract
+// remains blocking for every shipped harness.
 func skillContractCheck(request StartupRequest, name string) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		diagnosis := name + " worker skill contract"
+		blocking := requiresSkillSmoke(request.Policy, name)
 		if request.SkillChecker == nil {
 			return doctor.Failure(diagnosis, "the worker skill diagnosis adapter is unavailable", "configure the Docker worker runtime")
 		}
@@ -225,11 +247,21 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		}
 		evidence, err := LoadSkillSmokeEvidence(request.SkillEvidencePath)
 		if err != nil {
-			return doctor.Failure(diagnosis, "the recorded worker skill smoke evidence is unavailable", "record a smoke result for the pinned worker digest with scripts/smoke-skills.sh")
+			return skillEvidenceResult(blocking, diagnosis, "the recorded worker skill smoke evidence is unavailable", "record a smoke result for the pinned worker digest with scripts/smoke-skills.sh")
 		}
 		if !evidence.Covers(request.Image.Digest, name, contract.Version, required) {
-			return doctor.Failure(diagnosis, "no recorded smoke result proves "+name+" can use the role-mandated skills in the pinned worker image", "record a smoke result for the pinned worker digest and harness version with scripts/smoke-skills.sh")
+			return skillEvidenceResult(blocking, diagnosis, "no recorded smoke result proves "+name+" can use the role-mandated skills in the pinned worker image", "record a smoke result for the pinned worker digest and harness version with scripts/smoke-skills.sh")
 		}
 		return doctor.Success(diagnosis)
 	}
+}
+
+// skillEvidenceResult applies the repository policy's blocking scope to a
+// missing or stale real-invocation smoke result. The deterministic image skill
+// contract remains blocking for every shipped harness.
+func skillEvidenceResult(blocking bool, diagnosisName, problem, action string) doctor.Result {
+	if blocking {
+		return doctor.Failure(diagnosisName, problem, action)
+	}
+	return doctor.Warning(diagnosisName, problem, action)
 }

@@ -94,10 +94,11 @@ middle one costs a model call.
    For every shipped harness it probes the pinned image for the installed,
    unduplicated, model-visible skill set, and then reads the recorded smoke
    result for that exact digest and harness version. It never makes a model
-   call of its own. Both parts block for every shipped harness, not only for
-   the harness `role_harness_defaults` currently selects: a repository may
-   assign any role to any supported harness, so an unverified harness is not a
-   safe run.
+   call of its own. The image contract is checked for every shipped harness,
+   while missing smoke evidence blocks only for harnesses selected by
+   `role_harness_defaults`, or for both supported harnesses when
+   `allowed_overrides` contains `harness`. An unselected harness is reported
+   as advisory until the repository can select it.
 
 The smoke exits non-zero when any harness it was asked to prove produced no
 record, so a skipped harness never reads as a pass.
