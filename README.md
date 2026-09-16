@@ -37,6 +37,11 @@ diagnosis described in [Configuration and local
 operation](docs/configuration.md). It checks the host, repository, GitHub,
 worker, harness, authentication, and operational-store prerequisites together.
 
+To prepare a repository that has none of this yet, follow [Repository
+initialization](docs/repository-initialization.md). It is the ordered procedure
+that produces the worker image, the pinned digest, and the checked-in
+`factory.yaml`, and it contains a prompt that hands the work to an agent.
+
 ## Install
 
 From this checkout:
@@ -67,7 +72,9 @@ shows how they fit together.
 2. **Prepare the repository.** Review the checked-in policy, build the worker
    image, and confirm the target issue is authorized. Follow [Checked-in
    repository configuration](docs/configuration.md#checked-in-repository-configuration)
-   and [Claiming an issue](docs/configuration.md#claiming-an-issue).
+   and [Claiming an issue](docs/configuration.md#claiming-an-issue). A
+   repository that is not prepared yet starts at [Repository
+   initialization](docs/repository-initialization.md).
 3. **Start supervision.** Start the coordinator or use the deliberate
    one-shot operations described in the [end-to-end
    demonstration](docs/configuration.md#end-to-end-demonstration).
@@ -93,6 +100,7 @@ Each operational contract has one owner:
 
 | Topic | Canonical document |
 | --- | --- |
+| Preparing a new repository for factory runs, as an ordered agent-runnable procedure | [Repository initialization](docs/repository-initialization.md) |
 | Host and repository configuration, issue operations, polling, GitHub commands, cleanup, and reset | [Configuration and local operation](docs/configuration.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
 | Worker operations, stable paths, mounts, process state, and isolation | [Worker runtime](docs/worker-runtime.md) |
