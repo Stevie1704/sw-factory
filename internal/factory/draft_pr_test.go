@@ -625,6 +625,14 @@ func (w *draftGitWorkspace) Create(context.Context, string, string, string) (git
 
 // ReadRepositoryGuidance returns no documents for the in-memory Git fixture;
 // production capture still requires the exact-checkpoint reader seam.
+// ReadFileAtCheckpoint serves the fixture's working tree for any checkpoint.
+// The fixture mints no commits, so a test varies the configured setup inputs
+// by writing the file; exact-checkpoint reads are covered against real Git in
+// internal/git.
+func (*draftGitWorkspace) ReadFileAtCheckpoint(_ context.Context, worktreePath, _, path string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(worktreePath, filepath.FromSlash(path)))
+}
+
 func (*draftGitWorkspace) ReadRepositoryGuidance(context.Context, string, string) ([]gitadapter.GuidanceDocument, error) {
 	return nil, nil
 }

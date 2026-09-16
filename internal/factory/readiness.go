@@ -103,7 +103,7 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	if err := s.verifyGateCheckpoint(ctx, run); err != nil {
 		return run, fmt.Errorf("verify final readiness checkpoint: %w", err)
 	}
-	if err := ensureFinalCheckpointGatesPassed(ctx, runStore, run, packet); err != nil {
+	if err := ensureFinalCheckpointGatesPassed(ctx, s.checkpointFileReader(), runStore, run, packet); err != nil {
 		return run, err
 	}
 

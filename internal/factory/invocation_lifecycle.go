@@ -188,6 +188,7 @@ type invocationLifecycle struct {
 	headlessHarnesses   map[config.Harness]harness.HeadlessRuntime
 	harnessCapabilities harness.CapabilityResolver
 	worktree            gitadapter.WorktreeInspector
+	checkpointFiles     gitadapter.CheckpointFileReader
 	clock               Clock
 	hooks               invocationLifecycleHooks
 }
@@ -196,14 +197,14 @@ var _ InvocationLifecycle = (*invocationLifecycle)(nil)
 
 // newInvocationLifecycle constructs the module from explicit adapters and
 // hooks. It intentionally accepts only explicit adapters and effects.
-func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, clock Clock, hooks invocationLifecycleHooks, headless map[config.Harness]harness.HeadlessRuntime) *invocationLifecycle {
+func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.WorkerRuntime, capabilities harness.CapabilityResolver, worktree gitadapter.WorktreeInspector, checkpointFiles gitadapter.CheckpointFileReader, clock Clock, hooks invocationLifecycleHooks, headless map[config.Harness]harness.HeadlessRuntime) *invocationLifecycle {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
 	return &invocationLifecycle{
 		journal: journal, worker: workerRuntime,
 		headlessHarnesses:   headless,
-		harnessCapabilities: capabilities, worktree: worktree, clock: clock, hooks: hooks,
+		harnessCapabilities: capabilities, worktree: worktree, checkpointFiles: checkpointFiles, clock: clock, hooks: hooks,
 	}
 }
 
@@ -511,7 +512,7 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 			}
 		}
 	}
-	if err := ensureBaselineReadyForLaunch(ctx, request.RunStore, run, packet); err != nil {
+	if err := ensureBaselineReadyForLaunch(ctx, l.checkpointFiles, request.RunStore, run, packet); err != nil {
 		return LaunchSnapshot{}, err
 	}
 	return snapshot, nil

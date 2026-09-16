@@ -22,6 +22,7 @@ func (s *Service) lifecycleModule() *invocationLifecycle {
 		s.deps.Worker,
 		s.deps.HarnessCapabilities,
 		s.worktreeInspector(),
+		s.checkpointFileReader(),
 		s.deps.Now,
 		invocationLifecycleHooks{
 			persistRun:               s.persistAgentRunState,

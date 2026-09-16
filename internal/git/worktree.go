@@ -128,6 +128,15 @@ type RepositoryCraftReader interface {
 	ReadRepositoryCraft(context.Context, string, string, string) (GuidanceDocument, error)
 }
 
+// CheckpointFileReader is the optional exact-checkpoint read seam that reads
+// one tracked file as it was committed, without consulting the working tree.
+// Verifiers use it so a projection recorded at one checkpoint stays checkable
+// after later commits change the same file.
+type CheckpointFileReader interface {
+	// ReadFileAtCheckpoint reads one tracked file's bytes at an exact commit.
+	ReadFileAtCheckpoint(ctx context.Context, worktreePath, checkpointSHA, path string) ([]byte, error)
+}
+
 // WorktreeInspector is the optional read-only worktree observation seam.
 type WorktreeInspector interface {
 	// Inspect reads the current commit and changed paths without mutating Git.
@@ -277,32 +286,47 @@ func (m *LocalWorktreeManager) ReadRepositoryGuidance(ctx context.Context, workt
 // ReadRepositoryCraft reads a configured role-craft file from the immutable
 // checkpoint, never from the mutable run worktree or ordinary checkout.
 func (m *LocalWorktreeManager) ReadRepositoryCraft(ctx context.Context, worktreePath, checkpointSHA, path string) (GuidanceDocument, error) {
-	if strings.TrimSpace(worktreePath) == "" {
-		return GuidanceDocument{}, errors.New("worktree path is required")
-	}
-	if strings.TrimSpace(checkpointSHA) == "" {
-		return GuidanceDocument{}, errors.New("craft checkpoint SHA is required")
-	}
-	if err := ref.ValidatePart(checkpointSHA); err != nil {
-		return GuidanceDocument{}, fmt.Errorf("craft checkpoint SHA: %w", err)
-	}
 	if err := validateRepositoryFilePath(path); err != nil {
 		return GuidanceDocument{}, fmt.Errorf("craft path: %w", err)
 	}
+	content, err := m.ReadFileAtCheckpoint(ctx, worktreePath, checkpointSHA, path)
+	if err != nil {
+		return GuidanceDocument{}, fmt.Errorf("read repository craft: %w", err)
+	}
+	return GuidanceDocument{Path: filepath.ToSlash(path), Content: string(content)}, nil
+}
+
+// ReadFileAtCheckpoint reads one tracked file's bytes at an exact commit. It
+// accepts only a regular file tree entry, so a symbolic link cannot present
+// its target path as the file's own content, and an untracked or ignored path
+// fails here rather than silently reading whatever the working tree holds.
+func (m *LocalWorktreeManager) ReadFileAtCheckpoint(ctx context.Context, worktreePath, checkpointSHA, path string) ([]byte, error) {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil, errors.New("worktree path is required")
+	}
+	if strings.TrimSpace(checkpointSHA) == "" {
+		return nil, errors.New("file checkpoint SHA is required")
+	}
+	if err := ref.ValidatePart(checkpointSHA); err != nil {
+		return nil, fmt.Errorf("file checkpoint SHA: %w", err)
+	}
+	if err := validateRepositoryRelativePath(path); err != nil {
+		return nil, fmt.Errorf("file path: %w", err)
+	}
 	cleanPath := filepath.ToSlash(path)
-	object := checkpointSHA + ":" + cleanPath
-	fileType, err := m.runner().Run(ctx, worktreePath, []string{"cat-file", "-t", object})
+	entry, err := m.runner().Run(ctx, worktreePath, []string{"ls-tree", "-z", checkpointSHA, "--", cleanPath})
 	if err != nil {
-		return GuidanceDocument{}, fmt.Errorf("resolve repository craft %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
+		return nil, fmt.Errorf("resolve %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
 	}
-	if strings.TrimSpace(string(fileType)) != "blob" {
-		return GuidanceDocument{}, fmt.Errorf("repository craft %q at checkpoint %q is not a regular file", cleanPath, checkpointSHA)
+	tracked, ok := regularFileEntryPath(strings.TrimRight(string(entry), "\x00"))
+	if !ok || tracked != cleanPath {
+		return nil, fmt.Errorf("%q is not a regular file tracked at checkpoint %q", cleanPath, checkpointSHA)
 	}
-	content, err := m.runner().Run(ctx, worktreePath, []string{"show", object})
+	content, err := m.runner().Run(ctx, worktreePath, []string{"show", checkpointSHA + ":" + cleanPath})
 	if err != nil {
-		return GuidanceDocument{}, fmt.Errorf("read repository craft %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
+		return nil, fmt.Errorf("read %q at checkpoint %q: %w", cleanPath, checkpointSHA, err)
 	}
-	return GuidanceDocument{Path: cleanPath, Content: string(content)}, nil
+	return content, nil
 }
 
 // regularFileEntryPath returns the path of one `git ls-tree -z` entry when the
@@ -509,14 +533,40 @@ func validateCheckpointPath(path string) error {
 }
 
 // validateRepositoryFilePath rejects repository file paths with traversal or
-// Git-metadata segments before they are combined with a checkpoint ref.
+// validateRepositoryFilePath accepts only a safe repository-relative path that
+// names a Markdown document. The Markdown rule is checked in its original
+// position so an existing caller keeps the error it has always reported.
 func validateRepositoryFilePath(path string) error {
-	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
-		return errors.New("must be a safe repository-relative path")
+	if err := validateRepositoryPathSyntax(path); err != nil {
+		return err
 	}
 	if !strings.EqualFold(filepath.Ext(path), ".md") {
 		return errors.New("must name a repository-relative Markdown file")
 	}
+	return validateRepositoryPathContainment(path)
+}
+
+// validateRepositoryRelativePath accepts any clean, traversal-free path that
+// stays inside the repository checkout and outside its Git metadata.
+func validateRepositoryRelativePath(path string) error {
+	if err := validateRepositoryPathSyntax(path); err != nil {
+		return err
+	}
+	return validateRepositoryPathContainment(path)
+}
+
+// validateRepositoryPathSyntax rejects a path Git cannot address as one
+// repository-relative argument.
+func validateRepositoryPathSyntax(path string) error {
+	if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\x00\r\n\\") || filepath.IsAbs(path) {
+		return errors.New("must be a safe repository-relative path")
+	}
+	return nil
+}
+
+// validateRepositoryPathContainment rejects a path that escapes the checkout,
+// reaches into Git metadata, or is spelled in a form other than its clean one.
+func validateRepositoryPathContainment(path string) error {
 	for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
 		if segment == ".." {
 			return errors.New("must not contain parent traversal segments")
