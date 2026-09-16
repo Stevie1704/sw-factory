@@ -37,7 +37,7 @@ func (m *LocalWorktreeManager) DiscoverRepository(ctx context.Context, workingDi
 	}
 	rootOutput, err := m.runner().Run(ctx, directory, []string{"rev-parse", "--show-toplevel"})
 	if err != nil {
-		return RepositoryDiscovery{}, fmt.Errorf("%q is not inside a Git checkout: run factory register from a checkout or pass --repository", directory)
+		return RepositoryDiscovery{}, fmt.Errorf("%q is not inside a Git checkout", directory)
 	}
 	root := strings.TrimSpace(string(rootOutput))
 	if root == "" {
@@ -49,30 +49,30 @@ func (m *LocalWorktreeManager) DiscoverRepository(ctx context.Context, workingDi
 	}
 	fetchOutput, err := m.runner().Run(ctx, directory, []string{"remote", "get-url", DefaultRemoteName})
 	if err != nil {
-		return RepositoryDiscovery{}, fmt.Errorf("the checkout at %q has no %s remote: add one or pass --github-owner and --github-repository", root, DefaultRemoteName)
+		return RepositoryDiscovery{}, fmt.Errorf("the checkout at %q has no %s remote", root, DefaultRemoteName)
 	}
-	owner, repository, ok := ParseGitHubRemote(string(fetchOutput))
+	owner, repository, ok := parseGitHubRemote(string(fetchOutput))
 	if !ok {
-		return RepositoryDiscovery{}, fmt.Errorf("the %s remote does not identify a GitHub repository: pass --github-owner and --github-repository", DefaultRemoteName)
+		return RepositoryDiscovery{}, fmt.Errorf("the %s remote does not identify a GitHub repository", DefaultRemoteName)
 	}
 	pushOutput, err := m.runner().Run(ctx, directory, []string{"remote", "get-url", "--push", DefaultRemoteName})
 	if err != nil {
-		return RepositoryDiscovery{}, fmt.Errorf("the %s remote's push URL cannot be read: pass --github-owner and --github-repository", DefaultRemoteName)
+		return RepositoryDiscovery{}, fmt.Errorf("the %s remote's push URL cannot be read", DefaultRemoteName)
 	}
-	pushOwner, pushRepository, ok := ParseGitHubRemote(string(pushOutput))
+	pushOwner, pushRepository, ok := parseGitHubRemote(string(pushOutput))
 	if !ok {
-		return RepositoryDiscovery{}, fmt.Errorf("the %s remote's push URL does not identify a GitHub repository: pass --github-owner and --github-repository", DefaultRemoteName)
+		return RepositoryDiscovery{}, fmt.Errorf("the %s remote's push URL does not identify a GitHub repository", DefaultRemoteName)
 	}
 	if !strings.EqualFold(owner, pushOwner) || !strings.EqualFold(repository, pushRepository) {
-		return RepositoryDiscovery{}, fmt.Errorf("the %s remote's fetch and push URLs identify different GitHub repositories: pass --github-owner and --github-repository", DefaultRemoteName)
+		return RepositoryDiscovery{}, fmt.Errorf("the %s remote's fetch and push URLs identify different GitHub repositories", DefaultRemoteName)
 	}
 	return RepositoryDiscovery{Root: root, Owner: owner, Repository: repository}, nil
 }
 
-// ParseGitHubRemote extracts the owner and repository named by one Git remote
+// parseGitHubRemote extracts the owner and repository named by one Git remote
 // URL, accepting the HTTPS, ssh://, and scp-like SSH forms emitted by Git. It
 // reports false for any URL that does not name a github.com repository.
-func ParseGitHubRemote(value string) (string, string, bool) {
+func parseGitHubRemote(value string) (string, string, bool) {
 	remote := strings.TrimSpace(value)
 	if remote == "" || strings.ContainsAny(remote, "\x00\r\n") {
 		return "", "", false

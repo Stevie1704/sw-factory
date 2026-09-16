@@ -12,7 +12,8 @@ import (
 var errAccountUnavailable = errors.New("the authenticated GitHub account could not be read: run gh auth login for the account that supervises the repository")
 
 // AccountReader resolves the login of the locally authenticated GitHub
-// account. It is read-only and never reads or stores the CLI credential.
+// account. It is the only reliable coordinator identity available to the
+// adapter, and it is read-only: the CLI credential is never read or stored.
 type AccountReader interface {
 	AuthenticatedLogin(context.Context) (string, error)
 }

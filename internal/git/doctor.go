@@ -380,7 +380,7 @@ func validateDoctorRepository(path string) error {
 // remoteMatches compares a GitHub owner/repository identity against one Git
 // remote URL in any form the Git command emits.
 func remoteMatches(value, owner, repository string) bool {
-	remoteOwner, remoteRepository, ok := ParseGitHubRemote(value)
+	remoteOwner, remoteRepository, ok := parseGitHubRemote(value)
 	if !ok {
 		return false
 	}

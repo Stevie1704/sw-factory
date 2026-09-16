@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 )
@@ -106,18 +107,19 @@ func TestRegisterInfersEveryMissingValueFromASubdirectory(t *testing.T) {
 	if !filepath.IsAbs(result.RepositoryPath) {
 		t.Fatalf("RepositoryPath = %q, want an absolute path", result.RepositoryPath)
 	}
-	if result.GitHubOwner != "example" || result.GitHubRepository != "project" {
-		t.Fatalf("identity = %q/%q, want example/project", result.GitHubOwner, result.GitHubRepository)
+	registration := loadRegistration(t, fixture.configPath)
+	if registration.GitHub.Owner != "example" || registration.GitHub.Repository != "project" {
+		t.Fatalf("registered identity = %q/%q, want example/project", registration.GitHub.Owner, registration.GitHub.Repository)
 	}
-	if strings.Join(result.AuthorizedUsers, ",") != "alice" {
-		t.Fatalf("AuthorizedUsers = %v, want [alice]", result.AuthorizedUsers)
+	if strings.Join(registration.AuthorizedUsers, ",") != "alice" {
+		t.Fatalf("registered authorized users = %v, want [alice]", registration.AuthorizedUsers)
 	}
-	if result.RepositoryConfigPath != filepath.Join(fixture.repository, "factory.yaml") {
-		t.Fatalf("RepositoryConfigPath = %q, want the checkout's factory.yaml", result.RepositoryConfigPath)
+	if registration.RepositoryConfigPath != filepath.Join(fixture.repository, "factory.yaml") {
+		t.Fatalf("registered repository config = %q, want the checkout's factory.yaml", registration.RepositoryConfigPath)
 	}
-	want := []string{"repository", "github-owner", "github-repository", "authorized-user"}
-	if strings.Join(result.InferredFields, ",") != strings.Join(want, ",") {
-		t.Fatalf("InferredFields = %v, want %v", result.InferredFields, want)
+	want := []string{"repository=" + fixture.repository, "github-owner=example", "github-repository=project", "authorized-user=alice"}
+	if strings.Join(inferredPairs(result), ",") != strings.Join(want, ",") {
+		t.Fatalf("inferred = %v, want %v", inferredPairs(result), want)
 	}
 }
 
@@ -130,15 +132,15 @@ func TestRegisterLetsExplicitFlagsOverrideInferenceIndependently(t *testing.T) {
 		name     string
 		mutate   func(*factory.RegisterRequest)
 		inferred []string
-		verify   func(*testing.T, factory.RegisterResult)
+		verify   func(*testing.T, config.RepositoryRegistration)
 	}{
 		{
 			name:     "explicit owner",
 			mutate:   func(request *factory.RegisterRequest) { request.GitHubOwner = "other" },
 			inferred: []string{"repository", "github-repository", "authorized-user"},
-			verify: func(t *testing.T, result factory.RegisterResult) {
-				if result.GitHubOwner != "other" || result.GitHubRepository != "project" {
-					t.Fatalf("identity = %q/%q, want other/project", result.GitHubOwner, result.GitHubRepository)
+			verify: func(t *testing.T, registration config.RepositoryRegistration) {
+				if registration.GitHub.Owner != "other" || registration.GitHub.Repository != "project" {
+					t.Fatalf("registered identity = %q/%q, want other/project", registration.GitHub.Owner, registration.GitHub.Repository)
 				}
 			},
 		},
@@ -146,9 +148,9 @@ func TestRegisterLetsExplicitFlagsOverrideInferenceIndependently(t *testing.T) {
 			name:     "explicit repository name",
 			mutate:   func(request *factory.RegisterRequest) { request.GitHubRepository = "fork" },
 			inferred: []string{"repository", "github-owner", "authorized-user"},
-			verify: func(t *testing.T, result factory.RegisterResult) {
-				if result.GitHubOwner != "example" || result.GitHubRepository != "fork" {
-					t.Fatalf("identity = %q/%q, want example/fork", result.GitHubOwner, result.GitHubRepository)
+			verify: func(t *testing.T, registration config.RepositoryRegistration) {
+				if registration.GitHub.Owner != "example" || registration.GitHub.Repository != "fork" {
+					t.Fatalf("registered identity = %q/%q, want example/fork", registration.GitHub.Owner, registration.GitHub.Repository)
 				}
 			},
 		},
@@ -156,9 +158,9 @@ func TestRegisterLetsExplicitFlagsOverrideInferenceIndependently(t *testing.T) {
 			name:     "explicit authorized users",
 			mutate:   func(request *factory.RegisterRequest) { request.AuthorizedUsers = []string{"bob", "carol"} },
 			inferred: []string{"repository", "github-owner", "github-repository"},
-			verify: func(t *testing.T, result factory.RegisterResult) {
-				if strings.Join(result.AuthorizedUsers, ",") != "bob,carol" {
-					t.Fatalf("AuthorizedUsers = %v, want [bob carol]", result.AuthorizedUsers)
+			verify: func(t *testing.T, registration config.RepositoryRegistration) {
+				if strings.Join(registration.AuthorizedUsers, ",") != "bob,carol" {
+					t.Fatalf("registered authorized users = %v, want [bob carol]", registration.AuthorizedUsers)
 				}
 			},
 		},
@@ -177,10 +179,10 @@ func TestRegisterLetsExplicitFlagsOverrideInferenceIndependently(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Register() error = %v", err)
 			}
-			if strings.Join(result.InferredFields, ",") != strings.Join(tc.inferred, ",") {
-				t.Fatalf("InferredFields = %v, want %v", result.InferredFields, tc.inferred)
+			if strings.Join(inferredFlags(result), ",") != strings.Join(tc.inferred, ",") {
+				t.Fatalf("inferred flags = %v, want %v", inferredFlags(result), tc.inferred)
 			}
-			tc.verify(t, result)
+			tc.verify(t, loadRegistration(t, fixture.configPath))
 		})
 	}
 }
@@ -227,8 +229,8 @@ func TestRegisterSkipsInferenceWhenEveryValueIsExplicit(t *testing.T) {
 	if fixture.discoverer.callCount != 0 || fixture.account.callCount != 0 {
 		t.Fatalf("inference ran %d discovery and %d account calls, want none", fixture.discoverer.callCount, fixture.account.callCount)
 	}
-	if len(result.InferredFields) != 0 {
-		t.Fatalf("InferredFields = %v, want none", result.InferredFields)
+	if len(result.Inferred) != 0 {
+		t.Fatalf("inferred = %v, want none", result.Inferred)
 	}
 }
 
@@ -345,4 +347,37 @@ func TestRegisterReportsAMissingHostConfigurationBeforeInference(t *testing.T) {
 	if discoverer.callCount != 0 || account.callCount != 0 {
 		t.Fatal("inference ran before the host configuration was loaded")
 	}
+}
+
+// loadRegistration reads the single repository registration a register call
+// persisted, so assertions observe the stored schema rather than a result echo.
+func loadRegistration(t *testing.T, configPath string) config.RepositoryRegistration {
+	t.Helper()
+
+	host, err := config.LoadHost(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(host.Repositories) != 1 {
+		t.Fatalf("registered repositories = %d, want 1", len(host.Repositories))
+	}
+	return host.Repositories[0]
+}
+
+// inferredFlags lists the register flags a result reports as inferred.
+func inferredFlags(result factory.RegisterResult) []string {
+	flags := make([]string, 0, len(result.Inferred))
+	for _, value := range result.Inferred {
+		flags = append(flags, value.Flag)
+	}
+	return flags
+}
+
+// inferredPairs lists each inferred register flag with the value it resolved to.
+func inferredPairs(result factory.RegisterResult) []string {
+	pairs := make([]string, 0, len(result.Inferred))
+	for _, value := range result.Inferred {
+		pairs = append(pairs, value.Flag+"="+value.Value)
+	}
+	return pairs
 }

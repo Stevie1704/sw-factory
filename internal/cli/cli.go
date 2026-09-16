@@ -547,19 +547,8 @@ func runInit(ctx context.Context, args []string, defaultConfigPath string, outpu
 // inferred from the Git checkout and the authenticated GitHub account, so an
 // operator sees exactly which flag would override each one.
 func writeInferredRegistrationValues(output, errorsOutput io.Writer, result factory.RegisterResult) bool {
-	for _, field := range result.InferredFields {
-		var value string
-		switch field {
-		case "repository":
-			value = result.RepositoryPath
-		case "github-owner":
-			value = result.GitHubOwner
-		case "github-repository":
-			value = result.GitHubRepository
-		case "authorized-user":
-			value = strings.Join(result.AuthorizedUsers, ", ")
-		}
-		if !writeOutput(output, errorsOutput, "inferred --%s: %s\n", field, value) {
+	for _, value := range result.Inferred {
+		if !writeOutput(output, errorsOutput, "inferred --%s: %s\n", value.Flag, value.Value) {
 			return false
 		}
 	}

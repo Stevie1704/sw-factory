@@ -256,17 +256,9 @@ type RegisterRequest struct {
 type RegisterResult struct {
 	RepositoryPath      string
 	OperationalDataPath string
-	// GitHubOwner is the registered GitHub owner, inferred or explicit.
-	GitHubOwner string
-	// GitHubRepository is the registered GitHub repository name, inferred or explicit.
-	GitHubRepository string
-	// AuthorizedUsers are the registered authorized GitHub logins.
-	AuthorizedUsers []string
-	// RepositoryConfigPath is the registered checked-in configuration path.
-	RepositoryConfigPath string
-	// InferredFields names every registration flag whose value was inferred
-	// rather than supplied, in the order inference resolved them.
-	InferredFields []string
+	// Inferred lists every registration value that was inferred rather than
+	// supplied, in the order inference resolved them.
+	Inferred []InferredValue
 }
 
 // StatusResult reports the registered repository and the latest known run.
@@ -426,7 +418,7 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	if len(host.Repositories) != 0 {
 		return RegisterResult{}, errors.New("version one already has a registered repository")
 	}
-	request, inferredFields, err := s.inferRegistration(ctx, request)
+	request, inferred, err := s.inferRegistration(ctx, request)
 	if err != nil {
 		return RegisterResult{}, err
 	}
@@ -485,15 +477,7 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	if err := s.deps.Config.Save(s.configPath, host); err != nil {
 		return RegisterResult{}, fmt.Errorf("save host configuration after creating operational store %q: %w", operationalPath, err)
 	}
-	return RegisterResult{
-		RepositoryPath:       repositoryPath,
-		OperationalDataPath:  operationalPath,
-		GitHubOwner:          registration.GitHub.Owner,
-		GitHubRepository:     registration.GitHub.Repository,
-		AuthorizedUsers:      registration.AuthorizedUsers,
-		RepositoryConfigPath: repositoryConfigPath,
-		InferredFields:       inferredFields,
-	}, nil
+	return RegisterResult{RepositoryPath: repositoryPath, OperationalDataPath: operationalPath, Inferred: inferred}, nil
 }
 
 func (s *Service) Status(ctx context.Context) (StatusResult, error) {
