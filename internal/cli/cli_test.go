@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/cli"
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -458,6 +459,64 @@ func TestRunRegisterAcceptsMultipleAuthorizedUserFlags(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "registered repository") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+// TestRunRegisterUpdatesCredentialSourcesForAMatchingRepository verifies the
+// command exposes the safe host-registration update path and reports it.
+func TestRunRegisterUpdatesCredentialSourcesForAMatchingRepository(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidRepositoryConfig(t, repositoryPath)
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{
+		"register",
+		"--config", configPath,
+		"--repository", repositoryPath,
+		"--github-owner", "example",
+		"--github-repository", "project",
+		"--authorized-user", "alice",
+		"--operational-data", operationalPath,
+	}, &output, &output); code != 0 {
+		t.Fatalf("initial register exit code = %d, output = %s", code, output.String())
+	}
+
+	codexAuthPath := filepath.Join(root, "credentials", "codex-auth.json")
+	claudeAuthPath := filepath.Join(root, "credentials", "claude-credentials.json")
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{
+		"register",
+		"--config", configPath,
+		"--update",
+		"--repository", repositoryPath,
+		"--codex-auth", codexAuthPath,
+		"--claude-auth", claudeAuthPath,
+	}, &output, &output); code != 0 {
+		t.Fatalf("updated register exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "updated repository registration: "+repositoryPath) {
+		t.Fatalf("updated register output = %q, want update summary", output.String())
+	}
+
+	host, err := config.LoadHost(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := host.Repositories[0]
+	if registration.Authentication.CodexAuthPath != codexAuthPath || registration.Authentication.ClaudeAuthPath != claudeAuthPath {
+		t.Fatalf("authentication = %#v, want both updated credential sources", registration.Authentication)
 	}
 }
 

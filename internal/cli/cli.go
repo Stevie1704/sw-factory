@@ -562,6 +562,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	flags := flag.NewFlagSet("register", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	update := flags.Bool("update", false, "update credential sources for the matching registered repository")
 	repositoryPath := flags.String("repository", "", "registered repository path; inferred from the current Git checkout when omitted")
 	githubOwner := flags.String("github-owner", "", "GitHub repository owner; inferred from the checkout's origin remote when omitted")
 	githubRepository := flags.String("github-repository", "", "GitHub repository name; inferred from the checkout's origin remote when omitted")
@@ -587,6 +588,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	}
 	service := factory.New(*configPath)
 	result, err := service.Register(ctx, factory.RegisterRequest{
+		Update:               *update,
 		RepositoryPath:       *repositoryPath,
 		GitHubOwner:          *githubOwner,
 		GitHubRepository:     *githubRepository,
@@ -606,7 +608,11 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	if !writeInferredRegistrationValues(output, errorsOutput, result) {
 		return 1
 	}
-	if !writeOutput(output, errorsOutput, "registered repository: %s\noperational store: %s\n", result.RepositoryPath, result.OperationalDataPath) {
+	summary := "registered repository"
+	if result.Updated {
+		summary = "updated repository registration"
+	}
+	if !writeOutput(output, errorsOutput, "%s: %s\noperational store: %s\n", summary, result.RepositoryPath, result.OperationalDataPath) {
 		return 1
 	}
 	return 0

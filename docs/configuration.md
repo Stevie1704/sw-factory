@@ -12,7 +12,9 @@ CLI authenticated, the complete first-run sequence is:
 
 ```sh
 factory init
-factory register
+factory register \
+  --codex-auth /Users/me/.codex/auth.json \
+  --claude-auth /Users/me/.claude/.credentials.json
 factory bootstrap-labels
 factory doctor
 factory start
@@ -43,7 +45,9 @@ the operational store.
 The remaining registration values keep their existing defaults: the host
 configuration path, a host-local operational data path, `factory.yaml` in the
 checkout, and the polling interval and backoff. The authentication options are
-never inferred: `--codex-auth` and `--claude-auth` stay explicit.
+never inferred: `--codex-auth` and `--claude-auth` stay explicit. Omit either
+option when that harness has no host-side credential file, such as a Claude
+Code credential kept in the macOS login Keychain.
 
 ### Explicit fallback flags
 
@@ -60,11 +64,31 @@ factory register \
   --github-owner example \
   --github-repository project \
   --authorized-user alice \
+  --codex-auth /Users/me/.codex/auth.json \
+  --claude-auth /Users/me/.claude/.credentials.json \
   --operational-data /Users/me/.local/share/factory/factory.db
 factory status --config /Users/me/.config/factory/config.yaml
 ```
 
-`factory register` creates the SQLite store before it writes the registration. Apart from the read-only account lookup used to infer `--authorized-user`, it does not contact GitHub, create labels, or write into the registered repository.
+If a repository is already registered, keep create-only behavior by default and
+use `--update` to change its credential sources. The requested checkout must
+match the registered repository; omitted credential options keep their existing
+sources:
+
+```sh
+factory register \
+  --config /Users/me/.config/factory/config.yaml \
+  --update \
+  --repository /Users/me/src/project \
+  --codex-auth /Users/me/.codex/auth.json \
+  --claude-auth /Users/me/.claude/.credentials.json
+```
+
+`factory register` creates the SQLite store before it writes a new
+registration. An update changes only the supplied authentication paths and
+does not recreate the store. Apart from the read-only account lookup used to
+infer `--authorized-user`, registration does not contact GitHub, create labels,
+or write into the registered repository.
 
 Before claiming an issue, run the complete startup diagnosis:
 
@@ -745,7 +769,7 @@ removes the installation itself.
 | --- | --- | --- |
 | `factory cleanup` | Terminal run artifacts older than seven days | Yes |
 | `factory evaluation-delete` | Selected terminal evaluation summaries | Yes |
-| `factory register` | Adds one repository registration | Yes |
+| `factory register` | Creates one registration, or updates its credential sources with `--update` | Yes |
 | `factory bootstrap-labels` | Creates the factory-owned GitHub labels | Yes |
 | `factory reset` | Every local resource of one registered installation | No |
 

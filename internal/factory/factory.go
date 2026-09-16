@@ -236,6 +236,9 @@ type InitResult struct {
 }
 
 type RegisterRequest struct {
+	// Update requests changing credential-source fields on the matching
+	// existing repository registration instead of creating one.
+	Update              bool
 	RepositoryPath      string
 	GitHubOwner         string
 	GitHubRepository    string
@@ -256,6 +259,8 @@ type RegisterRequest struct {
 type RegisterResult struct {
 	RepositoryPath      string
 	OperationalDataPath string
+	// Updated reports whether an existing registration was changed.
+	Updated bool
 	// Inferred lists every registration value that was inferred rather than
 	// supplied, in the order inference resolved them.
 	Inferred []InferredValue
@@ -416,18 +421,21 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		return RegisterResult{}, err
 	}
 	if len(host.Repositories) != 0 {
-		return RegisterResult{}, errors.New("version one already has a registered repository")
+		if !request.Update {
+			return RegisterResult{}, errors.New("a repository is already registered; pass --update with --codex-auth or --claude-auth to update its credential sources")
+		}
+		return s.updateRegistration(ctx, host, request)
+	}
+	if request.Update {
+		return RegisterResult{}, errors.New("cannot update a repository registration because none exists; omit --update to register one")
 	}
 	request, inferred, err := s.inferRegistration(ctx, request)
 	if err != nil {
 		return RegisterResult{}, err
 	}
-	if err := s.deps.CheckRepository(request.RepositoryPath); err != nil {
-		return RegisterResult{}, err
-	}
-	repositoryPath, err := filepath.Abs(request.RepositoryPath)
+	repositoryPath, err := s.resolveRepositoryPath(request.RepositoryPath)
 	if err != nil {
-		return RegisterResult{}, fmt.Errorf("resolve repository path: %w", err)
+		return RegisterResult{}, err
 	}
 	operationalPath := request.OperationalDataPath
 	if operationalPath == "" {
@@ -478,6 +486,64 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		return RegisterResult{}, fmt.Errorf("save host configuration after creating operational store %q: %w", operationalPath, err)
 	}
 	return RegisterResult{RepositoryPath: repositoryPath, OperationalDataPath: operationalPath, Inferred: inferred}, nil
+}
+
+// updateRegistration changes the explicitly supplied credential sources on an
+// existing registration after proving the requested checkout is the same one.
+func (s *Service) updateRegistration(ctx context.Context, host config.HostConfig, request RegisterRequest) (RegisterResult, error) {
+	if strings.TrimSpace(request.CodexAuthPath) == "" && strings.TrimSpace(request.ClaudeAuthPath) == "" {
+		return RegisterResult{}, errors.New("registration update requires --codex-auth or --claude-auth")
+	}
+	repositoryPath, err := s.resolveRegistrationPath(ctx, request)
+	if err != nil {
+		return RegisterResult{}, err
+	}
+	registered := host.Repositories[0]
+	if resolvePath(repositoryPath) != resolvePath(registered.Path) {
+		return RegisterResult{}, fmt.Errorf("cannot update registration for %q: the registered repository is %q", repositoryPath, registered.Path)
+	}
+	updated := registered
+	if request.CodexAuthPath != "" {
+		updated.Authentication.CodexAuthPath = request.CodexAuthPath
+	}
+	if request.ClaudeAuthPath != "" {
+		updated.Authentication.ClaudeAuthPath = request.ClaudeAuthPath
+	}
+	host.Repositories[0] = updated
+	if err := config.ValidateHost(host); err != nil {
+		return RegisterResult{}, err
+	}
+	if err := s.deps.Config.Save(s.configPath, host); err != nil {
+		return RegisterResult{}, fmt.Errorf("save host configuration after updating registration: %w", err)
+	}
+	return RegisterResult{RepositoryPath: registered.Path, OperationalDataPath: registered.OperationalDataPath, Updated: true}, nil
+}
+
+// resolveRegistrationPath resolves the checkout path supplied for an update,
+// using Git discovery when the operator omitted --repository.
+func (s *Service) resolveRegistrationPath(ctx context.Context, request RegisterRequest) (string, error) {
+	repositoryPath := strings.TrimSpace(request.RepositoryPath)
+	if repositoryPath == "" {
+		discovery, err := s.discoverRegistrationRepository(ctx, request)
+		if err != nil {
+			return "", err
+		}
+		repositoryPath = discovery.Root
+	}
+	return s.resolveRepositoryPath(repositoryPath)
+}
+
+// resolveRepositoryPath validates a repository checkout and returns its
+// absolute path for storage and matching.
+func (s *Service) resolveRepositoryPath(repositoryPath string) (string, error) {
+	if err := s.deps.CheckRepository(repositoryPath); err != nil {
+		return "", err
+	}
+	repositoryPath, err := filepath.Abs(repositoryPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository path: %w", err)
+	}
+	return repositoryPath, nil
 }
 
 func (s *Service) Status(ctx context.Context) (StatusResult, error) {

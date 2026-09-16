@@ -354,6 +354,144 @@ func TestServiceRegisterFailsWhenARepositoryIsAlreadyRegistered(t *testing.T) {
 	if err == nil {
 		t.Fatal("second Register() succeeded, want an error because a repository is already registered")
 	}
+	if !strings.Contains(err.Error(), "--update") || !strings.Contains(err.Error(), "--codex-auth") || !strings.Contains(err.Error(), "--claude-auth") {
+		t.Fatalf("second Register() error = %q, want update credential-source guidance", err)
+	}
+}
+
+// TestServiceRegisterUpdatesCredentialSourcesForAMatchingRepository verifies
+// an explicit update changes only the selected host credential sources.
+func TestServiceRegisterUpdatesCredentialSourcesForAMatchingRepository(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	originalClaudeAuthPath := filepath.Join(root, "credentials", "original-claude-credentials.json")
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: operationalPath,
+		PollingInterval:     "45s",
+		PollingBackoff:      "7m",
+		ClaudeAuthPath:      originalClaudeAuthPath,
+	}); err != nil {
+		t.Fatalf("initial Register() error = %v", err)
+	}
+
+	codexAuthPath := filepath.Join(root, "credentials", "codex-auth.json")
+	result, err := service.Register(context.Background(), factory.RegisterRequest{
+		Update:         true,
+		RepositoryPath: repositoryPath,
+		CodexAuthPath:  codexAuthPath,
+	})
+	if err != nil {
+		t.Fatalf("updated Register() error = %v", err)
+	}
+	if !result.Updated {
+		t.Fatalf("Register() result = %#v, want an updated result", result)
+	}
+
+	host, err := config.LoadHost(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := host.Repositories[0]
+	if registration.Path != repositoryPath || registration.GitHub.Owner != "example" || registration.GitHub.Repository != "project" {
+		t.Fatalf("registration identity = %#v, want the original repository identity", registration)
+	}
+	if registration.Authentication.CodexAuthPath != codexAuthPath || registration.Authentication.ClaudeAuthPath != originalClaudeAuthPath {
+		t.Fatalf("authentication = %#v, want Codex updated and Claude preserved", registration.Authentication)
+	}
+	if registration.OperationalDataPath != operationalPath || registration.Polling.Interval != "45s" || registration.Polling.Backoff != "7m" {
+		t.Fatalf("registration settings = %#v, want the original settings preserved", registration)
+	}
+}
+
+// TestServiceRegisterRejectsCredentialUpdatesForADifferentRepository verifies
+// an update cannot retarget the one host registration.
+func TestServiceRegisterRejectsCredentialUpdatesForADifferentRepository(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	registeredPath := filepath.Join(root, "registered")
+	otherPath := filepath.Join(root, "other")
+	for _, repositoryPath := range []string{registeredPath, otherPath} {
+		if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeRepositoryConfig(t, repositoryPath)
+	}
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      registeredPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"),
+	}); err != nil {
+		t.Fatalf("initial Register() error = %v", err)
+	}
+
+	_, err := service.Register(context.Background(), factory.RegisterRequest{
+		Update:         true,
+		RepositoryPath: otherPath,
+		CodexAuthPath:  filepath.Join(root, "credentials", "codex-auth.json"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "registered repository") {
+		t.Fatalf("updated Register() error = %v, want a registered-repository mismatch", err)
+	}
+	registration := loadRegistration(t, configPath)
+	if registration.Path != registeredPath || registration.Authentication.CodexAuthPath != "" {
+		t.Fatalf("registration after rejected update = %#v, want the original registration unchanged", registration)
+	}
+}
+
+// TestServiceRegisterRequiresCredentialSourcesForAnUpdate verifies an update
+// cannot silently report success when it has no fields to change.
+func TestServiceRegisterRequiresCredentialSourcesForAnUpdate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	service := factory.New(configPath)
+	if _, err := service.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Register(context.Background(), factory.RegisterRequest{
+		RepositoryPath:      repositoryPath,
+		GitHubOwner:         "example",
+		GitHubRepository:    "project",
+		AuthorizedUsers:     []string{"alice"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"),
+	}); err != nil {
+		t.Fatalf("initial Register() error = %v", err)
+	}
+
+	_, err := service.Register(context.Background(), factory.RegisterRequest{Update: true, RepositoryPath: repositoryPath})
+	if err == nil || !strings.Contains(err.Error(), "--codex-auth") || !strings.Contains(err.Error(), "--claude-auth") {
+		t.Fatalf("updated Register() error = %v, want credential-source guidance", err)
+	}
 }
 
 func TestServiceRegisterUsesDefaultOperationalAndRepositoryConfigPathsWhenNotProvided(t *testing.T) {
