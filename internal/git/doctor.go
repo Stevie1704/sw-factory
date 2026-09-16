@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -378,28 +377,14 @@ func validateDoctorRepository(path string) error {
 	return nil
 }
 
-// remoteMatches compares a GitHub owner/repository identity while accepting
-// the HTTPS and scp-like SSH URL forms emitted by Git.
+// remoteMatches compares a GitHub owner/repository identity against one Git
+// remote URL in any form the Git command emits.
 func remoteMatches(value, owner, repository string) bool {
-	remote := strings.TrimSpace(value)
-	if remote == "" || strings.ContainsAny(remote, "\x00\r\n") {
+	remoteOwner, remoteRepository, ok := ParseGitHubRemote(value)
+	if !ok {
 		return false
 	}
-	if !strings.Contains(remote, "://") {
-		at := strings.LastIndex(remote, "@")
-		colon := strings.Index(remote, ":")
-		if colon <= at {
-			return false
-		}
-		remote = "ssh://" + remote[:colon] + "/" + remote[colon+1:]
-	}
-	parsed, err := url.Parse(remote)
-	if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
-		return false
-	}
-	path := strings.Trim(strings.TrimSuffix(parsed.Path, ".git"), "/")
-	wanted := strings.Trim(strings.TrimSuffix(owner+"/"+repository, ".git"), "/")
-	return strings.EqualFold(path, wanted)
+	return strings.EqualFold(remoteOwner, strings.TrimSpace(owner)) && strings.EqualFold(remoteRepository, strings.TrimSuffix(strings.TrimSpace(repository), ".git"))
 }
 
 var _ DoctorChecker = (*LocalWorktreeManager)(nil)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,6 +161,12 @@ type Dependencies struct {
 	Worktree       gitadapter.WorktreeManager
 	// GitWorkspace owns checkpoint, base-sync, push, and cleanup effects on the host.
 	GitWorkspace gitadapter.GitWorkspace
+	// RepositoryDiscoverer resolves the checkout root and GitHub identity used
+	// to infer registration values. It is read-only.
+	RepositoryDiscoverer gitadapter.RepositoryDiscoverer
+	// GitHubAccount resolves the authenticated GitHub login used to infer the
+	// default authorized user. It is read-only.
+	GitHubAccount github.AccountReader
 	// PullRequests owns idempotent draft pull-request discovery and mutation.
 	PullRequests github.PullRequestClient
 	// PullRequestReviews lists completed human reviews of a tracked pull
@@ -241,11 +248,25 @@ type RegisterRequest struct {
 	// ClaudeAuthPath is an optional host-side Claude credential file path.
 	ClaudeAuthPath       string
 	RepositoryConfigPath string
+	// WorkingDirectory is the directory the register command was invoked in. It
+	// is the inference source for values the operator did not supply.
+	WorkingDirectory string
 }
 
 type RegisterResult struct {
 	RepositoryPath      string
 	OperationalDataPath string
+	// GitHubOwner is the registered GitHub owner, inferred or explicit.
+	GitHubOwner string
+	// GitHubRepository is the registered GitHub repository name, inferred or explicit.
+	GitHubRepository string
+	// AuthorizedUsers are the registered authorized GitHub logins.
+	AuthorizedUsers []string
+	// RepositoryConfigPath is the registered checked-in configuration path.
+	RepositoryConfigPath string
+	// InferredFields names every registration flag whose value was inferred
+	// rather than supplied, in the order inference resolved them.
+	InferredFields []string
 }
 
 // StatusResult reports the registered repository and the latest known run.
@@ -332,6 +353,16 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 			dependencies.GitWorkspace = workspace
 		}
 	}
+	if dependencies.RepositoryDiscoverer == nil {
+		if discoverer, ok := dependencies.Worktree.(gitadapter.RepositoryDiscoverer); ok {
+			dependencies.RepositoryDiscoverer = discoverer
+		}
+	}
+	if dependencies.GitHubAccount == nil {
+		if account, ok := dependencies.GitHub.(github.AccountReader); ok {
+			dependencies.GitHubAccount = account
+		}
+	}
 	if dependencies.PullRequests == nil {
 		if client, ok := dependencies.GitHub.(github.PullRequestClient); ok {
 			dependencies.PullRequests = client
@@ -387,10 +418,17 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	}
 	host, err := s.deps.Config.Load(s.configPath)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return RegisterResult{}, fmt.Errorf("run factory init before factory register: %w", err)
+		}
 		return RegisterResult{}, err
 	}
 	if len(host.Repositories) != 0 {
 		return RegisterResult{}, errors.New("version one already has a registered repository")
+	}
+	request, inferredFields, err := s.inferRegistration(ctx, request)
+	if err != nil {
+		return RegisterResult{}, err
 	}
 	if err := s.deps.CheckRepository(request.RepositoryPath); err != nil {
 		return RegisterResult{}, err
@@ -447,7 +485,15 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	if err := s.deps.Config.Save(s.configPath, host); err != nil {
 		return RegisterResult{}, fmt.Errorf("save host configuration after creating operational store %q: %w", operationalPath, err)
 	}
-	return RegisterResult{RepositoryPath: repositoryPath, OperationalDataPath: operationalPath}, nil
+	return RegisterResult{
+		RepositoryPath:       repositoryPath,
+		OperationalDataPath:  operationalPath,
+		GitHubOwner:          registration.GitHub.Owner,
+		GitHubRepository:     registration.GitHub.Repository,
+		AuthorizedUsers:      registration.AuthorizedUsers,
+		RepositoryConfigPath: repositoryConfigPath,
+		InferredFields:       inferredFields,
+	}, nil
 }
 
 func (s *Service) Status(ctx context.Context) (StatusResult, error) {

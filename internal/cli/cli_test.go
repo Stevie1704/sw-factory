@@ -3,7 +3,9 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -300,44 +302,108 @@ func TestRunInitRejectsAnUnknownFlag(t *testing.T) {
 	}
 }
 
-func TestRunRegisterRequiresTheRequiredFlags(t *testing.T) {
+// TestRunRegisterInfersTheCheckoutAndGitHubIdentity verifies a registration
+// invoked from a subdirectory resolves the checkout root and origin identity
+// and reports each inferred value.
+func TestRunRegisterInfersTheCheckoutAndGitHubIdentity(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := initGitCheckout(t, root, "https://github.com/example/project.git")
+	subdirectory := filepath.Join(repositoryPath, "internal", "cli")
+	if err := os.MkdirAll(subdirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+
+	t.Chdir(subdirectory)
+	output.Reset()
+	code := cli.Run(context.Background(), []string{
+		"register",
+		"--config", configPath,
+		"--authorized-user", "alice",
+		"--operational-data", filepath.Join(root, "state", "factory.db"),
+	}, &output, &output)
+	if code != 0 {
+		t.Fatalf("register exit code = %d, output = %s", code, output.String())
+	}
+	for _, want := range []string{
+		"inferred --repository: " + repositoryPath,
+		"inferred --github-owner: example",
+		"inferred --github-repository: project",
+		"registered repository: " + repositoryPath,
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output = %q, want it to contain %q", output.String(), want)
+		}
+	}
+	if strings.Contains(output.String(), "inferred --authorized-user") {
+		t.Fatalf("output = %q, want the explicit authorized user to stay explicit", output.String())
+	}
+}
+
+// TestRunRegisterFailsClosedOutsideAGitCheckout verifies a registration that
+// cannot infer its missing values reports an actionable error and writes
+// nothing.
+func TestRunRegisterFailsClosedOutsideAGitCheckout(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{
-			name: "missing repository",
-			args: []string{"register", "--github-owner", "example", "--github-repository", "project", "--authorized-user", "alice"},
-		},
-		{
-			name: "missing github owner",
-			args: []string{"register", "--repository", "/tmp/repository", "--github-repository", "project", "--authorized-user", "alice"},
-		},
-		{
-			name: "missing github repository",
-			args: []string{"register", "--repository", "/tmp/repository", "--github-owner", "example", "--authorized-user", "alice"},
-		},
-		{
-			name: "missing authorized user",
-			args: []string{"register", "--repository", "/tmp/repository", "--github-owner", "example", "--github-repository", "project"},
-		},
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	writeValidRepositoryConfig(t, repositoryPath)
 
-			configPath := filepath.Join(t.TempDir(), "config.yaml")
-			var output bytes.Buffer
-			code := cli.Run(context.Background(), append([]string{tc.args[0], "--config", configPath}, tc.args[1:]...), &output, &output)
-			if code != 2 {
-				t.Fatalf("exit code = %d, want 2, output = %s", code, output.String())
-			}
-			if !strings.Contains(output.String(), "register requires") {
-				t.Fatalf("output = %q", output.String())
-			}
-		})
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+
+	output.Reset()
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	code := cli.Run(context.Background(), []string{
+		"register",
+		"--config", configPath,
+		"--repository", repositoryPath,
+		"--authorized-user", "alice",
+		"--operational-data", operationalPath,
+	}, &output, &output)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "not inside a Git checkout") {
+		t.Fatalf("output = %q, want an actionable checkout diagnosis", output.String())
+	}
+	if _, err := os.Stat(operationalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("operational store stat error = %v, want it to be absent", err)
+	}
+}
+
+// TestRunRegisterRequiresTheHostConfiguration verifies the first-run error
+// names factory init instead of reporting a bare file-read failure.
+func TestRunRegisterRequiresTheHostConfiguration(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	var output bytes.Buffer
+	code := cli.Run(context.Background(), []string{
+		"register",
+		"--config", filepath.Join(root, "config.yaml"),
+		"--repository", root,
+		"--github-owner", "example",
+		"--github-repository", "project",
+		"--authorized-user", "alice",
+	}, &output, &output)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "factory init") {
+		t.Fatalf("output = %q, want it to name factory init", output.String())
 	}
 }
 
@@ -638,4 +704,31 @@ base_synchronization:
 	if err := os.WriteFile(filepath.Join(repositoryPath, "factory.yaml"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// initGitCheckout creates a real Git checkout with a GitHub origin remote and
+// a valid checked-in repository configuration.
+func initGitCheckout(t *testing.T, root, remote string) string {
+	t.Helper()
+
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidRepositoryConfig(t, repositoryPath)
+	for _, args := range [][]string{
+		{"init", "--quiet"},
+		{"remote", "add", "origin", remote},
+	} {
+		command := exec.Command("git", args...)
+		command.Dir = repositoryPath
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(repositoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }

@@ -6,26 +6,51 @@ The host configuration is created with `factory init`. Its path is selected by `
 
 ## Quick start
 
-`factory register` currently needs the repository path, GitHub repository
-identity, and at least one authorized GitHub user. It does not infer those
-values from the current directory or Git remote. The shortest supported setup
-inside a checkout is:
+`factory register` infers the values it can from the checkout you run it in.
+Inside a Git checkout whose `origin` remote points at GitHub, with the GitHub
+CLI authenticated, the complete first-run sequence is:
 
 ```sh
 factory init
-factory register --repository "$PWD" --github-owner example --github-repository project --authorized-user alice
+factory register
 factory bootstrap-labels
 factory doctor
 factory start
 ```
 
-The `--config`, `--operational-data`, and `--repository-config` options are
-omitted here because their documented defaults use the standard host
-configuration location, a host-local data directory, and `factory.yaml` in the
-checkout. Polling also has defaults. Replace `example`, `project`, and `alice`
-with the GitHub owner, repository, and authorized username for the checkout.
-Use the full [host configuration](#host-configuration) example when those
-defaults or the authentication options do not fit the installation.
+`factory init` is still required. Registration never creates the host
+configuration: it fails with an instruction to run `factory init` when the
+configuration is missing, so host state is only ever created by an explicit
+command.
+
+### Inferred registration values
+
+`factory register` reports every value it inferred as an `inferred --<flag>`
+line before the registration summary. It infers only these three:
+
+| Flag | Inferred from | Limitation |
+| --- | --- | --- |
+| `--repository` | `git rev-parse --show-toplevel` in the current directory | Fails when the directory is not inside a Git checkout |
+| `--github-owner`, `--github-repository` | the `origin` remote's fetch and push URLs | Only the `origin` remote, only `github.com`, and only when the fetch and push URLs name the same repository |
+| `--authorized-user` | the login of the authenticated `gh` account | One user; repeat `--authorized-user` to register more |
+
+Inference is read-only and fails closed. It never changes a Git reference or
+remote, never reads or copies a credential file, and never prints command
+output. When a value cannot be resolved safely, registration reports the
+problem and the flag that overrides it, and writes neither the registration nor
+the operational store.
+
+The remaining registration values keep their existing defaults: the host
+configuration path, a host-local operational data path, `factory.yaml` in the
+checkout, and the polling interval and backoff. The authentication options are
+never inferred: `--codex-auth` and `--claude-auth` stay explicit.
+
+### Explicit fallback flags
+
+Every registration flag remains an override, and each one replaces exactly the
+value it names. Supply `--github-owner` alone, for example, and the repository
+name and authorized user are still inferred. Use the full option set when the
+checkout, remote, or account does not match the registration you want:
 
 ```sh
 factory init --config /Users/me/.config/factory/config.yaml
@@ -39,7 +64,7 @@ factory register \
 factory status --config /Users/me/.config/factory/config.yaml
 ```
 
-`factory register` creates the SQLite store before it writes the registration. It does not contact GitHub, create labels, or write into the registered repository.
+`factory register` creates the SQLite store before it writes the registration. Apart from the read-only account lookup used to infer `--authorized-user`, it does not contact GitHub, create labels, or write into the registered repository.
 
 Before claiming an issue, run the complete startup diagnosis:
 
