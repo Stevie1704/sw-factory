@@ -110,7 +110,7 @@ func TestManualResumeCaptureLimitWaitsForHuman(t *testing.T) {
 	}
 	runStore := &retryCredentialProjectionStore{}
 	workerRuntime := &repairContractWorker{}
-	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, invocationLifecycleHooks{
+	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, nil, invocationLifecycleHooks{
 		persistRun: func(_ context.Context, _ config.RepositoryRegistration, target RunStore, _, next store.Run) error {
 			return target.SaveRun(context.Background(), next)
 		},
@@ -171,7 +171,7 @@ func TestRetryWaitingForHarnessRoutesCaptureLimitToHuman(t *testing.T) {
 	run := store.Run{ID: "run-retry-capture-limit", Status: store.StatusWaitingForHarness}
 	runStore := &retryCredentialProjectionStore{}
 	workerRuntime := &repairContractWorker{}
-	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, invocationLifecycleHooks{
+	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, nil, invocationLifecycleHooks{
 		persistRun: func(_ context.Context, _ config.RepositoryRegistration, target RunStore, previous, next store.Run) error {
 			if err := target.SaveRun(context.Background(), next); err != nil {
 				return err
@@ -206,7 +206,7 @@ func TestAutomaticHarnessRetryResumeRoutesCaptureLimitToHuman(t *testing.T) {
 	run := store.Run{ID: "run-native-retry-capture-limit", Status: store.StatusWaitingForHarness}
 	runStore := &retryCredentialProjectionStore{}
 	workerRuntime := &repairContractWorker{}
-	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, invocationLifecycleHooks{
+	module := newInvocationLifecycle(nil, workerRuntime, nil, nil, nil, nil, invocationLifecycleHooks{
 		persistRun: func(_ context.Context, _ config.RepositoryRegistration, target RunStore, _, next store.Run) error {
 			return target.SaveRun(context.Background(), next)
 		},

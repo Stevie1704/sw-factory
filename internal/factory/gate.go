@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -223,7 +224,7 @@ func ensureBaselineReadyAtCheckpointForLaunch(ctx context.Context, reader gitada
 		return errors.New("operational store does not support baseline gate results")
 	}
 	baselineCheckpoint := checkpoint
-	fingerprint, err := setupInputFingerprintAtCheckpoint(ctx, reader, run.Worktree, baselineCheckpoint, packet.RepositoryConfig.SetupFiles)
+	fingerprint, err := setupInputFingerprint(ctx, reader, run.Worktree, baselineCheckpoint, packet.RepositoryConfig.SetupFiles)
 	if err != nil {
 		return fmt.Errorf("fingerprint baseline setup files: %w", err)
 	}
@@ -273,7 +274,7 @@ func ensureBaselineReadyAtCheckpointForLaunch(ctx context.Context, reader gitada
 // inferred from a review result alone: every gate must have a matching,
 // successful, content-free projection before the pull request can become
 // non-draft.
-func ensureFinalCheckpointGatesPassed(ctx context.Context, runStore RunStore, run store.Run, packet SpecificationPacket) error {
+func ensureFinalCheckpointGatesPassed(ctx context.Context, reader gitadapter.CheckpointFileReader, runStore RunStore, run store.Run, packet SpecificationPacket) error {
 	resultStore, ok := runStore.(GateResultStore)
 	if !ok {
 		return errors.New("operational store does not support final checkpoint gate results")
@@ -281,7 +282,7 @@ func ensureFinalCheckpointGatesPassed(ctx context.Context, runStore RunStore, ru
 	if !github.ValidCommitSHA(run.CheckpointSHA) {
 		return errors.New("final readiness requires a valid checkpoint SHA")
 	}
-	fingerprint, err := setupInputFingerprint(run.Worktree, packet.RepositoryConfig.SetupFiles)
+	fingerprint, err := setupInputFingerprint(ctx, reader, run.Worktree, run.CheckpointSHA, packet.RepositoryConfig.SetupFiles)
 	if err != nil {
 		return fmt.Errorf("fingerprint final gate setup files: %w", err)
 	}
@@ -357,7 +358,7 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 	if s.deps.CommitStatuses == nil {
 		return gate.SuiteResult{}, errors.New("GitHub client does not support Commit Statuses")
 	}
-	fingerprint, err := setupInputFingerprint(run.Worktree, packet.RepositoryConfig.SetupFiles)
+	fingerprint, err := setupInputFingerprint(ctx, s.checkpointFileReader(), run.Worktree, run.CheckpointSHA, packet.RepositoryConfig.SetupFiles)
 	if err != nil {
 		return gate.SuiteResult{}, fmt.Errorf("fingerprint configured setup files: %w", err)
 	}
@@ -510,12 +511,13 @@ func configuredGateOrdinals(gates []config.GateConfig) map[string]int {
 	return ordinals
 }
 
-// setupInputFingerprintAtCheckpoint hashes the configured manifest and lockfile
-// contents as they were committed at one exact checkpoint. A verifier must use
-// this rather than the working tree: an agent may legitimately edit a setup
-// file after a projection was recorded, and the recorded fingerprint belongs to
-// the checkpoint that produced it, not to whatever the worktree holds now.
-func setupInputFingerprintAtCheckpoint(ctx context.Context, reader gitadapter.CheckpointFileReader, worktree, checkpoint string, files []string) (string, error) {
+// setupInputFingerprint hashes the configured manifest and lockfile contents
+// as they were committed at one exact checkpoint, so one identity describes
+// which dependency graph setup evaluated. It never reads the working tree: an
+// agent may legitimately edit a configured setup file, and the recorded
+// fingerprint belongs to the checkpoint that produced it. A configured entry
+// the checkpoint does not track as a regular file therefore fails here.
+func setupInputFingerprint(ctx context.Context, reader gitadapter.CheckpointFileReader, worktree, checkpoint string, files []string) (string, error) {
 	if len(files) == 0 {
 		return "", nil
 	}
@@ -524,32 +526,9 @@ func setupInputFingerprintAtCheckpoint(ctx context.Context, reader gitadapter.Ch
 	}
 	hasher := sha256.New()
 	for _, relative := range files {
-		data, err := reader.ReadFileAtCheckpoint(ctx, worktree, checkpoint, relative)
+		data, err := reader.ReadFileAtCheckpoint(ctx, worktree, checkpoint, path.Clean(filepath.ToSlash(relative)))
 		if err != nil {
 			return "", fmt.Errorf("read %q at checkpoint %q: %w", relative, checkpoint, err)
-		}
-		_, _ = hasher.Write([]byte(relative))
-		_, _ = hasher.Write([]byte{0})
-		_, _ = hasher.Write(data)
-		_, _ = hasher.Write([]byte{0})
-	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
-}
-
-// setupInputFingerprint hashes the configured manifest and lockfile contents
-// so each suite records which dependency graph setup evaluated. It reads the
-// working tree, so only a caller that has proven the worktree stands at the
-// checkpoint being evaluated may use it.
-func setupInputFingerprint(worktree string, files []string) (string, error) {
-	if len(files) == 0 {
-		return "", nil
-	}
-	hasher := sha256.New()
-	for _, relative := range files {
-		path := filepath.Join(worktree, filepath.FromSlash(relative))
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", fmt.Errorf("read %q: %w", relative, err)
 		}
 		_, _ = hasher.Write([]byte(relative))
 		_, _ = hasher.Write([]byte{0})

@@ -95,8 +95,8 @@ func baselineVerifierFixture(t *testing.T, files checkpointFiles, baselineCheckp
 		SetupFiles: []string{"python/pyproject.toml"},
 		Gates:      []config.GateConfig{{Name: "build", Command: "build", Timeout: "1m", Blocking: true}},
 	}}
-	run := store.Run{ID: "run-baseline-identity", Worktree: "/worktree", BaseCheckpointSHA: baselineCheckpoint, CheckpointSHA: headCheckpoint}
-	fingerprint, err := setupInputFingerprintAtCheckpoint(context.Background(), files, run.Worktree, baselineCheckpoint, packet.RepositoryConfig.SetupFiles)
+	run := store.Run{ID: "run-baseline-identity", Worktree: t.TempDir(), BaseCheckpointSHA: baselineCheckpoint, CheckpointSHA: headCheckpoint}
+	fingerprint, err := setupInputFingerprint(context.Background(), files, run.Worktree, baselineCheckpoint, packet.RepositoryConfig.SetupFiles)
 	if err != nil {
 		t.Fatalf("baseline fingerprint: %v", err)
 	}
