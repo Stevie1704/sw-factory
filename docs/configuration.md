@@ -168,6 +168,11 @@ credential the worker itself persisted in its role volume.
 
 ## Checked-in repository configuration
 
+[Repository initialization](repository-initialization.md) is the ordered
+procedure that produces this file for a repository that has none, together with
+its worker image and pinned digest. This section owns the contract the procedure
+writes against.
+
 The default checked-in file is `factory.yaml` at the repository root. It is parsed with strict field checking and validated before a run can be claimed. Unknown schema versions fail closed.
 
 ```yaml
