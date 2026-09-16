@@ -26,7 +26,7 @@ command.
 ### Inferred registration values
 
 `factory register` reports every value it inferred as an `inferred --<flag>`
-line before the registration summary. It infers only these three:
+line before the registration summary. It infers only these values:
 
 | Flag | Inferred from | Limitation |
 | --- | --- | --- |
