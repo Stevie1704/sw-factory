@@ -129,6 +129,6 @@ done
 
 if [ -n "$unrecorded" ]; then
   echo "No smoke result recorded for:$unrecorded" >&2
-  echo "Startup stays blocked for those harnesses until their result is recorded." >&2
+  echo "Startup diagnosis blocks an unrecorded harness only when repository policy can select it." >&2
   exit 1
 fi

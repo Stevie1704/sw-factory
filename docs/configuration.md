@@ -444,8 +444,11 @@ boundary. Changing a skill needs a rebuild and a new digest.
 
 The recorded worker skill smoke evidence in `worker/skill-smoke.json` is keyed
 by this digest and by each harness's version, so a new digest invalidates it.
-Re-run `./scripts/smoke-skills.sh` after recording a new digest, or the startup
-diagnosis blocks every shipped harness.
+Re-run `./scripts/smoke-skills.sh` after recording a new digest. Startup
+diagnosis blocks missing evidence for harnesses selected by
+`role_harness_defaults`, or for both supported harnesses when
+`allowed_overrides` contains `harness`; an unselected harness is reported as
+an advisory finding.
 
 The checked-in `worker_build.image` is intentionally an image name without a
 mutable tag. The reported SHA-256 digest is appended by the worker adapter as

@@ -80,6 +80,54 @@ func TestStartupChecksKeepMissingOptionalCredentialsNonBlocking(t *testing.T) {
 	}
 }
 
+// TestStartupChecksMakeUnselectedHarnessSmokeAdvisory verifies a repository
+// only needs smoke evidence for the harnesses its policy can select.
+func TestStartupChecksMakeUnselectedHarnessSmokeAdvisory(t *testing.T) {
+	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy: &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{
+			"implementation": config.HarnessCodex,
+		}},
+		Image:             probedImage,
+		Checker:           &harnessDoctorChecker{},
+		SkillChecker:      &harnessDoctorChecker{},
+		SkillEvidencePath: writeSkillEvidenceForHarnesses(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills(), harness.NameCodex),
+	})...)
+	if !report.Ready() {
+		t.Fatalf("harness report = %#v, want unselected Claude smoke to be advisory", report)
+	}
+	if got := skillContractFailures(report); got != 0 {
+		t.Fatalf("harness skill contract failures = %d, want none", got)
+	}
+	if got := skillContractWarnings(report); got != 1 {
+		t.Fatalf("harness skill contract warnings = %d, want one for unselected Claude", got)
+	}
+}
+
+// TestStartupChecksKeepBothHarnessSmokesBlockingForHarnessOverrides verifies
+// allowing a harness override makes both supported harnesses eligible and
+// therefore keeps their smoke evidence blocking.
+func TestStartupChecksKeepBothHarnessSmokesBlockingForHarnessOverrides(t *testing.T) {
+	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy: &config.RepositoryConfig{
+			RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex},
+			AllowedOverrides:    []config.OverrideName{config.OverrideHarness},
+		},
+		Image:             probedImage,
+		Checker:           &harnessDoctorChecker{},
+		SkillChecker:      &harnessDoctorChecker{},
+		SkillEvidencePath: writeSkillEvidenceForHarnesses(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills(), harness.NameCodex),
+	})...)
+	if report.Ready() {
+		t.Fatal("harness report = ready, want missing override harness smoke to block")
+	}
+	if got := skillContractFailures(report); got != 1 {
+		t.Fatalf("harness skill contract failures = %d, want one for Claude", got)
+	}
+	if got := skillContractWarnings(report); got != 0 {
+		t.Fatalf("harness skill contract warnings = %d, want none", got)
+	}
+}
+
 // TestStartupChecksDoNotRenderCredentialErrors verifies configured credential
 // failures never include a path's contents or the underlying error string.
 func TestStartupChecksDoNotRenderCredentialErrors(t *testing.T) {
@@ -182,9 +230,15 @@ var probedImage = worker.ImageReference{
 // writeSkillEvidence records a smoke result for every supported harness at the
 // pinned digest and returns the evidence file path.
 func writeSkillEvidence(t *testing.T, digest, version string, skills []string) string {
+	return writeSkillEvidenceForHarnesses(t, digest, version, skills, harness.NameClaude, harness.NameCodex)
+}
+
+// writeSkillEvidenceForHarnesses records a smoke result for the requested
+// harnesses at the pinned digest and returns the evidence file path.
+func writeSkillEvidenceForHarnesses(t *testing.T, digest, version string, skills []string, harnesses ...string) string {
 	t.Helper()
 	evidence := harness.SkillSmokeEvidence{SchemaVersion: 1}
-	for _, name := range []string{harness.NameClaude, harness.NameCodex} {
+	for _, name := range harnesses {
 		evidence.Records = append(evidence.Records, harness.SkillSmokeRecord{
 			ImageDigest:    digest,
 			Harness:        name,
@@ -205,8 +259,8 @@ func writeSkillEvidence(t *testing.T, digest, version string, skills []string) s
 }
 
 // TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill verifies a role
-// cannot start against an image whose harness omits a role-mandated skill from
-// its model-visible catalog.
+// cannot start against an image whose shipped harness omits a role-mandated
+// skill from its model-visible catalog.
 func TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill(t *testing.T) {
 	secret := "probe-output-secret"
 	checker := &harnessDoctorChecker{skillError: errors.New(secret)}
@@ -229,8 +283,8 @@ func TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill(t *testing.T) {
 
 // TestStartupChecksRequireSmokeEvidenceForThePinnedDigestAndVersion verifies
 // startup refuses evidence recorded against a different worker image or a
-// different harness build, without making a model call of its own. Every
-// shipped harness blocks, because a role may be assigned to any of them.
+// different harness build, without making a model call of its own. The
+// selected harness blocks while an unselected shipped harness is advisory.
 func TestStartupChecksRequireSmokeEvidenceForThePinnedDigestAndVersion(t *testing.T) {
 	otherDigest := "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 	for name, path := range map[string]string{
@@ -247,8 +301,8 @@ func TestStartupChecksRequireSmokeEvidenceForThePinnedDigestAndVersion(t *testin
 				SkillChecker:      &harnessDoctorChecker{},
 				SkillEvidencePath: path,
 			})...)
-			if got := skillContractFailures(report); got != 2 {
-				t.Fatalf("harness skill contract failures = %d, want one per shipped harness", got)
+			if got := skillContractFailures(report); got != 1 {
+				t.Fatalf("harness skill contract failures = %d, want one for selected Codex", got)
 			}
 		})
 	}
@@ -257,13 +311,25 @@ func TestStartupChecksRequireSmokeEvidenceForThePinnedDigestAndVersion(t *testin
 // skillContractFailures counts the blocking skill-contract diagnoses in a
 // report, leaving unrelated harness checks out of the assertion.
 func skillContractFailures(report doctor.Report) int {
-	failures := 0
-	for _, result := range report.Failures() {
+	return countSkillContractResults(report.Failures())
+}
+
+// skillContractWarnings counts the non-blocking skill-contract diagnoses in a
+// report, leaving unrelated harness checks out of the assertion.
+func skillContractWarnings(report doctor.Report) int {
+	return countSkillContractResults(report.Warnings())
+}
+
+// countSkillContractResults counts skill-contract diagnoses in a result set,
+// leaving unrelated harness checks out of the assertion.
+func countSkillContractResults(results []doctor.Result) int {
+	count := 0
+	for _, result := range results {
 		if strings.HasSuffix(result.Name, "worker skill contract") {
-			failures++
+			count++
 		}
 	}
-	return failures
+	return count
 }
 
 // TestStartupChecksReportACaptureLimitOverflow verifies every harness-owned

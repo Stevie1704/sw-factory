@@ -508,11 +508,15 @@ the digest and the harness version. Startup diagnosis reads that record instead
 of repeating the paid call, and a new digest invalidates it.
 
 The diagnosis checks both shipped harnesses whatever the repository declares in
-`role_harness_defaults`, because a repository may later assign any role to any
-supported harness. A Claude-only repository therefore still needs a recorded
-Codex result, and the smoke needs both credential files to produce one. When
-only one credential exists, the smoke reports the missing harness and exits
-nonzero, and the diagnosis keeps blocking that harness.
+`role_harness_defaults`, because the worker image must keep both skill
+contracts valid. Recorded smoke evidence is blocking only for harnesses named
+by `role_harness_defaults`, or for both supported harnesses when
+`allowed_overrides` contains `harness`; an unselected harness with no record is
+reported as an advisory finding. A single-harness repository can therefore
+smoke only its selected harness by setting `HARNESSES` before running the
+script. When only one credential exists, the smoke reports any harness it was
+asked to prove without a credential and exits nonzero, while startup blocks
+only if that harness is eligible under the repository policy.
 
 The smoke looks for `~/.codex/auth.json` and `~/.claude/.credentials.json`, and
 `CODEX_AUTH_PATH` and `CLAUDE_AUTH_PATH` override those defaults. A macOS
