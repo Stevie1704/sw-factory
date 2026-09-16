@@ -60,6 +60,11 @@ Four actions in this procedure are the operator's, not the agent's:
 The agent prepares each command and asks. A missing credential file is a
 question for the operator, never a search.
 
+The prompt also stops the agent before writing any file. That is a review point
+rather than a boundary: the gate list and the role policy are decisions about
+how the repository is verified, and they are cheaper to correct before the file
+exists.
+
 ## Step 1: survey the target repository
 
 Collect, from the checkout itself:
@@ -248,7 +253,9 @@ factory in `internal/workflow` and are rejected in repository configuration.
 ### Gates
 
 Each gate declares `name`, `command`, `timeout`, `blocking`, and
-`environment_policy`. Names are unique. `depends_on` may reference earlier gates
+`environment_policy`. Names and commands are nonempty, names are unique,
+`timeout` is a positive Go duration, and `environment_policy` is `clean` or
+`role`. `depends_on` may reference earlier gates
 only, never the gate itself, so the list is an ordered, acyclic sequence. A
 blocking gate stops the checkpoint; a non-blocking gate reports and continues.
 Independent gates still run after an earlier failure.
@@ -283,22 +290,21 @@ separate test checkpoint, and protects the accepted test paths before
 implementation. `advisory` leaves the red/green loop inside the implementation
 role.
 
-Three booleans govern how a required-mode run may be relaxed. Each defaults to
-`false`, and each opens exactly one door:
+Three independent booleans sit beside the mode. Each defaults to `false`, and
+each opens exactly one door:
 
-| Field | What `true` permits |
-| --- | --- |
-| `allow_human_exemption` | A human skips the test stage for one issue. The run additionally needs the frozen issue marker `<!-- factory-test-exemption: human \| justification -->`. |
-| `allow_technical_exemption` | The test role records a provisional technical skip when the change is not testable by the declared means. The skip stays policy-controlled and visible. |
-| `allow_automated_objections` | The implementation role may object to a test automatically, which resumes the test session for up to `retry_limits.test_revision` revisions. |
+| Field | What `true` permits | When it is consulted |
+| --- | --- | --- |
+| `allow_human_exemption` | A human skips the test stage for one issue, with the frozen issue marker `<!-- factory-test-exemption: human \| justification -->`. | Only in `required` mode, and never when the issue selects a route that runs the test role. A selected route is a deliberate request for independent evidence and overrides the marker. |
+| `allow_technical_exemption` | The test role reports a technical exemption instead of a test handoff. | Whenever a test-role report arrives, so also under `advisory` mode when a route runs the test stage. Without it the report is refused. |
+| `allow_automated_objections` | The implementation role objects to a test automatically, which resumes the test session for up to `retry_limits.test_revision` revisions. | Whenever an objection is reported. While `false`, the objection is persisted and the run waits for a human. |
 
 `allow_automated_objections` is evidence-gated in this factory: it stays closed
 until the measured pilot in issue #26 records a proceed decision, and the
 coordinator verifies that decision comment independently. Declare it `false`.
 
-Both exemption switches are inert under `advisory` mode. Declare the three
-fields explicitly anyway, so the policy a run applies is readable in the file
-rather than inferred from an absent key.
+Declare all three explicitly, so the policy a run applies is readable in the
+file rather than inferred from an absent key.
 
 ### Caches
 
