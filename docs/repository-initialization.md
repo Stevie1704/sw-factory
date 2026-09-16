@@ -1,10 +1,13 @@
 # Repository initialization
 
 This document is the ordered procedure that prepares one target repository for
-factory runs, written so an agent can follow it end to end. It complements
-[Configuration and local operation](configuration.md), which owns the field
-contract, and [Worker runtime](worker-runtime.md), which owns the isolation
-contract.
+factory runs, written so an agent can follow it end to end. [Configuration and
+local operation](configuration.md) owns the field contract and [Worker
+runtime](worker-runtime.md) owns the isolation contract; this document states
+what an author needs while writing the file, so an agent working in the target
+repository does not have to hold either contract in context. Where this summary
+and `docs/configuration.md` disagree, `docs/configuration.md` is correct and
+this document is a defect.
 
 The procedure produces four checked-in artifacts in the target repository and
 one host registration:
@@ -27,36 +30,21 @@ Prepare the repository at <TARGET_REPO_PATH> for Software Factory runs.
 
 The Software Factory checkout is at <SW_FACTORY_CHECKOUT>. Read
 <SW_FACTORY_CHECKOUT>/docs/repository-initialization.md in full and follow its
-ordered procedure. Its field reference is authoritative; do not copy values from
-any other repository's factory.yaml without checking them against it.
+ordered procedure. Use its field reference rather than another repository's
+factory.yaml; where the two disagree, docs/configuration.md decides.
 
-Work in this order and report after each step:
+Stop and ask me before:
+- writing any file in the target repository,
+- running factory init, factory register, or factory bootstrap-labels,
+- running scripts/smoke-skills.sh,
+- committing anything.
 
-1. Survey the target repository: language, package manager, lockfiles, existing
-   lint/test/build commands, default branch, and any CI definition that already
-   encodes the verification commands.
-2. Propose the setup command, the gate list, and the role policy. Wait for my
-   approval before writing files.
-3. Write worker/Dockerfile and vendor worker/skills from the Software Factory
-   checkout.
-4. Build the factory base image and the repository worker image, verify the
-   image contract, and record the digest.
-5. Write factory.yaml and prove every setup and gate command runs inside the
-   built image under the worker's clean environment.
-6. Stop and hand back to me for the host steps: factory init, factory register,
-   factory bootstrap-labels, factory doctor, and the skill smoke.
-
-Rules:
-- Never run factory init, factory register, factory bootstrap-labels, or
-  scripts/smoke-skills.sh yourself. Those write host state, create GitHub
-  labels, or read my harness credentials and make a paid model call. Print the
-  exact command and ask.
-- Never invent a credential path and never read a credential file. If one is
-  missing, stop and ask.
-- Never commit an absolute host path into factory.yaml.
-- Every gate command must be proven inside the worker image before it is
-  written into factory.yaml.
+Never invent a credential path and never read a credential file. If one is
+missing, stop and ask. Never commit an absolute host path into factory.yaml.
 ~~~
+
+The prompt is deliberately short. The procedure lives in this document, so
+repeating it in the prompt only creates a second copy that can drift.
 
 ## Boundaries the agent must not cross alone
 
@@ -66,7 +54,7 @@ Four actions in this procedure are the operator's, not the agent's:
   operational store.
 - `factory bootstrap-labels` creates six labels in the GitHub repository.
 - `scripts/smoke-skills.sh` streams a host harness credential into a container
-  and makes a real, paid model call per harness.
+  and makes one real, paid model call per mandated skill per harness.
 - Any commit or pull request in the target repository.
 
 The agent prepares each command and asks. A missing credential file is a
@@ -112,8 +100,13 @@ from the same Software Factory checkout that builds the base image:
 
 ~~~sh
 mkdir -p <TARGET_REPO_PATH>/worker
+rm -rf <TARGET_REPO_PATH>/worker/skills
 cp -R <SW_FACTORY_CHECKOUT>/worker/skills <TARGET_REPO_PATH>/worker/skills
 ~~~
+
+The removal is part of the command, not a precaution. Copying a directory onto
+an existing directory of the same name nests it as `worker/skills/skills` and
+leaves the skills the image actually bakes untouched.
 
 Re-vendor whenever the base image is rebuilt. `scripts/smoke-skills.sh` reads
 its expected skill text from the Software Factory checkout and its actual text
@@ -248,7 +241,8 @@ factory in `internal/workflow` and are rejected in repository configuration.
 | `allowed_overrides` | Unique values from `model`, `reasoning_effort`, and `harness`. An empty list disables issue-level overrides. |
 | `review_units` | `max_unit_bytes` defaults to 65536 and is capped at 1048576. `max_units` defaults to 4 and is capped at 8. |
 | `test_policy.test_paths`, `test_policy.infrastructure_paths` | Extra repository-relative prefixes the test role may edit. `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` are allowed by default. |
-| `caches` | Named worker caches. See the caveat below before declaring one. |
+| `test_policy.allow_human_exemption`, `test_policy.allow_technical_exemption`, `test_policy.allow_automated_objections` | Booleans, each defaulting to `false`. See the test policy below. |
+| `caches` | A list of `name`, `path`, `read_only` entries. Names are unique and paths are nonempty. See the caveat below before declaring one. |
 | `evaluation.retention` | A positive Go duration, or omitted. |
 
 ### Gates
@@ -280,6 +274,31 @@ design route.
 the harness the role declares. Claude Code accepts `low`, `medium`, `high`,
 `xhigh`, and `max`. Codex accepts its own effort names. Deriving the values from
 the wrong harness fails validation before launch.
+
+### Test policy
+
+`test_policy.mode` decides whether the independent test role runs. `required`
+enters the test stage, verifies coordinator-rerun red evidence, creates a
+separate test checkpoint, and protects the accepted test paths before
+implementation. `advisory` leaves the red/green loop inside the implementation
+role.
+
+Three booleans govern how a required-mode run may be relaxed. Each defaults to
+`false`, and each opens exactly one door:
+
+| Field | What `true` permits |
+| --- | --- |
+| `allow_human_exemption` | A human skips the test stage for one issue. The run additionally needs the frozen issue marker `<!-- factory-test-exemption: human \| justification -->`. |
+| `allow_technical_exemption` | The test role records a provisional technical skip when the change is not testable by the declared means. The skip stays policy-controlled and visible. |
+| `allow_automated_objections` | The implementation role may object to a test automatically, which resumes the test session for up to `retry_limits.test_revision` revisions. |
+
+`allow_automated_objections` is evidence-gated in this factory: it stays closed
+until the measured pilot in issue #26 records a proceed decision, and the
+coordinator verifies that decision comment independently. Declare it `false`.
+
+Both exemption switches are inert under `advisory` mode. Declare the three
+fields explicitly anyway, so the policy a run applies is readable in the file
+rather than inferred from an absent key.
 
 ### Caches
 
@@ -377,11 +396,13 @@ shares `$HOME` and nothing else, so a system temporary directory is refused.
 cd <TARGET_REPO_PATH>
 worktree="$(mktemp -d "$(pwd)/.factory-proof.XXXXXX")"
 git archive HEAD | tar -x -C "$worktree"
+mkdir "$worktree.git"
 # The container writes as uid 10001, which does not own this copy.
 chmod -R a+rwX "$worktree"
 docker run --rm --pull=never \
   --cap-drop ALL --security-opt no-new-privileges \
   --mount "type=bind,src=$worktree,dst=/work" \
+  --mount "type=bind,src=$worktree.git,dst=/git,readonly" \
   --workdir /work \
   <IMAGE_NAME>@<DIGEST> /usr/bin/env -i \
     HOME=/home/factory \
@@ -389,9 +410,41 @@ docker run --rm --pull=never \
     TERM=xterm-256color \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
+    FACTORY_RUN_ID=gate-proof \
+    GIT_DIR=/git \
+    GIT_WORK_TREE=/work \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_CONFIG_COUNT=3 \
+    GIT_CONFIG_KEY_0=remote.origin.url \
+    GIT_CONFIG_VALUE_0=disabled://factory \
+    GIT_CONFIG_KEY_1=remote.origin.pushurl \
+    GIT_CONFIG_VALUE_1=disabled://factory \
+    GIT_CONFIG_KEY_2=credential.helper \
+    GIT_CONFIG_VALUE_2= \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    FACTORY_INVOCATION_DIR=/invocation \
+    FACTORY_RESULT_DIR=/results \
+    FACTORY_REPORT_COMMAND=/usr/local/bin/factory-report \
     /bin/sh -c 'npm ci && npm run lint && npm test && npm run build'
-rm -rf "$worktree"
+rm -rf "$worktree" "$worktree.git"
 ~~~
+
+This is the complete environment the worker supplies under
+`environment_policy: clean`, and it is the same shape `scripts/build-worker.sh`
+uses to prove this repository's own gates. The `role` policy adds exactly one
+entry, `FACTORY_ROLE`, plus any explicit values the invocation passes.
+
+`/git` is mounted because a run always has it, and the Git variables point every
+Git command at it. The empty directory used here is the honest lower bound: it
+proves a gate does not silently depend on the host's `.git`, and it makes a
+Git-reading gate fail in the proof rather than in the first run. A gate that
+legitimately reads history needs a projection with real Git metadata, which only
+the coordinator builds; treat such a gate as unproven until a disposable issue
+has exercised it.
 
 Remove the copy before the next proof. A gate that globs the whole tree would
 otherwise walk the dependencies the previous proof installed inside it. Ignore
@@ -458,7 +511,8 @@ supplied.
 
 ## Verifying the result
 
-`factory doctor` is the gate. It reports configuration, GitHub authentication
+`factory doctor` runs the startup diagnosis, the pre-claim report that decides
+whether a run may start. It reports configuration, GitHub authentication
 and permissions, the factory labels, the checkout's remote and worktree support,
 Docker, the pinned worker image, both harness executables, harness capabilities,
 the headless worker helper, harness authentication, and SQLite. It runs every
