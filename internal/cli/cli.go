@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -542,14 +543,28 @@ func runInit(ctx context.Context, args []string, defaultConfigPath string, outpu
 	return 0
 }
 
-// runRegister registers a repository using command-line options and reports the resulting repository and operational store paths.
+// writeInferredRegistrationValues reports every registration value that was
+// inferred from the Git checkout and the authenticated GitHub account, so an
+// operator sees exactly which flag would override each one.
+func writeInferredRegistrationValues(output, errorsOutput io.Writer, result factory.RegisterResult) bool {
+	for _, value := range result.Inferred {
+		if !writeOutput(output, errorsOutput, "inferred --%s: %s\n", value.Flag, value.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+// runRegister registers a repository, inferring the repository path, GitHub
+// identity, and authorized user that were not supplied, and reports every
+// inferred value with the resulting repository and operational store paths.
 func runRegister(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("register", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
-	repositoryPath := flags.String("repository", "", "registered repository path")
-	githubOwner := flags.String("github-owner", "", "GitHub repository owner")
-	githubRepository := flags.String("github-repository", "", "GitHub repository name")
+	repositoryPath := flags.String("repository", "", "registered repository path; inferred from the current Git checkout when omitted")
+	githubOwner := flags.String("github-owner", "", "GitHub repository owner; inferred from the checkout's origin remote when omitted")
+	githubRepository := flags.String("github-repository", "", "GitHub repository name; inferred from the checkout's origin remote when omitted")
 	operationalDataPath := flags.String("operational-data", "", "SQLite operational data path")
 	pollingInterval := flags.String("poll-interval", "30s", "polling interval")
 	pollingBackoff := flags.String("poll-backoff", "5m", "transport backoff")
@@ -557,7 +572,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	claudeAuthPath := flags.String("claude-auth", "", "host Claude credential path")
 	repositoryConfigPath := flags.String("repository-config", "", "checked-in repository configuration path")
 	authorizedUsers := stringList{}
-	flags.Var(&authorizedUsers, "authorized-user", "authorized GitHub username; may be repeated")
+	flags.Var(&authorizedUsers, "authorized-user", "authorized GitHub username; may be repeated; inferred from the authenticated gh account when omitted")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -565,9 +580,10 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		writeError(errorsOutput, errors.New("register does not accept positional arguments"))
 		return 2
 	}
-	if strings.TrimSpace(*repositoryPath) == "" || strings.TrimSpace(*githubOwner) == "" || strings.TrimSpace(*githubRepository) == "" || len(authorizedUsers) == 0 {
-		writeError(errorsOutput, errors.New("register requires --repository, --github-owner, --github-repository, and at least one --authorized-user"))
-		return 2
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		writeError(errorsOutput, fmt.Errorf("resolve the current directory for registration inference: %w", err))
+		return 1
 	}
 	service := factory.New(*configPath)
 	result, err := service.Register(ctx, factory.RegisterRequest{
@@ -581,9 +597,13 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		CodexAuthPath:        *codexAuthPath,
 		ClaudeAuthPath:       *claudeAuthPath,
 		RepositoryConfigPath: *repositoryConfigPath,
+		WorkingDirectory:     workingDirectory,
 	})
 	if err != nil {
 		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeInferredRegistrationValues(output, errorsOutput, result) {
 		return 1
 	}
 	if !writeOutput(output, errorsOutput, "registered repository: %s\noperational store: %s\n", result.RepositoryPath, result.OperationalDataPath) {

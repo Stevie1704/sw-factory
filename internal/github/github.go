@@ -478,7 +478,7 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository,
 	if strings.TrimSpace(marker) == "" {
 		return Comment{}, errors.New("status comment marker is required")
 	}
-	coordinator, err := c.authenticatedUser(ctx)
+	coordinator, err := c.AuthenticatedLogin(ctx)
 	if err != nil {
 		return Comment{}, err
 	}
@@ -495,21 +495,6 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository,
 		}
 	}
 	return Comment{}, nil
-}
-
-// authenticatedUser returns the GitHub login attached to the local gh
-// credential, which is the only reliable coordinator identity available to the
-// adapter when it recovers a status comment.
-func (c *GhClient) authenticatedUser(ctx context.Context) (string, error) {
-	var response userResponse
-	if err := c.callJSON(ctx, []string{"api", "user"}, nil, &response); err != nil {
-		return "", fmt.Errorf("identify authenticated GitHub user: %w", err)
-	}
-	login := strings.TrimSpace(response.Login)
-	if login == "" {
-		return "", errors.New("authenticated GitHub user has no login")
-	}
-	return login, nil
 }
 
 // EditIssueComment edits an existing issue comment by id.
@@ -820,12 +805,6 @@ type commentResponse struct {
 	User      struct {
 		Login string `json:"login"`
 	} `json:"user"`
-}
-
-// userResponse is the authenticated GitHub user projection used for ownership
-// checks on coordinator-created comments.
-type userResponse struct {
-	Login string `json:"login"`
 }
 
 // comment converts the GitHub response shape into the coordinator-neutral
