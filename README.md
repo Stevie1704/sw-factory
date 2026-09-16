@@ -61,7 +61,9 @@ shows how they fit together.
 
 1. **Prepare the host.** Initialize and register the installation, connect it
    to the target repository, and complete the startup diagnosis. Follow
-   [Host configuration](docs/configuration.md#host-configuration).
+   [Quick start](docs/configuration.md#quick-start) for the minimal first-run
+   sequence, or [Host configuration](docs/configuration.md#host-configuration)
+   for the full option set.
 2. **Prepare the repository.** Review the checked-in policy, build the worker
    image, and confirm the target issue is authorized. Follow [Checked-in
    repository configuration](docs/configuration.md#checked-in-repository-configuration)

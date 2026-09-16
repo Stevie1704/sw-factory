@@ -4,6 +4,29 @@ Issues #3 and #4 establish two configuration documents and one local operational
 
 The host configuration is created with `factory init`. Its path is selected by `--config`, then `FACTORY_CONFIG`, then the operating system's user configuration directory at `factory/config.yaml`. The repository registration is intentionally limited to one repository in version one.
 
+## Quick start
+
+`factory register` currently needs the repository path, GitHub repository
+identity, and at least one authorized GitHub user. It does not infer those
+values from the current directory or Git remote. The shortest supported setup
+inside a checkout is:
+
+```sh
+factory init
+factory register --repository "$PWD" --github-owner example --github-repository project --authorized-user alice
+factory bootstrap-labels
+factory doctor
+factory start
+```
+
+The `--config`, `--operational-data`, and `--repository-config` options are
+omitted here because their documented defaults use the standard host
+configuration location, a host-local data directory, and `factory.yaml` in the
+checkout. Polling also has defaults. Replace `example`, `project`, and `alice`
+with the GitHub owner, repository, and authorized username for the checkout.
+Use the full [host configuration](#host-configuration) example when those
+defaults or the authentication options do not fit the installation.
+
 ```sh
 factory init --config /Users/me/.config/factory/config.yaml
 factory register \
