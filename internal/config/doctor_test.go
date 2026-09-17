@@ -188,3 +188,88 @@ base_synchronization:
 		t.Fatal(err)
 	}
 }
+
+// TestCacheStartupCheckAcceptsAMappedRepositoryCache verifies a declared cache
+// with a host directory under the cache root passes startup diagnosis.
+func TestCacheStartupCheckAcceptsAMappedRepositoryCache(t *testing.T) {
+	t.Parallel()
+
+	registration := config.RepositoryRegistration{
+		CacheRoot: "/var/lib/factory/caches",
+		Caches:    map[string]string{"go-build": "/var/lib/factory/caches/go-build"},
+	}
+	repository := config.RepositoryConfig{Caches: []config.CacheConfig{{Name: "go-build"}}}
+
+	result := config.CacheStartupCheck(config.DoctorState{Registration: &registration, Repository: &repository})(context.Background())
+	if result.Status != doctor.StatusPassed {
+		t.Fatalf("cache diagnosis = %#v, want passed", result)
+	}
+}
+
+// TestCacheStartupCheckBlocksADeclaredCacheWithNoHostMapping verifies an
+// unmapped cache is a blocking finding rather than a silent default path.
+func TestCacheStartupCheckBlocksADeclaredCacheWithNoHostMapping(t *testing.T) {
+	t.Parallel()
+
+	registration := config.RepositoryRegistration{CacheRoot: "/var/lib/factory/caches"}
+	repository := config.RepositoryConfig{Caches: []config.CacheConfig{{Name: "go-build"}}}
+
+	result := config.CacheStartupCheck(config.DoctorState{Registration: &registration, Repository: &repository})(context.Background())
+	if result.Status != doctor.StatusFailed {
+		t.Fatalf("cache diagnosis = %#v, want failed", result)
+	}
+	if !strings.Contains(result.Problem, "go-build") || !strings.Contains(result.Action, "caches.go-build") {
+		t.Fatalf("cache diagnosis = %#v, want the unmapped cache name and host field", result)
+	}
+}
+
+// TestCacheStartupCheckBlocksAHostMappingForAnUndeclaredCache verifies host
+// configuration cannot mount a cache the repository never declared.
+func TestCacheStartupCheckBlocksAHostMappingForAnUndeclaredCache(t *testing.T) {
+	t.Parallel()
+
+	registration := config.RepositoryRegistration{
+		CacheRoot: "/var/lib/factory/caches",
+		Caches:    map[string]string{"npm": "/var/lib/factory/caches/npm"},
+	}
+	repository := config.RepositoryConfig{}
+
+	result := config.CacheStartupCheck(config.DoctorState{Registration: &registration, Repository: &repository})(context.Background())
+	if result.Status != doctor.StatusFailed {
+		t.Fatalf("cache diagnosis = %#v, want failed", result)
+	}
+	if !strings.Contains(result.Problem, "npm") {
+		t.Fatalf("cache diagnosis = %#v, want the undeclared cache name", result)
+	}
+}
+
+// TestCacheStartupCheckBlocksAHostPathOutsideTheCacheRoot verifies a
+// hand-edited host file cannot escape the operator's cache root.
+func TestCacheStartupCheckBlocksAHostPathOutsideTheCacheRoot(t *testing.T) {
+	t.Parallel()
+
+	registration := config.RepositoryRegistration{
+		CacheRoot: "/var/lib/factory/caches",
+		Caches:    map[string]string{"go-build": "/Users/maintainer/.ssh"},
+	}
+	repository := config.RepositoryConfig{Caches: []config.CacheConfig{{Name: "go-build"}}}
+
+	result := config.CacheStartupCheck(config.DoctorState{Registration: &registration, Repository: &repository})(context.Background())
+	if result.Status != doctor.StatusFailed {
+		t.Fatalf("cache diagnosis = %#v, want failed", result)
+	}
+	if !strings.Contains(result.Problem, "cache root") {
+		t.Fatalf("cache diagnosis = %#v, want a cache-root containment problem", result)
+	}
+}
+
+// TestCacheStartupCheckStaysSilentWithoutConfiguration verifies the cache
+// diagnosis does not repeat a configuration failure another check reports.
+func TestCacheStartupCheckStaysSilentWithoutConfiguration(t *testing.T) {
+	t.Parallel()
+
+	result := config.CacheStartupCheck(config.DoctorState{})(context.Background())
+	if result.Status != doctor.StatusPassed {
+		t.Fatalf("cache diagnosis = %#v, want passed without configuration", result)
+	}
+}

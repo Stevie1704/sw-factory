@@ -54,7 +54,6 @@ test_policy:
 allowed_overrides: [model, reasoning_effort]
 caches:
   - name: go-build
-    path: /tmp/factory-cache
     read_only: false
 worker_build:
   image: ghcr.io/example/factory-worker
@@ -777,20 +776,12 @@ func TestValidateRepositoryRejectsInvalidFieldsOneAtATime(t *testing.T) {
 			name: "duplicate cache names",
 			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
 				c.Caches = []config.CacheConfig{
-					{Name: "go-build", Path: "/tmp/a"},
-					{Name: "go-build", Path: "/tmp/b"},
+					{Name: "go-build"},
+					{Name: "go-build"},
 				}
 				return c
 			},
 			field: "caches[1].name",
-		},
-		{
-			name: "empty cache path",
-			mutate: func(c config.RepositoryConfig) config.RepositoryConfig {
-				c.Caches = []config.CacheConfig{{Name: "go-build", Path: ""}}
-				return c
-			},
-			field: "caches[0].path",
 		},
 		{
 			name: "missing worker image",
@@ -1077,5 +1068,145 @@ func TestValidateRepositoryRejectsInvalidClaudeCodeReasoningEffort(t *testing.T)
 	}
 	if err := config.ValidateRepository(validMixed); err != nil {
 		t.Fatalf("ValidateRepository() error = %v, want valid mixed Codex and Claude configuration to be accepted", err)
+	}
+}
+
+// TestLoadRepositoryRejectsADeclaredCacheHostPath verifies a checked-in
+// repository configuration cannot point a writable worker mount at a host
+// path, because host paths belong to host configuration.
+func TestLoadRepositoryRejectsADeclaredCacheHostPath(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.Caches = []config.CacheConfig{{Name: "go-build", Path: "/Users/maintainer/.cache/sw-factory/go-build"}}
+
+	err := config.ValidateRepository(policy)
+	var validationErr *config.ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("ValidateRepository() error = %v, want ValidationError", err)
+	}
+	if validationErr.Field != "caches[0].path" {
+		t.Fatalf("field = %q, want caches[0].path", validationErr.Field)
+	}
+}
+
+// TestValidateRepositoryAcceptsACacheDeclaredByNameAlone verifies a repository
+// owns only the cache name and its container-side access mode.
+func TestValidateRepositoryAcceptsACacheDeclaredByNameAlone(t *testing.T) {
+	t.Parallel()
+
+	policy := validRepositoryConfig()
+	policy.Caches = []config.CacheConfig{{Name: "go-build", ReadOnly: false}}
+
+	if err := config.ValidateRepository(policy); err != nil {
+		t.Fatalf("ValidateRepository() error = %v, want a name-only cache to be accepted", err)
+	}
+}
+
+// TestValidateHostAcceptsCachesMappedUnderTheCacheRoot verifies host
+// configuration supplies the host directory for a repository cache name.
+func TestValidateHostAcceptsCachesMappedUnderTheCacheRoot(t *testing.T) {
+	t.Parallel()
+
+	registration := validRegistration()
+	registration.CacheRoot = "/var/lib/factory/caches"
+	registration.Caches = map[string]string{"go-build": "/var/lib/factory/caches/go-build"}
+
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}
+	if err := config.ValidateHost(host); err != nil {
+		t.Fatalf("ValidateHost() error = %v, want a mapped cache to be accepted", err)
+	}
+}
+
+// TestValidateHostRejectsInvalidCacheMappings verifies the host cache root and
+// its mapping bound every writable host directory a worker can receive.
+func TestValidateHostRejectsInvalidCacheMappings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(config.RepositoryRegistration) config.RepositoryRegistration
+		field  string
+	}{
+		{
+			name: "relative cache root",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.CacheRoot = "caches"
+				return r
+			},
+			field: "repositories[0].cache_root",
+		},
+		{
+			name: "mapped cache without a cache root",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.Caches = map[string]string{"go-build": "/var/lib/factory/caches/go-build"}
+				return r
+			},
+			field: "repositories[0].cache_root",
+		},
+		{
+			name: "relative cache path",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.CacheRoot = "/var/lib/factory/caches"
+				r.Caches = map[string]string{"go-build": "caches/go-build"}
+				return r
+			},
+			field: "repositories[0].caches.go-build",
+		},
+		{
+			name: "cache path outside the cache root",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.CacheRoot = "/var/lib/factory/caches"
+				r.Caches = map[string]string{"go-build": "/Users/maintainer/.ssh"}
+				return r
+			},
+			field: "repositories[0].caches.go-build",
+		},
+		{
+			name: "cache path escaping the cache root",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.CacheRoot = "/var/lib/factory/caches"
+				r.Caches = map[string]string{"go-build": "/var/lib/factory/caches/../../../etc"}
+				return r
+			},
+			field: "repositories[0].caches.go-build",
+		},
+		{
+			name: "empty cache name",
+			mutate: func(r config.RepositoryRegistration) config.RepositoryRegistration {
+				r.CacheRoot = "/var/lib/factory/caches"
+				r.Caches = map[string]string{"": "/var/lib/factory/caches/go-build"}
+				return r
+			},
+			field: "repositories[0].caches",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{tc.mutate(validRegistration())}}
+			err := config.ValidateHost(host)
+			var validationErr *config.ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("ValidateHost() error = %v, want ValidationError", err)
+			}
+			if validationErr.Field != tc.field {
+				t.Fatalf("field = %q, want %q", validationErr.Field, tc.field)
+			}
+		})
+	}
+}
+
+// validRegistration returns one complete registration without cache mappings.
+func validRegistration() config.RepositoryRegistration {
+	return config.RepositoryRegistration{
+		Path:                 "/work/repository",
+		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+		AuthorizedUsers:      []string{"alice"},
+		Polling:              config.PollingConfig{Interval: "30s", Backoff: "5m"},
+		OperationalDataPath:  "/var/lib/factory/factory.db",
+		RepositoryConfigPath: "/work/repository/factory.yaml",
 	}
 }

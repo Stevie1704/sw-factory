@@ -2,8 +2,10 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
@@ -35,6 +37,53 @@ func StartupCheck(path string) (DoctorState, doctor.Check) {
 		}
 		return doctor.Success("configuration")
 	}
+}
+
+// CacheStartupCheck diagnoses the repository-to-host cache agreement. The
+// repository declares a cache by name; host configuration maps that name to a
+// directory under the operator's cache root. An undeclared or unmapped cache
+// blocks startup instead of falling back to a silent default host path.
+func CacheStartupCheck(state DoctorState) doctor.Check {
+	return func(context.Context) doctor.Result {
+		if state.Registration == nil || state.Repository == nil {
+			return doctor.Success("caches")
+		}
+		return diagnoseCaches(*state.Registration, *state.Repository)
+	}
+}
+
+// diagnoseCaches reports the first cache disagreement in a deterministic
+// order: unmapped declarations first, then host mappings no repository cache
+// claims.
+func diagnoseCaches(registration RepositoryRegistration, repository RepositoryConfig) doctor.Result {
+	declared := make(map[string]struct{}, len(repository.Caches))
+	for _, cache := range repository.Caches {
+		declared[cache.Name] = struct{}{}
+		hostPath := strings.TrimSpace(registration.Caches[cache.Name])
+		if hostPath == "" {
+			return doctor.Failure("caches",
+				fmt.Sprintf("repository cache %q has no host path", cache.Name),
+				fmt.Sprintf("map caches.%s to a directory under cache_root in the host configuration", cache.Name))
+		}
+		if !pathWithin(registration.CacheRoot, hostPath) {
+			return doctor.Failure("caches",
+				fmt.Sprintf("the host path for cache %q is outside the configured cache root", cache.Name),
+				fmt.Sprintf("move caches.%s under cache_root in the host configuration", cache.Name))
+		}
+	}
+	names := make([]string, 0, len(registration.Caches))
+	for name := range registration.Caches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := declared[name]; !ok {
+			return doctor.Failure("caches",
+				fmt.Sprintf("host configuration maps cache %q that the repository does not declare", name),
+				fmt.Sprintf("remove caches.%s from the host configuration or declare it in the repository configuration", name))
+		}
+	}
+	return doctor.Success("caches")
 }
 
 // inspectDoctorState performs the configuration-owned read-only diagnosis.
@@ -100,7 +149,13 @@ func inspectDoctorState(path string) DoctorState {
 // existing symlinks. Registration validation already requires absolute paths;
 // the repeated check protects diagnosis from a hand-edited host file.
 func pathWithin(root, target string) bool {
-	relative, err := filepath.Rel(resolvePath(root), resolvePath(target))
+	return lexicalPathWithin(resolvePath(root), resolvePath(target))
+}
+
+// lexicalPathWithin reports whether target is equal to or below root without
+// touching the file system, so configuration validation stays pure.
+func lexicalPathWithin(root, target string) bool {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(target))
 	if err != nil {
 		return false
 	}
