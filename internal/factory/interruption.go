@@ -33,16 +33,24 @@ type AuthRefreshRequest struct {
 	RunID string
 	// Harness selects codex or claude. Empty uses the invocation's harness.
 	Harness config.Harness
+	// Resume continues the affected native session after the credential source
+	// has been projected. It is deliberately opt-in so the default refresh
+	// operation remains a credential-only maintenance action.
+	Resume bool
 }
 
-// AuthRefreshResult reports the credential store identity after a refresh.
+// AuthRefreshResult reports the credential projection and optional native
+// continuation after an auth refresh.
 type AuthRefreshResult struct {
-	// Run is unchanged workflow state after credential refresh.
+	// Run is the resulting workflow projection after credential refresh and any
+	// explicitly requested native-session continuation.
 	Run store.Run
 	// Invocation is the invocation whose worker credential store was reseeded.
 	Invocation store.Invocation
 	// Harness identifies the refreshed adapter.
 	Harness config.Harness
+	// Resumed reports whether the explicit native session was continued.
+	Resumed bool
 }
 
 // latestInvocationForAuthRefresh selects the active invocation or the latest

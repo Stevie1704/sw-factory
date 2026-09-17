@@ -580,6 +580,7 @@ mention of “retry” or “refresh” cannot control a run:
 ```text
 /factory status
 /factory refresh
+/factory resume
 /factory answer clarification-1 use the existing JSON format
 /factory repair validate permitted paths before the adoption return
 /factory retry
@@ -601,7 +602,12 @@ over an open tracked pull request with a valid checkpoint and no active
 invocation; retry reopens a failed or explicitly cancelled run at its current
 stage; cancel stops active worker activity while retaining the run artifacts;
 and harness configuration records a later invocation override only when the
-frozen repository configuration permits it. A recognized command from an
+frozen repository configuration permits it. `/factory resume` is admitted only
+for a non-terminal typed harness-capacity pause or the typed authentication and
+native-session recovery pauses in `waiting_for_human`; it cannot bypass
+pending clarification questions, review disposition, capture-limit, or other
+human gates. It retries the paused lifecycle without consuming the automatic
+recovery allowance. A recognized command from an
 unauthorized author or a malformed command is a
 typed policy rejection. The coordinator leaves workflow stage, status, labels,
 and configuration unchanged for that rejection, while recording the rejection
@@ -614,6 +620,15 @@ automation clients, and an answer may begin with `answer=`.
 The command grammar and current implementation support both the Codex and Claude
 adapters. A selected harness is still validated against the frozen role policy
 and the startup capability check before an issue can be claimed.
+
+For an expired credential, refresh the host source first with
+`factory auth refresh`. `factory auth refresh --resume` combines that
+credential projection with one explicit native-session continuation; the
+default command remains credential-only. The equivalent GitHub sequence is the
+same host refresh followed by `/factory resume`, delivered by the live polling
+supervisor. The `--resume` path reconciles pending effects before continuing,
+and it reports a refresh success separately from a failed native-session
+precondition so adding the flag does not discard the credential refresh.
 
 Each comment is processed at most once. The operational store persists a
 monotonic run revision, the processed comment ID watermark, and the revision at

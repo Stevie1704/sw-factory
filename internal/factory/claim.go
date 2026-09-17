@@ -846,6 +846,7 @@ func statusCommentBody(run store.Run) string {
 	if run.LifecycleReason != "" {
 		lifecycle += fmt.Sprintf("- lifecycle reason: %s\n", safeStatusCommentValue(run.LifecycleReason))
 	}
+	lifecycle += resumeCommandStatusComment(run)
 	commandFeedback := ""
 	if run.LastCommandName != "" {
 		commandFeedback = fmt.Sprintf("\n### Last command\n\n- comment: `%s`\n- revision: `%d`\n- command: `%s`\n- outcome: `%s`\n- message: %s\n", safeStatusCommentValue(run.ProcessedCommentID), run.ProcessedCommentRevision, safeStatusCommentValue(run.LastCommandName), safeStatusCommentValue(run.LastCommandOutcome), safeStatusCommentValue(run.LastCommandMessage))
@@ -875,6 +876,26 @@ func statusCommentBody(run store.Run) string {
 	disposition := humanDispositionStatusComment(run)
 	activity := activityStatusComment(run)
 	return fmt.Sprintf("%s\n## Factory run\n\n- run identifier: `%s`\n- issue: #%d\n- branch: `%s`\n- worktree: `%s`\n- coordinator: `%s`\n- start time: `%s`\n- checkpoint: `%s`\n- stage: `%s`\n- status: `%s`\n%s- test policy: `%s`\n- route: `%s`\n%s%s%s%s%s%s%s%s%s%s", statusCommentMarker(run.ID), run.ID, run.IssueNumber, run.Branch, run.Worktree, run.Coordinator, started, run.CheckpointSHA, run.Stage, run.Status, activity, testPolicyDescription(testPolicyModeForRun(run)), routeDescriptionForRun(run), checkRepair, testRevision, pullRequest, lifecycle, harness, review, reviewRepair, disposition, questions, commandFeedback)
+}
+
+// resumeCommandStatusComment makes the authorized recovery command visible
+// on the two pauses that admit it, so a maintainer can act from the issue
+// without consulting coordinator documentation first.
+func resumeCommandStatusComment(run store.Run) string {
+	if len(run.PendingQuestions) > 0 {
+		return ""
+	}
+	reason := strings.TrimSpace(run.LifecycleReason)
+	switch {
+	case run.Status == store.StatusWaitingForHarness && strings.HasPrefix(reason, LifecycleReasonHarnessCapacityUnavailable):
+		return "\n### Recovery\n\n- command: `/factory resume`\n"
+	case run.Status == store.StatusWaitingForHuman && strings.HasPrefix(reason, LifecycleReasonHarnessAuthenticationExpired):
+		return "\n### Recovery\n\n- host command: `factory auth refresh --resume`\n- GitHub command: `/factory resume`\n"
+	case run.Status == store.StatusWaitingForHuman && strings.HasPrefix(reason, LifecycleReasonAutomaticHarnessRecoveryExhausted):
+		return "\n### Recovery\n\n- command: `/factory resume`\n"
+	default:
+		return ""
+	}
 }
 
 // testRevisionStatusComment renders the bounded objection-cycle projection

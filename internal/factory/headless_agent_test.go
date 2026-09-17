@@ -9,6 +9,8 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -106,6 +108,113 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 	}
 }
 
+// TestRefreshAuthCanExplicitlyResumeTheNativeSession verifies credential
+// refresh and manual native recovery are one opt-in operation, with exactly
+// one credential projection and one detached resume after the initial launch.
+func TestRefreshAuthCanExplicitlyResumeTheNativeSession(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	policy := validRepositoryConfig()
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{CodexAuthPath: authPath})
+
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	paused := *runStore.current
+	paused.Status = store.StatusWaitingForHuman
+	paused.LifecycleReason = factory.LifecycleReasonHarnessAuthenticationExpired + " (codex); run is waiting for `factory auth refresh`"
+	if err := runStore.SaveRun(context.Background(), paused); err != nil {
+		t.Fatalf("SaveRun() pause setup error = %v", err)
+	}
+	refreshed, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID, Resume: true})
+	if err != nil {
+		t.Fatalf("RefreshAuth(Resume: true) error = %v", err)
+	}
+	if !refreshed.Resumed || refreshed.Invocation.NativeSessionID != launch.Invocation.NativeSessionID || refreshed.Invocation.ManualResumeCount != 1 {
+		t.Fatalf("refreshed result = %#v, want explicit native resume", refreshed)
+	}
+	if len(runtime.codexSeeds) != 2 {
+		t.Fatalf("credential seeds = %#v, want initial projection plus one refresh", runtime.codexSeeds)
+	}
+	if len(headlessWorker.headlessStarts) != 2 || headlessWorker.headlessStarts[1].Mode != worker.HeadlessLaunchResume {
+		t.Fatalf("headless launches = %#v, want one exact-session resume", headlessWorker.headlessStarts)
+	}
+}
+
+// TestResumeAuthenticationFailureUsesTheRealPauseAndCancellationPath drives
+// an actual native resume failure through pauseForAuthentication, proving the
+// detached process is cancelled before the run waits for refreshed auth.
+func TestResumeAuthenticationFailureUsesTheRealPauseAndCancellationPath(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	headlessWorker := &headlessAgentWorker{
+		agentWorker: runtime,
+		resumeErr:   harness.NewAuthenticationExpiredError("codex"),
+	}
+	service := newDispatchingAgentService(t, runStore, headlessWorker, validRepositoryConfig(), config.AuthenticationConfig{CodexAuthPath: authPath})
+
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+	paused := *runStore.current
+	paused.Status = store.StatusWaitingForHuman
+	paused.LifecycleReason = factory.LifecycleReasonHarnessAuthenticationExpired + " (codex); waiting for auth"
+	if err := runStore.SaveRun(context.Background(), paused); err != nil {
+		t.Fatalf("SaveRun() pause setup error = %v", err)
+	}
+
+	_, err = service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
+	if err == nil || !strings.Contains(err.Error(), "authentication") {
+		t.Fatalf("Resume() error = %v, want classified authentication failure", err)
+	}
+	if runStore.current.Status != store.StatusWaitingForHuman || !strings.HasPrefix(runStore.current.LifecycleReason, factory.LifecycleReasonHarnessAuthenticationExpired) {
+		t.Fatalf("run after failed resume = %#v, want authentication pause", runStore.current)
+	}
+	if len(headlessWorker.headlessCancels) != 1 || headlessWorker.headlessCancels[0].InvocationID != launch.Invocation.ID {
+		t.Fatalf("headless cancellations = %#v, want exact active invocation cancellation", headlessWorker.headlessCancels)
+	}
+	if runtime.stops < 2 {
+		t.Fatalf("worker stops = %d, want resume cleanup and pause cleanup", runtime.stops)
+	}
+}
+
+// TestRefreshAuthResumePreconditionStillProjectsCredentials verifies a
+// non-resumable invocation does not turn --resume into an all-or-nothing
+// credential operation.
+func TestRefreshAuthResumePreconditionStillProjectsCredentials(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	service := newDispatchingAgentService(t, runStore, headlessWorker, validRepositoryConfig(), config.AuthenticationConfig{CodexAuthPath: authPath})
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+
+	invocation := runStore.invocations[launch.Invocation.ID]
+	invocation.Status = store.InvocationStatusCompleted
+	if err := runStore.SaveInvocation(context.Background(), invocation); err != nil {
+		t.Fatalf("SaveInvocation() precondition setup error = %v", err)
+	}
+	before := len(runtime.codexSeeds)
+	_, err = service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID, Resume: true})
+	if err == nil || !strings.Contains(err.Error(), "authentication refreshed") {
+		t.Fatalf("RefreshAuth(Resume: true) error = %v, want post-refresh resume precondition error", err)
+	}
+	if got := len(runtime.codexSeeds); got != before+1 {
+		t.Fatalf("credential seeds = %d, want one refresh despite rejected native continuation", got)
+	}
+}
+
 // TestRefreshAuthExplainsHowToRegisterAMissingCredentialSource verifies an
 // operator receives the registration remedy when no host source is configured.
 func TestRefreshAuthExplainsHowToRegisterAMissingCredentialSource(t *testing.T) {
@@ -139,12 +248,17 @@ func TestRefreshAuthExplainsHowToRegisterAMissingCredentialSource(t *testing.T) 
 // confirms it in stream-json output.
 type headlessAgentWorker struct {
 	*agentWorker
-	headlessStarts []worker.HeadlessRequest
+	headlessStarts  []worker.HeadlessRequest
+	headlessCancels []worker.HeadlessRequest
+	resumeErr       error
 }
 
 // StartHeadless records one detached launch.
 func (w *headlessAgentWorker) StartHeadless(_ context.Context, request worker.HeadlessRequest) (worker.HeadlessExecution, error) {
 	w.headlessStarts = append(w.headlessStarts, request)
+	if request.Mode == worker.HeadlessLaunchResume && w.resumeErr != nil {
+		return worker.HeadlessExecution{}, w.resumeErr
+	}
 	return worker.HeadlessExecution{RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID}, nil
 }
 
@@ -170,8 +284,11 @@ func (w *headlessAgentWorker) InspectHeadless(context.Context, worker.HeadlessRe
 	}, nil
 }
 
-// CancelHeadless implements the detached process extension.
-func (*headlessAgentWorker) CancelHeadless(context.Context, worker.HeadlessRequest) error { return nil }
+// CancelHeadless records detached process cancellation before worker stop.
+func (w *headlessAgentWorker) CancelHeadless(_ context.Context, request worker.HeadlessRequest) error {
+	w.headlessCancels = append(w.headlessCancels, request)
+	return nil
+}
 
 // FinishHeadless implements the detached process extension.
 func (*headlessAgentWorker) FinishHeadless(context.Context, worker.HeadlessRequest) error { return nil }

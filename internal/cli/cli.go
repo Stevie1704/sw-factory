@@ -20,6 +20,13 @@ import (
 // commandHandler runs one validated CLI command.
 type commandHandler func(context.Context, []string, string, io.Writer, io.Writer) int
 
+// authRefreshForCLI is the coordinator seam used by the auth command. Keeping
+// the flag and output handling independent from factory construction lets the
+// CLI contract be tested without requiring a live GitHub or worker runtime.
+var authRefreshForCLI = func(ctx context.Context, configPath string, request factory.AuthRefreshRequest) (factory.AuthRefreshResult, error) {
+	return factory.New(configPath).RefreshAuth(ctx, request)
+}
+
 // commandDefinition associates a user-facing command name with its handler.
 type commandDefinition struct {
 	name    string
@@ -270,8 +277,8 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 	return 0
 }
 
-// runAuth dispatches authentication maintenance subcommands. The refresh
-// operation only seeds a factory-managed worker credential store.
+// runAuth dispatches authentication maintenance subcommands. Refresh remains
+// credential-only unless the operator explicitly requests native recovery.
 func runAuth(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	if len(args) == 0 || args[0] != "refresh" {
 		writeError(errorsOutput, errors.New("auth requires the refresh subcommand"))
@@ -282,6 +289,7 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
 	harnessName := flags.String("harness", "", "codex or claude; empty uses the invocation harness")
+	resume := flags.Bool("resume", false, "resume the affected native session after refreshing credentials")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -289,10 +297,16 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 		writeError(errorsOutput, errors.New("auth refresh does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).RefreshAuth(ctx, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName)})
+	result, err := authRefreshForCLI(ctx, *configPath, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName), Resume: *resume})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
+	}
+	if *resume {
+		if !writeOutput(output, errorsOutput, "authentication refreshed\nrun: %s\ninvocation: %s\nharness: %s\nresumed: %t\n", result.Run.ID, result.Invocation.ID, result.Harness, result.Resumed) {
+			return 1
+		}
+		return 0
 	}
 	if !writeOutput(output, errorsOutput, "authentication refreshed\nrun: %s\ninvocation: %s\nharness: %s\n", result.Run.ID, result.Invocation.ID, result.Harness) {
 		return 1

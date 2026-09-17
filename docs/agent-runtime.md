@@ -90,7 +90,13 @@ coordinator pauses the run. Repair depends on where the credential came from.
 `factory auth refresh` reseeds the worker volume from a registered host source,
 so a repository relying on volume-persisted credentials has to register one, or
 reseed the role volume, before an unattended headless run can recover — a
-headless run cannot complete an interactive login for itself.
+headless run cannot complete an interactive login for itself. The explicit
+`--resume` option reconciles the same pending effect and review state as
+`factory resume`, then performs that projection and continues the affected
+native session in one operation; without it, auth refresh remains
+credential-only. The credential projection is completed before the
+`--resume` resumability checks, so an invalid native-session precondition still
+refreshes credentials and reports that continuation was not attempted.
 
 An SDK or API-key integration would instead authenticate with
 `ANTHROPIC_API_KEY`. The factory does not support that today, and the difference
@@ -196,7 +202,7 @@ recovery commands:
 
 ```sh
 factory resume --config /Users/me/.config/factory/config.yaml --run-id run-123
-factory auth refresh --config /Users/me/.config/factory/config.yaml --run-id run-123
+factory auth refresh --config /Users/me/.config/factory/config.yaml --run-id run-123 --resume
 ```
 
 `factory resume` retries harness capacity or performs a manual native resume
@@ -205,6 +211,7 @@ identity are already coordinator-owned, so progression can continue unattended.
 `factory auth refresh` reads the explicitly
 registered host credential source and reseeds only the factory-managed worker
 credential volume; it never writes the source file or host harness directory.
+The `--resume` form also performs one manual native resume after the projection.
 
 ## Invocation packet and report
 

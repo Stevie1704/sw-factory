@@ -15,6 +15,7 @@ import (
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -73,6 +74,8 @@ const (
 	PolicyRejectionAnswerQuestion PolicyRejectionCode = "answer_question"
 	// PolicyRejectionRefreshState means refresh is not legal for the run.
 	PolicyRejectionRefreshState PolicyRejectionCode = "refresh_state"
+	// PolicyRejectionResumeState means resume is not legal for the run's pause.
+	PolicyRejectionResumeState PolicyRejectionCode = "resume_state"
 	// PolicyRejectionRevisionState means a specification amendment is not legal
 	// for the current ready pull-request state.
 	PolicyRejectionRevisionState PolicyRejectionCode = "revision_state"
@@ -201,6 +204,8 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	case commandlanguage.Status:
 		updated, persistErr := s.persistCommandProjection(ctx, registration, runStore, *run, request.Comment, parsed.Command, string(parsed.Command.Kind), "command accepted")
 		return CommandResult{Outcome: CommandAccepted, Command: parsed.Command, Run: updated}, persistErr
+	case commandlanguage.Resume:
+		return s.handleResumeCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Refresh:
 		return s.handleRefreshCommand(ctx, registration, runStore, *run, request.Comment, parsed.Command)
 	case commandlanguage.Revision:
@@ -298,6 +303,116 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 		return CommandResult{}, fmt.Errorf("persist answer command watermark: %w", err)
 	}
 	return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
+}
+
+// handleResumeCommand continues a paused run through the same explicit
+// recovery lifecycle as the host resume command, then records the GitHub
+// comment watermark against the resulting run projection.
+func (s *Service) handleResumeCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+	if reason := resumeAdmissionReason(run); reason != "" {
+		rejection := &PolicyRejection{Code: PolicyRejectionResumeState, Problem: reason}
+		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
+	}
+	resumed, resumeErr := s.resumeWithStore(ctx, registration, runStore, &run)
+	base := resumed.Run
+	if base.ID == "" {
+		base = run
+	}
+	message := "command accepted; run resumed"
+	if resumeErr != nil {
+		// Resume differs from packet-changing commands: it may cross the
+		// irreversible native-process boundary before state publication reports
+		// an error. Claim the watermark after the attempt so polling cannot
+		// launch a second native session, and retain the classified failure in
+		// the visible command message.
+		message = resumeCommandFailureMessage(resumeErr)
+		watermarkBase, watermarkBaseErr := commandWatermarkBase(ctx, runStore, base)
+		if watermarkBaseErr == nil {
+			base = watermarkBase
+		} else {
+			resumeErr = errors.Join(resumeErr, watermarkBaseErr)
+		}
+	}
+	updated, projectionErr := s.persistCommandProjection(ctx, registration, runStore, base, comment, parsed, string(parsed.Kind), message)
+	result := CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}
+	return result, errors.Join(resumeErr, projectionErr)
+}
+
+// commandWatermarkBase rereads the durable run after a failed lifecycle
+// attempt. A state transition may have persisted before returning its error,
+// so the command projection must compare-and-set from the store's revision,
+// not from the in-memory next revision returned by the lifecycle helper.
+func commandWatermarkBase(ctx context.Context, runStore RunStore, fallback store.Run) (store.Run, error) {
+	current, err := runStore.CurrentRun(ctx)
+	if err != nil {
+		return fallback, fmt.Errorf("read run revision before claiming resume command: %w", err)
+	}
+	if current != nil && (fallback.ID == "" || current.ID == fallback.ID) {
+		return *current, nil
+	}
+	if latestStore, ok := runStore.(LatestRunStore); ok {
+		latest, latestErr := latestStore.LatestRun(ctx)
+		if latestErr != nil {
+			return fallback, fmt.Errorf("read latest run revision before claiming resume command: %w", latestErr)
+		}
+		if latest != nil && (fallback.ID == "" || latest.ID == fallback.ID) {
+			return *latest, nil
+		}
+	}
+	return fallback, nil
+}
+
+// resumeCommandFailureMessage turns the classified lifecycle failure into a
+// bounded status-comment message without copying adapter output or host paths.
+func resumeCommandFailureMessage(err error) string {
+	const prefix = "command accepted; resume attempt recorded; resume failed: "
+	if err == nil {
+		return "command accepted; run resumed"
+	}
+	if credentialProjectionCaptureLimit(err) {
+		return prefix + "worker credential capture limit remains exceeded"
+	}
+	var projectionErr *credentialProjectionError
+	if errors.As(err, &projectionErr) && projectionErr != nil {
+		return prefix + "managed harness credentials could not be projected"
+	}
+	switch {
+	case harness.IsRateLimited(err):
+		return prefix + "harness capacity is still unavailable"
+	case harness.IsAuthenticationExpired(err):
+		return prefix + "harness authentication is still expired"
+	case harness.IsUnexpectedExit(err):
+		return prefix + "the native harness session exited again"
+	default:
+		return "command accepted; resume attempt recorded; inspect factory status for recovery details"
+	}
+}
+
+// resumeAdmissionReason keeps the GitHub resume verb fail-closed. It is only
+// valid for temporary harness waits and the two typed human pauses for which
+// an operator can clear the external blocker without changing the packet.
+func resumeAdmissionReason(run store.Run) string {
+	if store.IsTerminalStatus(run.Status) {
+		return fmt.Sprintf("resume is not allowed after terminal run status %q", run.Status)
+	}
+	switch run.Status {
+	case store.StatusWaitingForHarness:
+		if !strings.HasPrefix(strings.TrimSpace(run.LifecycleReason), LifecycleReasonHarnessCapacityUnavailable) {
+			return "resume is only allowed for a harness-capacity pause, not the current infrastructure wait"
+		}
+		return ""
+	case store.StatusWaitingForHuman:
+		if len(run.PendingQuestions) > 0 {
+			return "resume cannot bypass pending clarification questions; use `/factory answer`"
+		}
+		reason := strings.TrimSpace(run.LifecycleReason)
+		if strings.HasPrefix(reason, LifecycleReasonHarnessAuthenticationExpired) || strings.HasPrefix(reason, LifecycleReasonAutomaticHarnessRecoveryExhausted) {
+			return ""
+		}
+		return "resume is only allowed for a recoverable authentication or native-session pause, not the current human gate"
+	default:
+		return fmt.Sprintf("resume is only allowed while the run is paused, not status %q", run.Status)
+	}
 }
 
 // handleRepairCommand applies one authorized maintainer instruction as a human

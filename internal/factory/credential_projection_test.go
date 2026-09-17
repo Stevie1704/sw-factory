@@ -156,7 +156,7 @@ func TestOrdinaryCredentialProjectionKeepsAuthenticationRecovery(t *testing.T) {
 	if outcome != RecoveryOutcomeWaitingForHuman || paused.Status != store.StatusWaitingForHuman {
 		t.Fatalf("paused recovery = %#v/%q, want human-waiting auth recovery", paused, outcome)
 	}
-	wantReason := "harness authentication expired (codex); run is waiting for `factory auth refresh`"
+	wantReason := LifecycleReasonHarnessAuthenticationExpired + " (codex); run is waiting for `factory auth refresh`"
 	if paused.LifecycleReason != wantReason {
 		t.Fatalf("lifecycle reason = %q, want %q", paused.LifecycleReason, wantReason)
 	}
