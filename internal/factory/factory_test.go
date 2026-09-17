@@ -262,6 +262,63 @@ func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapt
 	}
 }
 
+// TestFactoryStatusRequiresTheCoordinatorLockForLiveHeartbeat verifies a
+// future-dated heartbeat cannot report a live supervisor after its process
+// released the kernel-backed coordinator lock.
+func TestFactoryStatusRequiresTheCoordinatorLockForLiveHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	operationalPath := filepath.Join(root, "data", "factory.db")
+	now := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveSupervisorHeartbeat(context.Background(), store.SupervisorHeartbeat{
+		Coordinator: "host-a",
+		PID:         1234,
+		StartedAt:   now,
+		RenewedAt:   now,
+		ExpiresAt:   now.Add(time.Minute),
+	}); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config: &fakeConfigRepository{value: config.HostConfig{
+			SchemaVersion: config.CurrentHostSchemaVersion,
+			Repositories: []config.RepositoryRegistration{{
+				Path:                 repositoryPath,
+				OperationalDataPath:  operationalPath,
+				RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+			}},
+		}},
+		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) {
+			return store.Open(ctx, path)
+		},
+		Now: func() time.Time { return now },
+	})
+	status, err := service.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.SupervisorHeartbeat.Live(now) {
+		t.Fatalf("heartbeat = %#v, want an unexpired heartbeat", status.SupervisorHeartbeat)
+	}
+	if status.SupervisorLive {
+		t.Fatal("SupervisorLive = true without a held coordinator lock")
+	}
+}
+
 // TestFactoryStatusReportsTheLatestTerminalRun verifies status retains the
 // branch and worktree after a run reaches a terminal state.
 func TestFactoryStatusReportsTheLatestTerminalRun(t *testing.T) {

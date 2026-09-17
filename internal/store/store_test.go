@@ -97,9 +97,9 @@ func TestSupervisorHeartbeatRoundTripsAndExpires(t *testing.T) {
 	}
 }
 
-// TestSchema39MigrationCreatesSupervisorHeartbeat verifies older operational
+// TestSchema40MigrationCreatesSupervisorHeartbeat verifies older operational
 // stores gain the heartbeat singleton during the normal migration path.
-func TestSchema39MigrationCreatesSupervisorHeartbeat(t *testing.T) {
+func TestSchema40MigrationCreatesSupervisorHeartbeat(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "data", "factory.db")
@@ -136,6 +136,32 @@ func TestSchema39MigrationCreatesSupervisorHeartbeat(t *testing.T) {
 	}
 	if heartbeat != nil {
 		t.Fatalf("heartbeat = %#v, want empty after migration", heartbeat)
+	}
+}
+
+// TestSupervisorHeartbeatAllowsWallClockRollback verifies a host clock step
+// does not make a valid renewal unpersistable merely because it predates the
+// process start timestamp.
+func TestSupervisorHeartbeatAllowsWallClockRollback(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	startedAt := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
+	heartbeat := store.SupervisorHeartbeat{
+		Coordinator: "host-a",
+		PID:         1234,
+		StartedAt:   startedAt,
+		RenewedAt:   startedAt.Add(-3 * time.Second),
+		ExpiresAt:   startedAt.Add(5 * time.Minute),
+	}
+	if err := opened.SaveSupervisorHeartbeat(t.Context(), heartbeat); err != nil {
+		t.Fatalf("SaveSupervisorHeartbeat() error = %v, want clock rollback to be accepted", err)
 	}
 }
 

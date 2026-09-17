@@ -33,6 +33,20 @@ func StartupCheck(path string) doctor.Check {
 // prerequisite because this check is also run immediately before `factory
 // start`, when no supervisor is expected to exist yet.
 func SupervisorStartupCheck(path string, now time.Time) doctor.Check {
+	return supervisorStartupCheck(path, now, nil)
+}
+
+// SupervisorStartupCheckWithLock reports supervisor liveness only when both
+// the persisted heartbeat and the kernel-backed coordinator lock are live.
+// The callback is kept outside this package so the store package does not
+// depend on the factory lock implementation.
+func SupervisorStartupCheckWithLock(path string, now time.Time, lockHeld func() bool) doctor.Check {
+	return supervisorStartupCheck(path, now, lockHeld)
+}
+
+// supervisorStartupCheck contains the read-only heartbeat diagnosis shared by
+// the store-only compatibility check and the factory lock-aware check.
+func supervisorStartupCheck(path string, now time.Time, lockHeld func() bool) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		if strings.TrimSpace(path) == "" {
 			return doctor.Warning("Supervisor", "the supervisor heartbeat cannot be read because the operational store is not configured", "register the repository before inspecting supervisor liveness")
@@ -50,7 +64,7 @@ func SupervisorStartupCheck(path string, now time.Time) doctor.Check {
 		if heartbeat == nil {
 			return supervisorHeartbeatWarning(run)
 		}
-		if heartbeat.Live(now.UTC()) {
+		if heartbeat.Live(now.UTC()) && (lockHeld == nil || lockHeld()) {
 			return doctor.Success("Supervisor")
 		}
 		return supervisorHeartbeatWarning(run)

@@ -132,8 +132,10 @@ publishes a renewable `factory/lease` Commit Status on the target branch; its
 description includes the coordinator, active run, heartbeat, and expiry so a
 stale owner remains diagnosable in GitHub. It also renews a host-local heartbeat
 in the operational store. `factory status` and `factory doctor` report that
-heartbeat as live, expired, or missing; when an active run has no live
-heartbeat, status names the supervisor as the reason progress is stalled.
+heartbeat as live, expired, or missing; live additionally requires the
+kernel-backed coordinator lock, so a clean stop or process death is visible
+immediately. When an active run has no live heartbeat, status names the
+supervisor as the reason progress is stalled.
 `factory stop` signals the locked
 coordinator and leaves any active run, branch, worktree, worker, and session
 artifacts in place. Polling never creates factory labels; use

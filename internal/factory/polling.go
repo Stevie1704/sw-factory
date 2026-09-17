@@ -138,6 +138,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	leaseRunID := ""
 	delay := time.Duration(0)
+	consecutiveHeartbeatFailures := 0
 	consecutiveLeaseFailures := 0
 	consecutiveQueueFailures := 0
 	consecutiveCommandFailures := 0
@@ -155,8 +156,18 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 			}
 			return err
 		}
-		if err := heartbeat.heartbeatError(); err != nil {
-			return fmt.Errorf("renew supervisor heartbeat: %w", err)
+		if heartbeat != nil {
+			if err := heartbeat.heartbeatError(); err != nil {
+				consecutiveHeartbeatFailures++
+				s.emitCoordinatorEvent(events, CoordinatorEvent{
+					Kind:      EventRetry,
+					Operation: "supervisor heartbeat",
+					Attempt:   consecutiveHeartbeatFailures,
+					Reason:    "supervisor heartbeat renewal failed",
+				})
+			} else {
+				consecutiveHeartbeatFailures = 0
+			}
 		}
 		now := s.deps.Now().UTC()
 		if err := s.deps.Lease.RenewLease(pollContext, repository, github.Lease{

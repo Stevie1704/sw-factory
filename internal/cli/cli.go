@@ -725,7 +725,7 @@ func writeSupervisorStatus(output, errorsOutput io.Writer, result factory.Status
 	if result.SupervisorLive {
 		return writeOutput(output, errorsOutput, "supervisor: live (coordinator=%s pid=%d renewed=%s expires=%s)\n", heartbeat.Coordinator, heartbeat.PID, heartbeat.RenewedAt.UTC().Format(time.RFC3339), heartbeat.ExpiresAt.UTC().Format(time.RFC3339))
 	}
-	return writeOutput(output, errorsOutput, "supervisor: not live (coordinator=%s pid=%d renewed=%s expired=%s)\n", heartbeat.Coordinator, heartbeat.PID, heartbeat.RenewedAt.UTC().Format(time.RFC3339), heartbeat.ExpiresAt.UTC().Format(time.RFC3339))
+	return writeOutput(output, errorsOutput, "supervisor: not live (coordinator=%s pid=%d renewed=%s expires=%s)\n", heartbeat.Coordinator, heartbeat.PID, heartbeat.RenewedAt.UTC().Format(time.RFC3339), heartbeat.ExpiresAt.UTC().Format(time.RFC3339))
 }
 
 // runReconcile executes one restart reconciliation or explicitly abandons the

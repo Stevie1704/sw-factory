@@ -143,6 +143,10 @@ func TestSupervisorStartupCheckDistinguishesLiveAndMissingHeartbeats(t *testing.
 	if live.Status != doctor.StatusPassed {
 		t.Fatalf("live heartbeat result = %#v, want passed", live)
 	}
+	notHeld := store.SupervisorStartupCheckWithLock(path, now.Add(30*time.Second), func() bool { return false })(t.Context())
+	if notHeld.Status != doctor.StatusWarning || !strings.Contains(notHeld.Problem, "no live supervisor") {
+		t.Fatalf("unheld live heartbeat result = %#v, want a no-live warning", notHeld)
+	}
 }
 
 // TestSupervisorStartupCheckNamesAnActiveRunWithoutALiveHeartbeat verifies

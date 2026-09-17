@@ -286,7 +286,11 @@ type StatusResult struct {
 	// SupervisorHeartbeat is the latest local coordinator liveness projection,
 	// including an expired record when the last supervisor stopped renewing.
 	SupervisorHeartbeat *store.SupervisorHeartbeat
-	// SupervisorLive reports whether SupervisorHeartbeat is currently unexpired.
+	// SupervisorLockHeld reports whether the kernel-backed coordinator lock is
+	// currently owned by a live process.
+	SupervisorLockHeld bool
+	// SupervisorLive reports whether the heartbeat is unexpired and the
+	// coordinator lock is currently held.
 	SupervisorLive bool
 	// TestPolicyMode identifies the frozen TDD ownership mode of LatestRun.
 	TestPolicyMode config.TestMode
@@ -585,13 +589,18 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 		return StatusResult{}, err
 	}
 	defer func() { _ = opened.Close() }()
+	lockHeld, err := coordinatorLockHeld(coordinatorLockPath(registration))
+	if err != nil {
+		return StatusResult{}, fmt.Errorf("inspect coordinator lock for status: %w", err)
+	}
+	result.SupervisorLockHeld = lockHeld
 	if heartbeatStore, ok := opened.(SupervisorHeartbeatReader); ok {
 		result.SupervisorHeartbeat, err = heartbeatStore.ReadSupervisorHeartbeat(ctx)
 		if err != nil {
 			return StatusResult{}, fmt.Errorf("read supervisor heartbeat for status: %w", err)
 		}
 		if result.SupervisorHeartbeat != nil {
-			result.SupervisorLive = result.SupervisorHeartbeat.Live(s.deps.Now().UTC())
+			result.SupervisorLive = result.SupervisorHeartbeat.Live(s.deps.Now().UTC()) && result.SupervisorLockHeld
 		}
 	}
 	if latestStore, ok := opened.(LatestRunStore); ok {

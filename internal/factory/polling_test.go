@@ -165,6 +165,41 @@ func TestStartWritesASupervisorHeartbeat(t *testing.T) {
 	}
 }
 
+// TestStartSurvivesAHeartbeatWriteFailure verifies a diagnostic write failure
+// is observable as a retry event without taking down the coordinator loop.
+func TestStartSurvivesAHeartbeatWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runStore := &pollingHeartbeatRunStore{
+		fakeRunStore:    &fakeRunStore{},
+		heartbeatErrors: []error{errors.New("sqlite busy")},
+	}
+	var cancel context.CancelFunc
+	lease := &pollingLease{onRenew: func(github.Lease) {
+		if cancel != nil {
+			cancel()
+		}
+	}}
+	var events pollingEventSink
+	service := newPollingService(root, &fakeGitHub{}, &pollingIssueReader{}, lease, runStore, &fakeWorktree{}, nil)
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v, want heartbeat failure to be non-fatal", err)
+	}
+	for _, event := range events.events {
+		if event.Kind == factory.EventRetry && event.Operation == "supervisor heartbeat" {
+			if event.Attempt != 1 {
+				t.Fatalf("heartbeat retry event = %#v, want first attempt", event)
+			}
+			return
+		}
+	}
+	t.Fatalf("events = %#v, want a supervisor heartbeat retry event", events.events)
+}
+
 // TestStartUsesTransportBackoffWithoutChangingRunState verifies a GitHub
 // listing failure delays the next poll and consumes no run or repair budget.
 func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
@@ -631,11 +666,19 @@ func (f *pollingLease) RenewLease(_ context.Context, _ github.Repository, lease 
 // store seams.
 type pollingHeartbeatRunStore struct {
 	*fakeRunStore
-	heartbeats []store.SupervisorHeartbeat
+	heartbeats      []store.SupervisorHeartbeat
+	heartbeatErrors []error
 }
 
 // SaveSupervisorHeartbeat records coordinator liveness for polling assertions.
 func (s *pollingHeartbeatRunStore) SaveSupervisorHeartbeat(_ context.Context, heartbeat store.SupervisorHeartbeat) error {
+	if len(s.heartbeatErrors) > 0 {
+		err := s.heartbeatErrors[0]
+		s.heartbeatErrors = s.heartbeatErrors[1:]
+		if err != nil {
+			return err
+		}
+	}
 	s.heartbeats = append(s.heartbeats, heartbeat)
 	return nil
 }

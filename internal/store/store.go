@@ -1486,8 +1486,10 @@ func normalizeRun(run Run) (Run, error) {
 	return run, nil
 }
 
-// validateSupervisorHeartbeat checks the bounded fields and monotonic times of
+// validateSupervisorHeartbeat checks the bounded fields and expiry ordering of
 // one coordinator liveness projection before it crosses the store boundary.
+// Wall-clock time may step backwards, so a renewal is not required to follow
+// the process start timestamp.
 func validateSupervisorHeartbeat(heartbeat SupervisorHeartbeat) error {
 	if strings.TrimSpace(heartbeat.Coordinator) == "" || strings.ContainsAny(heartbeat.Coordinator, "\x00\r\n") {
 		return errors.New("supervisor heartbeat coordinator is required and must be single-line")
@@ -1497,9 +1499,6 @@ func validateSupervisorHeartbeat(heartbeat SupervisorHeartbeat) error {
 	}
 	if heartbeat.StartedAt.IsZero() || heartbeat.RenewedAt.IsZero() || heartbeat.ExpiresAt.IsZero() {
 		return errors.New("supervisor heartbeat timestamps are required")
-	}
-	if heartbeat.RenewedAt.Before(heartbeat.StartedAt) {
-		return errors.New("supervisor heartbeat renewal must not precede startup")
 	}
 	if !heartbeat.ExpiresAt.After(heartbeat.RenewedAt) {
 		return errors.New("supervisor heartbeat expiry must follow renewal")
