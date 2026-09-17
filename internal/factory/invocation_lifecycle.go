@@ -289,26 +289,8 @@ func (l *invocationLifecycle) resumeWithoutActiveInvocation(ctx context.Context,
 
 // resumeActiveInvocation handles the manual-resume branch of Resume.
 func (l *invocationLifecycle) resumeActiveInvocation(ctx context.Context, request InvocationRecoveryRequest, run store.Run, active store.Invocation) (ResumeResult, error) {
-	if reviewRoleInvocation(active) {
-		if active.ReviewRoundID != "" {
-			partitioned, ok := request.RunStore.(store.ReviewRoundStore)
-			if !ok {
-				return ResumeResult{Run: run, Invocation: active}, errors.New("operational store does not support partitioned review recovery")
-			}
-			round, roundErr := partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA)
-			if roundErr != nil {
-				return ResumeResult{Run: run, Invocation: active}, fmt.Errorf("read persisted review round for resume: %w", roundErr)
-			}
-			if round == nil || round.ID != active.ReviewRoundID {
-				return ResumeResult{Run: run, Invocation: active}, errors.New("active review invocation does not match the persisted review round")
-			}
-			if _, manifestErr := validatePersistedReviewManifest(ctx, partitioned, run, *round); manifestErr != nil {
-				return ResumeResult{Run: run, Invocation: active}, fmt.Errorf("validate persisted review manifest: %w", manifestErr)
-			}
-		}
-		if err := validatePersistedReviewDiff(active); err != nil {
-			return ResumeResult{Run: run, Invocation: active}, fmt.Errorf("validate persisted review diff: %w", err)
-		}
+	if err := l.validateActiveInvocationForResume(ctx, request, run, active); err != nil {
+		return ResumeResult{Run: run, Invocation: active}, err
 	}
 	if strings.TrimSpace(active.NativeSessionID) == "" {
 		if err := l.supersedeInvocation(ctx, request.Registration, request.RunStore, active); err != nil {
@@ -323,6 +305,45 @@ func (l *invocationLifecycle) resumeActiveInvocation(ctx context.Context, reques
 	if run.Status == store.StatusActive {
 		return ResumeResult{Run: run, Invocation: updatedInvocation}, nil
 	}
+	next, err := l.persistManualResumeState(ctx, request, run)
+	return ResumeResult{Run: next, Invocation: updatedInvocation}, err
+}
+
+// validateActiveInvocationForResume verifies review-specific durable context
+// before either host or auth-triggered native recovery crosses its effect
+// boundary.
+func (l *invocationLifecycle) validateActiveInvocationForResume(ctx context.Context, request InvocationRecoveryRequest, run store.Run, active store.Invocation) error {
+	if !reviewRoleInvocation(active) {
+		return nil
+	}
+	if active.ReviewRoundID != "" {
+		partitioned, ok := request.RunStore.(store.ReviewRoundStore)
+		if !ok {
+			return errors.New("operational store does not support partitioned review recovery")
+		}
+		round, roundErr := partitioned.ReviewRound(ctx, run.ID, run.CheckpointSHA)
+		if roundErr != nil {
+			return fmt.Errorf("read persisted review round for resume: %w", roundErr)
+		}
+		if round == nil || round.ID != active.ReviewRoundID {
+			return errors.New("active review invocation does not match the persisted review round")
+		}
+		if _, manifestErr := validatePersistedReviewManifest(ctx, partitioned, run, *round); manifestErr != nil {
+			return fmt.Errorf("validate persisted review manifest: %w", manifestErr)
+		}
+	}
+	if err := validatePersistedReviewDiff(active); err != nil {
+		return fmt.Errorf("validate persisted review diff: %w", err)
+	}
+	return nil
+}
+
+// persistManualResumeState publishes the active state after an explicit
+// native session has crossed its resume boundary.
+func (l *invocationLifecycle) persistManualResumeState(ctx context.Context, request InvocationRecoveryRequest, run store.Run) (store.Run, error) {
+	if run.Status == store.StatusActive {
+		return run, nil
+	}
 	next := run
 	next.Status = store.StatusActive
 	next.LifecycleReason = "manual native session resumed"
@@ -331,9 +352,9 @@ func (l *invocationLifecycle) resumeActiveInvocation(ctx context.Context, reques
 		next.Revision = run.Revision + 1
 	}
 	if err := l.persistLifecycleRun(ctx, request.Registration, request.RunStore, run, next); err != nil {
-		return ResumeResult{Run: next, Invocation: updatedInvocation}, err
+		return next, err
 	}
-	return ResumeResult{Run: next, Invocation: updatedInvocation}, nil
+	return next, nil
 }
 
 // recoveryInvocationID resolves a fresh identity only on the branch that will
@@ -377,8 +398,9 @@ func (l *invocationLifecycle) resumeActiveInvocationError(ctx context.Context, r
 }
 
 // RefreshAuth reseeds the registered harness credential source into the
-// invocation's managed worker volume.
-func (l *invocationLifecycle) refreshAuth(ctx context.Context, request InvocationRecoveryRequest, requestedHarness config.Harness) (AuthRefreshResult, error) {
+// invocation's managed worker volume, optionally continuing its native session
+// when the caller explicitly requests recovery.
+func (l *invocationLifecycle) refreshAuth(ctx context.Context, request InvocationRecoveryRequest, requestedHarness config.Harness, resume bool) (AuthRefreshResult, error) {
 	if request.Run == nil {
 		return AuthRefreshResult{}, errors.New("no persisted run")
 	}
@@ -407,6 +429,27 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 	}
 	if seed == nil || strings.TrimSpace(credentialStoreID) == "" {
 		return AuthRefreshResult{}, fmt.Errorf("no factory-managed %s credential source is registered; configure it with `factory register --update --%s-auth <path>` and retry `factory auth refresh`", harnessName, harnessName)
+	}
+	if resume {
+		if invocation.Status != store.InvocationStatusActive {
+			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, fmt.Errorf("auth refresh --resume requires an active invocation, not status %q", invocation.Status)
+		}
+		if strings.TrimSpace(invocation.NativeSessionID) == "" {
+			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, errors.New("auth refresh --resume requires a persisted native session identifier")
+		}
+		if err := l.validateActiveInvocationForResume(ctx, request, run, *invocation); err != nil {
+			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, err
+		}
+		updatedInvocation, resumeErr := l.resumePersistedInvocationManually(ctx, request.Registration, request.RunStore, run, *invocation)
+		if resumeErr != nil {
+			resumed := AuthRefreshResult{Run: run, Invocation: updatedInvocation, Harness: harnessName}
+			resumeResult, handledErr := l.resumeActiveInvocationError(ctx, request, run, *invocation, updatedInvocation, resumeErr)
+			resumed.Run = resumeResult.Run
+			resumed.Invocation = resumeResult.Invocation
+			return resumed, handledErr
+		}
+		resumedRun, stateErr := l.persistManualResumeState(ctx, request, run)
+		return AuthRefreshResult{Run: resumedRun, Invocation: updatedInvocation, Harness: harnessName, Resumed: stateErr == nil}, stateErr
 	}
 	if invocation.CredentialStoreID == "" {
 		invocation.CredentialStoreID = credentialStoreID

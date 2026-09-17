@@ -14,6 +14,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -122,6 +123,80 @@ func TestHandleCommandRetriesAFailedRun(t *testing.T) {
 	}
 	if got, want := githubAdapter.replacedLabels, []string{github.LabelAgentRunning}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("labels = %#v, want %#v", got, want)
+	}
+}
+
+// TestHandleCommandResumesARecoverablePausedRun verifies the GitHub command
+// reaches the exact native-session lifecycle and claims its comment once.
+func TestHandleCommandResumesARecoverablePausedRun(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	service := newDispatchingAgentService(t, runStore, headlessWorker, validRepositoryConfig(), config.AuthenticationConfig{})
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+	run := *runStore.current
+	run.Status = store.StatusWaitingForHuman
+	run.LifecycleReason = "automatic harness recovery exhausted (codex); manual native resume required"
+	if err := runStore.SaveRun(context.Background(), run); err != nil {
+		t.Fatalf("SaveRun() pause setup error = %v", err)
+	}
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 6,
+		Comment:     github.Comment{ID: "resume-1", Author: "alice", Body: "/factory resume"},
+	})
+	if err != nil {
+		t.Fatalf("HandleCommand() error = %v", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.Status != store.StatusActive || result.Run.ProcessedCommentID != "resume-1" {
+		t.Fatalf("result = %#v, want accepted active run with command watermark", result)
+	}
+	invocation := runStore.invocations[launch.Invocation.ID]
+	if invocation.ManualResumeCount != 1 || invocation.NativeSessionID != launch.Invocation.NativeSessionID {
+		t.Fatalf("invocation after command = %#v, want one exact native resume", invocation)
+	}
+	if len(headlessWorker.headlessStarts) != 2 || headlessWorker.headlessStarts[1].Mode != worker.HeadlessLaunchResume {
+		t.Fatalf("headless launches = %#v, want one exact-session resume", headlessWorker.headlessStarts)
+	}
+
+	replayed, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 6,
+		Comment:     github.Comment{ID: "resume-1", Author: "alice", Body: "/factory cancel"},
+	})
+	if err != nil {
+		t.Fatalf("replayed HandleCommand() error = %v", err)
+	}
+	if replayed.Outcome != factory.CommandReplayed || len(headlessWorker.headlessStarts) != 2 {
+		t.Fatalf("replayed result = %#v, launches = %#v, want no second lifecycle effect", replayed, headlessWorker.headlessStarts)
+	}
+}
+
+// TestHandleCommandRejectsResumeForAnUnrelatedHumanPause verifies resume does
+// not bypass clarification, review, or other human-owned workflow gates.
+func TestHandleCommandRejectsResumeForAnUnrelatedHumanPause(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusWaitingForHuman)
+	run.LifecycleReason = "test agent requested clarification"
+	run.PendingQuestions = []store.PendingQuestion{{ID: "clarification-1", Prompt: "choose a format"}}
+	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}}, statusComment: github.Comment{ID: "status-1"}}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	service := newCommandService(runStore, githubAdapter, nil)
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: 42,
+		Comment:     github.Comment{ID: "resume-reject-1", Author: "alice", Body: "/factory resume"},
+	})
+	var rejection *factory.PolicyRejection
+	if !errors.As(err, &rejection) || rejection.Code != factory.PolicyRejectionResumeState {
+		t.Fatalf("HandleCommand() error = %v, want resume-state rejection", err)
+	}
+	if result.Outcome != factory.CommandRejected || result.Run.Status != store.StatusWaitingForHuman || result.Run.ProcessedCommentID != "resume-reject-1" {
+		t.Fatalf("result = %#v, want rejected paused run with watermark", result)
 	}
 }
 

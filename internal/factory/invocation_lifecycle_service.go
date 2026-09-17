@@ -88,14 +88,7 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 	if request.RunID != "" && request.RunID != run.ID {
 		return ResumeResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, *run); err != nil {
-		return ResumeResult{Run: *run}, fmt.Errorf("recover headless native session identity before resume: %w", err)
-	}
-	result, err := s.lifecycleModule().Resume(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run, NewInvocationID: s.newInvocationID, EvaluationRecorder: launchEvaluationRecorderForRunStore(runStore)})
-	if err == nil && result.Invocation.ID != "" {
-		s.markInvocationStarted(result.Invocation.ID)
-	}
-	return result, err
+	return s.resumeWithStore(ctx, registration, runStore, run)
 }
 
 // RefreshAuth is the coordinator entry point for managed credential
@@ -124,7 +117,33 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 	if request.RunID != "" && request.RunID != run.ID {
 		return AuthRefreshResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
 	}
-	return s.lifecycleModule().refreshAuth(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run}, request.Harness)
+	if request.Resume {
+		if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, *run); err != nil {
+			return AuthRefreshResult{Run: *run}, fmt.Errorf("recover headless native session identity before auth refresh resume: %w", err)
+		}
+	}
+	result, refreshErr := s.lifecycleModule().refreshAuth(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run}, request.Harness, request.Resume)
+	if refreshErr == nil && result.Resumed && result.Invocation.ID != "" {
+		s.markInvocationStarted(result.Invocation.ID)
+	}
+	return result, refreshErr
+}
+
+// resumeWithStore applies the explicit resume lifecycle to an already-open
+// operational store. Command handling uses this seam while holding the
+// coordinator lock, avoiding a second lock acquisition during polling.
+func (s *Service) resumeWithStore(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) (ResumeResult, error) {
+	if run == nil {
+		return ResumeResult{}, errors.New("no persisted run")
+	}
+	if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, *run); err != nil {
+		return ResumeResult{Run: *run}, fmt.Errorf("recover headless native session identity before resume: %w", err)
+	}
+	result, err := s.lifecycleModule().Resume(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run, NewInvocationID: s.newInvocationID, EvaluationRecorder: launchEvaluationRecorderForRunStore(runStore)})
+	if err == nil && result.Invocation.ID != "" {
+		s.markInvocationStarted(result.Invocation.ID)
+	}
+	return result, err
 }
 
 // retryWaitingForHarness opens the operational store as a coordinator entry

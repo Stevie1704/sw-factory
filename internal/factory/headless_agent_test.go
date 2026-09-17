@@ -9,6 +9,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -103,6 +104,43 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 				t.Fatalf("headless launches after recovery = %#v, want one exact-session resume", headlessWorker.headlessStarts)
 			}
 		})
+	}
+}
+
+// TestRefreshAuthCanExplicitlyResumeTheNativeSession verifies credential
+// refresh and manual native recovery are one opt-in operation, with exactly
+// one credential projection and one detached resume after the initial launch.
+func TestRefreshAuthCanExplicitlyResumeTheNativeSession(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	policy := validRepositoryConfig()
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{CodexAuthPath: authPath})
+
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() error = %v", err)
+	}
+	paused := *runStore.current
+	paused.Status = store.StatusWaitingForHuman
+	paused.LifecycleReason = "harness authentication expired (codex); run is waiting for `factory auth refresh`"
+	if err := runStore.SaveRun(context.Background(), paused); err != nil {
+		t.Fatalf("SaveRun() pause setup error = %v", err)
+	}
+	refreshed, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID, Resume: true})
+	if err != nil {
+		t.Fatalf("RefreshAuth(Resume: true) error = %v", err)
+	}
+	if !refreshed.Resumed || refreshed.Invocation.NativeSessionID != launch.Invocation.NativeSessionID || refreshed.Invocation.ManualResumeCount != 1 {
+		t.Fatalf("refreshed result = %#v, want explicit native resume", refreshed)
+	}
+	if len(runtime.codexSeeds) != 2 {
+		t.Fatalf("credential seeds = %#v, want initial projection plus one refresh", runtime.codexSeeds)
+	}
+	if len(headlessWorker.headlessStarts) != 2 || headlessWorker.headlessStarts[1].Mode != worker.HeadlessLaunchResume {
+		t.Fatalf("headless launches = %#v, want one exact-session resume", headlessWorker.headlessStarts)
 	}
 }
 

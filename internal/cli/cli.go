@@ -270,8 +270,8 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 	return 0
 }
 
-// runAuth dispatches authentication maintenance subcommands. The refresh
-// operation only seeds a factory-managed worker credential store.
+// runAuth dispatches authentication maintenance subcommands. Refresh remains
+// credential-only unless the operator explicitly requests native recovery.
 func runAuth(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	if len(args) == 0 || args[0] != "refresh" {
 		writeError(errorsOutput, errors.New("auth requires the refresh subcommand"))
@@ -282,6 +282,7 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
 	harnessName := flags.String("harness", "", "codex or claude; empty uses the invocation harness")
+	resume := flags.Bool("resume", false, "resume the affected native session after refreshing credentials")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -289,10 +290,16 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 		writeError(errorsOutput, errors.New("auth refresh does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).RefreshAuth(ctx, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName)})
+	result, err := factory.New(*configPath).RefreshAuth(ctx, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName), Resume: *resume})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
+	}
+	if *resume {
+		if !writeOutput(output, errorsOutput, "authentication refreshed\nrun: %s\ninvocation: %s\nharness: %s\nresumed: %t\n", result.Run.ID, result.Invocation.ID, result.Harness, result.Resumed) {
+			return 1
+		}
+		return 0
 	}
 	if !writeOutput(output, errorsOutput, "authentication refreshed\nrun: %s\ninvocation: %s\nharness: %s\n", result.Run.ID, result.Invocation.ID, result.Harness) {
 		return 1

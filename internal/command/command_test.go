@@ -37,6 +37,20 @@ func TestParseDistinguishesOrdinaryDiscussionFromStructuredCommands(t *testing.T
 	}
 }
 
+// TestParseRecognizesTheAuthorizedResumeCommand verifies a paused-run resume
+// uses the same complete-comment grammar as the other coordinator controls.
+func TestParseRecognizesTheAuthorizedResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := command.Parse("/factory resume")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if !parsed.Recognized || parsed.Command.Kind != command.Resume {
+		t.Fatalf("parsed resume = %#v, want recognized resume command", parsed)
+	}
+}
+
 // TestAnswerCommandCarriesItsQuestionIdentifierAndText verifies the structured
 // answer payload is distinguishable from ordinary discussion.
 func TestAnswerCommandCarriesItsQuestionIdentifierAndText(t *testing.T) {

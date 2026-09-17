@@ -141,6 +141,8 @@ missing report enters native-resume recovery.
 When harness capacity is unavailable, the coordinator stops the worker and
 records `waiting_for_harness`; the polling supervisor retries after capacity
 returns. An expired credential stops the worker and waits for an explicit
-`factory auth refresh`. A manual `factory resume` restarts the exact persisted
-native session without changing the workflow retry budget. No worker
+`factory auth refresh`. `factory auth refresh --resume` combines the host
+credential projection with one manual continuation; the default refresh still
+only projects credentials. A manual `factory resume` restarts the exact
+persisted native session without changing the workflow retry budget. No worker
 recreation or harness-capacity wait changes that budget either.
