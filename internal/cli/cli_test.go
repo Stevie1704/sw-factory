@@ -791,3 +791,51 @@ func initGitCheckout(t *testing.T, root, remote string) string {
 	}
 	return resolved
 }
+
+// TestRunStatusNamesTheBlockerOfAPausedRun verifies the command reports the
+// recorded lifecycle reason, so an operator reads why a run stopped without
+// opening the tracked issue.
+func TestRunStatusNamesTheBlockerOfAPausedRun(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidRepositoryConfig(t, repositoryPath)
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"register", "--config", configPath, "--repository", repositoryPath, "--github-owner", "example", "--github-repository", "project", "--authorized-user", "alice", "--operational-data", operationalPath}, &output, &output); code != 0 {
+		t.Fatalf("register exit code = %d, output = %s", code, output.String())
+	}
+	started := time.Date(2026, 9, 17, 9, 0, 0, 0, time.UTC)
+	const reason = "check repair waiting for infrastructure: setup: error: Failed to create virtual environment"
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveRun(context.Background(), store.Run{
+		ID: "run-cli-reason", RepositoryPath: repositoryPath, IssueNumber: 13,
+		Stage: store.StageCheck, Status: store.StatusWaitingForHarness,
+		LifecycleReason: reason, CreatedAt: started, UpdatedAt: started,
+	}); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"status", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("status exit code = %d, output = %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "lifecycle reason: "+reason) {
+		t.Fatalf("status output = %q, want the recorded lifecycle reason", output.String())
+	}
+}

@@ -661,6 +661,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		if !writeOutput(output, errorsOutput, "%s: %s (stage=%s status=%s activity=%s test_policy=%s route=%s branch=%s worktree=%s)\n", label, result.LatestRun.ID, result.LatestRun.Stage, result.LatestRun.Status, result.Activity, factory.TestPolicyDescription(result.TestPolicyMode), result.Route.Description(), result.LatestRun.Branch, result.LatestRun.Worktree) {
 			return 1
 		}
+		if result.LatestRun.LifecycleReason != "" {
+			if !writeOutput(output, errorsOutput, "lifecycle reason: %s\n", result.LatestRun.LifecycleReason) {
+				return 1
+			}
+		}
 		if result.Activity == factory.ActivityInvocationActive {
 			activeInvocationIDs := append([]string(nil), result.LatestRun.ActiveInvocationIDs...)
 			if len(activeInvocationIDs) == 1 {

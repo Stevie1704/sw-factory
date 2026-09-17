@@ -358,13 +358,18 @@ func (s *Service) routeCheckRepair(ctx context.Context, registration config.Repo
 		Budget:    run.CheckRepairBudget,
 		Remaining: decision.remaining,
 	}
+	// Every decision retains the command output on the coordinator host. A
+	// repair carries it into the packet as well, but a run that parks has no
+	// packet, and the parked run is the one an operator has to read.
+	writeGateFailureDiagnostic(run, gate.PhaseCheckpoint, results, suiteErr, s.deps.Now().UTC())
+	cause := gateFailureCause(suiteErr)
 	switch decision.kind {
 	case checkRepairWaitDecision:
 		next := run
 		next.CheckRepairBudget = run.CheckRepairBudget
 		next.Stage = decision.nextStage
 		next.Status = decision.nextStatus
-		next.LifecycleReason = "check repair waiting for infrastructure"
+		next.LifecycleReason = withGateFailureCause("check repair waiting for infrastructure", cause)
 		next.UpdatedAt = s.deps.Now().UTC()
 		stopErr := s.stopCheckWorker(ctx, run.ID)
 		transitionErr := s.persistAgentRunState(ctx, registration, runStore, run, next)
@@ -379,7 +384,7 @@ func (s *Service) routeCheckRepair(ctx context.Context, registration config.Repo
 		next.CheckRepairBudget = run.CheckRepairBudget
 		next.Stage = decision.nextStage
 		next.Status = decision.nextStatus
-		next.LifecycleReason = "check-repair budget exhausted"
+		next.LifecycleReason = withGateFailureCause("check-repair budget exhausted", cause)
 		next.UpdatedAt = s.deps.Now().UTC()
 		stopErr := s.stopCheckWorker(ctx, run.ID)
 		transitionErr := s.persistAgentRunState(ctx, registration, runStore, run, next)

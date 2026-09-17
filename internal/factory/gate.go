@@ -191,7 +191,8 @@ func (s *Service) runBaselineProjection(ctx context.Context, registration config
 	if suiteErr == nil && persistErr != nil {
 		next.LifecycleReason = baselineLifecycleReason(run, "baseline gate result persistence failure")
 	} else {
-		next.LifecycleReason = baselineLifecycleReason(run, "baseline gate failure")
+		writeGateFailureDiagnostic(run, gate.PhaseBaseline, suite.Gates, suiteErr, s.deps.Now().UTC())
+		next.LifecycleReason = baselineLifecycleReason(run, withGateFailureCause("baseline gate failure", gateFailureCause(suiteErr)))
 	}
 	next.UpdatedAt = s.deps.Now().UTC()
 	issue := packet.Issue

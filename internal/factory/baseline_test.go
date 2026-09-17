@@ -373,3 +373,31 @@ func (f *baselineFixture) openedGateResults(t *testing.T, runID string, phase st
 	defer func() { _ = opened.Close() }()
 	return opened.GateResults(context.Background(), runID, phase, checkpoint)
 }
+
+// TestRunBaselineNamesTheFailingGateCause verifies an unhealthy baseline parks
+// with the blocker rather than its category and leaves the complete command
+// output beside the run's other artifacts.
+func TestRunBaselineNamesTheFailingGateCause(t *testing.T) {
+	fixture := newBaselineFixture(t, "", []worker.CommandResult{{ExitCode: 0}, {ExitCode: 9, Stderr: "internal/gate/runner_test.go:41: unexpected outcome"}})
+	claimed, err := fixture.service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+
+	baseline, err := fixture.service.RunBaseline(context.Background(), factory.BaselineRequest{RunID: claimed.Run.ID})
+	if err == nil {
+		t.Fatal("RunBaseline() succeeded for an unhealthy blocking baseline")
+	}
+
+	if !strings.HasPrefix(baseline.Run.LifecycleReason, "baseline gate failure: ") || !strings.Contains(baseline.Run.LifecycleReason, "unexpected outcome") {
+		t.Fatalf("lifecycle reason = %q, want the category followed by the gate cause", baseline.Run.LifecycleReason)
+	}
+	diagnostic := filepath.Join(filepath.Dir(fixture.worktreePath), ".factory-agents", claimed.Run.ID, "gate-failure", "baseline.log")
+	body, readErr := os.ReadFile(diagnostic)
+	if readErr != nil {
+		t.Fatalf("read baseline diagnostic: %v", readErr)
+	}
+	if !strings.Contains(string(body), "unexpected outcome") || !strings.Contains(string(body), claimed.Run.CheckpointSHA) {
+		t.Fatalf("diagnostic body = %q, want the gate output at the exact checkpoint", body)
+	}
+}

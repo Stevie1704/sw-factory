@@ -396,8 +396,14 @@ func boundHarnessFailureTranscript(transcript string) string {
 	return transcript[:head] + harnessDiagnosticTruncationMarker + transcript[len(transcript)-tail:]
 }
 
+// runArtifactRoot returns the private directory holding every host-side
+// artifact of one run, beside its worktree rather than inside it.
+func runArtifactRoot(run store.Run) string {
+	return filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID)
+}
+
 // invocationRoot returns the private per-invocation directory holding one
 // invocation's packet, results, and diagnostics.
 func invocationRoot(run store.Run, invocationID string) string {
-	return filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, invocationID)
+	return filepath.Join(runArtifactRoot(run), invocationID)
 }
