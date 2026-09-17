@@ -366,13 +366,17 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 	if err != nil {
 		return gate.SuiteResult{}, fmt.Errorf("prepare worker git metadata: %w", err)
 	}
+	caches, err := resolveWorkerCaches(packet.RepositoryConfig.Caches, registration)
+	if err != nil {
+		return gate.SuiteResult{}, fmt.Errorf("resolve worker caches: %w", err)
+	}
 	workerRequest := worker.StartRequest{
 		RunID:           run.ID,
 		WorktreePath:    run.Worktree,
 		GitMetadataPath: gitMetadataPath,
 		Image:           packet.RepositoryConfig.WorkerBuild.Image,
 		ImageDigest:     run.ImageDigest,
-		Caches:          workerCaches(packet.RepositoryConfig.Caches),
+		Caches:          caches,
 		Role:            "gate",
 	}
 	if err := s.journal().StartWorker(ctx, runStore, workerRequest); err != nil {
@@ -953,11 +957,18 @@ func gateDependencyPlan(gates []config.GateConfig, target string) ([]config.Gate
 	return plan, nil
 }
 
-// workerCaches converts repository cache configurations into worker cache mounts.
-func workerCaches(caches []config.CacheConfig) []worker.CacheMount {
+// resolveWorkerCaches binds every repository-declared cache name to the host
+// directory the registration maps it to. A declared cache with no host mapping
+// fails closed rather than falling back to a host path a repository commit
+// could choose.
+func resolveWorkerCaches(caches []config.CacheConfig, registration config.RepositoryRegistration) ([]worker.CacheMount, error) {
 	result := make([]worker.CacheMount, 0, len(caches))
 	for _, cache := range caches {
-		result = append(result, worker.CacheMount{Name: cache.Name, HostPath: cache.Path, ReadOnly: cache.ReadOnly})
+		hostPath := strings.TrimSpace(registration.Caches[cache.Name])
+		if hostPath == "" {
+			return nil, fmt.Errorf("repository cache %q has no host path; map caches.%s under cache_root in the host configuration", cache.Name, cache.Name)
+		}
+		result = append(result, worker.CacheMount{Name: cache.Name, HostPath: hostPath, ReadOnly: cache.ReadOnly})
 	}
-	return result
+	return result, nil
 }

@@ -24,7 +24,7 @@ func specificationViewPacket() SpecificationPacket {
 			Setup:        "scripts/worker-go.sh mod download",
 			Gates:        []config.GateConfig{{Name: "vet", Command: "scripts/worker-go.sh vet ./...", Timeout: "5m", Blocking: true}},
 			TestPolicy:   config.TestPolicy{Mode: config.TestModeAdvisory},
-			Caches:       []config.CacheConfig{{Name: "go-build", Path: "/Users/maintainer/.cache/sw-factory/go-build"}},
+			Caches:       []config.CacheConfig{{Name: "go-build"}},
 			WorkerBuild:  config.WorkerBuildConfig{Image: "ghcr.io/example/worker", Digest: "sha256:0000"},
 		},
 		RepositoryGuidance:      "### AGENTS.md\nUse the repository guidance.",

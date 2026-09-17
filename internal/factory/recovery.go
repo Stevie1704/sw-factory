@@ -624,37 +624,51 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 						Observed: workerInspection.Image,
 					})
 				}
-				workerRequest := worker.StartRequest{
-					RunID:             run.ID,
-					WorkerID:          workerIDForInvocation(*active),
-					WorktreeReadOnly:  roleIsKind(*active, workflow.RoleKindReview),
-					WorktreePath:      run.Worktree,
-					GitMetadataPath:   gitMetadataProjectionPath(run.ID, run.Worktree),
-					Image:             packet.RepositoryConfig.WorkerBuild.Image,
-					ImageDigest:       run.ImageDigest,
-					Caches:            workerCaches(packet.RepositoryConfig.Caches),
-					InvocationPath:    active.InvocationDirectory,
-					ResultPath:        active.ResultDirectory,
-					CredentialStoreID: active.CredentialStoreID,
-					Role:              active.Role,
-				}
-				known, matches := workerInspection.MountContractStatus(workerRequest)
-				if !known {
+				caches, cacheErr := resolveWorkerCaches(packet.RepositoryConfig.Caches, registration)
+				if cacheErr != nil {
+					// An unresolved cache makes every expected mount identity
+					// wrong, so the mount contract stays unchecked and the
+					// diagnosis reports the one real cause.
 					addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 						Kind:     RecoveryDiscrepancyInfrastructure,
 						Source:   "worker",
-						Field:    "mount contract inspection",
-						Expected: "adapter-owned worker mount identities",
-						Observed: "unavailable",
+						Field:    "cache host mapping",
+						Expected: "a host path for every repository-declared cache",
+						Observed: cacheErr.Error(),
 					})
-				} else if !matches {
-					addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
-						Kind:     RecoveryDiscrepancyInfrastructure,
-						Source:   "worker",
-						Field:    "mount contract",
-						Expected: "persisted worktree, Git, cache, invocation, result, and role identities",
-						Observed: "worker mount identity mismatch",
-					})
+				} else {
+					workerRequest := worker.StartRequest{
+						RunID:             run.ID,
+						WorkerID:          workerIDForInvocation(*active),
+						WorktreeReadOnly:  roleIsKind(*active, workflow.RoleKindReview),
+						WorktreePath:      run.Worktree,
+						GitMetadataPath:   gitMetadataProjectionPath(run.ID, run.Worktree),
+						Image:             packet.RepositoryConfig.WorkerBuild.Image,
+						ImageDigest:       run.ImageDigest,
+						Caches:            caches,
+						InvocationPath:    active.InvocationDirectory,
+						ResultPath:        active.ResultDirectory,
+						CredentialStoreID: active.CredentialStoreID,
+						Role:              active.Role,
+					}
+					known, matches := workerInspection.MountContractStatus(workerRequest)
+					if !known {
+						addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+							Kind:     RecoveryDiscrepancyInfrastructure,
+							Source:   "worker",
+							Field:    "mount contract inspection",
+							Expected: "adapter-owned worker mount identities",
+							Observed: "unavailable",
+						})
+					} else if !matches {
+						addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
+							Kind:     RecoveryDiscrepancyInfrastructure,
+							Source:   "worker",
+							Field:    "mount contract",
+							Expected: "persisted worktree, Git, cache, invocation, result, and role identities",
+							Observed: "worker mount identity mismatch",
+						})
+					}
 				}
 			}
 		}

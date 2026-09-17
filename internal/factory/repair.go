@@ -661,6 +661,10 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	if err != nil {
 		return store.Invocation{}, run, fmt.Errorf("prepare check-repair Git metadata: %w", err)
 	}
+	caches, err := resolveWorkerCaches(packet.RepositoryConfig.Caches, registration)
+	if err != nil {
+		return store.Invocation{}, run, fmt.Errorf("resolve check-repair worker caches: %w", err)
+	}
 	workerRequest := worker.StartRequest{
 		RunID:             run.ID,
 		WorkerID:          workerIDForInvocation(invocation),
@@ -668,7 +672,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		GitMetadataPath:   gitMetadataPath,
 		Image:             packet.RepositoryConfig.WorkerBuild.Image,
 		ImageDigest:       run.ImageDigest,
-		Caches:            workerCaches(packet.RepositoryConfig.Caches),
+		Caches:            caches,
 		InvocationPath:    packetDirectory,
 		ResultPath:        resultDirectory,
 		CredentialStoreID: credentialStoreID,
