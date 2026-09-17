@@ -179,44 +179,75 @@ func (*repairContractWorker) Inspect(context.Context, string) (worker.Inspection
 	return worker.Inspection{Exists: true}, nil
 }
 
-// TestRouteCheckRepairNamesTheDeterministicCauseWhenParking verifies a parked
-// run reports what setup printed and retains the full output on disk. A setup
-// failure takes the infrastructure wait branch, which built no repair packet
-// and left "check repair waiting for infrastructure" as the only evidence.
+// TestRouteCheckRepairNamesTheDeterministicCauseWhenParking verifies both
+// parked outcomes report what the failed command printed and retain the full
+// output on disk. A setup failure takes the infrastructure wait branch and an
+// exhausted budget takes the human branch; neither builds a repair packet, so
+// "check repair waiting for infrastructure" was the only evidence a run left.
 func TestRouteCheckRepairNamesTheDeterministicCauseWhenParking(t *testing.T) {
 	const checkpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	setup := worker.CommandResult{ExitCode: 1, Stderr: "error: Failed to create virtual environment\n  Caused by: A virtual environment already exists at '.venv'. Use '--clear' to replace it"}
-	run := store.Run{
-		ID:                "run-repair-cause",
-		Stage:             store.StageCheck,
-		Status:            store.StatusActive,
-		CheckpointSHA:     checkpoint,
-		CheckRepairBudget: 3,
-		Worktree:          filepath.Join(t.TempDir(), "worktrees", "run-repair-cause"),
+	gateCommand := worker.CommandResult{ExitCode: 1, Stderr: "internal/gate/runner_test.go:41: unexpected outcome"}
+	tests := []struct {
+		name        string
+		attempts    int
+		results     []gate.Result
+		suiteErr    error
+		wantOutcome CheckRepairOutcome
+		wantReason  string
+		wantOutput  string
+	}{
+		{
+			name:        "setup failure waits for infrastructure",
+			results:     []gate.Result{{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: setup, Status: github.CommitStatus{State: github.CommitStatusError}}},
+			suiteErr:    &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: setup}}},
+			wantOutcome: CheckRepairWaitingForHarness,
+			wantReason:  "check repair waiting for infrastructure: ",
+			wantOutput:  "--clear",
+		},
+		{
+			name:        "exhausted budget waits for a human",
+			attempts:    3,
+			results:     []gate.Result{{CheckpointSHA: checkpoint, GateName: "test", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeFailed, SetupRan: true, Gate: gateCommand, Status: github.CommitStatus{State: github.CommitStatusFailure}}},
+			suiteErr:    &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Blocking: true, Result: gateCommand}}},
+			wantOutcome: CheckRepairExhausted,
+			wantReason:  "check-repair budget exhausted: ",
+			wantOutput:  "unexpected outcome",
+		},
 	}
-	results := []gate.Result{{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: setup, Status: github.CommitStatus{State: github.CommitStatusError}}}
-	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: setup}}}
-	runStore := &repairContractStore{}
-	service := &Service{deps: Dependencies{Worker: &repairContractWorker{}, Now: func() time.Time { return time.Date(2026, 9, 17, 9, 30, 0, 0, time.UTC) }}}
-	packet := SpecificationPacket{RepositoryConfig: config.RepositoryConfig{RetryLimits: config.RetryLimits{CheckRepair: 3}}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			run := store.Run{
+				ID:                  "run-repair-cause",
+				Stage:               store.StageCheck,
+				Status:              store.StatusActive,
+				CheckpointSHA:       checkpoint,
+				CheckRepairAttempts: test.attempts,
+				CheckRepairBudget:   3,
+				Worktree:            filepath.Join(t.TempDir(), "worktrees", "run-repair-cause"),
+			}
+			runStore := &repairContractStore{}
+			service := &Service{deps: Dependencies{Worker: &repairContractWorker{}, Now: func() time.Time { return time.Date(2026, 9, 17, 9, 30, 0, 0, time.UTC) }}}
+			packet := SpecificationPacket{RepositoryConfig: config.RepositoryConfig{RetryLimits: config.RetryLimits{CheckRepair: 3}}}
 
-	result, err := service.routeCheckRepair(t.Context(), config.RepositoryRegistration{}, runStore, run, packet, results, suiteErr)
-	if err != nil {
-		t.Fatalf("routeCheckRepair() error = %v", err)
-	}
+			result, err := service.routeCheckRepair(t.Context(), config.RepositoryRegistration{}, runStore, run, packet, test.results, test.suiteErr)
+			if err != nil {
+				t.Fatalf("routeCheckRepair() error = %v", err)
+			}
 
-	if result.Outcome != CheckRepairWaitingForHarness {
-		t.Fatalf("outcome = %q, want the infrastructure wait outcome", result.Outcome)
-	}
-	if !strings.HasPrefix(result.Run.LifecycleReason, "check repair waiting for infrastructure: ") || !strings.Contains(result.Run.LifecycleReason, "--clear") {
-		t.Fatalf("lifecycle reason = %q, want the category followed by the setup cause", result.Run.LifecycleReason)
-	}
-	diagnostic := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, gateFailureDiagnosticDirectoryName, "checkpoint.log")
-	body, readErr := os.ReadFile(diagnostic)
-	if readErr != nil {
-		t.Fatalf("read parked diagnostic: %v", readErr)
-	}
-	if !strings.Contains(string(body), "Failed to create virtual environment") {
-		t.Fatalf("diagnostic body = %q, want the complete setup output", body)
+			if result.Outcome != test.wantOutcome {
+				t.Fatalf("outcome = %q, want %q", result.Outcome, test.wantOutcome)
+			}
+			if !strings.HasPrefix(result.Run.LifecycleReason, test.wantReason) || !strings.Contains(result.Run.LifecycleReason, test.wantOutput) {
+				t.Fatalf("lifecycle reason = %q, want %q followed by the command cause", result.Run.LifecycleReason, test.wantReason)
+			}
+			body, readErr := os.ReadFile(filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, gateFailureDiagnosticDirectoryName, "checkpoint.log"))
+			if readErr != nil {
+				t.Fatalf("read parked diagnostic: %v", readErr)
+			}
+			if !strings.Contains(string(body), test.wantOutput) {
+				t.Fatalf("diagnostic body = %q, want the complete command output", body)
+			}
+		})
 	}
 }

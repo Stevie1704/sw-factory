@@ -27,10 +27,10 @@ const (
 	gateFailureCauseLines = 2
 )
 
-// gateFailureCause renders one bounded line naming what the failed setup or
-// gate command printed. The typed failures deliberately exclude command output
-// from their own Error text, so the coordinator builds the operator-visible
-// cause here rather than widening those contracts.
+// gateFailureCause renders one bounded line naming the failed setup or gate
+// command and what it printed. The typed failures deliberately exclude command
+// output from their own Error text, so the coordinator builds the
+// operator-visible cause here rather than widening those contracts.
 //
 // An error carrying no command observation returns an empty cause, which keeps
 // an infrastructure category from claiming a deterministic blocker.
@@ -40,27 +40,28 @@ func gateFailureCause(suiteErr error) string {
 	}
 	var setupFailure *gate.SetupFailure
 	if errors.As(suiteErr, &setupFailure) {
-		return gateFailureCauseLine("setup", setupFailure.Result, setupFailure.Error())
+		return gateFailureCauseLine(setupFailure.Error(), setupFailure.Result)
 	}
 	var gateFailure *gate.GateFailure
 	if errors.As(suiteErr, &gateFailure) {
-		return gateFailureCauseLine(fmt.Sprintf("gate %q", gateFailure.Name), gateFailure.Result, gateFailure.Error())
+		return gateFailureCauseLine(gateFailure.Error(), gateFailure.Result)
 	}
 	return ""
 }
 
-// gateFailureCauseLine prefers what the command printed on standard error,
-// falls back to standard output, and finally to the typed failure text so a
-// silent command still names its subject.
-func gateFailureCauseLine(subject string, result worker.CommandResult, typed string) string {
+// gateFailureCauseLine joins the typed failure with the leading lines the
+// command printed. Both halves are needed on one line: the typed text names
+// the failure mode, because a timeout and a non-zero exit are not
+// distinguishable from output alone, and the output names the defect.
+func gateFailureCauseLine(typed string, result worker.CommandResult) string {
 	detail := leadingOutputLines(result.Stderr, gateFailureCauseLines)
 	if detail == "" {
 		detail = leadingOutputLines(result.Stdout, gateFailureCauseLines)
 	}
-	if detail == "" {
-		detail = typed
+	if detail != "" {
+		typed += ": " + detail
 	}
-	return boundedText(safeStatusCommentValue(subject+": "+detail), maxGateFailureCauseBytes)
+	return boundedText(safeStatusCommentValue(typed), maxGateFailureCauseBytes)
 }
 
 // leadingOutputLines joins at most limit non-blank leading lines into one line.
@@ -90,25 +91,23 @@ func withGateFailureCause(reason, cause string) string {
 }
 
 // writeGateFailureDiagnostic records the bounded setup and gate output of one
-// failed suite beside the run's other artifacts and returns the path it wrote,
-// or an empty string when there was nothing to record.
+// failed suite beside the run's other artifacts. A suite error carrying no
+// command observation records nothing, because a transport or persistence
+// failure would otherwise file the passing suite that preceded it as the cause
+// of the pause.
 //
 // The file stays on the coordinator host. Writing it is best-effort, because
 // losing a diagnostic must never mask the failure the caller is reporting.
-func writeGateFailureDiagnostic(run store.Run, phase gate.Phase, results []gate.Result, suiteErr error, observedAt time.Time) string {
+func writeGateFailureDiagnostic(run store.Run, phase gate.Phase, results []gate.Result, suiteErr error, observedAt time.Time) {
 	name := gateFailureDiagnosticName(phase)
-	if name == "" || suiteErr == nil || strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.Worktree) == "" {
-		return ""
+	if name == "" || gateFailureCause(suiteErr) == "" || strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.Worktree) == "" {
+		return
 	}
-	directory := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, gateFailureDiagnosticDirectoryName)
+	directory := filepath.Join(runArtifactRoot(run), gateFailureDiagnosticDirectoryName)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return ""
+		return
 	}
-	path := filepath.Join(directory, name)
-	if err := os.WriteFile(path, []byte(renderGateFailureDiagnostic(run, phase, results, suiteErr, observedAt)), 0o600); err != nil {
-		return ""
-	}
-	return path
+	_ = os.WriteFile(filepath.Join(directory, name), []byte(renderGateFailureDiagnostic(run, phase, results, suiteErr, observedAt)), 0o600)
 }
 
 // gateFailureDiagnosticName maps a declared phase to its fixed file name. An

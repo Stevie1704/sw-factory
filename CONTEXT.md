@@ -144,6 +144,15 @@ rounds, never consumes the review-repair budget, and records the maintainer
 source and event identity that produced it.
 _Avoid_: Review reply, advisory feedback
 
+**Gate failure diagnostic**:
+The host-side record of one failed gate suite, holding the exact checkpoint,
+the setup observation, and every gate that did not pass with bounded command
+output. It is written per run and phase beside the run's invocation
+directories, so a run that parks without a repair packet still names its cause.
+A bounded single line of it also reaches the lifecycle reason, which is the
+only part an operator sees without host access.
+_Avoid_: Gate log, failure dump
+
 **Review diff**:
 The exact base-to-checkpoint diff a review role judges. Every new review
 invocation materialises it as the regular read-only `/invocation/review.diff`

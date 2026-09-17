@@ -150,7 +150,7 @@ func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, roun
 			return nil, fmt.Errorf("partition exact review diff: %w", buildErr)
 		}
 		roundID := reviewRoundID(run, manifest.DiffSHA256)
-		canonicalPath := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, reviewRoundDirectoryName, reviewRoundArtifactName)
+		canonicalPath := filepath.Join(runArtifactRoot(run), reviewRoundDirectoryName, reviewRoundArtifactName)
 		if copyErr := copyReviewArtifact(sourcePath, canonicalPath); copyErr != nil {
 			return nil, fmt.Errorf("persist canonical review diff: %w", copyErr)
 		}

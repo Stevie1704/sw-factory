@@ -34,8 +34,8 @@ func TestGateFailureCauseNamesSetupCommandOutput(t *testing.T) {
 
 	cause := gateFailureCause(suiteErr)
 
-	if !strings.HasPrefix(cause, "setup: ") {
-		t.Fatalf("cause = %q, want a setup subject", cause)
+	if !strings.HasPrefix(cause, "setup command failed with exit code 1: ") {
+		t.Fatalf("cause = %q, want the typed setup failure first", cause)
 	}
 	if !strings.Contains(cause, "Failed to create virtual environment") || !strings.Contains(cause, "--clear") {
 		t.Fatalf("cause = %q, want the leading setup output lines", cause)
@@ -52,7 +52,7 @@ func TestGateFailureCauseNamesFailedGate(t *testing.T) {
 		Result: worker.CommandResult{ExitCode: 2, Stderr: "undefined: Publish"},
 	}}}
 
-	if got, want := gateFailureCause(suiteErr), `gate "build": undefined: Publish`; got != want {
+	if got, want := gateFailureCause(suiteErr), `gate "build" failed with exit code 2: undefined: Publish`; got != want {
 		t.Fatalf("cause = %q, want %q", got, want)
 	}
 }
@@ -63,13 +63,31 @@ func TestGateFailureCauseFallsBackToStdoutThenTypedError(t *testing.T) {
 	t.Parallel()
 
 	stdoutOnly := &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: worker.CommandResult{ExitCode: 1, Stdout: "lockfile is out of date"}}}}
-	if got, want := gateFailureCause(stdoutOnly), "setup: lockfile is out of date"; got != want {
+	if got, want := gateFailureCause(stdoutOnly), "setup command failed with exit code 1: lockfile is out of date"; got != want {
 		t.Fatalf("stdout cause = %q, want %q", got, want)
 	}
 
 	silent := &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Cause: errors.New("worker unavailable")}}}
-	if got, want := gateFailureCause(silent), "setup: setup execution failed: worker unavailable"; got != want {
+	if got, want := gateFailureCause(silent), "setup execution failed: worker unavailable"; got != want {
 		t.Fatalf("silent cause = %q, want %q", got, want)
+	}
+}
+
+// TestGateFailureCauseNamesATimeoutThatPrintedOutput verifies the failure mode
+// survives the command output. A timed-out gate prints an ordinary partial
+// transcript, so output alone cannot distinguish it from a non-zero exit and
+// the operator would read a truncated test log as the blocker.
+func TestGateFailureCauseNamesATimeoutThatPrintedOutput(t *testing.T) {
+	t.Parallel()
+
+	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.GateFailure{
+		Name:     "test",
+		TimedOut: true,
+		Result:   worker.CommandResult{Stdout: "ok internal/gate 0.4s"},
+	}}}
+
+	if got, want := gateFailureCause(suiteErr), `gate "test" timed out: ok internal/gate 0.4s`; got != want {
+		t.Fatalf("cause = %q, want %q", got, want)
 	}
 }
 
@@ -118,13 +136,9 @@ func TestWriteGateFailureDiagnosticRecordsSetupAndGateOutput(t *testing.T) {
 	}
 	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: results[0].Setup}}}
 
-	path := writeGateFailureDiagnostic(run, gate.PhaseCheckpoint, results, suiteErr, diagnosticObservedAt)
+	writeGateFailureDiagnostic(run, gate.PhaseCheckpoint, results, suiteErr, diagnosticObservedAt)
 
-	want := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, gateFailureDiagnosticDirectoryName, "checkpoint.log")
-	if path != want {
-		t.Fatalf("diagnostic path = %q, want %q", path, want)
-	}
-	body := readDiagnostic(t, path)
+	body := readDiagnostic(t, diagnosticPath(run, "checkpoint.log"))
 	for _, fragment := range []string{
 		diagnosticObservedAt.Format(time.RFC3339),
 		diagnosticCheckpointSHA,
@@ -156,7 +170,9 @@ func TestWriteGateFailureDiagnosticBoundsCommandOutput(t *testing.T) {
 	}}
 	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Result: results[0].Gate}}}
 
-	body := readDiagnostic(t, writeGateFailureDiagnostic(run, gate.PhaseCheckpoint, results, suiteErr, diagnosticObservedAt))
+	writeGateFailureDiagnostic(run, gate.PhaseCheckpoint, results, suiteErr, diagnosticObservedAt)
+
+	body := readDiagnostic(t, diagnosticPath(run, "checkpoint.log"))
 
 	if !strings.Contains(body, "[truncated]") {
 		t.Fatalf("diagnostic body = %q, want the bounded-output marker", body)
@@ -166,22 +182,35 @@ func TestWriteGateFailureDiagnosticBoundsCommandOutput(t *testing.T) {
 	}
 }
 
-// TestWriteGateFailureDiagnosticIsBestEffort verifies a diagnostic that cannot
-// be written never masks the failure the caller already reports.
-func TestWriteGateFailureDiagnosticIsBestEffort(t *testing.T) {
+// TestWriteGateFailureDiagnosticRecordsOnlyDeterministicFailures verifies a
+// diagnostic that cannot or must not be written never masks the failure the
+// caller already reports. A transport or persistence failure carries no
+// command observation, and filing the passing suite that preceded it would
+// name a healthy checkpoint as the cause of the pause.
+func TestWriteGateFailureDiagnosticRecordsOnlyDeterministicFailures(t *testing.T) {
 	t.Parallel()
 
 	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: worker.CommandResult{ExitCode: 1, Stderr: "boom"}}}}
 	results := []gate.Result{{CheckpointSHA: diagnosticCheckpointSHA, GateName: "build", Phase: gate.PhaseCheckpoint}}
+	tests := []struct {
+		name     string
+		run      store.Run
+		phase    gate.Phase
+		suiteErr error
+	}{
+		{name: "no worktree", run: store.Run{ID: "run-1"}, phase: gate.PhaseCheckpoint, suiteErr: suiteErr},
+		{name: "unsupported phase", run: diagnosticRun(t), phase: gate.Phase("unsupported"), suiteErr: suiteErr},
+		{name: "no failure", run: diagnosticRun(t), phase: gate.PhaseCheckpoint},
+		{name: "persistence failure", run: diagnosticRun(t), phase: gate.PhaseCheckpoint, suiteErr: errors.New("SQLite busy")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writeGateFailureDiagnostic(test.run, test.phase, results, test.suiteErr, diagnosticObservedAt)
 
-	if path := writeGateFailureDiagnostic(store.Run{ID: "run-1"}, gate.PhaseCheckpoint, results, suiteErr, diagnosticObservedAt); path != "" {
-		t.Fatalf("path without a worktree = %q, want no diagnostic", path)
-	}
-	if path := writeGateFailureDiagnostic(diagnosticRun(t), gate.Phase("unsupported"), results, suiteErr, diagnosticObservedAt); path != "" {
-		t.Fatalf("path for an unsupported phase = %q, want no diagnostic", path)
-	}
-	if path := writeGateFailureDiagnostic(diagnosticRun(t), gate.PhaseCheckpoint, results, nil, diagnosticObservedAt); path != "" {
-		t.Fatalf("path without a failure = %q, want no diagnostic", path)
+			if _, err := os.Stat(diagnosticPath(test.run, "checkpoint.log")); !os.IsNotExist(err) {
+				t.Fatalf("stat diagnostic error = %v, want no written diagnostic", err)
+			}
+		})
 	}
 }
 
@@ -204,12 +233,14 @@ func diagnosticRun(t *testing.T) store.Run {
 	return store.Run{ID: "run-diagnostic", CheckpointSHA: diagnosticCheckpointSHA, Worktree: filepath.Join(t.TempDir(), "worktrees", "run-diagnostic")}
 }
 
+// diagnosticPath returns the fixed location of one run's phase diagnostic.
+func diagnosticPath(run store.Run, name string) string {
+	return filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, gateFailureDiagnosticDirectoryName, name)
+}
+
 // readDiagnostic reads a written diagnostic and fails when it is absent.
 func readDiagnostic(t *testing.T, path string) string {
 	t.Helper()
-	if path == "" {
-		t.Fatal("writeGateFailureDiagnostic() returned no path, want a written diagnostic")
-	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read diagnostic: %v", err)
