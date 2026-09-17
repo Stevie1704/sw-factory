@@ -366,13 +366,17 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 	if err != nil {
 		return gate.SuiteResult{}, fmt.Errorf("prepare worker git metadata: %w", err)
 	}
+	caches, err := resolveWorkerCaches(packet.RepositoryConfig.Caches, registration)
+	if err != nil {
+		return gate.SuiteResult{}, fmt.Errorf("resolve worker caches: %w", err)
+	}
 	workerRequest := worker.StartRequest{
 		RunID:           run.ID,
 		WorktreePath:    run.Worktree,
 		GitMetadataPath: gitMetadataPath,
 		Image:           packet.RepositoryConfig.WorkerBuild.Image,
 		ImageDigest:     run.ImageDigest,
-		Caches:          workerCaches(packet.RepositoryConfig.Caches),
+		Caches:          caches,
 		Role:            "gate",
 	}
 	if err := s.journal().StartWorker(ctx, runStore, workerRequest); err != nil {
@@ -951,13 +955,4 @@ func gateDependencyPlan(gates []config.GateConfig, target string) ([]config.Gate
 		return nil, fmt.Errorf("gate %q is not declared in the frozen specification packet", target)
 	}
 	return plan, nil
-}
-
-// workerCaches converts repository cache configurations into worker cache mounts.
-func workerCaches(caches []config.CacheConfig) []worker.CacheMount {
-	result := make([]worker.CacheMount, 0, len(caches))
-	for _, cache := range caches {
-		result = append(result, worker.CacheMount{Name: cache.Name, HostPath: cache.Path, ReadOnly: cache.ReadOnly})
-	}
-	return result
 }

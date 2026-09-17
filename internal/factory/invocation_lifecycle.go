@@ -948,7 +948,11 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 		return launchMaterialisation{}, fmt.Errorf("prepare worker Git metadata: %w", err)
 	}
 	workerID := workerIDForInvocation(invocation)
-	workerRequest := worker.StartRequest{RunID: plan.Run.ID, WorkerID: workerID, WorktreeReadOnly: plan.RoleDefinition.Kind == workflow.RoleKindReview, WorktreePath: plan.Run.Worktree, GitMetadataPath: gitMetadataPath, Image: plan.Packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: plan.Run.ImageDigest, Caches: workerCaches(plan.Packet.RepositoryConfig.Caches), InvocationPath: packetDirectory, ResultPath: resultDirectory, Role: plan.Request.Role}
+	caches, err := resolveWorkerCaches(plan.Packet.RepositoryConfig.Caches, registration)
+	if err != nil {
+		return launchMaterialisation{}, fmt.Errorf("resolve launch worker caches: %w", err)
+	}
+	workerRequest := worker.StartRequest{RunID: plan.Run.ID, WorkerID: workerID, WorktreeReadOnly: plan.RoleDefinition.Kind == workflow.RoleKindReview, WorktreePath: plan.Run.Worktree, GitMetadataPath: gitMetadataPath, Image: plan.Packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: plan.Run.ImageDigest, Caches: caches, InvocationPath: packetDirectory, ResultPath: resultDirectory, Role: plan.Request.Role}
 	return launchMaterialisation{root: root, packetDirectory: packetDirectory, resultDirectory: resultDirectory, workerID: workerID, invocation: invocation, invocationPacket: invocationPacket, promptText: promptText, workerRequest: workerRequest}, nil
 }
 
@@ -1387,7 +1391,11 @@ func (l *invocationLifecycle) ensureWorkerForInvocation(ctx context.Context, reg
 	if err != nil {
 		return worker.StartRequest{}, invocation, fmt.Errorf("prepare recovery Git metadata: %w", err)
 	}
-	request := worker.StartRequest{RunID: run.ID, WorkerID: workerIDForInvocation(invocation), WorktreeReadOnly: roleIsKind(invocation, workflow.RoleKindReview), WorktreePath: run.Worktree, GitMetadataPath: gitMetadataPath, Image: packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: run.ImageDigest, Caches: workerCaches(packet.RepositoryConfig.Caches), InvocationPath: invocation.InvocationDirectory, ResultPath: invocation.ResultDirectory, CredentialStoreID: invocation.CredentialStoreID, Role: invocation.Role}
+	caches, err := resolveWorkerCaches(packet.RepositoryConfig.Caches, registration)
+	if err != nil {
+		return worker.StartRequest{}, invocation, fmt.Errorf("resolve recovery worker caches: %w", err)
+	}
+	request := worker.StartRequest{RunID: run.ID, WorkerID: workerIDForInvocation(invocation), WorktreeReadOnly: roleIsKind(invocation, workflow.RoleKindReview), WorktreePath: run.Worktree, GitMetadataPath: gitMetadataPath, Image: packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: run.ImageDigest, Caches: caches, InvocationPath: invocation.InvocationDirectory, ResultPath: invocation.ResultDirectory, CredentialStoreID: invocation.CredentialStoreID, Role: invocation.Role}
 	if l.worker == nil {
 		return worker.StartRequest{}, invocation, errors.New("worker runtime is required for invocation recovery")
 	}

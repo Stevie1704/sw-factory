@@ -225,7 +225,7 @@ frozen run parameters the role acts on - target branch, route, test policy
 mode, declared gates, and the captured guidance paths - and points at
 `/invocation/specification.json` for everything else. Repository guidance
 therefore reaches the role once, inside its own untrusted fence, and
-coordinator-owned configuration such as declared cache paths, worker build,
+coordinator-owned configuration such as declared caches, worker build,
 and harness or model policy stays out of the context window.
 
 A harness also discovers its own project instruction file from its working

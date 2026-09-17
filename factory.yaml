@@ -60,7 +60,6 @@ test_policy:
 allowed_overrides: []
 caches:
   - name: go-build
-    path: /Users/steffenkrakau/.cache/sw-factory/go-build
     read_only: false
 worker_build:
   image: ghcr.io/stevie1704/sw-factory-worker

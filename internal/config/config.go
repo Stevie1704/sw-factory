@@ -39,6 +39,14 @@ type RepositoryRegistration struct {
 	Authentication       AuthenticationConfig `yaml:"authentication"`
 	OperationalDataPath  string               `yaml:"operational_data_path"`
 	RepositoryConfigPath string               `yaml:"repository_config_path"`
+	// CacheRoot is the operator's data root for repository caches. Every
+	// mapped cache directory must resolve inside it, so a repository commit
+	// cannot request an arbitrary writable host mount.
+	CacheRoot string `yaml:"cache_root,omitempty"`
+	// Caches maps each repository-declared cache name to its host directory.
+	// The repository owns the name and the container-side access mode; the
+	// host owns the path.
+	Caches map[string]string `yaml:"caches,omitempty"`
 	// Review contains host-local concurrency and authorization ceilings. It is
 	// intentionally separate from repository review coverage policy.
 	Review ReviewHostConfig `yaml:"review,omitempty"`
@@ -217,9 +225,16 @@ type TestPolicy struct {
 	InfrastructurePaths []string `yaml:"infrastructure_paths"`
 }
 
+// CacheConfig declares one repository cache by name and container-side access
+// mode. The worker always mounts it at a factory-owned path derived from the
+// name. The host directory is never repository-owned: host configuration maps
+// the declared name to a directory under the operator's cache root.
 type CacheConfig struct {
-	Name     string `yaml:"name"`
-	Path     string `yaml:"path"`
+	Name string `yaml:"name"`
+	// Path is accepted only so a repository that still declares a host path is
+	// rejected with a typed field error instead of an unknown-field parse
+	// failure. It must always be empty.
+	Path     string `yaml:"path,omitempty"`
 	ReadOnly bool   `yaml:"read_only"`
 }
 
@@ -641,8 +656,8 @@ func ValidateRepository(config RepositoryConfig) error {
 			return validation(prefix+".name", "must be unique")
 		}
 		seenCaches[cache.Name] = struct{}{}
-		if strings.TrimSpace(cache.Path) == "" {
-			return validation(prefix+".path", "is required")
+		if strings.TrimSpace(cache.Path) != "" {
+			return validation(prefix+".path", "must not declare a host path; host configuration maps the cache name to a host directory")
 		}
 	}
 	if strings.TrimSpace(config.WorkerBuild.Image) == "" {
@@ -810,11 +825,8 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 		if path == "" {
 			continue
 		}
-		if strings.ContainsAny(path, "\x00\r\n") {
-			return validation(field, "must not contain control characters")
-		}
-		if !filepath.IsAbs(path) {
-			return validation(field, "must be absolute when set")
+		if err := validateAbsolutePath(field, path); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(repository.RepositoryConfigPath) == "" {
@@ -822,6 +834,56 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	}
 	if !filepath.IsAbs(repository.RepositoryConfigPath) {
 		return validation(prefix+".repository_config_path", "must be absolute")
+	}
+	return validateRegistrationCaches(prefix, repository)
+}
+
+// validateRegistrationCaches validates the host-owned cache root and the
+// name-to-path mapping that supplies a host directory for every repository
+// cache. Containment inside the cache root keeps a repository from requesting
+// an arbitrary writable host mount.
+func validateRegistrationCaches(prefix string, repository RepositoryRegistration) error {
+	root := strings.TrimSpace(repository.CacheRoot)
+	if root != "" {
+		if err := validateAbsolutePath(prefix+".cache_root", root); err != nil {
+			return err
+		}
+	}
+	if len(repository.Caches) == 0 {
+		return nil
+	}
+	if root == "" {
+		return validation(prefix+".cache_root", "is required when caches are mapped")
+	}
+	names := make([]string, 0, len(repository.Caches))
+	for name := range repository.Caches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" {
+			return validation(prefix+".caches", "must not map an empty cache name")
+		}
+		field := prefix + ".caches." + name
+		path := repository.Caches[name]
+		if err := validateAbsolutePath(field, path); err != nil {
+			return err
+		}
+		if !lexicalPathWithin(root, path) {
+			return validation(field, "must be inside cache_root")
+		}
+	}
+	return nil
+}
+
+// validateAbsolutePath validates one host path that a registration persists. It
+// reports a typed field error for control characters and for a relative path.
+func validateAbsolutePath(field, path string) error {
+	if strings.ContainsAny(path, "\x00\r\n") {
+		return validation(field, "must not contain control characters")
+	}
+	if !filepath.IsAbs(path) {
+		return validation(field, "must be absolute")
 	}
 	return nil
 }

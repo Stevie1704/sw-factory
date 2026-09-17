@@ -35,7 +35,7 @@ The Docker adapter uses these stable paths regardless of the host checkout:
 | --- | --- | --- |
 | `/work` | read-write | The run worktree |
 | `/git` | read-only | A credential-free projection of Git metadata needed for history and diffs |
-| `/cache/<name>` | declared per cache | A repository cache |
+| `/cache/<name>` | `read_only` declared per cache | A repository cache, whose host directory the registration maps by name |
 | `/invocation` | read-only | The frozen invocation packet for the active role |
 | `/results` | read-write | The invocation-scoped `report.json` result directory |
 | `/run/factory-auth` | managed; written only by the adapter, read-only for the role | A factory-managed Codex credential volume, separate from role session state |

@@ -25,6 +25,11 @@ configuration: it fails with an instruction to run `factory init` when the
 configuration is missing, so host state is only ever created by an explicit
 command.
 
+Registration does not provision cache paths. When the checked-in repository
+configuration declares any cache, add `cache_root` and the `caches` mapping to
+the registration by hand before `factory doctor`. Until that edit lands, the
+`caches` check blocks startup with the name it cannot resolve.
+
 ### Inferred registration values
 
 `factory register` reports every value it inferred as an `inferred --<flag>`
@@ -169,7 +174,16 @@ repositories:
       authorized_units: 8
     operational_data_path: /Users/me/.local/share/factory/factory.db
     repository_config_path: /Users/me/src/project/factory.yaml
+    cache_root: /Users/me/.local/share/factory/caches
+    caches:
+      go-build: /Users/me/.local/share/factory/caches/go-build
 ```
+
+`cache_root` is the operator's data root for repository caches, and `caches`
+maps each cache name the repository declares to its host directory. Every
+mapped directory must resolve inside `cache_root`, so a repository commit can
+never request an arbitrary writable host mount. Both keys are optional and are
+omitted when the repository declares no cache.
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 
@@ -262,7 +276,6 @@ test_policy:
 allowed_overrides: [model, reasoning_effort]
 caches:
   - name: go-build
-    path: /tmp/factory-cache
     read_only: false
 worker_build:
   image: ghcr.io/stevie1704/sw-factory-worker
@@ -275,7 +288,7 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, optional `role_craft` entries for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, bounded `review_units` values, and optional positive `evaluation.retention`. `review_units.max_unit_bytes` defaults to 65,536 bytes and is capped at 1 MiB by factory policy; `max_units` defaults to four and is capped at eight. The factory owns the ten-line context-overlap policy. A large exact checkpoint is persisted as one deterministic review manifest; the specification and standards axes receive separate fresh invocations over those shared units. The host `review.concurrency` defaults to two simultaneous invocations and `review.authorized_units` defaults to eight; a manifest above the normal repository fan-out pauses until an authorized maintainer comments `/factory authorize-review <units>`. `role_craft` paths must be nonempty, repository-relative Markdown paths without control characters, backslashes, absolute paths, or any `..` path segment. At claim time each selected file is read from the exact immutable base checkpoint; a missing file fails the claim. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, optional `role_craft` entries for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, bounded `review_units` values, and optional positive `evaluation.retention`. `review_units.max_unit_bytes` defaults to 65,536 bytes and is capped at 1 MiB by factory policy; `max_units` defaults to four and is capped at eight. The factory owns the ten-line context-overlap policy. A large exact checkpoint is persisted as one deterministic review manifest; the specification and standards axes receive separate fresh invocations over those shared units. The host `review.concurrency` defaults to two simultaneous invocations and `review.authorized_units` defaults to eight; a manifest above the normal repository fan-out pauses until an authorized maintainer comments `/factory authorize-review <units>`. `role_craft` paths must be nonempty, repository-relative Markdown paths without control characters, backslashes, absolute paths, or any `..` path segment. At claim time each selected file is read from the exact immutable base checkpoint; a missing file fails the claim. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. A cache entry declares only a unique `name` and `read_only`. The name becomes the in-worker mount point `/cache/<name>`. A declared `path` is rejected, because host paths belong to host configuration. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 `test_policy.allow_automated_objections` is the evidence-gated switch for the
 implementation-to-test objection cycle. Keep it `false` until the measured
@@ -290,6 +303,30 @@ authorized maintainer. Use either `Decision: proceed` or
 `Decision: revise and repeat` or
 `<!-- factory-pilot-decision: revise and repeat -->`, or either `Decision:
 stop` or `<!-- factory-pilot-decision: stop -->`, to close it.
+
+## Repository caches
+
+A cache is declared on both sides of the repository-versus-host boundary, and
+neither side can supply the other's half.
+
+| Declares | Owner | Fields |
+| --- | --- | --- |
+| The cache name and its container-side purpose | Checked-in repository configuration | `caches[].name`, `caches[].read_only` |
+| The host directory for one declared name | Host configuration | `cache_root`, `caches.<name>` |
+
+The worker always mounts a cache at `/cache/<name>`, so the repository controls
+what the cache is for and whether the worker may write to it, and the operator
+controls which host directory that cache uses. A repository configuration that
+declares `caches[].path` is rejected as a typed validation error.
+
+Host configuration refuses a mapped directory outside `cache_root` when it
+loads, so an out-of-root mapping never reaches a run. `factory doctor` reports
+the `caches` check as a blocking finding when a declared cache has no host
+mapping, when host configuration maps a cache the repository does not declare,
+or when a mapped directory resolves outside `cache_root` through a symbolic
+link. A worker launch, gate run, or check repair fails closed on an unmapped
+name, so a repository commit that adds a cache after registration cannot
+receive a defaulted host path.
 
 ## Per-role harness, model, and reasoning effort
 

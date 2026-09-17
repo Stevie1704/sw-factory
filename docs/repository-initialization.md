@@ -247,7 +247,7 @@ factory in `internal/workflow` and are rejected in repository configuration.
 | `review_units` | `max_unit_bytes` defaults to 65536 and is capped at 1048576. `max_units` defaults to 4 and is capped at 8. |
 | `test_policy.test_paths`, `test_policy.infrastructure_paths` | Extra repository-relative prefixes the test role may edit. `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` are allowed by default. |
 | `test_policy.allow_human_exemption`, `test_policy.allow_technical_exemption`, `test_policy.allow_automated_objections` | Booleans, each defaulting to `false`. See the test policy below. |
-| `caches` | A list of `name`, `path`, `read_only` entries. Names are unique and paths are nonempty. See the caveat below before declaring one. |
+| `caches` | A list of `name` and `read_only` entries with unique names. A `path` is rejected: host configuration supplies it. See the caches section below. |
 | `evaluation.retention` | A positive Go duration, or omitted. |
 
 ### Gates
@@ -308,10 +308,16 @@ file rather than inferred from an absent key.
 
 ### Caches
 
-`caches` maps a name to a host path that the worker mounts writable. Repository
-configuration currently has no way to express that path portably, so a declared
-cache pins one operator's home directory into a committed file. Omit `caches`
-until issue #180 splits the name from the host path.
+`caches` declares a cache by name and container-side access mode only. The
+worker mounts it at `/cache/<name>`, and `read_only` states whether the worker
+may update it. The host directory is not repository policy: the registration
+maps each declared name to a directory under its `cache_root`, so a committed
+file never pins one operator's home directory.
+
+Every declared cache needs that host mapping before a run can start. Add
+`cache_root` and the `caches` mapping to the host registration in the same
+change that declares the cache, or `factory doctor` blocks on the unmapped
+name. See [Configuration](configuration.md) for the host-side shape.
 
 ### Worked example
 
