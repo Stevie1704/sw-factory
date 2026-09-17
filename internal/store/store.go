@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 39
+const CurrentSchemaVersion = 40
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -86,6 +86,29 @@ const (
 // progression state to reconcile.
 func IsTerminalStatus(status Status) bool {
 	return status == StatusComplete || status == StatusCancelled || status == StatusFailed
+}
+
+// SupervisorHeartbeat is the host-local liveness projection for the polling
+// coordinator. Its expiry is deliberately persisted so another process can
+// distinguish a live supervisor from a coordinator that stopped renewing its
+// heartbeat.
+type SupervisorHeartbeat struct {
+	// Coordinator identifies the host or coordinator identity that owns the
+	// heartbeat.
+	Coordinator string
+	// PID identifies the process that last renewed the heartbeat.
+	PID int
+	// StartedAt is when the current supervisor process began renewing.
+	StartedAt time.Time
+	// RenewedAt is when the heartbeat was last written.
+	RenewedAt time.Time
+	// ExpiresAt is the first instant at which the heartbeat is no longer live.
+	ExpiresAt time.Time
+}
+
+// Live reports whether the heartbeat is valid and unexpired at now.
+func (heartbeat SupervisorHeartbeat) Live(now time.Time) bool {
+	return heartbeat.Coordinator != "" && heartbeat.PID > 0 && !heartbeat.RenewedAt.IsZero() && now.Before(heartbeat.ExpiresAt)
 }
 
 // PendingEffectKind identifies the external mutation reserved before a
@@ -955,6 +978,62 @@ func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	return scanRun(row)
 }
 
+// ReadSupervisorHeartbeat returns the latest persisted coordinator heartbeat,
+// or nil when no supervisor has written one for this operational store.
+func (s *Store) ReadSupervisorHeartbeat(ctx context.Context) (*SupervisorHeartbeat, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT coordinator, pid, started_at, renewed_at, expires_at
+		FROM supervisor_heartbeat
+		WHERE singleton = 1`)
+	var heartbeat SupervisorHeartbeat
+	var startedAt, renewedAt, expiresAt string
+	if err := row.Scan(&heartbeat.Coordinator, &heartbeat.PID, &startedAt, &renewedAt, &expiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read supervisor heartbeat: %w", err)
+	}
+	var err error
+	if heartbeat.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
+		return nil, fmt.Errorf("parse supervisor heartbeat started_at: %w", err)
+	}
+	if heartbeat.RenewedAt, err = time.Parse(time.RFC3339Nano, renewedAt); err != nil {
+		return nil, fmt.Errorf("parse supervisor heartbeat renewed_at: %w", err)
+	}
+	if heartbeat.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt); err != nil {
+		return nil, fmt.Errorf("parse supervisor heartbeat expires_at: %w", err)
+	}
+	if err := validateSupervisorHeartbeat(heartbeat); err != nil {
+		return nil, fmt.Errorf("validate supervisor heartbeat: %w", err)
+	}
+	return &heartbeat, nil
+}
+
+// SaveSupervisorHeartbeat replaces the singleton coordinator heartbeat with a
+// validated, timestamped liveness projection.
+func (s *Store) SaveSupervisorHeartbeat(ctx context.Context, heartbeat SupervisorHeartbeat) error {
+	if err := validateSupervisorHeartbeat(heartbeat); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO supervisor_heartbeat (singleton, coordinator, pid, started_at, renewed_at, expires_at)
+		VALUES (1, ?, ?, ?, ?, ?)
+		ON CONFLICT(singleton) DO UPDATE SET
+			coordinator = excluded.coordinator,
+			pid = excluded.pid,
+			started_at = excluded.started_at,
+			renewed_at = excluded.renewed_at,
+			expires_at = excluded.expires_at`,
+		heartbeat.Coordinator,
+		heartbeat.PID,
+		heartbeat.StartedAt.UTC().Format(runTimestampLayout),
+		heartbeat.RenewedAt.UTC().Format(runTimestampLayout),
+		heartbeat.ExpiresAt.UTC().Format(runTimestampLayout)); err != nil {
+		return fmt.Errorf("save supervisor heartbeat: %w", err)
+	}
+	return nil
+}
+
 // scanRun decodes one operational run row and its RFC3339 timestamps.
 func scanRun(row *sql.Row) (*Run, error) {
 	var run Run
@@ -1405,6 +1484,26 @@ func normalizeRun(run Run) (Run, error) {
 		run.TerminalAt = time.Time{}
 	}
 	return run, nil
+}
+
+// validateSupervisorHeartbeat checks the bounded fields and expiry ordering of
+// one coordinator liveness projection before it crosses the store boundary.
+// Wall-clock time may step backwards, so a renewal is not required to follow
+// the process start timestamp.
+func validateSupervisorHeartbeat(heartbeat SupervisorHeartbeat) error {
+	if strings.TrimSpace(heartbeat.Coordinator) == "" || strings.ContainsAny(heartbeat.Coordinator, "\x00\r\n") {
+		return errors.New("supervisor heartbeat coordinator is required and must be single-line")
+	}
+	if heartbeat.PID <= 0 {
+		return errors.New("supervisor heartbeat PID must be positive")
+	}
+	if heartbeat.StartedAt.IsZero() || heartbeat.RenewedAt.IsZero() || heartbeat.ExpiresAt.IsZero() {
+		return errors.New("supervisor heartbeat timestamps are required")
+	}
+	if !heartbeat.ExpiresAt.After(heartbeat.RenewedAt) {
+		return errors.New("supervisor heartbeat expiry must follow renewal")
+	}
+	return nil
 }
 
 // validateTestProjection checks the bounded durable test-stage state before it
@@ -3338,6 +3437,17 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				if err := addEvaluationSummaryColumnIfMissing(ctx, tx, column); err != nil {
 					return fmt.Errorf("apply store migration 39: %w", err)
 				}
+			}
+		case 40:
+			if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS supervisor_heartbeat (
+				singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+				coordinator TEXT NOT NULL,
+				pid INTEGER NOT NULL,
+				started_at TEXT NOT NULL,
+				renewed_at TEXT NOT NULL,
+				expires_at TEXT NOT NULL
+			)`); err != nil {
+				return fmt.Errorf("apply store migration 40: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

@@ -51,6 +51,120 @@ func TestOpenCreatesVersionedStoreWithNoActiveRun(t *testing.T) {
 	}
 }
 
+// TestSupervisorHeartbeatRoundTripsAndExpires verifies the durable liveness
+// projection remains readable after restart and becomes stale at its expiry.
+func TestSupervisorHeartbeatRoundTripsAndExpires(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
+	wanted := store.SupervisorHeartbeat{
+		Coordinator: "host-a",
+		PID:         1234,
+		StartedAt:   now,
+		RenewedAt:   now.Add(time.Minute),
+		ExpiresAt:   now.Add(6 * time.Minute),
+	}
+	if err := opened.SaveSupervisorHeartbeat(t.Context(), wanted); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = restarted.Close() }()
+	got, err := restarted.ReadSupervisorHeartbeat(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Coordinator != wanted.Coordinator || got.PID != wanted.PID || !got.StartedAt.Equal(wanted.StartedAt) || !got.RenewedAt.Equal(wanted.RenewedAt) || !got.ExpiresAt.Equal(wanted.ExpiresAt) {
+		t.Fatalf("heartbeat = %#v, want %#v", got, wanted)
+	}
+	if !got.Live(now.Add(2 * time.Minute)) {
+		t.Fatal("heartbeat is not live before expiry")
+	}
+	if got.Live(wanted.ExpiresAt) {
+		t.Fatal("heartbeat is live at its expiry")
+	}
+}
+
+// TestSchema40MigrationCreatesSupervisorHeartbeat verifies older operational
+// stores gain the heartbeat singleton during the normal migration path.
+func TestSchema40MigrationCreatesSupervisorHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), "DROP TABLE supervisor_heartbeat; UPDATE schema_metadata SET version = 39 WHERE singleton = 1"); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open() migration error = %v", err)
+	}
+	defer func() { _ = migrated.Close() }()
+	if got := migrated.SchemaVersion(); got != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
+	}
+	heartbeat, err := migrated.ReadSupervisorHeartbeat(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heartbeat != nil {
+		t.Fatalf("heartbeat = %#v, want empty after migration", heartbeat)
+	}
+}
+
+// TestSupervisorHeartbeatAllowsWallClockRollback verifies a host clock step
+// does not make a valid renewal unpersistable merely because it predates the
+// process start timestamp.
+func TestSupervisorHeartbeatAllowsWallClockRollback(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "data", "factory.db")
+	opened, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	startedAt := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
+	heartbeat := store.SupervisorHeartbeat{
+		Coordinator: "host-a",
+		PID:         1234,
+		StartedAt:   startedAt,
+		RenewedAt:   startedAt.Add(-3 * time.Second),
+		ExpiresAt:   startedAt.Add(5 * time.Minute),
+	}
+	if err := opened.SaveSupervisorHeartbeat(t.Context(), heartbeat); err != nil {
+		t.Fatalf("SaveSupervisorHeartbeat() error = %v, want clock rollback to be accepted", err)
+	}
+}
+
 func TestCurrentInvocationSchemaContainsNoTerminalProjection(t *testing.T) {
 	t.Parallel()
 

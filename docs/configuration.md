@@ -130,7 +130,13 @@ any non-terminal run exists. GitHub transport failures use the configured
 backoff and do not change workflow state or retry budgets. The coordinator
 publishes a renewable `factory/lease` Commit Status on the target branch; its
 description includes the coordinator, active run, heartbeat, and expiry so a
-stale owner remains diagnosable in GitHub. `factory stop` signals the locked
+stale owner remains diagnosable in GitHub. It also renews a host-local heartbeat
+in the operational store. `factory status` and `factory doctor` report that
+heartbeat as live, expired, or missing; live additionally requires the
+kernel-backed coordinator lock, so a clean stop or process death is visible
+immediately. When an active run has no live heartbeat, status names the
+supervisor as the reason progress is stalled.
+`factory stop` signals the locked
 coordinator and leaves any active run, branch, worktree, worker, and session
 artifacts in place. Polling never creates factory labels; use
 `factory bootstrap-labels` explicitly.
@@ -538,7 +544,7 @@ It refuses closed issues, issues without `agent-ready`, and a repository that al
 
 The coordinator then fetches `origin/<target_branch>`, records that fetched commit SHA, and creates the mutable run branch `factory/<run-id>` from that commit, plus a worktree at the sibling path `.factory-worktrees/<repository-name>/<run-id>`. The ordinary checkout is not checked out onto the run branch. The issue is changed to exactly one factory state label (`agent-running`) while preserving ordinary labels, and one editable status comment records the run identifier, branch, worktree, coordinator, start time, checkpoint, stage, and status. Later coordinator transitions edit that comment by its persisted comment identity; if persistence was interrupted after GitHub created it, the run marker recovers that existing comment rather than creating another. Stage and status remain separate values. The operational store rejects a second non-terminal run for the same repository through its uniqueness constraint. If a claim fails after creating its workspace, the coordinator removes the created run branch and worktree.
 
-The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
+The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the supervisor heartbeat and the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
 
 When no effect is pending, the lifecycle and supervisor entry points first
 observe a tracked issue or pull request, so an already-merged or closed target
@@ -659,13 +665,14 @@ both run headlessly inside the pinned worker and print only logical invocation
 and native session identities. The role receives a read-only invocation packet and reports through `factory-report`; use
 `factory agent-report --invocation-id <id>` to ask the coordinator to validate
 and accept the structured report. Native output is never treated as a stage
-result. The operational store schema is version 36 and persists invocation
+result. The operational store schema is version 40 and persists invocation
 identity, prompt version, result directory, native
 session identifier, and permitted handoff paths in addition to run state. It
 also persists the draft pull-request number and URL so a restarted command can
 update the existing pull request instead of creating another one. Terminal runs
 retain merge commit and lifecycle reason for status rendering and restart-safe
-GitHub projection retries.
+GitHub projection retries. The store also retains the host-local supervisor
+heartbeat used by `factory status` and `factory doctor`.
 
 ## Creating the draft pull request
 

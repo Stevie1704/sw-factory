@@ -115,12 +115,6 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		return err
 	}
 	defer func() { _ = lock.release() }()
-	s.seedCoordinatorStageFromStore(ctx, registration, stageTracker)
-	if err := s.reconcileRegisteredRun(ctx, registration); err != nil {
-		s.observeCoordinatorStageFromStore(ctx, registration, events)
-		return fmt.Errorf("reconcile persisted run at startup: %w", err)
-	}
-	s.observeCoordinatorStageFromStore(ctx, registration, events)
 
 	pollContext, cancel := context.WithCancel(ctx)
 	if !s.setPollCancel(cancel) {
@@ -129,10 +123,22 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	}
 	defer s.clearPollCancel()
 	defer cancel()
+	heartbeat, err := s.startSupervisorHeartbeat(pollContext, registration, interval, backoff)
+	if err != nil {
+		return err
+	}
+	defer heartbeat.stop()
+	s.seedCoordinatorStageFromStore(pollContext, registration, stageTracker)
+	if err := s.reconcileRegisteredRun(pollContext, registration); err != nil {
+		s.observeCoordinatorStageFromStore(pollContext, registration, events)
+		return fmt.Errorf("reconcile persisted run at startup: %w", err)
+	}
+	s.observeCoordinatorStageFromStore(pollContext, registration, events)
 
 	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	leaseRunID := ""
 	delay := time.Duration(0)
+	consecutiveHeartbeatFailures := 0
 	consecutiveLeaseFailures := 0
 	consecutiveQueueFailures := 0
 	consecutiveCommandFailures := 0
@@ -149,6 +155,19 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 				return nil
 			}
 			return err
+		}
+		if heartbeat != nil {
+			if err := heartbeat.heartbeatError(); err != nil {
+				consecutiveHeartbeatFailures++
+				s.emitCoordinatorEvent(events, CoordinatorEvent{
+					Kind:      EventRetry,
+					Operation: "supervisor heartbeat",
+					Attempt:   consecutiveHeartbeatFailures,
+					Reason:    "supervisor heartbeat renewal failed",
+				})
+			} else {
+				consecutiveHeartbeatFailures = 0
+			}
 		}
 		now := s.deps.Now().UTC()
 		if err := s.deps.Lease.RenewLease(pollContext, repository, github.Lease{

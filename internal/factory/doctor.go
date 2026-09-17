@@ -73,6 +73,14 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		AllRolesHeadless:      allRolesHeadless,
 	})...)
 	checks = append(checks, store.StartupCheck(registration.OperationalDataPath))
+	checks = append(checks, store.SupervisorStartupCheckWithLock(
+		registration.OperationalDataPath,
+		s.deps.Now().UTC(),
+		func() bool {
+			held, err := coordinatorLockHeld(coordinatorLockPath(registration))
+			return err == nil && held
+		},
+	))
 
 	return DoctorResult{Report: doctor.Run(ctx, checks...)}, nil
 }

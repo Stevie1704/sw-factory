@@ -92,6 +92,9 @@ base_synchronization:
 	if !strings.Contains(output.String(), "active run: none") {
 		t.Fatalf("status output = %q", output.String())
 	}
+	if !strings.Contains(output.String(), "supervisor: not live (no heartbeat recorded)") {
+		t.Fatalf("status output = %q, want missing supervisor heartbeat diagnosis", output.String())
+	}
 }
 
 // TestRunStartVerboseFlagKeepsCommandOutputSeparate verifies the start flag
@@ -650,6 +653,9 @@ func TestRunStatusDistinguishesAnActiveInvocationFromAnActiveRun(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "activity=run-active") || strings.Contains(output.String(), "active invocation:") {
 		t.Fatalf("status output = %q, want run-active without an invocation identity", output.String())
+	}
+	if !strings.Contains(output.String(), "supervisor warning: active run run-cli-activity has no live supervisor") {
+		t.Fatalf("status output = %q, want active-run supervisor warning", output.String())
 	}
 
 	run.ActiveInvocationIDs = []string{"inv-cli-activity"}
