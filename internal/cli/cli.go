@@ -649,6 +649,9 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 			return 1
 		}
 	}
+	if !writeSupervisorStatus(output, errorsOutput, result) {
+		return 1
+	}
 	if result.LatestRun == nil {
 		if !writeOutput(output, errorsOutput, "active run: none\n") {
 			return 1
@@ -677,6 +680,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 			}
 		}
 	}
+	if result.LatestRun != nil && !store.IsTerminalStatus(result.LatestRun.Status) && !result.SupervisorLive {
+		if !writeOutput(output, errorsOutput, "supervisor warning: active run %s has no live supervisor; run factory start\n", result.LatestRun.ID) {
+			return 1
+		}
+	}
 	if result.Recovery != nil {
 		agreement := "disagree"
 		if result.Recovery.SourcesAgree {
@@ -702,6 +710,22 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		}
 	}
 	return 0
+}
+
+// writeSupervisorStatus renders the local heartbeat and makes an absent or
+// expired supervisor distinguishable from an ordinary paused run.
+func writeSupervisorStatus(output, errorsOutput io.Writer, result factory.StatusResult) bool {
+	if result.RepositoryPath == "" {
+		return writeOutput(output, errorsOutput, "supervisor: not configured\n")
+	}
+	heartbeat := result.SupervisorHeartbeat
+	if heartbeat == nil {
+		return writeOutput(output, errorsOutput, "supervisor: not live (no heartbeat recorded)\n")
+	}
+	if result.SupervisorLive {
+		return writeOutput(output, errorsOutput, "supervisor: live (coordinator=%s pid=%d renewed=%s expires=%s)\n", heartbeat.Coordinator, heartbeat.PID, heartbeat.RenewedAt.UTC().Format(time.RFC3339), heartbeat.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	return writeOutput(output, errorsOutput, "supervisor: not live (coordinator=%s pid=%d renewed=%s expired=%s)\n", heartbeat.Coordinator, heartbeat.PID, heartbeat.RenewedAt.UTC().Format(time.RFC3339), heartbeat.ExpiresAt.UTC().Format(time.RFC3339))
 }
 
 // runReconcile executes one restart reconciliation or explicitly abandons the

@@ -136,6 +136,35 @@ func TestStartPollsThenStopsWithoutCancellingTheActiveRun(t *testing.T) {
 	}
 }
 
+// TestStartWritesASupervisorHeartbeat verifies the running coordinator leaves
+// a durable liveness record before its first queue observation.
+func TestStartWritesASupervisorHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runStore := &pollingHeartbeatRunStore{fakeRunStore: &fakeRunStore{}}
+	var cancel context.CancelFunc
+	lease := &pollingLease{onRenew: func(github.Lease) {
+		if cancel != nil {
+			cancel()
+		}
+	}}
+	service := newPollingService(root, &fakeGitHub{}, &pollingIssueReader{}, lease, runStore, &fakeWorktree{}, nil)
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if len(runStore.heartbeats) == 0 {
+		t.Fatal("Start() wrote no supervisor heartbeat")
+	}
+	heartbeat := runStore.heartbeats[0]
+	if heartbeat.Coordinator != "coordinator-test" || heartbeat.PID <= 0 || !heartbeat.ExpiresAt.After(heartbeat.RenewedAt) {
+		t.Fatalf("heartbeat = %#v, want coordinator, PID, and expiry", heartbeat)
+	}
+}
+
 // TestStartUsesTransportBackoffWithoutChangingRunState verifies a GitHub
 // listing failure delays the next poll and consumes no run or repair budget.
 func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
@@ -597,9 +626,23 @@ func (f *pollingLease) RenewLease(_ context.Context, _ github.Repository, lease 
 	return nil
 }
 
+// pollingHeartbeatRunStore adds the optional heartbeat projection to the
+// regular polling store fixture without changing tests that exercise legacy
+// store seams.
+type pollingHeartbeatRunStore struct {
+	*fakeRunStore
+	heartbeats []store.SupervisorHeartbeat
+}
+
+// SaveSupervisorHeartbeat records coordinator liveness for polling assertions.
+func (s *pollingHeartbeatRunStore) SaveSupervisorHeartbeat(_ context.Context, heartbeat store.SupervisorHeartbeat) error {
+	s.heartbeats = append(s.heartbeats, heartbeat)
+	return nil
+}
+
 // newPollingService constructs a service with real queue/claim behavior and
 // isolated fakes for the external polling and lease adapters.
-func newPollingService(root string, githubAdapter github.Client, issuePoller github.IssuePoller, lease github.LeaseClient, runStore *fakeRunStore, worktree gitadapter.WorktreeManager, comments github.CommentReader) *factory.Service {
+func newPollingService(root string, githubAdapter github.Client, issuePoller github.IssuePoller, lease github.LeaseClient, runStore factory.OperationalStore, worktree gitadapter.WorktreeManager, comments github.CommentReader) *factory.Service {
 	registration := config.RepositoryRegistration{
 		Path:                 filepath.Join(root, "repository"),
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},

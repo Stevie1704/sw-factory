@@ -120,6 +120,18 @@ type LatestRunStore interface {
 	LatestRun(context.Context) (*store.Run, error)
 }
 
+// SupervisorHeartbeatReader reads the host-local coordinator liveness
+// projection used by status and doctor surfaces.
+type SupervisorHeartbeatReader interface {
+	ReadSupervisorHeartbeat(context.Context) (*store.SupervisorHeartbeat, error)
+}
+
+// SupervisorHeartbeatWriter persists the host-local coordinator liveness
+// projection while the polling supervisor is running.
+type SupervisorHeartbeatWriter interface {
+	SaveSupervisorHeartbeat(context.Context, store.SupervisorHeartbeat) error
+}
+
 // StoreOpener opens the host-local operational store.
 type StoreOpener func(context.Context, string) (OperationalStore, error)
 
@@ -271,6 +283,11 @@ type StatusResult struct {
 	ConfigPath     string
 	RepositoryPath string
 	LatestRun      *store.Run
+	// SupervisorHeartbeat is the latest local coordinator liveness projection,
+	// including an expired record when the last supervisor stopped renewing.
+	SupervisorHeartbeat *store.SupervisorHeartbeat
+	// SupervisorLive reports whether SupervisorHeartbeat is currently unexpired.
+	SupervisorLive bool
 	// TestPolicyMode identifies the frozen TDD ownership mode of LatestRun.
 	TestPolicyMode config.TestMode
 	// Route identifies the frozen contract-first workflow route of LatestRun,
@@ -568,6 +585,15 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 		return StatusResult{}, err
 	}
 	defer func() { _ = opened.Close() }()
+	if heartbeatStore, ok := opened.(SupervisorHeartbeatReader); ok {
+		result.SupervisorHeartbeat, err = heartbeatStore.ReadSupervisorHeartbeat(ctx)
+		if err != nil {
+			return StatusResult{}, fmt.Errorf("read supervisor heartbeat for status: %w", err)
+		}
+		if result.SupervisorHeartbeat != nil {
+			result.SupervisorLive = result.SupervisorHeartbeat.Live(s.deps.Now().UTC())
+		}
+	}
 	if latestStore, ok := opened.(LatestRunStore); ok {
 		result.LatestRun, err = latestStore.LatestRun(ctx)
 	} else {
