@@ -825,11 +825,8 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 		if path == "" {
 			continue
 		}
-		if strings.ContainsAny(path, "\x00\r\n") {
-			return validation(field, "must not contain control characters")
-		}
-		if !filepath.IsAbs(path) {
-			return validation(field, "must be absolute when set")
+		if err := validateAbsolutePath(field, path); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(repository.RepositoryConfigPath) == "" {
@@ -848,11 +845,8 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 func validateRegistrationCaches(prefix string, repository RepositoryRegistration) error {
 	root := strings.TrimSpace(repository.CacheRoot)
 	if root != "" {
-		if strings.ContainsAny(root, "\x00\r\n") {
-			return validation(prefix+".cache_root", "must not contain control characters")
-		}
-		if !filepath.IsAbs(root) {
-			return validation(prefix+".cache_root", "must be absolute")
+		if err := validateAbsolutePath(prefix+".cache_root", root); err != nil {
+			return err
 		}
 	}
 	if len(repository.Caches) == 0 {
@@ -872,15 +866,24 @@ func validateRegistrationCaches(prefix string, repository RepositoryRegistration
 		}
 		field := prefix + ".caches." + name
 		path := repository.Caches[name]
-		if strings.ContainsAny(path, "\x00\r\n") {
-			return validation(field, "must not contain control characters")
-		}
-		if !filepath.IsAbs(path) {
-			return validation(field, "must be absolute")
+		if err := validateAbsolutePath(field, path); err != nil {
+			return err
 		}
 		if !lexicalPathWithin(root, path) {
 			return validation(field, "must be inside cache_root")
 		}
+	}
+	return nil
+}
+
+// validateAbsolutePath validates one host path that a registration persists. It
+// reports a typed field error for control characters and for a relative path.
+func validateAbsolutePath(field, path string) error {
+	if strings.ContainsAny(path, "\x00\r\n") {
+		return validation(field, "must not contain control characters")
+	}
+	if !filepath.IsAbs(path) {
+		return validation(field, "must be absolute")
 	}
 	return nil
 }

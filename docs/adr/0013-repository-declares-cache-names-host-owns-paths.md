@@ -4,7 +4,7 @@ status: accepted
 
 # Repository configuration declares cache names; host configuration owns cache paths
 
-A cache host path in checked-in `factory.yaml` let a repository commit point a writable bind mount at any host directory and made the file unusable by a second operator. Repository configuration therefore declares only the cache name and its container-side purpose, and the host registration maps each declared name to a directory that must resolve inside the operator's `cache_root`. A declared cache with no host mapping, a host mapping no repository cache claims, and a mapped directory outside the cache root are all blocking startup findings; worker launch, gates, and check repair fail closed on the same disagreement rather than defaulting a path.
+A cache host path in checked-in `factory.yaml` let a repository commit point a writable bind mount at any host directory and made the file unusable by a second operator. Repository configuration therefore declares only the cache name and its container-side purpose, and the host registration maps each declared name to a directory that must resolve inside the operator's `cache_root`. Host configuration refuses a mapped directory outside the cache root when it loads. Startup diagnosis also blocks a declared cache with no host mapping, and a host mapping that no repository cache claims. Worker launch, gates, and check repair fail closed on an unmapped name. No layer defaults a path.
 
 ## Considered options
 
