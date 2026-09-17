@@ -247,11 +247,11 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 				continue
 			}
 			consecutiveCommandFailures = 0
-			// Every remaining command failure, from a rejected comment to an
-			// unreadable command store, leaves the run untouched and is
-			// retried by the next pass over the same comments. None of them
-			// may stop an unattended coordinator, so the queue observation
-			// below still runs.
+			// Every remaining command failure is either a durable command
+			// outcome whose watermark prevents replay, or a store/transport
+			// failure that may be retried by the next pass over the comments.
+			// Neither may stop an unattended coordinator, so the queue
+			// observation below still runs.
 		}
 		s.observeCoordinatorStageFromStore(pollContext, registration, events)
 		if commandErr == nil {

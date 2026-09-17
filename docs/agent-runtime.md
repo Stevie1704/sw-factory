@@ -91,8 +91,12 @@ coordinator pauses the run. Repair depends on where the credential came from.
 so a repository relying on volume-persisted credentials has to register one, or
 reseed the role volume, before an unattended headless run can recover — a
 headless run cannot complete an interactive login for itself. The explicit
-`--resume` option performs that projection and continues the affected native
-session in one operation; without it, auth refresh remains credential-only.
+`--resume` option reconciles the same pending effect and review state as
+`factory resume`, then performs that projection and continues the affected
+native session in one operation; without it, auth refresh remains
+credential-only. The credential projection is completed before the
+`--resume` resumability checks, so an invalid native-session precondition still
+refreshes credentials and reports that continuation was not attempted.
 
 An SDK or API-key integration would instead authenticate with
 `ANTHROPIC_API_KEY`. The factory does not support that today, and the difference

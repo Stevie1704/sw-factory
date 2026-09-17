@@ -39,9 +39,11 @@ type AuthRefreshRequest struct {
 	Resume bool
 }
 
-// AuthRefreshResult reports the credential store identity after a refresh.
+// AuthRefreshResult reports the credential projection and optional native
+// continuation after an auth refresh.
 type AuthRefreshResult struct {
-	// Run is unchanged workflow state after credential refresh.
+	// Run is the resulting workflow projection after credential refresh and any
+	// explicitly requested native-session continuation.
 	Run store.Run
 	// Invocation is the invocation whose worker credential store was reseeded.
 	Invocation store.Invocation

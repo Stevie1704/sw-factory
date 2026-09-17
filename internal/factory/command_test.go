@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -140,7 +142,7 @@ func TestHandleCommandResumesARecoverablePausedRun(t *testing.T) {
 	}
 	run := *runStore.current
 	run.Status = store.StatusWaitingForHuman
-	run.LifecycleReason = "automatic harness recovery exhausted (codex); manual native resume required"
+	run.LifecycleReason = factory.LifecycleReasonAutomaticHarnessRecoveryExhausted + " (codex); manual native resume required"
 	if err := runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("SaveRun() pause setup error = %v", err)
 	}
@@ -172,6 +174,58 @@ func TestHandleCommandResumesARecoverablePausedRun(t *testing.T) {
 	}
 	if replayed.Outcome != factory.CommandReplayed || len(headlessWorker.headlessStarts) != 2 {
 		t.Fatalf("replayed result = %#v, launches = %#v, want no second lifecycle effect", replayed, headlessWorker.headlessStarts)
+	}
+}
+
+// TestHandleCommandRecordsFailedResumeCauseAndWatermark verifies an attempted
+// native continuation is not replayed, while its classified failure remains
+// visible in the supervision projection.
+func TestHandleCommandRecordsFailedResumeCauseAndWatermark(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{
+		agentWorker: runtime,
+		resumeErr:   harness.NewAuthenticationExpiredError("codex"),
+	}
+	service := newDispatchingAgentService(t, runStore, headlessWorker, validRepositoryConfig(), config.AuthenticationConfig{CodexAuthPath: filepath.Join(t.TempDir(), "auth.json")})
+	_, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+	paused := *runStore.current
+	paused.Status = store.StatusWaitingForHuman
+	paused.LifecycleReason = factory.LifecycleReasonHarnessAuthenticationExpired + " (codex); waiting for auth"
+	if err := runStore.SaveRun(context.Background(), paused); err != nil {
+		t.Fatalf("SaveRun() pause setup error = %v", err)
+	}
+
+	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: runStore.current.IssueNumber,
+		Comment:     github.Comment{ID: "resume-failed-1", Author: "alice", Body: "/factory resume"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "authentication") {
+		t.Fatalf("HandleCommand() error = %v, want classified authentication failure", err)
+	}
+	if result.Outcome != factory.CommandAccepted || result.Run.ProcessedCommentID != "resume-failed-1" {
+		t.Fatalf("result = %#v, want accepted attempted-resume watermark", result)
+	}
+	if !strings.Contains(result.Run.LastCommandMessage, "authentication") {
+		t.Fatalf("last command message = %q, want classified cause", result.Run.LastCommandMessage)
+	}
+	if !strings.Contains(runStore.github.statusComment.Body, "harness authentication is still expired") {
+		t.Fatalf("status comment = %q, want failed-resume cause", runStore.github.statusComment.Body)
+	}
+
+	replayed, replayErr := service.HandleCommand(context.Background(), factory.CommandRequest{
+		IssueNumber: runStore.current.IssueNumber,
+		Comment:     github.Comment{ID: "resume-failed-1", Author: "alice", Body: "/factory resume"},
+	})
+	if replayErr != nil {
+		t.Fatalf("replayed HandleCommand() error = %v", replayErr)
+	}
+	if replayed.Outcome != factory.CommandReplayed || len(headlessWorker.headlessStarts) != 2 {
+		t.Fatalf("replayed result = %#v, launches = %#v, want no second native attempt", replayed, headlessWorker.headlessStarts)
 	}
 }
 

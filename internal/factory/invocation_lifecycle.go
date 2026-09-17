@@ -218,30 +218,9 @@ func (l *invocationLifecycle) Resume(ctx context.Context, request InvocationReco
 	if store.IsTerminalStatus(run.Status) {
 		return ResumeResult{}, fmt.Errorf("cannot resume terminal run %q with status %q", run.ID, run.Status)
 	}
-	reconciled := false
-	if pending, journaled := request.RunStore.(PendingEffectStore); journaled {
-		effect, err := pending.PendingEffect(ctx, run.ID)
-		if err != nil {
-			return ResumeResult{}, fmt.Errorf("inspect pending effect before resume: %w", err)
-		}
-		if effect != nil {
-			if l.hooks.reconcileInterrupted == nil {
-				return ResumeResult{}, errors.New("interrupted-run reconciliation hook is required")
-			}
-			updated, _, _, reconcileErr := l.hooks.reconcileInterrupted(ctx, request.Registration, request.RunStore, run, false)
-			run = updated
-			if reconcileErr != nil {
-				return ResumeResult{Run: run}, reconcileErr
-			}
-			reconciled = true
-		}
-	}
-	if run.Stage == store.StageReview && !reconciled && l.hooks.reconcileInterrupted != nil {
-		updated, _, _, reconcileErr := l.hooks.reconcileInterrupted(ctx, request.Registration, request.RunStore, run, false)
-		run = updated
-		if reconcileErr != nil {
-			return ResumeResult{Run: run}, reconcileErr
-		}
+	run, _, err := l.reconcileBeforeResume(ctx, request, run)
+	if err != nil {
+		return ResumeResult{Run: run}, err
 	}
 	activeStore, ok := request.RunStore.(ActiveInvocationStore)
 	if !ok {
@@ -255,6 +234,38 @@ func (l *invocationLifecycle) Resume(ctx context.Context, request InvocationReco
 		return l.resumeActiveInvocation(ctx, request, run, *active)
 	}
 	return l.resumeWithoutActiveInvocation(ctx, request, run)
+}
+
+// reconcileBeforeResume drains the same durable interruption state for every
+// explicit continuation path, including auth refresh with --resume.
+func (l *invocationLifecycle) reconcileBeforeResume(ctx context.Context, request InvocationRecoveryRequest, run store.Run) (store.Run, bool, error) {
+	reconciled := false
+	if pending, journaled := request.RunStore.(PendingEffectStore); journaled {
+		effect, err := pending.PendingEffect(ctx, run.ID)
+		if err != nil {
+			return run, false, fmt.Errorf("inspect pending effect before resume: %w", err)
+		}
+		if effect != nil {
+			if l.hooks.reconcileInterrupted == nil {
+				return run, false, errors.New("interrupted-run reconciliation hook is required")
+			}
+			updated, _, _, reconcileErr := l.hooks.reconcileInterrupted(ctx, request.Registration, request.RunStore, run, false)
+			run = updated
+			if reconcileErr != nil {
+				return run, false, reconcileErr
+			}
+			reconciled = true
+		}
+	}
+	if run.Stage == store.StageReview && !reconciled && l.hooks.reconcileInterrupted != nil {
+		updated, _, _, reconcileErr := l.hooks.reconcileInterrupted(ctx, request.Registration, request.RunStore, run, false)
+		run = updated
+		if reconcileErr != nil {
+			return run, false, reconcileErr
+		}
+		reconciled = true
+	}
+	return run, reconciled, nil
 }
 
 // resumeWithoutActiveInvocation either re-enters a coordinator-owned check
@@ -408,6 +419,14 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 	if store.IsTerminalStatus(run.Status) {
 		return AuthRefreshResult{}, fmt.Errorf("cannot refresh auth for terminal run %q", run.ID)
 	}
+	if resume {
+		var reconcileErr error
+		run, _, reconcileErr = l.reconcileBeforeResume(ctx, request, run)
+		if reconcileErr != nil {
+			return AuthRefreshResult{Run: run}, reconcileErr
+		}
+		request.Run = &run
+	}
 	invocationStore, ok := request.RunStore.(InvocationStore)
 	if !ok {
 		return AuthRefreshResult{}, errors.New("operational store does not support invocation auth refresh")
@@ -430,27 +449,6 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 	if seed == nil || strings.TrimSpace(credentialStoreID) == "" {
 		return AuthRefreshResult{}, fmt.Errorf("no factory-managed %s credential source is registered; configure it with `factory register --update --%s-auth <path>` and retry `factory auth refresh`", harnessName, harnessName)
 	}
-	if resume {
-		if invocation.Status != store.InvocationStatusActive {
-			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, fmt.Errorf("auth refresh --resume requires an active invocation, not status %q", invocation.Status)
-		}
-		if strings.TrimSpace(invocation.NativeSessionID) == "" {
-			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, errors.New("auth refresh --resume requires a persisted native session identifier")
-		}
-		if err := l.validateActiveInvocationForResume(ctx, request, run, *invocation); err != nil {
-			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, err
-		}
-		updatedInvocation, resumeErr := l.resumePersistedInvocationManually(ctx, request.Registration, request.RunStore, run, *invocation)
-		if resumeErr != nil {
-			resumed := AuthRefreshResult{Run: run, Invocation: updatedInvocation, Harness: harnessName}
-			resumeResult, handledErr := l.resumeActiveInvocationError(ctx, request, run, *invocation, updatedInvocation, resumeErr)
-			resumed.Run = resumeResult.Run
-			resumed.Invocation = resumeResult.Invocation
-			return resumed, handledErr
-		}
-		resumedRun, stateErr := l.persistManualResumeState(ctx, request, run)
-		return AuthRefreshResult{Run: resumedRun, Invocation: updatedInvocation, Harness: harnessName, Resumed: stateErr == nil}, stateErr
-	}
 	if invocation.CredentialStoreID == "" {
 		invocation.CredentialStoreID = credentialStoreID
 		invocation.UpdatedAt = l.clock().UTC()
@@ -470,6 +468,29 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 			return AuthRefreshResult{Run: paused, Invocation: *invocation, Harness: harnessName}, errors.Join(projectionErr, pauseErr)
 		}
 		return AuthRefreshResult{}, projectionErr
+	}
+	if resume {
+		if invocation.Status != store.InvocationStatusActive {
+			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, fmt.Errorf("authentication refreshed; auth refresh --resume requires an active invocation, not status %q", invocation.Status)
+		}
+		if strings.TrimSpace(invocation.NativeSessionID) == "" {
+			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, errors.New("authentication refreshed; auth refresh --resume requires a persisted native session identifier")
+		}
+		if err := l.validateActiveInvocationForResume(ctx, request, run, *invocation); err != nil {
+			return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, fmt.Errorf("authentication refreshed; auth refresh --resume validation failed: %w", err)
+		}
+		updatedInvocation, resumeErr := l.resumePersistedInvocationManuallyAfterAuthRefresh(ctx, request.Registration, request.RunStore, run, *invocation)
+		if resumeErr != nil {
+			resumed := AuthRefreshResult{Run: run, Invocation: updatedInvocation, Harness: harnessName}
+			resumeResult, handledErr := l.resumeActiveInvocationError(ctx, request, run, *invocation, updatedInvocation, resumeErr)
+			resumed.Run = resumeResult.Run
+			resumed.Invocation = resumeResult.Invocation
+			return resumed, handledErr
+		}
+		resumedRun, stateErr := l.persistManualResumeState(ctx, request, run)
+		// Resumed describes the native boundary, which has already succeeded;
+		// stateErr is returned separately if publishing the run projection fails.
+		return AuthRefreshResult{Run: resumedRun, Invocation: updatedInvocation, Harness: harnessName, Resumed: true}, stateErr
 	}
 	return AuthRefreshResult{Run: run, Invocation: *invocation, Harness: harnessName}, nil
 }
@@ -1469,6 +1490,14 @@ func (l *invocationLifecycle) ensureWorkerForInvocation(ctx context.Context, reg
 // resumePersistedInvocationWithMode restores one active invocation through the
 // automatic recovery boundary or the explicit operator resume boundary.
 func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation, automatic bool) (store.Invocation, error) {
+	return l.resumePersistedInvocationWithOptions(ctx, registration, runStore, run, invocation, automatic, true)
+}
+
+// resumePersistedInvocationWithOptions performs one native continuation and
+// optionally restores the credential projection immediately before launch.
+// Explicit auth refresh already completed that projection, so it can disable
+// the second restore while retaining the same native-session effect.
+func (l *invocationLifecycle) resumePersistedInvocationWithOptions(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation, automatic, restoreCredentials bool) (store.Invocation, error) {
 	if automatic && invocation.RecoveryResumeCount > 0 {
 		return invocation, nil
 	}
@@ -1509,8 +1538,10 @@ func (l *invocationLifecycle) resumePersistedInvocationWithMode(ctx context.Cont
 	if err != nil {
 		return invocation, err
 	}
-	if err := l.restoreCredentialProjection(ctx, registration, run, invocation); err != nil {
-		return invocation, err
+	if restoreCredentials {
+		if err := l.restoreCredentialProjection(ctx, registration, run, invocation); err != nil {
+			return invocation, err
+		}
 	}
 	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), ReviewRoundID: invocation.ReviewRoundID, ReviewUnitID: invocation.ReviewUnitID, Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
 	if automatic {
@@ -1533,6 +1564,12 @@ func (l *invocationLifecycle) resumePersistedInvocation(ctx context.Context, reg
 // resumePersistedInvocationManually performs an explicit native resume.
 func (l *invocationLifecycle) resumePersistedInvocationManually(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (store.Invocation, error) {
 	return l.resumePersistedInvocationWithMode(ctx, registration, runStore, run, invocation, false)
+}
+
+// resumePersistedInvocationManuallyAfterAuthRefresh continues a native session
+// after RefreshAuth has already projected the newly refreshed credentials.
+func (l *invocationLifecycle) resumePersistedInvocationManuallyAfterAuthRefresh(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (store.Invocation, error) {
+	return l.resumePersistedInvocationWithOptions(ctx, registration, runStore, run, invocation, false, false)
 }
 
 // stopRunWorker keeps worker shutdown idempotent at the lifecycle seam.
@@ -1586,13 +1623,13 @@ func (l *invocationLifecycle) pauseForHarnessCapacity(ctx context.Context, regis
 	if strings.TrimSpace(harnessName) == "" {
 		harnessName = "harness"
 	}
-	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHarness, "harness capacity unavailable", fmt.Sprintf("harness capacity unavailable (%s); waiting for capacity", harnessName))
+	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHarness, LifecycleReasonHarnessCapacityUnavailable, fmt.Sprintf("%s (%s); waiting for capacity", LifecycleReasonHarnessCapacityUnavailable, harnessName))
 }
 
 // pauseForAuthentication stops delegated workers and records a redacted
 // human-waiting credential state.
 func (l *invocationLifecycle) pauseForAuthentication(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, "harness authentication expired", fmt.Sprintf("harness authentication expired (%s); run is waiting for `factory auth refresh`", harnessName))
+	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, LifecycleReasonHarnessAuthenticationExpired, fmt.Sprintf("%s (%s); run is waiting for `factory auth refresh`", LifecycleReasonHarnessAuthenticationExpired, harnessName))
 }
 
 // captureLimitRecoveryPrefix identifies the durable reason for the dedicated
@@ -1615,7 +1652,7 @@ func (l *invocationLifecycle) pauseForCaptureLimit(ctx context.Context, registra
 // pauseForManualRecovery records the bounded automatic-recovery boundary and
 // leaves the native session for an explicit operator-requested resume.
 func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
-	next, changed, err := l.prepareRunPause(ctx, runStore, run, store.StatusWaitingForHuman, "automatic harness recovery exhausted", fmt.Sprintf("automatic harness recovery exhausted (%s); manual native resume required", harnessName))
+	next, changed, err := l.prepareRunPause(ctx, runStore, run, store.StatusWaitingForHuman, LifecycleReasonAutomaticHarnessRecoveryExhausted, fmt.Sprintf("%s (%s); manual native resume required", LifecycleReasonAutomaticHarnessRecoveryExhausted, harnessName))
 	if err != nil {
 		return run, err
 	}

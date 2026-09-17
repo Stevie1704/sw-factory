@@ -20,6 +20,13 @@ import (
 // commandHandler runs one validated CLI command.
 type commandHandler func(context.Context, []string, string, io.Writer, io.Writer) int
 
+// authRefreshForCLI is the coordinator seam used by the auth command. Keeping
+// the flag and output handling independent from factory construction lets the
+// CLI contract be tested without requiring a live GitHub or worker runtime.
+var authRefreshForCLI = func(ctx context.Context, configPath string, request factory.AuthRefreshRequest) (factory.AuthRefreshResult, error) {
+	return factory.New(configPath).RefreshAuth(ctx, request)
+}
+
 // commandDefinition associates a user-facing command name with its handler.
 type commandDefinition struct {
 	name    string
@@ -290,7 +297,7 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 		writeError(errorsOutput, errors.New("auth refresh does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).RefreshAuth(ctx, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName), Resume: *resume})
+	result, err := authRefreshForCLI(ctx, *configPath, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName), Resume: *resume})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1

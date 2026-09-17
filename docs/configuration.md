@@ -626,7 +626,9 @@ For an expired credential, refresh the host source first with
 credential projection with one explicit native-session continuation; the
 default command remains credential-only. The equivalent GitHub sequence is the
 same host refresh followed by `/factory resume`, delivered by the live polling
-supervisor.
+supervisor. The `--resume` path reconciles pending effects before continuing,
+and it reports a refresh success separately from a failed native-session
+precondition so adding the flag does not discard the credential refresh.
 
 Each comment is processed at most once. The operational store persists a
 monotonic run revision, the processed comment ID watermark, and the revision at

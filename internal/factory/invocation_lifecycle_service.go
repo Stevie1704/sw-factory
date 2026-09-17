@@ -123,7 +123,7 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 		}
 	}
 	result, refreshErr := s.lifecycleModule().refreshAuth(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run}, request.Harness, request.Resume)
-	if refreshErr == nil && result.Resumed && result.Invocation.ID != "" {
+	if request.Resume && result.Resumed && result.Invocation.ID != "" {
 		s.markInvocationStarted(result.Invocation.ID)
 	}
 	return result, refreshErr
