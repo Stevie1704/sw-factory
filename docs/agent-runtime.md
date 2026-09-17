@@ -524,6 +524,17 @@ the full gate suite runs again; no prior checkpoint result authorizes it. Gate
 counts, repair attempts, stage durations, budget exhaustion, and available
 usage metadata remain in the local content-free evaluation summary.
 
+A run that parks builds no repair packet, so the coordinator writes the failed
+suite to `.factory-agents/<run>/gate-failure/<phase>.log` beside the run's
+invocation directories. The file records the exact checkpoint, the setup
+observation, and every gate that did not pass, with command output bounded by
+the same policy the repair packet uses. It stays on the coordinator host. The
+lifecycle reason of a parked run appends one bounded sanitized line naming the
+failed setup or gate command and what it printed, after the unchanged category
+prefix, so the status comment and `factory status` name the blocker instead of
+its category. An unhealthy baseline records the same artifact and reason under
+the `baseline` phase.
+
 ## Capture limit
 
 The worker runtime buffers at most 8 MiB of standard output and 8 MiB of

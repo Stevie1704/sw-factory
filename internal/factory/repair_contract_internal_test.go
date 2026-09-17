@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -175,4 +177,46 @@ func (w *repairContractWorker) Stop(context.Context, string) error { w.stops++; 
 // Inspect reports the fixture worker present.
 func (*repairContractWorker) Inspect(context.Context, string) (worker.Inspection, error) {
 	return worker.Inspection{Exists: true}, nil
+}
+
+// TestRouteCheckRepairNamesTheDeterministicCauseWhenParking verifies a parked
+// run reports what setup printed and retains the full output on disk. A setup
+// failure takes the infrastructure wait branch, which built no repair packet
+// and left "check repair waiting for infrastructure" as the only evidence.
+func TestRouteCheckRepairNamesTheDeterministicCauseWhenParking(t *testing.T) {
+	const checkpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	setup := worker.CommandResult{ExitCode: 1, Stderr: "error: Failed to create virtual environment\n  Caused by: A virtual environment already exists at '.venv'. Use '--clear' to replace it"}
+	run := store.Run{
+		ID:                "run-repair-cause",
+		Stage:             store.StageCheck,
+		Status:            store.StatusActive,
+		CheckpointSHA:     checkpoint,
+		CheckRepairBudget: 3,
+		Worktree:          filepath.Join(t.TempDir(), "worktrees", "run-repair-cause"),
+	}
+	results := []gate.Result{{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: setup, Status: github.CommitStatus{State: github.CommitStatusError}}}
+	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: setup}}}
+	runStore := &repairContractStore{}
+	service := &Service{deps: Dependencies{Worker: &repairContractWorker{}, Now: func() time.Time { return time.Date(2026, 9, 17, 9, 30, 0, 0, time.UTC) }}}
+	packet := SpecificationPacket{RepositoryConfig: config.RepositoryConfig{RetryLimits: config.RetryLimits{CheckRepair: 3}}}
+
+	result, err := service.routeCheckRepair(t.Context(), config.RepositoryRegistration{}, runStore, run, packet, results, suiteErr)
+	if err != nil {
+		t.Fatalf("routeCheckRepair() error = %v", err)
+	}
+
+	if result.Outcome != CheckRepairWaitingForHarness {
+		t.Fatalf("outcome = %q, want the infrastructure wait outcome", result.Outcome)
+	}
+	if !strings.HasPrefix(result.Run.LifecycleReason, "check repair waiting for infrastructure: ") || !strings.Contains(result.Run.LifecycleReason, "--clear") {
+		t.Fatalf("lifecycle reason = %q, want the category followed by the setup cause", result.Run.LifecycleReason)
+	}
+	diagnostic := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID, gateFailureDiagnosticDirectoryName, "checkpoint.log")
+	body, readErr := os.ReadFile(diagnostic)
+	if readErr != nil {
+		t.Fatalf("read parked diagnostic: %v", readErr)
+	}
+	if !strings.Contains(string(body), "Failed to create virtual environment") {
+		t.Fatalf("diagnostic body = %q, want the complete setup output", body)
+	}
 }
