@@ -91,7 +91,7 @@ A repository-declared deterministic command whose result is tied to an exact che
 _Avoid_: Agent check, review
 
 **Worker**:
-The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, explicitly declared repository caches, and factory-managed credential copies.
+The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, the host directories of explicitly declared repository caches, and factory-managed credential copies.
 _Avoid_: Container in workflow decisions
 
 **Headless process seam**:
@@ -269,12 +269,20 @@ _Avoid_: Production readiness, tracer bullet
 **Host configuration**:
 Host-local schema-version-2 YAML that registers the one repository, its GitHub
 identity, authorized users, polling, credential sources, checked-in repository
-configuration path, and external operational-data location.
+configuration path, external operational-data location, and the cache root with
+the host directory of every repository cache.
 _Avoid_: Repository policy
 
 **Repository configuration**:
-Checked-in `factory.yaml` that declares the repository's target branch, setup, deterministic gates, harness and model policy for factory-declared roles, optional repository role-craft file selections, budgets, worker build, and base synchronization. It cannot declare roles, prompts, stages, or transitions, and role craft cannot replace embedded authority.
+Checked-in `factory.yaml` that declares the repository's target branch, setup, deterministic gates, harness and model policy for factory-declared roles, optional repository role-craft file selections, budgets, repository cache names, worker build, and base synchronization. It cannot declare roles, prompts, stages, or transitions, it cannot name a host path, and role craft cannot replace embedded authority.
 _Avoid_: Host configuration
+
+**Repository cache**:
+One named directory the worker reuses between runs. Repository configuration
+owns the name and the container-side purpose; host configuration owns the host
+directory, which must resolve inside the operator's cache root. A cache that
+one side declares and the other does not map is a startup diagnosis failure.
+_Avoid_: Repository-declared cache path, default cache location
 
 **Operational store**:
 The versioned, host-local SQLite store for current run state. Its current-state
