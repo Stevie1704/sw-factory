@@ -47,9 +47,8 @@ _Avoid_: Mutable test file, permitted production path
 A bounded implementation-to-test dispute in which implementation submits the
 protected test's claim and observable evidence, the original test session may
 accept or reject that objection, and an accepted revision must pass independent
-red verification before implementation resumes. Automation is gated by the
-measured pilot and permits the repository's `retry_limits.test_revision`
-revision attempts before human review.
+red verification before implementation resumes. Frozen repository policy may
+permit `retry_limits.test_revision` automated attempts before human review.
 _Avoid_: Test rewrite, implementation-owned test edit, unbounded repair
 
 **Workflow route**:
@@ -272,7 +271,7 @@ Automatic transmission of product-usage or evaluation data from the operator's w
 _Avoid_: Local evaluation summary
 
 **Pilot**:
-An evidence-gathering delivery phase that compares the supervised factory with a direct-harness baseline before more elaborate workflow automation is authorized.
+A planned evidence-gathering delivery phase comparing the supervised factory with a direct-harness baseline. The measured pilot completed no matched comparisons and is not runtime authority.
 _Avoid_: Production readiness, tracer bullet
 
 **Host configuration**:

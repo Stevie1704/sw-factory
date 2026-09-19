@@ -26,10 +26,6 @@ import (
 // a human test-stage skip.
 const testExemptionMarkerPrefix = "<!-- factory-test-exemption:"
 
-// measuredPilotIssueNumber is the fixed evidence-gate issue named by the
-// objection-cycle specification.
-const measuredPilotIssueNumber = 26
-
 // testPolicyModeForRun returns the frozen test-policy mode used by status and
 // command projections. Invalid historical packets return the empty mode so a
 // projection cannot present an unverified policy as authoritative.
@@ -392,81 +388,14 @@ func validateImplementationTestObjection(value report.Report, invocation store.I
 	return nil
 }
 
-// automatedTestObjectionGate reads the authorized measured-pilot decision
-// before allowing an objection to start an automated revision. Configuration
-// alone cannot open this gate; an authorized maintainer must have recorded the
-// latest decision on issue #26.
-func (s *Service) automatedTestObjectionGate(ctx context.Context, registration config.RepositoryRegistration, packet SpecificationPacket) (bool, string) {
+// automatedTestObjectionGate reads the frozen repository policy before
+// allowing an objection to start an automated revision. Repository policy is
+// the sole authority for this bounded cycle.
+func automatedTestObjectionGate(packet SpecificationPacket) (bool, string) {
 	if !packet.RepositoryConfig.TestPolicy.AllowAutomatedObjections {
-		return false, "test objection recorded; automated revision is disabled pending measured-pilot authorization"
-	}
-	if s.deps.Comments == nil {
-		return false, "test objection recorded; issue #26 proceed decision could not be verified"
-	}
-	comments, err := s.deps.Comments.IssueComments(ctx, commandRepository(registration), measuredPilotIssueNumber)
-	if err != nil {
-		return false, "test objection recorded; issue #26 proceed decision could not be verified"
-	}
-	sort.SliceStable(comments, func(left, right int) bool {
-		if !comments[left].UpdatedAt.IsZero() && !comments[right].UpdatedAt.IsZero() && !comments[left].UpdatedAt.Equal(comments[right].UpdatedAt) {
-			return comments[left].UpdatedAt.Before(comments[right].UpdatedAt)
-		}
-		return compareGitHubIDs(comments[left].ID, comments[right].ID) < 0
-	})
-	decision := ""
-	for _, comment := range comments {
-		if !authorizedCommentAuthor(registration.AuthorizedUsers, comment.Author) {
-			continue
-		}
-		if value, ok := measuredPilotDecision(comment.Body); ok {
-			decision = value
-		}
-	}
-	if decision != "proceed" {
-		return false, "test objection recorded; issue #26 has no authorized proceed decision"
+		return false, "test objection recorded; automated revision is disabled by repository policy"
 	}
 	return true, ""
-}
-
-// measuredPilotDecision extracts one exact decision line or machine-readable
-// marker from a pilot comment. Ordinary prose mentioning the word proceed is
-// intentionally not sufficient to authorize automation.
-func measuredPilotDecision(body string) (string, bool) {
-	const markerPrefix = "<!-- factory-pilot-decision:"
-	const markerSuffix = "-->"
-	for _, rawLine := range strings.Split(body, "\n") {
-		line := strings.TrimSpace(rawLine)
-		lowerLine := strings.ToLower(line)
-		if strings.HasPrefix(lowerLine, markerPrefix) && strings.HasSuffix(lowerLine, markerSuffix) {
-			value := strings.TrimSpace(line[len(markerPrefix) : len(line)-len(markerSuffix)])
-			if decision, ok := normalizeMeasuredPilotDecision(value); ok {
-				return decision, true
-			}
-		}
-		line = strings.TrimSpace(strings.TrimLeft(line, "-*# "))
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 || !strings.EqualFold(strings.TrimSpace(parts[0]), "decision") {
-			continue
-		}
-		if decision, ok := normalizeMeasuredPilotDecision(parts[1]); ok {
-			return decision, true
-		}
-	}
-	return "", false
-}
-
-// normalizeMeasuredPilotDecision keeps the pilot decision vocabulary closed
-// and strips only presentation backticks around a decision value.
-func normalizeMeasuredPilotDecision(value string) (string, bool) {
-	value = strings.TrimSpace(value)
-	value = strings.Trim(value, "`")
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "proceed", "revise and repeat", "stop":
-		return value, true
-	default:
-		return "", false
-	}
 }
 
 // projectImplementationTestObjection moves a validated implementation
@@ -510,7 +439,7 @@ func projectImplementationTestObjection(previous store.Run, value report.Report,
 		next.Stage = store.StageTest
 		next.Status = store.StatusWaitingForHuman
 		if strings.TrimSpace(automationReason) == "" {
-			automationReason = "test objection recorded; automated revision is disabled pending measured-pilot authorization"
+			automationReason = "test objection recorded; automated revision is disabled by repository policy"
 		}
 		next.LifecycleReason = automationReason
 		return next, nil

@@ -11,7 +11,7 @@ func (s *Service) acceptanceModule(evaluationRecorder acceptanceEvaluationRecord
 		s.worktreeInspector(),
 		s.deps.Now,
 		evaluationRecorder,
-		s.automatedTestObjectionGate,
+		automatedTestObjectionGate,
 		reportAcceptanceHooks{
 			acceptTestStage:           s.acceptTestStageReport,
 			acceptReview:              s.acceptSpecificationReviewReport,
