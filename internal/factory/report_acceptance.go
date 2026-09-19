@@ -52,10 +52,10 @@ type AcceptanceSnapshot struct {
 	// ObjectionBasePathsError is a deferred read failure for objection context.
 	// Projection returns it without touching the filesystem.
 	ObjectionBasePathsError error
-	// AutomatedObjection is the read-only pilot decision gathered for an
+	// AutomatedObjection is the read-only policy decision gathered for an
 	// implementation objection before admission begins.
 	AutomatedObjection bool
-	// ObjectionGateReason explains why the gathered pilot decision refused
+	// ObjectionGateReason explains why the gathered policy decision refused
 	// automated objection handling.
 	ObjectionGateReason string
 }
@@ -147,12 +147,12 @@ type reportAcceptance struct {
 	worktree           gitadapter.WorktreeInspector
 	clock              Clock
 	evaluationRecorder acceptanceEvaluationRecorder
-	objectionGate      func(context.Context, config.RepositoryRegistration, SpecificationPacket) (bool, string)
+	objectionGate      func(SpecificationPacket) (bool, string)
 	hooks              reportAcceptanceHooks
 }
 
 // newReportAcceptance binds the module to one adapter set.
-func newReportAcceptance(journal acceptanceJournal, lifecycle acceptanceLifecycle, worktree gitadapter.WorktreeInspector, clock Clock, evaluationRecorder acceptanceEvaluationRecorder, objectionGate func(context.Context, config.RepositoryRegistration, SpecificationPacket) (bool, string), hooks reportAcceptanceHooks) *reportAcceptance {
+func newReportAcceptance(journal acceptanceJournal, lifecycle acceptanceLifecycle, worktree gitadapter.WorktreeInspector, clock Clock, evaluationRecorder acceptanceEvaluationRecorder, objectionGate func(SpecificationPacket) (bool, string), hooks reportAcceptanceHooks) *reportAcceptance {
 	return &reportAcceptance{
 		journal:            journal,
 		lifecycle:          lifecycle,
@@ -360,7 +360,7 @@ func (a *reportAcceptance) gather(ctx context.Context, registration config.Repos
 	}
 	if snapshot.PacketError == nil && implementationTestObjection(snapshot.Report, snapshot.Invocation) {
 		if a.objectionGate != nil {
-			snapshot.AutomatedObjection, snapshot.ObjectionGateReason = a.objectionGate(ctx, registration, snapshot.Packet)
+			snapshot.AutomatedObjection, snapshot.ObjectionGateReason = a.objectionGate(snapshot.Packet)
 		}
 		snapshot.ObjectionBasePaths, snapshot.ObjectionBasePathsError = protectedTestPathsForCheckpoint(run.Worktree, snapshot.Worktree.ChangedPaths)
 	}

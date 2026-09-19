@@ -331,7 +331,7 @@ func TestAdmitReportUsesGatheredProtectedPathIdentities(t *testing.T) {
 	}
 }
 
-// TestGatherCapturesTheObjectionGateDecision verifies the pilot read and test
+// TestGatherCapturesTheObjectionGateDecision verifies the policy read and test
 // path identities become immutable inputs to projection.
 func TestGatherCapturesTheObjectionGateDecision(t *testing.T) {
 	snapshot := completedImplementationSnapshot(t, func(snapshot *AcceptanceSnapshot) {
@@ -359,10 +359,10 @@ func TestGatherCapturesTheObjectionGateDecision(t *testing.T) {
 	gateCalled := false
 	module := reportAcceptance{
 		worktree: acceptanceWorktreeInspector{state: snapshot.Worktree},
-		objectionGate: func(_ context.Context, actual config.RepositoryRegistration, _ SpecificationPacket) (bool, string) {
+		objectionGate: func(actual SpecificationPacket) (bool, string) {
 			gateCalled = true
-			if actual.Path != registration.Path {
-				t.Fatalf("registration path = %q, want %q", actual.Path, registration.Path)
+			if actual.RepositoryConfig.TestPolicy.Mode != config.TestModeRequired {
+				t.Fatalf("test policy mode = %q, want required", actual.RepositoryConfig.TestPolicy.Mode)
 			}
 			return true, ""
 		},

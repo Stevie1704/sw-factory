@@ -299,9 +299,11 @@ each opens exactly one door:
 | `allow_technical_exemption` | The test role reports a technical exemption instead of a test handoff. | Whenever a test-role report arrives, so also under `advisory` mode when a route runs the test stage. Without it the report is refused. |
 | `allow_automated_objections` | The implementation role objects to a test automatically, which resumes the test session for up to `retry_limits.test_revision` revisions. | Whenever an objection is reported. While `false`, the objection is persisted and the run waits for a human. |
 
-`allow_automated_objections` is evidence-gated in this factory: it stays closed
-until the measured pilot in issue #26 records a proceed decision, and the
-coordinator verifies that decision comment independently. Declare it `false`.
+`allow_automated_objections` is the repository-owned authorization for the
+bounded implementation-to-test revision cycle. Declare it `false` by default;
+changing it is a deliberate repository-policy decision. The frozen value in the
+specification packet controls the run, and a disabled cycle preserves the
+objection for human disposition.
 
 Declare all three explicitly, so the policy a run applies is readable in the
 file rather than inferred from an absent key.

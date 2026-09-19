@@ -177,17 +177,6 @@ func TestTestStageAcceptsVerifiedRedTestsAndLaunchesImplementation(t *testing.T)
 	}
 }
 
-// pilotDecisionComments supplies the authorized measured-pilot decision used
-// by the objection-cycle fixture without contacting GitHub.
-type pilotDecisionComments struct {
-	comments []github.Comment
-}
-
-// IssueComments returns the fixture's immutable pilot-decision comments.
-func (r *pilotDecisionComments) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
-	return append([]github.Comment(nil), r.comments...), nil
-}
-
 // TestImplementationObjectionResumesTheOriginalTestSession verifies the
 // bounded objection loop: implementation submits evidence without touching a
 // protected test, the original native test session resumes, and a revised red
@@ -491,10 +480,10 @@ func TestImplementationObjectionEscalatesAfterTwoRevisionAttempts(t *testing.T) 
 	}
 }
 
-// TestImplementationObjectionWaitsForMeasuredPilotAuthorization verifies the
-// pre-pilot fail-closed path preserves the objection for human disposition and
-// never starts a second test session.
-func TestImplementationObjectionWaitsForMeasuredPilotAuthorization(t *testing.T) {
+// TestImplementationObjectionWaitsWhenAutomationIsDisabled verifies repository
+// policy preserves the objection for human disposition and never starts a
+// second test session.
+func TestImplementationObjectionWaitsWhenAutomationIsDisabled(t *testing.T) {
 	service, storeRuntime, workerRuntime, harnessRuntime, implementation, workspace := newObjectionCycleFixtureWith(t, false)
 	run := *storeRuntime.current
 	workspace.state.HeadSHA = run.CheckpointSHA
@@ -518,13 +507,13 @@ func TestImplementationObjectionWaitsForMeasuredPilotAuthorization(t *testing.T)
 		t.Fatalf("AcceptAgentReport() error = %v", err)
 	}
 	if storeRuntime.current.Status != store.StatusWaitingForHuman || storeRuntime.current.TestObjection == nil || storeRuntime.current.TestRevisionAttempts != 0 {
-		t.Fatalf("run after pre-pilot objection = %#v, want waiting with preserved objection", storeRuntime.current)
+		t.Fatalf("run after policy-disabled objection = %#v, want waiting with preserved objection", storeRuntime.current)
 	}
-	if len(storeRuntime.github.editedComments) == 0 || !strings.Contains(storeRuntime.github.editedComments[len(storeRuntime.github.editedComments)-1].body, "automated revision is disabled pending measured-pilot authorization") {
-		t.Fatalf("pre-pilot status comment = %#v, want measured-pilot pause reason", storeRuntime.github.editedComments)
+	if len(storeRuntime.github.editedComments) == 0 || !strings.Contains(storeRuntime.github.editedComments[len(storeRuntime.github.editedComments)-1].body, "automated revision is disabled by repository policy") {
+		t.Fatalf("disabled-automation status comment = %#v, want policy pause reason", storeRuntime.github.editedComments)
 	}
 	if len(harnessRuntime.resumes) != 0 || len(workerRuntime.starts) != startsBeforeObjection {
-		t.Fatalf("pre-pilot effects = resumes=%d worker starts=%d, want no resume and no new worker", len(harnessRuntime.resumes), len(workerRuntime.starts)-startsBeforeObjection)
+		t.Fatalf("policy-disabled effects = resumes=%d worker starts=%d, want no resume and no new worker", len(harnessRuntime.resumes), len(workerRuntime.starts)-startsBeforeObjection)
 	}
 }
 
@@ -535,7 +524,7 @@ func newObjectionCycleFixture(t *testing.T) (*factory.Service, *agentRunStore, *
 }
 
 // newObjectionCycleFixtureWith creates the objection-cycle fixture with an
-// explicit evidence-gate setting for testing both enabled and pre-pilot paths.
+// explicit repository-policy setting for testing both enabled and disabled paths.
 func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (*factory.Service, *agentRunStore, *agentWorker, *agentHarness, store.Invocation, *testStageWorkspace) {
 	t.Helper()
 	root := t.TempDir()
@@ -580,7 +569,6 @@ func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
 		GitHub:            githubRuntime,
-		Comments:          &pilotDecisionComments{comments: []github.Comment{{Author: "alice", Body: "Decision: proceed"}}},
 		CommitStatuses:    &gateStatuses{},
 		Worktree:          workspace,
 		GitWorkspace:      workspace,

@@ -215,9 +215,8 @@ type TestPolicy struct {
 	Mode                    TestMode `yaml:"mode"`
 	AllowHumanExemption     bool     `yaml:"allow_human_exemption"`
 	AllowTechnicalExemption bool     `yaml:"allow_technical_exemption"`
-	// AllowAutomatedObjections is the explicit evidence-gate switch for the
-	// bounded implementation-versus-test revision loop. It remains disabled
-	// until the measured pilot authorizes automation.
+	// AllowAutomatedObjections is the repository-owned switch for the bounded
+	// implementation-versus-test revision loop.
 	AllowAutomatedObjections bool `yaml:"allow_automated_objections"`
 	// TestPaths adds repository-relative prefixes where the test role may edit.
 	TestPaths []string `yaml:"test_paths"`

@@ -16,3 +16,7 @@ migration backup and fail-closed schema boundary without making the summary an
 operational-state field.
 
 This accepts a small amount of durable local metadata in exchange for an evidence-based rollout. The measured pilot must use these summaries before the objection cycle, concurrent dual review, and full review-repair loop are treated as justified product complexity.
+
+## Addendum — 2026-09-19
+
+ADR 0014 supersedes only the measured-pilot rollout precondition above. The decision to retain content-free local evaluation summaries remains accepted, and those summaries now provide ongoing evidence for assessing and tuning the shipped workflow.
