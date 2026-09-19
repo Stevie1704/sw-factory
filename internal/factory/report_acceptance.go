@@ -52,10 +52,10 @@ type AcceptanceSnapshot struct {
 	// ObjectionBasePathsError is a deferred read failure for objection context.
 	// Projection returns it without touching the filesystem.
 	ObjectionBasePathsError error
-	// AutomatedObjection is the read-only pilot decision gathered for an
+	// AutomatedObjection is the read-only policy decision gathered for an
 	// implementation objection before admission begins.
 	AutomatedObjection bool
-	// ObjectionGateReason explains why the gathered pilot decision refused
+	// ObjectionGateReason explains why the gathered policy decision refused
 	// automated objection handling.
 	ObjectionGateReason string
 }

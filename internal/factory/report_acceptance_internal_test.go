@@ -331,7 +331,7 @@ func TestAdmitReportUsesGatheredProtectedPathIdentities(t *testing.T) {
 	}
 }
 
-// TestGatherCapturesTheObjectionGateDecision verifies the pilot read and test
+// TestGatherCapturesTheObjectionGateDecision verifies the policy read and test
 // path identities become immutable inputs to projection.
 func TestGatherCapturesTheObjectionGateDecision(t *testing.T) {
 	snapshot := completedImplementationSnapshot(t, func(snapshot *AcceptanceSnapshot) {
