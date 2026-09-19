@@ -118,6 +118,10 @@ The project is a Go module. The standard local verification command is:
 make check
 ~~~
 
+The GitHub Actions **Checks** workflow runs for every pull request and every
+push to `main`. Its `make check` job runs the same formatting, vet, test, and
+build gate as the local command above.
+
 The available Make targets cover dependency setup, formatting, static
 analysis, tests, builds, installation, and worker-image verification. Read
 the [Makefile](Makefile) for the complete target list.
