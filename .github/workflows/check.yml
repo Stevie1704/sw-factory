@@ -1,0 +1,80 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GOTELEMETRY: "off"
+
+jobs:
+  check:
+    name: make check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Run repository checks
+        run: make check
+
+  test-race:
+    name: make test-race
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Run tests with the race detector
+        run: make test-race
+
+  verify-headless-worker:
+    name: Verify pinned headless worker
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Pull and verify pinned worker image
+        shell: bash
+        run: |
+          worker_image="$(sed -n 's/^  image: \(.*\)$/\1/p' factory.yaml)"
+          worker_digest="$(sed -n 's/^  digest: \(.*\)$/\1/p' factory.yaml)"
+          if [[ -z "$worker_image" || -z "$worker_digest" ]]; then
+            echo "::error title=Invalid worker configuration::factory.yaml must define worker_build.image and worker_build.digest"
+            exit 1
+          fi
+
+          worker_reference="$worker_image@$worker_digest"
+          if ! docker pull "$worker_reference"; then
+            echo "::error title=Worker image pull failed::Unable to pull pinned worker image $worker_reference"
+            exit 1
+          fi
+
+          scripts/verify-headless-worker.sh "$worker_reference"
