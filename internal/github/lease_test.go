@@ -240,7 +240,8 @@ func TestRenewLeaseIgnoresUnrelatedMilestones(t *testing.T) {
 }
 
 // TestRenewLeaseRediscoversADeletedMilestone verifies a cached projection that
-// disappeared is replaced by exactly one new owned milestone.
+// disappeared is replaced by exactly one new owned milestone in the same
+// renewal.
 func TestRenewLeaseRediscoversADeletedMilestone(t *testing.T) {
 	t.Parallel()
 
@@ -252,10 +253,7 @@ func TestRenewLeaseRediscoversADeletedMilestone(t *testing.T) {
 	}
 	server.milestones = nil
 
-	if err := client.RenewLease(context.Background(), testRepository, testLease(renewed.Add(time.Minute))); err == nil {
-		t.Fatal("RenewLease() error = nil, want the missing projection to surface once")
-	}
-	if err := client.RenewLease(context.Background(), testRepository, testLease(renewed.Add(2*time.Minute))); err != nil {
+	if err := client.RenewLease(context.Background(), testRepository, testLease(renewed.Add(time.Minute))); err != nil {
 		t.Fatalf("rediscovering RenewLease() error = %v", err)
 	}
 	if len(server.milestones) != 1 {
@@ -304,6 +302,7 @@ func TestRenewLeaseRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// testRepository is the fake repository served by milestoneServer.
 var testRepository = github.Repository{Owner: "example", Name: "project"}
 
 // testLease returns a valid one-minute lease renewed at the supplied time.

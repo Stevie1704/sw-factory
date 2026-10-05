@@ -130,16 +130,18 @@ any non-terminal run exists. GitHub transport failures use the configured
 backoff and do not change workflow state or retry budgets. The coordinator
 renews one GitHub lease on every polling pass: a closed milestone titled
 `factory coordinator lease`, visible on the repository's closed-milestones
-page. The first renewal creates it. Later renewals, also after a restart or a
-lost GitHub response, find it again and edit its description, so the number of
-lease resources stays at one however long the coordinator polls. The
+page. The first renewal creates it. Later renewals find it again and edit its
+description. This is also true after a restart or a lost GitHub response.
+Thus there is always one lease resource, however long the coordinator polls. The
 coordinator rewrites only the block between `<!-- factory-lease:begin -->` and
 `<!-- factory-lease:end -->`. That block shows the full coordinator identity,
 the active run (or `none`), and the complete renewal and expiry times. A past
 expiry means the coordinator stopped renewing. Text outside the block is kept.
 The coordinator adopts the milestone only when the authenticated `gh` account
 created it and the block is present. A milestone with that title which fails
-this check stops renewal with an actionable error; rename or delete it. Lease
+this check stops renewal with an actionable error; rename or delete it. If you
+change the `gh` account, the old account's milestone fails this check, so
+delete it once. Lease
 failures use the bounded lease backoff and do not change workflow state or
 retry budgets. The host lock remains the ownership authority; the GitHub lease
 does not give distributed fencing or failover.

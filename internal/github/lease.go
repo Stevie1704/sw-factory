@@ -107,10 +107,10 @@ func (c *GhClient) ownedLeaseMilestone(ctx context.Context, repository Repositor
 	if c.lease.milestone != 0 {
 		var milestone milestoneResponse
 		path := fmt.Sprintf("repos/%s/milestones/%d", repository.String(), c.lease.milestone)
-		if err := c.callJSON(ctx, []string{"api", path, "--method", "GET"}, nil, &milestone); err != nil {
-			return milestoneResponse{}, fmt.Errorf("read lease milestone #%d: %w", c.lease.milestone, err)
-		}
-		if milestone.Title == LeaseMilestoneTitle && milestone.ownedBy(login) {
+		// A cached milestone that was deleted, renamed, or changed falls back
+		// to discovery in the same renewal.
+		err := c.callJSON(ctx, []string{"api", path, "--method", "GET"}, nil, &milestone)
+		if err == nil && milestone.Title == LeaseMilestoneTitle && milestone.adoptableBy(login) {
 			return milestone, nil
 		}
 	}
@@ -126,8 +126,8 @@ func (c *GhClient) ownedLeaseMilestone(ctx context.Context, repository Repositor
 		if milestone.Title != LeaseMilestoneTitle {
 			continue
 		}
-		if !milestone.ownedBy(login) {
-			return milestoneResponse{}, fmt.Errorf("milestone #%d %q was not created by %s with the factory lease block: rename or delete it so the coordinator can create its own", milestone.Number, LeaseMilestoneTitle, login)
+		if err := milestone.adoptionError(login); err != nil {
+			return milestoneResponse{}, err
 		}
 		return milestone, nil
 	}
@@ -213,9 +213,21 @@ type milestoneResponse struct {
 	} `json:"creator"`
 }
 
-// ownedBy reports whether the coordinator account created the milestone and
-// the factory block is present. A copied block alone never proves ownership.
-func (m milestoneResponse) ownedBy(login string) bool {
-	_, _, hasBlock := leaseBlockBounds(m.Description)
-	return hasBlock && strings.EqualFold(strings.TrimSpace(m.Creator.Login), login)
+// adoptableBy reports whether the coordinator account created the milestone
+// and the factory block is present. A copied block alone never proves
+// ownership.
+func (m milestoneResponse) adoptableBy(login string) bool {
+	return m.adoptionError(login) == nil
+}
+
+// adoptionError explains, with a corrective action, why the coordinator must
+// not adopt a milestone that has the lease title.
+func (m milestoneResponse) adoptionError(login string) error {
+	if !strings.EqualFold(strings.TrimSpace(m.Creator.Login), login) {
+		return fmt.Errorf("milestone #%d %q was created by %q, not by the coordinator account %q: rename or delete it so the coordinator can create its own", m.Number, LeaseMilestoneTitle, m.Creator.Login, login)
+	}
+	if _, _, hasBlock := leaseBlockBounds(m.Description); !hasBlock {
+		return fmt.Errorf("milestone #%d %q has no factory lease block: restore the block, or rename or delete the milestone so the coordinator can create its own", m.Number, LeaseMilestoneTitle)
+	}
+	return nil
 }
