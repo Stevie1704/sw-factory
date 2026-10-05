@@ -96,7 +96,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	if !diagnosis.Ready() {
 		return &StartupBlockedError{Diagnosis: diagnosis}
 	}
-	registration, repositoryConfig, err := s.pollConfiguration()
+	registration, err := s.pollConfiguration()
 	if err != nil {
 		return err
 	}
@@ -171,11 +171,10 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		}
 		now := s.deps.Now().UTC()
 		if err := s.deps.Lease.RenewLease(pollContext, repository, github.Lease{
-			TargetBranch: repositoryConfig.TargetBranch,
-			Coordinator:  s.deps.Coordinator,
-			RunID:        leaseRunID,
-			RenewedAt:    now,
-			ExpiresAt:    now.Add(interval + backoff),
+			Coordinator: s.deps.Coordinator,
+			RunID:       leaseRunID,
+			RenewedAt:   now,
+			ExpiresAt:   now.Add(interval + backoff),
 		}); err != nil {
 			if pollingContextDone(err) {
 				return nil
@@ -487,7 +486,7 @@ func (s *Service) Stop(ctx context.Context) (StopResult, error) {
 // claim path as Start. It is useful for a supervised one-shot poll and for
 // testing the high-level coordinator seam without waiting on a timer.
 func (s *Service) PollOnce(ctx context.Context) (PollResult, error) {
-	registration, _, err := s.pollConfiguration()
+	registration, err := s.pollConfiguration()
 	if err != nil {
 		return PollResult{}, err
 	}
@@ -538,18 +537,17 @@ func (s *Service) pollOnce(ctx context.Context, registration config.RepositoryRe
 	return PollResult{Outcome: PollClaimed, IssueNumber: claimed.Run.IssueNumber, Run: claimed.Run}, nil
 }
 
-// pollConfiguration loads the one registered repository and its checked-in
-// policy after startup diagnosis has confirmed both are readable.
-func (s *Service) pollConfiguration() (config.RepositoryRegistration, config.RepositoryConfig, error) {
+// pollConfiguration returns the one registered repository after it confirms
+// that the checked-in policy still loads.
+func (s *Service) pollConfiguration() (config.RepositoryRegistration, error) {
 	registration, err := s.registration()
 	if err != nil {
-		return config.RepositoryRegistration{}, config.RepositoryConfig{}, err
+		return config.RepositoryRegistration{}, err
 	}
-	repositoryConfig, err := s.deps.LoadRepository(registration.RepositoryConfigPath)
-	if err != nil {
-		return config.RepositoryRegistration{}, config.RepositoryConfig{}, fmt.Errorf("load repository configuration for polling: %w", err)
+	if _, err := s.deps.LoadRepository(registration.RepositoryConfigPath); err != nil {
+		return config.RepositoryRegistration{}, fmt.Errorf("load repository configuration for polling: %w", err)
 	}
-	return registration, repositoryConfig, nil
+	return registration, nil
 }
 
 // startupDiagnosis resolves the injected diagnosis seam or the complete

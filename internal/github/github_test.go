@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/github"
 )
@@ -116,52 +115,6 @@ func TestGhClientListsEligibleIssuesInDeterministicOrder(t *testing.T) {
 	}
 	if !hasArgs(runner.calls[0].args, "-f", "state=open", "-f", "labels=agent-ready") {
 		t.Fatalf("GitHub call args = %#v, want open agent-ready filters", runner.calls[0].args)
-	}
-}
-
-// TestGhClientPublishesAVisibleRenewableLease verifies the lease adapter
-// records coordinator ownership as an exact target-branch Commit Status.
-func TestGhClientPublishesAVisibleRenewableLease(t *testing.T) {
-	t.Parallel()
-
-	sha := "0123456789abcdef0123456789abcdef01234567"
-	runner := &fakeCommandRunner{outputs: [][]byte{
-		[]byte(`{"sha":"` + sha + `"}`),
-		[]byte(""),
-	}}
-	client := &github.GhClient{Runner: runner}
-	renewed := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	expires := renewed.Add(5 * time.Minute)
-	err := client.RenewLease(context.Background(), github.Repository{Owner: "example", Name: "project"}, github.Lease{
-		TargetBranch: "main",
-		Coordinator:  "coordinator-test",
-		RunID:        "run-42",
-		RenewedAt:    renewed,
-		ExpiresAt:    expires,
-	})
-	if err != nil {
-		t.Fatalf("RenewLease() error = %v", err)
-	}
-	if len(runner.calls) != 2 {
-		t.Fatalf("GitHub calls = %d, want branch lookup plus status write", len(runner.calls))
-	}
-	if !containsArgs(runner.calls[0].args, "repos/example/project/commits/main", "--method", "GET") {
-		t.Fatalf("branch lookup args = %#v", runner.calls[0].args)
-	}
-	if !containsArgs(runner.calls[1].args, "repos/example/project/statuses/"+sha, "--method", "POST", "--input", "-") {
-		t.Fatalf("lease status args = %#v", runner.calls[1].args)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal(runner.calls[1].input, &payload); err != nil {
-		t.Fatalf("decode lease status payload: %v", err)
-	}
-	if payload["state"] != string(github.CommitStatusPending) || payload["context"] != github.LeaseStatusContext {
-		t.Fatalf("lease status payload = %#v, want pending %q", payload, github.LeaseStatusContext)
-	}
-	for _, expected := range []string{"coordinator-test", "run-42", "expires=2026-08-26T12:05:00Z"} {
-		if !strings.Contains(payload["description"], expected) {
-			t.Errorf("lease description %q does not contain %q", payload["description"], expected)
-		}
 	}
 }
 

@@ -128,9 +128,32 @@ host lock. It polls immediately and then at the configured interval, claims
 only the oldest open issue carrying `agent-ready`, and skips queue claims while
 any non-terminal run exists. GitHub transport failures use the configured
 backoff and do not change workflow state or retry budgets. The coordinator
-publishes a renewable `factory/lease` Commit Status on the target branch; its
-description includes the coordinator, active run, heartbeat, and expiry so a
-stale owner remains diagnosable in GitHub. It also renews a host-local heartbeat
+renews one GitHub lease on every polling pass: a closed milestone titled
+`factory coordinator lease`, visible on the repository's closed-milestones
+page. The first renewal creates it. Later renewals find it again and edit its
+description. This is also true after a restart or a lost GitHub response.
+Thus there is always one lease resource, however long the coordinator polls. The
+coordinator rewrites only the block between `<!-- factory-lease:begin -->` and
+`<!-- factory-lease:end -->`. That block shows the full coordinator identity,
+the active run (or `none`), and the complete renewal and expiry times. A past
+expiry means the coordinator stopped renewing. Text outside the block is kept.
+The coordinator adopts the milestone only when the authenticated `gh` account
+created it and the block is present. A milestone with that title which fails
+this check stops renewal with an actionable error; rename or delete it. If you
+change the `gh` account, the old account's milestone fails this check, so
+delete it once. Lease
+failures use the bounded lease backoff and do not change workflow state or
+retry budgets. The host lock remains the ownership authority; the GitHub lease
+does not give distributed fencing or failover.
+
+Installations from before this change published the lease as a pending
+`factory/lease` Commit Status, and GitHub accepts at most 1,000 statuses for
+each commit and context. The coordinator no longer reads or writes that
+context, so an installation whose target commit is already at the cap starts
+normally. GitHub cannot delete Commit Statuses. The last legacy status stays
+pending on its old commit and stops showing on the branch head after the next
+commit. If branch protection requires `factory/lease`, remove that
+requirement. The coordinator also renews a host-local heartbeat
 in the operational store. `factory status` and `factory doctor` report that
 heartbeat as live, expired, or missing; live additionally requires the
 kernel-backed coordinator lock, so a clean stop or process death is visible

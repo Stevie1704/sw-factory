@@ -136,6 +136,45 @@ func TestStartPollsThenStopsWithoutCancellingTheActiveRun(t *testing.T) {
 	}
 }
 
+// TestStartKeepsPollingThroughALongIdlePeriod verifies more than 1,000 idle
+// lease renewals do not stop the supervisor, and work that arrives afterwards
+// is still claimed.
+func TestStartKeepsPollingThroughALongIdlePeriod(t *testing.T) {
+	t.Parallel()
+
+	const idleRenewals = 1100
+	root := t.TempDir()
+	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}}
+	runStore := &fakeRunStore{}
+	var cancel context.CancelFunc
+	lease := &pollingLease{}
+	lease.onRenew = func(value github.Lease) {
+		if len(lease.calls) == idleRenewals {
+			githubAdapter.issues = []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+		}
+		if value.RunID == "run-fixed" && cancel != nil {
+			cancel()
+		}
+	}
+	service := newPollingService(root, githubAdapter, githubAdapter, lease, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}, nil)
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if githubAdapter.claimedIssue != 7 || githubAdapter.listCalls < idleRenewals {
+		t.Fatalf("polling calls = list=%d claim=%d, want issue 7 claimed after %d idle passes", githubAdapter.listCalls, githubAdapter.claimedIssue, idleRenewals)
+	}
+	for index, renewal := range lease.calls[:idleRenewals-1] {
+		if renewal.RunID != "" {
+			t.Fatalf("idle renewal %d = %#v, want no run", index, renewal)
+		}
+	}
+}
+
 // TestStartWritesASupervisorHeartbeat verifies the running coordinator leaves
 // a durable liveness record before its first queue observation.
 func TestStartWritesASupervisorHeartbeat(t *testing.T) {

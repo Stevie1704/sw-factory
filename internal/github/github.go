@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Stevie1704/sw-factory/internal/ref"
 )
 
 const (
@@ -63,24 +61,6 @@ type Issue struct {
 	UpdatedAt     time.Time
 }
 
-// LeaseStatusContext is the stable Commit Status context used to expose the
-// coordinator's renewable GitHub lease on the configured target branch.
-const LeaseStatusContext = "factory/lease"
-
-// Lease describes one visible coordinator ownership heartbeat.
-type Lease struct {
-	// TargetBranch is the branch whose current commit receives the status.
-	TargetBranch string
-	// Coordinator identifies the host holding the lease.
-	Coordinator string
-	// RunID identifies the active run, when one has been claimed.
-	RunID string
-	// RenewedAt is the coordinator's latest heartbeat time.
-	RenewedAt time.Time
-	// ExpiresAt is the time after which the GitHub projection is stale.
-	ExpiresAt time.Time
-}
-
 // Label describes a factory-owned GitHub label.
 type Label struct {
 	Name        string
@@ -110,11 +90,6 @@ type CommentReader interface {
 // IssuePoller lists the repository's open, agent-authorized issue queue.
 type IssuePoller interface {
 	ListEligibleIssues(context.Context, Repository) ([]Issue, error)
-}
-
-// LeaseClient publishes a renewable, operator-visible coordinator lease.
-type LeaseClient interface {
-	RenewLease(context.Context, Repository, Lease) error
 }
 
 // PullRequest is the pull-request identity and body returned to the
@@ -313,11 +288,13 @@ func (commandRunner) Run(ctx context.Context, args []string, input []byte) ([]by
 // GhClient implements Client through the locally authenticated gh executable.
 type GhClient struct {
 	Runner CommandRunner
+
+	// lease caches the discovered lease projection between renewals.
+	lease leaseCache
 }
 
 var _ CommentReader = (*GhClient)(nil)
 var _ IssuePoller = (*GhClient)(nil)
-var _ LeaseClient = (*GhClient)(nil)
 var _ CommitStatusReader = (*GhClient)(nil)
 var _ PullRequestDraftClient = (*GhClient)(nil)
 
@@ -373,42 +350,6 @@ func (c *GhClient) ListEligibleIssues(ctx context.Context, repository Repository
 		return issues[left].Number < issues[right].Number
 	})
 	return issues, nil
-}
-
-// RenewLease publishes the coordinator heartbeat as a pending Commit Status
-// on the current target-branch commit. A stale heartbeat remains visible in
-// GitHub with its expiry timestamp after a host process disappears.
-func (c *GhClient) RenewLease(ctx context.Context, repository Repository, lease Lease) error {
-	if strings.TrimSpace(lease.TargetBranch) == "" {
-		return errors.New("lease target branch is required and must be safe")
-	}
-	if err := ref.ValidatePart(lease.TargetBranch); err != nil {
-		return fmt.Errorf("lease target branch: %w", err)
-	}
-	if strings.TrimSpace(lease.Coordinator) == "" || strings.ContainsAny(lease.Coordinator, "\x00\r\n") {
-		return errors.New("lease coordinator is required and must be a single line")
-	}
-	if lease.RenewedAt.IsZero() || lease.ExpiresAt.IsZero() || !lease.ExpiresAt.After(lease.RenewedAt) {
-		return errors.New("lease heartbeat and expiry must be valid")
-	}
-	var response commitResponse
-	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/commits/%s", repository.String(), lease.TargetBranch), "--method", "GET"}, nil, &response); err != nil {
-		return fmt.Errorf("read target branch for coordinator lease: %w", err)
-	}
-	if !ValidCommitSHA(response.SHA) {
-		return errors.New("target branch response did not contain a valid commit SHA")
-	}
-	description := fmt.Sprintf("coordinator=%s run=%s renewed=%s expires=%s", safeStatusValue(lease.Coordinator), safeStatusValue(lease.RunID), lease.RenewedAt.UTC().Format(time.RFC3339), lease.ExpiresAt.UTC().Format(time.RFC3339))
-	description = truncateStatusDescription(description, 140)
-	if err := c.CreateCommitStatus(ctx, repository, CommitStatus{
-		SHA:         response.SHA,
-		State:       CommitStatusPending,
-		Context:     LeaseStatusContext,
-		Description: description,
-	}); err != nil {
-		return fmt.Errorf("publish coordinator lease: %w", err)
-	}
-	return nil
 }
 
 // CreateLabel creates or updates one factory label through gh.
@@ -762,29 +703,6 @@ func containsLabel(labels []string, wanted string) bool {
 		}
 	}
 	return false
-}
-
-// safeStatusValue bounds untrusted lease values to one status-comment line.
-func safeStatusValue(value string) string {
-	return strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ", "\x00", " ").Replace(value))
-}
-
-// truncateStatusDescription limits a status description by Unicode code
-// points so an unusually long coordinator identity cannot create invalid UTF-8.
-func truncateStatusDescription(value string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit])
-}
-
-// commitResponse is the branch-head projection needed by lease publishing.
-type commitResponse struct {
-	SHA string `json:"sha"`
 }
 
 // commitStatusResponse is the GitHub status projection needed for replay

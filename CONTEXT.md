@@ -217,6 +217,15 @@ and lets the same coordinator process claim the next oldest eligible issue.
 Waiting-for-human and retryable-infrastructure states never release it.
 _Avoid_: Cleanup, retention, restart
 
+**GitHub lease**:
+The operator-visible projection of the coordinator heartbeat: one closed
+milestone titled `factory coordinator lease` that the coordinator account
+created. Every renewal rewrites only the factory block in its description with
+the coordinator, the active run, and the complete renewal and expiry times. A
+past expiry identifies stale ownership. The host lock, not the GitHub lease, is
+the ownership authority.
+_Avoid_: Lease status, `factory/lease` Commit Status, distributed lock
+
 **Run activity**:
 The published distinction between an active run whose next transition the
 coordinator owns, an active invocation whose harness is executing, and a
