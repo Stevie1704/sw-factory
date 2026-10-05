@@ -96,7 +96,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	if !diagnosis.Ready() {
 		return &StartupBlockedError{Diagnosis: diagnosis}
 	}
-	registration, repositoryConfig, err := s.pollConfiguration()
+	registration, _, err := s.pollConfiguration()
 	if err != nil {
 		return err
 	}
@@ -171,11 +171,10 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		}
 		now := s.deps.Now().UTC()
 		if err := s.deps.Lease.RenewLease(pollContext, repository, github.Lease{
-			TargetBranch: repositoryConfig.TargetBranch,
-			Coordinator:  s.deps.Coordinator,
-			RunID:        leaseRunID,
-			RenewedAt:    now,
-			ExpiresAt:    now.Add(interval + backoff),
+			Coordinator: s.deps.Coordinator,
+			RunID:       leaseRunID,
+			RenewedAt:   now,
+			ExpiresAt:   now.Add(interval + backoff),
 		}); err != nil {
 			if pollingContextDone(err) {
 				return nil
