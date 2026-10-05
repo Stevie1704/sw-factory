@@ -899,7 +899,7 @@ func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.
 	case store.StageCheck:
 		// CreateDraftPullRequest records the checkpoint before its gates run, so
 		// StageCheck alone does not prove the checkpoint was accepted.
-		if err := ensureFinalCheckpointGatesPassed(ctx, s.checkpointFileReader(), runStore, run, packet); err != nil {
+		if err := ensureFinalCheckpointGatesAccepted(ctx, s.checkpointFileReader(), runStore, run, packet); err != nil {
 			return false, nil
 		}
 	case store.StageDraftPR, store.StageReview, store.StageReady:
@@ -922,7 +922,7 @@ func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.
 		if run.PullRequestNumber == 0 {
 			return false, nil
 		}
-		if err := ensureFinalCheckpointGatesPassed(ctx, s.checkpointFileReader(), runStore, run, packet); err != nil {
+		if err := ensureFinalCheckpointGatesAccepted(ctx, s.checkpointFileReader(), runStore, run, packet); err != nil {
 			return false, nil
 		}
 	default:
