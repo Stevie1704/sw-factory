@@ -581,6 +581,12 @@ func baselineFailureErrorTargeted(body string, suite gate.SuiteResult, suiteErr 
 		return false
 	}
 	for _, cause := range failure.Failures {
+		// A cancelled command that may still run is worker infrastructure,
+		// never the declared baseline failure a marker can accept.
+		var terminationErr *worker.CommandTerminationError
+		if errors.As(cause, &terminationErr) {
+			return false
+		}
 		var gateFailure *gate.GateFailure
 		var setupFailure *gate.SetupFailure
 		var dependencyFailure *gate.DependencyFailure

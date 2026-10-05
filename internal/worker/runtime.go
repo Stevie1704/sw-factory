@@ -457,6 +457,12 @@ func (r *DockerRuntime) Resume(ctx context.Context, request ResumeRequest) error
 // RunCommand executes a shell command with an explicitly constructed worker
 // environment. Host environment variables and credential-bearing names never
 // enter the command environment.
+//
+// The command runs as its own process group inside the worker. When ctx ends
+// first, RunCommand terminates that group inside the worker and returns the
+// context error only after termination is confirmed; otherwise it returns a
+// *CommandTerminationError, and the worker refuses later commands until it is
+// stopped or recreated.
 func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) (CommandResult, error) {
 	if err := validateCommandRequest(request); err != nil {
 		return CommandResult{}, err
@@ -470,6 +476,10 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 		return CommandResult{}, fmt.Errorf("worker %q is not running", request.RunID)
 	}
 
+	commandID, err := newCommandID()
+	if err != nil {
+		return CommandResult{}, err
+	}
 	environment := commandEnvironment(request)
 	args := []string{"exec", "--workdir", WorktreePath}
 	for _, value := range environment {
@@ -477,10 +487,24 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	}
 	args = append(args, containerName(workerID), "/usr/bin/env", "-i")
 	args = append(args, environment...)
-	args = append(args, "/bin/sh", "-c", request.Command)
+	args = append(args, supervisedCommandArgs(commandID, request.Command)...)
 	result, err := r.runDocker(ctx, args)
 	if err == nil {
 		return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, nil
+	}
+	// A refused command never started, and its refusal must not be hidden by
+	// a deadline that expired at the same time.
+	var commandErr *dockerCommandError
+	if errors.As(err, &commandErr) && commandRefused(commandErr, commandID) {
+		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, &CommandTerminationError{Reason: "an earlier cancelled command is still running"})
+	}
+	// Cancelling the host Docker CLI does not stop the command inside the
+	// worker. Termination is confirmed before any other classification, so no
+	// caller sees a timeout while the command can still modify the checkout.
+	if ctx.Err() != nil {
+		if terminationErr := r.terminateCommand(ctx, workerID, commandID); terminationErr != nil {
+			return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, terminationErr)
+		}
 	}
 	// The capture limit outranks exit-code classification: a command that
 	// wrote past it produced no complete result to report.
@@ -491,7 +515,6 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	if ctx.Err() != nil {
 		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, ctx.Err())
 	}
-	var commandErr *dockerCommandError
 	if errors.As(err, &commandErr) && commandErr.ProcessStarted && commandErr.ExitCode >= 0 && commandErr.ExitCode != 125 && !isDockerRuntimeFailure(commandErr) {
 		return CommandResult{ExitCode: commandErr.ExitCode, Stdout: commandErr.Stdout, Stderr: commandErr.Stderr}, nil
 	}

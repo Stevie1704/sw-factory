@@ -500,7 +500,9 @@ func writeDockerStub(t *testing.T) (string, string, string) {
 	mountsPath := filepath.Join(root, "docker.mounts")
 	script := `#!/bin/sh
 set -eu
-printf '%s\n' "$*" >> "$WORKER_DOCKER_LOG"
+# Multi-line script arguments stay on one log line per Docker invocation.
+printf '%s' "$*" | tr '\n' ' ' >> "$WORKER_DOCKER_LOG"
+printf '\n' >> "$WORKER_DOCKER_LOG"
 if [ -n "${WORKER_DOCKER_FAIL:-}" ]; then
   printf '%s\n' "$WORKER_DOCKER_FAIL" >&2
   exit 1
@@ -588,6 +590,14 @@ case "$command_name" in
     fi
     ;;
   exec)
+    case "$*" in
+      *factory-command-terminate*)
+        if [ -n "${WORKER_DOCKER_TERMINATE_REMOVES:-}" ]; then
+          rm -f "$WORKER_DOCKER_STATE"
+        fi
+        exit "${WORKER_DOCKER_TERMINATE_STATUS:-0}"
+        ;;
+    esac
     if [ -n "${WORKER_DOCKER_EXEC_ERROR:-}" ]; then
       printf '%s\n' "$WORKER_DOCKER_EXEC_ERROR" >&2
       exit "${WORKER_DOCKER_EXEC_EXIT:-1}"
@@ -604,6 +614,27 @@ case "$command_name" in
       *fail-137*)
         printf 'command-failed-137\n' >&2
         exit 137
+        ;;
+      *slow-command*)
+        exec sleep 5
+        ;;
+      *refused-command*)
+        position=0
+        command_id=""
+        for argument in "$@"; do
+          if [ "$position" = 2 ]; then
+            command_id=$argument
+            break
+          fi
+          if [ "$position" = 1 ]; then
+            position=2
+          fi
+          if [ "$argument" = factory-command ]; then
+            position=1
+          fi
+        done
+        printf 'factory-command-refused %s\n' "$command_id" >&2
+        exit 125
         ;;
       *fail-command*)
         printf 'command-failed\n' >&2

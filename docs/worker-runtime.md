@@ -112,8 +112,78 @@ bounded again to 16 KiB. A stream that writes past the command capture limit
 returns a typed output-limit failure instead of a command result.
 `docs/agent-runtime.md` records how a role observes that failure.
 
+## Command timeout and cancellation
+
+The worker, not the host Docker CLI, owns the lifetime of every `run-command`
+process. This applies to setup, gates, red-test verification, and headless
+state commands alike. A fixed shell supervisor inside the worker starts the
+command with `setsid` as the leader of a new process group. Before the command
+runs, it atomically records that group under a private random command
+identity. The records live in
+`/tmp/factory-commands/<kernel-boot-id>-<pid-1-start-time>/`. The directory
+name changes when the container or the Docker host restarts, so a process
+group number from an earlier boot never names a later process. The
+coordinator never sees the identity, the PID, or the path.
+
+When the caller's deadline or cancellation ends a command first, the adapter
+runs a second, fixed terminator in the same worker before it returns:
+
+1. It publishes a cancellation marker for the command identity. A supervisor
+   that has not yet recorded its group sees the marker and exits before the
+   command runs.
+2. It sends SIGTERM to the process group and waits a 5 second grace period.
+3. It sends SIGKILL and waits a second grace period.
+4. Zombies count as stopped: worker PID 1 does not reap orphans, and a zombie
+   cannot modify the checkout.
+
+The adapter returns the original `context.DeadlineExceeded` or
+`context.Canceled` only after the terminator confirms that no group member is
+alive. A worker that is missing or stopped also counts as confirmed, because
+stopping a container ends all of its processes. In all other cases the adapter
+returns a typed `CommandTerminationError` and never a timeout result. These
+cases are a group that survives SIGKILL, a failed terminator call, and a lost
+response after the bounded terminator timeout. Repeated cancellation of the
+same identity is idempotent.
+
+After an unconfirmed termination, the terminator keeps the records. Every later
+supervised command in that worker checks for a cancelled record whose group is
+still alive. If one exists, the command does not start, and the adapter
+returns the same typed error. So no independent gate, repair launch, or
+headless state command can overlap the surviving process. Reconciliation is
+to stop or recreate the worker. The next boot uses a new records directory.
+
+The gate runner stops a suite at that error. It records the affected gate as
+an execution error, even when the gate is advisory, and skips every later
+gate. The check-repair policy classifies the error as infrastructure: the run
+waits in `waiting_for_harness`, the coordinator stops the worker, and the run
+keeps its repair attempts. The lifecycle reason names the discrepancy and the
+recovery action. A `factory-baseline-target` marker never accepts the error,
+so a baseline with an unconfirmed termination does not advance.
+
+A timeout with a confirmed termination keeps its deterministic repair
+classification. Exit codes, the capture limit, and other runtime failures also
+keep their classification.
+
+Known limits:
+
+- A process that leaves its process group with its own `setsid` is outside
+  this guarantee until the worker stops.
+- The adapter terminates a command only when the caller's context ends. If the
+  Docker CLI fails for a transport reason while the command runs, the adapter
+  reports a runtime failure. The coordinator then stops the worker.
+- A command that exits normally but leaves live background processes is not
+  terminated.
+
+## Contract tests
+
 The contract tests use a controlled Docker executable. Live Docker and harness
 checks remain environment checks and are not ordinary unit-test dependencies.
+To run the real command-lifetime checks against the pinned worker, use:
+
+```sh
+FACTORY_DOCKER_WORKER_IMAGE=ghcr.io/stevie1704/sw-factory-worker@sha256:... \
+  go test ./internal/worker -run TestRealWorkerCommandLifetime
+```
 
 Every harness publishes completion with `factory-report`, which atomically
 writes a schema-versioned JSON report below `/results`; the coordinator

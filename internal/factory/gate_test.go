@@ -131,6 +131,8 @@ type gateWorker struct {
 	starts   []worker.StartRequest
 	commands []worker.CommandRequest
 	results  []worker.CommandResult
+	// errors optionally pairs a runtime error with the result at each index.
+	errors []error
 }
 
 // Start records the frozen worker start request.
@@ -147,7 +149,12 @@ func (w *gateWorker) RunCommand(_ context.Context, request worker.CommandRequest
 	w.commands = append(w.commands, request)
 	result := w.results[0]
 	w.results = w.results[1:]
-	return result, nil
+	var err error
+	if len(w.errors) != 0 {
+		err = w.errors[0]
+		w.errors = w.errors[1:]
+	}
+	return result, err
 }
 
 // Stop implements WorkerRuntime for the coordinator gate test.
