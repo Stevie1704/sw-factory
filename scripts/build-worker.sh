@@ -8,21 +8,39 @@ DOCKER="${DOCKER:-docker}"
 WORKER_BASE_IMAGE="${WORKER_BASE_IMAGE:-ghcr.io/stevie1704/sw-factory-base:v1}"
 WORKER_IMAGE="${WORKER_IMAGE:-ghcr.io/stevie1704/sw-factory-worker}"
 WORKER_TAG="${WORKER_TAG:-v1}"
-GO_VERSION="${GO_VERSION:-1.25.0}"
+NPM_VERSION="${NPM_VERSION:-11.21.0}"
 CLAUDE_VERSION="${CLAUDE_VERSION:-2.1.232}"
 CODEX_VERSION="${CODEX_VERSION:-0.148.0}"
 WORKER_PLATFORM="${WORKER_PLATFORM:-}"
 WORKER_REFERENCE="${WORKER_IMAGE}:${WORKER_TAG}"
+
+# The go.mod toolchain line is the only approved Go release for the shipped
+# helpers and the worker toolchain. A different GO_VERSION is refused rather
+# than silently producing an unapproved image.
+approved_go="$(sed -n 's/^toolchain go//p' go.mod)"
+if [ -z "$approved_go" ]; then
+  echo "go.mod has no toolchain line naming the approved Go release" >&2
+  exit 1
+fi
+if [ -n "${GO_VERSION:-}" ] && [ "$GO_VERSION" != "$approved_go" ]; then
+  echo "GO_VERSION=$GO_VERSION differs from the approved go.mod toolchain go$approved_go." >&2
+  echo "Unset GO_VERSION, or change the toolchain line in go.mod and the worker Dockerfile defaults together." >&2
+  exit 1
+fi
+GO_VERSION="$approved_go"
 
 platform_args=""
 if [ -n "$WORKER_PLATFORM" ]; then
   platform_args="--platform=$WORKER_PLATFORM"
 fi
 
-echo "Building factory base image $WORKER_BASE_IMAGE"
+echo "Building factory base image $WORKER_BASE_IMAGE with Go $GO_VERSION"
+# --pull refreshes the moving Go and Node base tags, so a rebuild picks up
+# their published security updates instead of a stale local copy.
 # shellcheck disable=SC2086
-"$DOCKER" build $platform_args \
+"$DOCKER" build $platform_args --pull \
   --build-arg "GO_VERSION=$GO_VERSION" \
+  --build-arg "NPM_VERSION=$NPM_VERSION" \
   --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION" \
   --build-arg "CODEX_VERSION=$CODEX_VERSION" \
   --build-arg "FACTORY_BASE_VERSION=1" \
@@ -60,7 +78,9 @@ echo "Verifying local image reference $local_reference"
 "$DOCKER" run --rm --pull=never \
   --cap-drop ALL \
   --security-opt no-new-privileges \
+  --env "APPROVED_GO=go$GO_VERSION" \
   "$local_reference" /bin/sh -c '
+  set -eu
   test "$(id -u)" = 10001
   test "$HOME" = /home/factory
   test -d /work && test -d /git && test -d /cache && test -d /invocation && test -d /results
@@ -73,6 +93,12 @@ echo "Verifying local image reference $local_reference"
   command -v go >/dev/null
   command -v gofmt >/dev/null
   test "$PATH" = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  # Build metadata of every shipped helper and the worker toolchain must name
+  # the approved Go release.
+  test "$(go env GOVERSION)" = "$APPROVED_GO"
+  for helper in /usr/local/bin/factory-report /usr/local/bin/factory-worker-headless /usr/local/go/bin/go; do
+    test "$(go version "$helper")" = "$helper: $APPROVED_GO"
+  done
 '
 
 repository_root="$(pwd -P)"
@@ -94,6 +120,8 @@ tar -C "$repository_root" \
   --exclude='./.git' \
   --exclude='./.factory-worktrees' \
   --exclude='./.worker-build.*' \
+  --exclude='./.worker-scan.*' \
+  --exclude='./.scan-reports' \
   --exclude='./.headless-verify.*' \
   --exclude='./.serena' \
   --exclude='./.ua' \

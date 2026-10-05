@@ -1,7 +1,7 @@
 # Versioned factory worker base image. The repository worker definition adds
 # only the project toolchain that its gates require.
 
-ARG GO_VERSION=1.25.0
+ARG GO_VERSION=1.27.1
 
 # Building the report in a stage that has the target platform selected makes
 # the copied binary native to the image platform, including under buildx.
@@ -17,6 +17,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /factory-report ./cmd/f
 
 FROM node:22-bookworm-slim
 
+ARG NPM_VERSION=11.21.0
 ARG CLAUDE_VERSION=2.1.232
 ARG CODEX_VERSION=0.148.0
 ARG FACTORY_BASE_VERSION=1
@@ -25,7 +26,10 @@ LABEL org.opencontainers.image.title="Software Factory worker base" \
       org.opencontainers.image.version="${FACTORY_BASE_VERSION}" \
       org.opencontainers.image.description="Pinned harnesses and factory reporting command for supervised workers"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Upgrading first applies Debian security fixes that the Node base image
+# does not carry yet.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
       bash \
       ca-certificates \
       curl \
@@ -37,8 +41,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Exact package versions are build arguments so the base image can be
-# reproduced without silently adopting a newer harness release.
-RUN npm install --global \
+# reproduced without silently adopting a newer harness release. npm itself is
+# pinned too: the copy bundled with Node carries dependencies with released
+# security fixes.
+RUN npm install --global "npm@${NPM_VERSION}" \
+    && npm install --global \
       "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force
