@@ -54,6 +54,9 @@ make install
 
 The build produces the coordinator, worker report, and headless worker helper.
 The install target places the commands in Go's configured binary directory.
+Every Make target builds with the Go release in the go.mod `toolchain` line,
+and Go downloads it when the Go on `PATH` is a different release; see [Build
+toolchain and vulnerability scanning](docs/supply-chain.md).
 Run <code>make check</code> before submitting repository changes. Build and
 verify the pinned worker image by following the [worker image
 instructions](docs/configuration.md#worker-image-build-and-digest-pinning).
@@ -104,6 +107,7 @@ Each operational contract has one owner:
 | Host and repository configuration, issue operations, polling, GitHub commands, cleanup, and reset | [Configuration and local operation](docs/configuration.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
 | Worker operations, stable paths, mounts, process state, and isolation | [Worker runtime](docs/worker-runtime.md) |
+| Approved Go toolchain, vulnerability scans, suppressions, and the Worker rebuild, publish, and repin procedure | [Build toolchain and vulnerability scanning](docs/supply-chain.md) |
 | Terms, invariants, ownership, and lifecycle model | [Domain context](CONTEXT.md) |
 | Component relationships and architecture overview | [Architecture visualization](docs/architecture.html) |
 
@@ -120,7 +124,9 @@ make check
 
 The GitHub Actions **Checks** workflow runs for every pull request and every
 push to `main`. Its `make check` job runs the same formatting, vet, test, and
-build gate as the local command above.
+build gate as the local command above, and then `make vuln-check` scans the
+module source and the built binaries. The worker job pulls the pinned Worker
+image and scans it with `make worker-scan`.
 
 The available Make targets cover dependency setup, formatting, static
 analysis, tests, builds, installation, and worker-image verification. Read

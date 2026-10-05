@@ -511,10 +511,11 @@ be downgraded by a route. See the README section on workflow routes.
 This repository owns a two-layer worker image definition:
 
 - `worker/base.Dockerfile` defines the versioned factory base image. It pins
-  the Codex and Claude Code npm packages through `CODEX_VERSION` and
-  `CLAUDE_VERSION` build arguments, installs Git and the basic worker
+  npm and the Codex and Claude Code npm packages through `NPM_VERSION`,
+  `CODEX_VERSION`, and `CLAUDE_VERSION` build arguments, installs Git and the basic worker
   utilities, and builds the repository's `factory-report` binary into
-  `/usr/local/bin/factory-report`.
+  `/usr/local/bin/factory-report` and the headless process helper into
+  `/usr/local/bin/factory-worker-headless`.
 - `worker/Dockerfile` extends that base with the Go toolchain required by this
   repository's setup and gates. Go and `gofmt` are exposed through
   `/usr/local/bin`, because the worker adapter deliberately supplies the fixed
@@ -535,10 +536,17 @@ the configured image must be built locally under the same image name; this is
 deliberate because the worker runtime never pulls. A registry publish workflow
 should replace it with the registry's manifest digest. The command prints the
 exact `worker_build` block to copy into `factory.yaml`. The defaults pin Codex
-`0.148.0`, Claude Code `2.1.232`, and
-Go `1.25.0`; override those build arguments explicitly when producing a new
-versioned image. Set `WORKER_PLATFORM=linux/amd64` (or another target) when
-building for a platform different from the Docker daemon.
+`0.148.0`, Claude Code `2.1.232`, and npm `11.21.0`; override those build arguments explicitly
+when producing a new versioned image. The Go release is not an override: the
+script reads the approved release from the go.mod `toolchain` line, refuses a
+different `GO_VERSION`, and verifies the build metadata of the shipped helpers
+and the worker toolchain in the image. Set `WORKER_PLATFORM=linux/amd64` (or
+another target) when building for a platform different from the Docker daemon.
+
+`make worker-publish` scans and publishes a locally built image and prints its
+registry manifest digest. [Build toolchain and vulnerability
+scanning](supply-chain.md) owns the approved Go toolchain, the scan policy,
+and the complete rebuild, publish, repin, and smoke procedure.
 
 After the image smoke checks, the same command mounts this checkout and runs
 the configured setup, format, vet, test, and build gates under the worker's
