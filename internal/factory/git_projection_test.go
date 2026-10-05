@@ -164,14 +164,16 @@ if [ "${1:-}" = "container" ] && [ "${2:-}" = "inspect" ]; then
   exit 0
 fi
 if [ "${1:-}" = "exec" ]; then
-  while [ "$#" -gt 0 ] && [ "$1" != "/bin/sh" ]; do
+  # Skip the worker-side supervisor; its records root and command identity
+  # precede the repository command.
+  while [ "$#" -gt 0 ] && [ "$1" != "factory-command" ]; do
     shift
   done
-  if [ "$#" -lt 3 ] || [ "$2" != "-c" ]; then
+  if [ "$#" -ne 4 ]; then
     echo "malformed worker command" >&2
     exit 125
   fi
-  shift 2
+  shift 3
   GIT_DIR="$PROJECTION_TEST_GIT_DIR" \
   GIT_WORK_TREE="$PROJECTION_TEST_GIT_WORK_TREE" \
   GIT_CONFIG_NOSYSTEM=1 \
