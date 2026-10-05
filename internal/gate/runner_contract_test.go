@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -317,11 +318,64 @@ func TestRunnerClassifiesACommandTimeoutAsATypedGateFailure(t *testing.T) {
 	}
 }
 
+// TestRunnerHaltsTheSuiteWhenTerminationIsUnconfirmed verifies that a gate
+// whose timed-out command may still run is an infrastructure error, not a
+// repairable timeout, and that no later gate overlaps it, even when the gate is
+// advisory.
+func TestRunnerHaltsTheSuiteWhenTerminationIsUnconfirmed(t *testing.T) {
+	t.Parallel()
+
+	unconfirmed := fmt.Errorf("run command in worker: %w", &worker.CommandTerminationError{Reason: "the worker did not confirm the cancellation"})
+	runtime := &fakeRuntime{
+		results:       []worker.CommandResult{{ExitCode: 0}},
+		errors:        []error{nil, unconfirmed},
+		waitForCancel: map[int]bool{1: true},
+	}
+	statuses := &fakeStatusPublisher{}
+	runner := gate.Runner{Runtime: runtime, Statuses: statuses}
+
+	result, err := runner.RunSuite(context.Background(), gate.SuiteRequest{
+		RunID:         "run-unconfirmed-termination",
+		CheckpointSHA: gateCheckpoint,
+		Setup:         "setup",
+		SetupTimeout:  "1m",
+		Phase:         gate.PhaseCheckpoint,
+		Gates: []config.GateConfig{
+			{Name: "lint", Command: "lint", Timeout: "1ms", Blocking: false, EnvironmentPolicy: config.EnvironmentPolicyClean},
+			{Name: "test", Command: "test", Timeout: "1m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean},
+		},
+	})
+
+	if len(runtime.commands) != 2 {
+		t.Fatalf("worker commands = %#v, want setup and the first gate only", runtime.commands)
+	}
+	var gateFailure *gate.GateFailure
+	if !errors.As(err, &gateFailure) || gateFailure.TimedOut || gateFailure.Cause == nil {
+		t.Fatalf("RunSuite() error = %v, want an untimed gate execution failure", err)
+	}
+	var terminationErr *worker.CommandTerminationError
+	if !errors.As(err, &terminationErr) {
+		t.Fatalf("RunSuite() error = %v, want the termination discrepancy retained", err)
+	}
+	if len(result.Gates) != 2 {
+		t.Fatalf("suite gates = %#v, want one result per declared gate", result.Gates)
+	}
+	if result.Gates[0].Outcome != gate.OutcomeError || result.Gates[0].Status.State != github.CommitStatusError {
+		t.Fatalf("first gate = %#v, want an execution error status", result.Gates[0])
+	}
+	if !result.Gates[1].Skipped || result.Gates[1].Outcome != gate.OutcomeSkipped || len(statuses.statuses) != 2 {
+		t.Fatalf("second gate = %#v, statuses = %#v, want a published skip", result.Gates[1], statuses.statuses)
+	}
+}
+
 // fakeRuntime is a WorkerRuntime adapter used at the gate module's public seam.
 type fakeRuntime struct {
 	commands []worker.CommandRequest
 	results  []worker.CommandResult
 	errors   []error
+	// waitForCancel selects zero-based calls that block until their context
+	// ends, like a command that outlives its timeout.
+	waitForCancel map[int]bool
 }
 
 // Start implements WorkerRuntime for the gate contract tests.
@@ -331,7 +385,10 @@ func (f *fakeRuntime) Start(context.Context, worker.StartRequest) error { return
 func (f *fakeRuntime) Resume(context.Context, worker.ResumeRequest) error { return nil }
 
 // RunCommand records the coordinator command and returns the next fixture.
-func (f *fakeRuntime) RunCommand(_ context.Context, request worker.CommandRequest) (worker.CommandResult, error) {
+func (f *fakeRuntime) RunCommand(ctx context.Context, request worker.CommandRequest) (worker.CommandResult, error) {
+	if f.waitForCancel[len(f.commands)] {
+		<-ctx.Done()
+	}
 	f.commands = append(f.commands, request)
 	var result worker.CommandResult
 	if len(f.results) != 0 {

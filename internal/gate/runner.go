@@ -281,7 +281,9 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 
 // RunSuite executes setup once, then evaluates every declared gate in order.
 // Independent gates continue after a failure; gates depending on a failed gate
-// receive an explicit skipped result instead of a failure.
+// receive an explicit skipped result instead of a failure. A gate whose
+// cancelled command the worker cannot confirm stopped halts the suite: every
+// later gate is skipped, and the failure blocks even for an advisory gate.
 func (r Runner) RunSuite(ctx context.Context, request SuiteRequest) (SuiteResult, error) {
 	if err := r.validateSuiteRequest(request); err != nil {
 		return SuiteResult{}, err
@@ -325,7 +327,18 @@ func (r Runner) RunSuite(ctx context.Context, request SuiteRequest) (SuiteResult
 
 	failed := make(map[string]bool, len(request.Gates))
 	blockingFailures := make([]error, 0)
+	halted := false
 	for index, declared := range request.Gates {
+		if halted {
+			// A command that may still run owns the checkout and caches, so no
+			// later gate may overlap it, whatever its dependencies.
+			gateResult := r.skippedResult(result, declared, index, "worker command termination is unconfirmed")
+			result.Gates = append(result.Gates, gateResult)
+			if err := r.publish(ctx, gateResult.Status); err != nil {
+				blockingFailures = append(blockingFailures, err)
+			}
+			continue
+		}
 		if dependency, reason := failedDependency(declared, failed); dependency != "" {
 			gateResult := r.skippedResult(result, declared, index, reason)
 			result.Gates = append(result.Gates, gateResult)
@@ -346,7 +359,8 @@ func (r Runner) RunSuite(ctx context.Context, request SuiteRequest) (SuiteResult
 		}
 		if failure != nil {
 			failed[declared.Name] = true
-			if declared.Blocking {
+			halted = terminationUnconfirmed(failure)
+			if declared.Blocking || halted {
 				blockingFailures = append(blockingFailures, failure)
 			}
 		}
@@ -437,7 +451,9 @@ func (r Runner) runDeclaredGate(ctx context.Context, suite SuiteResult, declared
 		gateResult.Status.Description = "factory gate passed"
 		return gateResult, nil
 	}
-	timedOut = timedOut || errors.Is(commandErr, context.DeadlineExceeded)
+	// An unconfirmed termination is worker infrastructure even though the
+	// deadline expired: the command may still run, so it is no timeout result.
+	timedOut = (timedOut || errors.Is(commandErr, context.DeadlineExceeded)) && !terminationUnconfirmed(commandErr)
 	failure := &GateFailure{Name: declared.Name, Result: gateResult.Gate, Cause: commandErr, TimedOut: timedOut, Blocking: declared.Blocking}
 	gateResult.Outcome = OutcomeFailed
 	if timedOut {
@@ -452,6 +468,13 @@ func (r Runner) runDeclaredGate(ctx context.Context, suite SuiteResult, declared
 		gateResult.Status.Description = "factory gate failed"
 	}
 	return gateResult, failure
+}
+
+// terminationUnconfirmed reports whether err carries a worker discrepancy for
+// a cancelled command that may still be running.
+func terminationUnconfirmed(err error) bool {
+	var terminationErr *worker.CommandTerminationError
+	return errors.As(err, &terminationErr)
 }
 
 // setupFailedResult records every declared gate without misclassifying it as a

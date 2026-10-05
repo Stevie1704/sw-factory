@@ -74,6 +74,7 @@ func TestRepairableCheckFailureRejectsInfrastructure(t *testing.T) {
 		{name: "deterministic suite", err: &gate.SuiteFailure{Failures: []error{deterministic, &gate.DependencyFailure{Name: "lint", Dependency: "test"}}}, want: true},
 		{name: "timeout", err: &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", TimedOut: true}}}, want: true},
 		{name: "worker runtime", err: &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Cause: errors.New("worker unavailable")}}}},
+		{name: "unconfirmed termination", err: &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Cause: &worker.CommandTerminationError{Reason: "the worker did not confirm the cancellation"}}}}},
 		{name: "setup", err: &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: worker.CommandResult{ExitCode: 1}}}}},
 		{name: "transport", err: &gate.SuiteFailure{Failures: []error{deterministic, errors.New("GitHub unavailable")}}},
 		{name: "joined persistence", err: errors.Join(&gate.SuiteFailure{Failures: []error{deterministic}}, errors.New("SQLite busy"))},
@@ -139,6 +140,39 @@ func TestRouteCheckRepairWaitsAndExhaustsWithoutSpendingExtraBudget(t *testing.T
 				t.Fatalf("saved states = %#v, want one %s state", runStore.saved, test.wantStatus)
 			}
 		})
+	}
+}
+
+// TestRouteCheckRepairParksAnUnconfirmedTerminationWithoutSpendingBudget
+// verifies that a gate command which may still be running pauses the run for
+// infrastructure, releases the worker, and tells the operator how to recover.
+func TestRouteCheckRepairParksAnUnconfirmedTerminationWithoutSpendingBudget(t *testing.T) {
+	const checkpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	unconfirmed := fmt.Errorf("run command in worker %q: %w", "issue-210-run-20261005T094500Z", &worker.CommandTerminationError{Reason: "the command process group survived forced termination"})
+	results := []gate.Result{
+		{CheckpointSHA: checkpoint, GateName: "test", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeError, SetupRan: true, Status: github.CommitStatus{State: github.CommitStatusError}},
+		{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeSkipped, Skipped: true, SkipReason: "worker command termination is unconfirmed", Status: github.CommitStatus{State: github.CommitStatusPending}},
+	}
+	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Blocking: true, Cause: unconfirmed}}}
+	run := store.Run{ID: "issue-210-run-20261005T094500Z", Stage: store.StageCheck, Status: store.StatusActive, CheckpointSHA: checkpoint, CheckRepairAttempts: 1, CheckRepairBudget: 3, Worktree: filepath.Join(t.TempDir(), "worktrees", "run")}
+	runStore := &repairContractStore{}
+	workerRuntime := &repairContractWorker{}
+	service := &Service{deps: Dependencies{Worker: workerRuntime, Now: func() time.Time { return time.Date(2026, 10, 5, 9, 45, 0, 0, time.UTC) }}}
+	packet := SpecificationPacket{RepositoryConfig: config.RepositoryConfig{RetryLimits: config.RetryLimits{CheckRepair: 3}}}
+
+	result, err := service.routeCheckRepair(t.Context(), config.RepositoryRegistration{}, runStore, run, packet, results, suiteErr)
+
+	if err != nil {
+		t.Fatalf("routeCheckRepair() error = %v", err)
+	}
+	if result.Outcome != CheckRepairWaitingForHarness || result.Run.Status != store.StatusWaitingForHarness || result.Attempt != 1 || result.Remaining != 2 {
+		t.Fatalf("result = %#v, want an infrastructure wait without a consumed attempt", result)
+	}
+	if workerRuntime.stops != 1 {
+		t.Fatalf("worker stops = %d, want the worker released so its processes end", workerRuntime.stops)
+	}
+	if reason := result.Run.LifecycleReason; !strings.Contains(reason, "termination is unconfirmed") || !strings.Contains(reason, "stop or recreate the worker") {
+		t.Fatalf("lifecycle reason = %q, want the typed discrepancy and its recovery action", reason)
 	}
 }
 
