@@ -18,12 +18,12 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
-// TestAdvisoryGateFailureReachesReadiness drives one run from claim through
+// TestNonBlockingGateFailureReachesReadiness drives one run from claim through
 // an accepted gate suite and an independent review to a ready pull request
 // while an independent non-blocking gate fails. It uses a real operational
 // store and fake external adapters, so no GitHub state changes.
-func TestAdvisoryGateFailureReachesReadiness(t *testing.T) {
-	fixture := newAdvisoryReadinessFixture(t)
+func TestNonBlockingGateFailureReachesReadiness(t *testing.T) {
+	fixture := newNonBlockingReadinessFixture(t)
 	ctx := context.Background()
 
 	claimed, err := fixture.service.ClaimIssue(ctx, 42)
@@ -37,18 +37,18 @@ func TestAdvisoryGateFailureReachesReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartAgent(implementation) error = %v", err)
 	}
-	fixture.workspace.state.ChangedPaths = []string{"internal/factory/advisory.go"}
+	fixture.workspace.state.ChangedPaths = []string{"internal/factory/lint.go"}
 	fixture.acceptReport(t, implementation, report.Report{
 		Outcome: report.OutcomeCompleted, Summary: "implementation complete",
 		Handoff: &report.Handoff{
-			ChangeSummary:          "implemented advisory behavior",
-			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "advisory readiness", Evidence: "factory regression"}},
-			ProductionFilesChanged: []string{"internal/factory/advisory.go"},
+			ChangeSummary:          "implemented non-blocking gate behavior",
+			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "non-blocking gate readiness", Evidence: "factory regression"}},
+			ProductionFilesChanged: []string{"internal/factory/lint.go"},
 			FocusedCommands:        []string{"go test ./internal/factory"},
 		},
 	})
 
-	// Setup passes, the independent advisory gate fails, and the required
+	// Setup passes, the independent non-blocking gate fails, and the required
 	// gate passes at the implementation checkpoint.
 	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 0}, worker.CommandResult{ExitCode: 3}, worker.CommandResult{ExitCode: 0})
 	draft, err := fixture.service.CreateDraftPullRequest(ctx, factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
@@ -56,44 +56,52 @@ func TestAdvisoryGateFailureReachesReadiness(t *testing.T) {
 		t.Fatalf("CreateDraftPullRequest() error = %v", err)
 	}
 	if draft.Repair != nil || draft.Run.Stage != store.StageDraftPR || draft.Run.CheckRepairAttempts != 0 {
-		t.Fatalf("draft result = %#v, want a draft PR without spending repair budget on an advisory failure", draft)
+		t.Fatalf("draft result = %#v, want a draft PR without spending repair budget on a non-blocking gate failure", draft)
 	}
 	fixture.pullRequests.existing = fixture.pullRequests.created
 	fixture.pullRequests.existing.HeadSHA = draft.Run.CheckpointSHA
 
-	review, err := fixture.service.StartAgent(ctx, factory.AgentRequest{RunID: claimed.Run.ID})
-	if err != nil {
-		t.Fatalf("StartAgent(review) error = %v", err)
+	// Both independent review axes pass at the exact checkpoint.
+	var reviews []factory.AgentLaunchResult
+	for _, role := range []string{"spec_review", "standards_review"} {
+		review, err := fixture.service.StartAgent(ctx, factory.AgentRequest{RunID: claimed.Run.ID, Role: role})
+		if err != nil {
+			t.Fatalf("StartAgent(%s) error = %v", role, err)
+		}
+		reviews = append(reviews, review)
 	}
-	if review.Invocation.Role != "spec_review" {
-		t.Fatalf("review invocation = %#v, want spec_review", review.Invocation)
+	for _, review := range reviews {
+		fixture.acceptReport(t, review, report.Report{
+			Outcome: report.OutcomeCompleted, Summary: "review complete",
+			ReviewHandoff: &report.ReviewHandoff{ReviewedSHA: draft.Run.CheckpointSHA, UnitID: review.Invocation.ReviewUnitID},
+		})
 	}
-	fixture.acceptReport(t, review, report.Report{
-		Outcome: report.OutcomeCompleted, Summary: "review complete",
-		ReviewHandoff: &report.ReviewHandoff{ReviewedSHA: draft.Run.CheckpointSHA, UnitID: review.Invocation.ReviewUnitID},
-	})
+	review := reviews[len(reviews)-1]
 
 	ready := fixture.currentRun(t)
+	if ready.SpecificationReview == nil || ready.StandardsReview == nil {
+		t.Fatalf("run reviews = %#v / %#v, want both review axes recorded", ready.SpecificationReview, ready.StandardsReview)
+	}
 	if ready.Stage != store.StageReady || ready.Status != store.StatusActive || ready.CheckRepairAttempts != 0 {
 		t.Fatalf("run after review = %#v, want ready/active without check repair", ready)
 	}
 	if fixture.pullRequests.existing.Draft {
-		t.Fatal("pull request remained draft despite only an advisory gate failure")
+		t.Fatal("pull request remained draft despite only a non-blocking gate failure")
 	}
 	results := fixture.checkpointGateResults(t, ready)
-	if len(results) != 2 || results[0].GateName != "advisory" || results[0].Outcome != store.GateOutcomeFailed || results[0].Status != string(github.CommitStatusFailure) || results[1].Outcome != store.GateOutcomePassed {
-		t.Fatalf("persisted checkpoint results = %#v, want the advisory failure retained beside the required success", results)
+	if len(results) != 2 || results[0].GateName != "lint" || results[0].Outcome != store.GateOutcomeFailed || results[0].Status != string(github.CommitStatusFailure) || results[1].Outcome != store.GateOutcomePassed {
+		t.Fatalf("persisted checkpoint results = %#v, want the non-blocking gate failure retained beside the required success", results)
 	}
-	if !fixture.publishedStatus("advisory", draft.Run.CheckpointSHA, github.CommitStatusFailure) {
-		t.Fatalf("published statuses = %#v, want an exact-checkpoint advisory failure", fixture.statuses.values)
+	if !fixture.publishedStatus("lint", draft.Run.CheckpointSHA, github.CommitStatusFailure) {
+		t.Fatalf("published statuses = %#v, want an exact-checkpoint non-blocking gate failure", fixture.statuses.values)
 	}
 	body := fixture.pullRequests.createdRequests[0].Body
-	if !strings.Contains(body, "advisory") || !strings.Contains(body, "failed") {
-		t.Fatalf("generated PR body = %q, want the advisory failure visible", body)
+	if !strings.Contains(body, "lint") || !strings.Contains(body, "failed") {
+		t.Fatalf("generated PR body = %q, want the non-blocking gate failure visible", body)
 	}
 
 	// A replayed review acceptance keeps the run ready and never rewrites the
-	// advisory failure evidence to success. Unattended readiness retries use
+	// non-blocking gate failure evidence to success. Unattended readiness retries use
 	// the same final-checkpoint validator, covered by its unit tests.
 	if _, err := fixture.service.AcceptAgentReport(ctx, factory.AgentReportRequest{RunID: review.Invocation.RunID, InvocationID: review.Invocation.ID}); err != nil {
 		t.Fatalf("replayed AcceptAgentReport() error = %v", err)
@@ -104,13 +112,13 @@ func TestAdvisoryGateFailureReachesReadiness(t *testing.T) {
 	}
 	again := fixture.checkpointGateResults(t, replayed)
 	if len(again) != 2 || again[0].Outcome != store.GateOutcomeFailed || again[0].Status != string(github.CommitStatusFailure) {
-		t.Fatalf("checkpoint results after replay = %#v, want unchanged advisory failure", again)
+		t.Fatalf("checkpoint results after replay = %#v, want unchanged non-blocking gate failure", again)
 	}
 }
 
-// advisoryReadinessFixture wires a real operational store to fake Git,
+// nonBlockingReadinessFixture wires a real operational store to fake Git,
 // GitHub, worker, and harness adapters for a claim-to-ready run.
-type advisoryReadinessFixture struct {
+type nonBlockingReadinessFixture struct {
 	service         *factory.Service
 	operationalPath string
 	workspace       *reviewableDraftWorkspace
@@ -119,10 +127,10 @@ type advisoryReadinessFixture struct {
 	pullRequests    *fakePullRequests
 }
 
-// newAdvisoryReadinessFixture declares an independent advisory gate before a
+// newNonBlockingReadinessFixture declares an independent non-blocking gate before a
 // required gate and selects implementation-owned tests so the run reaches
 // review without a separate test stage.
-func newAdvisoryReadinessFixture(t *testing.T) *advisoryReadinessFixture {
+func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 	t.Helper()
 	root := t.TempDir()
 	repositoryPath := filepath.Join(root, "repository")
@@ -139,7 +147,7 @@ func newAdvisoryReadinessFixture(t *testing.T) *advisoryReadinessFixture {
 	}
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{
-		{Name: "advisory", Command: "advisory", Timeout: "1m", Blocking: false, EnvironmentPolicy: config.EnvironmentPolicyClean},
+		{Name: "lint", Command: "lint", Timeout: "1m", Blocking: false, EnvironmentPolicy: config.EnvironmentPolicyClean},
 		{Name: "required", Command: "required", Timeout: "1m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean},
 	}
 	policy.TestPolicy.Mode = config.TestModeAdvisory
@@ -147,21 +155,23 @@ func newAdvisoryReadinessFixture(t *testing.T) *advisoryReadinessFixture {
 	delete(policy.ModelOptions, "test")
 	policy.RoleHarnessDefaults["spec_review"] = config.HarnessCodex
 	policy.ModelOptions["spec_review"] = []string{"gpt-5"}
-	issue := github.Issue{Number: 42, Title: "Honor advisory gates", Body: "Reach readiness with an advisory gate failure.", State: "open", Labels: []string{github.LabelAgentReady}}
+	policy.RoleHarnessDefaults["standards_review"] = config.HarnessCodex
+	policy.ModelOptions["standards_review"] = []string{"gpt-5"}
+	issue := github.Issue{Number: 42, Title: "Honor non-blocking gates", Body: "Reach readiness with a non-blocking gate failure.", State: "open", Labels: []string{github.LabelAgentReady}}
 	workspace := &reviewableDraftWorkspace{draftGitWorkspace: &draftGitWorkspace{
-		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-advisory", Worktree: worktreePath},
-		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-advisory", HeadSHA: factoryGateCheckpoint},
+		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-nonblocking", Worktree: worktreePath},
+		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-nonblocking", HeadSHA: factoryGateCheckpoint},
 	}}
 	// Baseline: setup plus both gates pass before any agent edit.
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 21, URL: "https://github.com/example/project/pull/21", State: "open", Draft: true, HeadBranch: "factory/run-advisory", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 21, URL: "https://github.com/example/project/pull/21", State: "open", Draft: true, HeadBranch: "factory/run-nonblocking", BaseBranch: "main"}}
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		OperationalDataPath: operationalPath, RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
 		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json")},
 	}}}
-	ids := []string{"run-advisory", "implementation", "review"}
+	ids := []string{"run-nonblocking", "implementation", "spec-review", "standards-review"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
@@ -181,11 +191,11 @@ func newAdvisoryReadinessFixture(t *testing.T) *advisoryReadinessFixture {
 		},
 		Coordinator: "coordinator-test",
 	})
-	return &advisoryReadinessFixture{service: service, operationalPath: operationalPath, workspace: workspace, worker: workerRuntime, statuses: statuses, pullRequests: pullRequests}
+	return &nonBlockingReadinessFixture{service: service, operationalPath: operationalPath, workspace: workspace, worker: workerRuntime, statuses: statuses, pullRequests: pullRequests}
 }
 
 // acceptReport completes one launched invocation with the given role payload.
-func (f *advisoryReadinessFixture) acceptReport(t *testing.T, launch factory.AgentLaunchResult, value report.Report) {
+func (f *nonBlockingReadinessFixture) acceptReport(t *testing.T, launch factory.AgentLaunchResult, value report.Report) {
 	t.Helper()
 	value.SchemaVersion = report.SchemaVersion
 	value.InvocationID = launch.Invocation.ID
@@ -204,7 +214,7 @@ func (f *advisoryReadinessFixture) acceptReport(t *testing.T, launch factory.Age
 }
 
 // currentRun reopens the real store and returns the active or latest run.
-func (f *advisoryReadinessFixture) currentRun(t *testing.T) store.Run {
+func (f *nonBlockingReadinessFixture) currentRun(t *testing.T) store.Run {
 	t.Helper()
 	opened, err := store.Open(context.Background(), f.operationalPath)
 	if err != nil {
@@ -219,7 +229,7 @@ func (f *advisoryReadinessFixture) currentRun(t *testing.T) store.Run {
 }
 
 // checkpointGateResults reads the persisted final-checkpoint projection.
-func (f *advisoryReadinessFixture) checkpointGateResults(t *testing.T, run store.Run) []store.GateResult {
+func (f *nonBlockingReadinessFixture) checkpointGateResults(t *testing.T, run store.Run) []store.GateResult {
 	t.Helper()
 	opened, err := store.Open(context.Background(), f.operationalPath)
 	if err != nil {
@@ -234,7 +244,7 @@ func (f *advisoryReadinessFixture) checkpointGateResults(t *testing.T, run store
 }
 
 // publishedStatus reports whether one exact-checkpoint gate status was sent.
-func (f *advisoryReadinessFixture) publishedStatus(gateName, sha string, state github.CommitStatusState) bool {
+func (f *nonBlockingReadinessFixture) publishedStatus(gateName, sha string, state github.CommitStatusState) bool {
 	for _, status := range f.statuses.values {
 		if status.SHA == sha && status.State == state && strings.HasSuffix(status.Context, gateName) {
 			return true
@@ -251,6 +261,6 @@ type reviewableDraftWorkspace struct {
 
 // StreamDiff writes a fixed diff for the reviewer.
 func (*reviewableDraftWorkspace) StreamDiff(_ context.Context, _, _, _ string, destination io.Writer) error {
-	_, err := io.WriteString(destination, "diff --git a/internal/factory/advisory.go b/internal/factory/advisory.go\n")
+	_, err := io.WriteString(destination, "diff --git a/internal/factory/lint.go b/internal/factory/lint.go\n")
 	return err
 }

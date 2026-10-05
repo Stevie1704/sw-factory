@@ -264,12 +264,12 @@ A non-blocking (`blocking: false`) gate is advisory at two points:
 
 - Suite evaluation: a failing or timed-out non-blocking command does not fail
   the suite, so it does not start check repair or spend the repair budget.
-- Final readiness: the pull request can become ready when every blocking gate
-  passed and a non-blocking gate failed its command.
+- Final readiness: a failed non-blocking gate command does not prevent
+  readiness. Every blocking gate must pass.
 
 The advisory failure stays visible. The factory keeps the `failure` status on
 the exact checkpoint, the failed outcome in the stored result, and the gate in
-the generated pull-request summary. These limits apply:
+the generated pull-request summary. These rules continue to apply:
 
 - A blocking gate that depends on a failed non-blocking gate is skipped, and
   that skip blocks the suite and readiness.

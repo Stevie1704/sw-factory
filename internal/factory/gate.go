@@ -311,7 +311,7 @@ func ensureFinalCheckpointGatesAccepted(ctx context.Context, reader gitadapter.C
 			return fmt.Errorf("final checkpoint gate result %q is duplicated", result.GateName)
 		}
 		seen[result.GateName] = struct{}{}
-		if err := finalGateOutcomeAccepted(result); err != nil {
+		if err := ensureFinalGateOutcomeAccepted(result); err != nil {
 			return err
 		}
 	}
@@ -323,12 +323,12 @@ func ensureFinalCheckpointGatesAccepted(ctx context.Context, reader gitadapter.C
 	return nil
 }
 
-// finalGateOutcomeAccepted applies the repository blocking policy to one
+// ensureFinalGateOutcomeAccepted applies the repository blocking policy to one
 // identity-checked final result. Only a declared command failure of a
 // non-blocking gate is advisory; a runtime error, a skip, or a setup failure
 // still refuses readiness, and the published status must agree with the
 // outcome so a failure is never presented as success.
-func finalGateOutcomeAccepted(result store.GateResult) error {
+func ensureFinalGateOutcomeAccepted(result store.GateResult) error {
 	wantStatus := github.CommitStatusSuccess
 	switch {
 	case result.Outcome == store.GateOutcomePassed:
