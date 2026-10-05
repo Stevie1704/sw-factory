@@ -1,0 +1,16 @@
+{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck","scanner_version":"v1.8.0","db":"https://vuln.go.dev","db_last_modified":"2026-10-01T20:24:15Z","scan_level":"symbol","scan_mode":"binary"}}
+{"progress":{"message":"Scanning your binary for known vulnerabilities..."}}
+{"SBOM":{"go_version":"go1.25.5","modules":[{"path":"github.com/Stevie1704/sw-factory","version":"v0.0.0-20261005121617-cddb4a6d94c1+dirty"},{"path":"github.com/dustin/go-humanize","version":"v1.0.1"},{"path":"github.com/google/uuid","version":"v1.6.0"},{"path":"github.com/mattn/go-isatty","version":"v0.0.24"},{"path":"github.com/ncruces/go-strftime","version":"v1.0.0"},{"path":"github.com/remyoudompheng/bigfft","version":"v0.0.0-20230129092748-24d4a6f8daec"},{"path":"golang.org/x/sys","version":"v0.47.0"},{"path":"gopkg.in/yaml.v3","version":"v3.0.1"},{"path":"modernc.org/libc","version":"v1.74.4"},{"path":"modernc.org/mathutil","version":"v1.7.1"},{"path":"modernc.org/memory","version":"v1.11.0"},{"path":"modernc.org/sqlite","version":"v1.57.0"},{"path":"stdlib","version":"go1.25.5"}],"roots":["github.com/Stevie1704/sw-factory"]}}
+{"progress":{"message":"Fetching vulnerabilities from the database..."}}
+{"progress":{"message":"Checking the binary against the vulnerabilities..."}}
+{"finding":{"osv":"GO-2026-4337","fixed_version":"v1.25.7","trace":[{"module":"stdlib","version":"v1.25.5"}]}}
+{"finding":{"osv":"GO-2026-4341","fixed_version":"v1.25.6","trace":[{"module":"stdlib","version":"v1.25.5"}]}}
+{"finding":{"osv":"GO-2026-4601","fixed_version":"v1.25.8","trace":[{"module":"stdlib","version":"v1.25.5"}]}}
+{"finding":{"osv":"GO-2026-4602","fixed_version":"v1.25.8","trace":[{"module":"stdlib","version":"v1.25.5"}]}}
+{"finding":{"osv":"GO-2026-4341","fixed_version":"v1.25.6","trace":[{"module":"stdlib","version":"v1.25.5","package":"net/url"}]}}
+{"finding":{"osv":"GO-2026-4601","fixed_version":"v1.25.8","trace":[{"module":"stdlib","version":"v1.25.5","package":"net/url"}]}}
+{"finding":{"osv":"GO-2026-4602","fixed_version":"v1.25.8","trace":[{"module":"stdlib","version":"v1.25.5","package":"os"}]}}
+{"finding":{"osv":"GO-2026-4602","fixed_version":"v1.25.8","trace":[{"module":"stdlib","version":"v1.25.5","package":"os","function":"ReadDir"}]}}
+{"finding":{"osv":"GO-2026-4602","fixed_version":"v1.25.8","trace":[{"module":"stdlib","version":"v1.25.5","package":"os","function":"ReadDir","receiver":"File"}]}}
+{"finding":{"osv":"GO-2026-4341","fixed_version":"v1.25.6","trace":[{"module":"stdlib","version":"v1.25.5","package":"net/url","function":"ParseQuery"}]}}
+{"finding":{"osv":"GO-2026-4601","fixed_version":"v1.25.8","trace":[{"module":"stdlib","version":"v1.25.5","package":"net/url","function":"Parse"}]}}
