@@ -86,8 +86,8 @@ bounded check, and the doctor reports all failures before a run can start.
 _Avoid_: First failure, mid-run diagnosis
 
 **Gate**:
-A repository-declared deterministic command whose result is tied to an exact checkpoint and does not depend on model judgment.
-_Avoid_: Agent check, review
+A repository-declared deterministic command whose result is tied to an exact checkpoint and does not depend on model judgment. Gates run inside the Worker; they are the only place for checks a repository requires, because factory Git operations on the host never run repository Git hooks (ADR 0015).
+_Avoid_: Agent check, review, Git hook
 
 **Worker**:
 The per-run isolated execution environment that exposes only the run worktree, read-only Git metadata, the host directories of explicitly declared repository caches, and factory-managed credential copies.

@@ -102,7 +102,7 @@ factory doctor --config /Users/me/.config/factory/config.yaml
 ```
 
 The doctor reports configuration, GitHub authentication and permissions, the
-factory labels, the checkout's remote/hooks/worktree support, Docker, the
+factory labels, the checkout's remote, hook suppression, and worktree support, Docker, the
 pinned worker image, both supported harness executables, harness capabilities,
 the headless worker helper, harness authentication sources, and SQLite. It runs every
 contributor even after a failure and returns a nonzero exit status when any
@@ -303,6 +303,55 @@ persisted and the run waits for a human. When enabled, the coordinator resumes
 the original test session, permits the repository's
 `retry_limits.test_revision` revision attempts, and reruns the revised focused
 command independently before implementation can continue.
+
+## Host Git boundary
+
+The coordinator runs Git on the host only for factory-owned operations:
+worktree creation, checkpoints, base synchronization, push, inspection, and
+startup diagnosis. Each of these commands starts with the policy
+`-c core.hooksPath=/dev/null -c core.fsmonitor=false` (ADR 0015). Command-line
+configuration outranks repository, global, system, and ambient `GIT_CONFIG_*`
+configuration. Thus no repository hook runs on the host through a factory
+operation, also when `core.hooksPath` points at a tracked directory that a
+worker can edit. The factory does not change the checkout's Git configuration.
+Your manual Git commands in the checkout continue to run your hooks.
+`factory doctor` reports the `git hooks` check as blocking when factory Git
+invocations do not resolve the disabled hooks path.
+
+| Mechanism | Factory policy | Reason |
+| --- | --- | --- |
+| Client hooks (`pre-commit`, `commit-msg`, `post-checkout`, `post-merge`, `pre-push`, `reference-transaction`, and all others) | Suppressed | A configured hooks path can point at tracked, worker-editable scripts. |
+| `core.fsmonitor` hook command | Suppressed | Status reads would run the configured command. The factory does not need it. |
+| Clean, smudge, and process filters; merge drivers | Supported | Only host configuration defines their commands. Tracked `.gitattributes` can only select a defined driver. Git LFS needs them. |
+| External diff and text conversion | Not reached | Checkpoint validation uses the built-in `diff --check` format. The review diff passes `--no-ext-diff --no-textconv`. |
+| Commit signing (`commit.gpgSign`, `gpg.program`) | Supported | The operator configures the program. A repository may require signed commits. |
+| Transport authentication (credential helpers, `core.sshCommand`, askpass) | Supported | Fetch and push need it. No hook runs, so no repository script can inherit it. |
+| Server-side hooks of the remote | Not in scope | They run on the remote. The production remote is GitHub. |
+
+### Move hook checks into gates
+
+A check that a repository runs as a Git hook does not run for factory
+checkpoints. If the check is required, declare it as a gate in `factory.yaml`.
+The worker runs it against the exact checkpoint. For example, replace a
+pre-commit hook that runs a formatter and the unit tests with:
+
+```yaml
+gates:
+  - name: format
+    command: gofmt -l .
+    timeout: 30s
+    blocking: true
+    environment_policy: clean
+  - name: test
+    command: scripts/worker-go.sh test ./...
+    timeout: 2m
+    blocking: true
+    depends_on: [format]
+    environment_policy: clean
+```
+
+Developers can keep the hook for manual commits. For factory checkpoints, gates
+replace hooks.
 
 ## Repository caches
 

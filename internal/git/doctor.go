@@ -94,7 +94,7 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 				return doctor.Failure("git hooks", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckHooks(ctx, request); err != nil {
-				return doctor.Failure("git hooks", "the checkout's Git hooks directory cannot be inspected", "restore a readable Git hooks directory or correct core.hooksPath")
+				return doctor.Failure("git hooks", "factory Git invocations do not suppress repository hooks", "run the factory with a git binary that honors command-line configuration; move required hook checks into repository gates")
 			}
 			return doctor.Success("git hooks")
 		},
@@ -230,8 +230,9 @@ func remoteDiagnosis(err error) (string, string) {
 	}
 }
 
-// CheckHooks verifies the configured Git hooks path is present and readable.
-// Hooks are never executed by diagnosis.
+// CheckHooks verifies that factory Git invocations resolve the disabled hooks
+// path, so no repository, global, or ambient hook can run through a factory
+// operation. Hooks are never executed by diagnosis.
 func (m *LocalWorktreeManager) CheckHooks(ctx context.Context, request DoctorRequest) error {
 	if err := validateDoctorRepository(request.RepositoryPath); err != nil {
 		return err
@@ -240,19 +241,8 @@ func (m *LocalWorktreeManager) CheckHooks(ctx context.Context, request DoctorReq
 	if err != nil {
 		return fmt.Errorf("resolve Git hooks path: %w", err)
 	}
-	hooksPath := strings.TrimSpace(string(output))
-	if hooksPath == "" {
-		return errors.New("Git returned an empty hooks path")
-	}
-	if !filepath.IsAbs(hooksPath) {
-		hooksPath = filepath.Join(request.RepositoryPath, hooksPath)
-	}
-	info, err := os.Stat(hooksPath)
-	if err != nil {
-		return fmt.Errorf("inspect Git hooks directory: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("Git hooks path is not a directory")
+	if hooksPath := strings.TrimSpace(string(output)); hooksPath != os.DevNull {
+		return fmt.Errorf("factory Git invocations resolve hooks path %q instead of %q", hooksPath, os.DevNull)
 	}
 	return nil
 }

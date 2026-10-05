@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -118,7 +119,7 @@ func (s *Service) streamReviewDiff(ctx context.Context, worktree, base, checkpoi
 // streamReviewDiffFromWorktree streams Git stdout directly into the supplied
 // destination. No command-output helper may materialise the complete diff.
 func streamReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoint string, destination io.Writer) error {
-	command := exec.CommandContext(ctx, "git", "-C", worktree, "diff", "--no-ext-diff", "--no-textconv", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", ".")
+	command := exec.CommandContext(ctx, "git", gitadapter.HostCommandArgs("-C", worktree, "diff", "--no-ext-diff", "--no-textconv", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", ".")...)
 	// The factory worker environment may provide a coordinator-level Git
 	// projection. Remove those overrides so this command inspects the claimed
 	// worktree's own repository metadata.

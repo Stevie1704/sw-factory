@@ -40,11 +40,7 @@ func TestLocalWorktreeManagerChecksTheConfiguredRemoteAndTargetBranch(t *testing
 // repository-local capability checks use read-only Git observations.
 func TestLocalWorktreeManagerChecksHooksAndWorktreeSupport(t *testing.T) {
 	repositoryPath := t.TempDir()
-	hooksPath := filepath.Join(repositoryPath, ".git", "hooks")
-	if err := os.MkdirAll(hooksPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runner := &gitDoctorRunner{repositoryPath: repositoryPath, hooksPath: hooksPath}
+	runner := &gitDoctorRunner{repositoryPath: repositoryPath, hooksPath: os.DevNull}
 	manager := &gitadapter.LocalWorktreeManager{Runner: runner}
 	request := gitadapter.DoctorRequest{RepositoryPath: repositoryPath}
 	if err := manager.CheckHooks(context.Background(), request); err != nil {
@@ -56,6 +52,31 @@ func TestLocalWorktreeManagerChecksHooksAndWorktreeSupport(t *testing.T) {
 	joined := strings.Join(runner.commands, "\n")
 	if !strings.Contains(joined, "rev-parse --git-path hooks") || !strings.Contains(joined, "worktree list --porcelain") {
 		t.Fatalf("Git commands = %q, want hooks and worktree checks", joined)
+	}
+}
+
+// TestLocalWorktreeManagerRejectsAnIneffectiveHookPolicy verifies diagnosis
+// fails when factory Git invocations would still resolve a real hooks
+// directory, for example through a git wrapper that drops the policy.
+func TestLocalWorktreeManagerRejectsAnIneffectiveHookPolicy(t *testing.T) {
+	repositoryPath := t.TempDir()
+	runner := &gitDoctorRunner{repositoryPath: repositoryPath, hooksPath: filepath.Join(repositoryPath, ".git", "hooks")}
+	manager := &gitadapter.LocalWorktreeManager{Runner: runner}
+	if err := manager.CheckHooks(context.Background(), gitadapter.DoctorRequest{RepositoryPath: repositoryPath}); err == nil {
+		t.Fatal("CheckHooks() error = nil, want rejection of an enabled hooks directory")
+	}
+}
+
+// TestLocalWorktreeManagerHookPolicyOutranksRepositoryConfiguration verifies
+// the production runner suppresses a hooks path the checkout configures.
+func TestLocalWorktreeManagerHookPolicyOutranksRepositoryConfiguration(t *testing.T) {
+	t.Parallel()
+
+	repositoryPath := t.TempDir()
+	runGit(t, repositoryPath, "init", "-b", "main")
+	runGit(t, repositoryPath, "config", "core.hooksPath", ".hooks")
+	if err := (&gitadapter.LocalWorktreeManager{}).CheckHooks(context.Background(), gitadapter.DoctorRequest{RepositoryPath: repositoryPath}); err != nil {
+		t.Fatalf("CheckHooks() error = %v", err)
 	}
 }
 
