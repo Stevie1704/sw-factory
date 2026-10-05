@@ -270,12 +270,13 @@ func ensureBaselineReadyAtCheckpointForLaunch(ctx context.Context, reader gitada
 	return nil
 }
 
-// ensureFinalCheckpointGatesPassed verifies every configured gate result for
-// the exact checkpoint that the reviewers inspected. Readiness is never
+// ensureFinalCheckpointGatesAccepted verifies every configured gate result
+// for the exact checkpoint that the reviewers inspected. Readiness is never
 // inferred from a review result alone: every gate must have a matching,
-// successful, content-free projection before the pull request can become
-// non-draft.
-func ensureFinalCheckpointGatesPassed(ctx context.Context, reader gitadapter.CheckpointFileReader, runStore RunStore, run store.Run, packet SpecificationPacket) error {
+// content-free projection before the pull request can become non-draft. A
+// required gate must pass; a non-blocking gate may also carry a declared
+// command failure, which stays recorded as a failure.
+func ensureFinalCheckpointGatesAccepted(ctx context.Context, reader gitadapter.CheckpointFileReader, runStore RunStore, run store.Run, packet SpecificationPacket) error {
 	resultStore, ok := runStore.(GateResultStore)
 	if !ok {
 		return errors.New("operational store does not support final checkpoint gate results")
@@ -310,17 +311,36 @@ func ensureFinalCheckpointGatesPassed(ctx context.Context, reader gitadapter.Che
 			return fmt.Errorf("final checkpoint gate result %q is duplicated", result.GateName)
 		}
 		seen[result.GateName] = struct{}{}
-		if result.Outcome != store.GateOutcomePassed {
-			return fmt.Errorf("final checkpoint gate %q has outcome %q; readiness requires success", result.GateName, result.Outcome)
-		}
-		if result.Status != "" && result.Status != string(github.CommitStatusSuccess) {
-			return fmt.Errorf("final checkpoint gate %q has status %q; readiness requires success", result.GateName, result.Status)
+		if err := finalGateOutcomeAccepted(result); err != nil {
+			return err
 		}
 	}
 	for _, declared := range packet.RepositoryConfig.Gates {
 		if _, ok := seen[declared.Name]; !ok {
 			return fmt.Errorf("final checkpoint gate result %q is missing", declared.Name)
 		}
+	}
+	return nil
+}
+
+// finalGateOutcomeAccepted applies the repository blocking policy to one
+// identity-checked final result. Only a declared command failure of a
+// non-blocking gate is advisory; a runtime error, a skip, or a setup failure
+// still refuses readiness, and the published status must agree with the
+// outcome so a failure is never presented as success.
+func finalGateOutcomeAccepted(result store.GateResult) error {
+	wantStatus := github.CommitStatusSuccess
+	switch {
+	case result.Outcome == store.GateOutcomePassed:
+	case !result.Blocking && result.Outcome == store.GateOutcomeFailed:
+		wantStatus = github.CommitStatusFailure
+	case result.Blocking:
+		return fmt.Errorf("final checkpoint gate %q has outcome %q; readiness requires success", result.GateName, result.Outcome)
+	default:
+		return fmt.Errorf("final checkpoint gate %q has outcome %q; readiness requires success or an advisory command failure", result.GateName, result.Outcome)
+	}
+	if result.Status != "" && result.Status != string(wantStatus) {
+		return fmt.Errorf("final checkpoint gate %q has status %q; readiness requires %q for outcome %q", result.GateName, result.Status, wantStatus, result.Outcome)
 	}
 	return nil
 }

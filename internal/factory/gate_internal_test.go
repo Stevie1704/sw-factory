@@ -157,3 +157,128 @@ func TestBaselineReadinessRefusesWithoutACheckpointReader(t *testing.T) {
 		t.Fatalf("ensureBaselineReadyForLaunch() error = %v, want a missing-seam refusal", err)
 	}
 }
+
+// finalGateRunStore serves one fixed final-checkpoint projection, including
+// rows a real store would refuse, so every identity rule can be exercised.
+type finalGateRunStore struct {
+	gateOrdinalRunStore
+	checkpoint []store.GateResult
+}
+
+// GateResults returns the configured projection for every query.
+func (s *finalGateRunStore) GateResults(context.Context, string, store.GatePhase, string) ([]store.GateResult, error) {
+	return s.checkpoint, nil
+}
+
+// finalGateFixture returns a frozen required-plus-advisory suite whose
+// checkpoint projection is fully valid: the required gate passed and the
+// independent advisory gate failed.
+func finalGateFixture(t *testing.T) (checkpointFiles, store.Run, SpecificationPacket, []store.GateResult) {
+	t.Helper()
+	files := checkpointFiles{baselineIdentityHeadSHA: {"go.mod": []byte("module example\n")}}
+	packet := SpecificationPacket{RepositoryConfig: config.RepositoryConfig{
+		SetupFiles: []string{"go.mod"},
+		Gates: []config.GateConfig{
+			{Name: "required", Command: "required", Timeout: "1m", Blocking: true},
+			{Name: "advisory", Command: "advisory", Timeout: "1m", Blocking: false},
+		},
+	}}
+	run := store.Run{ID: "run-final-gates", Worktree: t.TempDir(), CheckpointSHA: baselineIdentityHeadSHA}
+	fingerprint, err := setupInputFingerprint(context.Background(), files, run.Worktree, run.CheckpointSHA, packet.RepositoryConfig.SetupFiles)
+	if err != nil {
+		t.Fatalf("final fingerprint: %v", err)
+	}
+	results := []store.GateResult{
+		{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "required", Outcome: store.GateOutcomePassed, Status: "success", Blocking: true, SetupFingerprint: fingerprint},
+		{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 1, GateName: "advisory", Outcome: store.GateOutcomeFailed, Status: "failure", Blocking: false, SetupFingerprint: fingerprint},
+	}
+	return files, run, packet, results
+}
+
+// TestFinalReadinessAcceptsAnIndependentAdvisoryCommandFailure verifies a
+// gate the repository declared non-blocking cannot refuse readiness only
+// because its command failed, while its failure evidence stays unchanged.
+func TestFinalReadinessAcceptsAnIndependentAdvisoryCommandFailure(t *testing.T) {
+	files, run, packet, results := finalGateFixture(t)
+
+	if err := ensureFinalCheckpointGatesAccepted(context.Background(), files, &finalGateRunStore{checkpoint: results}, run, packet); err != nil {
+		t.Fatalf("ensureFinalCheckpointGatesAccepted() error = %v, want an advisory failure to permit readiness", err)
+	}
+}
+
+// TestFinalReadinessRejectsUnacceptableGateResults verifies required gates
+// must pass, advisory gates accept only a declared command failure, and every
+// identity rule applies to advisory results as strictly as to required ones.
+func TestFinalReadinessRejectsUnacceptableGateResults(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func([]store.GateResult) []store.GateResult
+		want   string
+	}{
+		{"failed required gate", func(r []store.GateResult) []store.GateResult {
+			r[0].Outcome, r[0].Status = store.GateOutcomeFailed, "failure"
+			return r
+		}, `"required" has outcome "failed"`},
+		{"required gate skipped after an advisory prerequisite failed", func(r []store.GateResult) []store.GateResult {
+			r[0].Outcome, r[0].Status = store.GateOutcomeSkipped, "pending"
+			return r
+		}, `"required" has outcome "skipped"`},
+		{"advisory runtime error", func(r []store.GateResult) []store.GateResult {
+			r[1].Outcome, r[1].Status = store.GateOutcomeError, "error"
+			return r
+		}, `"advisory" has outcome "error"`},
+		{"advisory setup failure", func(r []store.GateResult) []store.GateResult {
+			r[1].Outcome, r[1].Status = store.GateOutcomeSetupFailed, "error"
+			return r
+		}, `"advisory" has outcome "setup_failed"`},
+		{"advisory skip", func(r []store.GateResult) []store.GateResult {
+			r[1].Outcome, r[1].Status = store.GateOutcomeSkipped, "error"
+			return r
+		}, `"advisory" has outcome "skipped"`},
+		{"advisory failure with a fabricated success status", func(r []store.GateResult) []store.GateResult {
+			r[1].Status = "success"
+			return r
+		}, `"advisory" has status "success"`},
+		{"missing advisory result", func(r []store.GateResult) []store.GateResult {
+			return r[:1]
+		}, "incomplete"},
+		{"duplicate advisory result", func(r []store.GateResult) []store.GateResult {
+			return []store.GateResult{r[1], r[1]}
+		}, "duplicated"},
+		{"stale advisory checkpoint", func(r []store.GateResult) []store.GateResult {
+			r[1].CheckpointSHA = baselineIdentityBaseSHA
+			return r
+		}, "frozen run identity"},
+		{"wrong advisory phase", func(r []store.GateResult) []store.GateResult {
+			r[1].Phase = store.GatePhaseBaseline
+			return r
+		}, "frozen run identity"},
+		{"wrong advisory blocking policy", func(r []store.GateResult) []store.GateResult {
+			r[1].Blocking = true
+			return r
+		}, "frozen run identity"},
+		{"wrong advisory ordinal", func(r []store.GateResult) []store.GateResult {
+			r[1].Ordinal = 0
+			return r
+		}, "frozen run identity"},
+		{"wrong advisory setup fingerprint", func(r []store.GateResult) []store.GateResult {
+			r[1].SetupFingerprint = "stale"
+			return r
+		}, "frozen run identity"},
+		{"advisory result of another run", func(r []store.GateResult) []store.GateResult {
+			r[1].RunID = "run-other"
+			return r
+		}, "frozen run identity"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files, run, packet, results := finalGateFixture(t)
+			runStore := &finalGateRunStore{checkpoint: tc.mutate(results)}
+
+			err := ensureFinalCheckpointGatesAccepted(context.Background(), files, runStore, run, packet)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ensureFinalCheckpointGatesAccepted() error = %v, want refusal containing %q", err, tc.want)
+			}
+		})
+	}
+}

@@ -260,6 +260,26 @@ only, never the gate itself, so the list is an ordered, acyclic sequence. A
 blocking gate stops the checkpoint; a non-blocking gate reports and continues.
 Independent gates still run after an earlier failure.
 
+A non-blocking (`blocking: false`) gate is advisory at two points:
+
+- Suite evaluation: a failing or timed-out non-blocking command does not fail
+  the suite, so it does not start check repair or spend the repair budget.
+- Final readiness: the pull request can become ready when every blocking gate
+  passed and a non-blocking gate failed its command.
+
+The advisory failure stays visible. The factory keeps the `failure` status on
+the exact checkpoint, the failed outcome in the stored result, and the gate in
+the generated pull-request summary. These limits apply:
+
+- A blocking gate that depends on a failed non-blocking gate is skipped, and
+  that skip blocks the suite and readiness.
+- A setup failure, a worker execution error, an unconfirmed command
+  termination, or a skipped non-blocking gate is not an advisory command
+  failure. Each still blocks readiness.
+- Readiness rejects a missing, duplicate, or mismatched result for every gate,
+  blocking or not. The result must match the run, checkpoint, phase, declared
+  order, blocking policy, and setup fingerprint.
+
 ### Roles
 
 The factory declares five roles: `test`, `implementation`, `architecture`,
