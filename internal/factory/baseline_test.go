@@ -260,6 +260,28 @@ func TestRunBaselineAllowsAnExplicitlyTargetedFailure(t *testing.T) {
 	}
 }
 
+// TestRunBaselineRefusesATargetedExemptionAfterAnUnconfirmedTermination
+// verifies a baseline marker never advances a run while a cancelled gate
+// command may still run in the worker.
+func TestRunBaselineRefusesATargetedExemptionAfterAnUnconfirmedTermination(t *testing.T) {
+	fixture := newBaselineFixture(t, "<!-- factory-baseline-target: test -->", []worker.CommandResult{{ExitCode: 0}, {}})
+	fixture.worker.errors = []error{nil, &worker.CommandTerminationError{Reason: "the worker did not confirm the cancellation"}}
+	claimed, err := fixture.service.ClaimIssue(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+
+	baseline, err := fixture.service.RunBaseline(context.Background(), factory.BaselineRequest{RunID: claimed.Run.ID})
+
+	var terminationErr *worker.CommandTerminationError
+	if !errors.As(err, &terminationErr) {
+		t.Fatalf("RunBaseline() error = %v, want the termination discrepancy", err)
+	}
+	if baseline.Run.Status == store.StatusActive || baseline.Run.Stage == store.StageTest {
+		t.Fatalf("baseline run = %#v, want no progression past the unconfirmed termination", baseline.Run)
+	}
+}
+
 // TestRunBaselineRerunsSetupWhenAConfiguredDependencyInputChanges verifies
 // setup fingerprints change when a manifest changes between baseline suites.
 func TestRunBaselineRerunsSetupWhenAConfiguredDependencyInputChanges(t *testing.T) {
