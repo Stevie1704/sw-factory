@@ -332,19 +332,11 @@ func (r Runner) RunSuite(ctx context.Context, request SuiteRequest) (SuiteResult
 		if halted {
 			// A command that may still run owns the checkout and caches, so no
 			// later gate may overlap it, whatever its dependencies.
-			gateResult := r.skippedResult(result, declared, index, "worker command termination is unconfirmed")
-			result.Gates = append(result.Gates, gateResult)
-			if err := r.publish(ctx, gateResult.Status); err != nil {
-				blockingFailures = append(blockingFailures, err)
-			}
+			blockingFailures = r.recordGate(ctx, &result, r.skippedResult(result, declared, index, "worker command termination is unconfirmed"), blockingFailures)
 			continue
 		}
 		if dependency, reason := failedDependency(declared, failed); dependency != "" {
-			gateResult := r.skippedResult(result, declared, index, reason)
-			result.Gates = append(result.Gates, gateResult)
-			if err := r.publish(ctx, gateResult.Status); err != nil {
-				blockingFailures = append(blockingFailures, err)
-			}
+			blockingFailures = r.recordGate(ctx, &result, r.skippedResult(result, declared, index, reason), blockingFailures)
 			if declared.Blocking {
 				blockingFailures = append(blockingFailures, &DependencyFailure{Name: declared.Name, Dependency: dependency})
 			}
@@ -353,10 +345,7 @@ func (r Runner) RunSuite(ctx context.Context, request SuiteRequest) (SuiteResult
 		}
 
 		gateResult, failure := r.runDeclaredGate(ctx, result, declared)
-		result.Gates = append(result.Gates, gateResult)
-		if err := r.publish(ctx, gateResult.Status); err != nil {
-			blockingFailures = append(blockingFailures, err)
-		}
+		blockingFailures = r.recordGate(ctx, &result, gateResult, blockingFailures)
 		if failure != nil {
 			failed[declared.Name] = true
 			halted = terminationUnconfirmed(failure)
@@ -468,6 +457,16 @@ func (r Runner) runDeclaredGate(ctx context.Context, suite SuiteResult, declared
 		gateResult.Status.Description = "factory gate failed"
 	}
 	return gateResult, failure
+}
+
+// recordGate appends one gate result to the suite and publishes its status. A
+// publication failure joins the blocking failures that it returns.
+func (r Runner) recordGate(ctx context.Context, suite *SuiteResult, gateResult Result, blockingFailures []error) []error {
+	suite.Gates = append(suite.Gates, gateResult)
+	if err := r.publish(ctx, gateResult.Status); err != nil {
+		blockingFailures = append(blockingFailures, err)
+	}
+	return blockingFailures
 }
 
 // terminationUnconfirmed reports whether err carries a worker discrepancy for

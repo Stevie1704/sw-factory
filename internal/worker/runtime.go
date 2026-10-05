@@ -492,6 +492,12 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	if err == nil {
 		return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, nil
 	}
+	// A refused command never started, and its refusal must not be hidden by
+	// a deadline that expired at the same time.
+	var commandErr *dockerCommandError
+	if errors.As(err, &commandErr) && commandRefused(commandErr, commandID) {
+		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, &CommandTerminationError{Reason: "an earlier cancelled command is still running"})
+	}
 	// Cancelling the host Docker CLI does not stop the command inside the
 	// worker. Termination is confirmed before any other classification, so no
 	// caller sees a timeout while the command can still modify the checkout.
@@ -508,10 +514,6 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	}
 	if ctx.Err() != nil {
 		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, ctx.Err())
-	}
-	var commandErr *dockerCommandError
-	if errors.As(err, &commandErr) && commandRefused(commandErr, commandID) {
-		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, &CommandTerminationError{Reason: "an earlier cancelled command is still running"})
 	}
 	if errors.As(err, &commandErr) && commandErr.ProcessStarted && commandErr.ExitCode >= 0 && commandErr.ExitCode != 125 && !isDockerRuntimeFailure(commandErr) {
 		return CommandResult{ExitCode: commandErr.ExitCode, Stdout: commandErr.Stdout, Stderr: commandErr.Stderr}, nil

@@ -140,8 +140,8 @@ The adapter returns the original `context.DeadlineExceeded` or
 `context.Canceled` only after the terminator confirms that no group member is
 alive. A worker that is missing or stopped also counts as confirmed, because
 stopping a container ends all of its processes. In all other cases the adapter
-returns a typed `CommandTerminationError` and never a timeout result. This
-includes a group that survives SIGKILL, a failed terminator call, or a lost
+returns a typed `CommandTerminationError` and never a timeout result. These
+cases are a group that survives SIGKILL, a failed terminator call, and a lost
 response after the bounded terminator timeout. Repeated cancellation of the
 same identity is idempotent.
 
@@ -154,13 +154,25 @@ to stop or recreate the worker. The next boot uses a new records directory.
 
 The gate runner stops a suite at that error. It records the affected gate as
 an execution error, even when the gate is advisory, and skips every later
-gate. The check-repair policy classifies it as infrastructure: the run waits
-in `waiting_for_harness`, the worker is stopped, and no repair attempt is
-consumed. The lifecycle reason names the discrepancy and the recovery action.
-A timeout whose termination is confirmed keeps its deterministic repair
-classification. Exit codes, the capture limit, and other runtime failures keep
-their classification. A process that leaves its process group with its own
-`setsid` is outside this guarantee until the worker stops.
+gate. The check-repair policy classifies the error as infrastructure: the run
+waits in `waiting_for_harness`, the coordinator stops the worker, and the run
+keeps its repair attempts. The lifecycle reason names the discrepancy and the
+recovery action. A `factory-baseline-target` marker never accepts the error,
+so a baseline with an unconfirmed termination does not advance.
+
+A timeout with a confirmed termination keeps its deterministic repair
+classification. Exit codes, the capture limit, and other runtime failures also
+keep their classification.
+
+Known limits:
+
+- A process that leaves its process group with its own `setsid` is outside
+  this guarantee until the worker stops.
+- The adapter terminates a command only when the caller's context ends. If the
+  Docker CLI fails for a transport reason while the command runs, the adapter
+  reports a runtime failure. The coordinator then stops the worker.
+- A command that exits normally but leaves live background processes is not
+  terminated.
 
 ## Contract tests
 

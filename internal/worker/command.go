@@ -78,23 +78,23 @@ case $group in ''|*[!0-9]*|0|1) exit 1 ;; esac
 kill -s TERM -- "-$group" 2>/dev/null
 if ! settle "$group" "$grace"; then
   kill -s KILL -- "-$group" 2>/dev/null
-  settle "$group" "$grace" || exit 3
+  settle "$group" "$grace" || exit ` + terminateSurvivedExitCode + `
 fi
 rm -f "$records/$id.pgid" "$records/$id.cancel"
 `
 
 // terminateSurvivedExitCode is the terminator's exit code for a process group
-// that survived SIGKILL.
-const terminateSurvivedExitCode = 3
+// that survived SIGKILL. It is text because the terminator script embeds it.
+const terminateSurvivedExitCode = "3"
 
-var (
-	// commandTerminationGrace is the time allowed for a cancelled process group
-	// to handle SIGTERM, and again for it to disappear after SIGKILL.
-	commandTerminationGrace = 5 * time.Second
-	// commandTerminationSlack bounds the Docker round trips around the two
-	// grace periods, so a lost cancellation response cannot block forever.
-	commandTerminationSlack = 10 * time.Second
-)
+// commandTerminationSlack bounds the Docker round trips around the two grace
+// periods, so a lost cancellation response cannot block forever.
+const commandTerminationSlack = 10 * time.Second
+
+// commandTerminationGrace is the time allowed for a cancelled process group to
+// handle SIGTERM, and again for it to disappear after SIGKILL. Real-Docker
+// tests shorten it.
+var commandTerminationGrace = 5 * time.Second
 
 // CommandTerminationError reports that a cancelled worker command could not be
 // proven stopped, or that the worker refused new work because an earlier
@@ -139,20 +139,21 @@ func (r *DockerRuntime) terminateCommand(ctx context.Context, workerID, commandI
 	if err == nil {
 		return nil
 	}
-	if r.workerGone(workerID) {
+	if r.workerGone(ctx, workerID) {
 		return nil
 	}
 	var commandErr *dockerCommandError
-	if errors.As(err, &commandErr) && commandErr.ExitCode == terminateSurvivedExitCode && !isDockerRuntimeFailure(commandErr) {
+	if errors.As(err, &commandErr) && strconv.Itoa(commandErr.ExitCode) == terminateSurvivedExitCode && !isDockerRuntimeFailure(commandErr) {
 		return &CommandTerminationError{Reason: "the command process group survived forced termination"}
 	}
 	return &CommandTerminationError{Reason: "the worker did not confirm the cancellation"}
 }
 
 // workerGone reports whether the worker is missing or stopped, which ends every
-// process it ran. An inspection failure is not proof and reports false.
-func (r *DockerRuntime) workerGone(workerID string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTerminationSlack)
+// process it ran. An inspection failure is not proof and reports false. It gets
+// its own bound, because a lost terminator response may have used up ctx.
+func (r *DockerRuntime) workerGone(ctx context.Context, workerID string) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commandTerminationSlack)
 	defer cancel()
 	inspection, err := r.inspectContainer(ctx, containerName(workerID))
 	if err != nil {
