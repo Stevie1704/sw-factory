@@ -70,14 +70,18 @@ type govulncheckMessage struct {
 		GoVersion string `json:"go_version"`
 	} `json:"SBOM"`
 	Finding *struct {
-		OSV   string `json:"osv"`
-		Trace []struct {
-			Module   string `json:"module"`
-			Version  string `json:"version"`
-			Package  string `json:"package"`
-			Function string `json:"function"`
-		} `json:"trace"`
+		OSV   string             `json:"osv"`
+		Trace []govulncheckFrame `json:"trace"`
 	} `json:"finding"`
+}
+
+// govulncheckFrame is one frame of a govulncheck finding trace. The first
+// frame names the vulnerable module, package, and symbol.
+type govulncheckFrame struct {
+	Module   string `json:"module"`
+	Version  string `json:"version"`
+	Package  string `json:"package"`
+	Function string `json:"function"`
 }
 
 // ParseGovulncheck reads a govulncheck -format json stream. An advisory is
@@ -108,7 +112,7 @@ func ParseGovulncheck(r io.Reader) (Scan, error) {
 		case message.SBOM != nil:
 			scan.GoVersion = message.SBOM.GoVersion
 		case message.Finding != nil && len(message.Finding.Trace) > 0:
-			mergeGovulncheckFinding(byAdvisory, message.Finding.OSV, message.Finding.Trace[0].Module, message.Finding.Trace[0].Version, message.Finding.Trace[0].Package, message.Finding.Trace[0].Function)
+			mergeGovulncheckFinding(byAdvisory, message.Finding.OSV, message.Finding.Trace[0])
 		}
 	}
 	if !sawConfig {
@@ -125,16 +129,16 @@ func ParseGovulncheck(r io.Reader) (Scan, error) {
 
 // mergeGovulncheckFinding folds one trace into the advisory's finding,
 // keeping the most specific package and any symbol-level reachability.
-func mergeGovulncheckFinding(byAdvisory map[string]*Finding, advisory, module, version, pkg, function string) {
+func mergeGovulncheckFinding(byAdvisory map[string]*Finding, advisory string, frame govulncheckFrame) {
 	finding, ok := byAdvisory[advisory]
 	if !ok {
-		finding = &Finding{Advisory: advisory, Package: module, Version: version}
+		finding = &Finding{Advisory: advisory, Package: frame.Module, Version: frame.Version}
 		byAdvisory[advisory] = finding
 	}
-	if pkg != "" {
-		finding.Package = pkg
+	if frame.Package != "" {
+		finding.Package = frame.Package
 	}
-	if function != "" {
+	if frame.Function != "" {
 		finding.Actionable = true
 	}
 }

@@ -10,7 +10,8 @@
 #
 # Usage: scan-go-artifacts.sh [--source] [BINARY...]
 # Exit status: 0 clean, 1 actionable findings or an unapproved Go release,
-# 2 a scanner could not produce a result.
+# 2 a scanner could not produce a result. Every setup step exits 2, so an
+# infrastructure failure is never reported as findings.
 set -eu
 
 GOVULNCHECK_VERSION=v1.8.0
@@ -32,14 +33,14 @@ if [ "${1:-}" = "--source" ]; then
   shift
 fi
 
-tools="$(mktemp -d)"
+tools="$(mktemp -d)" || exit 2
 # Remove the scanner build and raw reports when the scan exits.
 cleanup_scan_tools() {
   rm -rf "$tools"
 }
 trap cleanup_scan_tools EXIT HUP INT TERM
 
-mkdir -p "$SCAN_REPORT_DIR"
+mkdir -p "$SCAN_REPORT_DIR" || exit 2
 metadata="$SCAN_REPORT_DIR/scans.jsonl"
 
 if ! GOBIN="$tools" go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION" ||
@@ -78,7 +79,7 @@ evaluate_report() {
 
 if [ "$scan_source" = true ]; then
   revision="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-  if ! git -C "$REPOSITORY_ROOT" diff --quiet HEAD 2>/dev/null; then
+  if [ -n "$(git -C "$REPOSITORY_ROOT" status --porcelain 2>/dev/null)" ]; then
     revision="$revision-dirty"
   fi
   if (cd "$REPOSITORY_ROOT" && "$tools/govulncheck" -format json ./...) >"$tools/source.json"; then

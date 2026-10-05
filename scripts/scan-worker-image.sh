@@ -9,7 +9,8 @@
 # The reference defaults to worker_build.image@worker_build.digest from
 # factory.yaml.
 # Exit status: 0 clean, 1 actionable findings or an unapproved Go release,
-# 2 a scanner could not produce a result.
+# 2 a scanner could not produce a result. Every setup step exits 2, so an
+# infrastructure failure is never reported as findings.
 set -eu
 
 DOCKER="${DOCKER:-docker}"
@@ -25,11 +26,11 @@ if ! "$DOCKER" image inspect "$reference" >/dev/null 2>&1; then
   echo "worker image $reference is not available locally; build or pull it first" >&2
   exit 2
 fi
-image_id="$("$DOCKER" image inspect "$reference" --format '{{.Id}}')"
+image_id="$("$DOCKER" image inspect "$reference" --format '{{.Id}}')" || exit 2
 
 # The Docker daemon may run in a VM that shares only the home directory, so
 # the scan inputs live below the repository root, as in build-worker.sh.
-scan_root="$(mktemp -d "$REPOSITORY_ROOT/.worker-scan.XXXXXX")"
+scan_root="$(mktemp -d "$REPOSITORY_ROOT/.worker-scan.XXXXXX")" || exit 2
 container=""
 # Remove the exported image, the extracted binaries, and the container.
 cleanup_scan_inputs() {
@@ -49,8 +50,8 @@ record_status() {
 }
 
 echo "Extracting Go helpers and toolchain from $reference"
-mkdir "$scan_root/bin"
-container="$("$DOCKER" create --pull=never "$reference")"
+mkdir "$scan_root/bin" || exit 2
+container="$("$DOCKER" create --pull=never "$reference")" || exit 2
 for path in /usr/local/bin/factory-report /usr/local/bin/factory-worker-headless /usr/local/go/bin/go; do
   if ! "$DOCKER" cp -L "$container:$path" "$scan_root/bin/"; then
     echo "could not extract $path from $reference" >&2
@@ -64,7 +65,7 @@ else
 fi
 
 echo "Scanning $reference with $GRYPE_IMAGE"
-mkdir -p "$SCAN_REPORT_DIR"
+mkdir -p "$SCAN_REPORT_DIR" || exit 2
 if "$DOCKER" save --output "$scan_root/image.tar" "$reference" &&
   "$DOCKER" run --rm --pull=missing \
     --mount "type=bind,src=$scan_root,dst=/scan,readonly" \

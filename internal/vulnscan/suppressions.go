@@ -1,7 +1,6 @@
 package vulnscan
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -40,11 +39,7 @@ type suppressionFile struct {
 
 // LoadSuppressions reads and validates a suppression policy document.
 func LoadSuppressions(r io.Reader) ([]Suppression, error) {
-	content, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read suppressions: %w", err)
-	}
-	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	decoder := yaml.NewDecoder(r)
 	decoder.KnownFields(true)
 	var file suppressionFile
 	if err := decoder.Decode(&file); err != nil && !errors.Is(err, io.EOF) {

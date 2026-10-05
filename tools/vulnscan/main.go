@@ -40,6 +40,7 @@ type scanRecord struct {
 	EvaluatedAt   string                 `json:"evaluated_at"`
 }
 
+// main evaluates one report from standard input and exits with its status.
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, time.Now()))
 }
