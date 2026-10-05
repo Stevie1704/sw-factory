@@ -227,7 +227,7 @@ setup_files: [go.mod, go.sum]
 setup_environment_policy: clean
 gates:
   - name: format
-    command: gofmt -l .
+    command: test -z "$(gofmt -l .)"
     timeout: 30s
     blocking: true
     environment_policy: clean
@@ -338,7 +338,7 @@ pre-commit hook that runs a formatter and the unit tests with:
 ```yaml
 gates:
   - name: format
-    command: gofmt -l .
+    command: test -z "$(gofmt -l .)"
     timeout: 30s
     blocking: true
     environment_policy: clean
@@ -349,6 +349,9 @@ gates:
     depends_on: [format]
     environment_policy: clean
 ```
+
+A gate fails only on a nonzero exit status. Thus a check that only lists
+problems, such as `gofmt -l`, must turn that output into a failure.
 
 Developers can keep the hook for manual commits. For factory checkpoints, gates
 replace hooks.
