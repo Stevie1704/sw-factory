@@ -89,7 +89,7 @@ type govulncheckFrame struct {
 // module- and package-level matches stay informational.
 func ParseGovulncheck(r io.Reader) (Scan, error) {
 	var scan Scan
-	byAdvisory := map[string]*Finding{}
+	findings := govulncheckFindings{}
 	sawConfig := false
 	decoder := json.NewDecoder(r)
 	for {
@@ -112,7 +112,7 @@ func ParseGovulncheck(r io.Reader) (Scan, error) {
 		case message.SBOM != nil:
 			scan.GoVersion = message.SBOM.GoVersion
 		case message.Finding != nil && len(message.Finding.Trace) > 0:
-			mergeGovulncheckFinding(byAdvisory, message.Finding.OSV, message.Finding.Trace[0])
+			findings.add(message.Finding.OSV, message.Finding.Trace[0])
 		}
 	}
 	if !sawConfig {
@@ -121,26 +121,57 @@ func ParseGovulncheck(r io.Reader) (Scan, error) {
 	if scan.GoVersion == "" {
 		return Scan{}, fmt.Errorf("%w: govulncheck did not report the scanned Go version", ErrScannerOutput)
 	}
-	for _, finding := range byAdvisory {
-		scan.Findings = append(scan.Findings, *finding)
-	}
+	scan.Findings = findings.list()
 	return scan, nil
 }
 
-// mergeGovulncheckFinding folds one trace into the advisory's finding,
-// keeping the most specific package and any symbol-level reachability.
-func mergeGovulncheckFinding(byAdvisory map[string]*Finding, advisory string, frame govulncheckFrame) {
-	finding, ok := byAdvisory[advisory]
+// govulncheckKey identifies one advisory in one package of one module.
+// Package is empty for a match that govulncheck reports only at module level.
+type govulncheckKey struct {
+	advisory, module, pkg string
+}
+
+// govulncheckFindings collects govulncheck traces as one finding per
+// advisory and package, so a suppression for one package cannot hide another.
+type govulncheckFindings map[govulncheckKey]*Finding
+
+// add folds one trace frame into its advisory and package finding, and marks
+// it actionable when the frame names a vulnerable symbol.
+func (f govulncheckFindings) add(advisory string, frame govulncheckFrame) {
+	key := govulncheckKey{advisory: advisory, module: frame.Module, pkg: frame.Package}
+	finding, ok := f[key]
 	if !ok {
-		finding = &Finding{Advisory: advisory, Package: frame.Module, Version: frame.Version}
-		byAdvisory[advisory] = finding
-	}
-	if frame.Package != "" {
-		finding.Package = frame.Package
+		name := frame.Package
+		if name == "" {
+			name = frame.Module
+		}
+		finding = &Finding{Advisory: advisory, Package: name, Version: frame.Version}
+		f[key] = finding
 	}
 	if frame.Function != "" {
 		finding.Actionable = true
 	}
+}
+
+// list returns the findings in a stable order. A module-level match is
+// dropped when the same advisory also matched a package of that module,
+// because the package findings already report it more precisely.
+func (f govulncheckFindings) list() []Finding {
+	covered := map[govulncheckKey]bool{}
+	for key := range f {
+		if key.pkg != "" {
+			covered[govulncheckKey{advisory: key.advisory, module: key.module}] = true
+		}
+	}
+	findings := []Finding{}
+	for key, finding := range f {
+		if key.pkg == "" && covered[key] {
+			continue
+		}
+		findings = append(findings, *finding)
+	}
+	sortFindings(findings)
+	return findings
 }
 
 // grypeReport is the subset of grype's JSON report the policy reads.

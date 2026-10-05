@@ -67,6 +67,7 @@ func TestMetadataRecordsReproducibleContentFreeIdentity(t *testing.T) {
 	}
 }
 
+// readFile returns the content of a test input file.
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile(path)

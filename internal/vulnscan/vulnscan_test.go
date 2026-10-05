@@ -153,6 +153,37 @@ suppressions:
 	}
 }
 
+// TestGovulncheckKeepsOneFindingPerAdvisoryAndPackage verifies that one
+// advisory reaching two packages stays two findings in either report order,
+// so a suppression for one package can never hide the other.
+func TestGovulncheckKeepsOneFindingPerAdvisoryAndPackage(t *testing.T) {
+	header := `{"config":{"scanner_name":"govulncheck","scanner_version":"v1.8.0","scan_mode":"binary"}}
+{"SBOM":{"go_version":"go1.25.5"}}
+{"finding":{"osv":"GO-2026-9999","trace":[{"module":"stdlib","version":"v1.25.5"}]}}
+`
+	url := `{"finding":{"osv":"GO-2026-9999","trace":[{"module":"stdlib","version":"v1.25.5","package":"net/url","function":"Parse"}]}}
+`
+	http := `{"finding":{"osv":"GO-2026-9999","trace":[{"module":"stdlib","version":"v1.25.5","package":"net/http","function":"Get"}]}}
+`
+	for name, report := range map[string]string{"url first": header + url + http, "http first": header + http + url} {
+		scan, err := ParseGovulncheck(strings.NewReader(report))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		verdict := Evaluate(scan, "factory", []Suppression{validSuppression("GO-2026-9999", "factory", "net/url")}, reviewDay)
+		if got := advisories(verdict.Actionable); got != "GO-2026-9999 net/http" {
+			t.Errorf("%s: actionable = %s, want only net/http", name, got)
+		}
+		if got := advisories(verdict.Suppressed); got != "GO-2026-9999 net/url" {
+			t.Errorf("%s: suppressed = %s, want only net/url", name, got)
+		}
+		if verdict.Informational != 0 {
+			t.Errorf("%s: informational = %d; a module-level match of a package finding is not separate", name, verdict.Informational)
+		}
+	}
+}
+
+// parseFixture parses one scanner fixture file with the given parser.
 func parseFixture(t *testing.T, path string, parse func(io.Reader) (Scan, error)) Scan {
 	t.Helper()
 	file, err := os.Open(path)
@@ -167,10 +198,12 @@ func parseFixture(t *testing.T, path string, parse func(io.Reader) (Scan, error)
 	return scan
 }
 
+// validSuppression returns a complete, unexpired suppression for one package.
 func validSuppression(advisory, artifact, pkg string) Suppression {
 	return Suppression{Advisory: advisory, Artifact: artifact, Package: pkg, Reason: "reviewed", Owner: "Stevie1704", ReviewBy: "2026-12-31"}
 }
 
+// advisories renders findings as comma-separated "advisory package" pairs.
 func advisories(findings []Finding) string {
 	keys := make([]string, 0, len(findings))
 	for _, finding := range findings {
