@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -179,12 +180,31 @@ type CommandRunner interface {
 	Run(context.Context, string, []string) ([]byte, error)
 }
 
-// commandRunner executes the host git binary.
+// hostGitPolicy is the factory-owned configuration placed before every host
+// Git subcommand. Command-line configuration outranks repository, global,
+// system, and ambient GIT_CONFIG_* settings, so neither a repository nor the
+// host environment can re-enable hook execution for a factory operation. The
+// policy exists only on factory invocations; the checkout's own configuration
+// and a developer's manual Git usage keep their hooks.
+var hostGitPolicy = []string{
+	// No executable can exist below the null device, so Git skips every hook.
+	"-c", "core.hooksPath=" + os.DevNull,
+	// core.fsmonitor may name a hook command that status-style reads run.
+	"-c", "core.fsmonitor=false",
+}
+
+// HostCommandArgs returns the complete host git argument list for one
+// subcommand, with the factory-owned hook suppression policy applied first.
+func HostCommandArgs(args ...string) []string {
+	return append(slices.Clone(hostGitPolicy), args...)
+}
+
+// commandRunner executes the host git binary under the factory hook policy.
 type commandRunner struct{}
 
 // Run executes git in the requested repository directory.
 func (commandRunner) Run(ctx context.Context, directory string, args []string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", args...)
+	command := exec.CommandContext(ctx, "git", HostCommandArgs(args...)...)
 	command.Dir = directory
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
