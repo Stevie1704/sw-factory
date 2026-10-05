@@ -5,14 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 )
 
-// repositoryHookNames are the client hooks reachable through the factory's
-// worktree, checkpoint, base synchronization, push, and inspection operations.
-var repositoryHookNames = []string{
+// hookedCommandNames are the client hooks reachable through the factory's
+// worktree, checkpoint, base synchronization, push, and inspection operations,
+// plus the fsmonitor command that status reads would run.
+var hookedCommandNames = []string{
 	"post-checkout",
 	"pre-commit",
 	"prepare-commit-msg",
@@ -52,6 +54,10 @@ func TestFactoryGitOperationsNeverRunRepositoryHooks(t *testing.T) {
 			t.Setenv("GIT_CONFIG_VALUE_0", hooks)
 			t.Setenv("GIT_CONFIG_KEY_1", "core.fsmonitor")
 			t.Setenv("GIT_CONFIG_VALUE_1", filepath.Join(hooks, "fsmonitor"))
+		},
+		"ambient parameters": func(t *testing.T, repository string) {
+			hooks := filepath.Join(repository, ".hooks")
+			t.Setenv("GIT_CONFIG_PARAMETERS", "'core.hooksPath'='"+hooks+"' 'core.fsmonitor'='"+filepath.Join(hooks, "fsmonitor")+"'")
 		},
 	}
 	for name, enableHooks := range scopes {
@@ -93,7 +99,7 @@ func initializeHookedRepository(t *testing.T, repository, remote, markers string
 	if err := os.MkdirAll(hooks, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range repositoryHookNames {
+	for _, name := range hookedCommandNames {
 		script := "#!/bin/sh\ntouch '" + filepath.Join(markers, name) + "'\n"
 		if err := os.WriteFile(filepath.Join(hooks, name), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
@@ -172,4 +178,37 @@ func ranHooks(t *testing.T, markers string) []string {
 		names = append(names, entry.Name())
 	}
 	return names
+}
+
+// TestFactoryGitPushKeepsTransportAuthenticationWithoutLeakingCredentials
+// verifies the hook policy leaves the operator's transport command in place
+// and that a failed push does not report a credential embedded in the URL.
+func TestFactoryGitPushKeepsTransportAuthenticationWithoutLeakingCredentials(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repository := filepath.Join(root, "project")
+	initializeGitRepository(t, repository, filepath.Join(root, "project-origin.git"))
+	transportMarker := filepath.Join(root, "ssh-command-ran")
+	sshCommand := filepath.Join(root, "ssh-command")
+	if err := os.WriteFile(sshCommand, []byte("#!/bin/sh\ntouch '"+transportMarker+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "config", "core.sshCommand", sshCommand)
+	manager := &gitadapter.LocalWorktreeManager{}
+	push := gitadapter.PushRequest{WorktreePath: repository, Branch: "main"}
+
+	runGit(t, repository, "remote", "set-url", "origin", "ssh://example.invalid/project.git")
+	if err := manager.Push(context.Background(), push); err == nil {
+		t.Fatal("Push() through the failing transport command error = nil")
+	}
+	if _, err := os.Stat(transportMarker); err != nil {
+		t.Fatalf("configured core.sshCommand did not run under the hook policy: %v", err)
+	}
+
+	runGit(t, repository, "remote", "set-url", "origin", "https://factory:secret-token@127.0.0.1:1/project.git")
+	err := manager.Push(context.Background(), push)
+	if err == nil || strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("Push() to an unreachable authenticated remote error = %v, want a failure without the credential", err)
+	}
 }

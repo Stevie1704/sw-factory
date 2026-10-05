@@ -94,7 +94,7 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 				return doctor.Failure("git hooks", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckHooks(ctx, request); err != nil {
-				return doctor.Failure("git hooks", "factory Git invocations do not suppress repository hooks", "run the factory with a git binary that honors command-line configuration; move required hook checks into repository gates")
+				return doctor.Failure("git hooks", "factory Git invocations do not suppress repository hooks", "remove any git wrapper or alias on PATH that drops command-line configuration; move required hook checks into repository gates")
 			}
 			return doctor.Success("git hooks")
 		},

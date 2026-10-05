@@ -102,7 +102,7 @@ factory doctor --config /Users/me/.config/factory/config.yaml
 ```
 
 The doctor reports configuration, GitHub authentication and permissions, the
-factory labels, the checkout's remote, hook suppression, and worktree support, Docker, the
+factory labels, the checkout's Git checks (remote, hook suppression, worktree support), Docker, the
 pinned worker image, both supported harness executables, harness capabilities,
 the headless worker helper, harness authentication sources, and SQLite. It runs every
 contributor even after a failure and returns a nonzero exit status when any
@@ -312,8 +312,8 @@ startup diagnosis. Each of these commands starts with the policy
 `-c core.hooksPath=/dev/null -c core.fsmonitor=false` (ADR 0015). Command-line
 configuration outranks repository, global, system, and ambient `GIT_CONFIG_*`
 configuration. Thus no repository hook runs on the host through a factory
-operation, also when `core.hooksPath` points at a tracked directory that a
-worker can edit. The factory does not change the checkout's Git configuration.
+operation. This is also true when `core.hooksPath` points at a tracked
+directory that a worker can edit. The factory does not change the checkout's Git configuration.
 Your manual Git commands in the checkout continue to run your hooks.
 `factory doctor` reports the `git hooks` check as blocking when factory Git
 invocations do not resolve the disabled hooks path.
@@ -322,7 +322,7 @@ invocations do not resolve the disabled hooks path.
 | --- | --- | --- |
 | Client hooks (`pre-commit`, `commit-msg`, `post-checkout`, `post-merge`, `pre-push`, `reference-transaction`, and all others) | Suppressed | A configured hooks path can point at tracked, worker-editable scripts. |
 | `core.fsmonitor` hook command | Suppressed | Status reads would run the configured command. The factory does not need it. |
-| Clean, smudge, and process filters; merge drivers | Supported | Only host configuration defines their commands. Tracked `.gitattributes` can only select a defined driver. Git LFS needs them. |
+| Clean, smudge, and process filters; merge drivers | Supported | Only host configuration defines their commands. The worker gets read-only Git metadata without configuration, so it cannot define one. Tracked `.gitattributes` can only select a defined driver. Git LFS needs them. |
 | External diff and text conversion | Not reached | Checkpoint validation uses the built-in `diff --check` format. The review diff passes `--no-ext-diff --no-textconv`. |
 | Commit signing (`commit.gpgSign`, `gpg.program`) | Supported | The operator configures the program. A repository may require signed commits. |
 | Transport authentication (credential helpers, `core.sshCommand`, askpass) | Supported | Fetch and push need it. No hook runs, so no repository script can inherit it. |
