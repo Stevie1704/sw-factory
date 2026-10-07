@@ -80,6 +80,7 @@ func TestLoadHostRejectsInvalidWorkerLimits(t *testing.T) {
 		{limit: "cpus: 0", field: "cpus"},
 		{limit: "cpus: -4", field: "cpus"},
 		{limit: "cpus: all", field: "cpus"},
+		{limit: `cpus: "0.0000000001"`, field: "cpus"},
 		{limit: "pids: 0", field: "pids"},
 		{limit: "pids: -1", field: "pids"},
 		{limit: "pids: many", field: "pids"},

@@ -24,14 +24,17 @@ const (
 	DefaultLogMaxFiles = "3"
 	// minimumMemoryBytes is the smallest memory limit Docker accepts.
 	minimumMemoryBytes = 6 << 20
+	// minimumCPUs is the smallest CPU limit the Docker daemon accepts.
+	minimumCPUs = 0.01
 )
 
 // sizePattern is the Docker byte-size grammar the factory accepts: a positive
 // whole number with an optional b, k, m, or g unit.
 var sizePattern = regexp.MustCompile(`^([0-9]+)([bkmgBKMG]?)$`)
 
-// cpuPattern accepts a decimal CPU count such as 4 or 1.5.
-var cpuPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+// cpuPattern accepts a decimal CPU count such as 4 or 1.5. Docker stores the
+// count in billionths of a CPU, so it refuses more than nine decimal places.
+var cpuPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]{1,9})?$`)
 
 // ResourceLimits are the host-owned bounds applied to one worker container.
 // The values use the Docker CLI grammar. An empty value selects its default.
@@ -83,8 +86,8 @@ func (l ResourceLimits) Validate() error {
 		}
 	}
 	if l.CPUs != "" {
-		if count, err := strconv.ParseFloat(l.CPUs, 64); !cpuPattern.MatchString(l.CPUs) || err != nil || count <= 0 {
-			return &ResourceLimitError{Field: "cpus", Message: "must be a positive CPU count, such as 4 or 1.5"}
+		if count, err := strconv.ParseFloat(l.CPUs, 64); !cpuPattern.MatchString(l.CPUs) || err != nil || count < minimumCPUs {
+			return &ResourceLimitError{Field: "cpus", Message: "must be a CPU count of at least 0.01 with at most nine decimal places, such as 4 or 1.5"}
 		}
 	}
 	if l.PIDs != "" && !positiveInteger(l.PIDs) {

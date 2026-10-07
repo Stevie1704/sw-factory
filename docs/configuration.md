@@ -255,7 +255,7 @@ optional, and an omitted key takes its default:
 | Key | Default | Docker setting | Accepted values |
 | --- | --- | --- | --- |
 | `memory` | `8g` | `--memory`, and `--memory-swap` with the same value | A size with an optional `b`, `k`, `m`, or `g` unit, at least `6m` |
-| `cpus` | `4` | `--cpus` | A positive CPU count, such as `4` or `1.5` |
+| `cpus` | `4` | `--cpus` | A CPU count of at least `0.01` with at most nine decimal places, such as `4` or `1.5` |
 | `pids` | `4096` | `--pids-limit` | A positive whole number |
 | `log_max_size` | `10m` | `--log-opt max-size` of the `json-file` log driver | A positive size with an optional `b`, `k`, `m`, or `g` unit |
 | `log_max_files` | `3` | `--log-opt max-file` of the `json-file` log driver | A positive whole number |
