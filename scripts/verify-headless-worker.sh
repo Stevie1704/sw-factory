@@ -3,7 +3,8 @@
 # Exercise the detached worker protocol through a real Docker container for
 # every production harness adapter. The fake harnesses are deterministic and
 # offline, so this verifies the worker boundary without spending a harness
-# request or requiring credentials.
+# request or requiring credentials. It then runs the real-worker Go checks for
+# command lifetime and resource limits against the same image.
 set -eu
 
 DOCKER="${DOCKER:-docker}"
@@ -413,4 +414,7 @@ SETTINGS"
 verify_harness codex headless-verification-session '"type":"thread.started"'
 verify_harness claude 8f14e45f-ceea-467a-9575-1b0a4b2a4bd9 '"subtype":"init"'
 assert_claude_session_contract
+
+echo "Verifying real worker command lifetime and resource limits"
+(cd "$REPOSITORY_ROOT" && FACTORY_DOCKER_WORKER_IMAGE="$WORKER_REFERENCE" "${GO:-go}" test -count=1 -run '^TestRealWorker' ./internal/worker)
 echo "Headless worker lifecycle verification passed for $WORKER_REFERENCE"
