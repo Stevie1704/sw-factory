@@ -101,9 +101,10 @@ func (l ResourceLimits) Validate() error {
 	return nil
 }
 
-// String renders the limits as one operator-readable summary.
+// String renders the effective limits as one operator-readable summary.
 func (l ResourceLimits) String() string {
-	return fmt.Sprintf("memory %s, swap %s, cpus %s, pids %s, log %s x %s", l.Memory, l.Memory, l.CPUs, l.PIDs, l.LogMaxFiles, l.LogMaxSize)
+	effective := l.Effective()
+	return fmt.Sprintf("memory %s, swap %s, cpus %s, pids %s, log %s x %s", effective.Memory, effective.Memory, effective.CPUs, effective.PIDs, effective.LogMaxFiles, effective.LogMaxSize)
 }
 
 // dockerArguments returns the docker run flags that apply the effective limits.

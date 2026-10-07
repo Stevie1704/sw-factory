@@ -134,7 +134,8 @@ after the command. A command that succeeds although one of its processes was
 killed keeps its successful result. The error is an infrastructure failure,
 never a command result: the gate runner records an execution error, and the
 check-repair policy pauses the run with a lifecycle reason that names the
-out-of-memory kill. When the kernel exposes no `oom_kill` count, an
+out-of-memory kill. A focused red-test verification that fails this way also
+names the kill in its pause reason. When the kernel exposes no `oom_kill` count, an
 out-of-memory kill stays an ordinary non-zero exit.
 
 A command that reaches the PID limit sees `fork` fail. The worker becomes
@@ -144,6 +145,9 @@ Known limits:
 
 - Detached headless harness processes report the exit status of the harness.
   An out-of-memory kill of a harness process is not yet a typed failure.
+- The `oom_kill` count belongs to the whole worker cgroup. A failing command
+  that ran while the memory limit killed another process in the same worker,
+  such as a headless harness, also reports the out-of-memory failure.
 - Limits do not change on a reused worker. A worker created before the limits
   changed keeps its earlier limits until the coordinator recreates it.
 
