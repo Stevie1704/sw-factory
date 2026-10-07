@@ -309,3 +309,34 @@ func assertCheckInfrastructurePause(t *testing.T, run store.Run) {
 		t.Fatalf("run = stage %q status %q reason %q attempts %d, want a check infrastructure pause without a spent attempt", run.Stage, run.Status, run.LifecycleReason, run.CheckRepairAttempts)
 	}
 }
+
+// TestReconcileNamesTheCheckRetryForACheckInfrastructurePause verifies
+// `factory reconcile` names the retry-checks continuation of a parked check,
+// not only the generic recovery advice.
+func TestReconcileNamesTheCheckRetryForACheckInfrastructurePause(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-reconcile-pause", true)
+	fixture.runtime.nextCommandErr = errors.New("worker container is not running")
+	if _, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID}); err != nil {
+		t.Fatalf("CreateDraftPullRequest() fixture error = %v", err)
+	}
+
+	result, err := fixture.service.Reconcile(context.Background())
+
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.Run == nil {
+		t.Fatal("Reconcile() run = nil, want the paused check")
+	}
+	assertCheckInfrastructurePause(t, *result.Run)
+	retries := 0
+	for _, action := range result.Diagnosis.SafeActions {
+		if strings.Contains(action, "retry checks") && strings.Contains(action, "factory resume") {
+			retries++
+		}
+	}
+	if retries != 1 {
+		t.Fatalf("safe actions = %#v, want the retry-checks continuation exactly once", result.Diagnosis.SafeActions)
+	}
+}

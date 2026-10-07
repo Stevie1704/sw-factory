@@ -840,6 +840,7 @@ func (s *Service) Reconcile(ctx context.Context) (RecoveryResult, error) {
 		return RecoveryResult{Outcome: RecoveryOutcomeReconciled}, nil
 	}
 	updated, diagnosis, outcome, reconcileErr := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
+	appendCheckContinuationAction(&diagnosis, updated)
 	appendPendingEffectAction(&diagnosis)
 	result := RecoveryResult{Run: &updated, Diagnosis: diagnosis, Outcome: outcome}
 	return result, reconcileErr
@@ -1118,9 +1119,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 		// invocation may have no native identity yet, so ordinary interrupted
 		// projection checks would incorrectly turn a retryable wait into a human
 		// discrepancy.
-		diagnosis := waitingForHarnessDiagnosis(run.ID)
-		appendCheckContinuationAction(&diagnosis, run)
-		return run, diagnosis, RecoveryOutcomeWaitingForHarness, nil
+		return run, waitingForHarnessDiagnosis(run.ID), RecoveryOutcomeWaitingForHarness, nil
 	}
 	if store.IsTerminalStatus(run.Status) {
 		return run, reconciledRecoveryDiagnosis(run.ID), RecoveryOutcomeReconciled, nil
