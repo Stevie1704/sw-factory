@@ -152,46 +152,72 @@ func inspectDoctorState(path string) DoctorState {
 // rendered; every other error keeps the generic problem because its text can
 // quote file paths or repository content.
 func describeRepositoryLoadFailure(err error) string {
+	const generic = "checked-in repository configuration is missing or invalid"
 	var (
-		fileError     *ConfigFileError
-		validationErr *ValidationError
-		policyError   *PolicyError
-		schemaError   *UnknownSchemaVersionError
+		fileError       *ConfigFileError
+		validationError *ValidationError
+		policyError     *PolicyError
+		schemaError     *UnknownSchemaVersionError
 	)
 	switch {
 	case errors.As(err, &fileError):
 		// Parse and read failures can quote input values or unknown keys.
-	case errors.As(err, &validationErr):
-		return fmt.Sprintf("checked-in repository configuration is invalid: %s: %s", safeRepositoryField(validationErr.Field), validationErr.Message)
+		return generic
+	case errors.As(err, &validationError):
+		return fmt.Sprintf("checked-in repository configuration is invalid: %s: %s", safeRepositoryField(validationError.Field), validationError.Message)
 	case errors.As(err, &policyError):
-		return fmt.Sprintf("checked-in repository policy is rejected: %s: %s", safeRepositoryField(policyError.Field), policyError.Message)
+		return fmt.Sprintf("checked-in repository policy is rejected: %s: %s", policyField(policyError.Field), policyError.Message)
 	case errors.As(err, &schemaError):
 		return fmt.Sprintf("checked-in repository configuration is invalid: schema_version %d is newer than supported version %d", schemaError.Version, schemaError.Supported)
 	}
-	return "checked-in repository configuration is missing or invalid"
+	return generic
 }
 
-// roleKeyedRepositoryFields names the repository maps whose keys are
-// repository-supplied role names and so can carry arbitrary content.
-var roleKeyedRepositoryFields = []string{"role_craft", "role_harness_defaults", "model_options", "reasoning_effort_options"}
+// roleKeyedRepositoryFields maps each repository map whose keys are
+// repository-supplied role names to whether its validators append a numeric
+// list index after the role.
+var roleKeyedRepositoryFields = map[string]bool{
+	"role_craft":               false,
+	"role_harness_defaults":    false,
+	"model_options":            true,
+	"reasoning_effort_options": true,
+}
 
 // safeRepositoryField keeps a role suffix only when it names a role in the
-// factory-owned workflow registry, optionally followed by a validator list
-// index. Any other role key collapses to the map's fixed field name, because
-// escaping or truncating an unknown key can still reveal its contents.
+// factory-owned workflow registry, followed by a list index only where the
+// map's validators generate one. Any other role key collapses to the map's
+// fixed field name, because escaping or truncating an unknown key can still
+// reveal its contents.
 func safeRepositoryField(field string) string {
-	for _, parent := range roleKeyedRepositoryFields {
-		suffix, found := strings.CutPrefix(field, parent+".")
-		if !found {
-			continue
-		}
-		role, index, indexed := strings.Cut(suffix, "[")
-		if _, known := workflow.DefaultRegistry().Role(role); known && (!indexed || validListIndex(index)) {
-			return field
-		}
+	parent, suffix, found := splitRoleKeyedField(field)
+	if !found {
+		return field
+	}
+	role, index, hasIndex := strings.Cut(suffix, "[")
+	if _, known := workflow.DefaultRegistry().Role(role); known && (!hasIndex || roleKeyedRepositoryFields[parent] && validListIndex(index)) {
+		return field
+	}
+	return parent
+}
+
+// policyField collapses every role-keyed policy field to its map name: a
+// policy rejection under a role map always names an undeclared role.
+func policyField(field string) string {
+	if parent, _, found := splitRoleKeyedField(field); found {
 		return parent
 	}
 	return field
+}
+
+// splitRoleKeyedField separates a field under a role-keyed map into the
+// map's fixed name and the repository-supplied suffix.
+func splitRoleKeyedField(field string) (parent, suffix string, found bool) {
+	for parent := range roleKeyedRepositoryFields {
+		if suffix, found := strings.CutPrefix(field, parent+"."); found {
+			return parent, suffix, true
+		}
+	}
+	return "", "", false
 }
 
 // validListIndex reports whether suffix is a decimal list index followed by

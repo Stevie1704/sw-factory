@@ -292,59 +292,14 @@ func TestStartupCheckNamesTheInvalidRepositoryField(t *testing.T) {
 	}
 }
 
-// diagnoseRepositoryConfig runs the configuration startup check against a
-// private host registration and the smallest valid repository policy after
-// mutate rewrites the policy text.
-func diagnoseRepositoryConfig(t *testing.T, mutate func(string) string) doctor.Result {
-	t.Helper()
-	root := t.TempDir()
-	repositoryPath := filepath.Join(root, "repository")
-	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeDoctorRepositoryConfig(t, repositoryPath)
-	repositoryConfigPath := filepath.Join(repositoryPath, "factory.yaml")
-	contents, err := os.ReadFile(repositoryConfigPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mutated := mutate(string(contents))
-	if mutated == string(contents) {
-		t.Fatal("mutation did not change the repository configuration")
-	}
-	if err := os.WriteFile(repositoryConfigPath, []byte(mutated), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	hostPath := filepath.Join(root, "config.yaml")
-	host := `schema_version: 2
-repositories:
-  - path: ` + repositoryPath + `
-    github:
-      owner: example
-      repository: project
-    authorized_users: [alice]
-    polling:
-      interval: 30s
-      backoff: 5m
-    operational_data_path: ` + filepath.Join(root, "state", "factory.db") + `
-    repository_config_path: ` + repositoryConfigPath + `
-`
-	if err := os.WriteFile(hostPath, []byte(host), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	state, check := config.StartupCheck(hostPath)
-	result := check(context.Background())
-	if result.Status == doctor.StatusFailed && state.Repository != nil {
-		t.Fatalf("startup state = %#v, want no repository projection on failure", state)
-	}
-	return result
-}
-
 // TestStartupCheckNamesAnInvalidDigestWithoutEchoingIt verifies a rejected
-// worker digest names the field and format without printing the value.
+// worker digest names the field and format without printing the value or any
+// unrelated repository scalar.
 func TestStartupCheckNamesAnInvalidDigestWithoutEchoingIt(t *testing.T) {
 	supplied := "sha256:not-a-digest-sentinel"
 	result := diagnoseRepositoryConfig(t, func(contents string) string {
+		contents = strings.Replace(contents, "target_branch: main", "target_branch: main-sentinel", 1)
+		contents = strings.Replace(contents, "command: go test ./...", "command: go test ./... # sentinel", 1)
 		return strings.Replace(contents, "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", supplied, 1)
 	})
 	want := "worker_build.digest: must be a sha256 digest with 64 hexadecimal characters"
@@ -352,7 +307,7 @@ func TestStartupCheckNamesAnInvalidDigestWithoutEchoingIt(t *testing.T) {
 		t.Fatalf("startup result = %#v, want %q", result, want)
 	}
 	if strings.Contains(result.Problem+result.Action, "sentinel") {
-		t.Fatalf("startup result exposed the supplied digest: %#v", result)
+		t.Fatalf("startup result exposed repository values: %#v", result)
 	}
 }
 
@@ -392,6 +347,8 @@ func TestStartupCheckCollapsesUnknownRoleKeys(t *testing.T) {
 		"secret-like": `"sk-live-sentinel-token"`,
 		"newline":     `"evil\nsentinel"`,
 		"terminal":    `"\e[31msentinel\e[0m"`,
+		"indexed":     `"test[0]"`,
+		"long":        strings.Repeat("sentinel", 64),
 	}
 	maps := map[string]func(contents, key string) string{
 		"role_craft": func(contents, key string) string {
@@ -414,7 +371,7 @@ func TestStartupCheckCollapsesUnknownRoleKeys(t *testing.T) {
 				if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, field+reason) {
 					t.Fatalf("startup result = %#v, want %q", result, field+reason)
 				}
-				if strings.ContainsAny(result.Problem+result.Action, "\n\x1b") || strings.Contains(result.Problem+result.Action, "sentinel") {
+				if strings.ContainsAny(result.Problem+result.Action, "\n\x1b") || strings.Contains(result.Problem+result.Action, "sentinel") || strings.Contains(result.Problem, field+".") {
 					t.Fatalf("startup result exposed the role key: %#v", result)
 				}
 			})
@@ -477,4 +434,46 @@ func TestRepositoryTypeErrorQuotesTheInputValue(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "zqleak") {
 		t.Fatalf("LoadRepository() error = %v, want a decoder error quoting the sentinel", err)
 	}
+}
+
+// diagnoseRepositoryConfig runs the configuration startup check against a
+// private host registration and the smallest valid repository policy after
+// mutate rewrites the policy text.
+func diagnoseRepositoryConfig(t *testing.T, mutate func(string) string) doctor.Result {
+	t.Helper()
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeDoctorRepositoryConfig(t, repositoryPath)
+	repositoryConfigPath := filepath.Join(repositoryPath, "factory.yaml")
+	contents, err := os.ReadFile(repositoryConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := mutate(string(contents))
+	if mutated == string(contents) {
+		t.Fatal("mutation did not change the repository configuration")
+	}
+	if err := os.WriteFile(repositoryConfigPath, []byte(mutated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostPath := filepath.Join(root, "config.yaml")
+	if err := config.SaveHost(hostPath, config.HostConfig{
+		SchemaVersion: config.CurrentHostSchemaVersion,
+		Repositories: []config.RepositoryRegistration{{
+			Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+			AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"},
+			OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: repositoryConfigPath,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, check := config.StartupCheck(hostPath)
+	result := check(context.Background())
+	if result.Status == doctor.StatusFailed && state.Repository != nil {
+		t.Fatalf("startup state = %#v, want no repository projection on failure", state)
+	}
+	return result
 }
