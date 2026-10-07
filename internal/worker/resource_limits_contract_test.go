@@ -3,6 +3,8 @@ package worker_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -140,9 +142,16 @@ func TestResourceLimitsEffectiveValues(t *testing.T) {
 
 // TestDockerRuntimeClassifiesAnOutOfMemoryKill verifies that a command the
 // worker's memory limit killed is a typed infrastructure failure, not an
-// ordinary non-zero exit, and that command output cannot forge the failure.
+// ordinary non-zero exit. The kernel's kill count is the only evidence, so
+// command output that imitates a marker, even with the private command
+// identity, stays an ordinary exit.
 func TestDockerRuntimeClassifiesAnOutOfMemoryKill(t *testing.T) {
 	stub, _, _ := writeDockerStub(t)
+	oomFile := filepath.Join(t.TempDir(), "oom-kills")
+	if err := os.WriteFile(oomFile, []byte("2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKER_DOCKER_OOM_FILE", oomFile)
 	runtime := &worker.DockerRuntime{DockerBinary: stub}
 	request := worker.StartRequest{
 		RunID:           "run-contract-oom",

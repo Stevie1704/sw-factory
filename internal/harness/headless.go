@@ -94,6 +94,9 @@ type HeadlessInspection struct {
 	StdoutTruncated bool
 	// StderrTruncated reports incomplete diagnostic output.
 	StderrTruncated bool
+	// OutOfMemory reports a failed exit after the worker memory limit killed
+	// a process during the invocation.
+	OutOfMemory bool
 }
 
 // HeadlessRuntime is the factory-owned lifecycle seam for terminal-free
@@ -151,7 +154,7 @@ func (h *headless) InspectHeadless(ctx context.Context, request HeadlessInspecti
 	if err != nil {
 		return HeadlessInspection{}, err
 	}
-	return HeadlessInspection{Status: result.Status, ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr, StdoutTruncated: result.StdoutTruncated, StderrTruncated: result.StderrTruncated}, nil
+	return HeadlessInspection{Status: result.Status, ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr, StdoutTruncated: result.StdoutTruncated, StderrTruncated: result.StderrTruncated, OutOfMemory: result.OutOfMemory}, nil
 }
 
 // CancelHeadless delegates idempotent cancellation to the worker process
@@ -355,6 +358,11 @@ func (h *headless) waitForNativeSession(ctx context.Context, request HeadlessSta
 // adapter-owned stderr event must remain visible when stdout is empty or
 // truncated.
 func (h *headless) classifyInspection(inspection HeadlessInspection) *HeadlessFailure {
+	// A memory-limit kill is the cause of whatever the process printed last,
+	// so it outranks every output-based category.
+	if inspection.Status == worker.HeadlessStatusExited && inspection.OutOfMemory {
+		return &HeadlessFailure{Cause: NewOutOfMemoryError(h.protocol.name), ExitCode: inspection.ExitCode}
+	}
 	output := inspection.Stdout
 	if strings.TrimSpace(inspection.Stderr) != "" {
 		output += "\n" + inspection.Stderr

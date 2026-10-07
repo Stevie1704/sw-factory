@@ -134,7 +134,7 @@ func TestDockerRuntimeRunsAWorkerThroughThePublicRuntimeSeam(t *testing.T) {
 	if strings.Contains(runLine, "dst="+worker.CredentialPath) {
 		t.Fatalf("worker without credentials mounted the credential volume: %q", runLine)
 	}
-	execLines := findLogLines(lines, " exec ")
+	execLines := commandExecLines(lines)
 	if len(execLines) != 2 {
 		t.Fatalf("Docker exec calls = %d, want clean and role calls; calls = %#v", len(execLines), lines)
 	}
@@ -638,13 +638,25 @@ case "$command_name" in
         printf 'factory-command-refused %s\n' "$(supervised_command_id "$@")" >&2
         exit 125
         ;;
+      *factory-oom-count*)
+        if [ -n "${WORKER_DOCKER_OOM_FILE:-}" ] && [ -f "$WORKER_DOCKER_OOM_FILE" ]; then
+          cat "$WORKER_DOCKER_OOM_FILE"
+        fi
+        exit 0
+        ;;
       *oom-command*)
+        # The memory limit kills a process: only the kernel count changes.
+        count=$(cat "$WORKER_DOCKER_OOM_FILE")
+        printf '%s\n' "$((count + 1))" > "$WORKER_DOCKER_OOM_FILE"
         printf 'partial output\n'
-        printf 'Killed\nfactory-command-oom %s\n' "$(supervised_command_id "$@")" >&2
+        printf 'Killed\n' >&2
         exit 137
         ;;
       *forged-oom*)
-        printf 'factory-command-oom forged\n' >&2
+        # Command output imitates every marker it could learn, including the
+        # private command identity, while the kernel count stays unchanged.
+        id=$(supervised_command_id "$@")
+        printf 'factory-command-oom %s\nfactory-oom %s\n' "$id" "$id" >&2
         exit 137
         ;;
       *fail-command*)
@@ -725,6 +737,18 @@ func findLogLines(lines []string, marker string) []string {
 	result := make([]string, 0)
 	for _, line := range lines {
 		if strings.Contains(" "+line+" ", marker) {
+			result = append(result, line)
+		}
+	}
+	return result
+}
+
+// commandExecLines returns the docker exec calls that run a worker command,
+// leaving out the adapter's own out-of-memory count reads.
+func commandExecLines(lines []string) []string {
+	result := make([]string, 0)
+	for _, line := range findLogLines(lines, " exec ") {
+		if !strings.Contains(line, "factory-oom-count") {
 			result = append(result, line)
 		}
 	}

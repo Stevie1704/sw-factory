@@ -111,6 +111,58 @@ func TestRealWorkerResourceLimits(t *testing.T) {
 		}
 	})
 
+	t.Run("a detached process killed at the memory limit reports out of memory", func(t *testing.T) {
+		request := HeadlessRequest{
+			RunID: runID, InvocationID: "inv-oom", Command: []string{"awk", `BEGIN { s = "x"; while (1) s = s s }`},
+			EnvironmentPolicy: EnvironmentPolicyClean, Mode: HeadlessLaunchFresh,
+		}
+		if _, err := runtime.StartHeadless(context.Background(), request); err != nil {
+			t.Fatalf("StartHeadless() error = %v", err)
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			inspection, err := runtime.InspectHeadless(context.Background(), request)
+			if err != nil {
+				t.Fatalf("InspectHeadless() error = %v", err)
+			}
+			if inspection.Status == HeadlessStatusExited {
+				if inspection.ExitCode == 0 || !inspection.OutOfMemory {
+					t.Fatalf("InspectHeadless() = status %q exit %d out of memory %t, want an out-of-memory exit", inspection.Status, inspection.ExitCode, inspection.OutOfMemory)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("detached process status = %q after 30s, want exited", inspection.Status)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		// A later ordinary failure in the same worker is not blamed on the
+		// earlier kill, because its baseline is recorded at its own launch.
+		ordinary := request
+		ordinary.InvocationID = "inv-ordinary"
+		ordinary.Command = []string{"sh", "-c", "exit 3"}
+		if _, err := runtime.StartHeadless(context.Background(), ordinary); err != nil {
+			t.Fatalf("StartHeadless() ordinary error = %v", err)
+		}
+		deadline = time.Now().Add(30 * time.Second)
+		for {
+			inspection, err := runtime.InspectHeadless(context.Background(), ordinary)
+			if err != nil {
+				t.Fatalf("InspectHeadless() ordinary error = %v", err)
+			}
+			if inspection.Status == HeadlessStatusExited {
+				if inspection.ExitCode != 3 || inspection.OutOfMemory {
+					t.Fatalf("ordinary InspectHeadless() = exit %d out of memory %t, want exit 3 without out of memory", inspection.ExitCode, inspection.OutOfMemory)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("ordinary detached process status = %q after 30s, want exited", inspection.Status)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+
 	t.Run("a fork loop stops at the PID limit", func(t *testing.T) {
 		// Each background sleep holds one PID. The loop asks for far more
 		// PIDs than the limit, so the kernel refuses a fork and the shell

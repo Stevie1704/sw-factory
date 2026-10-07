@@ -119,9 +119,9 @@ _Avoid_: Truncation, output cap, log limit
 
 **Worker limits**:
 The host-owned memory, CPU, PID, and container-log bounds every worker
-container starts with. A repository commit cannot raise them. A command that
-the memory limit kills is a typed out-of-memory infrastructure failure, not a
-command exit.
+container starts with. A repository commit cannot raise them. A command or a
+detached harness process that the memory limit kills is a typed
+out-of-memory infrastructure failure, not an ordinary exit.
 _Avoid_: Quota, resource config
 
 **WorkerRuntime**:

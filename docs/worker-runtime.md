@@ -126,28 +126,44 @@ Workers also start with Docker's `--init` process as PID 1. The init process
 reaps orphaned processes. Without it, orphans stay as zombies that hold PIDs,
 and a worker that reached its PID limit once would refuse every later fork.
 
-When the memory limit kills a process while a `run-command` command runs, and
-the command then fails, the adapter returns a typed `OutOfMemoryError` instead
-of the exit code. The supervisor reads the worker cgroup's `oom_kill` count
-(`memory.events` on cgroup v2, `memory.oom_control` on cgroup v1) before and
-after the command. A command that succeeds although one of its processes was
-killed keeps its successful result. The error is an infrastructure failure,
-never a command result: the gate runner records an execution error, and the
-check-repair policy pauses the run with a lifecycle reason that names the
-out-of-memory kill. A focused red-test verification that fails this way also
-names the kill in its pause reason. When the kernel exposes no `oom_kill` count, an
-out-of-memory kill stays an ordinary non-zero exit.
+### Out-of-memory kills
+
+The adapter detects an out-of-memory kill from the kernel, never from command
+output. It reads the worker cgroup's `oom_kill` count (`memory.events` on
+cgroup v2, `memory.oom_control` on cgroup v1) in its own `docker exec`, apart
+from the command. No worker process can write that count, so command output
+cannot forge an out-of-memory failure.
+
+- **Commands.** `run-command` reads the count before the command starts. When
+  the command fails and the count grew, the adapter returns a typed
+  `OutOfMemoryError` instead of the exit code. A command that succeeds
+  although one of its processes was killed keeps its successful result. The
+  gate runner records an execution error, and the check-repair policy pauses
+  the run as `check infrastructure unavailable` with a reason that names the
+  out-of-memory kill. A focused red-test verification that fails this way
+  also names the kill in its pause reason.
+- **Detached harness processes.** `start-headless` records the count, as root,
+  in `/run/factory-oom/<boot>/<invocation-id>` before the process starts. The
+  worker user cannot create, change, or replace entries under `/run`, and the
+  adapter trusts only root-owned entries. When `inspect-headless` sees a
+  failed exit and the count grew past that baseline, it reports
+  `OutOfMemory`. The harness adapter reports an unexpected exit that names
+  the out-of-memory kill. The coordinator does not resume it automatically,
+  because a resume would meet the same limit. It pauses the run as
+  `harness out of memory (<harness>)`, and `/factory resume` continues the
+  native session after the operator raises `worker_limits.memory`.
+
+When the kernel exposes no `oom_kill` count, or the baseline could not be
+recorded, an out-of-memory kill stays an ordinary failed exit.
 
 A command that reaches the PID limit sees `fork` fail. The worker becomes
 usable again when the processes that hold its PIDs end.
 
 Known limits:
 
-- Detached headless harness processes report the exit status of the harness.
-  An out-of-memory kill of a harness process is not yet a typed failure.
 - The `oom_kill` count belongs to the whole worker cgroup. A failing command
-  that ran while the memory limit killed another process in the same worker,
-  such as a headless harness, also reports the out-of-memory failure.
+  that ran while the memory limit killed another process in the same worker
+  also reports the out-of-memory failure.
 - Limits do not change on a reused worker. A worker created before the limits
   changed keeps its earlier limits until the coordinator recreates it.
 
@@ -217,8 +233,10 @@ Known limits:
 
 The contract tests use a controlled Docker executable. Live Docker and harness
 checks remain environment checks and are not ordinary unit-test dependencies.
-To run the real command-lifetime and resource-limit checks against the pinned
-worker, use:
+`scripts/verify-headless-worker.sh` runs the real command-lifetime and
+resource-limit checks after the headless lifecycle checks, so `make
+worker-build` and the CI worker verification job both run them. To run them
+alone against the pinned worker, use:
 
 ```sh
 FACTORY_DOCKER_WORKER_IMAGE=ghcr.io/stevie1704/sw-factory-worker@sha256:... \

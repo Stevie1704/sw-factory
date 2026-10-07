@@ -489,6 +489,7 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	if err != nil {
 		return CommandResult{}, err
 	}
+	oomBefore, oomKnown := r.oomKillCount(ctx, workerID)
 	environment := commandEnvironment(request)
 	args := []string{"exec", "--workdir", WorktreePath}
 	for _, value := range environment {
@@ -526,7 +527,7 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	}
 	// An out-of-memory kill is the worker's limit, not the command's verdict,
 	// so it outranks exit-code classification.
-	if errors.As(err, &commandErr) && commandOutOfMemory(commandErr, commandID) {
+	if r.killedAtMemoryLimit(ctx, workerID, oomBefore, oomKnown) {
 		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, &OutOfMemoryError{})
 	}
 	if errors.As(err, &commandErr) && commandErr.ProcessStarted && commandErr.ExitCode >= 0 && commandErr.ExitCode != 125 && !isDockerRuntimeFailure(commandErr) {

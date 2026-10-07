@@ -893,7 +893,7 @@ func resumeCommandStatusComment(run store.Run) string {
 		return "\n### Recovery\n\n- command: `/factory resume`\n"
 	case run.Status == store.StatusWaitingForHuman && strings.HasPrefix(reason, LifecycleReasonHarnessAuthenticationExpired):
 		return "\n### Recovery\n\n- host command: `factory auth refresh --resume`\n- GitHub command: `/factory resume`\n"
-	case run.Status == store.StatusWaitingForHuman && strings.HasPrefix(reason, LifecycleReasonAutomaticHarnessRecoveryExhausted):
+	case run.Status == store.StatusWaitingForHuman && (strings.HasPrefix(reason, LifecycleReasonAutomaticHarnessRecoveryExhausted) || strings.HasPrefix(reason, LifecycleReasonHarnessOutOfMemory)):
 		return "\n### Recovery\n\n- command: `/factory resume`\n"
 	default:
 		return ""

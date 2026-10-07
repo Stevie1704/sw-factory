@@ -406,7 +406,7 @@ func (l *invocationLifecycle) resumeActiveInvocationError(ctx context.Context, r
 		return ResumeResult{Run: paused, Invocation: updated}, errors.Join(classified, pauseErr)
 	}
 	if harness.IsUnexpectedExit(classified) {
-		paused, pauseErr := l.pauseForManualRecovery(ctx, request.Registration, request.RunStore, run, active.Harness)
+		paused, pauseErr := l.pauseForHarnessExit(ctx, request.Registration, request.RunStore, run, active.Harness, classified)
 		return ResumeResult{Run: paused, Invocation: updated}, errors.Join(classified, pauseErr)
 	}
 	return ResumeResult{Run: run, Invocation: updated}, resumeErr
@@ -1197,7 +1197,7 @@ func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request In
 	}
 	if harness.IsUnexpectedExit(classified) {
 		return l.retainLaunchAfterHarnessFailure(ctx, request, plan, invocationStore, invocation, classified, func() (store.Run, error) {
-			return l.pauseForManualRecovery(ctx, request.Registration, request.RunStore, plan.Run, string(plan.Policy.Harness))
+			return l.pauseForHarnessExit(ctx, request.Registration, request.RunStore, plan.Run, string(plan.Policy.Harness), classified)
 		})
 	}
 	return harness.Session{}, store.Invocation{}, false, fmt.Errorf("launch %s %s agent: %w", plan.Policy.Harness, invocation.Role, classified)
@@ -1653,6 +1653,21 @@ func (l *invocationLifecycle) pauseForCaptureLimit(ctx context.Context, registra
 	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, captureLimitRecoveryPrefix, captureLimitRecoveryReason(harnessName))
 }
 
+// pauseForOutOfMemory stops delegated workers and records a human pause that
+// names the memory-limit kill of a detached harness process.
+func (l *invocationLifecycle) pauseForOutOfMemory(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
+	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, LifecycleReasonHarnessOutOfMemory, fmt.Sprintf("%s (%s): killed at the worker memory limit; raise worker_limits.memory in the host configuration, then resume", LifecycleReasonHarnessOutOfMemory, harnessName))
+}
+
+// pauseForHarnessExit pauses after an unexpected harness exit. A memory-limit
+// kill names its cause; every other exit needs a manual native resume.
+func (l *invocationLifecycle) pauseForHarnessExit(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string, cause error) (store.Run, error) {
+	if harness.IsOutOfMemory(cause) {
+		return l.pauseForOutOfMemory(ctx, registration, runStore, run, harnessName)
+	}
+	return l.pauseForManualRecovery(ctx, registration, runStore, run, harnessName)
+}
+
 // pauseForManualRecovery records the bounded automatic-recovery boundary and
 // leaves the native session for an explicit operator-requested resume.
 func (l *invocationLifecycle) pauseForManualRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
@@ -1882,7 +1897,7 @@ func (l *invocationLifecycle) handleRetryResumeError(ctx context.Context, regist
 		return err
 	}
 	if harness.IsUnexpectedExit(classified) {
-		_, err := l.pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
+		_, err := l.pauseForHarnessExit(ctx, registration, runStore, run, active.Harness, classified)
 		return err
 	}
 	return resumeErr
@@ -1940,6 +1955,10 @@ func (l *invocationLifecycle) reconcileActiveHarnessLiveness(ctx context.Context
 			}
 			if harness.IsAuthenticationExpired(failure) {
 				_, pauseErr := l.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
+				return pauseErr
+			}
+			if harness.IsOutOfMemory(failure) {
+				_, pauseErr := l.pauseForOutOfMemory(ctx, registration, runStore, run, active.Harness)
 				return pauseErr
 			}
 		}
