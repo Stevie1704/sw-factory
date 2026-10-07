@@ -271,15 +271,9 @@ func (l *invocationLifecycle) reconcileBeforeResume(ctx context.Context, request
 // resumeWithoutActiveInvocation either re-enters a coordinator-owned check
 // pause or launches the role selected by the persisted run.
 func (l *invocationLifecycle) resumeWithoutActiveInvocation(ctx context.Context, request InvocationRecoveryRequest, run store.Run) (ResumeResult, error) {
-	if run.Stage == store.StageCheck && isRestartReconciliationPause(run) {
-		if l.hooks.resumeRecoveredCheck == nil {
-			return ResumeResult{}, errors.New("recovered-check resume hook is required")
-		}
-		resumed, err := l.hooks.resumeRecoveredCheck(ctx, request.Registration, request.RunStore, run)
-		if err != nil {
-			return ResumeResult{Run: resumed}, err
-		}
-		return ResumeResult{Run: resumed}, nil
+	if isCheckContinuationPause(run) {
+		resumed, err := l.continueCheck(ctx, request.Registration, request.RunStore, run)
+		return ResumeResult{Run: resumed}, err
 	}
 	invocationID, err := l.recoveryInvocationID(request)
 	if err != nil {
@@ -366,6 +360,16 @@ func (l *invocationLifecycle) persistManualResumeState(ctx context.Context, requ
 		return next, err
 	}
 	return next, nil
+}
+
+// continueCheck re-enters gate evaluation for a paused check through the
+// coordinator-owned continuation. A check stage declares no agent role, so a
+// paused check must never fall through to an agent launch.
+func (l *invocationLifecycle) continueCheck(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
+	if l.hooks.resumeRecoveredCheck == nil {
+		return run, errors.New("recovered-check resume hook is required")
+	}
+	return l.hooks.resumeRecoveredCheck(ctx, registration, runStore, run)
 }
 
 // recoveryInvocationID resolves a fresh identity only on the branch that will
@@ -1834,6 +1838,12 @@ func (l *invocationLifecycle) retryWaitingForHarness(ctx context.Context, regist
 		if err := l.supersedeInvocation(ctx, registration, runStore, *active); err != nil {
 			return err
 		}
+	}
+	if isCheckInfrastructurePause(run) {
+		// A legacy check infrastructure wait is left by retrying its checks;
+		// the continuation reconciles any pending effect first.
+		_, err := l.continueCheck(ctx, registration, runStore, run)
+		return err
 	}
 	if launch == nil {
 		return errors.New("launch callback is required for harness retry")

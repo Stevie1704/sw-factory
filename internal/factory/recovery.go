@@ -1118,7 +1118,9 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 		// invocation may have no native identity yet, so ordinary interrupted
 		// projection checks would incorrectly turn a retryable wait into a human
 		// discrepancy.
-		return run, waitingForHarnessDiagnosis(run.ID), RecoveryOutcomeWaitingForHarness, nil
+		diagnosis := waitingForHarnessDiagnosis(run.ID)
+		appendCheckContinuationAction(&diagnosis, run)
+		return run, diagnosis, RecoveryOutcomeWaitingForHarness, nil
 	}
 	if store.IsTerminalStatus(run.Status) {
 		return run, reconciledRecoveryDiagnosis(run.ID), RecoveryOutcomeReconciled, nil
@@ -1632,6 +1634,53 @@ func isRestartReconciliationPause(run store.Run) bool {
 	return run.Status == store.StatusWaitingForHuman && strings.HasPrefix(run.LifecycleReason, restartReconciliationPausePrefix)
 }
 
+// legacyCheckInfrastructureWaitReasons are the lifecycle reasons older
+// coordinators recorded when they parked a check in waiting_for_harness. No
+// agent launch can leave that state, so recovery retries the checks instead.
+var legacyCheckInfrastructureWaitReasons = []string{
+	"check repair waiting for infrastructure",
+	"check repair harness unavailable",
+}
+
+// isCheckInfrastructurePause reports whether a check is paused because its
+// gate suite or repair launch failed for infrastructure reasons, including the
+// legacy waiting_for_harness form of that pause.
+func isCheckInfrastructurePause(run store.Run) bool {
+	if run.Stage != store.StageCheck {
+		return false
+	}
+	switch run.Status {
+	case store.StatusWaitingForHuman:
+		return strings.HasPrefix(run.LifecycleReason, LifecycleReasonCheckInfrastructureUnavailable)
+	case store.StatusWaitingForHarness:
+		for _, reason := range legacyCheckInfrastructureWaitReasons {
+			if strings.HasPrefix(run.LifecycleReason, reason) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isCheckContinuationPause reports whether a paused check continues by
+// re-evaluating its checkpoint rather than by launching an agent.
+func isCheckContinuationPause(run store.Run) bool {
+	return run.Stage == store.StageCheck && (isRestartReconciliationPause(run) || isCheckInfrastructurePause(run))
+}
+
+// checkContinuationAction names the operator continuation for a check
+// infrastructure pause, so status output identifies the real blocker's exit.
+const checkContinuationAction = "retry checks at the same checkpoint with `factory resume` or `/factory resume`"
+
+// appendCheckContinuationAction adds the retry-checks continuation to a
+// diagnosis of a check infrastructure pause.
+func appendCheckContinuationAction(diagnosis *RecoveryDiagnosis, run store.Run) {
+	if diagnosis == nil || !isCheckInfrastructurePause(run) || len(run.PendingQuestions) != 0 {
+		return
+	}
+	diagnosis.SafeActions = append(diagnosis.SafeActions, checkContinuationAction)
+}
+
 // hasGitHubStateProjectionDiscrepancy identifies label or status-comment drift
 // that the ordinary state-transition effect can repair idempotently.
 func hasGitHubStateProjectionDiscrepancy(diagnosis RecoveryDiagnosis) bool {
@@ -1668,10 +1717,11 @@ func recoveryProjectionOnly(diagnosis RecoveryDiagnosis) bool {
 }
 
 // resumeRecoveredCheck re-enters a coordinator-owned check after recovery has
-// repaired its projections. It never starts an implementation agent and keeps
-// ordinary human, clarification, and check-repair pauses fail-closed.
+// repaired its projections or after a check infrastructure pause. It never
+// starts an implementation agent, never spends a check-repair attempt, and
+// keeps ordinary human, clarification, and check-repair pauses fail-closed.
 func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
-	if !isRestartReconciliationPause(run) || run.Stage != store.StageCheck {
+	if !isCheckContinuationPause(run) {
 		return run, nil
 	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
@@ -1680,6 +1730,9 @@ func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.
 			return updated, reconcileErr
 		}
 		run = updated
+		if !isCheckContinuationPause(run) {
+			return run, nil
+		}
 	}
 	if len(run.PendingQuestions) != 0 {
 		return run, errors.New("recovery-paused check has pending clarification questions")
@@ -1690,6 +1743,9 @@ func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.
 	next := run
 	next.Status = store.StatusActive
 	next.LifecycleReason = "resuming check evaluation after restart reconciliation"
+	if isCheckInfrastructurePause(run) {
+		next.LifecycleReason = "retrying checks after check infrastructure pause"
+	}
 	next.Revision = run.Revision + 1
 	next.UpdatedAt = s.deps.Now().UTC()
 	if err := s.persistAgentRunState(ctx, registration, runStore, run, next); err != nil {

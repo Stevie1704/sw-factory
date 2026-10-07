@@ -202,6 +202,8 @@ type agentWorker struct {
 	codexSeeds, claudeSeeds []worker.CredentialSeedRequest
 	inspectResult           *worker.Inspection
 	inspectErr, seedErr     error
+	// nextCommandErr is returned once by the next command instead of a result.
+	nextCommandErr error
 }
 
 // Start records one worker launch.
@@ -216,6 +218,10 @@ func (*agentWorker) Resume(context.Context, worker.ResumeRequest) error { return
 // RunCommand returns the next configured command result.
 func (w *agentWorker) RunCommand(_ context.Context, request worker.CommandRequest) (worker.CommandResult, error) {
 	w.commands = append(w.commands, request)
+	if err := w.nextCommandErr; err != nil {
+		w.nextCommandErr = nil
+		return worker.CommandResult{}, err
+	}
 	if len(w.results) == 0 {
 		return worker.CommandResult{}, nil
 	}

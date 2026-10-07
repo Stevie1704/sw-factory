@@ -626,6 +626,7 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 			diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, opened, *result.LatestRun)
 			diagnosis.PendingEffect = pending
 			appendPendingEffectAction(&diagnosis)
+			appendCheckContinuationAction(&diagnosis, *result.LatestRun)
 			result.Recovery = &diagnosis
 		} else if pending != nil {
 			// A terminal projection can be durable before the final journal clear.
