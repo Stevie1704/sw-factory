@@ -116,6 +116,28 @@ migrate, back up, chmod, or initialize store state.
 Missing optional host credential files are warnings because a harness may be
 authenticated during its first worker session.
 
+When the checked-in `factory.yaml` fails validation, the `configuration` check
+names the first invalid field and the reason:
+
+```text
+doctor: configuration: failed
+problem: checked-in repository configuration is invalid: worker_build.digest: must be a sha256 digest with 64 hexadecimal characters
+action: repair the repository factory.yaml and its declared workflow policy
+```
+
+Repair that field and run `factory doctor --config …` again until the check
+passes; the loader reports one field per run. A repository attempt to declare
+factory-owned workflow fields such as `roles` reports `checked-in repository
+policy is rejected` with the field, and a newer `schema_version` names both
+versions. The finding never shows the supplied value. An unknown role key in
+`role_craft`, `role_harness_defaults`, `model_options`, or
+`reasoning_effort_options` names only the parent map. YAML syntax, type, and
+unknown-field errors, and read errors, keep the generic `checked-in repository
+configuration is missing or invalid` problem, because their decoder text can
+quote repository content. The doctor is not a standalone `factory.yaml`
+validator: it needs a registered repository in the host configuration and runs
+the full startup diagnosis.
+
 Start the persistent coordinator after diagnosis is ready:
 
 ```sh
