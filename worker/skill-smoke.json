@@ -47,6 +47,17 @@
     },
     {
       "image_digest": "sha256:ce8b5db6fc41bc09e0dea4df7f591991e21034997caf538f321444e5ad2949dd",
+      "harness": "claude",
+      "harness_version": "2.1.232 (Claude Code)",
+      "skills": [
+        "implement",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-07T17:00:39Z"
+    },
+    {
+      "image_digest": "sha256:ce8b5db6fc41bc09e0dea4df7f591991e21034997caf538f321444e5ad2949dd",
       "harness": "codex",
       "harness_version": "codex-cli 0.148.0",
       "skills": [

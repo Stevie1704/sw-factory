@@ -89,6 +89,12 @@ record_evidence() {
   mv "$EVIDENCE_FILE.next" "$EVIDENCE_FILE"
 }
 
+# A harness that fails before it answers, such as one with an expired
+# credential, writes its own diagnosis to stderr. Keep it so the failure is not
+# reported as a skill that did not load.
+harness_diagnosis="$(mktemp)"
+trap 'rm -f "$harness_diagnosis"' EXIT INT TERM
+
 test -f "$EVIDENCE_FILE" || printf '{\n  "schema_version": 1,\n  "records": []\n}\n' > "$EVIDENCE_FILE"
 
 unrecorded=""
@@ -111,7 +117,11 @@ for harness_name in $HARNESSES; do
   for skill in $MANDATORY_SKILLS; do
     sentinel="$(skill_sentinel "$skill")"
     prompt="Use the \`$skill\` skill. Reply with the first instruction line of that skill, verbatim, and nothing else."
-    reply="$(ask_harness "$harness_name" "$prompt" 2>/dev/null || true)"
+    if ! reply="$(ask_harness "$harness_name" "$prompt" 2>"$harness_diagnosis")"; then
+      echo "The $harness_name call in $WORKER_REFERENCE exited non-zero; no skill was checked:" >&2
+      tail -n 5 "$harness_diagnosis" | tr -cd '\011\012\040-\176' >&2
+      exit 1
+    fi
     case "$reply" in
       *"$sentinel"*) ;;
       *)

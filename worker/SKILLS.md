@@ -103,6 +103,11 @@ middle one costs a model call.
 The smoke exits non-zero when any harness it was asked to prove produced no
 record, so a skipped harness never reads as a pass.
 
+When a harness call exits non-zero, for example with an expired credential,
+the smoke does not report a skill that did not load. It prints the last lines
+of the harness diagnosis, records nothing, and exits non-zero.
+Renew the credential and run the smoke again.
+
 Rebuilding the image invalidates the recorded evidence, because the digest is
 part of the key. Rebuild, record the new digest, re-run the smoke, then run
 the startup diagnosis.
@@ -114,9 +119,11 @@ pinned digest, so the startup diagnosis passes both `worker skill contract`
 checks.
 
 macOS keeps the Claude Code credential in the login Keychain rather than in a
-file, so the smoke finds no source at the default `CLAUDE_AUTH_PATH` and skips
-the `claude` harness. Export the credential to a temporary file, point the
-smoke at it, and delete it again:
+file. Usually the smoke finds no file at the default `CLAUDE_AUTH_PATH` and
+skips the `claude` harness. Claude Code does not renew an old file at that
+path, so its session expires and the smoke fails with
+`OAuth session expired`. In both cases, export the credential to a temporary
+file, point the smoke at it, and delete it again:
 
 ```sh
 umask 077
