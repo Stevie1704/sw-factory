@@ -126,6 +126,9 @@ type StartRequest struct {
 	CredentialStoreID string
 	// Role selects the isolated role session volume used by the adapter.
 	Role string
+	// Limits are the host-owned resource limits for a new worker container.
+	// Omitted values select the documented defaults.
+	Limits ResourceLimits
 }
 
 // ResumeRequest contains the immutable image identity needed to resume an
@@ -395,10 +398,16 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--network", "bridge",
+		// The init process reaps orphaned processes. Without it, orphans stay
+		// as zombies that hold PIDs until the PID limit refuses every fork.
+		"--init",
+	}
+	args = append(args, request.Limits.dockerArguments()...)
+	args = append(args,
 		"--workdir", WorktreePath,
 		"--mount", bindMount(request.WorktreePath, WorktreePath, request.WorktreeReadOnly),
 		"--mount", bindMount(request.GitMetadataPath, GitMetadataPath, true),
-	}
+	)
 	if request.InvocationPath != "" {
 		args = append(args, "--mount", bindMount(request.InvocationPath, InvocationPath, true))
 	}
@@ -514,6 +523,11 @@ func (r *DockerRuntime) RunCommand(ctx context.Context, request CommandRequest) 
 	}
 	if ctx.Err() != nil {
 		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, ctx.Err())
+	}
+	// An out-of-memory kill is the worker's limit, not the command's verdict,
+	// so it outranks exit-code classification.
+	if errors.As(err, &commandErr) && commandOutOfMemory(commandErr, commandID) {
+		return CommandResult{}, fmt.Errorf("run command in worker %q: %w", request.RunID, &OutOfMemoryError{})
 	}
 	if errors.As(err, &commandErr) && commandErr.ProcessStarted && commandErr.ExitCode >= 0 && commandErr.ExitCode != 125 && !isDockerRuntimeFailure(commandErr) {
 		return CommandResult{ExitCode: commandErr.ExitCode, Stdout: commandErr.Stdout, Stderr: commandErr.Stderr}, nil
@@ -1344,6 +1358,9 @@ func validateStartRequest(request StartRequest) error {
 	}
 	if request.Role != "" && !validName(request.Role) {
 		return fmt.Errorf("worker role %q contains unsafe characters", request.Role)
+	}
+	if err := request.Limits.Validate(); err != nil {
+		return err
 	}
 	seen := make(map[string]struct{}, len(request.Caches))
 	for _, cache := range request.Caches {

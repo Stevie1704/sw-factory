@@ -399,6 +399,7 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 		ImageDigest:     run.ImageDigest,
 		Caches:          caches,
 		Role:            "gate",
+		Limits:          config.EffectiveWorkerLimits(registration.WorkerLimits),
 	}
 	if err := s.journal().StartWorker(ctx, runStore, workerRequest); err != nil {
 		return gate.SuiteResult{}, err

@@ -19,7 +19,7 @@ const dockerWorkerImageVariable = "FACTORY_DOCKER_WORKER_IMAGE"
 // timed-out command and its descendants stop before RunCommand returns, and
 // that ordinary command results are unchanged by supervision.
 func TestRealWorkerCommandLifetime(t *testing.T) {
-	runtime, runID, worktree := startRealWorker(t)
+	runtime, runID, worktree := startRealWorker(t, ResourceLimits{})
 	// A short grace keeps SIGKILL escalation well before the descendants below
 	// would finish on their own.
 	grace := commandTerminationGrace
@@ -94,9 +94,58 @@ func TestRealWorkerCommandLifetime(t *testing.T) {
 	})
 }
 
+// TestRealWorkerResourceLimits proves, in a real pinned worker, that a command
+// which allocates past the memory limit produces the typed out-of-memory
+// failure, and that a fork loop stops at the PID limit.
+func TestRealWorkerResourceLimits(t *testing.T) {
+	runtime, runID, _ := startRealWorker(t, ResourceLimits{Memory: "64m", PIDs: "64"})
+
+	t.Run("allocation past the memory limit is an out-of-memory failure", func(t *testing.T) {
+		// awk doubles one string until the memory limit kills it.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		result, err := runtime.RunCommand(ctx, cleanCommand(runID, `awk 'BEGIN { s = "x"; while (1) s = s s }'`))
+		var oomErr *OutOfMemoryError
+		if !errors.As(err, &oomErr) {
+			t.Fatalf("RunCommand() = %#v, %v; want a typed out-of-memory error", result, err)
+		}
+	})
+
+	t.Run("a fork loop stops at the PID limit", func(t *testing.T) {
+		// Each background sleep holds one PID. The loop asks for far more
+		// PIDs than the limit, so the kernel refuses a fork and the shell
+		// stops instead of exhausting the host.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		result, err := runtime.RunCommand(ctx, cleanCommand(runID, `i=0; while [ $i -lt 200 ]; do sleep 3 & i=$((i + 1)); done; wait`))
+		if err != nil {
+			t.Fatalf("RunCommand() error = %v", err)
+		}
+		if result.ExitCode == 0 || !strings.Contains(strings.ToLower(result.Stderr), "fork") {
+			t.Fatalf("RunCommand() = %#v, want a refused fork at the PID limit", result)
+		}
+		// The worker recovers when the sleeps that hold the PIDs end.
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			result, err := runtime.RunCommand(context.Background(), cleanCommand(runID, "cat /sys/fs/cgroup/pids.max"))
+			if err == nil && result.ExitCode == 0 {
+				if limit := strings.TrimSpace(result.Stdout); limit != "64" {
+					t.Fatalf("worker pids.max = %q, want 64", limit)
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("worker after the fork loop = %#v, %v; want it usable again", result, err)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	})
+}
+
 // startRealWorker starts a disposable credential-free worker from the pinned
-// image and removes it with its directories when the test ends.
-func startRealWorker(t *testing.T) (*DockerRuntime, string, string) {
+// image with the given limits and removes it with its directories when the
+// test ends.
+func startRealWorker(t *testing.T, limits ResourceLimits) (*DockerRuntime, string, string) {
 	t.Helper()
 	reference := os.Getenv(dockerWorkerImageVariable)
 	if reference == "" {
@@ -129,7 +178,7 @@ func startRealWorker(t *testing.T) (*DockerRuntime, string, string) {
 		_ = runtime.Cleanup(context.Background(), CleanupRequest{RunID: runID, Roles: []string{"implementation"}})
 		_ = os.RemoveAll(root)
 	})
-	if err := runtime.Start(context.Background(), StartRequest{RunID: runID, WorktreePath: worktree, GitMetadataPath: gitMetadata, Image: image, ImageDigest: digest}); err != nil {
+	if err := runtime.Start(context.Background(), StartRequest{RunID: runID, WorktreePath: worktree, GitMetadataPath: gitMetadata, Image: image, ImageDigest: digest, Limits: limits}); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	return runtime, runID, worktree

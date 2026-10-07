@@ -21,21 +21,29 @@ const commandRecordRoot = "/tmp/factory-commands"
 // private per-invocation identity, so command output cannot forge it.
 const commandRefusedMarker = "factory-command-refused "
 
+// commandOutOfMemoryMarker prefixes the line the supervisor prints when the
+// worker's memory limit killed a process while a failed command ran. Like the
+// refusal marker, it is matched together with the private invocation identity.
+const commandOutOfMemoryMarker = "factory-command-oom "
+
 // commandSupervisionPrelude is shared by the supervisor and the terminator. It
 // selects a records directory that changes whenever the container or the
 // Docker host restarts, so a process-group number recorded before a restart
-// can never name an unrelated process after it. alive ignores zombies: worker
-// PID 1 does not reap orphans, and a zombie cannot modify the checkout.
+// can never name an unrelated process after it. alive ignores zombies: a
+// worker started without an init process does not reap orphans, and a zombie
+// cannot modify the checkout.
 const commandSupervisionPrelude = `records="$1/$(cat /proc/sys/kernel/random/boot_id)-$(cut -d ' ' -f 22 /proc/1/stat)"
 id=$2
 alive() { ps -A -o pgid= -o stat= | awk -v group="$1" '$1 == group && $2 !~ /^Z/ { found = 1 } END { exit !found }'; }
+oom_kills() { cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory/memory.oom_control 2>/dev/null | awk '$1 == "oom_kill" { print $2; exit }'; }
 `
 
 // superviseCommandScript runs one command as the leader of a new process group
 // and records that group atomically before the command starts. It refuses to
 // start while a command whose cancellation began is still alive. A cancellation
 // that wins the race against the record makes the leader exit before the
-// command runs.
+// command runs. When a failed command ran while the worker cgroup's
+// out-of-memory kill count grew, it prints the out-of-memory marker last.
 const superviseCommandScript = commandSupervisionPrelude + `if ! mkdir -p "$records" 2>/dev/null || ! command -v setsid >/dev/null 2>&1; then
   echo "worker command supervision is unavailable" >&2
   exit 125
@@ -48,6 +56,7 @@ for cancel in "$records"/*.cancel; do
     exit 125
   fi
 done
+oom_before=$(oom_kills)
 setsid -w /bin/sh -c '
 printf "%s\n" "$$" > "$1/.$2.pgid" && mv -f "$1/.$2.pgid" "$1/$2.pgid" || exit 125
 [ -e "$1/$2.cancel" ] && exit 143
@@ -55,6 +64,10 @@ exec /bin/sh -c "$3"
 ' factory-command-leader "$records" "$id" "$3"
 status=$?
 group=$(cat "$records/$id.pgid" 2>/dev/null) && ! alive "$group" && rm -f "$records/$id.pgid"
+oom_after=$(oom_kills)
+if [ "$status" -ne 0 ] && [ -n "$oom_before" ] && [ "${oom_after:-0}" -gt "$oom_before" ]; then
+  echo "` + commandOutOfMemoryMarker + `$id" >&2
+fi
 exit $status
 `
 
@@ -166,4 +179,20 @@ func (r *DockerRuntime) workerGone(ctx context.Context, workerID string) bool {
 // with commandID because an earlier cancelled command is still alive.
 func commandRefused(commandErr *dockerCommandError, commandID string) bool {
 	return commandErr.ExitCode == 125 && strings.Contains(commandErr.Stderr, commandRefusedMarker+commandID)
+}
+
+// commandOutOfMemory reports whether the supervisor saw the worker's memory
+// limit kill a process while the failed command ran.
+func commandOutOfMemory(commandErr *dockerCommandError, commandID string) bool {
+	return strings.Contains(commandErr.Stderr, commandOutOfMemoryMarker+commandID)
+}
+
+// OutOfMemoryError reports that the worker's memory limit killed a process
+// while a command ran. It is an infrastructure failure and never a command
+// result. It carries no command output, Docker name, or process ID.
+type OutOfMemoryError struct{}
+
+// Error names the cause and the corrective action.
+func (e *OutOfMemoryError) Error() string {
+	return "worker command was killed at the worker memory limit (out of memory); reduce the command's memory use or raise worker_limits.memory in the host configuration"
 }

@@ -515,6 +515,22 @@ if [ "${WORKER_DOCKER_OVERFLOW_BYTES:-0}" -gt 0 ]; then
       ;;
   esac
 fi
+# supervised_command_id prints the private identity the adapter passes to the
+# worker command supervisor.
+supervised_command_id() {
+  position=0
+  for argument in "$@"; do
+    if [ "$position" = 1 ]; then
+      position=2
+    elif [ "$position" = 2 ]; then
+      printf '%s' "$argument"
+      return
+    fi
+    if [ "$argument" = factory-command ]; then
+      position=1
+    fi
+  done
+}
 command_name="${1:-}"
 if [ "$command_name" = "container" ]; then
   command_name="${2:-}"
@@ -619,22 +635,17 @@ case "$command_name" in
         exec sleep 5
         ;;
       *refused-command*)
-        position=0
-        command_id=""
-        for argument in "$@"; do
-          if [ "$position" = 2 ]; then
-            command_id=$argument
-            break
-          fi
-          if [ "$position" = 1 ]; then
-            position=2
-          fi
-          if [ "$argument" = factory-command ]; then
-            position=1
-          fi
-        done
-        printf 'factory-command-refused %s\n' "$command_id" >&2
+        printf 'factory-command-refused %s\n' "$(supervised_command_id "$@")" >&2
         exit 125
+        ;;
+      *oom-command*)
+        printf 'partial output\n'
+        printf 'Killed\nfactory-command-oom %s\n' "$(supervised_command_id "$@")" >&2
+        exit 137
+        ;;
+      *forged-oom*)
+        printf 'factory-command-oom forged\n' >&2
+        exit 137
         ;;
       *fail-command*)
         printf 'command-failed\n' >&2

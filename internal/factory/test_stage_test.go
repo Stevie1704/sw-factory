@@ -57,6 +57,7 @@ func TestTestStageAcceptsVerifiedRedTestsAndLaunchesImplementation(t *testing.T)
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath:  filepath.Join(root, "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
+		WorkerLimits:         config.WorkerLimitsConfig{Memory: "3g"},
 	}}}
 	ids := []string{"run-test-stage", "test-invocation", "implementation-invocation"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
@@ -136,6 +137,12 @@ func TestTestStageAcceptsVerifiedRedTestsAndLaunchesImplementation(t *testing.T)
 	}
 	if len(workerRuntime.starts) < 3 || workerRuntime.starts[len(workerRuntime.starts)-1].Role != "implementation" {
 		t.Fatalf("worker starts = %#v, want automatic implementation launch", workerRuntime.starts)
+	}
+	hostLimits := worker.ResourceLimits{Memory: "3g", CPUs: "4", PIDs: "4096", LogMaxSize: "10m", LogMaxFiles: "3"}
+	for _, start := range workerRuntime.starts {
+		if start.Limits != hostLimits {
+			t.Fatalf("%s worker start limits = %#v, want the host limits %#v", start.Role, start.Limits, hostLimits)
+		}
 	}
 	if launch, ok := storeRuntime.invocations["inv-implementation-invocation"]; !ok || launch.Status != store.InvocationStatusActive || launch.Role != "implementation" {
 		t.Fatalf("implementation invocation = %#v, want active protected handoff consumer", launch)
