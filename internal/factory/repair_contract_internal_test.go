@@ -36,7 +36,7 @@ func TestDecideCheckRepairCoversEveryBudgetOutcome(t *testing.T) {
 		{name: "last repair", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 2, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantKind: checkRepairStartDecision, wantStage: store.StageImplementation, wantStatus: store.StatusActive, wantAttempt: 3, wantRemain: 0, wantConsumed: true},
 		{name: "exhausted", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 3, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantKind: checkRepairExhaustDecision, wantStage: store.StageCheck, wantStatus: store.StatusWaitingForHuman, wantAttempt: 3},
 		{name: "configured budget above old ceiling", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairBudget: 7}, kind: checkRepairDeterministicFailure, wantKind: checkRepairStartDecision, wantStage: store.StageImplementation, wantStatus: store.StatusActive, wantAttempt: 1, wantRemain: 6, wantConsumed: true},
-		{name: "infrastructure pause", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 1, CheckRepairBudget: 3}, kind: checkRepairInfrastructureFailure, wantKind: checkRepairWaitDecision, wantStage: store.StageCheck, wantStatus: store.StatusWaitingForHuman, wantAttempt: 1, wantRemain: 2},
+		{name: "infrastructure pause", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 1, CheckRepairBudget: 3}, kind: checkRepairInfrastructureFailure, wantKind: checkRepairPauseDecision, wantStage: store.StageCheck, wantStatus: store.StatusWaitingForHuman, wantAttempt: 1, wantRemain: 2},
 		{name: "wrong stage", run: store.Run{Stage: store.StageImplementation, Status: store.StatusActive, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantErr: true},
 		{name: "wrong status", run: store.Run{Stage: store.StageCheck, Status: store.StatusWaitingForHuman, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantErr: true},
 		{name: "zero budget", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive}, kind: checkRepairDeterministicFailure, wantErr: true},
@@ -171,7 +171,7 @@ func TestRouteCheckRepairParksAnUnconfirmedTerminationWithoutSpendingBudget(t *t
 		t.Fatalf("routeCheckRepair() error = %v", err)
 	}
 	if result.Outcome != CheckRepairInfrastructurePause || result.Run.Status != store.StatusWaitingForHuman || result.Attempt != 1 || result.Remaining != 2 {
-		t.Fatalf("result = %#v, want an infrastructure wait without a consumed attempt", result)
+		t.Fatalf("result = %#v, want an infrastructure pause without a consumed attempt", result)
 	}
 	if workerRuntime.stops != 1 {
 		t.Fatalf("worker stops = %d, want the worker released so its processes end", workerRuntime.stops)

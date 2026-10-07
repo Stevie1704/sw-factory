@@ -138,8 +138,8 @@ type checkRepairDecisionKind string
 const (
 	// checkRepairStartDecision launches the next bounded native repair.
 	checkRepairStartDecision checkRepairDecisionKind = "start"
-	// checkRepairWaitDecision pauses until an operator retries the checks.
-	checkRepairWaitDecision checkRepairDecisionKind = "wait"
+	// checkRepairPauseDecision pauses until an operator retries the checks.
+	checkRepairPauseDecision checkRepairDecisionKind = "pause"
 	// checkRepairExhaustDecision escalates after the frozen repair budget.
 	checkRepairExhaustDecision checkRepairDecisionKind = "exhaust"
 )
@@ -180,7 +180,7 @@ func decideCheckRepair(run store.Run, kind checkRepairFailureKind) (checkRepairD
 	switch kind {
 	case checkRepairInfrastructureFailure:
 		return checkRepairDecision{
-			kind:       checkRepairWaitDecision,
+			kind:       checkRepairPauseDecision,
 			nextStage:  store.StageCheck,
 			nextStatus: store.StatusWaitingForHuman,
 			attempt:    run.CheckRepairAttempts,
@@ -376,7 +376,7 @@ func (s *Service) routeCheckRepair(ctx context.Context, registration config.Repo
 	writeGateFailureDiagnostic(run, gate.PhaseCheckpoint, results, suiteErr, s.deps.Now().UTC())
 	cause := gateFailureCause(suiteErr)
 	switch decision.kind {
-	case checkRepairWaitDecision:
+	case checkRepairPauseDecision:
 		next := run
 		next.CheckRepairBudget = run.CheckRepairBudget
 		next.Stage = decision.nextStage

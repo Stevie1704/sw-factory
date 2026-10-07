@@ -1649,12 +1649,13 @@ func isCheckInfrastructurePause(run store.Run) bool {
 	if run.Stage != store.StageCheck {
 		return false
 	}
+	reason := strings.TrimSpace(run.LifecycleReason)
 	switch run.Status {
 	case store.StatusWaitingForHuman:
-		return strings.HasPrefix(run.LifecycleReason, LifecycleReasonCheckInfrastructureUnavailable)
+		return strings.HasPrefix(reason, LifecycleReasonCheckInfrastructureUnavailable)
 	case store.StatusWaitingForHarness:
-		for _, reason := range legacyCheckInfrastructureWaitReasons {
-			if strings.HasPrefix(run.LifecycleReason, reason) {
+		for _, legacy := range legacyCheckInfrastructureWaitReasons {
+			if strings.HasPrefix(reason, legacy) {
 				return true
 			}
 		}
@@ -1675,7 +1676,7 @@ const checkContinuationAction = "retry checks at the same checkpoint with `facto
 // appendCheckContinuationAction adds the retry-checks continuation to a
 // diagnosis of a check infrastructure pause.
 func appendCheckContinuationAction(diagnosis *RecoveryDiagnosis, run store.Run) {
-	if diagnosis == nil || !isCheckInfrastructurePause(run) || len(run.PendingQuestions) != 0 {
+	if !isCheckInfrastructurePause(run) || len(run.PendingQuestions) != 0 {
 		return
 	}
 	diagnosis.SafeActions = append(diagnosis.SafeActions, checkContinuationAction)
