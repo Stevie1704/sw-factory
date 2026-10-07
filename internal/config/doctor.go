@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // DoctorState contains the validated configuration projections needed by
@@ -137,12 +139,74 @@ func inspectDoctorState(path string) DoctorState {
 	}
 	repository, err := LoadRepository(registration.RepositoryConfigPath)
 	if err != nil {
-		state.problem = "checked-in repository configuration is missing or invalid"
+		state.problem = describeRepositoryLoadFailure(err)
 		state.action = "repair the repository factory.yaml and its declared workflow policy"
 		return state
 	}
 	state.Repository = &repository
 	return state
+}
+
+// describeRepositoryLoadFailure turns a LoadRepository error into a safe
+// operator-facing problem. Only typed, factory-authored field diagnostics are
+// rendered; every other error keeps the generic problem because its text can
+// quote file paths or repository content.
+func describeRepositoryLoadFailure(err error) string {
+	var (
+		fileError     *ConfigFileError
+		validationErr *ValidationError
+		policyError   *PolicyError
+		schemaError   *UnknownSchemaVersionError
+	)
+	switch {
+	case errors.As(err, &fileError):
+		// Parse and read failures can quote input values or unknown keys.
+	case errors.As(err, &validationErr):
+		return fmt.Sprintf("checked-in repository configuration is invalid: %s: %s", safeRepositoryField(validationErr.Field), validationErr.Message)
+	case errors.As(err, &policyError):
+		return fmt.Sprintf("checked-in repository policy is rejected: %s: %s", safeRepositoryField(policyError.Field), policyError.Message)
+	case errors.As(err, &schemaError):
+		return fmt.Sprintf("checked-in repository configuration is invalid: schema_version %d is newer than supported version %d", schemaError.Version, schemaError.Supported)
+	}
+	return "checked-in repository configuration is missing or invalid"
+}
+
+// roleKeyedRepositoryFields names the repository maps whose keys are
+// repository-supplied role names and so can carry arbitrary content.
+var roleKeyedRepositoryFields = []string{"role_craft", "role_harness_defaults", "model_options", "reasoning_effort_options"}
+
+// safeRepositoryField keeps a role suffix only when it names a role in the
+// factory-owned workflow registry, optionally followed by a validator list
+// index. Any other role key collapses to the map's fixed field name, because
+// escaping or truncating an unknown key can still reveal its contents.
+func safeRepositoryField(field string) string {
+	for _, parent := range roleKeyedRepositoryFields {
+		suffix, found := strings.CutPrefix(field, parent+".")
+		if !found {
+			continue
+		}
+		role, index, indexed := strings.Cut(suffix, "[")
+		if _, known := workflow.DefaultRegistry().Role(role); known && (!indexed || validListIndex(index)) {
+			return field
+		}
+		return parent
+	}
+	return field
+}
+
+// validListIndex reports whether suffix is a decimal list index followed by
+// the closing bracket, the only form validators append after a role name.
+func validListIndex(suffix string) bool {
+	digits, found := strings.CutSuffix(suffix, "]")
+	if !found || digits == "" {
+		return false
+	}
+	for _, character := range digits {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // pathWithin reports whether target is equal to or below root after resolving

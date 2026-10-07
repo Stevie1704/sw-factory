@@ -273,3 +273,208 @@ func TestCacheStartupCheckStaysSilentWithoutConfiguration(t *testing.T) {
 		t.Fatalf("cache diagnosis = %#v, want passed without configuration", result)
 	}
 }
+
+// TestStartupCheckNamesTheInvalidRepositoryField verifies a semantic
+// repository-policy failure names the field and the validator reason so an
+// operator can repair factory.yaml without guessing.
+func TestStartupCheckNamesTheInvalidRepositoryField(t *testing.T) {
+	result := diagnoseRepositoryConfig(t, func(contents string) string {
+		return strings.Replace(contents, "  test: [gpt-5]", "  test: []", 1)
+	})
+	if result.Status != doctor.StatusFailed {
+		t.Fatalf("startup result = %#v, want failed", result)
+	}
+	if !strings.Contains(result.Problem, "repository configuration") || !strings.Contains(result.Problem, "model_options.test: must declare at least one model") {
+		t.Fatalf("startup result = %#v, want the field and reason", result)
+	}
+	if !strings.Contains(result.Action, "repair the repository factory.yaml") {
+		t.Fatalf("startup result = %#v, want the repository repair action", result)
+	}
+}
+
+// diagnoseRepositoryConfig runs the configuration startup check against a
+// private host registration and the smallest valid repository policy after
+// mutate rewrites the policy text.
+func diagnoseRepositoryConfig(t *testing.T, mutate func(string) string) doctor.Result {
+	t.Helper()
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeDoctorRepositoryConfig(t, repositoryPath)
+	repositoryConfigPath := filepath.Join(repositoryPath, "factory.yaml")
+	contents, err := os.ReadFile(repositoryConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := mutate(string(contents))
+	if mutated == string(contents) {
+		t.Fatal("mutation did not change the repository configuration")
+	}
+	if err := os.WriteFile(repositoryConfigPath, []byte(mutated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostPath := filepath.Join(root, "config.yaml")
+	host := `schema_version: 2
+repositories:
+  - path: ` + repositoryPath + `
+    github:
+      owner: example
+      repository: project
+    authorized_users: [alice]
+    polling:
+      interval: 30s
+      backoff: 5m
+    operational_data_path: ` + filepath.Join(root, "state", "factory.db") + `
+    repository_config_path: ` + repositoryConfigPath + `
+`
+	if err := os.WriteFile(hostPath, []byte(host), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, check := config.StartupCheck(hostPath)
+	result := check(context.Background())
+	if result.Status == doctor.StatusFailed && state.Repository != nil {
+		t.Fatalf("startup state = %#v, want no repository projection on failure", state)
+	}
+	return result
+}
+
+// TestStartupCheckNamesAnInvalidDigestWithoutEchoingIt verifies a rejected
+// worker digest names the field and format without printing the value.
+func TestStartupCheckNamesAnInvalidDigestWithoutEchoingIt(t *testing.T) {
+	supplied := "sha256:not-a-digest-sentinel"
+	result := diagnoseRepositoryConfig(t, func(contents string) string {
+		return strings.Replace(contents, "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", supplied, 1)
+	})
+	want := "worker_build.digest: must be a sha256 digest with 64 hexadecimal characters"
+	if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, want) {
+		t.Fatalf("startup result = %#v, want %q", result, want)
+	}
+	if strings.Contains(result.Problem+result.Action, "sentinel") {
+		t.Fatalf("startup result exposed the supplied digest: %#v", result)
+	}
+}
+
+// TestStartupCheckNamesAFactoryOwnedWorkflowDeclaration verifies a repository
+// attempt to declare workflow roles yields the typed policy finding.
+func TestStartupCheckNamesAFactoryOwnedWorkflowDeclaration(t *testing.T) {
+	result := diagnoseRepositoryConfig(t, func(contents string) string {
+		return contents + "roles: [secret-role-sentinel]\n"
+	})
+	want := "roles: workflow declarations are factory-owned and cannot be supplied by repository configuration"
+	if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, "repository policy") || !strings.Contains(result.Problem, want) {
+		t.Fatalf("startup result = %#v, want the policy field and reason", result)
+	}
+	if strings.Contains(result.Problem+result.Action, "sentinel") {
+		t.Fatalf("startup result exposed configuration content: %#v", result)
+	}
+}
+
+// TestStartupCheckNamesANewerRepositorySchema verifies an unsupported schema
+// names schema_version and the version mismatch.
+func TestStartupCheckNamesANewerRepositorySchema(t *testing.T) {
+	result := diagnoseRepositoryConfig(t, func(contents string) string {
+		return strings.Replace(contents, "schema_version: 1", "schema_version: 99", 1)
+	})
+	want := "schema_version 99 is newer than supported version 1"
+	if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, "repository configuration") || !strings.Contains(result.Problem, want) {
+		t.Fatalf("startup result = %#v, want %q", result, want)
+	}
+}
+
+// TestStartupCheckCollapsesUnknownRoleKeys verifies an unknown role key in any
+// role map reports only the parent map and the safe reason, so secret-like or
+// terminal-control keys never reach the operator's terminal.
+func TestStartupCheckCollapsesUnknownRoleKeys(t *testing.T) {
+	const reason = ": role must be declared by the factory-owned workflow registry"
+	keys := map[string]string{
+		"secret-like": `"sk-live-sentinel-token"`,
+		"newline":     `"evil\nsentinel"`,
+		"terminal":    `"\e[31msentinel\e[0m"`,
+	}
+	maps := map[string]func(contents, key string) string{
+		"role_craft": func(contents, key string) string {
+			return contents + "role_craft:\n  " + key + ": docs/craft.md\n"
+		},
+		"role_harness_defaults": func(contents, key string) string {
+			return strings.Replace(contents, "role_harness_defaults:\n", "role_harness_defaults:\n  "+key+": codex\n", 1)
+		},
+		"model_options": func(contents, key string) string {
+			return strings.Replace(contents, "model_options:\n", "model_options:\n  "+key+": [gpt-5]\n", 1)
+		},
+		"reasoning_effort_options": func(contents, key string) string {
+			return contents + "reasoning_effort_options:\n  " + key + ": [high]\n"
+		},
+	}
+	for field, insert := range maps {
+		for name, key := range keys {
+			t.Run(field+"/"+name, func(t *testing.T) {
+				result := diagnoseRepositoryConfig(t, func(contents string) string { return insert(contents, key) })
+				if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, field+reason) {
+					t.Fatalf("startup result = %#v, want %q", result, field+reason)
+				}
+				if strings.ContainsAny(result.Problem+result.Action, "\n\x1b") || strings.Contains(result.Problem+result.Action, "sentinel") {
+					t.Fatalf("startup result exposed the role key: %#v", result)
+				}
+			})
+		}
+	}
+}
+
+// TestStartupCheckKeepsAKnownRoleAndListIndex verifies a field under a
+// factory-declared role keeps the role and the list index the operator needs.
+func TestStartupCheckKeepsAKnownRoleAndListIndex(t *testing.T) {
+	result := diagnoseRepositoryConfig(t, func(contents string) string {
+		return strings.Replace(contents, "  test: [gpt-5]", `  test: [""]`, 1)
+	})
+	want := "model_options.test[0]: must not be empty"
+	if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, want) {
+		t.Fatalf("startup result = %#v, want %q", result, want)
+	}
+}
+
+// TestStartupCheckKeepsParseFailuresGeneric verifies YAML syntax, type, and
+// unknown-field failures keep the generic finding, because their decoder
+// diagnostics can quote repository content.
+func TestStartupCheckKeepsParseFailuresGeneric(t *testing.T) {
+	const sentinel = "zqleak"
+	cases := map[string]func(string) string{
+		"syntax": func(contents string) string { return contents + "target_branch: [" + sentinel + "\n" },
+		"type": func(contents string) string {
+			return contents + "review_units:\n  max_units: " + sentinel + "\n"
+		},
+		"unknown field": func(contents string) string { return contents + sentinel + ": true\n" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			result := diagnoseRepositoryConfig(t, mutate)
+			if result.Status != doctor.StatusFailed || result.Problem != "checked-in repository configuration is missing or invalid" {
+				t.Fatalf("startup result = %#v, want the generic repository finding", result)
+			}
+			if strings.Contains(result.Problem+result.Action, sentinel) {
+				t.Fatalf("startup result exposed configuration content: %#v", result)
+			}
+		})
+	}
+}
+
+// TestRepositoryTypeErrorQuotesTheInputValue proves the type-error fixture in
+// TestStartupCheckKeepsParseFailuresGeneric exercises a decoder error that
+// really contains the sentinel, so the generic fallback is meaningful.
+func TestRepositoryTypeErrorQuotesTheInputValue(t *testing.T) {
+	repositoryPath := t.TempDir()
+	writeDoctorRepositoryConfig(t, repositoryPath)
+	path := filepath.Join(repositoryPath, "factory.yaml")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(contents, []byte("review_units:\n  max_units: zqleak\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = config.LoadRepository(path)
+	if err == nil || !strings.Contains(err.Error(), "zqleak") {
+		t.Fatalf("LoadRepository() error = %v, want a decoder error quoting the sentinel", err)
+	}
+}
