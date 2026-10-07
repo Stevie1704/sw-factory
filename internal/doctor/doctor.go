@@ -30,6 +30,9 @@ type Result struct {
 	Problem string
 	// Action describes the corrective operator action.
 	Action string
+	// Detail is optional bounded information a passed check reports, such
+	// as the effective value of a setting.
+	Detail string
 }
 
 // Check is a subsystem-owned startup check. Checks must return a bounded

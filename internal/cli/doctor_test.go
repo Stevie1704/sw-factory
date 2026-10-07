@@ -89,6 +89,7 @@ base_synchronization:
 		"doctor: configuration: failed",
 		"model_options.test: must declare at least one model",
 		"action: repair the repository factory.yaml and its declared workflow policy",
+		"doctor: worker limits: passed (memory 8g, swap 8g, cpus 4, pids 4096, log 3 x 10m)",
 		"doctor: blocked",
 	} {
 		if !strings.Contains(reported, want) {

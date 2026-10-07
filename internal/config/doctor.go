@@ -41,6 +41,19 @@ func StartupCheck(path string) (DoctorState, doctor.Check) {
 	}
 }
 
+// WorkerLimitsStartupCheck reports the effective worker resource limits. The
+// configuration check already rejects invalid limits, so this check only
+// names the limits every worker container receives.
+func WorkerLimitsStartupCheck(state DoctorState) doctor.Check {
+	return func(context.Context) doctor.Result {
+		result := doctor.Success("worker limits")
+		if state.Registration != nil {
+			result.Detail = EffectiveWorkerLimits(state.Registration.WorkerLimits).String()
+		}
+		return result
+	}
+}
+
 // CacheStartupCheck diagnoses the repository-to-host cache agreement. The
 // repository declares a cache by name; host configuration maps that name to a
 // directory under the operator's cache root. An undeclared or unmapped cache
