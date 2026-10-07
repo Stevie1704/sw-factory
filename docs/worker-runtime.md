@@ -112,6 +112,41 @@ bounded again to 16 KiB. A stream that writes past the command capture limit
 returns a typed output-limit failure instead of a command result.
 `docs/agent-runtime.md` records how a role observes that failure.
 
+## Resource limits
+
+Every worker container starts with a memory limit, a CPU limit, a PID limit,
+and a bounded container log. The limits come from `worker_limits` in the host
+configuration, never from the repository's `factory.yaml`.
+`docs/configuration.md` lists the keys and their defaults (`8g` memory with
+equal swap, 4 CPUs, 4096 PIDs, and a `json-file` log of 3 files of `10m`).
+The adapter applies the defaults for every omitted value, so no worker starts
+without a bound. It refuses an invalid limit before it calls Docker.
+
+Workers also start with Docker's `--init` process as PID 1. The init process
+reaps orphaned processes. Without it, orphans stay as zombies that hold PIDs,
+and a worker that reached its PID limit once would refuse every later fork.
+
+When the memory limit kills a process while a `run-command` command runs, and
+the command then fails, the adapter returns a typed `OutOfMemoryError` instead
+of the exit code. The supervisor reads the worker cgroup's `oom_kill` count
+(`memory.events` on cgroup v2, `memory.oom_control` on cgroup v1) before and
+after the command. A command that succeeds although one of its processes was
+killed keeps its successful result. The error is an infrastructure failure,
+never a command result: the gate runner records an execution error, and the
+check-repair policy pauses the run with a lifecycle reason that names the
+out-of-memory kill. When the kernel exposes no `oom_kill` count, an
+out-of-memory kill stays an ordinary non-zero exit.
+
+A command that reaches the PID limit sees `fork` fail. The worker becomes
+usable again when the processes that hold its PIDs end.
+
+Known limits:
+
+- Detached headless harness processes report the exit status of the harness.
+  An out-of-memory kill of a harness process is not yet a typed failure.
+- Limits do not change on a reused worker. A worker created before the limits
+  changed keeps its earlier limits until the coordinator recreates it.
+
 ## Command timeout and cancellation
 
 The worker, not the host Docker CLI, owns the lifetime of every `run-command`
@@ -133,8 +168,8 @@ runs a second, fixed terminator in the same worker before it returns:
    command runs.
 2. It sends SIGTERM to the process group and waits a 5 second grace period.
 3. It sends SIGKILL and waits a second grace period.
-4. Zombies count as stopped: worker PID 1 does not reap orphans, and a zombie
-   cannot modify the checkout.
+4. Zombies count as stopped: a worker created without the init process does
+   not reap orphans, and a zombie cannot modify the checkout.
 
 The adapter returns the original `context.DeadlineExceeded` or
 `context.Canceled` only after the terminator confirms that no group member is
@@ -178,11 +213,12 @@ Known limits:
 
 The contract tests use a controlled Docker executable. Live Docker and harness
 checks remain environment checks and are not ordinary unit-test dependencies.
-To run the real command-lifetime checks against the pinned worker, use:
+To run the real command-lifetime and resource-limit checks against the pinned
+worker, use:
 
 ```sh
 FACTORY_DOCKER_WORKER_IMAGE=ghcr.io/stevie1704/sw-factory-worker@sha256:... \
-  go test ./internal/worker -run TestRealWorkerCommandLifetime
+  go test ./internal/worker -run TestRealWorker
 ```
 
 Every harness publishes completion with `factory-report`, which atomically
