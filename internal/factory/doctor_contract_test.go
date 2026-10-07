@@ -80,6 +80,64 @@ func TestDoctorChecksBothHarnessesWithoutATerminalDependency(t *testing.T) {
 	}
 }
 
+// TestDoctorReportsTheInvalidRepositoryFieldAlongsideLaterChecks verifies a
+// field-level repository-policy finding reaches the public startup report
+// while the remaining checks still run.
+func TestDoctorReportsTheInvalidRepositoryFieldAlongsideLaterChecks(t *testing.T) {
+	root := t.TempDir()
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRepositoryConfig(t, repositoryPath)
+	repositoryConfigPath := filepath.Join(repositoryPath, config.RepositoryConfigFileName)
+	body, err := os.ReadFile(repositoryConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := strings.Replace(string(body), "digest: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "digest: sha256:invalid-sentinel", 1)
+	if invalid == string(body) {
+		t.Fatal("repository fixture has no worker digest to invalidate")
+	}
+	if err := os.WriteFile(repositoryConfigPath, []byte(invalid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "host", "config.yaml")
+	if err := config.SaveHost(configPath, config.HostConfig{
+		SchemaVersion: config.CurrentHostSchemaVersion,
+		Repositories: []config.RepositoryRegistration{{
+			Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+			AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"},
+			OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: repositoryConfigPath,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gitWorkspace := &doctorContractGitWorkspace{}
+	workerRuntime := &doctorContractWorker{headlessAgentWorker: &headlessAgentWorker{agentWorker: &agentWorker{}}}
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{
+		GitHub: &fakeGitHub{}, GitWorkspace: gitWorkspace, Worktree: gitWorkspace, Worker: workerRuntime,
+	})
+	result, err := service.Doctor(t.Context())
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if result.Ready() {
+		t.Fatal("Doctor() is ready with an invalid repository configuration")
+	}
+	if len(result.Report.Results) < 2 {
+		t.Fatalf("Doctor() results = %#v, want the configuration finding and later checks", result.Report.Results)
+	}
+	configuration := result.Report.Results[0]
+	want := "worker_build.digest: must be a sha256 digest with 64 hexadecimal characters"
+	if configuration.Name != "configuration" || !strings.Contains(configuration.Problem, want) {
+		t.Fatalf("Doctor() configuration result = %#v, want %q", configuration, want)
+	}
+	if strings.Contains(configuration.Problem+configuration.Action, "sentinel") {
+		t.Fatalf("Doctor() configuration result exposed the digest: %#v", configuration)
+	}
+}
+
 // doctorContractGitWorkspace supplies both the task-oriented Git seam and its
 // read-only doctor checks without executing host Git commands.
 type doctorContractGitWorkspace struct{ fakeWorktree }

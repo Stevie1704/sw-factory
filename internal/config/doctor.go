@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // DoctorState contains the validated configuration projections needed by
@@ -137,12 +139,100 @@ func inspectDoctorState(path string) DoctorState {
 	}
 	repository, err := LoadRepository(registration.RepositoryConfigPath)
 	if err != nil {
-		state.problem = "checked-in repository configuration is missing or invalid"
+		state.problem = describeRepositoryLoadFailure(err)
 		state.action = "repair the repository factory.yaml and its declared workflow policy"
 		return state
 	}
 	state.Repository = &repository
 	return state
+}
+
+// describeRepositoryLoadFailure turns a LoadRepository error into a safe
+// operator-facing problem. Only typed, factory-authored field diagnostics are
+// rendered; every other error keeps the generic problem because its text can
+// quote file paths or repository content.
+func describeRepositoryLoadFailure(err error) string {
+	const generic = "checked-in repository configuration is missing or invalid"
+	var (
+		fileError       *ConfigFileError
+		validationError *ValidationError
+		policyError     *PolicyError
+		schemaError     *UnknownSchemaVersionError
+	)
+	switch {
+	case errors.As(err, &fileError):
+		// Parse and read failures can quote input values or unknown keys.
+		return generic
+	case errors.As(err, &validationError):
+		return fmt.Sprintf("checked-in repository configuration is invalid: %s: %s", safeRepositoryField(validationError.Field), validationError.Message)
+	case errors.As(err, &policyError):
+		return fmt.Sprintf("checked-in repository policy is rejected: %s: %s", policyField(policyError.Field), policyError.Message)
+	case errors.As(err, &schemaError):
+		return fmt.Sprintf("checked-in repository configuration is invalid: schema_version %d is newer than supported version %d", schemaError.Version, schemaError.Supported)
+	}
+	return generic
+}
+
+// roleKeyedRepositoryFields maps each repository map whose keys are
+// repository-supplied role names to whether its validators append a numeric
+// list index after the role.
+var roleKeyedRepositoryFields = map[string]bool{
+	"role_craft":               false,
+	"role_harness_defaults":    false,
+	"model_options":            true,
+	"reasoning_effort_options": true,
+}
+
+// safeRepositoryField keeps a role suffix only when it names a role in the
+// factory-owned workflow registry, followed by a list index only where the
+// map's validators generate one. Any other role key collapses to the map's
+// fixed field name, because escaping or truncating an unknown key can still
+// reveal its contents.
+func safeRepositoryField(field string) string {
+	parent, suffix, found := splitRoleKeyedField(field)
+	if !found {
+		return field
+	}
+	role, index, hasIndex := strings.Cut(suffix, "[")
+	if _, known := workflow.DefaultRegistry().Role(role); known && (!hasIndex || roleKeyedRepositoryFields[parent] && validListIndex(index)) {
+		return field
+	}
+	return parent
+}
+
+// policyField collapses every role-keyed policy field to its map name: a
+// policy rejection under a role map always names an undeclared role.
+func policyField(field string) string {
+	if parent, _, found := splitRoleKeyedField(field); found {
+		return parent
+	}
+	return field
+}
+
+// splitRoleKeyedField separates a field under a role-keyed map into the
+// map's fixed name and the repository-supplied suffix.
+func splitRoleKeyedField(field string) (parent, suffix string, found bool) {
+	for parent := range roleKeyedRepositoryFields {
+		if suffix, found := strings.CutPrefix(field, parent+"."); found {
+			return parent, suffix, true
+		}
+	}
+	return "", "", false
+}
+
+// validListIndex reports whether suffix is a decimal list index followed by
+// the closing bracket, the only form validators append after a role name.
+func validListIndex(suffix string) bool {
+	digits, found := strings.CutSuffix(suffix, "]")
+	if !found || digits == "" {
+		return false
+	}
+	for _, character := range digits {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // pathWithin reports whether target is equal to or below root after resolving

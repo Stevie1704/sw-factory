@@ -562,10 +562,31 @@ the headless worker helper, harness authentication, and SQLite. It runs every
 check even after a failure, so a configuration finding is visible alongside the
 others.
 
-The `configuration` check currently reports an invalid `factory.yaml` as
-`checked-in repository configuration is missing or invalid` without naming the
-field, so the field reference above is the pre-flight audit rather than an
-after-the-fact debugging aid. Issue #189 tracks surfacing the typed error.
+Run it against the host configuration that registers the repository:
+
+```sh
+factory doctor --config /Users/me/.config/factory/config.yaml
+```
+
+An invalid `factory.yaml` makes the `configuration` check name the first
+invalid field and the reason, for example:
+
+```text
+doctor: configuration: failed
+problem: checked-in repository configuration is invalid: model_options.test: must declare at least one model
+action: repair the repository factory.yaml and its declared workflow policy
+```
+
+Repair the named field, then run the doctor again. Repeat until the check
+passes. Each run reports only the first invalid field. The finding never shows
+the supplied value. An unknown role key reports only its parent map.
+
+YAML syntax errors, type errors, unknown fields, and read errors keep the
+generic problem `checked-in repository configuration is missing or invalid`.
+For these errors, compare the file with the field reference above.
+
+The doctor does not validate `factory.yaml` alone. It needs the host
+registration, and it runs the full startup diagnosis.
 
 Once the diagnosis is ready, prove the setup with one disposable issue before
 trusting the configuration on real work. Follow the [end-to-end
