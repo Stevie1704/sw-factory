@@ -578,13 +578,15 @@ action: repair the repository factory.yaml and its declared workflow policy
 ```
 
 Repair the named field, then run the doctor again. Repeat until the check
-passes, because each run reports only the first invalid field. The finding
-never shows the supplied value, and an unknown role key names only its parent
-map. YAML syntax, type, unknown-field, and read errors keep the generic
-`checked-in repository configuration is missing or invalid` problem; for these,
-compare the file against the field reference above. The doctor does not
-validate `factory.yaml` alone: it needs the host registration and runs the full
-startup diagnosis.
+passes. Each run reports only the first invalid field. The finding never shows
+the supplied value. An unknown role key reports only its parent map.
+
+YAML syntax errors, type errors, unknown fields, and read errors keep the
+generic problem `checked-in repository configuration is missing or invalid`.
+For these errors, compare the file with the field reference above.
+
+The doctor does not validate `factory.yaml` alone. It needs the host
+registration, and it runs the full startup diagnosis.
 
 Once the diagnosis is ready, prove the setup with one disposable issue before
 trusting the configuration on real work. Follow the [end-to-end

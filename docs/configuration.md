@@ -125,18 +125,23 @@ problem: checked-in repository configuration is invalid: worker_build.digest: mu
 action: repair the repository factory.yaml and its declared workflow policy
 ```
 
-Repair that field and run `factory doctor --config …` again until the check
-passes; the loader reports one field per run. A repository attempt to declare
-factory-owned workflow fields such as `roles` reports `checked-in repository
-policy is rejected` with the field, and a newer `schema_version` names both
-versions. The finding never shows the supplied value. An unknown role key in
-`role_craft`, `role_harness_defaults`, `model_options`, or
-`reasoning_effort_options` names only the parent map. YAML syntax, type, and
-unknown-field errors, and read errors, keep the generic `checked-in repository
-configuration is missing or invalid` problem, because their decoder text can
-quote repository content. The doctor is not a standalone `factory.yaml`
-validator: it needs a registered repository in the host configuration and runs
-the full startup diagnosis.
+Repair that field and run `factory doctor --config …` again. Repeat until the
+check passes. Each run reports only the first invalid field.
+
+- A repository field that declares factory-owned workflow policy, such as
+  `roles`, reports `checked-in repository policy is rejected` and the field.
+- A newer `schema_version` reports the supplied and the supported version.
+- An unknown role key in `role_craft`, `role_harness_defaults`,
+  `model_options`, or `reasoning_effort_options` reports only the parent map.
+- The finding never shows the supplied value.
+
+YAML syntax errors, type errors, unknown fields, and read errors keep the
+generic problem `checked-in repository configuration is missing or invalid`.
+The decoder text of these errors can contain repository content, so the doctor
+does not show it.
+
+The doctor is not a standalone `factory.yaml` validator. It needs a registered
+repository in the host configuration, and it runs the full startup diagnosis.
 
 Start the persistent coordinator after diagnosis is ready:
 
