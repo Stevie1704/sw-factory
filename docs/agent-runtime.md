@@ -205,8 +205,9 @@ factory resume --config /Users/me/.config/factory/config.yaml --run-id run-123
 factory auth refresh --config /Users/me/.config/factory/config.yaml --run-id run-123 --resume
 ```
 
-`factory resume` retries harness capacity or performs a manual native resume
-without spending the automatic recovery allowance. Its worker state and native
+`factory resume` retries harness capacity, retries the checks of a check
+infrastructure pause, or performs a manual native resume without spending the
+automatic recovery allowance. Its worker state and native
 identity are already coordinator-owned, so progression can continue unattended.
 `factory auth refresh` reads the explicitly
 registered host credential source and reseeds only the factory-managed worker
@@ -507,9 +508,12 @@ identity so a later coordinator can resume the session in the same harness.
 
 When `factory draft-pr` evaluates an accepted implementation checkpoint, it
 runs the complete frozen gate suite and retains each result under that exact
-checkpoint SHA. Typed deterministic gate failures are assembled into one
-bounded check-repair packet containing all gate outcomes, skipped dependency
-reasons, and bounded command diagnostics. A setup or gate command that writes
+checkpoint SHA. Typed deterministic failures - a gate that failed or timed
+out, or a setup command that exited non-zero - are assembled into one bounded
+check-repair packet containing the setup result, all gate outcomes, skipped
+dependency reasons, and bounded command diagnostics. A setup exit can also
+come from an external outage, so it admits a bounded repair rather than
+proving a repository defect. A setup or gate command that writes
 past the worker runtime's capture limit has no deterministic result:
 it is reported as `factory setup failed` or `factory gate execution failed`,
 and the packet records that failure without the command output. The next implementation invocation
@@ -520,9 +524,22 @@ The repository's `retry_limits.check_repair` value is frozen into the run. A
 repair reservation is durable before native resume, but the consumed attempt
 counter advances only after resume and the final run-state write succeed; an
 interrupted reservation is marked for reconciliation and blocks blind
-relaunch. Setup, worker, GitHub status, harness, and other transport failures
-roll back before resume and move the run to `waiting_for_harness` without
-consuming the budget. Once the budget is exhausted, the run moves to
+relaunch. A setup or gate the worker could not execute, GitHub status, harness
+launch, and other transport failures roll back before resume and move the run
+to `check/waiting_for_human` with the `check infrastructure unavailable`
+reason, without consuming the budget. `factory resume` or `/factory resume`
+retries the checks: it reconciles pending effects, persists `check/active`,
+and lets progression evaluate the same checkpoint again. It never launches an
+agent from `check`, and a repeated infrastructure failure returns to the same
+pause. Runs that an older coordinator parked in `check/waiting_for_harness`
+are recognized by their lifecycle reason and retry their checks the same way.
+
+The setup command is frozen in the specification packet. A repair can change
+repository inputs and the scripts that command invokes, but a change to the
+command itself in `factory.yaml` does not reach the current run; it needs an
+authorized configuration revision or a new run.
+
+Once the budget is exhausted, the run moves to
 `check/waiting_for_human` and receives the `agent-needs-input` label. The
 single status comment always shows consumed, pending, and remaining attempts.
 After a repair report is accepted, the next checkpoint must have a new SHA and

@@ -91,9 +91,10 @@ type CheckRepairOutcome string
 const (
 	// CheckRepairStarted means a native-resumed implementation session is active.
 	CheckRepairStarted CheckRepairOutcome = "started"
-	// CheckRepairWaitingForHarness means infrastructure must recover before the
-	// same checkpoint evaluation or repair launch can continue.
-	CheckRepairWaitingForHarness CheckRepairOutcome = "waiting_for_harness"
+	// CheckRepairInfrastructurePause means infrastructure must recover before
+	// the same checkpoint evaluation or repair launch can continue. The run
+	// waits for an explicit resume that retries the checks.
+	CheckRepairInfrastructurePause CheckRepairOutcome = "infrastructure_pause"
 	// CheckRepairWaitingForHuman means the coordinator cannot safely continue.
 	CheckRepairWaitingForHuman CheckRepairOutcome = "waiting_for_human"
 	// CheckRepairExhausted means the configured repair budget was reached.
@@ -127,7 +128,7 @@ const (
 	// is safe to send back to the implementation session.
 	checkRepairDeterministicFailure checkRepairFailureKind = "deterministic_failure"
 	// checkRepairInfrastructureFailure identifies an execution or transport
-	// failure that must wait without consuming a repair attempt.
+	// failure that must pause without consuming a repair attempt.
 	checkRepairInfrastructureFailure checkRepairFailureKind = "infrastructure_failure"
 )
 
@@ -137,8 +138,8 @@ type checkRepairDecisionKind string
 const (
 	// checkRepairStartDecision launches the next bounded native repair.
 	checkRepairStartDecision checkRepairDecisionKind = "start"
-	// checkRepairWaitDecision pauses until the harness can be retried.
-	checkRepairWaitDecision checkRepairDecisionKind = "wait"
+	// checkRepairPauseDecision pauses until an operator retries the checks.
+	checkRepairPauseDecision checkRepairDecisionKind = "pause"
 	// checkRepairExhaustDecision escalates after the frozen repair budget.
 	checkRepairExhaustDecision checkRepairDecisionKind = "exhaust"
 )
@@ -179,9 +180,9 @@ func decideCheckRepair(run store.Run, kind checkRepairFailureKind) (checkRepairD
 	switch kind {
 	case checkRepairInfrastructureFailure:
 		return checkRepairDecision{
-			kind:       checkRepairWaitDecision,
+			kind:       checkRepairPauseDecision,
 			nextStage:  store.StageCheck,
-			nextStatus: store.StatusWaitingForHarness,
+			nextStatus: store.StatusWaitingForHuman,
 			attempt:    run.CheckRepairAttempts,
 			remaining:  remainingCheckRepairBudget(run.CheckRepairAttempts, run.CheckRepairBudget),
 		}, nil
@@ -218,9 +219,12 @@ func remainingCheckRepairBudget(attempts, budget int) int {
 	return remaining
 }
 
-// isRepairableCheckFailure accepts only typed deterministic gate failures. A
-// setup failure, runtime error, dependency-only failure, or status-publication
-// error must wait without consuming the repair budget.
+// isRepairableCheckFailure accepts only typed deterministic command failures:
+// a gate that failed or timed out, or a setup command that exited non-zero. A
+// setup command exit can also come from an external outage, so this admits a
+// bounded repair rather than proving a repository defect. A runtime error,
+// dependency-only failure, or status-publication error must pause without
+// consuming the repair budget.
 func isRepairableCheckFailure(err error) bool {
 	suiteFailure, ok := oneError(err, func(candidate error) (*gate.SuiteFailure, bool) {
 		failure, ok := candidate.(*gate.SuiteFailure)
@@ -229,14 +233,22 @@ func isRepairableCheckFailure(err error) bool {
 	if !ok {
 		return false
 	}
-	hasGateFailure := false
+	hasCommandFailure := false
 	for _, failure := range suiteFailure.Failures {
+		var setupFailure *gate.SetupFailure
+		if errors.As(failure, &setupFailure) {
+			if setupFailure.Cause != nil || setupFailure.Result.ExitCode == 0 {
+				return false
+			}
+			hasCommandFailure = true
+			continue
+		}
 		var gateFailure *gate.GateFailure
 		if errors.As(failure, &gateFailure) {
 			if gateFailure.Cause != nil && !gateFailure.TimedOut {
 				return false
 			}
-			hasGateFailure = true
+			hasCommandFailure = true
 			continue
 		}
 		var dependencyFailure *gate.DependencyFailure
@@ -245,7 +257,7 @@ func isRepairableCheckFailure(err error) bool {
 		}
 		return false
 	}
-	return hasGateFailure
+	return hasCommandFailure
 }
 
 // oneError unwraps a single causal chain and rejects joined errors with more
@@ -364,17 +376,17 @@ func (s *Service) routeCheckRepair(ctx context.Context, registration config.Repo
 	writeGateFailureDiagnostic(run, gate.PhaseCheckpoint, results, suiteErr, s.deps.Now().UTC())
 	cause := gateFailureCause(suiteErr)
 	switch decision.kind {
-	case checkRepairWaitDecision:
+	case checkRepairPauseDecision:
 		next := run
 		next.CheckRepairBudget = run.CheckRepairBudget
 		next.Stage = decision.nextStage
 		next.Status = decision.nextStatus
-		next.LifecycleReason = withGateFailureCause("check repair waiting for infrastructure", cause)
+		next.LifecycleReason = withGateFailureCause(LifecycleReasonCheckInfrastructureUnavailable, cause)
 		next.UpdatedAt = s.deps.Now().UTC()
 		stopErr := s.stopCheckWorker(ctx, run.ID)
 		transitionErr := s.persistAgentRunState(ctx, registration, runStore, run, next)
 		updated := next
-		baseResult.Outcome = CheckRepairWaitingForHarness
+		baseResult.Outcome = CheckRepairInfrastructurePause
 		baseResult.Run = updated
 		baseResult.Attempt = updated.CheckRepairAttempts
 		baseResult.Remaining = remainingCheckRepairBudget(updated.CheckRepairAttempts, updated.CheckRepairBudget)
@@ -436,9 +448,12 @@ func (s *Service) routeCheckRepair(ctx context.Context, registration config.Repo
 			next.LifecycleReason = captureLimitRecoveryReason(credentialProjectionHarness(launchErr))
 			baseResult.Outcome = CheckRepairWaitingForHuman
 		} else {
-			next.Status = store.StatusWaitingForHarness
-			next.LifecycleReason = "check repair harness unavailable"
-			baseResult.Outcome = CheckRepairWaitingForHarness
+			// A check stage declares no agent role, so a harness wait could
+			// only be left by an impossible agent launch. Retrying the checks
+			// re-evaluates the checkpoint and then relaunches the repair.
+			next.Status = store.StatusWaitingForHuman
+			next.LifecycleReason = LifecycleReasonCheckInfrastructureUnavailable + ": check repair harness unavailable"
+			baseResult.Outcome = CheckRepairInfrastructurePause
 		}
 		next.Stage = store.StageCheck
 		next.UpdatedAt = s.deps.Now().UTC()

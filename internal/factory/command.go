@@ -389,15 +389,16 @@ func resumeCommandFailureMessage(err error) string {
 }
 
 // resumeAdmissionReason keeps the GitHub resume verb fail-closed. It is only
-// valid for temporary harness waits and the two typed human pauses for which
-// an operator can clear the external blocker without changing the packet.
+// valid for temporary harness waits, check infrastructure pauses, and the two
+// typed human pauses for which an operator can clear the external blocker
+// without changing the packet.
 func resumeAdmissionReason(run store.Run) string {
 	if store.IsTerminalStatus(run.Status) {
 		return fmt.Sprintf("resume is not allowed after terminal run status %q", run.Status)
 	}
 	switch run.Status {
 	case store.StatusWaitingForHarness:
-		if !strings.HasPrefix(strings.TrimSpace(run.LifecycleReason), LifecycleReasonHarnessCapacityUnavailable) {
+		if !strings.HasPrefix(strings.TrimSpace(run.LifecycleReason), LifecycleReasonHarnessCapacityUnavailable) && !isCheckInfrastructurePause(run) {
 			return "resume is only allowed for a harness-capacity pause, not the current infrastructure wait"
 		}
 		return ""
@@ -406,10 +407,10 @@ func resumeAdmissionReason(run store.Run) string {
 			return "resume cannot bypass pending clarification questions; use `/factory answer`"
 		}
 		reason := strings.TrimSpace(run.LifecycleReason)
-		if strings.HasPrefix(reason, LifecycleReasonHarnessAuthenticationExpired) || strings.HasPrefix(reason, LifecycleReasonAutomaticHarnessRecoveryExhausted) {
+		if strings.HasPrefix(reason, LifecycleReasonHarnessAuthenticationExpired) || strings.HasPrefix(reason, LifecycleReasonAutomaticHarnessRecoveryExhausted) || isCheckInfrastructurePause(run) {
 			return ""
 		}
-		return "resume is only allowed for a recoverable authentication or native-session pause, not the current human gate"
+		return "resume is only allowed for a recoverable authentication, native-session, or check infrastructure pause, not the current human gate"
 	default:
 		return fmt.Sprintf("resume is only allowed while the run is paused, not status %q", run.Status)
 	}

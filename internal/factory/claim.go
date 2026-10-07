@@ -879,7 +879,7 @@ func statusCommentBody(run store.Run) string {
 }
 
 // resumeCommandStatusComment makes the authorized recovery command visible
-// on the two pauses that admit it, so a maintainer can act from the issue
+// on the pauses that admit it, so a maintainer can act from the issue
 // without consulting coordinator documentation first.
 func resumeCommandStatusComment(run store.Run) string {
 	if len(run.PendingQuestions) > 0 {
@@ -887,6 +887,8 @@ func resumeCommandStatusComment(run store.Run) string {
 	}
 	reason := strings.TrimSpace(run.LifecycleReason)
 	switch {
+	case isCheckInfrastructurePause(run):
+		return "\n### Recovery\n\n- retry checks at the same checkpoint\n- host command: `factory resume`\n- GitHub command: `/factory resume`\n"
 	case run.Status == store.StatusWaitingForHarness && strings.HasPrefix(reason, LifecycleReasonHarnessCapacityUnavailable):
 		return "\n### Recovery\n\n- command: `/factory resume`\n"
 	case run.Status == store.StatusWaitingForHuman && strings.HasPrefix(reason, LifecycleReasonHarnessAuthenticationExpired):

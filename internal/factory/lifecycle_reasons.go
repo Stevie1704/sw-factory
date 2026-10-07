@@ -11,3 +11,9 @@ const LifecycleReasonHarnessAuthenticationExpired = "harness authentication expi
 // LifecycleReasonAutomaticHarnessRecoveryExhausted identifies the boundary
 // after the bounded automatic native-session recovery attempts are consumed.
 const LifecycleReasonAutomaticHarnessRecoveryExhausted = "automatic harness recovery exhausted"
+
+// LifecycleReasonCheckInfrastructureUnavailable identifies a check pause whose
+// gate suite or repair launch failed for infrastructure reasons. An explicit
+// resume retries the checks at the same checkpoint without spending a repair
+// attempt.
+const LifecycleReasonCheckInfrastructureUnavailable = "check infrastructure unavailable"

@@ -64,6 +64,61 @@ func TestResumeAdmissionReasonCoversEveryPolicyBranch(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "check infrastructure pause",
+			run: store.Run{
+				Stage:           store.StageCheck,
+				Status:          store.StatusWaitingForHuman,
+				LifecycleReason: LifecycleReasonCheckInfrastructureUnavailable + ": setup execution failed: worker unavailable",
+			},
+			want: true,
+		},
+		{
+			name: "check infrastructure pause with clarification",
+			run: store.Run{
+				Stage:            store.StageCheck,
+				Status:           store.StatusWaitingForHuman,
+				LifecycleReason:  LifecycleReasonCheckInfrastructureUnavailable,
+				PendingQuestions: []store.PendingQuestion{{ID: "question-1", Prompt: "choose one"}},
+			},
+			want: false,
+		},
+		{
+			name: "check infrastructure reason outside check",
+			run: store.Run{
+				Stage:           store.StageImplementation,
+				Status:          store.StatusWaitingForHuman,
+				LifecycleReason: LifecycleReasonCheckInfrastructureUnavailable,
+			},
+			want: false,
+		},
+		{
+			name: "exhausted check-repair budget",
+			run: store.Run{
+				Stage:           store.StageCheck,
+				Status:          store.StatusWaitingForHuman,
+				LifecycleReason: "check-repair budget exhausted: gate \"test\" failed with exit code 1",
+			},
+			want: false,
+		},
+		{
+			name: "legacy check infrastructure wait",
+			run: store.Run{
+				Stage:           store.StageCheck,
+				Status:          store.StatusWaitingForHarness,
+				LifecycleReason: "check repair waiting for infrastructure: setup command failed with exit code 1",
+			},
+			want: true,
+		},
+		{
+			name: "legacy check repair launch wait",
+			run: store.Run{
+				Stage:           store.StageCheck,
+				Status:          store.StatusWaitingForHarness,
+				LifecycleReason: "check repair harness unavailable",
+			},
+			want: true,
+		},
+		{
 			name: "other status",
 			run:  store.Run{Status: store.StatusActive},
 			want: false,
@@ -106,6 +161,15 @@ func TestResumeCommandStatusCommentNamesTheRecoverablePause(t *testing.T) {
 				LifecycleReason: LifecycleReasonHarnessAuthenticationExpired + " (codex)",
 			},
 			wants: []string{"factory auth refresh --resume", "/factory resume"},
+		},
+		{
+			name: "check infrastructure",
+			run: store.Run{
+				Stage:           store.StageCheck,
+				Status:          store.StatusWaitingForHuman,
+				LifecycleReason: LifecycleReasonCheckInfrastructureUnavailable + ": setup execution failed",
+			},
+			wants: []string{"retry checks", "factory resume", "/factory resume"},
 		},
 		{
 			name: "clarification remains answer-only",

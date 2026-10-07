@@ -18,7 +18,7 @@ import (
 )
 
 // TestDecideCheckRepairCoversEveryBudgetOutcome verifies the pure policy
-// distinguishes repair, exhaustion, infrastructure wait, and invalid state.
+// distinguishes repair, exhaustion, infrastructure pause, and invalid state.
 func TestDecideCheckRepairCoversEveryBudgetOutcome(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -36,7 +36,7 @@ func TestDecideCheckRepairCoversEveryBudgetOutcome(t *testing.T) {
 		{name: "last repair", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 2, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantKind: checkRepairStartDecision, wantStage: store.StageImplementation, wantStatus: store.StatusActive, wantAttempt: 3, wantRemain: 0, wantConsumed: true},
 		{name: "exhausted", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 3, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantKind: checkRepairExhaustDecision, wantStage: store.StageCheck, wantStatus: store.StatusWaitingForHuman, wantAttempt: 3},
 		{name: "configured budget above old ceiling", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairBudget: 7}, kind: checkRepairDeterministicFailure, wantKind: checkRepairStartDecision, wantStage: store.StageImplementation, wantStatus: store.StatusActive, wantAttempt: 1, wantRemain: 6, wantConsumed: true},
-		{name: "infrastructure wait", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 1, CheckRepairBudget: 3}, kind: checkRepairInfrastructureFailure, wantKind: checkRepairWaitDecision, wantStage: store.StageCheck, wantStatus: store.StatusWaitingForHarness, wantAttempt: 1, wantRemain: 2},
+		{name: "infrastructure pause", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive, CheckRepairAttempts: 1, CheckRepairBudget: 3}, kind: checkRepairInfrastructureFailure, wantKind: checkRepairPauseDecision, wantStage: store.StageCheck, wantStatus: store.StatusWaitingForHuman, wantAttempt: 1, wantRemain: 2},
 		{name: "wrong stage", run: store.Run{Stage: store.StageImplementation, Status: store.StatusActive, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantErr: true},
 		{name: "wrong status", run: store.Run{Stage: store.StageCheck, Status: store.StatusWaitingForHuman, CheckRepairBudget: 3}, kind: checkRepairDeterministicFailure, wantErr: true},
 		{name: "zero budget", run: store.Run{Stage: store.StageCheck, Status: store.StatusActive}, kind: checkRepairDeterministicFailure, wantErr: true},
@@ -63,7 +63,8 @@ func TestDecideCheckRepairCoversEveryBudgetOutcome(t *testing.T) {
 }
 
 // TestRepairableCheckFailureRejectsInfrastructure verifies only complete typed
-// deterministic suites can spend the repair budget.
+// deterministic suites can spend the repair budget. A setup command that exited
+// non-zero is repairable; a setup the worker could not execute is not.
 func TestRepairableCheckFailureRejectsInfrastructure(t *testing.T) {
 	deterministic := &gate.GateFailure{Name: "test", Result: worker.CommandResult{ExitCode: 1}}
 	tests := []struct {
@@ -75,7 +76,11 @@ func TestRepairableCheckFailureRejectsInfrastructure(t *testing.T) {
 		{name: "timeout", err: &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", TimedOut: true}}}, want: true},
 		{name: "worker runtime", err: &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Cause: errors.New("worker unavailable")}}}},
 		{name: "unconfirmed termination", err: &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Cause: &worker.CommandTerminationError{Reason: "the worker did not confirm the cancellation"}}}}},
-		{name: "setup", err: &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: worker.CommandResult{ExitCode: 1}}}}},
+		{name: "setup command", err: &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: worker.CommandResult{ExitCode: 1}}}}, want: true},
+		{name: "setup runtime", err: &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Cause: errors.New("worker unavailable")}}}},
+		{name: "setup without exit code", err: &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{}}}},
+		{name: "setup with status publication", err: &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: worker.CommandResult{ExitCode: 1}}, errors.New("GitHub unavailable")}}},
+		{name: "joined setup persistence", err: errors.Join(&gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: worker.CommandResult{ExitCode: 1}}}}, errors.New("SQLite busy"))},
 		{name: "transport", err: &gate.SuiteFailure{Failures: []error{deterministic, errors.New("GitHub unavailable")}}},
 		{name: "joined persistence", err: errors.Join(&gate.SuiteFailure{Failures: []error{deterministic}}, errors.New("SQLite busy"))},
 		{name: "dependency only", err: &gate.SuiteFailure{Failures: []error{&gate.DependencyFailure{Name: "lint", Dependency: "test"}}}},
@@ -119,7 +124,7 @@ func TestRouteCheckRepairWaitsAndExhaustsWithoutSpendingExtraBudget(t *testing.T
 		wantOutcome CheckRepairOutcome
 		wantStatus  store.Status
 	}{
-		{name: "infrastructure wait", suiteErr: errors.New("harness rate limit"), attempts: 1, wantOutcome: CheckRepairWaitingForHarness, wantStatus: store.StatusWaitingForHarness},
+		{name: "infrastructure pause", suiteErr: errors.New("harness rate limit"), attempts: 1, wantOutcome: CheckRepairInfrastructurePause, wantStatus: store.StatusWaitingForHuman},
 		{name: "budget exhaustion", suiteErr: &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Result: worker.CommandResult{ExitCode: 1}}}}, attempts: 3, wantOutcome: CheckRepairExhausted, wantStatus: store.StatusWaitingForHuman},
 	}
 	for _, test := range tests {
@@ -165,8 +170,8 @@ func TestRouteCheckRepairParksAnUnconfirmedTerminationWithoutSpendingBudget(t *t
 	if err != nil {
 		t.Fatalf("routeCheckRepair() error = %v", err)
 	}
-	if result.Outcome != CheckRepairWaitingForHarness || result.Run.Status != store.StatusWaitingForHarness || result.Attempt != 1 || result.Remaining != 2 {
-		t.Fatalf("result = %#v, want an infrastructure wait without a consumed attempt", result)
+	if result.Outcome != CheckRepairInfrastructurePause || result.Run.Status != store.StatusWaitingForHuman || result.Attempt != 1 || result.Remaining != 2 {
+		t.Fatalf("result = %#v, want an infrastructure pause without a consumed attempt", result)
 	}
 	if workerRuntime.stops != 1 {
 		t.Fatalf("worker stops = %d, want the worker released so its processes end", workerRuntime.stops)
@@ -215,9 +220,9 @@ func (*repairContractWorker) Inspect(context.Context, string) (worker.Inspection
 
 // TestRouteCheckRepairNamesTheDeterministicCauseWhenParking verifies both
 // parked outcomes report what the failed command printed and retain the full
-// output on disk. A setup failure takes the infrastructure wait branch and an
-// exhausted budget takes the human branch; neither builds a repair packet, so
-// "check repair waiting for infrastructure" was the only evidence a run left.
+// output on disk. A setup runtime failure takes the infrastructure pause branch
+// and an exhausted budget takes the human branch; neither builds a repair
+// packet, so the lifecycle reason is the only evidence a run leaves.
 func TestRouteCheckRepairNamesTheDeterministicCauseWhenParking(t *testing.T) {
 	const checkpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	setup := worker.CommandResult{ExitCode: 1, Stderr: "error: Failed to create virtual environment\n  Caused by: A virtual environment already exists at '.venv'. Use '--clear' to replace it"}
@@ -232,11 +237,11 @@ func TestRouteCheckRepairNamesTheDeterministicCauseWhenParking(t *testing.T) {
 		wantOutput  string
 	}{
 		{
-			name:        "setup failure waits for infrastructure",
+			name:        "setup runtime failure pauses for a check retry",
 			results:     []gate.Result{{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: setup, Status: github.CommitStatus{State: github.CommitStatusError}}},
-			suiteErr:    &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: setup}}},
-			wantOutcome: CheckRepairWaitingForHarness,
-			wantReason:  "check repair waiting for infrastructure: ",
+			suiteErr:    &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: setup, Cause: errors.New("worker unavailable")}}},
+			wantOutcome: CheckRepairInfrastructurePause,
+			wantReason:  LifecycleReasonCheckInfrastructureUnavailable + ": ",
 			wantOutput:  "--clear",
 		},
 		{
