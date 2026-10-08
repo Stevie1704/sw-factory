@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 )
 
 // DoctorRequest identifies the registered checkout and the GitHub branch it
@@ -44,11 +46,14 @@ const (
 	remoteFailurePushIdentity   remoteFailureKind = "push-identity"
 	remoteFailureBranchRead     remoteFailureKind = "branch-read"
 	remoteFailureBranchNoCommit remoteFailureKind = "branch-no-commit"
+	remoteFailureUnresponsive   remoteFailureKind = "unresponsive"
 )
 
 // remoteCheckError carries only a safe category from one Git remote probe.
 type remoteCheckError struct {
 	kind remoteFailureKind
+	// timeout is the expired deadline of an unresponsive remote.
+	timeout time.Duration
 }
 
 // Error returns a bounded error that never includes Git command output.
@@ -190,6 +195,10 @@ func (m *LocalWorktreeManager) CheckRemote(ctx context.Context, request DoctorRe
 		return remoteFailure(remoteFailurePushIdentity)
 	}
 	branchOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"ls-remote", "--exit-code", request.RemoteName, "refs/heads/" + request.TargetBranch})
+	var timeout *hostcmd.TimeoutError
+	if errors.As(err, &timeout) {
+		return &remoteCheckError{kind: remoteFailureUnresponsive, timeout: timeout.Timeout}
+	}
 	if err != nil {
 		return remoteFailure(remoteFailureBranchRead)
 	}
@@ -225,6 +234,8 @@ func remoteDiagnosis(err error) (string, string) {
 		return "the configured Git target branch cannot be read from the remote", "fetch the target branch and verify network and remote permissions"
 	case remoteFailureBranchNoCommit:
 		return "the configured Git target branch has no commit on the remote", "choose an existing target branch or publish the branch before starting the factory"
+	case remoteFailureUnresponsive:
+		return fmt.Sprintf("the Git remote did not answer within %s", failure.timeout), "check network access to the remote and that a credential helper or ssh agent supplies the credential without a prompt, then run factory doctor again"
 	default:
 		return "the Git remote diagnosis returned an unknown failure", "repair the registered checkout and configured Git remote, then retry the diagnosis"
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 )
 
 // DoctorClient is the read-only GitHub health seam used by startup diagnosis.
@@ -30,7 +31,30 @@ var (
 	errGhVersionUnsupported     = errors.New("github CLI version does not support required features")
 	errFactoryLabelsUnavailable = errors.New("factory labels are unavailable")
 	errFactoryLabelsMalformed   = errors.New("factory labels response is malformed")
+	errGitHubAuthentication     = errors.New("gh authentication status failed")
 )
+
+// diagnosisError returns the safe diagnosis category for a failed gh call. A
+// deadline expiry stays attached, so the report can say that GitHub did not
+// answer instead of naming a login or permission problem.
+func diagnosisError(category, err error) error {
+	var timeout *hostcmd.TimeoutError
+	if errors.As(err, &timeout) {
+		return fmt.Errorf("%w: %w", category, timeout)
+	}
+	return category
+}
+
+// unresponsiveFailure reports a check whose gh call reached its deadline.
+func unresponsiveFailure(name string, err error) (doctor.Result, bool) {
+	var timeout *hostcmd.TimeoutError
+	if !errors.As(err, &timeout) {
+		return doctor.Result{}, false
+	}
+	return doctor.Failure(name,
+		fmt.Sprintf("GitHub did not answer within %s", timeout.Timeout),
+		"check network access to github.com and the gh proxy settings, then run factory doctor again"), true
+}
 
 // missingFactoryLabelError identifies one required factory label that the
 // read-only label listing did not contain.
@@ -52,6 +76,9 @@ func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
 				return doctor.Failure("github authentication", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckAuthentication(ctx); err != nil {
+				if result, ok := unresponsiveFailure("github authentication", err); ok {
+					return result
+				}
 				return doctor.Failure("github authentication", "the GitHub CLI is not authenticated", "run gh auth login for the GitHub account that owns the registered repository")
 			}
 			return doctor.Success("github authentication")
@@ -61,6 +88,9 @@ func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
 				return doctor.Failure("github permissions", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckRepositoryAccess(ctx, repository); err != nil {
+				if result, ok := unresponsiveFailure("github permissions", err); ok {
+					return result
+				}
 				problem, action := repositoryAccessDiagnosis(err)
 				return doctor.Failure("github permissions", problem, action)
 			}
@@ -71,6 +101,9 @@ func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
 				return doctor.Failure("github labels", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckFactoryLabels(ctx, repository); err != nil {
+				if result, ok := unresponsiveFailure("github labels", err); ok {
+					return result
+				}
 				problem, action := factoryLabelsDiagnosis(err)
 				return doctor.Failure("github labels", problem, action)
 			}
@@ -83,7 +116,7 @@ func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
 // GitHub authentication without reading or printing its credential.
 func (c *GhClient) CheckAuthentication(ctx context.Context) error {
 	if _, err := c.runner().Run(ctx, []string{"auth", "status", "--hostname", "github.com"}, nil); err != nil {
-		return errors.New("gh authentication status failed")
+		return diagnosisError(errGitHubAuthentication, err)
 	}
 	return nil
 }
@@ -97,7 +130,7 @@ func (c *GhClient) CheckRepositoryAccess(ctx context.Context, repository Reposit
 	}
 	var response doctorRepositoryResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s", repository.String())}, nil, &response); err != nil {
-		return errRepositoryUnavailable
+		return diagnosisError(errRepositoryUnavailable, err)
 	}
 	if !response.Permissions.Pull {
 		return errRepositoryUnreadable
@@ -125,7 +158,7 @@ func (c *GhClient) checkTokenPermissions(ctx context.Context, private bool) erro
 		if strings.Contains(err.Error(), "unknown flag") || strings.Contains(err.Error(), "unknown command") {
 			return errGhVersionUnsupported
 		}
-		return errRepositoryTokenAccess
+		return diagnosisError(errRepositoryTokenAccess, err)
 	}
 	var response doctorAuthStatusResponse
 	if err := json.Unmarshal(output, &response); err != nil {
@@ -184,7 +217,7 @@ func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository Repository
 	}
 	output, err := c.callBytes(ctx, []string{"api", fmt.Sprintf("repos/%s/labels", repository.String()), "--paginate", "--slurp"}, nil)
 	if err != nil {
-		return errFactoryLabelsUnavailable
+		return diagnosisError(errFactoryLabelsUnavailable, err)
 	}
 	labels, err := decodeDoctorLabels(output)
 	if err != nil {

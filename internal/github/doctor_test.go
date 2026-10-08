@@ -8,6 +8,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 )
 
 // TestStartupChecksReportMissingFactoryLabelsAlongsideSuccessfulAccessChecks
@@ -31,6 +32,34 @@ func TestStartupChecksReportMissingFactoryLabelsAlongsideSuccessfulAccessChecks(
 	if got := report.Results[2]; got.Status != doctor.StatusFailed || !strings.Contains(got.Name, "labels") || got.Problem == "" || got.Action == "" {
 		t.Fatalf("label result = %#v, want actionable failure", got)
 	}
+}
+
+// TestStartupChecksReportAnUnresponsiveGitHub verifies that every GitHub check
+// names the expired deadline when gh does not answer, instead of reporting a
+// missing login or permission.
+func TestStartupChecksReportAnUnresponsiveGitHub(t *testing.T) {
+	client := &github.GhClient{Runner: unresponsiveRunner{}}
+	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+
+	if len(report.Results) != 3 {
+		t.Fatalf("GitHub check count = %d, want three", len(report.Results))
+	}
+	for _, result := range report.Results {
+		if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, "GitHub did not answer within 2m0s") {
+			t.Fatalf("result = %#v, want an unresponsive-GitHub failure that names the deadline", result)
+		}
+		if !strings.Contains(result.Action, "network") {
+			t.Fatalf("action = %q, want network guidance", result.Action)
+		}
+	}
+}
+
+// unresponsiveRunner simulates a gh call that reaches its deadline.
+type unresponsiveRunner struct{}
+
+// Run returns the typed deadline error that the production runner returns.
+func (unresponsiveRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
+	return nil, &hostcmd.TimeoutError{Operation: "gh " + args[0], Timeout: github.CommandTimeout}
 }
 
 // TestStartupChecksDistinguishLabelReadFailuresFromMissingLabels verifies the
