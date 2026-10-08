@@ -117,8 +117,11 @@ func (s *Service) streamReviewDiff(ctx context.Context, worktree, base, checkpoi
 }
 
 // streamReviewDiffFromWorktree streams Git stdout directly into the supplied
-// destination. No command-output helper may materialise the complete diff.
+// destination. No command-output helper may materialise the complete diff, so
+// this call has the local host Git deadline but no output limit.
 func streamReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoint string, destination io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, gitadapter.LocalCommandTimeout)
+	defer cancel()
 	command := exec.CommandContext(ctx, "git", gitadapter.HostCommandArgs("-C", worktree, "diff", "--no-ext-diff", "--no-textconv", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", ".")...)
 	// The factory worker environment may provide a coordinator-level Git
 	// projection. Remove those overrides so this command inspects the claimed
