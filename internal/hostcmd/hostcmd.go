@@ -1,7 +1,8 @@
 // Package hostcmd runs one host executable, such as git or gh, with a
 // deadline, without terminal input, and with a byte limit on each output
-// stream. A hung or very talkative host command then returns a typed error
-// instead of blocking or growing the coordinator without bound.
+// stream. A command that does not stop, or that writes too much output, then
+// returns a typed error. It does not block the coordinator or grow its memory
+// without a limit.
 package hostcmd
 
 import (
@@ -48,7 +49,9 @@ type Command struct {
 
 // Output is the captured output of one completed invocation.
 type Output struct {
+	// Stdout is the complete standard output.
 	Stdout []byte
+	// Stderr is the complete standard error.
 	Stderr []byte
 }
 
