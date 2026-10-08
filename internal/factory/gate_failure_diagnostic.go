@@ -90,6 +90,17 @@ func withGateFailureCause(reason, cause string) string {
 	return reason + ": " + cause
 }
 
+// withOutOfMemoryCause appends the out-of-memory cause to a pause reason when
+// the worker memory limit killed the command, so the paused run names it.
+// Every other cause leaves the reason unchanged.
+func withOutOfMemoryCause(reason string, err error) string {
+	var oomErr *worker.OutOfMemoryError
+	if !errors.As(err, &oomErr) {
+		return reason
+	}
+	return reason + ": " + oomErr.Error()
+}
+
 // writeGateFailureDiagnostic records the bounded setup and gate output of one
 // failed suite beside the run's other artifacts. A suite error carrying no
 // command observation records nothing, because a transport or persistence

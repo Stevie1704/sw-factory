@@ -31,7 +31,7 @@ func (r DoctorResult) Ready() bool {
 // protocol knowledge in the factory coordinator.
 func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	configuration, configurationCheck := config.StartupCheck(s.configPath)
-	checks := []doctor.Check{configurationCheck, config.CacheStartupCheck(configuration)}
+	checks := []doctor.Check{configurationCheck, config.CacheStartupCheck(configuration), config.WorkerLimitsStartupCheck(configuration)}
 
 	registration := config.RepositoryRegistration{}
 	if configuration.Registration != nil {

@@ -706,7 +706,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 					if diagnostics != "" {
 						_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, s.lifecycleModule().clock().UTC())
 					}
-					if harness.IsRateLimited(failure) || harness.IsAuthenticationExpired(failure) {
+					if harness.IsRateLimited(failure) || harness.IsAuthenticationExpired(failure) || harness.IsOutOfMemory(failure) {
 						diagnosis.headlessFailure = failure
 						diagnosis.headlessFailureHarness = active.Harness
 						return
@@ -1143,6 +1143,13 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			}
 			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, diagnosis.headlessFailure
 		}
+		if harness.IsOutOfMemory(diagnosis.headlessFailure) {
+			paused, pauseErr := s.lifecycleModule().pauseForOutOfMemory(ctx, registration, runStore, run, diagnosis.headlessFailureHarness)
+			if pauseErr != nil {
+				return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(diagnosis.headlessFailure, pauseErr)
+			}
+			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, diagnosis.headlessFailure
+		}
 	}
 	if diagnosis.SourcesAgree && run.Status == store.StatusActive {
 		activeValues, activeSupported, activeErr := activeInvocationsForRun(ctx, runStore, run.ID)
@@ -1209,7 +1216,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 							return paused, diagnosis, RecoveryOutcomeWaitingForHuman, classified
 						}
 						if harness.IsUnexpectedExit(classified) {
-							paused, pauseErr := s.lifecycleModule().pauseForManualRecovery(ctx, registration, runStore, run, active.Harness)
+							paused, pauseErr := s.lifecycleModule().pauseForHarnessExit(ctx, registration, runStore, run, active.Harness, classified)
 							if pauseErr != nil {
 								return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(classified, pauseErr)
 							}

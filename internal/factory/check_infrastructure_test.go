@@ -3,6 +3,7 @@ package factory_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,5 +339,24 @@ func TestReconcileNamesTheCheckRetryForACheckInfrastructurePause(t *testing.T) {
 	}
 	if retries != 1 {
 		t.Fatalf("safe actions = %#v, want the retry-checks continuation exactly once", result.Diagnosis.SafeActions)
+	}
+}
+
+// TestOutOfMemoryCheckPausesWithTheNamedCause verifies a check command the
+// worker memory limit killed is a check infrastructure pause, not a repairable
+// failure, and that the paused run names the out-of-memory cause.
+func TestOutOfMemoryCheckPausesWithTheNamedCause(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-check-oom", true)
+	fixture.runtime.nextCommandErr = fmt.Errorf("run command in worker %q: %w", fixture.run.ID, &worker.OutOfMemoryError{})
+
+	paused, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID})
+
+	if err != nil {
+		t.Fatalf("CreateDraftPullRequest() error = %v", err)
+	}
+	assertCheckInfrastructurePause(t, paused.Run)
+	if !strings.Contains(paused.Run.LifecycleReason, "out of memory") {
+		t.Fatalf("lifecycle reason = %q, want the out-of-memory cause", paused.Run.LifecycleReason)
 	}
 }

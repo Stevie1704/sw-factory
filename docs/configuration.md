@@ -233,6 +233,12 @@ repositories:
     cache_root: /Users/me/.local/share/factory/caches
     caches:
       go-build: /Users/me/.local/share/factory/caches/go-build
+    worker_limits:
+      memory: 8g
+      cpus: 4
+      pids: 4096
+      log_max_size: 10m
+      log_max_files: 3
 ```
 
 `cache_root` is the operator's data root for repository caches, and `caches`
@@ -240,6 +246,28 @@ maps each cache name the repository declares to its host directory. Every
 mapped directory must resolve inside `cache_root`, so a repository commit can
 never request an arbitrary writable host mount. Both keys are optional and are
 omitted when the repository declares no cache.
+
+`worker_limits` bounds every worker container the coordinator starts for the
+repository. The limits are host-owned: the checked-in `factory.yaml` cannot
+declare them, so a repository commit cannot raise its own limits. Every key is
+optional, and an omitted key takes its default:
+
+| Key | Default | Docker setting | Accepted values |
+| --- | --- | --- | --- |
+| `memory` | `8g` | `--memory`, and `--memory-swap` with the same value | A size with an optional `b`, `k`, `m`, or `g` unit, at least `6m` |
+| `cpus` | `4` | `--cpus` | A CPU count of at least `0.01` with at most nine decimal places, such as `4` or `1.5` |
+| `pids` | `4096` | `--pids-limit` | A positive whole number |
+| `log_max_size` | `10m` | `--log-opt max-size` of the `json-file` log driver | A positive size with an optional `b`, `k`, `m`, or `g` unit |
+| `log_max_files` | `3` | `--log-opt max-file` of the `json-file` log driver | A positive whole number |
+
+Swap always equals memory, so a worker cannot extend its memory with swap.
+Configuration validation rejects a zero, negative, or unparseable value with a
+field-level error, for example `repositories[0].worker_limits.pids`.
+`factory doctor` reports the effective limits as
+`doctor: worker limits: passed (memory 8g, swap 8g, cpus 4, pids 4096, log 3 x 10m)`.
+The limits apply when the coordinator creates a worker container. A worker
+that already exists keeps the limits it was created with.
+`docs/worker-runtime.md` describes how a command that reaches a limit fails.
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 

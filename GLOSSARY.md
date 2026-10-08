@@ -117,6 +117,13 @@ typed output-limit failure with no partial command result, and that failure
 outranks ordinary exit-code classification.
 _Avoid_: Truncation, output cap, log limit
 
+**Worker limits**:
+The host-owned memory, CPU, PID, and container-log bounds every worker
+container starts with. A repository commit cannot raise them. A command or a
+detached harness process that the memory limit kills is a typed
+out-of-memory infrastructure failure, not an ordinary exit.
+_Avoid_: Quota, resource config
+
 **WorkerRuntime**:
 The portable seam that starts, resumes, commands, stops, and inspects a worker while hiding runtime identifiers, container paths, role homes, invocation packets, result files, and process tracking.
 _Avoid_: Docker API

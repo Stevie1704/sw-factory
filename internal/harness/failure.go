@@ -41,6 +41,10 @@ type FailureError struct {
 	Kind FailureKind
 	// Harness identifies the adapter that reported the failure.
 	Harness string
+	// OutOfMemory reports that the worker memory limit killed a process
+	// before an unexpected exit. The exit keeps its recovery category, and
+	// the message names the cause.
+	OutOfMemory bool
 }
 
 // Error returns a bounded message that cannot expose adapter output or
@@ -58,10 +62,13 @@ func (e *FailureError) Error() string {
 	case FailureAuthenticationExpired:
 		category = ErrAuthenticationExpired.Error()
 	}
-	if strings.TrimSpace(e.Harness) == "" {
-		return category
+	if strings.TrimSpace(e.Harness) != "" {
+		category = fmt.Sprintf("%s (%s)", category, e.Harness)
 	}
-	return fmt.Sprintf("%s (%s)", category, e.Harness)
+	if e.OutOfMemory {
+		category += ": killed at the worker memory limit (out of memory)"
+	}
+	return category
 }
 
 // Unwrap exposes the stable category sentinel while keeping the message
@@ -87,6 +94,12 @@ func NewUnexpectedExitError(harnessName string) error {
 	return &FailureError{Kind: FailureUnexpectedExit, Harness: safeHarnessName(harnessName)}
 }
 
+// NewOutOfMemoryError creates a redacted unexpected-exit failure whose process
+// the worker memory limit killed.
+func NewOutOfMemoryError(harnessName string) error {
+	return &FailureError{Kind: FailureUnexpectedExit, Harness: safeHarnessName(harnessName), OutOfMemory: true}
+}
+
 // NewRateLimitError creates a redacted temporary-capacity failure.
 func NewRateLimitError(harnessName string) error {
 	return &FailureError{Kind: FailureRateLimited, Harness: safeHarnessName(harnessName)}
@@ -110,7 +123,7 @@ func ClassifyError(err error, harnessName ...string) error {
 		if len(harnessName) != 0 {
 			name = harnessName[0]
 		}
-		return &FailureError{Kind: typed.Kind, Harness: safeHarnessName(name)}
+		return &FailureError{Kind: typed.Kind, Harness: safeHarnessName(name), OutOfMemory: typed.OutOfMemory}
 	}
 	text := strings.ToLower(err.Error())
 	name := ""
@@ -127,6 +140,13 @@ func ClassifyError(err error, harnessName ...string) error {
 	default:
 		return err
 	}
+}
+
+// IsOutOfMemory reports whether err represents a harness exit after the worker
+// memory limit killed a process.
+func IsOutOfMemory(err error) bool {
+	var typed *FailureError
+	return errors.As(err, &typed) && typed.OutOfMemory
 }
 
 // IsUnexpectedExit reports whether err represents an unexpected harness exit.

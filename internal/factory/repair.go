@@ -697,6 +697,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		ResultPath:        resultDirectory,
 		CredentialStoreID: credentialStoreID,
 		Role:              previous.Role,
+		Limits:            config.EffectiveWorkerLimits(registration.WorkerLimits),
 	}
 	if err := s.journal().StartWorker(ctx, runStore, workerRequest); err != nil {
 		return store.Invocation{}, run, fmt.Errorf("start worker for check repair: %w", err)

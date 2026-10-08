@@ -24,8 +24,9 @@ const commandRefusedMarker = "factory-command-refused "
 // commandSupervisionPrelude is shared by the supervisor and the terminator. It
 // selects a records directory that changes whenever the container or the
 // Docker host restarts, so a process-group number recorded before a restart
-// can never name an unrelated process after it. alive ignores zombies: worker
-// PID 1 does not reap orphans, and a zombie cannot modify the checkout.
+// can never name an unrelated process after it. alive ignores zombies: a
+// worker started without an init process does not reap orphans, and a zombie
+// cannot modify the checkout.
 const commandSupervisionPrelude = `records="$1/$(cat /proc/sys/kernel/random/boot_id)-$(cut -d ' ' -f 22 /proc/1/stat)"
 id=$2
 alive() { ps -A -o pgid= -o stat= | awk -v group="$1" '$1 == group && $2 !~ /^Z/ { found = 1 } END { exit !found }'; }

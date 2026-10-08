@@ -826,7 +826,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 		}
 		reason := "focused red-test verification is disputed or unverifiable"
 		if err != nil {
-			reason = "focused red-test verification could not be completed"
+			reason = withOutOfMemoryCause("focused red-test verification could not be completed", err)
 		} else if result.ExitCode != 0 && !strings.Contains(output, value.TestHandoff.ExpectedFailureReason) {
 			reason = "focused red-test output did not contain the expected failure reason"
 		}
@@ -1003,7 +1003,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 		}
 		reason := "revised focused red-test verification is disputed or unverifiable"
 		if commandErr != nil {
-			reason = "revised focused red-test verification could not be completed"
+			reason = withOutOfMemoryCause("revised focused red-test verification could not be completed", commandErr)
 		} else if result.ExitCode != 0 && !strings.Contains(output, value.TestHandoff.ExpectedFailureReason) {
 			reason = "revised focused red-test output did not contain the expected failure reason"
 		}

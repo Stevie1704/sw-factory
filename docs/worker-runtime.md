@@ -112,6 +112,61 @@ bounded again to 16 KiB. A stream that writes past the command capture limit
 returns a typed output-limit failure instead of a command result.
 `docs/agent-runtime.md` records how a role observes that failure.
 
+## Resource limits
+
+Every worker container starts with a memory limit, a CPU limit, a PID limit,
+and a bounded container log. The limits come from `worker_limits` in the host
+configuration, never from the repository's `factory.yaml`.
+`docs/configuration.md` lists the keys and their defaults (`8g` memory with
+equal swap, 4 CPUs, 4096 PIDs, and a `json-file` log of 3 files of `10m`).
+The adapter applies the defaults for every omitted value, so no worker starts
+without a bound. It refuses an invalid limit before it calls Docker.
+
+Workers also start with Docker's `--init` process as PID 1. The init process
+reaps orphaned processes. Without it, orphans stay as zombies that hold PIDs,
+and a worker that reached its PID limit once would refuse every later fork.
+
+### Out-of-memory kills
+
+The adapter detects an out-of-memory kill from the kernel, never from command
+output. It reads the worker cgroup's `oom_kill` count (`memory.events` on
+cgroup v2, `memory.oom_control` on cgroup v1) in its own `docker exec`, apart
+from the command. No worker process can write that count, so command output
+cannot forge an out-of-memory failure.
+
+- **Commands.** `run-command` reads the count before the command starts. When
+  the command fails and the count grew, the adapter returns a typed
+  `OutOfMemoryError` instead of the exit code. A command that succeeds
+  although one of its processes was killed keeps its successful result. The
+  gate runner records an execution error, and the check-repair policy pauses
+  the run as `check infrastructure unavailable` with a reason that names the
+  out-of-memory kill. A focused red-test verification that fails this way
+  also names the kill in its pause reason.
+- **Detached harness processes.** `start-headless` records the count, as root,
+  in `/run/factory-oom/<boot>/<invocation-id>` before the process starts. The
+  worker user cannot create, change, or replace entries under `/run`, and the
+  adapter trusts only root-owned entries. When `inspect-headless` sees a
+  failed exit and the count grew past that baseline, it reports
+  `OutOfMemory`. The harness adapter reports an unexpected exit that names
+  the out-of-memory kill. The coordinator does not resume it automatically,
+  because a resume would meet the same limit. It pauses the run as
+  `harness out of memory (<harness>)`, and `/factory resume` continues the
+  native session after the operator raises `worker_limits.memory`.
+
+When the kernel exposes no `oom_kill` count, or the baseline could not be
+recorded, an out-of-memory kill stays an ordinary failed exit.
+
+A command that reaches the PID limit sees `fork` fail. The worker becomes
+usable again when the processes that hold its PIDs end.
+
+Known limits:
+
+- The `oom_kill` count belongs to the whole worker cgroup. A failing command
+  that ran while the memory limit killed another process in the same worker
+  also reports the out-of-memory failure.
+- Limits do not change on a reused worker. A worker created before the limits
+  changed keeps its earlier limits until the coordinator recreates it.
+
 ## Command timeout and cancellation
 
 The worker, not the host Docker CLI, owns the lifetime of every `run-command`
@@ -133,8 +188,8 @@ runs a second, fixed terminator in the same worker before it returns:
    command runs.
 2. It sends SIGTERM to the process group and waits a 5 second grace period.
 3. It sends SIGKILL and waits a second grace period.
-4. Zombies count as stopped: worker PID 1 does not reap orphans, and a zombie
-   cannot modify the checkout.
+4. Zombies count as stopped: a worker created without the init process does
+   not reap orphans, and a zombie cannot modify the checkout.
 
 The adapter returns the original `context.DeadlineExceeded` or
 `context.Canceled` only after the terminator confirms that no group member is
@@ -178,11 +233,14 @@ Known limits:
 
 The contract tests use a controlled Docker executable. Live Docker and harness
 checks remain environment checks and are not ordinary unit-test dependencies.
-To run the real command-lifetime checks against the pinned worker, use:
+`scripts/verify-headless-worker.sh` runs the real command-lifetime and
+resource-limit checks after the headless lifecycle checks, so `make
+worker-build` and the CI worker verification job both run them. To run them
+alone against the pinned worker, use:
 
 ```sh
 FACTORY_DOCKER_WORKER_IMAGE=ghcr.io/stevie1704/sw-factory-worker@sha256:... \
-  go test ./internal/worker -run TestRealWorkerCommandLifetime
+  go test ./internal/worker -run TestRealWorker
 ```
 
 Every harness publishes completion with `factory-report`, which atomically

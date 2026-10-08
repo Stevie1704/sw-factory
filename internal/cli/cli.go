@@ -142,7 +142,7 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 	}
 	for _, check := range result.Report.Results {
 		if check.Status == doctor.StatusPassed {
-			if !writeOutput(output, errorsOutput, "doctor: %s: passed\n", check.Name) {
+			if !writePassedCheck(output, errorsOutput, check) {
 				return 1
 			}
 			continue
@@ -161,6 +161,14 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 		return 1
 	}
 	return 1
+}
+
+// writePassedCheck renders one passed startup check and its optional detail.
+func writePassedCheck(output, errorsOutput io.Writer, check doctor.Result) bool {
+	if check.Detail == "" {
+		return writeOutput(output, errorsOutput, "doctor: %s: passed\n", check.Name)
+	}
+	return writeOutput(output, errorsOutput, "doctor: %s: passed (%s)\n", check.Name, check.Detail)
 }
 
 // writeCheckDiagnosis renders one non-passing startup check with its

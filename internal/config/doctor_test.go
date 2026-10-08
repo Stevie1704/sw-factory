@@ -477,3 +477,30 @@ func diagnoseRepositoryConfig(t *testing.T, mutate func(string) string) doctor.R
 	}
 	return result
 }
+
+// TestWorkerLimitsStartupCheckReportsTheEffectiveLimits verifies startup
+// diagnosis names the limits every worker container receives.
+func TestWorkerLimitsStartupCheckReportsTheEffectiveLimits(t *testing.T) {
+	t.Parallel()
+
+	registration := config.RepositoryRegistration{WorkerLimits: config.WorkerLimitsConfig{Memory: "2g", PIDs: "512"}}
+
+	result := config.WorkerLimitsStartupCheck(config.DoctorState{Registration: &registration})(context.Background())
+	if result.Status != doctor.StatusPassed || result.Name != "worker limits" {
+		t.Fatalf("worker limits diagnosis = %#v, want a passed worker limits check", result)
+	}
+	if result.Detail != "memory 2g, swap 2g, cpus 4, pids 512, log 3 x 10m" {
+		t.Fatalf("worker limits detail = %q, want the effective limits", result.Detail)
+	}
+}
+
+// TestWorkerLimitsStartupCheckReportsNothingWithoutARegistration verifies the
+// check leaves an unreadable configuration to the configuration check.
+func TestWorkerLimitsStartupCheckReportsNothingWithoutARegistration(t *testing.T) {
+	t.Parallel()
+
+	result := config.WorkerLimitsStartupCheck(config.DoctorState{})(context.Background())
+	if result.Status != doctor.StatusPassed || result.Detail != "" {
+		t.Fatalf("worker limits diagnosis = %#v, want a passed check with no detail", result)
+	}
+}

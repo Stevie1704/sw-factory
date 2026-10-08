@@ -94,6 +94,9 @@ type HeadlessInspection struct {
 	StdoutTruncated bool
 	// StderrTruncated reports that retained stderr is incomplete.
 	StderrTruncated bool
+	// OutOfMemory reports that the process exited with a failure after the
+	// worker's memory limit killed a process during the invocation.
+	OutOfMemory bool
 }
 
 // HeadlessProcessRuntime is the optional worker extension for terminal-free
@@ -172,6 +175,7 @@ func (r *DockerRuntime) StartHeadless(ctx context.Context, request HeadlessReque
 	}
 	args = append(args, "--")
 	args = append(args, request.Command...)
+	r.recordOOMBaseline(ctx, workerID, request.InvocationID)
 	if _, err := r.runDocker(ctx, args); err != nil {
 		return HeadlessExecution{}, fmt.Errorf("start headless worker process: %w", err)
 	}
@@ -233,7 +237,14 @@ func (r *DockerRuntime) inspectHeadless(ctx context.Context, request HeadlessReq
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &wire); err != nil {
 		return HeadlessInspection{}, fmt.Errorf("decode headless process state: %w", err)
 	}
-	return wire.toInspection()
+	inspection, err := wire.toInspection()
+	if err != nil {
+		return HeadlessInspection{}, err
+	}
+	if inspection.Status == HeadlessStatusExited && inspection.ExitCode != 0 {
+		inspection.OutOfMemory = r.detachedProcessKilledAtMemoryLimit(ctx, workerID, request.InvocationID)
+	}
+	return inspection, nil
 }
 
 // finishHeadless performs the fixed helper cancellation command used by both

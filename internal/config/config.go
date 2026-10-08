@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/Stevie1704/sw-factory/internal/reviewunits"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"gopkg.in/yaml.v3"
 )
@@ -50,6 +51,35 @@ type RepositoryRegistration struct {
 	// Review contains host-local concurrency and authorization ceilings. It is
 	// intentionally separate from repository review coverage policy.
 	Review ReviewHostConfig `yaml:"review,omitempty"`
+	// WorkerLimits bounds every worker container. It is host-owned, so a
+	// repository commit cannot raise its own limits.
+	WorkerLimits WorkerLimitsConfig `yaml:"worker_limits,omitempty"`
+}
+
+// WorkerLimitsConfig contains the host-owned worker resource limits in the
+// Docker CLI grammar. An omitted value selects its documented default.
+type WorkerLimitsConfig struct {
+	// Memory is the worker memory limit, for example 8g. Swap equals it.
+	Memory string `yaml:"memory,omitempty"`
+	// CPUs is the worker CPU limit, for example 4 or 1.5.
+	CPUs string `yaml:"cpus,omitempty"`
+	// PIDs is the worker process and thread limit.
+	PIDs string `yaml:"pids,omitempty"`
+	// LogMaxSize is the size of one container log file, for example 10m.
+	LogMaxSize string `yaml:"log_max_size,omitempty"`
+	// LogMaxFiles is the number of rotated container log files.
+	LogMaxFiles string `yaml:"log_max_files,omitempty"`
+}
+
+// EffectiveWorkerLimits returns the worker resource limits with the documented
+// default in place of every omitted value.
+func EffectiveWorkerLimits(value WorkerLimitsConfig) worker.ResourceLimits {
+	return workerLimits(value).Effective()
+}
+
+// workerLimits converts the host configuration to the worker adapter's limits.
+func workerLimits(value WorkerLimitsConfig) worker.ResourceLimits {
+	return worker.ResourceLimits{Memory: value.Memory, CPUs: value.CPUs, PIDs: value.PIDs, LogMaxSize: value.LogMaxSize, LogMaxFiles: value.LogMaxFiles}
 }
 
 type GitHubConfig struct {
@@ -810,6 +840,13 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	}
 	if repository.Review.AuthorizedUnits < 0 || repository.Review.AuthorizedUnits > MaxAuthorizedReviewUnits {
 		return validation(prefix+".review.authorized_units", fmt.Sprintf("must be zero or between one and %d", MaxAuthorizedReviewUnits))
+	}
+	if err := workerLimits(repository.WorkerLimits).Validate(); err != nil {
+		var limitErr *worker.ResourceLimitError
+		if errors.As(err, &limitErr) {
+			return validation(prefix+".worker_limits."+limitErr.Field, limitErr.Message)
+		}
+		return err
 	}
 	if strings.TrimSpace(repository.OperationalDataPath) == "" {
 		return validation(prefix+".operational_data_path", "is required")
