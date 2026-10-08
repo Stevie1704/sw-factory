@@ -940,6 +940,13 @@ func (s *Service) stopProgressionAfterFailure(ctx context.Context, registration 
 	if pollingContextDone(cause) || ctx.Err() != nil {
 		return progressionResult{Outcome: progressionWaiting, Run: observed, Steps: steps, Reason: "coordinator stopped"}, nil
 	}
+	// A host command deadline is a transport failure, not an ambiguous
+	// effect: the effect journal keeps any reserved mutation for the next
+	// pass to complete or recognize. The run stays active and the
+	// supervisor retries with backoff.
+	if hostCommandTimedOut(cause) {
+		return progressionResult{Outcome: progressionWaiting, Run: observed, Steps: steps, Reason: "host command timed out"}, cause
+	}
 	paused, err := s.pauseProgression(ctx, registration, observed, step, cause)
 	if err != nil {
 		return progressionResult{Run: observed, Steps: steps}, errors.Join(cause, err)

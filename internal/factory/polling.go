@@ -145,6 +145,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	consecutiveCommandFailures := 0
 	consecutiveProgressionFailures := 0
 	consecutiveHarnessRetryFailures := 0
+	consecutiveProgressionTimeouts := 0
 	for {
 		if err := waitPolling(pollContext, delay); err != nil {
 			if pollingContextDone(err) {
@@ -336,6 +337,20 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 				if pollingContextDone(err) {
 					return nil
 				}
+				// A host command timeout never stops the supervisor: the next
+				// pass can succeed once the remote answers again. It does not
+				// count toward the limit for ordinary failures.
+				if hostCommandTimedOut(err) {
+					consecutiveProgressionTimeouts++
+					s.emitCoordinatorEvent(events, CoordinatorEvent{
+						Kind:      EventRetry,
+						RunID:     progressionRunID,
+						Operation: "progression",
+						Attempt:   consecutiveProgressionTimeouts,
+					})
+					delay = backoff
+					continue
+				}
 				consecutiveProgressionFailures++
 				s.emitCoordinatorEvent(events, CoordinatorEvent{
 					Kind:        EventRetry,
@@ -351,6 +366,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 				continue
 			}
 			consecutiveProgressionFailures = 0
+			consecutiveProgressionTimeouts = 0
 			// A run this pass drove into a terminal state releases the
 			// one-active-run constraint. Observe the queue again without
 			// waiting a full interval so the next oldest eligible issue starts
