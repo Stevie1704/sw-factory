@@ -420,7 +420,11 @@ Each host `git` and `gh` call has a fixed deadline:
 When a deadline expires, the factory stops the command and all processes that
 it started. The call then fails with a retryable transport error. The
 supervisor does not stop. It backs off and tries again on its next pass, so
-lifecycle commands such as `/factory cancel` continue to work. `factory doctor`
+lifecycle commands such as `/factory cancel` continue to work. A timeout does
+not change the run state: the run stays active, and a GitHub or Git change
+that the factory reserved stays in the effect journal. The next pass completes
+or recognizes that change. A claim whose label change timed out stays a
+claim; it does not become `agent-failed`. `factory doctor`
 reports an unresponsive GitHub or Git remote as a failed check that names the
 deadline.
 
