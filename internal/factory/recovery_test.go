@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -132,7 +132,7 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			configure: func(run *store.Run, _ *recoveryWorktree, _ *fakeGitHub, pullRequests *fakePullRequests) {
 				run.PullRequestNumber = 17
 				run.PullRequestURL = "https://github.com/example/project/pull/17"
-				pullRequests.existing = github.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", HeadBranch: run.Branch, BaseBranch: "main"}
+				pullRequests.existing = codehost.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", HeadBranch: run.Branch, BaseBranch: "main"}
 			},
 			wantFields: []string{"github.pull request number", "github.pull request URL"},
 		},

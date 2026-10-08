@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/gate"
@@ -96,7 +97,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	}
 	runtime := &agentWorker{}
 	harnessRuntime := &agentHarness{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: branch, BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: branch, BaseBranch: "main"}}
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),

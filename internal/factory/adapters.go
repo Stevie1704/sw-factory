@@ -1,8 +1,8 @@
 package factory
 
 import (
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 )
 
 // gitWorkspace resolves the new task-oriented seam while retaining the
@@ -48,10 +48,10 @@ func (s *Service) checkpointFileReader() gitadapter.CheckpointFileReader {
 
 // pullRequestClient resolves the dedicated pull-request adapter or a GitHub
 // client that implements it directly.
-func (s *Service) pullRequestClient() github.PullRequestClient {
+func (s *Service) pullRequestClient() codehost.PullRequestClient {
 	if s.deps.PullRequests != nil {
 		return s.deps.PullRequests
 	}
-	client, _ := s.deps.GitHub.(github.PullRequestClient)
+	client, _ := s.deps.GitHub.(codehost.PullRequestClient)
 	return client
 }

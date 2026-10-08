@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -22,67 +22,67 @@ func TestApplicableHumanReviewsAcceptOnlyAuthorizedCompletedDecisions(t *testing
 	t.Parallel()
 
 	authorized := []string{"alice", "bob"}
-	changesRequested := github.PullRequestReview{
-		ID: "40", Author: "alice", State: github.PullRequestReviewChangesRequested,
+	changesRequested := codehost.PullRequestReview{
+		ID: "40", Author: "alice", State: codehost.PullRequestReviewChangesRequested,
 		Body: "restore the deleted validation", SubmittedAt: submittedAt,
 	}
 	tests := []struct {
 		name      string
-		reviews   []github.PullRequestReview
+		reviews   []codehost.PullRequestReview
 		watermark string
 		wantIDs   []string
 	}{
 		{
 			name:    "authorized changes requested",
-			reviews: []github.PullRequestReview{changesRequested},
+			reviews: []codehost.PullRequestReview{changesRequested},
 			wantIDs: []string{"40"},
 		},
 		{
 			name: "concurrent authorized decisions are all carried, oldest first",
-			reviews: []github.PullRequestReview{
-				{ID: "41", Author: "bob", State: github.PullRequestReviewChangesRequested, Body: "and rename the flag", SubmittedAt: submittedAt},
+			reviews: []codehost.PullRequestReview{
+				{ID: "41", Author: "bob", State: codehost.PullRequestReviewChangesRequested, Body: "and rename the flag", SubmittedAt: submittedAt},
 				changesRequested,
 			},
 			wantIDs: []string{"40", "41"},
 		},
 		{
 			name: "watermark keeps only the unapplied decision",
-			reviews: []github.PullRequestReview{
+			reviews: []codehost.PullRequestReview{
 				changesRequested,
-				{ID: "41", Author: "bob", State: github.PullRequestReviewChangesRequested, Body: "and rename the flag", SubmittedAt: submittedAt},
+				{ID: "41", Author: "bob", State: codehost.PullRequestReviewChangesRequested, Body: "and rename the flag", SubmittedAt: submittedAt},
 			},
 			watermark: "40",
 			wantIDs:   []string{"41"},
 		},
 		{
 			name:      "already applied review is skipped",
-			reviews:   []github.PullRequestReview{changesRequested},
+			reviews:   []codehost.PullRequestReview{changesRequested},
 			watermark: "40",
 		},
 		{
 			name:      "older review below the watermark is skipped",
-			reviews:   []github.PullRequestReview{changesRequested},
+			reviews:   []codehost.PullRequestReview{changesRequested},
 			watermark: "55",
 		},
 		{
 			name:    "unauthorized author is ignored",
-			reviews: []github.PullRequestReview{{ID: "42", Author: "mallory", State: github.PullRequestReviewChangesRequested, Body: "rewrite it", SubmittedAt: submittedAt}},
+			reviews: []codehost.PullRequestReview{{ID: "42", Author: "mallory", State: codehost.PullRequestReviewChangesRequested, Body: "rewrite it", SubmittedAt: submittedAt}},
 		},
 		{
 			name:    "commented review is ignored",
-			reviews: []github.PullRequestReview{{ID: "43", Author: "alice", State: github.PullRequestReviewCommented, Body: "looks interesting", SubmittedAt: submittedAt}},
+			reviews: []codehost.PullRequestReview{{ID: "43", Author: "alice", State: codehost.PullRequestReviewCommented, Body: "looks interesting", SubmittedAt: submittedAt}},
 		},
 		{
 			name:    "approval is ignored",
-			reviews: []github.PullRequestReview{{ID: "44", Author: "alice", State: github.PullRequestReviewApproved, Body: "ship it", SubmittedAt: submittedAt}},
+			reviews: []codehost.PullRequestReview{{ID: "44", Author: "alice", State: codehost.PullRequestReviewApproved, Body: "ship it", SubmittedAt: submittedAt}},
 		},
 		{
 			name:    "dismissed decision is ignored",
-			reviews: []github.PullRequestReview{{ID: "45", Author: "alice", State: github.PullRequestReviewDismissed, Body: "withdrawn", SubmittedAt: submittedAt}},
+			reviews: []codehost.PullRequestReview{{ID: "45", Author: "alice", State: codehost.PullRequestReviewDismissed, Body: "withdrawn", SubmittedAt: submittedAt}},
 		},
 		{
 			name:    "unsubmitted draft is ignored",
-			reviews: []github.PullRequestReview{{ID: "46", Author: "alice", State: github.PullRequestReviewChangesRequested, Body: "still drafting"}},
+			reviews: []codehost.PullRequestReview{{ID: "46", Author: "alice", State: codehost.PullRequestReviewChangesRequested, Body: "still drafting"}},
 		},
 	}
 	for _, test := range tests {
@@ -107,10 +107,10 @@ func TestApplicableHumanReviewsAcceptOnlyAuthorizedCompletedDecisions(t *testing
 func TestHumanRepairFindingsCarryTheBodyAndEveryInlineComment(t *testing.T) {
 	t.Parallel()
 
-	review := github.PullRequestReview{
-		ID: "40", Author: "alice", State: github.PullRequestReviewChangesRequested,
+	review := codehost.PullRequestReview{
+		ID: "40", Author: "alice", State: codehost.PullRequestReviewChangesRequested,
 		Body: "restore the deleted validation", SubmittedAt: submittedAt,
-		Comments: []github.PullRequestReviewComment{
+		Comments: []codehost.PullRequestReviewComment{
 			{Path: "internal/factory/review.go", Line: 42, Body: "this branch cannot be reached"},
 			{Path: "internal/factory/gate.go", Body: "no line anchor here"},
 			{Path: "internal/factory/lock.go", Line: 7, Body: "   "},

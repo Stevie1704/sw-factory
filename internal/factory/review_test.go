@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -829,7 +830,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	issue := tracker.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{tracker.LabelAgentReady}}
 	githubAdapter := &fakeGitHub{issueValue: issue}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{existing: codehost.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
 	baseWorktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{
 			workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-review", Worktree: worktreePath},

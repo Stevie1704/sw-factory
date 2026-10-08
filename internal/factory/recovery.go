@@ -11,10 +11,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -1933,7 +1933,7 @@ func inspectWorktreeProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 
 // inspectGitHubProjection compares the issue, state label, status comment, and
 // optional pull request through read-only GitHub adapter methods.
-func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client tracker.Client, pullRequests github.PullRequestClient, repository tracker.Repository, run store.Run) {
+func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client tracker.Client, pullRequests codehost.PullRequestClient, repository tracker.Repository, run store.Run) {
 	if client == nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "client", Expected: "read-only GitHub client", Observed: "client unavailable"})
 		return
@@ -1976,7 +1976,7 @@ func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, 
 
 // inspectPullRequestProjection checks an existing or unexpectedly discovered
 // pull request without creating, updating, or otherwise mutating it.
-func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, pullRequests github.PullRequestClient, repository tracker.Repository, run store.Run) {
+func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, pullRequests codehost.PullRequestClient, repository tracker.Repository, run store.Run) {
 	hasPersistedIdentity := run.PullRequestNumber > 0 || strings.TrimSpace(run.PullRequestURL) != ""
 	if pullRequests == nil {
 		if hasPersistedIdentity {

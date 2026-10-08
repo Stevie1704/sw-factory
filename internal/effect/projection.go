@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
@@ -136,7 +137,7 @@ func sameCommitStatus(left, right github.CommitStatus) bool {
 
 // samePullRequestRequest suppresses a redundant update after an interrupted
 // create or update has already reached GitHub.
-func samePullRequestRequest(existing github.PullRequest, request github.PullRequestRequest) bool {
+func samePullRequestRequest(existing codehost.PullRequest, request codehost.PullRequestRequest) bool {
 	return existing.Title == request.Title && existing.Body == request.Body && existing.Draft == request.Draft &&
 		existing.HeadBranch == request.HeadBranch && existing.BaseBranch == request.BaseBranch
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -213,7 +214,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 		t.Fatalf("found pull request = %#v, want decoded identity", found)
 	}
 
-	request := github.PullRequestRequest{Title: "Created", Body: "generated", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true}
+	request := codehost.PullRequestRequest{Title: "Created", Body: "generated", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true}
 	created, err := client.CreatePullRequest(context.Background(), repository, request)
 	if err != nil {
 		t.Fatalf("CreatePullRequest() error = %v", err)
@@ -398,7 +399,7 @@ func TestGhClientReadsCompletedPullRequestReviews(t *testing.T) {
 		t.Fatalf("reviews = %d, want every listed review", len(reviews))
 	}
 	changes := reviews[0]
-	if changes.ID != "4001" || changes.Author != "alice" || changes.State != github.PullRequestReviewChangesRequested {
+	if changes.ID != "4001" || changes.Author != "alice" || changes.State != codehost.PullRequestReviewChangesRequested {
 		t.Fatalf("first review = %#v, want the authorized changes-requested decision", changes)
 	}
 	if changes.SubmittedAt.IsZero() || changes.Body != "restore the validation" {
@@ -410,7 +411,7 @@ func TestGhClientReadsCompletedPullRequestReviews(t *testing.T) {
 	if len(reviews[1].Comments) != 0 {
 		t.Fatal("a commented review triggered an inline-comment request")
 	}
-	if !reviews[2].SubmittedAt.IsZero() || reviews[2].State != github.PullRequestReviewPending {
+	if !reviews[2].SubmittedAt.IsZero() || reviews[2].State != codehost.PullRequestReviewPending {
 		t.Fatalf("draft review = %#v, want an unsubmitted pending decision", reviews[2])
 	}
 	if len(runner.calls) != 2 {

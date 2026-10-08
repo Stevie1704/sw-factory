@@ -1,6 +1,7 @@
 package effect
 
 import (
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -117,7 +118,7 @@ type pushRequestJSON struct {
 type pullRequestEffectPayload struct {
 	Repository tracker.Repository
 	Number     int
-	Request    github.PullRequestRequest
+	Request    codehost.PullRequestRequest
 	PersistRun bool
 	Issue      tracker.Issue
 	Previous   store.Run

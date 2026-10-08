@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -65,23 +66,23 @@ func (r *recordingStatusesForTest) CreateCommitStatus(_ context.Context, reposit
 type recordingPullRequestsForTest struct {
 	repository tracker.Repository
 	number     int
-	request    github.PullRequestRequest
+	request    codehost.PullRequestRequest
 }
 
 // FindPullRequest reports the existing pull request with an outdated body.
-func (*recordingPullRequestsForTest) FindPullRequest(_ context.Context, _ tracker.Repository, head, base string) (github.PullRequest, error) {
-	return github.PullRequest{Number: 9, Title: "Fix the widget", Body: "outdated", HeadBranch: head, BaseBranch: base, Draft: true}, nil
+func (*recordingPullRequestsForTest) FindPullRequest(_ context.Context, _ tracker.Repository, head, base string) (codehost.PullRequest, error) {
+	return codehost.PullRequest{Number: 9, Title: "Fix the widget", Body: "outdated", HeadBranch: head, BaseBranch: base, Draft: true}, nil
 }
 
 // CreatePullRequest is never reached when the pull request exists.
-func (*recordingPullRequestsForTest) CreatePullRequest(context.Context, tracker.Repository, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, errExternal
+func (*recordingPullRequestsForTest) CreatePullRequest(context.Context, tracker.Repository, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, errExternal
 }
 
 // UpdatePullRequest records the replayed update.
-func (r *recordingPullRequestsForTest) UpdatePullRequest(_ context.Context, repository tracker.Repository, number int, request github.PullRequestRequest) (github.PullRequest, error) {
+func (r *recordingPullRequestsForTest) UpdatePullRequest(_ context.Context, repository tracker.Repository, number int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	r.repository, r.number, r.request = repository, number, request
-	return github.PullRequest{Number: number}, nil
+	return codehost.PullRequest{Number: number}, nil
 }
 
 // TestReplayAcceptsPayloadsJournaledBeforeTheTrackerPorts proves that a
@@ -124,7 +125,7 @@ func TestReplayAcceptsPayloadsJournaledBeforeTheTrackerPorts(t *testing.T) {
 	}
 
 	replay(store.PendingEffectKindPullRequest, legacyPullRequestPayload)
-	wantRequest := github.PullRequestRequest{Title: "Fix the widget", Body: "generated body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
+	wantRequest := codehost.PullRequestRequest{Title: "Fix the widget", Body: "generated body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
 	if pullRequests.repository != legacyRepository || pullRequests.number != 9 || pullRequests.request != wantRequest {
 		t.Fatalf("pull-request replay = %v #%d %#v, want acme/widget #9 %#v", pullRequests.repository, pullRequests.number, pullRequests.request, wantRequest)
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -53,7 +54,7 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 	}
 	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}}
 
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
@@ -121,7 +122,7 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 	// section, so regeneration must take the replace branch rather than append
 	// a second one. Human text alone would exercise only the append branch.
 	priorBody := "human-authored notes\n\n<!-- factory-generated:start -->\n## Factory run\n\n- stale generated section\n\nCloses #42\n<!-- factory-generated:end -->\n\ntrailing human notes"
-	pullRequests.existing = github.PullRequest{Number: 17, URL: pullRequests.created.URL, Body: priorBody, State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}
+	pullRequests.existing = codehost.PullRequest{Number: 17, URL: pullRequests.created.URL, Body: priorBody, State: "open", Draft: true, HeadBranch: "factory/run-draft", BaseBranch: "main"}
 	repeated, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: "run-draft", Intervention: "human reviewed"})
 	if err != nil {
 		t.Fatalf("repeated CreateDraftPullRequest() error = %v", err)
@@ -177,7 +178,7 @@ func TestCreateDraftPullRequestPublishesGateStatusesForAPushedCheckpoint(t *test
 	}
 	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &unpushedCheckpointStatuses{workspace: workspace}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 19, URL: "https://github.com/example/project/pull/19", State: "open", Draft: true, HeadBranch: "factory/run-unpushed", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{Number: 19, URL: "https://github.com/example/project/pull/19", State: "open", Draft: true, HeadBranch: "factory/run-unpushed", BaseBranch: "main"}}
 
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
@@ -255,7 +256,7 @@ func TestCreateDraftPullRequestReentersRecoveryPausedCheck(t *testing.T) {
 	}
 	workerRuntime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{
 		Number: 20, URL: "https://github.com/example/project/pull/20", State: "open", Draft: true,
 		HeadBranch: "factory/run-recovered-check", BaseBranch: "main",
 	}}
@@ -357,7 +358,7 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	runtime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 1}}}
 	harnessRuntime := &agentHarness{}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: "factory/run-repair", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: "factory/run-repair", BaseBranch: "main"}}
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
@@ -694,29 +695,29 @@ type fakeGitHubWithPullRequests struct {
 
 // fakePullRequests records draft pull-request discovery and mutations.
 type fakePullRequests struct {
-	existing        github.PullRequest
-	created         github.PullRequest
-	createdRequests []github.PullRequestRequest
-	updatedRequests []github.PullRequestRequest
+	existing        codehost.PullRequest
+	created         codehost.PullRequest
+	createdRequests []codehost.PullRequestRequest
+	updatedRequests []codehost.PullRequestRequest
 	readyHeadSHA    string
 }
 
 // FindPullRequest returns the currently known branch pull request.
-func (f *fakePullRequests) FindPullRequest(context.Context, tracker.Repository, string, string) (github.PullRequest, error) {
+func (f *fakePullRequests) FindPullRequest(context.Context, tracker.Repository, string, string) (codehost.PullRequest, error) {
 	return f.existing, nil
 }
 
 // CreatePullRequest records the first draft pull-request mutation.
-func (f *fakePullRequests) CreatePullRequest(_ context.Context, _ tracker.Repository, request github.PullRequestRequest) (github.PullRequest, error) {
+func (f *fakePullRequests) CreatePullRequest(_ context.Context, _ tracker.Repository, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	f.createdRequests = append(f.createdRequests, request)
 	if f.created.Number == 0 {
-		return github.PullRequest{}, errors.New("test pull request identity is not configured")
+		return codehost.PullRequest{}, errors.New("test pull request identity is not configured")
 	}
 	return f.created, nil
 }
 
 // UpdatePullRequest records regeneration of the generated factory section.
-func (f *fakePullRequests) UpdatePullRequest(_ context.Context, _ tracker.Repository, _ int, request github.PullRequestRequest) (github.PullRequest, error) {
+func (f *fakePullRequests) UpdatePullRequest(_ context.Context, _ tracker.Repository, _ int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	f.updatedRequests = append(f.updatedRequests, request)
 	updated := f.existing
 	updated.Title = request.Title
@@ -728,7 +729,7 @@ func (f *fakePullRequests) UpdatePullRequest(_ context.Context, _ tracker.Reposi
 
 // SetPullRequestDraft records the explicit readiness transition used after all
 // review gates pass.
-func (f *fakePullRequests) SetPullRequestDraft(_ context.Context, _ tracker.Repository, _ int, draft bool) (github.PullRequest, error) {
+func (f *fakePullRequests) SetPullRequestDraft(_ context.Context, _ tracker.Repository, _ int, draft bool) (codehost.PullRequest, error) {
 	f.existing.Draft = draft
 	updated := f.existing
 	if !draft && f.readyHeadSHA != "" {
@@ -738,4 +739,4 @@ func (f *fakePullRequests) SetPullRequestDraft(_ context.Context, _ tracker.Repo
 }
 
 var _ gitadapter.GitWorkspace = (*draftGitWorkspace)(nil)
-var _ github.PullRequestClient = (*fakePullRequests)(nil)
+var _ codehost.PullRequestClient = (*fakePullRequests)(nil)

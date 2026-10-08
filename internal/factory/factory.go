@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -181,10 +182,10 @@ type Dependencies struct {
 	// default authorized user. It is read-only.
 	GitHubAccount tracker.AccountReader
 	// PullRequests owns idempotent draft pull-request discovery and mutation.
-	PullRequests github.PullRequestClient
+	PullRequests codehost.PullRequestClient
 	// PullRequestReviews lists completed human reviews of a tracked pull
 	// request. It is read-only: the factory never submits or dismisses one.
-	PullRequestReviews github.PullRequestReviewReader
+	PullRequestReviews codehost.PullRequestReviewReader
 	// Comments lists issue and pull-request comments for command polling.
 	Comments tracker.CommentReader
 	Worker   worker.WorkerRuntime
@@ -383,12 +384,12 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		}
 	}
 	if dependencies.PullRequests == nil {
-		if client, ok := dependencies.GitHub.(github.PullRequestClient); ok {
+		if client, ok := dependencies.GitHub.(codehost.PullRequestClient); ok {
 			dependencies.PullRequests = client
 		}
 	}
 	if dependencies.PullRequestReviews == nil {
-		if reader, ok := dependencies.GitHub.(github.PullRequestReviewReader); ok {
+		if reader, ok := dependencies.GitHub.(codehost.PullRequestReviewReader); ok {
 			dependencies.PullRequestReviews = reader
 		}
 	}

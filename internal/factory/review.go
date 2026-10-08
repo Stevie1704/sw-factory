@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
@@ -723,7 +724,7 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 		return fmt.Errorf("build review progress projection: %w", err)
 	}
 	body := mergeGeneratedReviewSection(existing.Body, section)
-	updateRequest := github.PullRequestRequest{
+	updateRequest := codehost.PullRequestRequest{
 		Title:      defaultString(existing.Title, defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number))),
 		Body:       body,
 		HeadBranch: run.Branch,

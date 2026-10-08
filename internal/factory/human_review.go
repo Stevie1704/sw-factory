@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -25,11 +26,11 @@ const humanReviewerRole = "human"
 
 // pullRequestReviewReader resolves the read-only review seam without widening
 // the pull-request mutation authority of the other GitHub clients.
-func (s *Service) pullRequestReviewReader() github.PullRequestReviewReader {
+func (s *Service) pullRequestReviewReader() codehost.PullRequestReviewReader {
 	if s.deps.PullRequestReviews != nil {
 		return s.deps.PullRequestReviews
 	}
-	reader, _ := s.deps.GitHub.(github.PullRequestReviewReader)
+	reader, _ := s.deps.GitHub.(codehost.PullRequestReviewReader)
 	return reader
 }
 
@@ -81,7 +82,7 @@ func (s *Service) consumeHumanReview(ctx context.Context, registration config.Re
 // The draft change comes first and is idempotent, while the watermark advances
 // only with the durable transition. An interrupted pass therefore repeats the
 // draft change instead of losing the review.
-func (s *Service) applyHumanRepair(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, applicable []github.PullRequestReview, findings []store.ReviewRepairFinding) error {
+func (s *Service) applyHumanRepair(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, applicable []codehost.PullRequestReview, findings []store.ReviewRepairFinding) error {
 	if err := s.returnPullRequestToDraft(ctx, registration, run); err != nil {
 		return err
 	}
@@ -185,10 +186,10 @@ func repairAdmissionReason(run store.Run) string {
 // Two maintainers can request changes between two polls. Returning all of them
 // lets one repair packet carry every outstanding instruction, so advancing the
 // watermark to the newest identity cannot discard an older unapplied review.
-func applicableHumanReviews(reviews []github.PullRequestReview, authorized []string, watermark string) []github.PullRequestReview {
-	applicable := make([]github.PullRequestReview, 0, len(reviews))
+func applicableHumanReviews(reviews []codehost.PullRequestReview, authorized []string, watermark string) []codehost.PullRequestReview {
+	applicable := make([]codehost.PullRequestReview, 0, len(reviews))
 	for _, review := range reviews {
-		if review.State != github.PullRequestReviewChangesRequested {
+		if review.State != codehost.PullRequestReviewChangesRequested {
 			continue
 		}
 		if review.SubmittedAt.IsZero() || strings.TrimSpace(review.ID) == "" {
@@ -211,7 +212,7 @@ func applicableHumanReviews(reviews []github.PullRequestReview, authorized []str
 // humanRepairFindings converts one completed review into blocking findings.
 // The review body is one finding and every inline comment is another, so the
 // implementation role receives the complete human instruction.
-func humanRepairFindings(run store.Run, review github.PullRequestReview) []store.ReviewRepairFinding {
+func humanRepairFindings(run store.Run, review codehost.PullRequestReview) []store.ReviewRepairFinding {
 	evidence := fmt.Sprintf("GitHub review %s submitted by %s", review.ID, review.Author)
 	findings := make([]store.ReviewRepairFinding, 0, len(review.Comments)+1)
 	if body := strings.TrimSpace(review.Body); body != "" {
@@ -248,7 +249,7 @@ func humanRepairFinding(location, claim, evidence string) store.ReviewRepairFind
 
 // humanReviewLocation renders the repository-relative anchor of one inline
 // review comment in the same shape reviewers use for their own findings.
-func humanReviewLocation(comment github.PullRequestReviewComment) string {
+func humanReviewLocation(comment codehost.PullRequestReviewComment) string {
 	path := strings.TrimSpace(comment.Path)
 	if path == "" {
 		return "pull request diff"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -111,7 +112,7 @@ type Adapters struct {
 	// Workspace owns checkpoint and push effects on the host.
 	Workspace gitadapter.GitWorkspace
 	// PullRequests owns idempotent draft pull-request mutation.
-	PullRequests github.PullRequestClient
+	PullRequests codehost.PullRequestClient
 	// CommitStatuses publishes exact-SHA commit statuses.
 	CommitStatuses github.CommitStatusPublisher
 	// Worker launches the per-run isolated execution environment.

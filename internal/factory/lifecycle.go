@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -163,7 +163,7 @@ type lifecycleObservation struct {
 	// Issue is the observed issue snapshot.
 	Issue tracker.Issue
 	// PullRequest is the tracked pull request, when one exists.
-	PullRequest github.PullRequest
+	PullRequest codehost.PullRequest
 	// HasPullRequest reports whether a tracked pull request was found.
 	HasPullRequest bool
 }
@@ -200,7 +200,7 @@ type lifecycleDecision struct {
 // whether an observed issue and pull request complete, cancel, or leave a run
 // unchanged. It is the only interpretation of GitHub lifecycle state, so no
 // caller can invent a reset-specific or cleanup-specific variant.
-func classifyLifecycle(run store.Run, issue tracker.Issue, pullRequest github.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
+func classifyLifecycle(run store.Run, issue tracker.Issue, pullRequest codehost.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
 	// GitHub reports a merged pull request as closed, so merge detection must
 	// happen before either ordinary closed-state cancellation branch.
 	if hasPullRequest && pullRequest.Merged {
@@ -221,30 +221,30 @@ func classifyLifecycle(run store.Run, issue tracker.Issue, pullRequest github.Pu
 
 // trackedPullRequest loads the PR found by the run's exact branch and frozen
 // target branch. A missing PR is valid before draft-PR creation.
-func (s *Service) trackedPullRequest(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (github.PullRequest, bool, error) {
+func (s *Service) trackedPullRequest(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (codehost.PullRequest, bool, error) {
 	if run.PullRequestNumber == 0 {
-		return github.PullRequest{}, false, nil
+		return codehost.PullRequest{}, false, nil
 	}
 	client := s.pullRequestClient()
 	if client == nil {
-		return github.PullRequest{}, false, errors.New("GitHub pull-request client is required to observe a tracked pull request")
+		return codehost.PullRequest{}, false, errors.New("GitHub pull-request client is required to observe a tracked pull request")
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
-		return github.PullRequest{}, false, fmt.Errorf("decode specification packet for lifecycle observation: %w", err)
+		return codehost.PullRequest{}, false, fmt.Errorf("decode specification packet for lifecycle observation: %w", err)
 	}
 	if strings.TrimSpace(packet.RepositoryConfig.TargetBranch) == "" {
-		return github.PullRequest{}, false, errors.New("tracked run has no frozen pull-request target branch")
+		return codehost.PullRequest{}, false, errors.New("tracked run has no frozen pull-request target branch")
 	}
 	pullRequest, err := client.FindPullRequest(ctx, commandRepository(registration), run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
-		return github.PullRequest{}, false, fmt.Errorf("observe pull request #%d: %w", run.PullRequestNumber, err)
+		return codehost.PullRequest{}, false, fmt.Errorf("observe pull request #%d: %w", run.PullRequestNumber, err)
 	}
 	if pullRequest.Number == 0 {
-		return github.PullRequest{}, false, nil
+		return codehost.PullRequest{}, false, nil
 	}
 	if pullRequest.Number != run.PullRequestNumber {
-		return github.PullRequest{}, false, fmt.Errorf("tracked pull request changed from #%d to #%d", run.PullRequestNumber, pullRequest.Number)
+		return codehost.PullRequest{}, false, fmt.Errorf("tracked pull request changed from #%d to #%d", run.PullRequestNumber, pullRequest.Number)
 	}
 	return pullRequest, true, nil
 }
@@ -252,7 +252,7 @@ func (s *Service) trackedPullRequest(ctx context.Context, registration config.Re
 // pullRequestIsOpen reports whether a tracked pull request can still receive
 // work. A merged pull request is reported by GitHub as closed, so the merge
 // flag is checked before the lifecycle state.
-func pullRequestIsOpen(pullRequest github.PullRequest, found bool) bool {
+func pullRequestIsOpen(pullRequest codehost.PullRequest, found bool) bool {
 	return found && !pullRequest.Merged && strings.EqualFold(strings.TrimSpace(pullRequest.State), "open")
 }
 

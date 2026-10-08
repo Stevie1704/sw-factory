@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
@@ -268,18 +269,18 @@ func (journalWorkspaceForTest) SynchronizeBase(context.Context, gitadapter.BaseS
 type journalPullRequestsForTest struct{}
 
 // FindPullRequest returns the injected external failure.
-func (journalPullRequestsForTest) FindPullRequest(context.Context, tracker.Repository, string, string) (github.PullRequest, error) {
-	return github.PullRequest{}, errExternal
+func (journalPullRequestsForTest) FindPullRequest(context.Context, tracker.Repository, string, string) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, errExternal
 }
 
 // CreatePullRequest returns the injected external failure.
-func (journalPullRequestsForTest) CreatePullRequest(context.Context, tracker.Repository, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, errExternal
+func (journalPullRequestsForTest) CreatePullRequest(context.Context, tracker.Repository, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, errExternal
 }
 
 // UpdatePullRequest returns the injected external failure.
-func (journalPullRequestsForTest) UpdatePullRequest(context.Context, tracker.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, errExternal
+func (journalPullRequestsForTest) UpdatePullRequest(context.Context, tracker.Repository, int, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, errExternal
 }
 
 // journalStatusesForTest fails every commit-status publication.
@@ -547,7 +548,7 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 		RunID: run.ID, WorktreePath: "/worktree", ParentSHA: "parent",
 		Kind: gitadapter.CheckpointKindImplementation, Paths: []string{"a", "b"}, Message: "checkpoint",
 	}
-	pullRequest := github.PullRequestRequest{Title: "title", Body: "body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
+	pullRequest := codehost.PullRequestRequest{Title: "title", Body: "body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
 	status := github.CommitStatus{SHA: "checkpoint", State: github.CommitStatusSuccess, Context: "factory/test", Description: "passed"}
 	workerRequest := worker.StartRequest{RunID: run.ID, Role: "implementation", InvocationPath: "/invocation", ResultPath: "/result"}
 	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role}

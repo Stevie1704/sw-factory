@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -291,7 +291,7 @@ func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
 	githubAdapter := &commandGitHub{
 		issue:         tracker.Issue{Number: 42, Title: "Amended issue", Body: "new requirements", State: "open", Labels: []string{tracker.LabelAgentRunning}},
 		statusComment: tracker.Comment{ID: "status-1"},
-		pullRequest:   github.PullRequest{Number: 17, URL: run.PullRequestURL, State: "open", Draft: false, HeadBranch: run.Branch, BaseBranch: "main"},
+		pullRequest:   codehost.PullRequest{Number: 17, URL: run.PullRequestURL, State: "open", Draft: false, HeadBranch: run.Branch, BaseBranch: "main"},
 	}
 	runStore := &commandRunStore{current: &run, latest: &run}
 	service := newCommandServiceWithStoreAndWorktree(runStore, githubAdapter, nil, &fakeWorktree{
@@ -353,7 +353,7 @@ func TestHandleCommandRefreshDemotesAReadyPullRequest(t *testing.T) {
 	githubAdapter := &commandGitHub{
 		issue:         tracker.Issue{Number: 42, Title: "Refreshed issue", Body: "unchanged requirements", State: "open", Labels: []string{tracker.LabelAgentRunning}},
 		statusComment: tracker.Comment{ID: "status-1"},
-		pullRequest: github.PullRequest{
+		pullRequest: codehost.PullRequest{
 			Number: 17, URL: run.PullRequestURL, State: "open", Draft: false,
 			HeadBranch: run.Branch, BaseBranch: "main",
 		},
@@ -633,7 +633,7 @@ type commandGitHub struct {
 	replacedLabels  []string
 	createdComments []string
 	editedComments  []commandEditedComment
-	pullRequest     github.PullRequest
+	pullRequest     codehost.PullRequest
 	draftChanges    []bool
 }
 
@@ -677,24 +677,24 @@ func (g *commandGitHub) IssueComments(context.Context, tracker.Repository, int) 
 }
 
 // FindPullRequest returns the tracked pull request used by revision commands.
-func (g *commandGitHub) FindPullRequest(context.Context, tracker.Repository, string, string) (github.PullRequest, error) {
+func (g *commandGitHub) FindPullRequest(context.Context, tracker.Repository, string, string) (codehost.PullRequest, error) {
 	return g.pullRequest, nil
 }
 
 // CreatePullRequest is unused by command tests but completes the pull-request
 // client seam supplied by the command GitHub fixture.
-func (g *commandGitHub) CreatePullRequest(context.Context, tracker.Repository, github.PullRequestRequest) (github.PullRequest, error) {
+func (g *commandGitHub) CreatePullRequest(context.Context, tracker.Repository, codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	return g.pullRequest, nil
 }
 
 // UpdatePullRequest is unused by revision handling because draft transitions
 // use the dedicated readiness method.
-func (g *commandGitHub) UpdatePullRequest(context.Context, tracker.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
+func (g *commandGitHub) UpdatePullRequest(context.Context, tracker.Repository, int, codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	return g.pullRequest, nil
 }
 
 // SetPullRequestDraft records the explicit readiness mutation for revisions.
-func (g *commandGitHub) SetPullRequestDraft(_ context.Context, _ tracker.Repository, _ int, draft bool) (github.PullRequest, error) {
+func (g *commandGitHub) SetPullRequestDraft(_ context.Context, _ tracker.Repository, _ int, draft bool) (codehost.PullRequest, error) {
 	g.draftChanges = append(g.draftChanges, draft)
 	g.pullRequest.Draft = draft
 	return g.pullRequest, nil
@@ -857,7 +857,7 @@ func TestHandleCommandRepairResumesImplementationOnASingleAccountHost(t *testing
 	githubAdapter := &commandGitHub{
 		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentNeedsInput}},
 		statusComment: tracker.Comment{ID: "status-1"},
-		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: false},
+		pullRequest:   codehost.PullRequest{Number: 7, State: "open", Draft: false},
 	}
 	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
 	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
@@ -914,7 +914,7 @@ func TestHandleCommandRepairRefusesAnUnauthorizedMaintainer(t *testing.T) {
 	githubAdapter := &commandGitHub{
 		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentNeedsInput}},
 		statusComment: tracker.Comment{ID: "status-1"},
-		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: true},
+		pullRequest:   codehost.PullRequest{Number: 7, State: "open", Draft: true},
 	}
 	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
 	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
@@ -942,7 +942,7 @@ func TestHandleCommandRepairRefusesOutsideItsAdmissionContract(t *testing.T) {
 		name        string
 		mutate      func(*store.Run)
 		active      []store.Invocation
-		pullRequest github.PullRequest
+		pullRequest codehost.PullRequest
 	}{
 		{
 			name:   "stage is not review",
@@ -976,7 +976,7 @@ func TestHandleCommandRepairRefusesOutsideItsAdmissionContract(t *testing.T) {
 		{
 			name:        "tracked pull request was merged",
 			mutate:      func(*store.Run) {},
-			pullRequest: github.PullRequest{Number: 7, State: "closed", Merged: true},
+			pullRequest: codehost.PullRequest{Number: 7, State: "closed", Merged: true},
 		},
 	}
 	for _, testCase := range cases {
@@ -987,7 +987,7 @@ func TestHandleCommandRepairRefusesOutsideItsAdmissionContract(t *testing.T) {
 			testCase.mutate(&run)
 			pullRequest := testCase.pullRequest
 			if pullRequest.Number == 0 {
-				pullRequest = github.PullRequest{Number: 7, State: "open", Draft: true}
+				pullRequest = codehost.PullRequest{Number: 7, State: "open", Draft: true}
 			}
 			githubAdapter := &commandGitHub{
 				issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentNeedsInput}},
@@ -1025,7 +1025,7 @@ func TestPollCommandsAppliesOneRepairInstructionExactlyOnce(t *testing.T) {
 	githubAdapter := &commandGitHub{
 		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentNeedsInput}},
 		statusComment: tracker.Comment{ID: "status-1"},
-		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: true, HeadSHA: strings.Repeat("a", 40)},
+		pullRequest:   codehost.PullRequest{Number: 7, State: "open", Draft: true, HeadSHA: strings.Repeat("a", 40)},
 		comments:      []tracker.Comment{{ID: "41", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}},
 	}
 	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
@@ -1077,7 +1077,7 @@ func TestPollCommandsPrefersPullRequestLifecycleOverARepairInstruction(t *testin
 	githubAdapter := &commandGitHub{
 		issue:         tracker.Issue{Number: 42, State: "closed", Labels: []string{tracker.LabelAgentNeedsInput}},
 		statusComment: tracker.Comment{ID: "status-1"},
-		pullRequest:   github.PullRequest{Number: 7, State: "closed", Merged: true, MergeCommitSHA: strings.Repeat("d", 40)},
+		pullRequest:   codehost.PullRequest{Number: 7, State: "closed", Merged: true, MergeCommitSHA: strings.Repeat("d", 40)},
 		comments:      []tracker.Comment{{ID: "51", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}},
 	}
 	runStore := &repairRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}

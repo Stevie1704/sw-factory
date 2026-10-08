@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -166,7 +167,7 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 	// Baseline: setup plus both gates pass before any agent edit.
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 21, URL: "https://github.com/example/project/pull/21", State: "open", Draft: true, HeadBranch: "factory/run-nonblocking", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{Number: 21, URL: "https://github.com/example/project/pull/21", State: "open", Draft: true, HeadBranch: "factory/run-nonblocking", BaseBranch: "main"}}
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		OperationalDataPath: operationalPath, RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),

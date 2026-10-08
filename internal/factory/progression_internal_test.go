@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -659,24 +659,24 @@ type progressionDispatchPullRequests struct {
 }
 
 // FindPullRequest records a pull-request lookup and returns its configured error.
-func (p *progressionDispatchPullRequests) FindPullRequest(context.Context, tracker.Repository, string, string) (github.PullRequest, error) {
+func (p *progressionDispatchPullRequests) FindPullRequest(context.Context, tracker.Repository, string, string) (codehost.PullRequest, error) {
 	p.findCalls++
 	if len(p.findErrors) == 0 {
-		return github.PullRequest{}, nil
+		return codehost.PullRequest{}, nil
 	}
 	err := p.findErrors[0]
 	p.findErrors = p.findErrors[1:]
-	return github.PullRequest{}, err
+	return codehost.PullRequest{}, err
 }
 
 // CreatePullRequest satisfies the pull-request creation seam.
-func (*progressionDispatchPullRequests) CreatePullRequest(context.Context, tracker.Repository, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, context.Canceled
+func (*progressionDispatchPullRequests) CreatePullRequest(context.Context, tracker.Repository, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, context.Canceled
 }
 
 // UpdatePullRequest satisfies the pull-request update seam.
-func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, tracker.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, context.Canceled
+func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, tracker.Repository, int, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, context.Canceled
 }
 
 // progressionDispatchGitHub is the minimal issue client needed to let a
@@ -714,14 +714,14 @@ func (progressionDispatchGitHub) EditIssueComment(context.Context, tracker.Repos
 }
 
 var (
-	_ RunStore                 = (*progressionDispatchStore)(nil)
-	_ ActiveInvocationsStore   = (*progressionDispatchStore)(nil)
-	_ LatestInvocationStore    = (*progressionDispatchStore)(nil)
-	_ GateResultStore          = (*progressionDispatchStore)(nil)
-	_ InvocationStore          = (*progressionDispatchStore)(nil)
-	_ gitadapter.GitWorkspace  = (*progressionDispatchWorkspace)(nil)
-	_ tracker.Client           = progressionDispatchGitHub{}
-	_ github.PullRequestClient = (*progressionDispatchPullRequests)(nil)
+	_ RunStore                   = (*progressionDispatchStore)(nil)
+	_ ActiveInvocationsStore     = (*progressionDispatchStore)(nil)
+	_ LatestInvocationStore      = (*progressionDispatchStore)(nil)
+	_ GateResultStore            = (*progressionDispatchStore)(nil)
+	_ InvocationStore            = (*progressionDispatchStore)(nil)
+	_ gitadapter.GitWorkspace    = (*progressionDispatchWorkspace)(nil)
+	_ tracker.Client             = progressionDispatchGitHub{}
+	_ codehost.PullRequestClient = (*progressionDispatchPullRequests)(nil)
 )
 
 // progressionRunWithConcurrentReviews builds a frozen packet that enables
