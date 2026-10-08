@@ -2,6 +2,8 @@ package effect_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -127,5 +129,80 @@ func TestReplayAcceptsPayloadsJournaledBeforeTheTrackerPorts(t *testing.T) {
 	wantRequest := codehost.PullRequestRequest{Title: "Fix the widget", Body: "generated body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
 	if pullRequests.repository != legacyRepository || pullRequests.number != 9 || pullRequests.request != wantRequest {
 		t.Fatalf("pull-request replay = %v #%d %#v, want acme/widget #9 %#v", pullRequests.repository, pullRequests.number, pullRequests.request, wantRequest)
+	}
+}
+
+// legacyStateTransitionPayload is the old shape of the most common pending
+// effect. %s and %s are the previous and next runs; the store.Run shape is
+// not part of the port change.
+const legacyStateTransitionPayload = `{"Repository":{"Owner":"acme","Name":"widget"},"Issue":{"Number":42,"Title":"Fix the widget","Body":"spec","State":"OPEN","Labels":["active"],"IsPullRequest":false,"UpdatedAt":"2026-01-02T03:04:05Z"},"Previous":%s,"Next":%s,"CreateComment":true,"StopWorker":false,"InvalidateResults":false,"InvalidateAllResults":false}`
+
+// snapshotIssuesForTest reports no live issue, so the transition must use
+// the frozen issue snapshot from the payload, and records the status comment.
+type snapshotIssuesForTest struct {
+	journalIssuesForTest
+	labelReplacements int
+	commentRepository tracker.Repository
+	commentIssue      int
+}
+
+// Issue reports that the tracker returned no issue.
+func (*snapshotIssuesForTest) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
+	return tracker.Issue{}, nil
+}
+
+// ReplaceIssueLabels counts label replacements.
+func (s *snapshotIssuesForTest) ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error {
+	s.labelReplacements++
+	return nil
+}
+
+// FindStatusComment reports no existing status comment.
+func (*snapshotIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, nil
+}
+
+// CreateIssueComment records where the status comment was created.
+func (s *snapshotIssuesForTest) CreateIssueComment(_ context.Context, repository tracker.Repository, number int, _ string) (tracker.Comment, error) {
+	s.commentRepository, s.commentIssue = repository, number
+	return tracker.Comment{ID: "status-new"}, nil
+}
+
+// TestReplayAcceptsAStateTransitionJournaledBeforeTheTrackerPorts proves that
+// the repository and the frozen issue snapshot of an old state transition
+// decode unchanged: the snapshot labels already match the next state, so no
+// label is replaced, and the status comment goes to acme/widget #42.
+func TestReplayAcceptsAStateTransitionJournaledBeforeTheTrackerPorts(t *testing.T) {
+	previous := journalRunForTest()
+	next := previous
+	next.Revision++
+	previousJSON, err := json.Marshal(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextJSON, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := &snapshotIssuesForTest{}
+	journal := effect.New(effect.Adapters{
+		Now:          func() time.Time { return time.Unix(10, 0).UTC() },
+		Issues:       issues,
+		Presentation: journalPresentationForTest{},
+		Projector:    journalProjectorForTest{run: previous},
+	})
+	pending := store.PendingEffect{
+		RunID: previous.ID, ID: "state_transition:legacy", Kind: store.PendingEffectKindStateTransition,
+		Payload: fmt.Sprintf(legacyStateTransitionPayload, previousJSON, nextJSON),
+	}
+
+	if _, err := journal.Replay(context.Background(), &journalStoreForTest{run: previous}, pending); err != nil {
+		t.Fatalf("Replay(state_transition) error = %v", err)
+	}
+	if issues.labelReplacements != 0 {
+		t.Fatalf("label replacements = %d, want none because the snapshot labels already match", issues.labelReplacements)
+	}
+	if issues.commentRepository != legacyRepository || issues.commentIssue != 42 {
+		t.Fatalf("status comment = %v #%d, want acme/widget #42", issues.commentRepository, issues.commentIssue)
 	}
 }
