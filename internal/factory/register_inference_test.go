@@ -69,7 +69,7 @@ func newInferenceFixture(t *testing.T) *inferenceFixture {
 	account := &stubAccount{login: "alice"}
 	service := factory.NewWithDependencies(configPath, factory.Dependencies{
 		RepositoryDiscoverer: discoverer,
-		GitHubAccount:        account,
+		TrackerAccount:       account,
 	})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
@@ -335,7 +335,7 @@ func TestRegisterReportsAMissingHostConfigurationBeforeInference(t *testing.T) {
 	account := &stubAccount{}
 	service := factory.NewWithDependencies(filepath.Join(root, "config.yaml"), factory.Dependencies{
 		RepositoryDiscoverer: discoverer,
-		GitHubAccount:        account,
+		TrackerAccount:       account,
 	})
 	_, err := service.Register(context.Background(), factory.RegisterRequest{WorkingDirectory: root})
 	if err == nil {

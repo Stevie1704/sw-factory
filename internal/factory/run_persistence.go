@@ -40,7 +40,7 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 		_, directSupported := runStore.(runResultInvalidator)
 		invalidateResults = atomicSupported || directSupported
 	}
-	if next.StatusCommentID == "" || s.deps.GitHub == nil {
+	if next.StatusCommentID == "" || s.deps.Tracker == nil {
 		if invalidateResults {
 			next.UpdatedAt = s.deps.Now().UTC()
 			if atomicStore, ok := runStore.(atomicPacketTransitionStore); ok {
@@ -57,7 +57,7 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 		return saveRunWithRetry(ctx, runStore, next)
 	}
 	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
-	issue, err := s.deps.GitHub.Issue(ctx, repository, next.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, next.IssueNumber)
 	if err != nil {
 		return fmt.Errorf("read issue for agent state transition: %w", err)
 	}
@@ -120,11 +120,11 @@ func (s *Service) applyLegacyStateTransition(ctx context.Context, runStore RunSt
 	}
 	oldLabels := append([]string(nil), transition.Issue.Labels...)
 	newLabels := replaceFactoryState(oldLabels, factoryLabelForStatus(next.Status))
-	if err := s.deps.GitHub.ReplaceIssueLabels(ctx, transition.Repository, next.IssueNumber, newLabels); err != nil {
+	if err := s.deps.Tracker.ReplaceIssueLabels(ctx, transition.Repository, next.IssueNumber, newLabels); err != nil {
 		return next, fmt.Errorf("set issue #%d state: %w", next.IssueNumber, err)
 	}
 	if transition.CreateComment {
-		comment, err := s.deps.GitHub.CreateIssueComment(ctx, transition.Repository, next.IssueNumber, statusCommentBody(next))
+		comment, err := s.deps.Tracker.CreateIssueComment(ctx, transition.Repository, next.IssueNumber, statusCommentBody(next))
 		if err != nil {
 			return next, fmt.Errorf("create status comment: %w", err)
 		}
@@ -133,8 +133,8 @@ func (s *Service) applyLegacyStateTransition(ctx context.Context, runStore RunSt
 		}
 		next.StatusCommentID = comment.ID
 	} else {
-		if err := s.deps.GitHub.EditIssueComment(ctx, transition.Repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
-			_ = s.deps.GitHub.ReplaceIssueLabels(ctx, transition.Repository, next.IssueNumber, oldLabels)
+		if err := s.deps.Tracker.EditIssueComment(ctx, transition.Repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
+			_ = s.deps.Tracker.ReplaceIssueLabels(ctx, transition.Repository, next.IssueNumber, oldLabels)
 			return next, fmt.Errorf("edit status comment: %w", err)
 		}
 	}
@@ -145,8 +145,8 @@ func (s *Service) applyLegacyStateTransition(ctx context.Context, runStore RunSt
 	if err := saveRunWithRetry(ctx, runStore, next); err != nil {
 		if !transition.CreateComment {
 			compensationErrors := []error{
-				s.deps.GitHub.EditIssueComment(ctx, transition.Repository, transition.Previous.StatusCommentID, statusCommentBody(transition.Previous)),
-				s.deps.GitHub.ReplaceIssueLabels(ctx, transition.Repository, next.IssueNumber, oldLabels),
+				s.deps.Tracker.EditIssueComment(ctx, transition.Repository, transition.Previous.StatusCommentID, statusCommentBody(transition.Previous)),
+				s.deps.Tracker.ReplaceIssueLabels(ctx, transition.Repository, next.IssueNumber, oldLabels),
 			}
 			return next, errors.Join(append([]error{fmt.Errorf("persist state transition: %w", err)}, compensationErrors...)...)
 		}

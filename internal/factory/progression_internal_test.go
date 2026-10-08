@@ -86,7 +86,7 @@ func TestDriveRunPausesAnExpiredActiveInvocation(t *testing.T) {
 			OpenStore: func(context.Context, string) (OperationalStore, error) {
 				return runStore, nil
 			},
-			GitHub: progressionDispatchGitHub{},
+			Tracker: progressionDispatchGitHub{},
 			Now: func() time.Time {
 				return now
 			},
@@ -150,7 +150,7 @@ func TestDriveRunKeepsAnActiveInvocationInsideItsDeadline(t *testing.T) {
 			OpenStore: func(context.Context, string) (OperationalStore, error) {
 				return runStore, nil
 			},
-			GitHub: progressionDispatchGitHub{},
+			Tracker: progressionDispatchGitHub{},
 			Now: func() time.Time {
 				return now
 			},
@@ -419,7 +419,7 @@ func TestDriveRunDispatchesEveryProgressionCommand(t *testing.T) {
 					OpenStore: func(context.Context, string) (OperationalStore, error) {
 						return runStore, nil
 					},
-					GitHub:       progressionDispatchGitHub{},
+					Tracker:      progressionDispatchGitHub{},
 					GitWorkspace: workspace,
 					PullRequests: pullRequests,
 					Now: func() time.Time {
@@ -482,7 +482,7 @@ func TestDriveRunKeepsTheRunActiveWhenAHostCommandTimesOut(t *testing.T) {
 		deps: Dependencies{
 			Config:       progressionDispatchConfig{registration: registration},
 			OpenStore:    func(context.Context, string) (OperationalStore, error) { return runStore, nil },
-			GitHub:       progressionDispatchGitHub{},
+			Tracker:      progressionDispatchGitHub{},
 			GitWorkspace: workspace,
 			PullRequests: &progressionDispatchPullRequests{},
 			Now:          func() time.Time { return time.Unix(1, 0).UTC() },

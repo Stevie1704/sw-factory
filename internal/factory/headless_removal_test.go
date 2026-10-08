@@ -286,8 +286,8 @@ func newHeadlessRemovalFixture(t *testing.T, harnessName config.Harness) headles
 			return store.OpenReadOnly(ctx, path)
 		},
 		Worker: runtime, GitWorkspace: gitRuntime,
-		GitHub: &fakeGitHub{issueValue: tracker.Issue{Number: 165, State: "open"}},
-		Now:    func() time.Time { return time.Now().UTC() },
+		Tracker: &fakeGitHub{issueValue: tracker.Issue{Number: 165, State: "open"}},
+		Now:     func() time.Time { return time.Now().UTC() },
 	})
 	return headlessRemovalFixture{
 		service: service, worker: runtime, git: gitRuntime, configPath: configPath,

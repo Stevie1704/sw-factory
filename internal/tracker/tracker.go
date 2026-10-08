@@ -11,6 +11,8 @@ package tracker
 import (
 	"context"
 	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 )
 
 // Repository identifies the registered repository that the tracker and the
@@ -126,4 +128,11 @@ type Lease struct {
 // lease is only a diagnostic projection (ADR 0018).
 type LeaseClient interface {
 	RenewLease(context.Context, Repository, Lease) error
+}
+
+// ReadinessChecker reports whether an adapter can serve the registered
+// repository, for example its authentication and permissions. Each adapter
+// owns its own checks, so doctor needs no provider knowledge.
+type ReadinessChecker interface {
+	StartupChecks(Repository) []doctor.Check
 }

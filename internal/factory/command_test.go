@@ -462,7 +462,7 @@ func TestPollCommandsSkipsThePersistedWatermark(t *testing.T) {
 	second, err := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:    commandConfig{host: commandHost()},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		GitHub:    githubAdapter,
+		Tracker:   githubAdapter,
 		Comments:  githubAdapter,
 		Now:       func() time.Time { return time.Date(2026, 8, 23, 10, 11, 12, 0, time.UTC) },
 	}).PollCommands(context.Background(), factory.CommandPollRequest{RunID: run.ID})
@@ -518,7 +518,7 @@ func newCommandServiceWithStoreAndWorktree(runStore factory.OperationalStore, gi
 	dependencies := factory.Dependencies{
 		Config:    commandConfig{host: commandHost()},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		GitHub:    githubAdapter,
+		Tracker:   githubAdapter,
 		Comments:  comments,
 		// A command test must never reach the real worker runtime: terminal
 		// lifecycle handling stops the run-scoped worker, and the default

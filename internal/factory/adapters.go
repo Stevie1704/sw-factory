@@ -52,6 +52,6 @@ func (s *Service) pullRequestClient() codehost.PullRequestClient {
 	if s.deps.PullRequests != nil {
 		return s.deps.PullRequests
 	}
-	client, _ := s.deps.GitHub.(codehost.PullRequestClient)
+	client, _ := s.deps.Tracker.(codehost.PullRequestClient)
 	return client
 }

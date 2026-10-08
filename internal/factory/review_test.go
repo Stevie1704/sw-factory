@@ -854,7 +854,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		Tracker:           &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
 		PullRequests:      pullRequests,
 		Worktree:          worktree,
 		Worker:            runtime,

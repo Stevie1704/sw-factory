@@ -228,7 +228,7 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:    &fakeConfig{value: host},
 		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
-		GitHub:    githubAdapter,
+		Tracker:   githubAdapter,
 		Worker:    &recoveryWorker{},
 		Now:       func() time.Time { return time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC) },
 	})
@@ -286,7 +286,7 @@ func newRecoveryService(t *testing.T, runStore *recoveryRunStore, githubAdapter 
 	dependencies := factory.Dependencies{
 		Config:    &fakeConfig{value: host},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		GitHub:    githubAdapter, Worktree: worktree,
+		Tracker:   githubAdapter, Worktree: worktree,
 		Worker: &recoveryWorker{},
 	}
 	if pullRequests != nil {

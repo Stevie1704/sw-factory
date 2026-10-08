@@ -114,7 +114,7 @@ func (s *Service) BootstrapLabels(ctx context.Context) (BootstrapLabelsResult, e
 	}
 	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	for _, label := range factoryLabels {
-		if err := s.deps.GitHub.CreateLabel(ctx, repository, label); err != nil {
+		if err := s.deps.Tracker.CreateLabel(ctx, repository, label); err != nil {
 			return BootstrapLabelsResult{}, err
 		}
 	}
@@ -149,7 +149,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return IssueResult{}, fmt.Errorf("an active run already exists: %s", current.ID)
 	}
 
-	issue, err := s.deps.GitHub.Issue(ctx, repository, issueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, issueNumber)
 	if err != nil {
 		return IssueResult{}, err
 	}
@@ -349,12 +349,12 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 		return store.Run{}, err
 	}
 	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return store.Run{}, err
 	}
 	if run.StatusCommentID == "" {
-		comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
+		comment, err := s.deps.Tracker.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
 		if err != nil {
 			return store.Run{}, err
 		}
@@ -811,10 +811,10 @@ func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Ru
 	run.Status = store.StatusFailed
 	run.UpdatedAt = s.deps.Now().UTC()
 	compensationErrors := []error{
-		s.deps.GitHub.ReplaceIssueLabels(ctx, repository, run.IssueNumber, replaceFactoryState(issue.Labels, tracker.LabelAgentFailed)),
+		s.deps.Tracker.ReplaceIssueLabels(ctx, repository, run.IssueNumber, replaceFactoryState(issue.Labels, tracker.LabelAgentFailed)),
 	}
 	if run.StatusCommentID != "" {
-		compensationErrors = append(compensationErrors, s.deps.GitHub.EditIssueComment(ctx, repository, run.StatusCommentID, statusCommentBody(run)))
+		compensationErrors = append(compensationErrors, s.deps.Tracker.EditIssueComment(ctx, repository, run.StatusCommentID, statusCommentBody(run)))
 	}
 	if err := runStore.SaveRun(ctx, run); err != nil {
 		compensationErrors = append(compensationErrors, fmt.Errorf("persist failed claim: %w", err))

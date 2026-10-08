@@ -284,7 +284,7 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for answer: %w", err)
 	}
@@ -461,7 +461,7 @@ func (s *Service) handleRepairCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for maintainer repair: %w", err)
 	}
@@ -501,7 +501,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("decode specification packet for refresh: %w", err)
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for refresh: %w", err)
 	}
@@ -586,7 +586,7 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 		return CommandResult{}, fmt.Errorf("decode specification packet for revision: %w", err)
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for revision: %w", err)
 	}
@@ -1080,11 +1080,11 @@ func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Contex
 	// Apply GitHub effects first (labels and status comment update)
 	oldLabels := append([]string(nil), issue.Labels...)
 	newLabels := replaceFactoryState(oldLabels, factoryLabelForStatus(next.Status))
-	if err := s.deps.GitHub.ReplaceIssueLabels(ctx, repository, next.IssueNumber, newLabels); err != nil {
+	if err := s.deps.Tracker.ReplaceIssueLabels(ctx, repository, next.IssueNumber, newLabels); err != nil {
 		return next, fmt.Errorf("set issue #%d state: %w", next.IssueNumber, err)
 	}
-	if err := s.deps.GitHub.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
-		_ = s.deps.GitHub.ReplaceIssueLabels(ctx, repository, next.IssueNumber, oldLabels)
+	if err := s.deps.Tracker.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
+		_ = s.deps.Tracker.ReplaceIssueLabels(ctx, repository, next.IssueNumber, oldLabels)
 		return next, fmt.Errorf("edit status comment: %w", err)
 	}
 
@@ -1199,7 +1199,7 @@ func (s *Service) handleCancelCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for cancellation: %w", err)
 	}
@@ -1348,7 +1348,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 		run = updated
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -1567,7 +1567,7 @@ func (s *Service) persistCommandProjectionWithRun(ctx context.Context, registrat
 		return next, fmt.Errorf("persist command watermark: %w", err)
 	}
 	repository := commandRepository(registration)
-	if err := s.deps.GitHub.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
+	if err := s.deps.Tracker.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
 		return next, fmt.Errorf("edit status comment for command: %w", err)
 	}
 	return next, nil
@@ -1586,7 +1586,7 @@ func saveCommandRun(ctx context.Context, runStore effectkernel.RunStore, expecte
 // comment when an earlier process stopped before persisting its identity.
 func (s *Service) recoverCommandStatusComment(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (store.Run, error) {
 	repository := commandRepository(registration)
-	comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
+	comment, err := s.deps.Tracker.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
 	if err != nil {
 		return run, err
 	}

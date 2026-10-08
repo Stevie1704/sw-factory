@@ -47,10 +47,10 @@ func (s *Service) inferRegistration(ctx context.Context, request RegisterRequest
 		}
 	}
 	if needsUsers {
-		if s.deps.GitHubAccount == nil {
+		if s.deps.TrackerAccount == nil {
 			return RegisterRequest{}, nil, errors.New("register cannot infer an authorized user: no GitHub account adapter is configured; pass --authorized-user")
 		}
-		login, err := s.deps.GitHubAccount.AuthenticatedLogin(ctx)
+		login, err := s.deps.TrackerAccount.AuthenticatedLogin(ctx)
 		if err != nil {
 			return RegisterRequest{}, nil, fmt.Errorf("infer the authorized user: %w", err)
 		}

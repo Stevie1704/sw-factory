@@ -29,7 +29,7 @@ func (s *Service) pullRequestReviewReader() codehost.PullRequestReviewReader {
 	if s.deps.PullRequestReviews != nil {
 		return s.deps.PullRequestReviews
 	}
-	reader, _ := s.deps.GitHub.(codehost.PullRequestReviewReader)
+	reader, _ := s.deps.Tracker.(codehost.PullRequestReviewReader)
 	return reader
 }
 

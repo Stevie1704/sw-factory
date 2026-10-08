@@ -25,7 +25,7 @@ type stateTransition = effectkernel.StateTransition
 func (s *Service) journal() *effectkernel.Journal {
 	return effectkernel.New(effectkernel.Adapters{
 		Now:            s.deps.Now,
-		Issues:         s.deps.GitHub,
+		Issues:         s.deps.Tracker,
 		Presentation:   runPresentation{},
 		Projector:      runProjector{},
 		Workspace:      s.gitWorkspace(),

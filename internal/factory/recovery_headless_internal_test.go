@@ -113,7 +113,7 @@ func TestHeadlessStartupRecreatesWorkerAndResumesOnce(t *testing.T) {
 			dependencies := Dependencies{
 				Config:    &headlessRecoveryConfig{host: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}},
 				OpenStore: func(ctx context.Context, path string) (OperationalStore, error) { return store.Open(ctx, path) },
-				GitHub:    githubRuntime, Worktree: &headlessRecoveryWorktree{state: gitadapter.WorktreeState{
+				Tracker:   githubRuntime, Worktree: &headlessRecoveryWorktree{state: gitadapter.WorktreeState{
 					RepositoryPath: root, Branch: run.Branch, HeadSHA: run.CheckpointSHA,
 				}}, Worker: workerRuntime,
 				HeadlessHarnesses: map[config.Harness]harness.HeadlessRuntime{harnessName: harnessRuntime},

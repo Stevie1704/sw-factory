@@ -174,7 +174,7 @@ type lifecycleObservation struct {
 // Classification is deliberately left to the caller, because a transition and a
 // read-only refusal report an uninterpretable lifecycle differently.
 func (s *Service) observeGitHubLifecycle(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (lifecycleObservation, error) {
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return lifecycleObservation{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
 	}
@@ -288,7 +288,7 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 	}
 	repository := commandRepository(registration)
 	if next.StatusCommentID == "" {
-		comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, next.IssueNumber, statusCommentMarker(next.ID))
+		comment, err := s.deps.Tracker.FindStatusComment(ctx, repository, next.IssueNumber, statusCommentMarker(next.ID))
 		if err != nil {
 			return next, fmt.Errorf("recover status comment for lifecycle transition: %w", err)
 		}

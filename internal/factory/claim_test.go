@@ -505,7 +505,7 @@ func TestClaimIssueRefusesAnAdapterWithoutNativeResumeBeforeGitHubEffects(t *tes
 		}}}},
 		OpenStore:      func(context.Context, string) (factory.OperationalStore, error) { return &fakeRunStore{}, nil },
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil },
-		GitHub:         githubAdapter,
+		Tracker:        githubAdapter,
 		Worktree:       worktree,
 		HarnessCapabilities: func(string) (harness.Capabilities, error) {
 			return harness.Capabilities{Name: harness.NameCodex}, nil
@@ -536,7 +536,7 @@ func newClaimService(githubAdapter *fakeGitHub, worktree *fakeWorktree, runStore
 			return runStore, nil
 		},
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return repositoryConfig, nil },
-		GitHub:         githubAdapter,
+		Tracker:        githubAdapter,
 		Worktree:       worktree,
 		Now: func() time.Time {
 			return time.Date(2026, 8, 20, 10, 11, 12, 0, time.UTC)

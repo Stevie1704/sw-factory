@@ -8,7 +8,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -48,7 +47,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		}
 	}
 
-	checks = append(checks, github.StartupChecks(s.doctorGitHub(), repository)...)
+	checks = append(checks, s.trackerReadiness(repository)...)
 	checks = append(checks, gitadapter.StartupChecks(s.doctorGitWorkspace(), gitadapter.DoctorRequest{
 		RepositoryPath:     registration.Path,
 		RemoteName:         gitadapter.DefaultRemoteName,
@@ -86,10 +85,15 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	return DoctorResult{Report: doctor.Run(ctx, checks...)}, nil
 }
 
-// doctorGitHub resolves the read-only GitHub diagnosis seam.
-func (s *Service) doctorGitHub() github.DoctorClient {
-	checker, _ := s.deps.GitHub.(github.DoctorClient)
-	return checker
+// trackerReadiness returns the tracker adapter's own readiness checks, or
+// one failure when the adapter cannot report its readiness.
+func (s *Service) trackerReadiness(repository tracker.Repository) []doctor.Check {
+	if checker, ok := s.deps.Tracker.(tracker.ReadinessChecker); ok {
+		return checker.StartupChecks(repository)
+	}
+	return []doctor.Check{func(context.Context) doctor.Result {
+		return doctor.Failure("tracker readiness", "the tracker adapter cannot report its readiness", "configure a tracker adapter that provides readiness checks")
+	}}
 }
 
 // doctorGitWorkspace resolves the read-only Git diagnosis seam from the

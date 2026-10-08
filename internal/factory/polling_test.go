@@ -861,7 +861,7 @@ func newPollingService(root string, githubAdapter tracker.Client, issuePoller tr
 			return runStore, nil
 		},
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil },
-		GitHub:         githubAdapter,
+		Tracker:        githubAdapter,
 		IssuePoller:    issuePoller,
 		Lease:          lease,
 		Worktree:       worktree,

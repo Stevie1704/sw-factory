@@ -102,7 +102,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		return err
 	}
 	if s.issuePoller() == nil {
-		return errors.New("GitHub issue poller is required to start the coordinator")
+		return errors.New("tracker issue poller is required to start the coordinator")
 	}
 	lease := s.deps.Lease
 	if lease == nil {
@@ -551,7 +551,7 @@ func (s *Service) pollOnce(ctx context.Context, registration config.RepositoryRe
 
 	poller := s.issuePoller()
 	if poller == nil {
-		return PollResult{}, errors.New("GitHub issue poller is required for polling")
+		return PollResult{}, errors.New("tracker issue poller is required for polling")
 	}
 	issues, err := poller.ListEligibleIssues(ctx, tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository})
 	if err != nil {
@@ -603,7 +603,7 @@ func (s *Service) issuePoller() tracker.IssuePoller {
 	if s.deps.IssuePoller != nil {
 		return s.deps.IssuePoller
 	}
-	if poller, ok := s.deps.GitHub.(tracker.IssuePoller); ok {
+	if poller, ok := s.deps.Tracker.(tracker.IssuePoller); ok {
 		return poller
 	}
 	return nil

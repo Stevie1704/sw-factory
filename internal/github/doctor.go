@@ -68,6 +68,13 @@ func (e *missingFactoryLabelError) Error() string {
 	return fmt.Sprintf("factory label %q is missing", e.name)
 }
 
+var _ tracker.ReadinessChecker = (*GhClient)(nil)
+
+// StartupChecks returns the GitHub readiness checks for the repository.
+func (c *GhClient) StartupChecks(repository tracker.Repository) []doctor.Check {
+	return StartupChecks(c, repository)
+}
+
 // StartupChecks returns the GitHub-owned authentication, permission, and
 // factory-label checks in deterministic order.
 func StartupChecks(client DoctorClient, repository tracker.Repository) []doctor.Check {

@@ -468,7 +468,7 @@ func TestAcceptanceRouteRunsTheVerifiedRedHandoffUnderAdvisoryPolicy(t *testing.
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            githubRuntime,
+		Tracker:           githubRuntime,
 		CommitStatuses:    &gateStatuses{},
 		Worktree:          workspace,
 		GitWorkspace:      workspace,

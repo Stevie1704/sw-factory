@@ -376,7 +376,7 @@ func newBaselineFixture(t *testing.T, issueBody string, results []worker.Command
 		Config:         &fakeConfig{value: host},
 		OpenStore:      func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return *policyRef, nil },
-		GitHub:         githubRuntime, Worktree: worktree, GitWorkspace: worktree, Worker: workerRuntime,
+		Tracker:        githubRuntime, Worktree: worktree, GitWorkspace: worktree, Worker: workerRuntime,
 		CommitStatuses: &gateStatuses{},
 		Now:            func() time.Time { return time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC) },
 		NewRunID:       func() (string, error) { return "run-baseline", nil },

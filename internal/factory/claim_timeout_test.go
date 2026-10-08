@@ -161,7 +161,7 @@ func newSQLitePollingService(root, databasePath string, githubAdapter *labelTime
 		Config:         &fakeConfig{value: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}},
 		OpenStore:      func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil },
-		GitHub:         githubAdapter,
+		Tracker:        githubAdapter,
 		IssuePoller:    githubAdapter,
 		Lease:          &pollingLease{},
 		Worktree:       worktree,

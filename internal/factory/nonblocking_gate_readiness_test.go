@@ -177,7 +177,7 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: &fakeGitHub{issueValue: issue}},
+		Tracker:           &fakeGitHubWithPullRequests{fakeGitHub: &fakeGitHub{issueValue: issue}},
 		PullRequests:      pullRequests,
 		Worktree:          workspace,
 		GitWorkspace:      workspace,

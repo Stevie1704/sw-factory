@@ -283,7 +283,7 @@ func (s *Service) diagnoseInterruptedRunWithStore(ctx context.Context, registrat
 	inspectWorktreeProjection(ctx, &diagnosis, inspector, registration.Path, run)
 
 	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
-	inspectGitHubProjection(ctx, &diagnosis, s.deps.GitHub, s.pullRequestClient(), repository, run)
+	inspectGitHubProjection(ctx, &diagnosis, s.deps.Tracker, s.pullRequestClient(), repository, run)
 	inspectRemoteBranchProjection(ctx, &diagnosis, s.gitWorkspace(), run)
 	s.inspectInvocationProjection(ctx, &diagnosis, registration, runStore, run)
 	diagnosis.SourcesAgree = recoverySourcesAgree(diagnosis)
@@ -1524,10 +1524,10 @@ func (s *Service) completePendingCheckRepair(ctx context.Context, registration c
 	if active.RecoveryResumeCount == 0 {
 		return run, nil
 	}
-	if s.deps.GitHub == nil {
+	if s.deps.Tracker == nil {
 		return run, errors.New("GitHub client is required to complete check-repair reservation")
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return run, fmt.Errorf("read issue while completing check-repair reservation: %w", err)
 	}
@@ -1622,13 +1622,13 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 	if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
-	if s.deps.GitHub == nil || strings.TrimSpace(next.StatusCommentID) == "" {
+	if s.deps.Tracker == nil || strings.TrimSpace(next.StatusCommentID) == "" {
 		if err := saveRunWithRetry(ctx, runStore, next); err != nil {
 			return next, fmt.Errorf("persist restart reconciliation pause: %w", err)
 		}
 		return next, nil
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), next.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), next.IssueNumber)
 	if err != nil {
 		if saveErr := saveRunWithRetry(ctx, runStore, next); saveErr != nil {
 			return next, errors.Join(fmt.Errorf("read issue while pausing for reconciliation: %w", err), saveErr)

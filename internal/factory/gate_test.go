@@ -63,7 +63,7 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 			return runStore, nil
 		},
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:         githubAdapter,
+		Tracker:        githubAdapter,
 		GitWorkspace:   workspace,
 		Worktree:       workspace,
 		Worker:         runtime,

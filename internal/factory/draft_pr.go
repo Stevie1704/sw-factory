@@ -123,7 +123,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		return DraftPullRequestResult{}, err
 	}
 	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return DraftPullRequestResult{}, err
 	}

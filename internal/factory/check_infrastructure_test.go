@@ -106,7 +106,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return opened, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		Tracker:           &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
 		PullRequests:      pullRequests,
 		Worktree:          workspace,
 		GitWorkspace:      workspace,
