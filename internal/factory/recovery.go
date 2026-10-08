@@ -1933,7 +1933,7 @@ func inspectWorktreeProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 
 // inspectGitHubProjection compares the issue, state label, status comment, and
 // optional pull request through read-only GitHub adapter methods.
-func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client github.Client, pullRequests github.PullRequestClient, repository tracker.Repository, run store.Run) {
+func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client tracker.Client, pullRequests github.PullRequestClient, repository tracker.Repository, run store.Run) {
 	if client == nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "client", Expected: "read-only GitHub client", Observed: "client unavailable"})
 		return
@@ -2039,7 +2039,7 @@ func pullRequestIdentity(run store.Run) string {
 func factoryStateLabels(labels []string) []string {
 	result := make([]string, 0, len(labels))
 	for _, label := range labels {
-		if hasLabel(github.FactoryStateLabels, label) {
+		if hasLabel(tracker.FactoryStateLabels, label) {
 			result = append(result, label)
 		}
 	}

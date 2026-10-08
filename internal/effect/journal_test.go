@@ -178,13 +178,13 @@ func (journalIssuesForTest) ReplaceIssueLabels(context.Context, tracker.Reposito
 }
 
 // CreateIssueComment returns the injected external failure.
-func (journalIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errExternal
+func (journalIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errExternal
 }
 
 // FindStatusComment returns the injected external failure.
-func (journalIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errExternal
+func (journalIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errExternal
 }
 
 // EditIssueComment returns the injected external failure.
@@ -217,13 +217,13 @@ func (i *recoveringLabelIssuesForTest) ReplaceIssueLabels(_ context.Context, _ t
 }
 
 // CreateIssueComment is unused by the label handler.
-func (*recoveringLabelIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected comment creation")
+func (*recoveringLabelIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected comment creation")
 }
 
 // FindStatusComment is unused by the label handler.
-func (*recoveringLabelIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected status-comment read")
+func (*recoveringLabelIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected status-comment read")
 }
 
 // EditIssueComment is unused by the label handler.
@@ -376,7 +376,7 @@ func (h *responseLossHarness) FinishHeadless(context.Context, harness.Session) e
 // convergedIssuesForTest exposes an already-current GitHub projection.
 type convergedIssuesForTest struct {
 	issue   tracker.Issue
-	comment github.Comment
+	comment tracker.Comment
 }
 
 // Issue returns the current issue projection.
@@ -391,12 +391,12 @@ func (i *convergedIssuesForTest) ReplaceIssueLabels(_ context.Context, _ tracker
 }
 
 // CreateIssueComment is unused when the status comment already exists.
-func (*convergedIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected comment creation")
+func (*convergedIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected comment creation")
 }
 
 // FindStatusComment returns the existing coordinator-owned projection.
-func (i *convergedIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
+func (i *convergedIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
 	return i.comment, nil
 }
 
@@ -781,7 +781,7 @@ func TestResultAcceptanceReplayDoesNotRepeatFinalization(t *testing.T) {
 	runtime := &responseLossHarness{failOnce: true}
 	issues := &convergedIssuesForTest{
 		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{string(next.Status)}},
-		comment: github.Comment{ID: next.StatusCommentID, Body: journalPresentationForTest{}.StatusCommentBody(next)},
+		comment: tracker.Comment{ID: next.StatusCommentID, Body: journalPresentationForTest{}.StatusCommentBody(next)},
 	}
 	journal := effect.New(effect.Adapters{
 		Now: func() time.Time { return time.Unix(10, 0).UTC() }, Issues: issues,

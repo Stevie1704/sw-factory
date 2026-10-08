@@ -14,7 +14,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -126,7 +125,7 @@ type CommandRequest struct {
 	// IssueNumber identifies the issue or pull request being commented on.
 	IssueNumber int
 	// Comment contains the immutable comment identity, author, and body.
-	Comment github.Comment
+	Comment tracker.Comment
 }
 
 // CommandPollRequest selects the run whose issue and pull-request comments
@@ -251,7 +250,7 @@ type atomicAllPacketTransitionStore interface {
 
 // handleAnswerCommand applies one authorized answer, versions the packet, and
 // resumes the implementation role with that answer mounted in its packet.
-func (s *Service) handleAnswerCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleAnswerCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if run.Status != store.StatusWaitingForHuman && !(run.Status == store.StatusActive && len(run.PendingQuestions) > 0) {
 		rejection := &PolicyRejection{Code: PolicyRejectionAnswerState, Problem: fmt.Sprintf("answer is only allowed while the run waits for human input, not status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -309,7 +308,7 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 // handleResumeCommand continues a paused run through the same explicit
 // recovery lifecycle as the host resume command, then records the GitHub
 // comment watermark against the resulting run projection.
-func (s *Service) handleResumeCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleResumeCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if reason := resumeAdmissionReason(run); reason != "" {
 		rejection := &PolicyRejection{Code: PolicyRejectionResumeState, Problem: reason}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -429,7 +428,7 @@ func resumeAdmissionReason(run store.Run) string {
 // An explicit command refuses a store without durable invocation history,
 // where the equivalent submitted review is silently left unread: a maintainer
 // who addressed the coordinator directly is owed the refusal.
-func (s *Service) handleRepairCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRepairCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if reason := repairAdmissionReason(run); reason != "" {
 		rejection := &PolicyRejection{Code: PolicyRejectionRepairState, Problem: reason}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -489,7 +488,7 @@ func (s *Service) handleRepairCommand(ctx context.Context, registration config.R
 
 // handleRefreshCommand re-reads the issue, creates a new packet version, and
 // resumes implementation against the refreshed specification.
-func (s *Service) handleRefreshCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRefreshCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if store.IsTerminalStatus(run.Status) {
 		rejection := &PolicyRejection{Code: PolicyRejectionRefreshState, Problem: fmt.Sprintf("refresh is not allowed after run status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -568,7 +567,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 // ready pull request. It preserves the existing branch, worktree, checkpoint,
 // pull-request identity, and invocation artifacts while invalidating every
 // result from the superseded packet and restarting at the current checkpoint.
-func (s *Service) handleRevisionCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRevisionCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	readyStatus := run.Status == store.StatusActive || run.Status == store.StatusWaitingForHuman
 	if run.Stage != store.StageReady || !readyStatus {
 		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("revision is only allowed for a ready run, not stage %q/status %q", run.Stage, run.Status)}
@@ -1189,7 +1188,7 @@ func removePendingQuestion(questions []store.PendingQuestion, questionID string)
 
 // handleCancelCommand applies an authorized, idempotent cancellation request
 // while retaining every run artifact needed for later inspection or retry.
-func (s *Service) handleCancelCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleCancelCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if run.Status == store.StatusCancelled {
 		next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; run was already cancelled")
 		updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
@@ -1298,7 +1297,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 // because GitHub's comment object does not repeat its parent target.
 type polledComment struct {
 	target  int
-	comment github.Comment
+	comment tracker.Comment
 }
 
 // commandRepository maps one registered GitHub identity for all command
@@ -1315,7 +1314,7 @@ type commandRevisionStore interface {
 
 // handleRetryCommand reopens a failed run at its existing stage and applies
 // the normal label/comment transition without creating a new status comment.
-func (s *Service) handleRetryCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRetryCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	var launch *store.Invocation
 	launchRetry := false
 	if run.Status == store.StatusWaitingForHuman {
@@ -1389,7 +1388,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 
 // handleReviewAuthorization records an authorized fan-out ceiling for the
 // exact current review manifest and reopens unattended progression.
-func (s *Service) handleReviewAuthorization(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleReviewAuthorization(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if run.Stage != store.StageDraftPR && run.Stage != store.StageReview {
 		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: fmt.Sprintf("review fan-out authorization is only available in draft_pr or review stage, not %q", run.Stage)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -1505,7 +1504,7 @@ func isRetryableFailedLaunch(run store.Run, invocation store.Invocation) bool {
 
 // handleHarnessConfiguration validates an authorized harness override against
 // the frozen repository configuration before recording it for a later invocation.
-func (s *Service) handleHarnessConfiguration(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleHarnessConfiguration(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if store.IsTerminalStatus(run.Status) {
 		rejection := &PolicyRejection{Code: PolicyRejectionHarnessOverride, Problem: fmt.Sprintf("harness configuration is not available after run status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -1532,7 +1531,7 @@ func (s *Service) handleHarnessConfiguration(ctx context.Context, registration c
 
 // persistCommandRejection records a typed policy refusal in the existing
 // status comment and watermark while leaving workflow state and labels intact.
-func (s *Service) persistCommandRejection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request, rejection *PolicyRejection) (CommandResult, error) {
+func (s *Service) persistCommandRejection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request, rejection *PolicyRejection) (CommandResult, error) {
 	next := commandProjection(run, comment, parsed, commandResultName(parsed), rejection.Error())
 	next.LastCommandOutcome = string(CommandRejected)
 	updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
@@ -1545,7 +1544,7 @@ func (s *Service) persistCommandRejection(ctx context.Context, registration conf
 
 // persistCommandProjection stores a successful status/refresh result in the
 // single editable comment and returns the updated run.
-func (s *Service) persistCommandProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request, name, message string) (store.Run, error) {
+func (s *Service) persistCommandProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request, name, message string) (store.Run, error) {
 	next := commandProjection(run, comment, parsed, name, message)
 	return s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
 }
@@ -1600,7 +1599,7 @@ func (s *Service) recoverCommandStatusComment(ctx context.Context, registration 
 
 // commandProjection creates the next revision and advances the immutable
 // comment watermark without changing workflow stage or status.
-func commandProjection(previous store.Run, comment github.Comment, parsed commandlanguage.Request, name, message string) store.Run {
+func commandProjection(previous store.Run, comment tracker.Comment, parsed commandlanguage.Request, name, message string) store.Run {
 	next := previous
 	next.Revision = previous.Revision + 1
 	next.ProcessedCommentID = comment.ID

@@ -32,8 +32,8 @@ type InvocationStore interface {
 type issueClient interface {
 	Issue(context.Context, tracker.Repository, int) (tracker.Issue, error)
 	ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error
-	CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error)
-	FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error)
+	CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error)
+	FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error)
 	EditIssueComment(context.Context, tracker.Repository, string, string) error
 }
 

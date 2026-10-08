@@ -689,7 +689,7 @@ func (progressionDispatchGitHub) Issue(context.Context, tracker.Repository, int)
 }
 
 // CreateLabel satisfies the issue client seam.
-func (progressionDispatchGitHub) CreateLabel(context.Context, tracker.Repository, github.Label) error {
+func (progressionDispatchGitHub) CreateLabel(context.Context, tracker.Repository, tracker.Label) error {
 	return context.Canceled
 }
 
@@ -699,13 +699,13 @@ func (progressionDispatchGitHub) ReplaceIssueLabels(context.Context, tracker.Rep
 }
 
 // CreateIssueComment satisfies the issue client seam.
-func (progressionDispatchGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, context.Canceled
+func (progressionDispatchGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, context.Canceled
 }
 
 // FindStatusComment satisfies the issue client seam.
-func (progressionDispatchGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, context.Canceled
+func (progressionDispatchGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, context.Canceled
 }
 
 // EditIssueComment satisfies the issue client seam.
@@ -720,7 +720,7 @@ var (
 	_ GateResultStore          = (*progressionDispatchStore)(nil)
 	_ InvocationStore          = (*progressionDispatchStore)(nil)
 	_ gitadapter.GitWorkspace  = (*progressionDispatchWorkspace)(nil)
-	_ github.Client            = progressionDispatchGitHub{}
+	_ tracker.Client           = progressionDispatchGitHub{}
 	_ github.PullRequestClient = (*progressionDispatchPullRequests)(nil)
 )
 

@@ -32,8 +32,8 @@ func TestClaimKeepsARunWhoseLabelTransitionTimedOut(t *testing.T) {
 	timeout := &hostcmd.TimeoutError{Operation: "gh api", Timeout: github.CommandTimeout}
 	githubAdapter := &labelTimeoutGitHub{
 		pollingGitHub: &pollingGitHub{
-			fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}},
-			issues:     []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}},
+			fakeGitHub: &fakeGitHub{statusComment: tracker.Comment{ID: "status-1"}},
+			issues:     []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{tracker.LabelAgentReady}}},
 		},
 		labelErrors: []error{timeout, timeout},
 	}
@@ -80,12 +80,12 @@ func TestClaimKeepsARunWhoseLabelTransitionTimedOut(t *testing.T) {
 	if pending, err := opened.PendingEffect(ctx, run.ID); err != nil || pending != nil {
 		t.Fatalf("pending effect after replay = %#v, %v, want none", pending, err)
 	}
-	if !slices.Contains(githubAdapter.issueValue.Labels, github.LabelAgentRunning) {
-		t.Fatalf("issue labels after replay = %q, want %q", githubAdapter.issueValue.Labels, github.LabelAgentRunning)
+	if !slices.Contains(githubAdapter.issueValue.Labels, tracker.LabelAgentRunning) {
+		t.Fatalf("issue labels after replay = %q, want %q", githubAdapter.issueValue.Labels, tracker.LabelAgentRunning)
 	}
 	for _, labels := range githubAdapter.replacedHistory {
-		if slices.Contains(labels, github.LabelAgentFailed) {
-			t.Fatalf("label history = %q, want no %q transition", githubAdapter.replacedHistory, github.LabelAgentFailed)
+		if slices.Contains(labels, tracker.LabelAgentFailed) {
+			t.Fatalf("label history = %q, want no %q transition", githubAdapter.replacedHistory, tracker.LabelAgentFailed)
 		}
 	}
 }

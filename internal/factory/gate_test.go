@@ -52,7 +52,7 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 	runStore := &fakeRunStore{}
 	runtime := &gateWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 5, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 5, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-gate-coordinator", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{Branch: "factory/run-gate-coordinator", HeadSHA: factoryGateCheckpoint},

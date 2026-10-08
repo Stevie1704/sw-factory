@@ -11,7 +11,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -27,7 +26,7 @@ func TestIssueClaimsAnEligibleIssueWithAFrozenPacketAndOneStatusComment(t *testi
 		Title:  "Add claim workflow",
 		Body:   "The issue body is frozen at claim time.",
 		State:  "open",
-		Labels: []string{"enhancement", github.LabelAgentReady},
+		Labels: []string{"enhancement", tracker.LabelAgentReady},
 	}
 	repositoryConfig := validRepositoryConfig()
 	githubAdapter := &fakeGitHub{issueValue: issue}
@@ -81,7 +80,7 @@ func TestIssueClaimsAnEligibleIssueWithAFrozenPacketAndOneStatusComment(t *testi
 			t.Errorf("status comment %q does not contain %q", comment, expected)
 		}
 	}
-	if got, want := githubAdapter.replacedLabels, []string{"enhancement", github.LabelAgentRunning}; !equalStrings(got, want) {
+	if got, want := githubAdapter.replacedLabels, []string{"enhancement", tracker.LabelAgentRunning}; !equalStrings(got, want) {
 		t.Fatalf("labels = %#v, want %#v", got, want)
 	}
 
@@ -112,7 +111,7 @@ func TestIssueClaimsAnEligibleIssueWithAFrozenPacketAndOneStatusComment(t *testi
 func TestIssueClaimFreezesRepositoryCraftFromTheImmutableBase(t *testing.T) {
 	t.Parallel()
 
-	issue := tracker.Issue{Number: 42, Title: "Freeze repository craft", State: "open", Labels: []string{github.LabelAgentReady}}
+	issue := tracker.Issue{Number: 42, Title: "Freeze repository craft", State: "open", Labels: []string{tracker.LabelAgentReady}}
 	repositoryConfig := validRepositoryConfig()
 	repositoryConfig.RoleCraft = map[string]string{"implementation": "docs/factory/craft/implementation.md"}
 	worktree := &fakeWorktree{
@@ -144,7 +143,7 @@ func TestIssueClaimFreezesRepositoryCraftFromTheImmutableBase(t *testing.T) {
 func TestIssueClaimFailsWhenConfiguredRepositoryCraftIsMissing(t *testing.T) {
 	t.Parallel()
 
-	issue := tracker.Issue{Number: 42, Title: "Missing repository craft", State: "open", Labels: []string{github.LabelAgentReady}}
+	issue := tracker.Issue{Number: 42, Title: "Missing repository craft", State: "open", Labels: []string{tracker.LabelAgentReady}}
 	repositoryConfig := validRepositoryConfig()
 	repositoryConfig.RoleCraft = map[string]string{"implementation": "docs/factory/craft/implementation.md"}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base-checkpoint", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
@@ -165,12 +164,12 @@ func TestIssueClaimScopesCommandsToTheRunStart(t *testing.T) {
 		Number: 42,
 		Title:  "Scope commands to the claimed run",
 		State:  "open",
-		Labels: []string{github.LabelAgentReady},
+		Labels: []string{tracker.LabelAgentReady},
 	}
-	oldCommand := github.Comment{ID: "100", Author: "alice", Body: "/factory cancel"}
-	latestHistory := github.Comment{ID: "102", Author: "alice", Body: "historical discussion"}
-	newCommand := github.Comment{ID: "103", Author: "alice", Body: "/factory status"}
-	githubAdapter := &fakeGitHub{issueValue: issue, comments: []github.Comment{latestHistory, oldCommand}}
+	oldCommand := tracker.Comment{ID: "100", Author: "alice", Body: "/factory cancel"}
+	latestHistory := tracker.Comment{ID: "102", Author: "alice", Body: "historical discussion"}
+	newCommand := tracker.Comment{ID: "103", Author: "alice", Body: "/factory status"}
+	githubAdapter := &fakeGitHub{issueValue: issue, comments: []tracker.Comment{latestHistory, oldCommand}}
 	service := newClaimService(githubAdapter, &fakeWorktree{workspace: gitadapter.Workspace{
 		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
 	}}, &fakeRunStore{}, validRepositoryConfig())
@@ -194,7 +193,7 @@ func TestIssueClaimScopesCommandsToTheRunStart(t *testing.T) {
 	if first[1].Run.Status != store.StatusActive || first[1].Run.LastCommandName != "status" {
 		t.Fatalf("post-claim command run = %#v, want active status projection", first[1].Run)
 	}
-	if len(githubAdapter.replacedLabels) != 1 || githubAdapter.replacedLabels[0] != github.LabelAgentRunning {
+	if len(githubAdapter.replacedLabels) != 1 || githubAdapter.replacedLabels[0] != tracker.LabelAgentRunning {
 		t.Fatalf("label mutations = %#v, want the claim label only", githubAdapter.replacedLabels)
 	}
 	if len(githubAdapter.editedComments) != 1 {
@@ -219,7 +218,7 @@ func TestIssueClaimFailsClosedWhenCommentHistoryCannotBeRead(t *testing.T) {
 	t.Parallel()
 
 	githubAdapter := &fakeGitHub{
-		issueValue:  tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}},
+		issueValue:  tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}},
 		commentsErr: errors.New("GitHub comments unavailable"),
 	}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{
@@ -250,11 +249,11 @@ func TestIssueRefusesClosedOrUnauthorizedIssuesBeforeCreatingAWorkspace(t *testi
 		issueErr      error
 		message       string
 	}{
-		{name: "closed", state: "closed", labels: []string{github.LabelAgentReady}, message: "only open issues"},
+		{name: "closed", state: "closed", labels: []string{tracker.LabelAgentReady}, message: "only open issues"},
 		{name: "not ready", state: "open", labels: []string{"enhancement"}, message: "not labeled"},
-		{name: "pull request", state: "open", labels: []string{github.LabelAgentReady}, isPullRequest: true, message: "pull requests cannot be claimed"},
-		{name: "conflicting factory label", state: "open", labels: []string{github.LabelAgentReady, github.LabelAgentRunning}, message: "another factory state label"},
-		{name: "GitHub issue lookup", state: "open", labels: []string{github.LabelAgentReady}, issueErr: errors.New("GitHub unavailable"), message: "GitHub unavailable"},
+		{name: "pull request", state: "open", labels: []string{tracker.LabelAgentReady}, isPullRequest: true, message: "pull requests cannot be claimed"},
+		{name: "conflicting factory label", state: "open", labels: []string{tracker.LabelAgentReady, tracker.LabelAgentRunning}, message: "another factory state label"},
+		{name: "GitHub issue lookup", state: "open", labels: []string{tracker.LabelAgentReady}, issueErr: errors.New("GitHub unavailable"), message: "GitHub unavailable"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -286,7 +285,7 @@ func TestClaimFailureMarksTheIssueFailed(t *testing.T) {
 	t.Parallel()
 
 	githubAdapter := &fakeGitHub{
-		issueValue:       tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}},
+		issueValue:       tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}},
 		createCommentErr: errors.New("GitHub unavailable"),
 	}
 	runStore := &fakeRunStore{}
@@ -296,7 +295,7 @@ func TestClaimFailureMarksTheIssueFailed(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "GitHub unavailable") {
 		t.Fatalf("ClaimIssue() error = %v, want comment failure", err)
 	}
-	if got, want := githubAdapter.replacedHistory[len(githubAdapter.replacedHistory)-1], []string{github.LabelAgentFailed}; !equalStrings(got, want) {
+	if got, want := githubAdapter.replacedHistory[len(githubAdapter.replacedHistory)-1], []string{tracker.LabelAgentFailed}; !equalStrings(got, want) {
 		t.Fatalf("final labels = %#v, want %#v", got, want)
 	}
 	if got := runStore.saved[len(runStore.saved)-1].Status; got != store.StatusFailed {
@@ -313,7 +312,7 @@ func TestClaimFailureMarksTheIssueFailed(t *testing.T) {
 func TestClaimRetriesAndCompensatesWhenTheFinalPersistenceFails(t *testing.T) {
 	t.Parallel()
 
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	runStore := &fakeRunStore{saveErrors: []error{nil, errors.New("store unavailable"), errors.New("store unavailable"), nil}}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
 	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
@@ -324,7 +323,7 @@ func TestClaimRetriesAndCompensatesWhenTheFinalPersistenceFails(t *testing.T) {
 	if got := runStore.saved[len(runStore.saved)-1].Status; got != store.StatusFailed {
 		t.Fatalf("persisted status = %q, want failed", got)
 	}
-	if got, want := githubAdapter.replacedHistory[len(githubAdapter.replacedHistory)-1], []string{github.LabelAgentFailed}; !equalStrings(got, want) {
+	if got, want := githubAdapter.replacedHistory[len(githubAdapter.replacedHistory)-1], []string{tracker.LabelAgentFailed}; !equalStrings(got, want) {
 		t.Fatalf("final labels = %#v, want %#v", got, want)
 	}
 	if len(githubAdapter.editedComments) != 1 {
@@ -340,7 +339,7 @@ func TestClaimRetriesAndCompensatesWhenTheFinalPersistenceFails(t *testing.T) {
 func TestClaimSucceedsAfterRetryingFinalPersistence(t *testing.T) {
 	t.Parallel()
 
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	runStore := &fakeRunStore{saveErrors: []error{nil, errors.New("store unavailable"), nil}}
 	service := newClaimService(githubAdapter, &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}, runStore, validRepositoryConfig())
 	result, err := service.ClaimIssue(context.Background(), 42)
@@ -360,7 +359,7 @@ func TestClaimSucceedsAfterRetryingFinalPersistence(t *testing.T) {
 func TestClaimRemovesWorkspaceWhenInitialPersistenceFails(t *testing.T) {
 	t.Parallel()
 
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	worktree := &fakeWorktree{
 		workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"},
 	}
@@ -384,7 +383,7 @@ func TestClaimPreservesTheOriginalErrorWhenWorkspaceCleanupFails(t *testing.T) {
 	t.Parallel()
 
 	githubAdapter := &fakeGitHub{
-		issueValue:       tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}},
+		issueValue:       tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}},
 		createCommentErr: errors.New("GitHub unavailable"),
 	}
 	worktree := &fakeWorktree{
@@ -405,7 +404,7 @@ func TestTransitionEditsThePersistedStatusCommentAndKeepsStageAndStatusSeparate(
 	t.Parallel()
 
 	runStore := &fakeRunStore{}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{"enhancement", github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{"enhancement", tracker.LabelAgentReady}}}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
 	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
 	if _, err := service.ClaimIssue(context.Background(), 42); err != nil {
@@ -432,7 +431,7 @@ func TestTransitionEditsThePersistedStatusCommentAndKeepsStageAndStatusSeparate(
 	if len(githubAdapter.editedComments) != 1 || githubAdapter.editedComments[0].id != "comment-1" {
 		t.Fatalf("edited comments = %#v, want comment-1", githubAdapter.editedComments)
 	}
-	if gotLabels, want := githubAdapter.replacedLabels, []string{"enhancement", github.LabelAgentNeedsInput}; !equalStrings(gotLabels, want) {
+	if gotLabels, want := githubAdapter.replacedLabels, []string{"enhancement", tracker.LabelAgentNeedsInput}; !equalStrings(gotLabels, want) {
 		t.Fatalf("labels = %#v, want %#v", gotLabels, want)
 	}
 	if !strings.Contains(githubAdapter.editedComments[0].body, "stage: `implementation`") || !strings.Contains(githubAdapter.editedComments[0].body, "status: `waiting_for_human`") {
@@ -447,8 +446,8 @@ func TestTransitionRecoversACommentIdentityAfterAnInterruptedPersistence(t *test
 
 	runStore := &fakeRunStore{}
 	githubAdapter := &fakeGitHub{
-		issueValue:    tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}},
-		statusComment: github.Comment{ID: "comment-recovered", Body: "old status"},
+		issueValue:    tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}},
+		statusComment: tracker.Comment{ID: "comment-recovered", Body: "old status"},
 	}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
 	service := newClaimService(githubAdapter, worktree, runStore, validRepositoryConfig())
@@ -479,14 +478,14 @@ func TestTransitionRecoversACommentIdentityAfterAnInterruptedPersistence(t *test
 func TestBootstrapLabelsIsTheExplicitLabelCreationPath(t *testing.T) {
 	t.Parallel()
 
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	service := newClaimService(githubAdapter, &fakeWorktree{}, &fakeRunStore{}, validRepositoryConfig())
 	result, err := service.BootstrapLabels(context.Background())
 	if err != nil {
 		t.Fatalf("BootstrapLabels() error = %v", err)
 	}
-	if len(githubAdapter.createdLabels) != 6 || !equalStrings(result.Labels, github.FactoryStateLabels) {
-		t.Fatalf("created/result labels = %#v/%#v, want all factory labels %#v", githubAdapter.createdLabels, result.Labels, github.FactoryStateLabels)
+	if len(githubAdapter.createdLabels) != 6 || !equalStrings(result.Labels, tracker.FactoryStateLabels) {
+		t.Fatalf("created/result labels = %#v/%#v, want all factory labels %#v", githubAdapter.createdLabels, result.Labels, tracker.FactoryStateLabels)
 	}
 }
 
@@ -496,7 +495,7 @@ func TestBootstrapLabelsIsTheExplicitLabelCreationPath(t *testing.T) {
 func TestClaimIssueRefusesAnAdapterWithoutNativeResumeBeforeGitHubEffects(t *testing.T) {
 	t.Parallel()
 
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	worktree := &fakeWorktree{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed"}}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config: &fakeConfig{value: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
@@ -582,16 +581,16 @@ type fakeGitHub struct {
 	issueValue       tracker.Issue
 	issueErr         error
 	issueCalls       int
-	createdLabels    []github.Label
+	createdLabels    []tracker.Label
 	replacedLabels   []string
 	replacedHistory  [][]string
 	createdComments  []string
 	editedComments   []editedComment
 	createCommentErr error
-	statusComment    github.Comment
+	statusComment    tracker.Comment
 	findCommentCalls int
 	// comments contains the issue history returned to command polling.
-	comments []github.Comment
+	comments []tracker.Comment
 	// commentsErr simulates a failure while establishing the claim cutoff.
 	commentsErr error
 }
@@ -606,7 +605,7 @@ func (f *fakeGitHub) Issue(context.Context, tracker.Repository, int) (tracker.Is
 }
 
 // CreateLabel records explicit label bootstrap calls.
-func (f *fakeGitHub) CreateLabel(_ context.Context, _ tracker.Repository, label github.Label) error {
+func (f *fakeGitHub) CreateLabel(_ context.Context, _ tracker.Repository, label tracker.Label) error {
 	f.createdLabels = append(f.createdLabels, label)
 	return nil
 }
@@ -620,16 +619,16 @@ func (f *fakeGitHub) ReplaceIssueLabels(_ context.Context, _ tracker.Repository,
 }
 
 // CreateIssueComment records the one-comment claim path.
-func (f *fakeGitHub) CreateIssueComment(_ context.Context, _ tracker.Repository, _ int, body string) (github.Comment, error) {
+func (f *fakeGitHub) CreateIssueComment(_ context.Context, _ tracker.Repository, _ int, body string) (tracker.Comment, error) {
 	if f.createCommentErr != nil {
-		return github.Comment{}, f.createCommentErr
+		return tracker.Comment{}, f.createCommentErr
 	}
 	f.createdComments = append(f.createdComments, body)
-	return github.Comment{ID: "comment-1", Body: body}, nil
+	return tracker.Comment{ID: "comment-1", Body: body}, nil
 }
 
 // FindStatusComment returns the configured recoverable status comment.
-func (f *fakeGitHub) FindStatusComment(_ context.Context, _ tracker.Repository, _ int, _ string) (github.Comment, error) {
+func (f *fakeGitHub) FindStatusComment(_ context.Context, _ tracker.Repository, _ int, _ string) (tracker.Comment, error) {
 	f.findCommentCalls++
 	return f.statusComment, nil
 }
@@ -644,11 +643,11 @@ func (f *fakeGitHub) EditIssueComment(_ context.Context, _ tracker.Repository, i
 }
 
 // IssueComments returns the issue comments visible to command polling.
-func (f *fakeGitHub) IssueComments(context.Context, tracker.Repository, int) ([]github.Comment, error) {
+func (f *fakeGitHub) IssueComments(context.Context, tracker.Repository, int) ([]tracker.Comment, error) {
 	if f.commentsErr != nil {
 		return nil, f.commentsErr
 	}
-	return append([]github.Comment(nil), f.comments...), nil
+	return append([]tracker.Comment(nil), f.comments...), nil
 }
 
 // editedComment records one status-comment edit.

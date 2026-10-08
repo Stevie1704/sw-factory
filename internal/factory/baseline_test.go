@@ -231,7 +231,7 @@ func TestRunBaselineBlocksAnUnhealthyPreEditSuite(t *testing.T) {
 	if baseline.Run.Status != store.StatusFailed || baseline.Run.Stage != store.StagePreflight {
 		t.Fatalf("blocked baseline run = %#v, want failed preflight", baseline.Run)
 	}
-	if got := fixture.github.replacedHistory[len(fixture.github.replacedHistory)-1]; len(got) != 1 || got[0] != github.LabelAgentFailed {
+	if got := fixture.github.replacedHistory[len(fixture.github.replacedHistory)-1]; len(got) != 1 || got[0] != tracker.LabelAgentFailed {
 		t.Fatalf("baseline failure labels = %#v, want agent-failed", got)
 	}
 	results, err := fixture.openedGateResults(t, claimed.Run.ID, store.GatePhaseBaseline, claimed.Run.CheckpointSHA)
@@ -360,7 +360,7 @@ func newBaselineFixture(t *testing.T, issueBody string, results []worker.Command
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "1m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
 	policyRef := &policy
-	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Baseline", Body: issueBody, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Baseline", Body: issueBody, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workerRuntime := &gateWorker{results: results}
 	worktree := &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-baseline", Worktree: worktreePath},

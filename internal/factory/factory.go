@@ -164,7 +164,7 @@ type Dependencies struct {
 	OpenStoreReadOnly ReadOnlyStoreOpener
 	CheckRepository   RepositoryChecker
 	LoadRepository    RepositoryConfigLoader
-	GitHub            github.Client
+	GitHub            tracker.Client
 	// IssuePoller lists eligible GitHub work without broadening the mutation
 	// authority of the existing issue client seam.
 	IssuePoller tracker.IssuePoller
@@ -186,7 +186,7 @@ type Dependencies struct {
 	// request. It is read-only: the factory never submits or dismisses one.
 	PullRequestReviews github.PullRequestReviewReader
 	// Comments lists issue and pull-request comments for command polling.
-	Comments github.CommentReader
+	Comments tracker.CommentReader
 	Worker   worker.WorkerRuntime
 	// HeadlessHarnesses own detached role lifecycle, keyed by the
 	// repository-selected harness.
@@ -393,7 +393,7 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		}
 	}
 	if dependencies.Comments == nil {
-		if reader, ok := dependencies.GitHub.(github.CommentReader); ok {
+		if reader, ok := dependencies.GitHub.(tracker.CommentReader); ok {
 			dependencies.Comments = reader
 		}
 	}

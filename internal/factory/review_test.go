@@ -749,7 +749,7 @@ func TestStandardsReviewLaunchCanRetryFromDraftPullRequest(t *testing.T) {
 
 	retry, err := fixture.service.HandleCommand(context.Background(), factory.CommandRequest{
 		RunID: run.ID, IssueNumber: run.IssueNumber,
-		Comment: github.Comment{ID: "retry-standards-launch", Author: "alice", Body: "/factory retry"},
+		Comment: tracker.Comment{ID: "retry-standards-launch", Author: "alice", Body: "/factory retry"},
 	})
 	if err != nil {
 		t.Fatalf("HandleCommand(standards review) error = %v", err)
@@ -826,7 +826,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	policy := validRepositoryConfig()
 	policy.RoleHarnessDefaults["spec_review"] = config.HarnessCodex
 	policy.ModelOptions["spec_review"] = []string{"gpt-5"}
-	issue := tracker.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{github.LabelAgentReady}}
+	issue := tracker.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{tracker.LabelAgentReady}}
 	githubAdapter := &fakeGitHub{issueValue: issue}
 	statuses := &gateStatuses{}
 	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
@@ -889,7 +889,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	if err := runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("SaveRun() review fixture error = %v", err)
 	}
-	githubAdapter.statusComment = github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
+	githubAdapter.statusComment = tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
 	worktree.state.HeadSHA = reviewCheckpoint
 	worktree.state.ChangedPaths = nil
 	runStore.gateResults[run.ID] = []store.GateResult{

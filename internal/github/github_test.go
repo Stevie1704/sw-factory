@@ -37,10 +37,10 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	if issue.IsPullRequest {
 		t.Fatal("ordinary issue was identified as a pull request")
 	}
-	if err := client.CreateLabel(context.Background(), repository, github.Label{Name: github.LabelAgentRunning, Color: "1d76db", Description: "active"}); err != nil {
+	if err := client.CreateLabel(context.Background(), repository, tracker.Label{Name: tracker.LabelAgentRunning, Color: "1d76db", Description: "active"}); err != nil {
 		t.Fatalf("CreateLabel() error = %v", err)
 	}
-	if err := client.ReplaceIssueLabels(context.Background(), repository, 42, []string{"enhancement", github.LabelAgentRunning}); err != nil {
+	if err := client.ReplaceIssueLabels(context.Background(), repository, 42, []string{"enhancement", tracker.LabelAgentRunning}); err != nil {
 		t.Fatalf("ReplaceIssueLabels() error = %v", err)
 	}
 	comment, err := client.CreateIssueComment(context.Background(), repository, 42, "status body")
@@ -67,14 +67,14 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	if len(runner.calls) != 7 {
 		t.Fatalf("CLI calls = %d, want seven", len(runner.calls))
 	}
-	if !hasArgs(runner.calls[1].args, "label", "create", github.LabelAgentRunning, "--force") {
+	if !hasArgs(runner.calls[1].args, "label", "create", tracker.LabelAgentRunning, "--force") {
 		t.Fatalf("label call = %#v, want explicit idempotent label creation", runner.calls[1].args)
 	}
 	var labelsPayload map[string][]string
 	if err := json.Unmarshal(runner.calls[2].input, &labelsPayload); err != nil {
 		t.Fatalf("decode labels request: %v", err)
 	}
-	if got := labelsPayload["labels"]; len(got) != 2 || got[1] != github.LabelAgentRunning {
+	if got := labelsPayload["labels"]; len(got) != 2 || got[1] != tracker.LabelAgentRunning {
 		t.Fatalf("labels request = %#v, want replacement labels", labelsPayload)
 	}
 	for _, call := range runner.calls[2:5] {

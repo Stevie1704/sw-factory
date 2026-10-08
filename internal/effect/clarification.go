@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -63,18 +62,18 @@ func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, re
 // findOrCreateComment observes the coordinator-owned marker and repairs its
 // body before creating a question comment, making publication safe across
 // response loss and stale question edits.
-func (h clarificationHandler) findOrCreateComment(ctx context.Context, repository tracker.Repository, target int, runID string, packetVersion int, body string) (github.Comment, error) {
+func (h clarificationHandler) findOrCreateComment(ctx context.Context, repository tracker.Repository, target int, runID string, packetVersion int, body string) (tracker.Comment, error) {
 	if h.issues == nil {
-		return github.Comment{}, errors.New("GitHub client is required for clarification publication")
+		return tracker.Comment{}, errors.New("GitHub client is required for clarification publication")
 	}
 	comment, err := h.issues.FindStatusComment(ctx, repository, target, h.presentation.ClarificationCommentMarker(runID, packetVersion))
 	if err != nil {
-		return github.Comment{}, fmt.Errorf("find existing clarification questions on #%d: %w", target, err)
+		return tracker.Comment{}, fmt.Errorf("find existing clarification questions on #%d: %w", target, err)
 	}
 	if strings.TrimSpace(comment.ID) != "" {
 		if comment.Body != body {
 			if err := h.issues.EditIssueComment(ctx, repository, comment.ID, body); err != nil {
-				return github.Comment{}, fmt.Errorf("repair clarification questions on #%d: %w", target, err)
+				return tracker.Comment{}, fmt.Errorf("repair clarification questions on #%d: %w", target, err)
 			}
 			comment.Body = body
 		}
@@ -82,10 +81,10 @@ func (h clarificationHandler) findOrCreateComment(ctx context.Context, repositor
 	}
 	created, err := h.issues.CreateIssueComment(ctx, repository, target, body)
 	if err != nil {
-		return github.Comment{}, fmt.Errorf("post clarification questions on #%d: %w", target, err)
+		return tracker.Comment{}, fmt.Errorf("post clarification questions on #%d: %w", target, err)
 	}
 	if strings.TrimSpace(created.ID) == "" {
-		return github.Comment{}, fmt.Errorf("post clarification questions on #%d returned an empty comment id", target)
+		return tracker.Comment{}, fmt.Errorf("post clarification questions on #%d returned an empty comment id", target)
 	}
 	return created, nil
 }

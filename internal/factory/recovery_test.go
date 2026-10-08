@@ -31,8 +31,8 @@ func TestProgressionRefusesAnAgreeingInterruptedRun(t *testing.T) {
 	}
 	run := recoveryRun(worktreePath)
 	githubAdapter := &fakeGitHub{
-		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}},
+		statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 	storeAdapter := &recoveryRunStore{run: run}
@@ -94,21 +94,21 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			name: "stale GitHub label",
 			configure: func(run *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
 				run.Status = store.StatusWaitingForHuman
-				githubAdapter.issueValue.Labels = []string{github.LabelAgentRunning}
+				githubAdapter.issueValue.Labels = []string{tracker.LabelAgentRunning}
 			},
 			wantFields: []string{"github.state label"},
 		},
 		{
 			name: "missing status comment",
 			configure: func(_ *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
-				githubAdapter.statusComment = github.Comment{}
+				githubAdapter.statusComment = tracker.Comment{}
 			},
 			wantFields: []string{"github.status comment"},
 		},
 		{
 			name: "mismatched status comment",
 			configure: func(run *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
-				githubAdapter.statusComment = github.Comment{ID: "comment-other", Body: factory.StatusCommentBody(*run)}
+				githubAdapter.statusComment = tracker.Comment{ID: "comment-other", Body: factory.StatusCommentBody(*run)}
 			},
 			wantFields: []string{"github.status comment"},
 		},
@@ -148,8 +148,8 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			}
 			run := recoveryRun(worktreePath)
 			githubAdapter := &fakeGitHub{
-				issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-				statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+				issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}},
+				statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 			}
 			worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 			pullRequests := &fakePullRequests{}
@@ -222,8 +222,8 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
 	}}}
 	githubAdapter := &fakeGitHub{
-		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}},
+		statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:    &fakeConfig{value: host},

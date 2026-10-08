@@ -228,7 +228,7 @@ func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository tracker.Re
 	for _, label := range labels {
 		seen[label.Name] = struct{}{}
 	}
-	for _, required := range FactoryStateLabels {
+	for _, required := range tracker.FactoryStateLabels {
 		if _, ok := seen[required]; !ok {
 			return &missingFactoryLabelError{name: required}
 		}

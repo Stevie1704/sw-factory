@@ -614,7 +614,7 @@ func (s *Service) issuePoller() tracker.IssuePoller {
 func eligibleIssueQueue(issues []tracker.Issue) []tracker.Issue {
 	eligible := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {
-		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !hasLabel(issue.Labels, github.LabelAgentReady) {
+		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !hasLabel(issue.Labels, tracker.LabelAgentReady) {
 			continue
 		}
 		eligible = append(eligible, issue)

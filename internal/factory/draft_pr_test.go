@@ -46,7 +46,7 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 		{Name: "test", Command: "test", Timeout: "5m", Blocking: true, DependsOn: []string{"format"}, EnvironmentPolicy: config.EnvironmentPolicyClean},
 	}
 	runStore := &fakeRunStore{}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Add the factory handoff", Body: "Implement the supervised draft PR boundary.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Add the factory handoff", Body: "Implement the supervised draft PR boundary.", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-draft", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{Branch: "factory/run-draft", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory.go"}},
@@ -170,7 +170,7 @@ func TestCreateDraftPullRequestPublishesGateStatusesForAPushedCheckpoint(t *test
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{{Name: "format", Command: "format", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
 	runStore := &fakeRunStore{}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Publish the checkpoint first", Body: "Attach gate statuses to a resolvable commit.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Publish the checkpoint first", Body: "Attach gate statuses to a resolvable commit.", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-unpushed", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{Branch: "factory/run-unpushed", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory.go"}},
@@ -247,7 +247,7 @@ func TestCreateDraftPullRequestReentersRecoveryPausedCheck(t *testing.T) {
 	runStore := &fakeRunStore{}
 	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{
 		Number: 42, Title: "Recover the check stage", Body: "Continue gate evaluation after recovery.", State: "open",
-		Labels: []string{github.LabelAgentReady},
+		Labels: []string{tracker.LabelAgentReady},
 	}}
 	workspace := &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-recovered-check", Worktree: worktreePath},
@@ -286,8 +286,8 @@ func TestCreateDraftPullRequestReentersRecoveryPausedCheck(t *testing.T) {
 	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
 		t.Fatalf("SaveRun() fixture setup error = %v", err)
 	}
-	githubAdapter.issueValue.Labels = []string{github.LabelAgentNeedsInput}
-	githubAdapter.statusComment = github.Comment{ID: claimed.Run.StatusCommentID, Body: factory.StatusCommentBody(claimed.Run)}
+	githubAdapter.issueValue.Labels = []string{tracker.LabelAgentNeedsInput}
+	githubAdapter.statusComment = tracker.Comment{ID: claimed.Run.StatusCommentID, Body: factory.StatusCommentBody(claimed.Run)}
 
 	result, err := service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
 	if err != nil {
@@ -302,7 +302,7 @@ func TestCreateDraftPullRequestReentersRecoveryPausedCheck(t *testing.T) {
 	if len(workerRuntime.commands) != 2 || workerRuntime.commands[0].Command != policy.Setup || workerRuntime.commands[1].Command != "format" {
 		t.Fatalf("check commands = %#v, want setup and format only", workerRuntime.commands)
 	}
-	if got := githubAdapter.issueValue.Labels; len(got) != 1 || got[0] != github.LabelAgentRunning {
+	if got := githubAdapter.issueValue.Labels; len(got) != 1 || got[0] != tracker.LabelAgentRunning {
 		t.Fatalf("final issue labels = %#v, want agent-running", got)
 	}
 }
@@ -348,7 +348,7 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
 	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Repair the implementation", Body: "Implement and repair the supervised handoff.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Repair the implementation", Body: "Implement and repair the supervised handoff.", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace:      gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-repair", Worktree: worktreePath},
 		state:          gitadapter.WorktreeState{Branch: "factory/run-repair", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory/agent.go"}},
@@ -491,7 +491,7 @@ func TestCreateDraftPullRequestPreservesCaptureLimitCauseThroughCheckRepair(t *t
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
 	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Repair credential projection", Body: "Keep capture-limit failures identifiable.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Repair credential projection", Body: "Keep capture-limit failures identifiable.", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace:      gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-repair-capture-limit", Worktree: worktreePath},
 		state:          gitadapter.WorktreeState{Branch: "factory/run-repair-capture-limit", HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"internal/factory/agent.go"}},
@@ -571,7 +571,7 @@ func TestCreateDraftPullRequestRejectsAnActiveImplementationInvocation(t *testin
 	policy := validRepositoryConfig()
 	runStore := &activeInvocationRunStore{fakeRunStore: &fakeRunStore{}, active: &store.Invocation{ID: "inv-active", RunID: "run-active", Status: store.InvocationStatusActive}}
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: "/repo", OperationalDataPath: "/outside/factory.db", RepositoryConfigPath: "/repo/factory.yaml"}}}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-active", Worktree: "/worktree/run-active"}}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config: &fakeConfig{value: host}, OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },

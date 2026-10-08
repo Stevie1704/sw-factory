@@ -11,7 +11,6 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -107,7 +106,7 @@ func TestHeadlessStartupRecreatesWorkerAndResumesOnce(t *testing.T) {
 			}
 			githubRuntime := &headlessRecoveryGitHub{
 				issue:   tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{factoryLabelForStatus(run.Status)}},
-				comment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+				comment: tracker.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
 			}
 			workerRuntime := &headlessRecoveryWorker{}
 			harnessRuntime := &headlessRecoveryHarness{name: string(harnessName), nativeSessionID: invocation.NativeSessionID}
@@ -187,7 +186,7 @@ func (*headlessRecoveryConfig) Create(string) (config.HostConfig, error) {
 // headlessRecoveryGitHub exposes a converged issue and status comment.
 type headlessRecoveryGitHub struct {
 	issue   tracker.Issue
-	comment github.Comment
+	comment tracker.Comment
 }
 
 // Issue returns the current issue projection.
@@ -196,7 +195,7 @@ func (g *headlessRecoveryGitHub) Issue(context.Context, tracker.Repository, int)
 }
 
 // CreateLabel is unused by recovery.
-func (*headlessRecoveryGitHub) CreateLabel(context.Context, tracker.Repository, github.Label) error {
+func (*headlessRecoveryGitHub) CreateLabel(context.Context, tracker.Repository, tracker.Label) error {
 	return errors.New("unexpected label creation")
 }
 
@@ -207,12 +206,12 @@ func (g *headlessRecoveryGitHub) ReplaceIssueLabels(_ context.Context, _ tracker
 }
 
 // CreateIssueComment is unused because the run has a status comment.
-func (*headlessRecoveryGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected comment creation")
+func (*headlessRecoveryGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected comment creation")
 }
 
 // FindStatusComment returns the current coordinator-owned status projection.
-func (g *headlessRecoveryGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
+func (g *headlessRecoveryGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
 	return g.comment, nil
 }
 

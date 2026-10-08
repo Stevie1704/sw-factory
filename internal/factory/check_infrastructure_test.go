@@ -88,7 +88,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	if journaled {
 		opened = &journaledAgentRunStore{agentRunStore: runStore, pending: map[string]store.PendingEffect{}}
 	}
-	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Recover checks", Body: "Retry checks after setup failures.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Recover checks", Body: "Retry checks after setup failures.", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace:      gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: branch, Worktree: worktreePath},
 		state:          gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: branch, HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"python/pyproject.toml"}},
@@ -129,7 +129,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	}
 	// Resume restarts reconciliation, which compares the run with the issue's
 	// status comment; edits keep this fixture comment current.
-	githubAdapter.statusComment = github.Comment{ID: claimed.Run.StatusCommentID, Body: githubAdapter.createdComments[len(githubAdapter.createdComments)-1]}
+	githubAdapter.statusComment = tracker.Comment{ID: claimed.Run.StatusCommentID, Body: githubAdapter.createdComments[len(githubAdapter.createdComments)-1]}
 	claimed.Run.TestStageSkipped = true
 	claimed.Run.TestExemption = &store.TestExemption{Kind: "human", Justification: "check recovery fixture"}
 	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {

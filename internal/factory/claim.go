@@ -12,7 +12,6 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -81,23 +80,23 @@ type TransitionRequest struct {
 }
 
 // factoryLabels is the sole factory-owned label definition set.
-var factoryLabels = []github.Label{
-	{Name: github.LabelAgentReady, Description: "Issue is explicitly authorized for factory work", Color: "0e8a16"},
-	{Name: github.LabelAgentRunning, Description: "Factory run is active", Color: "1d76db"},
-	{Name: github.LabelAgentNeedsInput, Description: "Factory run is waiting for human input", Color: "fbca04"},
-	{Name: github.LabelAgentFailed, Description: "Factory run failed and needs attention", Color: "b60205"},
-	{Name: github.LabelAgentCancelled, Description: "Factory run was cancelled", Color: "6f42c1"},
-	{Name: github.LabelAgentComplete, Description: "Factory run completed", Color: "5319e7"},
+var factoryLabels = []tracker.Label{
+	{Name: tracker.LabelAgentReady, Description: "Issue is explicitly authorized for factory work", Color: "0e8a16"},
+	{Name: tracker.LabelAgentRunning, Description: "Factory run is active", Color: "1d76db"},
+	{Name: tracker.LabelAgentNeedsInput, Description: "Factory run is waiting for human input", Color: "fbca04"},
+	{Name: tracker.LabelAgentFailed, Description: "Factory run failed and needs attention", Color: "b60205"},
+	{Name: tracker.LabelAgentCancelled, Description: "Factory run was cancelled", Color: "6f42c1"},
+	{Name: tracker.LabelAgentComplete, Description: "Factory run completed", Color: "5319e7"},
 }
 
 // factoryLabelByStatus maps orthogonal status values to product labels.
 var factoryLabelByStatus = map[store.Status]string{
-	store.StatusActive:            github.LabelAgentRunning,
-	store.StatusWaitingForHarness: github.LabelAgentRunning,
-	store.StatusWaitingForHuman:   github.LabelAgentNeedsInput,
-	store.StatusFailed:            github.LabelAgentFailed,
-	store.StatusCancelled:         github.LabelAgentCancelled,
-	store.StatusComplete:          github.LabelAgentComplete,
+	store.StatusActive:            tracker.LabelAgentRunning,
+	store.StatusWaitingForHarness: tracker.LabelAgentRunning,
+	store.StatusWaitingForHuman:   tracker.LabelAgentNeedsInput,
+	store.StatusFailed:            tracker.LabelAgentFailed,
+	store.StatusCancelled:         tracker.LabelAgentCancelled,
+	store.StatusComplete:          tracker.LabelAgentComplete,
 }
 
 // validStatuses contains the independent statuses accepted by transitions.
@@ -166,8 +165,8 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if !strings.EqualFold(strings.TrimSpace(issue.State), "open") {
 		return IssueResult{}, fmt.Errorf("issue #%d is %s; only open issues can be claimed", issueNumber, defaultString(issue.State, "not open"))
 	}
-	if !hasLabel(issue.Labels, github.LabelAgentReady) {
-		return IssueResult{}, fmt.Errorf("issue #%d is not labeled %q", issueNumber, github.LabelAgentReady)
+	if !hasLabel(issue.Labels, tracker.LabelAgentReady) {
+		return IssueResult{}, fmt.Errorf("issue #%d is not labeled %q", issueNumber, tracker.LabelAgentReady)
 	}
 	if conflictingFactoryLabel(issue.Labels) {
 		return IssueResult{}, fmt.Errorf("issue #%d has another factory state label", issueNumber)
@@ -812,7 +811,7 @@ func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Ru
 	run.Status = store.StatusFailed
 	run.UpdatedAt = s.deps.Now().UTC()
 	compensationErrors := []error{
-		s.deps.GitHub.ReplaceIssueLabels(ctx, repository, run.IssueNumber, replaceFactoryState(issue.Labels, github.LabelAgentFailed)),
+		s.deps.GitHub.ReplaceIssueLabels(ctx, repository, run.IssueNumber, replaceFactoryState(issue.Labels, tracker.LabelAgentFailed)),
 	}
 	if run.StatusCommentID != "" {
 		compensationErrors = append(compensationErrors, s.deps.GitHub.EditIssueComment(ctx, repository, run.StatusCommentID, statusCommentBody(run)))
@@ -1074,7 +1073,7 @@ func factoryLabelForStatus(status store.Status) string {
 	if label, ok := factoryLabelByStatus[status]; ok {
 		return label
 	}
-	return github.LabelAgentRunning
+	return tracker.LabelAgentRunning
 }
 
 // validateStage rejects values outside the factory-owned workflow registry.
@@ -1106,7 +1105,7 @@ func hasLabel(labels []string, wanted string) bool {
 // conflictingFactoryLabel rejects an issue already owned by another run state.
 func conflictingFactoryLabel(labels []string) bool {
 	for _, label := range labels {
-		if label != github.LabelAgentReady && hasLabel(github.FactoryStateLabels, label) {
+		if label != tracker.LabelAgentReady && hasLabel(tracker.FactoryStateLabels, label) {
 			return true
 		}
 	}
@@ -1119,7 +1118,7 @@ func replaceFactoryState(labels []string, state string) []string {
 	result := make([]string, 0, len(labels)+1)
 	seen := make(map[string]struct{}, len(labels)+1)
 	for _, label := range labels {
-		if hasLabel(github.FactoryStateLabels, label) {
+		if hasLabel(tracker.FactoryStateLabels, label) {
 			continue
 		}
 		if _, exists := seen[label]; exists {

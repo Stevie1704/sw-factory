@@ -15,59 +15,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
-const (
-	// LabelAgentReady authorizes an issue for a factory claim.
-	LabelAgentReady = "agent-ready"
-	// LabelAgentRunning marks an active factory run.
-	LabelAgentRunning = "agent-running"
-	// LabelAgentNeedsInput marks a run waiting for human input.
-	LabelAgentNeedsInput = "agent-needs-input"
-	// LabelAgentFailed marks a failed factory run.
-	LabelAgentFailed = "agent-failed"
-	// LabelAgentCancelled marks a cancelled factory run.
-	LabelAgentCancelled = "agent-cancelled"
-	// LabelAgentComplete marks a completed factory run.
-	LabelAgentComplete = "agent-complete"
-)
-
-// FactoryStateLabels is the complete set of labels owned by the factory.
-// Claiming and transitioning only replace labels from this set; ordinary issue
-// labels are preserved.
-var FactoryStateLabels = []string{
-	LabelAgentReady,
-	LabelAgentRunning,
-	LabelAgentNeedsInput,
-	LabelAgentFailed,
-	LabelAgentCancelled,
-	LabelAgentComplete,
-}
-
-// Label describes a factory-owned GitHub label.
-type Label struct {
-	Name        string
-	Description string
-	Color       string
-}
-
-// Comment is the coordinator-neutral identity and revision of a GitHub issue
-// or pull-request comment.
-type Comment struct {
-	// ID is the immutable GitHub comment identity used as a replay watermark.
-	ID string
-	// Body is the complete user-authored comment text.
-	Body string
-	// Author is the GitHub login that authored the comment.
-	Author string
-	// UpdatedAt is the current edit revision of the comment.
-	UpdatedAt time.Time
-}
-
-// CommentReader lists comments for an issue or pull request through the
-// shared GitHub issue-comments endpoint.
-type CommentReader interface {
-	IssueComments(context.Context, tracker.Repository, int) ([]Comment, error)
-}
-
 // PullRequest is the pull-request identity and body returned to the
 // coordinator after a host-side GitHub operation.
 type PullRequest struct {
@@ -149,18 +96,6 @@ type CommitStatusPublisher interface {
 // that GitHub accepted before the coordinator process stopped.
 type CommitStatusReader interface {
 	ListCommitStatuses(context.Context, tracker.Repository, string) ([]CommitStatus, error)
-}
-
-// Client is the small host-side seam used by the claim coordinator. It keeps
-// GitHub credentials inside the local gh process and returns only workflow
-// data to the coordinator.
-type Client interface {
-	Issue(context.Context, tracker.Repository, int) (tracker.Issue, error)
-	CreateLabel(context.Context, tracker.Repository, Label) error
-	ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error
-	CreateIssueComment(context.Context, tracker.Repository, int, string) (Comment, error)
-	FindStatusComment(context.Context, tracker.Repository, int, string) (Comment, error)
-	EditIssueComment(context.Context, tracker.Repository, string, string) error
 }
 
 // PullRequestClient is the host-side seam for idempotent draft pull-request
@@ -288,7 +223,7 @@ type GhClient struct {
 	lease leaseCache
 }
 
-var _ CommentReader = (*GhClient)(nil)
+var _ tracker.CommentReader = (*GhClient)(nil)
 var _ tracker.IssuePoller = (*GhClient)(nil)
 var _ CommitStatusReader = (*GhClient)(nil)
 var _ PullRequestDraftClient = (*GhClient)(nil)
@@ -323,7 +258,7 @@ func (c *GhClient) ListEligibleIssues(ctx context.Context, repository tracker.Re
 	args := []string{
 		"api", fmt.Sprintf("repos/%s/issues", repository.String()),
 		"--paginate", "--slurp", "--method", "GET",
-		"-f", "state=open", "-f", "labels=" + LabelAgentReady,
+		"-f", "state=open", "-f", "labels=" + tracker.LabelAgentReady,
 	}
 	output, err := c.callBytes(ctx, args, nil)
 	if err != nil {
@@ -336,7 +271,7 @@ func (c *GhClient) ListEligibleIssues(ctx context.Context, repository tracker.Re
 	issues := make([]tracker.Issue, 0, len(responses))
 	for _, response := range responses {
 		issue := response.issue()
-		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !containsLabel(issue.Labels, LabelAgentReady) {
+		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !containsLabel(issue.Labels, tracker.LabelAgentReady) {
 			continue
 		}
 		issues = append(issues, issue)
@@ -348,7 +283,7 @@ func (c *GhClient) ListEligibleIssues(ctx context.Context, repository tracker.Re
 }
 
 // CreateLabel creates or updates one factory label through gh.
-func (c *GhClient) CreateLabel(ctx context.Context, repository tracker.Repository, label Label) error {
+func (c *GhClient) CreateLabel(ctx context.Context, repository tracker.Repository, label tracker.Label) error {
 	if strings.TrimSpace(label.Name) == "" {
 		return errors.New("GitHub label name is required")
 	}
@@ -377,17 +312,17 @@ func (c *GhClient) ReplaceIssueLabels(ctx context.Context, repository tracker.Re
 }
 
 // CreateIssueComment creates one issue comment and returns its immutable id.
-func (c *GhClient) CreateIssueComment(ctx context.Context, repository tracker.Repository, number int, body string) (Comment, error) {
+func (c *GhClient) CreateIssueComment(ctx context.Context, repository tracker.Repository, number int, body string) (tracker.Comment, error) {
 	var response commentResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--method", "POST"}, map[string]string{"body": body}, &response); err != nil {
-		return Comment{}, fmt.Errorf("create status comment on issue #%d: %w", number, err)
+		return tracker.Comment{}, fmt.Errorf("create status comment on issue #%d: %w", number, err)
 	}
 	return response.comment(), nil
 }
 
 // IssueComments lists all comments for an issue or pull request in GitHub's
 // stable API order. The caller uses comment IDs as the exactly-once watermark.
-func (c *GhClient) IssueComments(ctx context.Context, repository tracker.Repository, number int) ([]Comment, error) {
+func (c *GhClient) IssueComments(ctx context.Context, repository tracker.Repository, number int) ([]tracker.Comment, error) {
 	if number <= 0 {
 		return nil, errors.New("issue number must be positive")
 	}
@@ -395,7 +330,7 @@ func (c *GhClient) IssueComments(ctx context.Context, repository tracker.Reposit
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
 		return nil, fmt.Errorf("list comments on issue #%d: %w", number, err)
 	}
-	comments := make([]Comment, 0)
+	comments := make([]tracker.Comment, 0)
 	for _, page := range pages {
 		for _, response := range page {
 			comments = append(comments, response.comment())
@@ -407,20 +342,20 @@ func (c *GhClient) IssueComments(ctx context.Context, repository tracker.Reposit
 // FindStatusComment recovers a previously created status comment by its
 // immutable run marker when persistence was interrupted after GitHub mutation.
 // It only returns a marker match authored by the authenticated coordinator.
-func (c *GhClient) FindStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (Comment, error) {
+func (c *GhClient) FindStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (tracker.Comment, error) {
 	if number <= 0 {
-		return Comment{}, errors.New("issue number must be positive")
+		return tracker.Comment{}, errors.New("issue number must be positive")
 	}
 	if strings.TrimSpace(marker) == "" {
-		return Comment{}, errors.New("status comment marker is required")
+		return tracker.Comment{}, errors.New("status comment marker is required")
 	}
 	coordinator, err := c.AuthenticatedLogin(ctx)
 	if err != nil {
-		return Comment{}, err
+		return tracker.Comment{}, err
 	}
 	var pages [][]commentResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
-		return Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
+		return tracker.Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
 	}
 	for _, page := range pages {
 		for _, response := range page {
@@ -430,7 +365,7 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository tracker.Rep
 			}
 		}
 	}
-	return Comment{}, nil
+	return tracker.Comment{}, nil
 }
 
 // EditIssueComment edits an existing issue comment by id.
@@ -722,8 +657,8 @@ type commentResponse struct {
 
 // comment converts the GitHub response shape into the coordinator-neutral
 // comment model.
-func (r commentResponse) comment() Comment {
-	return Comment{ID: fmt.Sprint(r.ID), Body: r.Body, Author: r.User.Login, UpdatedAt: r.UpdatedAt}
+func (r commentResponse) comment() tracker.Comment {
+	return tracker.Comment{ID: fmt.Sprint(r.ID), Body: r.Body, Author: r.User.Login, UpdatedAt: r.UpdatedAt}
 }
 
 // pullRequestResponse is the GitHub API subset used by the factory.

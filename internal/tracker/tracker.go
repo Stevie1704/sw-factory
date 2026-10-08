@@ -44,3 +44,67 @@ type IssuePoller interface {
 type AccountReader interface {
 	AuthenticatedLogin(context.Context) (string, error)
 }
+
+const (
+	// LabelAgentReady authorizes an issue for a factory claim.
+	LabelAgentReady = "agent-ready"
+	// LabelAgentRunning marks an active factory run.
+	LabelAgentRunning = "agent-running"
+	// LabelAgentNeedsInput marks a run waiting for human input.
+	LabelAgentNeedsInput = "agent-needs-input"
+	// LabelAgentFailed marks a failed factory run.
+	LabelAgentFailed = "agent-failed"
+	// LabelAgentCancelled marks a cancelled factory run.
+	LabelAgentCancelled = "agent-cancelled"
+	// LabelAgentComplete marks a completed factory run.
+	LabelAgentComplete = "agent-complete"
+)
+
+// FactoryStateLabels is the complete set of labels owned by the factory.
+// Claiming and transitioning only replace labels from this set; ordinary issue
+// labels are preserved.
+var FactoryStateLabels = []string{
+	LabelAgentReady,
+	LabelAgentRunning,
+	LabelAgentNeedsInput,
+	LabelAgentFailed,
+	LabelAgentCancelled,
+	LabelAgentComplete,
+}
+
+// Label describes a factory-owned run-state label.
+type Label struct {
+	Name        string
+	Description string
+	Color       string
+}
+
+// Comment is the identity and revision of an issue or pull-request comment.
+type Comment struct {
+	// ID is the immutable comment identity used as a replay watermark.
+	ID string
+	// Body is the complete user-authored comment text.
+	Body string
+	// Author is the tracker login that authored the comment.
+	Author string
+	// UpdatedAt is the current edit revision of the comment.
+	UpdatedAt time.Time
+}
+
+// CommentReader lists the comments of an issue or pull request. The command
+// stream of a run is read through it.
+type CommentReader interface {
+	IssueComments(context.Context, Repository, int) ([]Comment, error)
+}
+
+// Client is the issue, label, and comment seam used by the claim coordinator.
+// It keeps tracker credentials inside the adapter and returns only workflow
+// data to the coordinator.
+type Client interface {
+	Issue(context.Context, Repository, int) (Issue, error)
+	CreateLabel(context.Context, Repository, Label) error
+	ReplaceIssueLabels(context.Context, Repository, int, []string) error
+	CreateIssueComment(context.Context, Repository, int, string) (Comment, error)
+	FindStatusComment(context.Context, Repository, int, string) (Comment, error)
+	EditIssueComment(context.Context, Repository, string, string) error
+}

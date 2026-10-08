@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -49,8 +48,8 @@ func TestStatusCommentDiscrepancyRecordsIdentityNotBody(t *testing.T) {
 
 	run := reasonLoopRun()
 	client := &reasonLoopGitHub{
-		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentNeedsInput}},
-		comment: github.Comment{ID: run.StatusCommentID, Body: statusCommentMarker(run.ID) + "\ndrifted body\n"},
+		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{tracker.LabelAgentNeedsInput}},
+		comment: tracker.Comment{ID: run.StatusCommentID, Body: statusCommentMarker(run.ID) + "\ndrifted body\n"},
 	}
 	diagnosis := newRecoveryDiagnosis(run.ID)
 
@@ -89,8 +88,8 @@ func TestStatusCommentComparisonIgnoresTheLifecycleReason(t *testing.T) {
 	}
 
 	client := &reasonLoopGitHub{
-		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentNeedsInput}},
-		comment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(published)},
+		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{tracker.LabelAgentNeedsInput}},
+		comment: tracker.Comment{ID: run.StatusCommentID, Body: statusCommentBody(published)},
 	}
 	diagnosis := newRecoveryDiagnosis(run.ID)
 	inspectGitHubProjection(context.Background(), &diagnosis, client, nil, tracker.Repository{Owner: "owner", Name: "repository"}, run)
@@ -123,7 +122,7 @@ func reasonLoopDiscrepancy(diagnosis RecoveryDiagnosis, field string) (RecoveryD
 // reasonLoopGitHub is the read-only projection the inspection reads.
 type reasonLoopGitHub struct {
 	issue   tracker.Issue
-	comment github.Comment
+	comment tracker.Comment
 }
 
 // Issue returns the fixture issue.
@@ -132,12 +131,12 @@ func (c *reasonLoopGitHub) Issue(context.Context, tracker.Repository, int) (trac
 }
 
 // FindStatusComment returns the fixture status comment.
-func (c *reasonLoopGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
+func (c *reasonLoopGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
 	return c.comment, nil
 }
 
 // CreateLabel is never called by a read-only inspection.
-func (*reasonLoopGitHub) CreateLabel(context.Context, tracker.Repository, github.Label) error {
+func (*reasonLoopGitHub) CreateLabel(context.Context, tracker.Repository, tracker.Label) error {
 	return nil
 }
 
@@ -147,8 +146,8 @@ func (*reasonLoopGitHub) ReplaceIssueLabels(context.Context, tracker.Repository,
 }
 
 // CreateIssueComment is never called by a read-only inspection.
-func (*reasonLoopGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, nil
+func (*reasonLoopGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, nil
 }
 
 // EditIssueComment is never called by a read-only inspection.
