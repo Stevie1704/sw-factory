@@ -11,6 +11,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -143,6 +144,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	consecutiveQueueFailures := 0
 	consecutiveCommandFailures := 0
 	consecutiveProgressionFailures := 0
+	consecutiveHarnessRetryFailures := 0
 	for {
 		if err := waitPolling(pollContext, delay); err != nil {
 			if pollingContextDone(err) {
@@ -200,8 +202,20 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 			if pollingContextDone(err) {
 				return nil
 			}
+			if hostCommandTimedOut(err) {
+				consecutiveHarnessRetryFailures++
+				s.emitCoordinatorEvent(events, CoordinatorEvent{
+					Kind:      EventRetry,
+					RunID:     leaseRunID,
+					Operation: "harness retry",
+					Attempt:   consecutiveHarnessRetryFailures,
+				})
+				delay = backoff
+				continue
+			}
 			return err
 		}
+		consecutiveHarnessRetryFailures = 0
 		s.observeCoordinatorStageFromStore(pollContext, registration, events)
 		s.seedCoordinatorStageFromStore(pollContext, registration, stageTracker)
 		commandResults, commandErr := s.pollLoopCommandResults(pollContext)
@@ -532,7 +546,14 @@ func (s *Service) pollOnce(ctx context.Context, registration config.RepositoryRe
 	}
 	claimed, err := s.ClaimIssue(ctx, issues[0].Number)
 	if err != nil {
-		return PollResult{}, fmt.Errorf("claim oldest eligible issue #%d: %w", issues[0].Number, err)
+		err = fmt.Errorf("claim oldest eligible issue #%d: %w", issues[0].Number, err)
+		// The claim state machine records its own outcome durably, so a host
+		// command deadline needs no further handling here: the next pass reads
+		// that state and continues.
+		if hostCommandTimedOut(err) {
+			return PollResult{}, &pollingTransportError{err: err}
+		}
+		return PollResult{}, err
 	}
 	return PollResult{Outcome: PollClaimed, IssueNumber: claimed.Run.IssueNumber, Run: claimed.Run}, nil
 }
@@ -622,6 +643,14 @@ func waitPolling(ctx context.Context, delay time.Duration) error {
 // long-running coordinator controlled by start/stop.
 func pollingContextDone(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// hostCommandTimedOut reports whether a host git or gh call reached its own
+// deadline. That is a retryable transport failure, never the supervisor's
+// shutdown, so the loop backs off and tries again.
+func hostCommandTimedOut(err error) bool {
+	var timeout *hostcmd.TimeoutError
+	return errors.As(err, &timeout)
 }
 
 // setPollCancel records a same-process stop handle while rejecting duplicate
