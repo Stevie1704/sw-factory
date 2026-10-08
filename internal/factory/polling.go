@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -105,8 +104,9 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	if s.issuePoller() == nil {
 		return errors.New("GitHub issue poller is required to start the coordinator")
 	}
-	if s.deps.Lease == nil {
-		return errors.New("GitHub lease client is required to start the coordinator")
+	lease := s.deps.Lease
+	if lease == nil {
+		lease = absentLease{}
 	}
 	interval, backoff, err := pollingDurations(registration.Polling)
 	if err != nil {
@@ -174,7 +174,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 			}
 		}
 		now := s.deps.Now().UTC()
-		if err := s.deps.Lease.RenewLease(pollContext, repository, github.Lease{
+		if err := lease.RenewLease(pollContext, repository, tracker.Lease{
 			Coordinator: s.deps.Coordinator,
 			RunID:       leaseRunID,
 			RenewedAt:   now,
@@ -690,3 +690,11 @@ func (s *Service) clearPollCancel() {
 		s.pollCancel = nil
 	}
 }
+
+// absentLease stands in for a tracker adapter without a lease port. The lease
+// is a diagnostic projection and the host lock owns the repository (ADR 0018),
+// so the coordinator polls without one.
+type absentLease struct{}
+
+// RenewLease publishes nothing.
+func (absentLease) RenewLease(context.Context, tracker.Repository, tracker.Lease) error { return nil }

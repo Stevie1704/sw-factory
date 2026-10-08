@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -356,7 +356,7 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 	run.TestStageSkipped = true
 	run.TestExemption = &store.TestExemption{Kind: "human", Justification: "implementation seam fixture"}
 	_ = runStore.SaveRun(context.Background(), run)
-	runStore.gateResults[run.ID] = []store.GateResult{{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseBaseline, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking}}
+	runStore.gateResults[run.ID] = []store.GateResult{{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseBaseline, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(codehost.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking}}
 	return service, runStore, runtime, harnessRuntime
 }
 

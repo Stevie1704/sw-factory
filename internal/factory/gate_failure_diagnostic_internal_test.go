@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/gate"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -131,8 +131,8 @@ func TestWriteGateFailureDiagnosticRecordsSetupAndGateOutput(t *testing.T) {
 
 	run := diagnosticRun(t)
 	results := []gate.Result{
-		{CheckpointSHA: diagnosticCheckpointSHA, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: worker.CommandResult{ExitCode: 1, Stderr: "error: Failed to create virtual environment"}, Status: github.CommitStatus{State: github.CommitStatusError}},
-		{CheckpointSHA: diagnosticCheckpointSHA, GateName: "lint", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: worker.CommandResult{ExitCode: 1, Stderr: "error: Failed to create virtual environment"}, Status: github.CommitStatus{State: github.CommitStatusError}},
+		{CheckpointSHA: diagnosticCheckpointSHA, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: worker.CommandResult{ExitCode: 1, Stderr: "error: Failed to create virtual environment"}, Status: codehost.CommitStatus{State: codehost.CommitStatusError}},
+		{CheckpointSHA: diagnosticCheckpointSHA, GateName: "lint", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: worker.CommandResult{ExitCode: 1, Stderr: "error: Failed to create virtual environment"}, Status: codehost.CommitStatus{State: codehost.CommitStatusError}},
 	}
 	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: results[0].Setup}}}
 

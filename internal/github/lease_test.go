@@ -283,7 +283,7 @@ func TestRenewLeaseRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 
 	renewed := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	tests := map[string]github.Lease{
+	tests := map[string]tracker.Lease{
 		"empty coordinator":     {Coordinator: " ", RenewedAt: renewed, ExpiresAt: renewed.Add(time.Minute)},
 		"multiline coordinator": {Coordinator: "a\nb", RenewedAt: renewed, ExpiresAt: renewed.Add(time.Minute)},
 		"expiry before renewal": {Coordinator: "host", RenewedAt: renewed, ExpiresAt: renewed},
@@ -307,8 +307,8 @@ func TestRenewLeaseRejectsInvalidValues(t *testing.T) {
 var testRepository = tracker.Repository{Owner: "example", Name: "project"}
 
 // testLease returns a valid one-minute lease renewed at the supplied time.
-func testLease(renewed time.Time) github.Lease {
-	return github.Lease{Coordinator: "coordinator-test", RunID: "run-42", RenewedAt: renewed, ExpiresAt: renewed.Add(time.Minute)}
+func testLease(renewed time.Time) tracker.Lease {
+	return tracker.Lease{Coordinator: "coordinator-test", RunID: "run-42", RenewedAt: renewed, ExpiresAt: renewed.Add(time.Minute)}
 }
 
 // milestoneRecord is the fake GitHub milestone state.

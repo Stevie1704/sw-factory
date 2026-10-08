@@ -3,7 +3,6 @@ package effect
 import (
 	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -77,7 +76,7 @@ type labelTransitionEffectPayload struct {
 // commitStatusEffectPayload is the serialized intent for one exact-SHA status.
 type commitStatusEffectPayload struct {
 	Repository tracker.Repository
-	Status     github.CommitStatus
+	Status     codehost.CommitStatus
 }
 
 // checkpointRequestJSON keeps the git adapter request independent from the

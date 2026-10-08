@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -900,7 +900,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	if err != nil {
 		return AgentResult{}, fmt.Errorf("create test checkpoint: %w", err)
 	}
-	if !github.ValidCommitSHA(checkpoint.SHA) {
+	if !codehost.ValidCommitSHA(checkpoint.SHA) {
 		return AgentResult{}, errors.New("test checkpoint returned an invalid commit SHA")
 	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
@@ -1089,7 +1089,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 	if err != nil {
 		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint could not be created")
 	}
-	if !github.ValidCommitSHA(checkpoint.SHA) {
+	if !codehost.ValidCommitSHA(checkpoint.SHA) {
 		return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint returned an invalid commit identity")
 	}
 	if _, journaled := runStore.(PendingEffectStore); !journaled {

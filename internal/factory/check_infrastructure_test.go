@@ -15,7 +15,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -139,7 +138,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	runStore.gateResults[claimed.Run.ID] = []store.GateResult{{
 		RunID: claimed.Run.ID, CheckpointSHA: claimed.Run.CheckpointSHA, Phase: store.GatePhaseBaseline,
 		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
-		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+		Status: string(codehost.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
 	}}
 	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
 	if err != nil {

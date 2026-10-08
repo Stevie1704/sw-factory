@@ -108,3 +108,22 @@ type Client interface {
 	FindStatusComment(context.Context, Repository, int, string) (Comment, error)
 	EditIssueComment(context.Context, Repository, string, string) error
 }
+
+// Lease describes one visible coordinator ownership heartbeat.
+type Lease struct {
+	// Coordinator identifies the host holding the lease.
+	Coordinator string
+	// RunID identifies the active run, when one has been claimed.
+	RunID string
+	// RenewedAt is the coordinator's latest heartbeat time.
+	RenewedAt time.Time
+	// ExpiresAt is the time after which the lease projection is stale.
+	ExpiresAt time.Time
+}
+
+// LeaseClient publishes a renewable, operator-visible coordinator lease. It is
+// an optional adapter capability: the host lock owns the repository, and the
+// lease is only a diagnostic projection (ADR 0018).
+type LeaseClient interface {
+	RenewLease(context.Context, Repository, Lease) error
+}

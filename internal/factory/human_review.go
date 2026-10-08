@@ -8,7 +8,6 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -171,7 +170,7 @@ func repairAdmissionReason(run store.Run) string {
 		return fmt.Sprintf("repair is only allowed while a review waits for human disposition, not stage %q/status %q", run.Stage, run.Status)
 	case run.PullRequestNumber <= 0:
 		return "repair requires a tracked pull request"
-	case !github.ValidCommitSHA(run.CheckpointSHA):
+	case !codehost.ValidCommitSHA(run.CheckpointSHA):
 		return "repair requires a valid review checkpoint"
 	case len(run.ActiveInvocationIDs) != 0:
 		return "repair requires a run with no active invocation"

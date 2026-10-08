@@ -16,47 +16,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
-// CommitStatusState is the GitHub state vocabulary used for deterministic
-// checkpoint results.
-type CommitStatusState string
-
-const (
-	// CommitStatusPending is an in-progress status state.
-	CommitStatusPending CommitStatusState = "pending"
-	// CommitStatusSuccess marks a successful checkpoint result.
-	CommitStatusSuccess CommitStatusState = "success"
-	// CommitStatusFailure marks a declared command that exited unsuccessfully.
-	CommitStatusFailure CommitStatusState = "failure"
-	// CommitStatusError marks setup or runtime infrastructure failure.
-	CommitStatusError CommitStatusState = "error"
-)
-
-// CommitStatus identifies one status attached to one exact commit SHA.
-type CommitStatus struct {
-	// SHA is the immutable commit being reported.
-	SHA string
-	// State is the GitHub status state.
-	State CommitStatusState
-	// Context is the stable status context used for repeated reports.
-	Context string
-	// Description is a content-free human-readable summary.
-	Description string
-	// TargetURL is an optional operator-facing evidence URL.
-	TargetURL string
-}
-
-// CommitStatusPublisher is the host-side seam for publishing exact-SHA
-// Commit Statuses without exposing GitHub credentials to workflow code.
-type CommitStatusPublisher interface {
-	CreateCommitStatus(context.Context, tracker.Repository, CommitStatus) error
-}
-
-// CommitStatusReader is the read-only projection used to recognize a status
-// that GitHub accepted before the coordinator process stopped.
-type CommitStatusReader interface {
-	ListCommitStatuses(context.Context, tracker.Repository, string) ([]CommitStatus, error)
-}
-
 // CommandRunner is the executable seam for the local GitHub CLI adapter.
 type CommandRunner interface {
 	Run(context.Context, []string, []byte) ([]byte, error)
@@ -113,7 +72,7 @@ type GhClient struct {
 
 var _ tracker.CommentReader = (*GhClient)(nil)
 var _ tracker.IssuePoller = (*GhClient)(nil)
-var _ CommitStatusReader = (*GhClient)(nil)
+var _ codehost.CommitStatusReader = (*GhClient)(nil)
 var _ codehost.PullRequestDraftClient = (*GhClient)(nil)
 
 // NewClient returns a GitHub CLI-backed client.
@@ -363,11 +322,11 @@ func (c *GhClient) SetPullRequestDraft(ctx context.Context, repository tracker.R
 
 // CreateCommitStatus publishes one deterministic result for an exact commit.
 // The status context is caller-defined but must be stable and single-line.
-func (c *GhClient) CreateCommitStatus(ctx context.Context, repository tracker.Repository, status CommitStatus) error {
-	if !ValidCommitSHA(status.SHA) {
+func (c *GhClient) CreateCommitStatus(ctx context.Context, repository tracker.Repository, status codehost.CommitStatus) error {
+	if !codehost.ValidCommitSHA(status.SHA) {
 		return errors.New("commit status SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
 	}
-	if status.State != CommitStatusPending && status.State != CommitStatusSuccess && status.State != CommitStatusFailure && status.State != CommitStatusError {
+	if status.State != codehost.CommitStatusPending && status.State != codehost.CommitStatusSuccess && status.State != codehost.CommitStatusFailure && status.State != codehost.CommitStatusError {
 		return fmt.Errorf("unsupported commit status state %q", status.State)
 	}
 	if strings.TrimSpace(status.Context) == "" || strings.ContainsAny(status.Context, "\r\n") {
@@ -392,8 +351,8 @@ func (c *GhClient) CreateCommitStatus(ctx context.Context, repository tracker.Re
 
 // ListCommitStatuses reads all statuses attached to one exact commit so a
 // pending status effect can be recognized without publishing a duplicate.
-func (c *GhClient) ListCommitStatuses(ctx context.Context, repository tracker.Repository, sha string) ([]CommitStatus, error) {
-	if !ValidCommitSHA(sha) {
+func (c *GhClient) ListCommitStatuses(ctx context.Context, repository tracker.Repository, sha string) ([]codehost.CommitStatus, error) {
+	if !codehost.ValidCommitSHA(sha) {
 		return nil, errors.New("commit status SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
 	}
 	output, err := c.callBytes(ctx, []string{"api", fmt.Sprintf("repos/%s/commits/%s/statuses", repository.String(), sha), "--method", "GET", "--paginate", "--slurp"}, nil)
@@ -404,11 +363,11 @@ func (c *GhClient) ListCommitStatuses(ctx context.Context, repository tracker.Re
 	if err != nil {
 		return nil, fmt.Errorf("decode commit statuses for %s: %w", sha, err)
 	}
-	statuses := make([]CommitStatus, 0, len(responses))
+	statuses := make([]codehost.CommitStatus, 0, len(responses))
 	for _, response := range responses {
-		statuses = append(statuses, CommitStatus{
+		statuses = append(statuses, codehost.CommitStatus{
 			SHA:         sha,
-			State:       CommitStatusState(response.State),
+			State:       codehost.CommitStatusState(response.State),
 			Context:     response.Context,
 			Description: response.Description,
 			TargetURL:   response.TargetURL,
@@ -447,21 +406,6 @@ func (c *GhClient) callBytes(ctx context.Context, args []string, payload any) ([
 		args = append(args, "--input", "-")
 	}
 	return c.runner().Run(ctx, args, input)
-}
-
-// ValidCommitSHA reports whether value is a full 40- or 64-character lowercase
-// hexadecimal commit SHA while rejecting values that could alter a GitHub API path.
-func ValidCommitSHA(value string) bool {
-	if len(value) != 40 && len(value) != 64 {
-		return false
-	}
-	for _, character := range value {
-		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 // issueResponse is the subset of the GitHub issue API response needed by a

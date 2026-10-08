@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -17,14 +17,14 @@ import (
 // publication that makes the remote able to resolve its checkpoint.
 type commitStatusHandler struct {
 	now       func() time.Time
-	statuses  github.CommitStatusPublisher
+	statuses  codehost.CommitStatusPublisher
 	workspace gitadapter.GitWorkspace
 	projector runProjector
 }
 
 // CommitStatusPublisher wraps a commit-status seam with durable idempotency,
 // so an ambiguous response cannot create a second semantic status.
-func (j *Journal) CommitStatusPublisher(runStore RunStore, runID string, delegate github.CommitStatusPublisher) github.CommitStatusPublisher {
+func (j *Journal) CommitStatusPublisher(runStore RunStore, runID string, delegate codehost.CommitStatusPublisher) codehost.CommitStatusPublisher {
 	handler := mustApplyHandler[commitStatusHandler](j.dispatcher, store.PendingEffectKindCommitStatus)
 	return journaledCommitStatus{handler: handler, runStore: runStore, runID: runID, delegate: delegate}
 }
@@ -34,19 +34,19 @@ type journaledCommitStatus struct {
 	handler  commitStatusHandler
 	runStore RunStore
 	runID    string
-	delegate github.CommitStatusPublisher
+	delegate codehost.CommitStatusPublisher
 }
 
 // CreateCommitStatus publishes or recognizes one exact-SHA status without
 // creating a second semantic status after a process interruption.
-func (p journaledCommitStatus) CreateCommitStatus(ctx context.Context, repository tracker.Repository, status github.CommitStatus) error {
+func (p journaledCommitStatus) CreateCommitStatus(ctx context.Context, repository tracker.Repository, status codehost.CommitStatus) error {
 	payload := commitStatusEffectPayload{Repository: repository, Status: status}
 	effect, err := reserve(p.handler.now, p.runID, store.PendingEffectKindCommitStatus, status.SHA+"\x00"+status.Context+"\x00"+string(status.State)+"\x00"+status.Description, payload)
 	if err != nil {
 		return err
 	}
 	return withPendingEffect(ctx, p.runStore, effect, applier(func() error {
-		if reader, ok := p.delegate.(github.CommitStatusReader); ok {
+		if reader, ok := p.delegate.(codehost.CommitStatusReader); ok {
 			statuses, err := reader.ListCommitStatuses(ctx, repository, status.SHA)
 			if err != nil {
 				return fmt.Errorf("inspect existing commit status: %w", err)
@@ -77,7 +77,7 @@ func (h commitStatusHandler) Replay(ctx context.Context, request replayRequest) 
 	if h.statuses == nil {
 		return store.Run{}, errors.New("commit-status publisher is required to replay status")
 	}
-	reader, ok := h.statuses.(github.CommitStatusReader)
+	reader, ok := h.statuses.(codehost.CommitStatusReader)
 	if !ok {
 		return store.Run{}, errors.New("commit-status reader is required to replay status safely")
 	}

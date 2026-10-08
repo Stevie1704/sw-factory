@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -83,7 +83,7 @@ func TestRunGateStartsThePinnedWorkerAndUsesTheFrozenGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunGate() error = %v", err)
 	}
-	if result.Status.State != github.CommitStatusSuccess || result.Status.SHA != factoryGateCheckpoint {
+	if result.Status.State != codehost.CommitStatusSuccess || result.Status.SHA != factoryGateCheckpoint {
 		t.Fatalf("RunGate() status = %#v, want exact-SHA success", result.Status)
 	}
 	if len(runtime.starts) != 1 {
@@ -169,15 +169,15 @@ func (w *gateWorker) Inspect(context.Context, string) (worker.Inspection, error)
 // gateStatuses records exact-SHA statuses published by the coordinator.
 type gateStatuses struct {
 	repositories []tracker.Repository
-	values       []github.CommitStatus
+	values       []codehost.CommitStatus
 }
 
 // CreateCommitStatus records one status publication.
-func (s *gateStatuses) CreateCommitStatus(_ context.Context, repository tracker.Repository, status github.CommitStatus) error {
+func (s *gateStatuses) CreateCommitStatus(_ context.Context, repository tracker.Repository, status codehost.CommitStatus) error {
 	s.repositories = append(s.repositories, repository)
 	s.values = append(s.values, status)
 	return nil
 }
 
 var _ worker.WorkerRuntime = (*gateWorker)(nil)
-var _ github.CommitStatusPublisher = (*gateStatuses)(nil)
+var _ codehost.CommitStatusPublisher = (*gateStatuses)(nil)

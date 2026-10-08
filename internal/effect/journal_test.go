@@ -13,7 +13,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -287,7 +286,7 @@ func (journalPullRequestsForTest) UpdatePullRequest(context.Context, tracker.Rep
 type journalStatusesForTest struct{}
 
 // CreateCommitStatus returns the injected external failure.
-func (journalStatusesForTest) CreateCommitStatus(context.Context, tracker.Repository, github.CommitStatus) error {
+func (journalStatusesForTest) CreateCommitStatus(context.Context, tracker.Repository, codehost.CommitStatus) error {
 	return errExternal
 }
 
@@ -549,7 +548,7 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 		Kind: gitadapter.CheckpointKindImplementation, Paths: []string{"a", "b"}, Message: "checkpoint",
 	}
 	pullRequest := codehost.PullRequestRequest{Title: "title", Body: "body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
-	status := github.CommitStatus{SHA: "checkpoint", State: github.CommitStatusSuccess, Context: "factory/test", Description: "passed"}
+	status := codehost.CommitStatus{SHA: "checkpoint", State: codehost.CommitStatusSuccess, Context: "factory/test", Description: "passed"}
 	workerRequest := worker.StartRequest{RunID: run.ID, Role: "implementation", InvocationPath: "/invocation", ResultPath: "/result"}
 	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role}
 

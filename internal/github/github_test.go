@@ -163,9 +163,9 @@ func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
 	runner := &fakeCommandRunner{outputs: [][]byte{[]byte("")}}
 	client := &github.GhClient{Runner: runner}
 	sha := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err := client.CreateCommitStatus(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, github.CommitStatus{
+	err := client.CreateCommitStatus(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, codehost.CommitStatus{
 		SHA:         sha,
-		State:       github.CommitStatusSuccess,
+		State:       codehost.CommitStatusSuccess,
 		Context:     "factory/gate/test",
 		Description: "factory setup and gate passed",
 	})
@@ -322,12 +322,12 @@ func TestValidCommitSHARejectsAbbreviatedObjectIDs(t *testing.T) {
 	t.Parallel()
 
 	for _, length := range []int{39, 41, 63, 65} {
-		if github.ValidCommitSHA(strings.Repeat("a", length)) {
+		if codehost.ValidCommitSHA(strings.Repeat("a", length)) {
 			t.Errorf("ValidCommitSHA(%d characters) = true, want false", length)
 		}
 	}
 	for _, length := range []int{40, 64} {
-		if !github.ValidCommitSHA(strings.Repeat("a", length)) {
+		if !codehost.ValidCommitSHA(strings.Repeat("a", length)) {
 			t.Errorf("ValidCommitSHA(%d characters) = false, want true", length)
 		}
 	}

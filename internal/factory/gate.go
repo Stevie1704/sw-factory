@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -282,7 +282,7 @@ func ensureFinalCheckpointGatesAccepted(ctx context.Context, reader gitadapter.C
 	if !ok {
 		return errors.New("operational store does not support final checkpoint gate results")
 	}
-	if !github.ValidCommitSHA(run.CheckpointSHA) {
+	if !codehost.ValidCommitSHA(run.CheckpointSHA) {
 		return errors.New("final readiness requires a valid checkpoint SHA")
 	}
 	fingerprint, err := setupInputFingerprint(ctx, reader, run.Worktree, run.CheckpointSHA, packet.RepositoryConfig.SetupFiles)
@@ -330,11 +330,11 @@ func ensureFinalCheckpointGatesAccepted(ctx context.Context, reader gitadapter.C
 // still refuses readiness, and the published status must agree with the
 // outcome so a failure is never presented as success.
 func ensureFinalGateOutcomeAccepted(result store.GateResult) error {
-	wantStatus := github.CommitStatusSuccess
+	wantStatus := codehost.CommitStatusSuccess
 	switch {
 	case result.Outcome == store.GateOutcomePassed:
 	case !result.Blocking && result.Outcome == store.GateOutcomeFailed:
-		wantStatus = github.CommitStatusFailure
+		wantStatus = codehost.CommitStatusFailure
 	case result.Blocking:
 		return fmt.Errorf("final checkpoint gate %q has outcome %q; readiness requires success", result.GateName, result.Outcome)
 	default:

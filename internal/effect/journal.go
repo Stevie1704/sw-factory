@@ -6,7 +6,6 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -114,7 +113,7 @@ type Adapters struct {
 	// PullRequests owns idempotent draft pull-request mutation.
 	PullRequests codehost.PullRequestClient
 	// CommitStatuses publishes exact-SHA commit statuses.
-	CommitStatuses github.CommitStatusPublisher
+	CommitStatuses codehost.CommitStatusPublisher
 	// Worker launches the per-run isolated execution environment.
 	Worker workerLauncher
 	// Lifecycle stops workers and resolves harness runtimes during replay.

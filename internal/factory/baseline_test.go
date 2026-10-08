@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -42,7 +42,7 @@ func TestRunBaselineRecordsAHealthyPreEditSuiteBeforeAgentProgression(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Outcome != store.GateOutcomePassed || results[0].Status != string(github.CommitStatusSuccess) {
+	if len(results) != 1 || results[0].Outcome != store.GateOutcomePassed || results[0].Status != string(codehost.CommitStatusSuccess) {
 		t.Fatalf("stored baseline results = %#v, want exact-checkpoint success", results)
 	}
 }

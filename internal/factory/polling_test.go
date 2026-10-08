@@ -110,7 +110,7 @@ func TestStartPollsThenStopsWithoutCancellingTheActiveRun(t *testing.T) {
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}, issues: issues}
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
-	lease := &pollingLease{onRenew: func(value github.Lease) {
+	lease := &pollingLease{onRenew: func(value tracker.Lease) {
 		if value.RunID == "run-fixed" && cancel != nil {
 			cancel()
 		}
@@ -150,7 +150,7 @@ func TestStartKeepsPollingThroughALongIdlePeriod(t *testing.T) {
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
 	lease := &pollingLease{}
-	lease.onRenew = func(value github.Lease) {
+	lease.onRenew = func(value tracker.Lease) {
 		if len(lease.calls) == idleRenewals {
 			githubAdapter.issues = []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 		}
@@ -185,7 +185,7 @@ func TestStartWritesASupervisorHeartbeat(t *testing.T) {
 	root := t.TempDir()
 	runStore := &pollingHeartbeatRunStore{fakeRunStore: &fakeRunStore{}}
 	var cancel context.CancelFunc
-	lease := &pollingLease{onRenew: func(github.Lease) {
+	lease := &pollingLease{onRenew: func(tracker.Lease) {
 		if cancel != nil {
 			cancel()
 		}
@@ -217,7 +217,7 @@ func TestStartSurvivesAHeartbeatWriteFailure(t *testing.T) {
 		heartbeatErrors: []error{errors.New("sqlite busy")},
 	}
 	var cancel context.CancelFunc
-	lease := &pollingLease{onRenew: func(github.Lease) {
+	lease := &pollingLease{onRenew: func(tracker.Lease) {
 		if cancel != nil {
 			cancel()
 		}
@@ -393,7 +393,7 @@ func TestStartAppliesACancelAfterAHungGitHubCallTimesOut(t *testing.T) {
 	}
 	var cancel context.CancelFunc
 	lease := &pollingLease{}
-	lease.onRenew = func(github.Lease) {
+	lease.onRenew = func(tracker.Lease) {
 		if strings.Contains(githubAdapter.lastLabelMutation, tracker.LabelAgentCancelled) && cancel != nil {
 			cancel()
 		}
@@ -443,7 +443,7 @@ func TestStartRetriesAClaimWhoseGitHubCallTimedOut(t *testing.T) {
 	}, issues: issues}
 	var cancel context.CancelFunc
 	lease := &pollingLease{}
-	lease.onRenew = func(github.Lease) {
+	lease.onRenew = func(tracker.Lease) {
 		if githubAdapter.listCalls >= 2 && cancel != nil {
 			cancel()
 		}
@@ -478,7 +478,7 @@ func TestStartEmitsTypedPollAndClaimEvents(t *testing.T) {
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}, issues: issues}
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
-	lease := &pollingLease{onRenew: func(value github.Lease) {
+	lease := &pollingLease{onRenew: func(value tracker.Lease) {
 		if value.RunID == "run-fixed" && cancel != nil {
 			cancel()
 		}
@@ -532,7 +532,7 @@ func TestStartEmitsLeaseRetryAttempts(t *testing.T) {
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
 	lease := &pollingLease{renewErrors: []error{errors.New("lease unavailable")}}
-	lease.onRenew = func(github.Lease) {
+	lease.onRenew = func(tracker.Lease) {
 		if len(lease.calls) >= 2 && cancel != nil {
 			cancel()
 		}
@@ -558,6 +558,31 @@ func TestStartEmitsLeaseRetryAttempts(t *testing.T) {
 	}
 	if retry.Attempt != 1 || retry.MaxAttempts != 5 || !retry.Timestamp.Equal(time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("lease retry event = %#v, want attempt 1/5 with coordinator timestamp", retry)
+	}
+}
+
+// TestStartPollsWithoutALeaseWhenTheTrackerHasNone verifies that the lease is
+// an optional tracker capability: the host lock owns the repository, so a
+// tracker adapter without a lease still lets the coordinator poll its queue.
+func TestStartPollsWithoutALeaseWhenTheTrackerHasNone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader := &pollingIssueReader{onList: func(call int) ([]tracker.Issue, error) {
+		if call >= 2 {
+			cancel()
+		}
+		return nil, nil
+	}}
+	service := newPollingService(root, &fakeGitHub{}, reader, nil, &fakeRunStore{}, &fakeWorktree{}, nil)
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v, want polling without a lease", err)
+	}
+	if reader.calls < 2 {
+		t.Fatalf("queue polls = %d, want at least two passes", reader.calls)
 	}
 }
 
@@ -587,7 +612,7 @@ func TestStartEmitsSwallowedCommandFailure(t *testing.T) {
 	}
 	var cancel context.CancelFunc
 	lease := &pollingLease{}
-	lease.onRenew = func(github.Lease) {
+	lease.onRenew = func(tracker.Lease) {
 		if len(lease.calls) >= 2 && commandSeen && cancel != nil {
 			cancel()
 		}
@@ -642,7 +667,7 @@ func TestStartEmitsACommandStageTransitionAfterRestart(t *testing.T) {
 	}}
 	var cancel context.CancelFunc
 	lease := &pollingLease{}
-	lease.onRenew = func(github.Lease) {
+	lease.onRenew = func(tracker.Lease) {
 		if len(lease.calls) == 1 {
 			available = true
 		}
@@ -778,13 +803,13 @@ func (f *pollingIssueReader) ListEligibleIssues(_ context.Context, _ tracker.Rep
 
 // pollingLease records visible lease renewals for start-loop assertions.
 type pollingLease struct {
-	calls       []github.Lease
+	calls       []tracker.Lease
 	renewErrors []error
-	onRenew     func(github.Lease)
+	onRenew     func(tracker.Lease)
 }
 
 // RenewLease records the lease and invokes its optional test hook.
-func (f *pollingLease) RenewLease(_ context.Context, _ tracker.Repository, lease github.Lease) error {
+func (f *pollingLease) RenewLease(_ context.Context, _ tracker.Repository, lease tracker.Lease) error {
 	f.calls = append(f.calls, lease)
 	if f.onRenew != nil {
 		f.onRenew(lease)
@@ -821,7 +846,7 @@ func (s *pollingHeartbeatRunStore) SaveSupervisorHeartbeat(_ context.Context, he
 
 // newPollingService constructs a service with real queue/claim behavior and
 // isolated fakes for the external polling and lease adapters.
-func newPollingService(root string, githubAdapter tracker.Client, issuePoller tracker.IssuePoller, lease github.LeaseClient, runStore factory.OperationalStore, worktree gitadapter.WorktreeManager, comments tracker.CommentReader) *factory.Service {
+func newPollingService(root string, githubAdapter tracker.Client, issuePoller tracker.IssuePoller, lease tracker.LeaseClient, runStore factory.OperationalStore, worktree gitadapter.WorktreeManager, comments tracker.CommentReader) *factory.Service {
 	registration := config.RepositoryRegistration{
 		Path:                 filepath.Join(root, "repository"),
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},

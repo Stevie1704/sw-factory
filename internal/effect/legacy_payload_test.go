@@ -8,7 +8,6 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/effect"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -48,16 +47,16 @@ func (r *recordingIssuesForTest) ReplaceIssueLabels(_ context.Context, repositor
 // recordingStatusesForTest records the commit status a replay publishes.
 type recordingStatusesForTest struct {
 	repository tracker.Repository
-	status     github.CommitStatus
+	status     codehost.CommitStatus
 }
 
 // ListCommitStatuses reports no existing status, so replay must publish.
-func (*recordingStatusesForTest) ListCommitStatuses(context.Context, tracker.Repository, string) ([]github.CommitStatus, error) {
+func (*recordingStatusesForTest) ListCommitStatuses(context.Context, tracker.Repository, string) ([]codehost.CommitStatus, error) {
 	return nil, nil
 }
 
 // CreateCommitStatus records the replayed status.
-func (r *recordingStatusesForTest) CreateCommitStatus(_ context.Context, repository tracker.Repository, status github.CommitStatus) error {
+func (r *recordingStatusesForTest) CreateCommitStatus(_ context.Context, repository tracker.Repository, status codehost.CommitStatus) error {
 	r.repository, r.status = repository, status
 	return nil
 }
@@ -116,8 +115,8 @@ func TestReplayAcceptsPayloadsJournaledBeforeTheTrackerPorts(t *testing.T) {
 	}
 
 	replay(store.PendingEffectKindCommitStatus, legacyCommitStatusPayload)
-	wantStatus := github.CommitStatus{
-		SHA: "0123456789abcdef0123456789abcdef01234567", State: github.CommitStatusFailure,
+	wantStatus := codehost.CommitStatus{
+		SHA: "0123456789abcdef0123456789abcdef01234567", State: codehost.CommitStatusFailure,
 		Context: "factory/test", Description: "tests failed", TargetURL: "https://example.test/run",
 	}
 	if statuses.repository != legacyRepository || statuses.status != wantStatus {

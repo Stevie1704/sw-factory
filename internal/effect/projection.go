@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/codehost"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -131,7 +130,7 @@ func sameStringSlice(left, right []string) bool {
 
 // sameCommitStatus compares every semantic field that makes a status replay
 // safe; GitHub may assign its own numeric status identity.
-func sameCommitStatus(left, right github.CommitStatus) bool {
+func sameCommitStatus(left, right codehost.CommitStatus) bool {
 	return left.SHA == right.SHA && left.State == right.State && left.Context == right.Context && left.Description == right.Description && left.TargetURL == right.TargetURL
 }
 

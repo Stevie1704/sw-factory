@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -172,7 +172,7 @@ type InvocationLifecycle interface {
 // the module. The module never receives the coordinator's dependency bundle.
 type invocationLifecycleHooks struct {
 	persistRun               func(context.Context, config.RepositoryRegistration, RunStore, store.Run, store.Run) error
-	publishReviewStatus      func(context.Context, config.RepositoryRegistration, RunStore, store.Run, string, github.CommitStatusState, string) error
+	publishReviewStatus      func(context.Context, config.RepositoryRegistration, RunStore, store.Run, string, codehost.CommitStatusState, string) error
 	refreshReviewPullRequest func(context.Context, config.RepositoryRegistration, RunStore, store.Run) error
 	reconcileInterrupted     func(context.Context, config.RepositoryRegistration, RunStore, store.Run, bool) (store.Run, RecoveryDiagnosis, RecoveryOutcome, error)
 	resumeRecoveredCheck     func(context.Context, config.RepositoryRegistration, RunStore, store.Run) (store.Run, error)
@@ -1069,7 +1069,7 @@ func (l *invocationLifecycle) activateLaunch(ctx context.Context, request Invoca
 		if l.hooks.publishReviewStatus == nil {
 			return AgentLaunchResult{}, fmt.Errorf("commit-status publisher is required for %s", plan.Request.Role)
 		}
-		if err := l.hooks.publishReviewStatus(ctx, request.Registration, request.RunStore, plan.Run, plan.Request.Role, github.CommitStatusPending, fmt.Sprintf("%s in progress", plan.Request.Role)); err != nil {
+		if err := l.hooks.publishReviewStatus(ctx, request.Registration, request.RunStore, plan.Run, plan.Request.Role, codehost.CommitStatusPending, fmt.Sprintf("%s in progress", plan.Request.Role)); err != nil {
 			return AgentLaunchResult{}, fmt.Errorf("publish pending %s status: %w", plan.Request.Role, err)
 		}
 	}

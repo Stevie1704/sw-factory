@@ -13,7 +13,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -91,10 +90,10 @@ func TestNonBlockingGateFailureReachesReadiness(t *testing.T) {
 		t.Fatal("pull request remained draft despite only a non-blocking gate failure")
 	}
 	results := fixture.checkpointGateResults(t, ready)
-	if len(results) != 2 || results[0].GateName != "lint" || results[0].Outcome != store.GateOutcomeFailed || results[0].Status != string(github.CommitStatusFailure) || results[1].Outcome != store.GateOutcomePassed {
+	if len(results) != 2 || results[0].GateName != "lint" || results[0].Outcome != store.GateOutcomeFailed || results[0].Status != string(codehost.CommitStatusFailure) || results[1].Outcome != store.GateOutcomePassed {
 		t.Fatalf("persisted checkpoint results = %#v, want the non-blocking gate failure retained beside the required success", results)
 	}
-	if !fixture.publishedStatus("lint", draft.Run.CheckpointSHA, github.CommitStatusFailure) {
+	if !fixture.publishedStatus("lint", draft.Run.CheckpointSHA, codehost.CommitStatusFailure) {
 		t.Fatalf("published statuses = %#v, want an exact-checkpoint non-blocking gate failure", fixture.statuses.values)
 	}
 	body := fixture.pullRequests.createdRequests[0].Body
@@ -113,7 +112,7 @@ func TestNonBlockingGateFailureReachesReadiness(t *testing.T) {
 		t.Fatalf("run after replay = %#v draft=%v, want ready non-draft", replayed, fixture.pullRequests.existing.Draft)
 	}
 	again := fixture.checkpointGateResults(t, replayed)
-	if len(again) != 2 || again[0].Outcome != store.GateOutcomeFailed || again[0].Status != string(github.CommitStatusFailure) {
+	if len(again) != 2 || again[0].Outcome != store.GateOutcomeFailed || again[0].Status != string(codehost.CommitStatusFailure) {
 		t.Fatalf("checkpoint results after replay = %#v, want unchanged non-blocking gate failure", again)
 	}
 }
@@ -246,7 +245,7 @@ func (f *nonBlockingReadinessFixture) checkpointGateResults(t *testing.T, run st
 }
 
 // publishedStatus reports whether one exact-checkpoint gate status was sent.
-func (f *nonBlockingReadinessFixture) publishedStatus(gateName, sha string, state github.CommitStatusState) bool {
+func (f *nonBlockingReadinessFixture) publishedStatus(gateName, sha string, state codehost.CommitStatusState) bool {
 	for _, status := range f.statuses.values {
 		if status.SHA == sha && status.State == state && strings.HasSuffix(status.Context, gateName) {
 			return true

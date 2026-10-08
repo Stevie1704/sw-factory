@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -113,7 +113,7 @@ type Result struct {
 	// SkipReason explains a dependency or setup skip without reporting a failure.
 	SkipReason string
 	// Status is the final exact-SHA Commit Status request.
-	Status github.CommitStatus
+	Status codehost.CommitStatus
 }
 
 // SuiteResult contains setup and every declared gate result in declaration
@@ -254,7 +254,7 @@ type Runner struct {
 	// Repository is the host-side GitHub repository receiving statuses.
 	Repository tracker.Repository
 	// Statuses publishes exact-SHA GitHub results.
-	Statuses github.CommitStatusPublisher
+	Statuses codehost.CommitStatusPublisher
 }
 
 // Run executes setup followed by one declared gate at the compatibility seam.
@@ -373,7 +373,7 @@ func (r Runner) validateSuiteRequest(request SuiteRequest) error {
 	if strings.TrimSpace(request.RunID) == "" {
 		return errors.New("gate run id is required")
 	}
-	if !github.ValidCommitSHA(request.CheckpointSHA) {
+	if !codehost.ValidCommitSHA(request.CheckpointSHA) {
 		return errors.New("gate checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
 	}
 	if strings.TrimSpace(request.Setup) == "" {
@@ -437,7 +437,7 @@ func (r Runner) runDeclaredGate(ctx context.Context, suite SuiteResult, declared
 	cancelGate()
 	if commandErr == nil && gateResult.Gate.ExitCode == 0 {
 		gateResult.Outcome = OutcomePassed
-		gateResult.Status.State = github.CommitStatusSuccess
+		gateResult.Status.State = codehost.CommitStatusSuccess
 		gateResult.Status.Description = "factory gate passed"
 		return gateResult, nil
 	}
@@ -447,14 +447,14 @@ func (r Runner) runDeclaredGate(ctx context.Context, suite SuiteResult, declared
 	failure := &GateFailure{Name: declared.Name, Result: gateResult.Gate, Cause: commandErr, TimedOut: timedOut, Blocking: declared.Blocking}
 	gateResult.Outcome = OutcomeFailed
 	if timedOut {
-		gateResult.Status.State = github.CommitStatusFailure
+		gateResult.Status.State = codehost.CommitStatusFailure
 		gateResult.Status.Description = "factory gate timed out"
 	} else if commandErr != nil {
 		gateResult.Outcome = OutcomeError
-		gateResult.Status.State = github.CommitStatusError
+		gateResult.Status.State = codehost.CommitStatusError
 		gateResult.Status.Description = "factory gate execution failed"
 	} else {
-		gateResult.Status.State = github.CommitStatusFailure
+		gateResult.Status.State = codehost.CommitStatusFailure
 		gateResult.Status.Description = "factory gate failed"
 	}
 	return gateResult, failure
@@ -484,7 +484,7 @@ func (r Runner) setupFailedResult(suite SuiteResult, declared config.GateConfig,
 	result.Outcome = OutcomeSetupFailed
 	result.Skipped = true
 	result.SkipReason = "setup failed"
-	result.Status.State = github.CommitStatusError
+	result.Status.State = codehost.CommitStatusError
 	result.Status.Description = "factory setup failed"
 	result.Setup = failure.Result
 	return result
@@ -496,7 +496,7 @@ func (r Runner) skippedResult(suite SuiteResult, declared config.GateConfig, _ i
 	result.Outcome = OutcomeSkipped
 	result.Skipped = true
 	result.SkipReason = reason
-	result.Status.State = github.CommitStatusPending
+	result.Status.State = codehost.CommitStatusPending
 	result.Status.Description = trimDescription("factory gate skipped: " + reason)
 	return result
 }
@@ -511,7 +511,7 @@ func baseResult(suite SuiteResult, declared config.GateConfig) Result {
 		Setup:            suite.Setup,
 		SetupRan:         suite.SetupRan,
 		SetupFingerprint: suite.SetupFingerprint,
-		Status: github.CommitStatus{
+		Status: codehost.CommitStatus{
 			SHA:     suite.CheckpointSHA,
 			Context: statusContext(suite.Phase, declared.Name),
 		},
@@ -541,7 +541,7 @@ func requestGateTimeout(declared config.GateConfig) time.Duration {
 }
 
 // publish sends one status and preserves the exact checkpoint identity.
-func (r Runner) publish(ctx context.Context, status github.CommitStatus) error {
+func (r Runner) publish(ctx context.Context, status codehost.CommitStatus) error {
 	if err := r.Statuses.CreateCommitStatus(ctx, r.Repository, status); err != nil {
 		return fmt.Errorf("publish gate status: %w", err)
 	}

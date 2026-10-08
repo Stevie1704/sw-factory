@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -60,7 +60,7 @@ func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, reques
 		if err != nil {
 			return fmt.Errorf("create checkpoint: %w", err)
 		}
-		if !github.ValidCommitSHA(checkpoint.SHA) {
+		if !codehost.ValidCommitSHA(checkpoint.SHA) {
 			return errors.New("GitWorkspace returned an invalid checkpoint SHA")
 		}
 		next.AcceptedImplementationCheckpointSHA = ""
@@ -132,7 +132,7 @@ func (h checkpointHandler) Replay(ctx context.Context, request replayRequest) (s
 	if err != nil {
 		return store.Run{}, fmt.Errorf("replay checkpoint: %w", err)
 	}
-	if !github.ValidCommitSHA(checkpoint.SHA) {
+	if !codehost.ValidCommitSHA(checkpoint.SHA) {
 		return store.Run{}, errors.New("replayed checkpoint returned an invalid SHA")
 	}
 	next := payload.Next

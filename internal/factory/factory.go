@@ -170,8 +170,8 @@ type Dependencies struct {
 	// authority of the existing issue client seam.
 	IssuePoller tracker.IssuePoller
 	// Lease publishes the coordinator's visible GitHub heartbeat.
-	Lease          github.LeaseClient
-	CommitStatuses github.CommitStatusPublisher
+	Lease          tracker.LeaseClient
+	CommitStatuses codehost.CommitStatusPublisher
 	Worktree       gitadapter.WorktreeManager
 	// GitWorkspace owns checkpoint, base-sync, push, and cleanup effects on the host.
 	GitWorkspace gitadapter.GitWorkspace
@@ -356,12 +356,12 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		}
 	}
 	if dependencies.Lease == nil {
-		if lease, ok := dependencies.GitHub.(github.LeaseClient); ok {
+		if lease, ok := dependencies.GitHub.(tracker.LeaseClient); ok {
 			dependencies.Lease = lease
 		}
 	}
 	if dependencies.CommitStatuses == nil {
-		if publisher, ok := dependencies.GitHub.(github.CommitStatusPublisher); ok {
+		if publisher, ok := dependencies.GitHub.(codehost.CommitStatusPublisher); ok {
 			dependencies.CommitStatuses = publisher
 		}
 	}

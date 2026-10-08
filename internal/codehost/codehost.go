@@ -127,3 +127,59 @@ type PullRequestReviewReader interface {
 type PullRequestDraftClient interface {
 	SetPullRequestDraft(context.Context, tracker.Repository, int, bool) (PullRequest, error)
 }
+
+// CommitStatusState is the state vocabulary used for deterministic checkpoint
+// results. Each adapter maps it to its provider's status values.
+type CommitStatusState string
+
+const (
+	// CommitStatusPending is an in-progress status state.
+	CommitStatusPending CommitStatusState = "pending"
+	// CommitStatusSuccess marks a successful checkpoint result.
+	CommitStatusSuccess CommitStatusState = "success"
+	// CommitStatusFailure marks a declared command that exited unsuccessfully.
+	CommitStatusFailure CommitStatusState = "failure"
+	// CommitStatusError marks setup or runtime infrastructure failure.
+	CommitStatusError CommitStatusState = "error"
+)
+
+// CommitStatus identifies one status attached to one exact commit SHA.
+type CommitStatus struct {
+	// SHA is the immutable commit being reported.
+	SHA string
+	// State is the status state.
+	State CommitStatusState
+	// Context is the stable status context used for repeated reports.
+	Context string
+	// Description is a content-free human-readable summary.
+	Description string
+	// TargetURL is an optional operator-facing evidence URL.
+	TargetURL string
+}
+
+// CommitStatusPublisher is the host-side seam for publishing exact-SHA
+// Commit Statuses without exposing code-host credentials to workflow code.
+type CommitStatusPublisher interface {
+	CreateCommitStatus(context.Context, tracker.Repository, CommitStatus) error
+}
+
+// CommitStatusReader is the read-only projection used to recognize a status
+// that the code host accepted before the coordinator process stopped.
+type CommitStatusReader interface {
+	ListCommitStatuses(context.Context, tracker.Repository, string) ([]CommitStatus, error)
+}
+
+// ValidCommitSHA reports whether value is a full 40- or 64-character lowercase
+// hexadecimal commit SHA while rejecting values that could alter a code-host API path.
+func ValidCommitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}

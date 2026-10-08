@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -44,7 +44,7 @@ func TestRunnerExecutesSetupAndOneDeclaredGatePublishesTheExactCheckpoint(t *tes
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Status.State != github.CommitStatusSuccess || result.Status.SHA != gateCheckpoint {
+	if result.Status.State != codehost.CommitStatusSuccess || result.Status.SHA != gateCheckpoint {
 		t.Fatalf("Run() status = %#v, want success for exact checkpoint", result.Status)
 	}
 	if result.Status.Context != "factory/gate/test" {
@@ -89,10 +89,10 @@ func TestRunnerClassifiesSetupFailureAndDoesNotRunTheGate(t *testing.T) {
 	if !errors.As(err, &setupFailure) {
 		t.Fatalf("Run() error = %v, want SetupFailure", err)
 	}
-	if result.Status.State != github.CommitStatusError || len(runtime.commands) != 1 {
+	if result.Status.State != codehost.CommitStatusError || len(runtime.commands) != 1 {
 		t.Fatalf("result = %#v commands = %#v, want setup error and no gate", result, runtime.commands)
 	}
-	if len(statuses.statuses) != 1 || statuses.statuses[0].State != github.CommitStatusError {
+	if len(statuses.statuses) != 1 || statuses.statuses[0].State != codehost.CommitStatusError {
 		t.Fatalf("published statuses = %#v, want setup error status", statuses.statuses)
 	}
 }
@@ -126,7 +126,7 @@ func TestRunnerClassifiesGateFailure(t *testing.T) {
 	if !errors.As(err, &gateFailure) {
 		t.Fatalf("Run() error = %v, want GateFailure", err)
 	}
-	if result.Status.State != github.CommitStatusFailure || result.Status.SHA != gateCheckpoint {
+	if result.Status.State != codehost.CommitStatusFailure || result.Status.SHA != gateCheckpoint {
 		t.Fatalf("result status = %#v, want failure at exact checkpoint", result.Status)
 	}
 	if runtime.commands[1].EnvironmentPolicy != worker.EnvironmentPolicyRole {
@@ -168,10 +168,10 @@ func TestRunnerRunsIndependentGatesAndSkipsFailedDependencies(t *testing.T) {
 	if !errors.As(err, &formatFailure) {
 		t.Fatalf("RunSuite() error = %v, want GateFailure", err)
 	}
-	if len(result.Gates) != 3 || result.Gates[0].Status.State != github.CommitStatusFailure {
+	if len(result.Gates) != 3 || result.Gates[0].Status.State != codehost.CommitStatusFailure {
 		t.Fatalf("suite gates = %#v, want all declared gate results", result.Gates)
 	}
-	if result.Gates[1].Status.State != github.CommitStatusSuccess || result.Gates[1].SetupFingerprint != "setup-fingerprint-1" {
+	if result.Gates[1].Status.State != codehost.CommitStatusSuccess || result.Gates[1].SetupFingerprint != "setup-fingerprint-1" {
 		t.Fatalf("independent lint result = %#v, want success with setup fingerprint", result.Gates[1])
 	}
 	if !result.Gates[2].Skipped || !strings.Contains(result.Gates[2].SkipReason, "format") {
@@ -311,7 +311,7 @@ func TestRunnerClassifiesACommandTimeoutAsATypedGateFailure(t *testing.T) {
 	if !errors.As(err, &gateFailure) {
 		t.Fatalf("RunSuite() error = %v, want GateFailure", err)
 	}
-	if !gateFailure.TimedOut || result.Gates[0].Status.State != github.CommitStatusFailure {
+	if !gateFailure.TimedOut || result.Gates[0].Status.State != codehost.CommitStatusFailure {
 		t.Fatalf("timeout failure = %#v, result = %#v, want typed failure status", gateFailure, result.Gates[0])
 	}
 	if result.Gates[0].Status.Description != "factory gate timed out" {
@@ -361,7 +361,7 @@ func TestRunnerHaltsTheSuiteWhenTerminationIsUnconfirmed(t *testing.T) {
 	if len(result.Gates) != 2 {
 		t.Fatalf("suite gates = %#v, want one result per declared gate", result.Gates)
 	}
-	if result.Gates[0].Outcome != gate.OutcomeError || result.Gates[0].Status.State != github.CommitStatusError {
+	if result.Gates[0].Outcome != gate.OutcomeError || result.Gates[0].Status.State != codehost.CommitStatusError {
 		t.Fatalf("first gate = %#v, want an execution error status", result.Gates[0])
 	}
 	if !result.Gates[1].Skipped || result.Gates[1].Outcome != gate.OutcomeSkipped || len(statuses.statuses) != 2 {
@@ -414,14 +414,14 @@ func (f *fakeRuntime) Inspect(context.Context, string) (worker.Inspection, error
 
 // fakeStatusPublisher records the one status emitted by a gate run.
 type fakeStatusPublisher struct {
-	statuses []github.CommitStatus
+	statuses []codehost.CommitStatus
 }
 
 // CreateCommitStatus implements the GitHub status seam for contract tests.
-func (f *fakeStatusPublisher) CreateCommitStatus(_ context.Context, _ tracker.Repository, status github.CommitStatus) error {
+func (f *fakeStatusPublisher) CreateCommitStatus(_ context.Context, _ tracker.Repository, status codehost.CommitStatus) error {
 	f.statuses = append(f.statuses, status)
 	return nil
 }
 
 var _ worker.WorkerRuntime = (*fakeRuntime)(nil)
-var _ github.CommitStatusPublisher = (*fakeStatusPublisher)(nil)
+var _ codehost.CommitStatusPublisher = (*fakeStatusPublisher)(nil)

@@ -11,7 +11,6 @@ import (
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -170,7 +169,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		if checkpointErr != nil {
 			return DraftPullRequestResult{}, checkpointErr
 		}
-		if !github.ValidCommitSHA(checkpoint.SHA) {
+		if !codehost.ValidCommitSHA(checkpoint.SHA) {
 			return DraftPullRequestResult{}, errors.New("GitWorkspace returned an invalid implementation checkpoint SHA")
 		}
 		next.AcceptedImplementationCheckpointSHA = ""
@@ -389,13 +388,13 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 			}
 		} else {
 			switch result.Status.State {
-			case github.CommitStatusSuccess:
+			case codehost.CommitStatusSuccess:
 				status = "passed"
-			case github.CommitStatusFailure:
+			case codehost.CommitStatusFailure:
 				status = "failed"
-			case github.CommitStatusError:
+			case codehost.CommitStatusError:
 				status = "error"
-			case github.CommitStatusPending:
+			case codehost.CommitStatusPending:
 				status = "pending"
 			default:
 				status = "unknown"

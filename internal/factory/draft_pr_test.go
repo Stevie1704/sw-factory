@@ -14,7 +14,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -312,13 +311,13 @@ func TestCreateDraftPullRequestReentersRecoveryPausedCheck(t *testing.T) {
 // GitHub does, so a test proves the checkpoint reaches the remote first.
 type unpushedCheckpointStatuses struct {
 	workspace *draftGitWorkspace
-	values    []github.CommitStatus
+	values    []codehost.CommitStatus
 	rejected  int
 }
 
 // CreateCommitStatus records one status and rejects any SHA the remote cannot
 // resolve yet.
-func (s *unpushedCheckpointStatuses) CreateCommitStatus(_ context.Context, _ tracker.Repository, status github.CommitStatus) error {
+func (s *unpushedCheckpointStatuses) CreateCommitStatus(_ context.Context, _ tracker.Repository, status codehost.CommitStatus) error {
 	if !s.workspace.remoteHasCheckpoint(status.SHA) {
 		s.rejected++
 		return fmt.Errorf("No commit found for SHA: %s (HTTP 422)", status.SHA)
@@ -327,7 +326,7 @@ func (s *unpushedCheckpointStatuses) CreateCommitStatus(_ context.Context, _ tra
 	return nil
 }
 
-var _ github.CommitStatusPublisher = (*unpushedCheckpointStatuses)(nil)
+var _ codehost.CommitStatusPublisher = (*unpushedCheckpointStatuses)(nil)
 
 // TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair
 // verifies the full failed-check to resumed-session to fresh-checkpoint loop.
@@ -397,7 +396,7 @@ func TestCreateDraftPullRequestRoutesDeterministicFailuresThroughNativeRepair(t 
 	runStore.gateResults[claimed.Run.ID] = []store.GateResult{{
 		RunID: claimed.Run.ID, CheckpointSHA: claimed.Run.CheckpointSHA, Phase: store.GatePhaseBaseline,
 		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
-		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+		Status: string(codehost.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
 	}}
 	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
 	if err != nil {
@@ -540,7 +539,7 @@ func TestCreateDraftPullRequestPreservesCaptureLimitCauseThroughCheckRepair(t *t
 	runStore.gateResults[claimed.Run.ID] = []store.GateResult{{
 		RunID: claimed.Run.ID, CheckpointSHA: claimed.Run.CheckpointSHA, Phase: store.GatePhaseBaseline,
 		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
-		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+		Status: string(codehost.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
 	}}
 	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
 	if err != nil {
