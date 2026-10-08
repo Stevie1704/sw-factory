@@ -12,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -453,6 +454,49 @@ func TestDriveRunDispatchesEveryProgressionCommand(t *testing.T) {
 				t.Fatalf("pull-request lookup calls = %d, want %d", pullRequests.findCalls, test.wantFindCalls)
 			}
 		})
+	}
+}
+
+// TestDriveRunKeepsTheRunActiveWhenAHostCommandTimesOut verifies that a
+// progression step that fails on a host command deadline returns the
+// retryable timeout and leaves the run active. Pausing it for a person would
+// turn a transport failure into human work.
+func TestDriveRunKeepsTheRunActiveWhenAHostCommandTimesOut(t *testing.T) {
+	runStore := &progressionDispatchStore{run: store.Run{
+		ID:                  "run-baseline-timeout",
+		Stage:               store.StageClaim,
+		Status:              store.StatusActive,
+		SpecificationPacket: progressionDispatchPacket(t, false),
+		Worktree:            "/worktree",
+	}}
+	workspace := &progressionDispatchWorkspace{inspectErr: &hostcmd.TimeoutError{Operation: "git status", Timeout: gitadapter.LocalCommandTimeout}}
+	registration := config.RepositoryRegistration{
+		Path:                 "/repository",
+		OperationalDataPath:  "/state/factory.db",
+		RepositoryConfigPath: "/repository/factory.yaml",
+		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
+	}
+	service := &Service{
+		configPath: "/host/config.yaml",
+		deps: Dependencies{
+			Config:       progressionDispatchConfig{registration: registration},
+			OpenStore:    func(context.Context, string) (OperationalStore, error) { return runStore, nil },
+			GitHub:       progressionDispatchGitHub{},
+			GitWorkspace: workspace,
+			PullRequests: &progressionDispatchPullRequests{},
+			Now:          func() time.Time { return time.Unix(1, 0).UTC() },
+			NewRunID:     func() (string, error) { return "dispatch-generated", nil },
+		},
+		startupChecked: true,
+	}
+
+	_, err := service.driveRun(context.Background(), registration)
+
+	if !hostCommandTimedOut(err) {
+		t.Fatalf("driveRun() error = %v, want the retryable host command timeout", err)
+	}
+	if runStore.run.Status != store.StatusActive || runStore.run.LifecycleReason != "" {
+		t.Fatalf("run after timeout = %s (%q), want it still active and unpaused", runStore.run.Status, runStore.run.LifecycleReason)
 	}
 }
 

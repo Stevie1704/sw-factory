@@ -69,6 +69,10 @@ const (
 	// RecoveryOutcomeWaitingForHarness means the harness reported temporary
 	// capacity pressure and the run remains eligible for an automatic retry.
 	RecoveryOutcomeWaitingForHarness RecoveryOutcome = "waiting_for_harness"
+	// RecoveryOutcomeRetryable means a host git or gh call timed out while it
+	// replayed a pending effect. The effect stays reserved and the next
+	// reconciliation replays it again.
+	RecoveryOutcomeRetryable RecoveryOutcome = "retryable"
 )
 
 // RecoveryDiscrepancy describes one observed disagreement between persisted
@@ -1030,6 +1034,14 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 	} else if pending != nil {
 		resumeWasAlreadyReserved := harnessResumeWasAlreadyReserved(ctx, runStore, *pending)
 		updated, replayErr := s.journal().Replay(ctx, runStore, *pending)
+		if hostCommandTimedOut(replayErr) {
+			// GitHub or the Git remote did not answer. The effect stays
+			// reserved and the run keeps its state, so the next drain
+			// replays the same effect.
+			diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
+			diagnosis.PendingEffect = pending
+			return run, diagnosis, RecoveryOutcomeRetryable, replayErr
+		}
 		if replayErr != nil {
 			diagnosis := s.diagnoseInterruptedRunWithStore(ctx, registration, runStore, run)
 			diagnosis.PendingEffect = pending

@@ -9,12 +9,12 @@ import (
 	"hash"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -117,30 +117,17 @@ func (s *Service) streamReviewDiff(ctx context.Context, worktree, base, checkpoi
 }
 
 // streamReviewDiffFromWorktree streams Git stdout directly into the supplied
-// destination. No command-output helper may materialise the complete diff.
+// destination. No command-output helper may materialise the complete diff, so
+// this call has the host Git deadline and process-group stop but no output
+// limit.
 func streamReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoint string, destination io.Writer) error {
-	command := exec.CommandContext(ctx, "git", gitadapter.HostCommandArgs("-C", worktree, "diff", "--no-ext-diff", "--no-textconv", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", ".")...)
+	command := gitadapter.HostCommand(worktree, []string{"diff", "--no-ext-diff", "--no-textconv", fmt.Sprintf("--unified=%d", reviewDiffContextLines), base, checkpoint, "--", "."})
 	// The factory worker environment may provide a coordinator-level Git
 	// projection. Remove those overrides so this command inspects the claimed
-	// worktree's own repository metadata.
-	command.Env = environmentWithoutGitProjection()
-	command.Stdout = destination
-	command.Stderr = io.Discard
-	return command.Run()
-}
-
-// environmentWithoutGitProjection removes inherited repository overrides
-// without replacing them with empty values that Git interprets as paths.
-func environmentWithoutGitProjection() []string {
-	environment := os.Environ()
-	filtered := make([]string, 0, len(environment))
-	for _, entry := range environment {
-		if strings.HasPrefix(entry, "GIT_DIR=") || strings.HasPrefix(entry, "GIT_WORK_TREE=") {
-			continue
-		}
-		filtered = append(filtered, entry)
-	}
-	return filtered
+	// worktree's own repository metadata. An empty value would not do: Git
+	// reads it as a path.
+	command.Unset = []string{"GIT_DIR", "GIT_WORK_TREE"}
+	return hostcmd.Stream(ctx, command, destination)
 }
 
 // reviewRoleInvocation reports whether a versioned invocation belongs to

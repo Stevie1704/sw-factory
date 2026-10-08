@@ -13,6 +13,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -369,6 +370,101 @@ func TestStartBacksOffCommandTransportFailures(t *testing.T) {
 	if savedCommandWatermark(runStore.saved, "15", "status") {
 		t.Fatal("a queued command was applied although every comment listing failed")
 	}
+}
+
+// TestStartAppliesACancelAfterAHungGitHubCallTimesOut verifies that a comment
+// listing that reaches its host command deadline is a retryable transport
+// failure: the supervisor keeps running, and its next pass applies a pending
+// /factory cancel.
+func TestStartAppliesACancelAfterAHungGitHubCallTimesOut(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
+	runStore := &fakeRunStore{}
+	timeout := &hostcmd.TimeoutError{Operation: "gh api", Timeout: github.CommandTimeout}
+	cancelCommand := []github.Comment{{ID: "15", Author: "alice", Body: "/factory cancel"}}
+	comments := &pollingCommentReader{
+		listErrors:     []error{nil, timeout},
+		commentBatches: [][]github.Comment{nil, nil, cancelCommand},
+		comments:       cancelCommand,
+	}
+	var cancel context.CancelFunc
+	lease := &pollingLease{}
+	lease.onRenew = func(github.Lease) {
+		if strings.Contains(githubAdapter.lastLabelMutation, github.LabelAgentCancelled) && cancel != nil {
+			cancel()
+		}
+	}
+	var events pollingEventSink
+	service := newPollingService(root, githubAdapter, githubAdapter, lease, runStore, &fakeWorktree{workspace: gitadapter.Workspace{
+		BaseSHA: "base", Branch: "factory/run-fixed", Worktree: "/worktree/run-fixed",
+	}}, comments)
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	cancel = stop
+	defer stop()
+
+	if err := service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v, want the supervisor to survive a timed-out GitHub call", err)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatal("the test deadline stopped the supervisor; the cancel command was never applied")
+	}
+	if comments.calls < 3 {
+		t.Fatalf("comment listings = %d, want a retry after the timed-out listing", comments.calls)
+	}
+	if !savedCommandWatermark(runStore.saved, "15", "cancel") {
+		t.Fatalf("saved runs = %#v, want the cancel command applied after the timeout", runStore.saved)
+	}
+	var retried bool
+	for _, event := range events.events {
+		if event.Kind == factory.EventCommandFailure && event.Code == "transport" {
+			retried = true
+		}
+	}
+	if !retried {
+		t.Fatalf("events = %#v, want the timeout reported as a transport failure", events.events)
+	}
+}
+
+// TestStartRetriesAClaimWhoseGitHubCallTimedOut verifies that a claim that
+// fails because a gh call reached its deadline is a transport failure: the
+// supervisor backs off and observes the queue again instead of stopping.
+func TestStartRetriesAClaimWhoseGitHubCallTimedOut(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{
+		statusComment: github.Comment{ID: "status-1"},
+		issueErr:      &hostcmd.TimeoutError{Operation: "gh api", Timeout: github.CommandTimeout},
+	}, issues: issues}
+	var cancel context.CancelFunc
+	lease := &pollingLease{}
+	lease.onRenew = func(github.Lease) {
+		if githubAdapter.listCalls >= 2 && cancel != nil {
+			cancel()
+		}
+	}
+	var events pollingEventSink
+	service := newPollingService(root, githubAdapter, githubAdapter, lease, &fakeRunStore{}, &fakeWorktree{}, nil)
+	ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	cancel = stop
+	defer stop()
+
+	if err := service.Start(ctx, &events); err != nil {
+		t.Fatalf("Start() error = %v, want the supervisor to survive a timed-out claim", err)
+	}
+	if githubAdapter.listCalls < 2 {
+		t.Fatalf("queue observations = %d, want a second pass after the timed-out claim", githubAdapter.listCalls)
+	}
+	for _, event := range events.events {
+		if event.Kind == factory.EventRetry && event.Operation == "queue polling" {
+			return
+		}
+	}
+	t.Fatalf("events = %#v, want a queue-polling retry for the timed-out claim", events.events)
 }
 
 // TestStartEmitsTypedPollAndClaimEvents verifies that the persistent

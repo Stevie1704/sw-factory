@@ -10,6 +10,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 )
 
 // TestLocalWorktreeManagerChecksTheConfiguredRemoteAndTargetBranch verifies
@@ -149,11 +150,40 @@ func TestStartupChecksReportEveryConfiguredRoleCraftEntry(t *testing.T) {
 	}
 }
 
+// TestStartupChecksReportAnUnresponsiveRemote verifies that a remote that does
+// not answer before the command deadline gives an actionable finding and does
+// not hold the diagnosis.
+func TestStartupChecksReportAnUnresponsiveRemote(t *testing.T) {
+	repositoryPath := t.TempDir()
+	runner := &gitDoctorRunner{
+		repositoryPath: repositoryPath,
+		hooksPath:      os.DevNull,
+		lsRemoteErr:    &hostcmd.TimeoutError{Operation: "git ls-remote", Timeout: gitadapter.LocalCommandTimeout},
+	}
+	manager := &gitadapter.LocalWorktreeManager{Runner: runner}
+	report := doctor.Run(context.Background(), gitadapter.StartupChecks(manager, gitadapter.DoctorRequest{
+		RepositoryPath:     repositoryPath,
+		RemoteName:         "origin",
+		ExpectedOwner:      "example",
+		ExpectedRepository: "project",
+		TargetBranch:       "main",
+	})...)
+
+	remote := report.Results[0]
+	if remote.Status != doctor.StatusFailed || !strings.Contains(remote.Problem, "did not answer within 2m0s") {
+		t.Fatalf("git remote result = %#v, want an unresponsive-remote failure that names the deadline", remote)
+	}
+	if !strings.Contains(remote.Action, "network") || !strings.Contains(remote.Action, "credential") {
+		t.Fatalf("git remote action = %q, want network and credential guidance", remote.Action)
+	}
+}
+
 // gitDoctorRunner returns deterministic observations for Git diagnosis.
 type gitDoctorRunner struct {
 	repositoryPath string
 	hooksPath      string
 	treeMode       string
+	lsRemoteErr    error
 	commands       []string
 }
 
@@ -170,6 +200,9 @@ func (r *gitDoctorRunner) Run(_ context.Context, _ string, args []string) ([]byt
 	case len(args) == 4 && args[0] == "remote" && args[2] == "--push":
 		return []byte("git@github.com:example/project.git\n"), nil
 	case len(args) > 0 && args[0] == "ls-remote":
+		if r.lsRemoteErr != nil {
+			return nil, r.lsRemoteErr
+		}
 		return []byte("0123456789abcdef0123456789abcdef01234567\trefs/heads/main\n"), nil
 	case len(args) == 3 && args[0] == "cat-file" && args[1] == "-t":
 		return []byte("blob\n"), nil

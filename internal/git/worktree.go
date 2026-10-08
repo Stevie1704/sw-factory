@@ -2,17 +2,17 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/ref"
 )
 
@@ -199,24 +199,63 @@ func HostCommandArgs(args ...string) []string {
 	return append(slices.Clone(hostGitPolicy), args...)
 }
 
-// commandRunner executes the host git binary under the factory hook policy.
+const (
+	// LocalCommandTimeout is the deadline for a host Git command that does not
+	// transfer objects, such as status, rev-parse, commit, or ls-remote.
+	LocalCommandTimeout = 2 * time.Minute
+	// TransferCommandTimeout is the deadline for git fetch and git push, which
+	// transfer objects to or from the remote.
+	TransferCommandTimeout = 10 * time.Minute
+)
+
+// nonInteractiveEnvironment keeps host Git away from the operator. Git does
+// not prompt on the terminal, and an empty askpass value makes Git and ssh
+// skip every askpass program, so a missing credential fails at once instead
+// of waiting for an answer that an unattended coordinator cannot give.
+var nonInteractiveEnvironment = []string{
+	"GIT_TERMINAL_PROMPT=0",
+	"GIT_ASKPASS=",
+	"SSH_ASKPASS=",
+}
+
+// commandRunner executes the host git binary under the factory hook policy,
+// with a deadline and without terminal interaction.
 type commandRunner struct{}
 
 // Run executes git in the requested repository directory.
 func (commandRunner) Run(ctx context.Context, directory string, args []string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", HostCommandArgs(args...)...)
-	command.Dir = directory
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
+	output, err := hostcmd.Run(ctx, HostCommand(directory, args))
+	if err != nil {
+		var timeout *hostcmd.TimeoutError
+		var limit *hostcmd.OutputLimitError
+		message := strings.TrimSpace(string(output.Stderr))
+		if message == "" || errors.As(err, &timeout) || errors.As(err, &limit) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), message, err)
 	}
-	return stdout.Bytes(), nil
+	return output.Stdout, nil
+}
+
+// HostCommand describes one host Git invocation: the hook policy before the
+// subcommand, the non-interactive environment, and the subcommand's deadline.
+func HostCommand(directory string, args []string) hostcmd.Command {
+	operation := "git"
+	timeout := LocalCommandTimeout
+	if len(args) > 0 {
+		operation += " " + args[0]
+		if args[0] == "fetch" || args[0] == "push" {
+			timeout = TransferCommandTimeout
+		}
+	}
+	return hostcmd.Command{
+		Operation: operation,
+		Name:      "git",
+		Args:      HostCommandArgs(args...),
+		Dir:       directory,
+		Env:       slices.Clone(nonInteractiveEnvironment),
+		Timeout:   timeout,
+	}
 }
 
 // LocalWorktreeManager fetches the configured target branch and creates a new

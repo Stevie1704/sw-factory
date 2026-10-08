@@ -259,6 +259,13 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		CreateComment: true,
 	})
 	if err != nil {
+		// A host command deadline leaves a pending claim, not a failed one:
+		// the journal keeps the reserved transition, and the next command
+		// poll replays it once GitHub answers. Failing the claim here would
+		// mark the issue agent-failed for a transport failure.
+		if hostCommandTimedOut(err) {
+			return IssueResult{Run: run}, err
+		}
 		_, failureErr := s.failClaim(ctx, runStore, run, repository, issue, err)
 		return IssueResult{}, cleanupWorkspace(failureErr)
 	}
@@ -517,6 +524,12 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 	updated, _, _, err := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
 	if err != nil {
 		*run = updated
+		if hostCommandTimedOut(err) {
+			// Let the next call reconcile again instead of caching a
+			// transport failure for the life of the process.
+			s.startupChecked = false
+			return err
+		}
 		s.startupErr = err
 		return s.startupErr
 	}
@@ -545,6 +558,12 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 	updated, diagnosis, _, err := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
 	*run = updated
 	if err != nil {
+		if hostCommandTimedOut(err) {
+			// Let the next call reconcile again instead of caching a
+			// transport failure for the life of the process.
+			s.startupChecked = false
+			return err
+		}
 		s.startupErr = err
 		return s.startupErr
 	}

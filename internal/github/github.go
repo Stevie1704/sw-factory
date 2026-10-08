@@ -2,16 +2,16 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 )
 
 const (
@@ -263,24 +263,43 @@ type CommandRunner interface {
 	Run(context.Context, []string, []byte) ([]byte, error)
 }
 
-// commandRunner executes the host gh binary.
+// CommandTimeout is the deadline for one host gh call.
+const CommandTimeout = 2 * time.Minute
+
+// commandRunner executes the host gh binary with a deadline and without
+// prompts.
 type commandRunner struct{}
 
 // Run executes gh with optional JSON input supplied through stdin.
 func (commandRunner) Run(ctx context.Context, args []string, input []byte) ([]byte, error) {
-	command := exec.CommandContext(ctx, "gh", args...)
-	command.Stdin = bytes.NewReader(input)
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
+	output, err := hostcmd.Run(ctx, hostCommand(args, input))
+	if err != nil {
+		var timeout *hostcmd.TimeoutError
+		var limit *hostcmd.OutputLimitError
+		message := strings.TrimSpace(string(output.Stderr))
+		if message == "" || errors.As(err, &timeout) || errors.As(err, &limit) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("gh %s: %s: %w", strings.Join(args, " "), message, err)
 	}
-	return stdout.Bytes(), nil
+	return output.Stdout, nil
+}
+
+// hostCommand describes one gh invocation. GH_PROMPT_DISABLED stops gh from
+// asking interactive questions that an unattended coordinator cannot answer.
+func hostCommand(args []string, input []byte) hostcmd.Command {
+	operation := "gh"
+	if len(args) > 0 {
+		operation += " " + args[0]
+	}
+	return hostcmd.Command{
+		Operation: operation,
+		Name:      "gh",
+		Args:      args,
+		Stdin:     input,
+		Env:       []string{"GH_PROMPT_DISABLED=1"},
+		Timeout:   CommandTimeout,
+	}
 }
 
 // GhClient invokes the locally authenticated GitHub CLI. The adapter never

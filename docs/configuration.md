@@ -403,8 +403,42 @@ invocations do not resolve the disabled hooks path.
 | Clean, smudge, and process filters; merge drivers | Supported | Only host configuration defines their commands. The worker gets read-only Git metadata without configuration, so it cannot define one. Tracked `.gitattributes` can only select a defined driver. Git LFS needs them. |
 | External diff and text conversion | Not reached | Checkpoint validation uses the built-in `diff --check` format. The review diff passes `--no-ext-diff --no-textconv`. |
 | Commit signing (`commit.gpgSign`, `gpg.program`) | Supported | The operator configures the program. A repository may require signed commits. |
-| Transport authentication (credential helpers, `core.sshCommand`, askpass) | Supported | Fetch and push need it. No hook runs, so no repository script can inherit it. |
+| Transport authentication (credential helpers, `core.sshCommand`, ssh agent) | Supported | Fetch and push need it. No hook runs, so no repository script can inherit it. |
+| Terminal prompts and askpass programs | Disabled | The coordinator runs unattended. A prompt would block it. |
 | Server-side hooks of the remote | Not in scope | They run on the remote. The production remote is GitHub. |
+
+### Deadlines and non-interactive mode
+
+Each host `git` and `gh` call has a fixed deadline:
+
+| Operation | Deadline |
+| --- | --- |
+| `git fetch`, `git push` | 10 minutes |
+| All other host `git` commands, including `git ls-remote` and the review diff | 2 minutes |
+| All `gh` calls | 2 minutes |
+
+When a deadline expires, the factory stops the command and all processes that
+it started. The call then fails with a retryable transport error. The
+supervisor does not stop. It backs off and tries again on its next pass, so
+lifecycle commands such as `/factory cancel` continue to work. A timeout does
+not change the run state: the run stays active, and a GitHub or Git change
+that the factory reserved stays in the effect journal. The next pass completes
+or recognizes that change. A claim whose label change timed out stays a
+claim; it does not become `agent-failed`. `factory doctor`
+reports an unresponsive GitHub or Git remote as a failed check that names the
+deadline.
+
+Host commands cannot ask for input:
+
+- `git` runs with `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=`, and `SSH_ASKPASS=`.
+  Git does not prompt on the terminal and starts no askpass program. Supply
+  credentials through a credential helper (for example `gh auth setup-git`) or
+  an ssh agent.
+- `gh` runs with `GH_PROMPT_DISABLED=1`.
+
+The factory keeps at most 32 MiB of stdout and 32 MiB of stderr for each
+host command. A command that writes more fails with an output-limit error. The
+factory does not use partial output.
 
 ### Move hook checks into gates
 
