@@ -120,6 +120,57 @@ func TestRunReportsCallerCancellationAsTheContextError(t *testing.T) {
 	}
 }
 
+// TestStreamStopsACommandWhoseChildKeepsTheOutputOpen verifies that a
+// streamed command gets the same deadline as Run: a child that keeps stdout
+// open cannot hold the call past the deadline, and the output streamed before
+// the deadline stays in the destination.
+func TestStreamStopsACommandWhoseChildKeepsTheOutputOpen(t *testing.T) {
+	t.Parallel()
+
+	pidFile := filepath.Join(t.TempDir(), "pids")
+	var destination strings.Builder
+	started := time.Now()
+	err := hostcmd.Stream(context.Background(), hostcmd.Command{
+		Name:    "sh",
+		Args:    []string{"-c", `printf partial; sleep 60 & echo "$$ $!" > "$1"; wait`, "sh", pidFile},
+		Timeout: 200 * time.Millisecond,
+	}, &destination)
+
+	var timeout *hostcmd.TimeoutError
+	if !errors.As(err, &timeout) {
+		t.Fatalf("Stream() error = %v, want *hostcmd.TimeoutError", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("Stream() returned after %s, want shortly after the 200ms deadline", elapsed)
+	}
+	if destination.String() != "partial" {
+		t.Fatalf("streamed output = %q, want the bytes written before the deadline", destination.String())
+	}
+	for _, pid := range recordedPIDs(t, pidFile) {
+		if processAlive(pid) {
+			t.Fatalf("process %d is still running after the deadline", pid)
+		}
+	}
+}
+
+// TestStreamRemovesUnsetVariablesFromTheInheritedEnvironment verifies that a
+// caller can drop an inherited variable instead of setting it to an empty
+// value, which Git would read as a path.
+func TestStreamRemovesUnsetVariablesFromTheInheritedEnvironment(t *testing.T) {
+	t.Setenv("HOSTCMD_PROBE", "inherited")
+
+	var destination strings.Builder
+	err := hostcmd.Stream(context.Background(), hostcmd.Command{
+		Name:    "sh",
+		Args:    []string{"-c", `printf '%s' "${HOSTCMD_PROBE-unset}"`},
+		Unset:   []string{"HOSTCMD_PROBE"},
+		Timeout: 30 * time.Second,
+	}, &destination)
+	if err != nil || destination.String() != "unset" {
+		t.Fatalf("Stream() = %q, %v, want the variable removed", destination.String(), err)
+	}
+}
+
 // recordedPIDs waits for the script to record its process IDs and parses them.
 func recordedPIDs(t *testing.T, path string) []int {
 	t.Helper()

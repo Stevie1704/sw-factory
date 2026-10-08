@@ -18,12 +18,12 @@ func TestHostCommandSetsTheDeadlineForEachSubcommand(t *testing.T) {
 		"rev-parse": 2 * time.Minute,
 	}
 	for subcommand, want := range cases {
-		command := hostCommand("/repository", []string{subcommand, "origin"})
+		command := HostCommand("/repository", []string{subcommand, "origin"})
 		if command.Timeout != want {
-			t.Errorf("hostCommand(%q) timeout = %s, want %s", subcommand, command.Timeout, want)
+			t.Errorf("HostCommand(%q) timeout = %s, want %s", subcommand, command.Timeout, want)
 		}
 		if command.Operation != "git "+subcommand {
-			t.Errorf("hostCommand(%q) operation = %q, want %q", subcommand, command.Operation, "git "+subcommand)
+			t.Errorf("HostCommand(%q) operation = %q, want %q", subcommand, command.Operation, "git "+subcommand)
 		}
 	}
 }
@@ -32,17 +32,17 @@ func TestHostCommandSetsTheDeadlineForEachSubcommand(t *testing.T) {
 // host Git command can neither prompt on the terminal nor start an askpass
 // program, and that it keeps the factory hook policy.
 func TestHostCommandRunsGitNonInteractivelyUnderTheHookPolicy(t *testing.T) {
-	command := hostCommand("/repository", []string{"fetch", "origin"})
+	command := HostCommand("/repository", []string{"fetch", "origin"})
 
 	if command.Name != "git" || command.Dir != "/repository" {
-		t.Fatalf("hostCommand() = %#v, want git in the repository directory", command)
+		t.Fatalf("HostCommand() = %#v, want git in the repository directory", command)
 	}
 	if !slices.Equal(command.Args, HostCommandArgs("fetch", "origin")) {
-		t.Fatalf("hostCommand() args = %q, want the hook policy before the subcommand", command.Args)
+		t.Fatalf("HostCommand() args = %q, want the hook policy before the subcommand", command.Args)
 	}
 	for _, entry := range []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS="} {
 		if !slices.Contains(command.Env, entry) {
-			t.Errorf("hostCommand() env = %q, want %q", command.Env, entry)
+			t.Errorf("HostCommand() env = %q, want %q", command.Env, entry)
 		}
 	}
 }

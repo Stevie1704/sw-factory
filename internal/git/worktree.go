@@ -224,7 +224,7 @@ type commandRunner struct{}
 
 // Run executes git in the requested repository directory.
 func (commandRunner) Run(ctx context.Context, directory string, args []string) ([]byte, error) {
-	output, err := hostcmd.Run(ctx, hostCommand(directory, args))
+	output, err := hostcmd.Run(ctx, HostCommand(directory, args))
 	if err != nil {
 		var timeout *hostcmd.TimeoutError
 		var limit *hostcmd.OutputLimitError
@@ -237,9 +237,9 @@ func (commandRunner) Run(ctx context.Context, directory string, args []string) (
 	return output.Stdout, nil
 }
 
-// hostCommand describes one host Git invocation: the hook policy before the
+// HostCommand describes one host Git invocation: the hook policy before the
 // subcommand, the non-interactive environment, and the subcommand's deadline.
-func hostCommand(directory string, args []string) hostcmd.Command {
+func HostCommand(directory string, args []string) hostcmd.Command {
 	operation := "git"
 	timeout := LocalCommandTimeout
 	if len(args) > 0 {

@@ -10,8 +10,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -40,6 +43,9 @@ type Command struct {
 	Dir string
 	// Stdin is the complete standard input. Nil means an empty input.
 	Stdin []byte
+	// Unset names inherited variables to remove from the environment. Use it
+	// where an empty value has a meaning, as GIT_DIR has for Git.
+	Unset []string
 	// Env holds KEY=value entries added to the inherited environment. A later
 	// entry replaces an inherited entry with the same key.
 	Env []string
@@ -94,39 +100,75 @@ func (e *OutputLimitError) Error() string {
 // report stderr. Run stops the command's whole process group, so helper
 // processes such as git-remote-https or ssh stop with it.
 func Run(ctx context.Context, command Command) (Output, error) {
+	stdout := &boundedBuffer{}
+	stderr := &boundedBuffer{}
+	err := execute(ctx, command, stdout, stderr)
+	var timeout *TimeoutError
+	if errors.As(err, &timeout) || ctx.Err() != nil {
+		return Output{}, err
+	}
+	switch {
+	case stdout.exceeded:
+		return Output{}, &OutputLimitError{Operation: operationName(command), Stream: "stdout", Limit: OutputLimit}
+	case stderr.exceeded:
+		return Output{}, &OutputLimitError{Operation: operationName(command), Stream: "stderr", Limit: OutputLimit}
+	}
+	return Output{Stdout: stdout.captured.Bytes(), Stderr: stderr.captured.Bytes()}, err
+}
+
+// Stream executes command and copies its stdout to destination without a byte
+// limit, for output that the caller writes to a file instead of memory.
+// Stderr is discarded. The deadline, the process-group stop, and the error
+// types are the same as for Run.
+func Stream(ctx context.Context, command Command, destination io.Writer) error {
+	return execute(ctx, command, destination, io.Discard)
+}
+
+// execute runs command with its deadline in its own process group. A caller
+// cancellation returns the caller's context error, and a deadline expiry
+// returns *TimeoutError. Every other result is the exec error.
+func execute(ctx context.Context, command Command, stdout, stderr io.Writer) error {
 	if command.Timeout <= 0 {
-		return Output{}, errors.New("host command timeout must be positive")
+		return errors.New("host command timeout must be positive")
 	}
 	deadline, cancel := context.WithTimeout(ctx, command.Timeout)
 	defer cancel()
 	process := exec.CommandContext(deadline, command.Name, command.Args...)
 	process.Dir = command.Dir
-	process.Env = append(os.Environ(), command.Env...)
+	process.Env = append(inheritedEnvironment(command.Unset), command.Env...)
 	process.Stdin = bytes.NewReader(command.Stdin)
-	stdout := &boundedBuffer{}
-	stderr := &boundedBuffer{}
 	process.Stdout = stdout
 	process.Stderr = stderr
-	// A separate process group lets Run stop every descendant together, and
-	// keeps the command away from the terminal's foreground input.
+	// A separate process group lets execute stop every descendant together,
+	// and keeps the command away from the terminal's foreground input.
 	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	process.Cancel = func() error { return syscall.Kill(-process.Process.Pid, syscall.SIGKILL) }
 	process.WaitDelay = waitDelay
 	err := process.Run()
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return Output{}, ctxErr
-	}
-	operation := operationName(command)
-	switch {
-	case stdout.exceeded:
-		return Output{}, &OutputLimitError{Operation: operation, Stream: "stdout", Limit: OutputLimit}
-	case stderr.exceeded:
-		return Output{}, &OutputLimitError{Operation: operation, Stream: "stderr", Limit: OutputLimit}
+		return ctxErr
 	}
 	if err != nil && errors.Is(deadline.Err(), context.DeadlineExceeded) {
-		return Output{}, &TimeoutError{Operation: operation, Timeout: command.Timeout}
+		return &TimeoutError{Operation: operationName(command), Timeout: command.Timeout}
 	}
-	return Output{Stdout: stdout.captured.Bytes(), Stderr: stderr.captured.Bytes()}, err
+	return err
+}
+
+// inheritedEnvironment returns the coordinator's environment without the
+// named variables.
+func inheritedEnvironment(unset []string) []string {
+	environment := os.Environ()
+	if len(unset) == 0 {
+		return environment
+	}
+	kept := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains(unset, name) {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }
 
 // operationName returns the declared operation, or names an invocation by its
