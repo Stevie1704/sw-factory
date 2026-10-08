@@ -8,12 +8,25 @@ The software factory turns an explicitly authorized GitHub issue into a supervis
 One supervised execution that owns a frozen issue, specification packet, branch, worktree, and pull request.
 _Avoid_: Job, task, workflow instance
 
-**GitHub lifecycle observation**:
+**Work tracker**:
+The external system that holds the issues the factory claims, their run-state
+labels, the status and command comments, and the optional coordinator lease.
+It stays the source of truth for product intent. The coordinator reaches it
+only through the tracker port; GitHub is the first adapter.
+_Avoid_: GitHub (for the concept), ticket store
+
+**Code host**:
+The external system that holds the run branch's pull request, its human
+reviews, and the checkpoint commit statuses. The coordinator reaches it only
+through the code-host port; GitHub is the first adapter.
+_Avoid_: GitHub (for the concept), forge
+
+**Lifecycle observation**:
 One coordinator read of the tracked issue and pull request that can identify
 successful merge completion, an unmerged closure requiring cancellation, or a
 newly submitted authorized review requesting changes. Lifecycle is always read
 before any repair, readiness, or infrastructure work.
-_Avoid_: Screen scrape, hidden workflow transition
+_Avoid_: GitHub lifecycle observation, screen scrape, hidden workflow transition
 
 **Specification packet**:
 The versioned, frozen statement of product intent for a run, consisting of the claimed issue snapshot, the selected workflow route, accepted clarifications or revisions, repository guidance captured at the run's base checkpoint, and any configured repository role-craft content captured at that same checkpoint.
@@ -224,14 +237,15 @@ and lets the same coordinator process claim the next oldest eligible issue.
 Waiting-for-human and retryable-infrastructure states never release it.
 _Avoid_: Cleanup, retention, restart
 
-**GitHub lease**:
-The operator-visible projection of the coordinator heartbeat: one closed
+**Coordinator lease**:
+The operator-visible projection of the coordinator heartbeat. It is optional
+per tracker adapter. The GitHub adapter publishes it as one closed
 milestone titled `factory coordinator lease` that the coordinator account
 created. Every renewal rewrites only the factory block in its description with
 the coordinator, the active run, and the complete renewal and expiry times. A
-past expiry identifies stale ownership. The host lock, not the GitHub lease, is
+past expiry identifies stale ownership. The host lock, not the coordinator lease, is
 the ownership authority.
-_Avoid_: Lease status, `factory/lease` Commit Status, distributed lock
+_Avoid_: GitHub lease, lease status, `factory/lease` Commit Status, distributed lock
 
 **Run activity**:
 The published distinction between an active run whose next transition the

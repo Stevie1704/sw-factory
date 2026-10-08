@@ -155,7 +155,8 @@ host lock. It polls immediately and then at the configured interval, claims
 only the oldest open issue carrying `agent-ready`, and skips queue claims while
 any non-terminal run exists. GitHub transport failures use the configured
 backoff and do not change workflow state or retry budgets. The coordinator
-renews one GitHub lease on every polling pass: a closed milestone titled
+renews one coordinator lease on every polling pass. The GitHub adapter
+publishes it as a closed milestone titled
 `factory coordinator lease`, visible on the repository's closed-milestones
 page. The first renewal creates it. Later renewals find it again and edit its
 description. This is also true after a restart or a lost GitHub response.
@@ -170,8 +171,10 @@ this check stops renewal with an actionable error; rename or delete it. If you
 change the `gh` account, the old account's milestone fails this check, so
 delete it once. Lease
 failures use the bounded lease backoff and do not change workflow state or
-retry budgets. The host lock remains the ownership authority; the GitHub lease
-does not give distributed fencing or failover.
+retry budgets. The host lock remains the ownership authority; the coordinator
+lease does not give distributed fencing or failover. The lease is optional per
+adapter: with a tracker adapter that has no lease, the coordinator polls
+without one (ADR 0018).
 
 Installations from before this change published the lease as a pending
 `factory/lease` Commit Status, and GitHub accepts at most 1,000 statuses for
@@ -710,7 +713,7 @@ It refuses closed issues, issues without `agent-ready`, and a repository that al
 
 The coordinator then fetches `origin/<target_branch>`, records that fetched commit SHA, and creates the mutable run branch `factory/<run-id>` from that commit, plus a worktree at the sibling path `.factory-worktrees/<repository-name>/<run-id>`. The ordinary checkout is not checked out onto the run branch. The issue is changed to exactly one factory state label (`agent-running`) while preserving ordinary labels, and one editable status comment records the run identifier, branch, worktree, coordinator, start time, checkpoint, stage, and status. Later coordinator transitions edit that comment by its persisted comment identity; if persistence was interrupted after GitHub created it, the run marker recovers that existing comment rather than creating another. Stage and status remain separate values. The operational store rejects a second non-terminal run for the same repository through its uniqueness constraint. If a claim fails after creating its workspace, the coordinator removes the created run branch and worktree.
 
-The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the supervisor heartbeat and the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
+The coordinator reaches the work tracker (issues, labels, comments, lease) and the code host (pull requests, reviews, commit statuses) only through the factory-owned ports in `internal/tracker` and `internal/codehost` (ADR 0018). The CLI selects the GitHub adapter for both. The GitHub adapter invokes the locally authenticated `gh` CLI. The coordinator receives issue and mutation results in memory; GitHub credentials are not read into or persisted by the factory. `factory status` reports the supervisor heartbeat and the active run's stage, status, branch, and worktree, or the latest terminal run when no run is active.
 
 When no effect is pending, the lifecycle and supervisor entry points first
 observe a tracked issue or pull request, so an already-merged or closed target
@@ -1084,6 +1087,6 @@ operational database does not exist, no planned local runtime artifact remains,
 and the ordinary fresh-host journey works again.
 
 The high-level `Factory` seam injects configuration, repository checking,
-GitHub, pull requests, `GitWorkspace`, worker, headless harness, clock,
+the tracker adapter, pull requests, `GitWorkspace`, worker, headless harness, clock,
 run-identity, and operational-store adapters. Contract tests exercise Docker
 and both detached adapters through controlled seams.

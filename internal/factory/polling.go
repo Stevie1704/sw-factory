@@ -78,8 +78,8 @@ func (e *StartupBlockedError) Error() string {
 
 // Start runs the supervised polling loop until its context is cancelled. It
 // diagnoses the full host before taking the lock, acquires exclusive ownership
-// before reconciliation, renews a visible GitHub lease, and backs off read-only
-// queue or lease transport failures without changing run state or retry
+// before reconciliation, renews the visible coordinator lease, and backs off
+// read-only queue or lease transport failures without changing run state or retry
 // budgets. After every observation that found or claimed a run it drives that
 // run toward its draft pull request, so the routine path needs no
 // stage-driving CLI command. Claim failures are returned because the claim
