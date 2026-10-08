@@ -18,6 +18,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -1053,14 +1054,14 @@ func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, 
 // invalidation commit or roll back together. The command watermark (ProcessedCommentID)
 // is intentionally not set here; it is deferred until after successful resumption
 // to keep packet-change resumption retryable when startAgentWithStore fails.
-func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run) (store.Run, error) {
+func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue tracker.Issue, previous, next store.Run) (store.Run, error) {
 	return s.applyPacketChangeTransitionWithInvalidation(ctx, runStore, registration, issue, previous, next, false)
 }
 
 // applyPacketChangeTransitionWithInvalidation applies a packet transition and
 // chooses whether ordinary refresh invalidation or complete amendment
 // invalidation is required.
-func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run, invalidateAll bool) (store.Run, error) {
+func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue tracker.Issue, previous, next store.Run, invalidateAll bool) (store.Run, error) {
 	repository := commandRepository(registration)
 	next.UpdatedAt = s.deps.Now().UTC()
 	if next.Revision <= previous.Revision {
@@ -1302,8 +1303,8 @@ type polledComment struct {
 
 // commandRepository maps one registered GitHub identity for all command
 // operations, keeping polling and command effects on the same repository.
-func commandRepository(registration config.RepositoryRegistration) github.Repository {
-	return github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+func commandRepository(registration config.RepositoryRegistration) tracker.Repository {
+	return tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 }
 
 // commandRevisionStore is the optional atomic persistence seam implemented by

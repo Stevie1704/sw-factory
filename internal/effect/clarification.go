@@ -9,6 +9,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // clarificationHandler owns the coordinator-authored clarification comment and
@@ -22,13 +23,13 @@ type clarificationHandler struct {
 
 // PublishClarificationComment reserves one clarification publication before
 // the comment reaches GitHub, then records the comment identity on the run.
-func (j *Journal) PublishClarificationComment(ctx context.Context, runStore RunStore, repository github.Repository, target int, run store.Run, packetVersion int, body string) (store.Run, error) {
+func (j *Journal) PublishClarificationComment(ctx context.Context, runStore RunStore, repository tracker.Repository, target int, run store.Run, packetVersion int, body string) (store.Run, error) {
 	handler := mustApplyHandler[clarificationHandler](j.dispatcher, store.PendingEffectKindClarificationComment)
 	return handler.publish(ctx, runStore, repository, target, run, packetVersion, body)
 }
 
 // publish reserves and performs one clarification publication.
-func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, repository github.Repository, target int, run store.Run, packetVersion int, body string) (store.Run, error) {
+func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, repository tracker.Repository, target int, run store.Run, packetVersion int, body string) (store.Run, error) {
 	if err := validateRunBeforeEffect(store.PendingEffectKindClarificationComment, run); err != nil {
 		return run, err
 	}
@@ -62,7 +63,7 @@ func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, re
 // findOrCreateComment observes the coordinator-owned marker and repairs its
 // body before creating a question comment, making publication safe across
 // response loss and stale question edits.
-func (h clarificationHandler) findOrCreateComment(ctx context.Context, repository github.Repository, target int, runID string, packetVersion int, body string) (github.Comment, error) {
+func (h clarificationHandler) findOrCreateComment(ctx context.Context, repository tracker.Repository, target int, runID string, packetVersion int, body string) (github.Comment, error) {
 	if h.issues == nil {
 		return github.Comment{}, errors.New("GitHub client is required for clarification publication")
 	}

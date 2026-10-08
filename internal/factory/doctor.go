@@ -11,6 +11,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -37,7 +38,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	if configuration.Registration != nil {
 		registration = *configuration.Registration
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	repositoryPolicy := configuration.Repository
 	image := worker.ImageReference{}
 	if repositoryPolicy != nil {

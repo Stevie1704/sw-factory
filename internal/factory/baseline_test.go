@@ -15,6 +15,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -359,7 +360,7 @@ func newBaselineFixture(t *testing.T, issueBody string, results []worker.Command
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "1m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
 	policyRef := &policy
-	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Baseline", Body: issueBody, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Baseline", Body: issueBody, State: "open", Labels: []string{github.LabelAgentReady}}}
 	workerRuntime := &gateWorker{results: results}
 	worktree := &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-baseline", Worktree: worktreePath},

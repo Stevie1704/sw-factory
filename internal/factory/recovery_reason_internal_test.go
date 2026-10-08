@@ -7,6 +7,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestRecoveryPauseReasonConvergesAcrossGenerations verifies a pause reason
@@ -48,12 +49,12 @@ func TestStatusCommentDiscrepancyRecordsIdentityNotBody(t *testing.T) {
 
 	run := reasonLoopRun()
 	client := &reasonLoopGitHub{
-		issue:   github.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentNeedsInput}},
+		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentNeedsInput}},
 		comment: github.Comment{ID: run.StatusCommentID, Body: statusCommentMarker(run.ID) + "\ndrifted body\n"},
 	}
 	diagnosis := newRecoveryDiagnosis(run.ID)
 
-	inspectGitHubProjection(context.Background(), &diagnosis, client, nil, github.Repository{Owner: "owner", Name: "repository"}, run)
+	inspectGitHubProjection(context.Background(), &diagnosis, client, nil, tracker.Repository{Owner: "owner", Name: "repository"}, run)
 
 	discrepancy, found := reasonLoopDiscrepancy(diagnosis, "status comment")
 	if !found {
@@ -88,11 +89,11 @@ func TestStatusCommentComparisonIgnoresTheLifecycleReason(t *testing.T) {
 	}
 
 	client := &reasonLoopGitHub{
-		issue:   github.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentNeedsInput}},
+		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{github.LabelAgentNeedsInput}},
 		comment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(published)},
 	}
 	diagnosis := newRecoveryDiagnosis(run.ID)
-	inspectGitHubProjection(context.Background(), &diagnosis, client, nil, github.Repository{Owner: "owner", Name: "repository"}, run)
+	inspectGitHubProjection(context.Background(), &diagnosis, client, nil, tracker.Repository{Owner: "owner", Name: "repository"}, run)
 	if _, found := reasonLoopDiscrepancy(diagnosis, "status comment"); found {
 		t.Fatalf("discrepancies = %#v, want no status comment drift from the reason line alone", diagnosis.Discrepancies)
 	}
@@ -121,36 +122,36 @@ func reasonLoopDiscrepancy(diagnosis RecoveryDiagnosis, field string) (RecoveryD
 
 // reasonLoopGitHub is the read-only projection the inspection reads.
 type reasonLoopGitHub struct {
-	issue   github.Issue
+	issue   tracker.Issue
 	comment github.Comment
 }
 
 // Issue returns the fixture issue.
-func (c *reasonLoopGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+func (c *reasonLoopGitHub) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
 	return c.issue, nil
 }
 
 // FindStatusComment returns the fixture status comment.
-func (c *reasonLoopGitHub) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+func (c *reasonLoopGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
 	return c.comment, nil
 }
 
 // CreateLabel is never called by a read-only inspection.
-func (*reasonLoopGitHub) CreateLabel(context.Context, github.Repository, github.Label) error {
+func (*reasonLoopGitHub) CreateLabel(context.Context, tracker.Repository, github.Label) error {
 	return nil
 }
 
 // ReplaceIssueLabels is never called by a read-only inspection.
-func (*reasonLoopGitHub) ReplaceIssueLabels(context.Context, github.Repository, int, []string) error {
+func (*reasonLoopGitHub) ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error {
 	return nil
 }
 
 // CreateIssueComment is never called by a read-only inspection.
-func (*reasonLoopGitHub) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+func (*reasonLoopGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
 	return github.Comment{}, nil
 }
 
 // EditIssueComment is never called by a read-only inspection.
-func (*reasonLoopGitHub) EditIssueComment(context.Context, github.Repository, string, string) error {
+func (*reasonLoopGitHub) EditIssueComment(context.Context, tracker.Repository, string, string) error {
 	return nil
 }

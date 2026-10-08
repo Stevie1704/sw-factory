@@ -20,6 +20,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -825,7 +826,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	policy := validRepositoryConfig()
 	policy.RoleHarnessDefaults["spec_review"] = config.HarnessCodex
 	policy.ModelOptions["spec_review"] = []string{"gpt-5"}
-	issue := github.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{github.LabelAgentReady}}
+	issue := tracker.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{github.LabelAgentReady}}
 	githubAdapter := &fakeGitHub{issueValue: issue}
 	statuses := &gateStatuses{}
 	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}

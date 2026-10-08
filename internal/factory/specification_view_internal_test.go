@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // specificationViewPacket is a frozen packet carrying the host-only
@@ -14,7 +14,7 @@ import (
 func specificationViewPacket() SpecificationPacket {
 	return SpecificationPacket{
 		Version: 1,
-		Issue: github.Issue{
+		Issue: tracker.Issue{
 			Number: 115,
 			Title:  "Replace progression action closures with typed commands",
 			Body:   "Make run-transition planning a pure function.\n\n```go\ntype progressionAction struct{}\n```\n",

@@ -10,6 +10,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // commitStatusHandler owns one exact-SHA commit status and the branch
@@ -38,7 +39,7 @@ type journaledCommitStatus struct {
 
 // CreateCommitStatus publishes or recognizes one exact-SHA status without
 // creating a second semantic status after a process interruption.
-func (p journaledCommitStatus) CreateCommitStatus(ctx context.Context, repository github.Repository, status github.CommitStatus) error {
+func (p journaledCommitStatus) CreateCommitStatus(ctx context.Context, repository tracker.Repository, status github.CommitStatus) error {
 	payload := commitStatusEffectPayload{Repository: repository, Status: status}
 	effect, err := reserve(p.handler.now, p.runID, store.PendingEffectKindCommitStatus, status.SHA+"\x00"+status.Context+"\x00"+string(status.State)+"\x00"+status.Description, payload)
 	if err != nil {

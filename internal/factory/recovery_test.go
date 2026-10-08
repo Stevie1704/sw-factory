@@ -15,6 +15,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -30,7 +31,7 @@ func TestProgressionRefusesAnAgreeingInterruptedRun(t *testing.T) {
 	}
 	run := recoveryRun(worktreePath)
 	githubAdapter := &fakeGitHub{
-		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
 		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
@@ -147,7 +148,7 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			}
 			run := recoveryRun(worktreePath)
 			githubAdapter := &fakeGitHub{
-				issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+				issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
 				statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 			}
 			worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
@@ -221,7 +222,7 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
 	}}}
 	githubAdapter := &fakeGitHub{
-		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
+		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
 		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
@@ -261,7 +262,7 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 
 // recoveryRun returns a complete persisted run fixture for startup diagnosis.
 func recoveryRun(worktreePath string) store.Run {
-	packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, Issue: github.Issue{Number: 42, Title: "Recovery", Body: "diagnose"}, RepositoryConfig: validRepositoryConfig()})
+	packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, Issue: tracker.Issue{Number: 42, Title: "Recovery", Body: "diagnose"}, RepositoryConfig: validRepositoryConfig()})
 	if err != nil {
 		panic(err)
 	}

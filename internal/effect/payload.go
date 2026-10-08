@@ -5,6 +5,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -12,8 +13,8 @@ import (
 // later transitions. The only difference is whether a status comment is
 // created or edited.
 type StateTransition struct {
-	Repository    github.Repository
-	Issue         github.Issue
+	Repository    tracker.Repository
+	Issue         tracker.Issue
 	Previous      store.Run
 	Next          store.Run
 	CreateComment bool
@@ -35,8 +36,8 @@ type StateTransition struct {
 // stateTransitionEffectPayload is the serialized intent for one paired issue
 // label and status-comment projection.
 type stateTransitionEffectPayload struct {
-	Repository           github.Repository
-	Issue                github.Issue
+	Repository           tracker.Repository
+	Issue                tracker.Issue
 	Previous             store.Run
 	Next                 store.Run
 	CreateComment        bool
@@ -48,7 +49,7 @@ type stateTransitionEffectPayload struct {
 // statusCommentEffectPayload is the serialized intent for a command
 // watermark and its corresponding status-comment edit.
 type statusCommentEffectPayload struct {
-	Repository github.Repository
+	Repository tracker.Repository
 	Previous   store.Run
 	Next       store.Run
 }
@@ -56,7 +57,7 @@ type statusCommentEffectPayload struct {
 // clarificationCommentEffectPayload is the serialized intent for one
 // coordinator-authored clarification comment and its run identity projection.
 type clarificationCommentEffectPayload struct {
-	Repository github.Repository
+	Repository tracker.Repository
 	Target     int
 	Body       string
 	// PacketVersion scopes the comment marker to one clarification round so a
@@ -67,14 +68,14 @@ type clarificationCommentEffectPayload struct {
 // labelTransitionEffectPayload is the serialized intent for a standalone
 // complete issue-label replacement.
 type labelTransitionEffectPayload struct {
-	Repository  github.Repository
+	Repository  tracker.Repository
 	IssueNumber int
 	Labels      []string
 }
 
 // commitStatusEffectPayload is the serialized intent for one exact-SHA status.
 type commitStatusEffectPayload struct {
-	Repository github.Repository
+	Repository tracker.Repository
 	Status     github.CommitStatus
 }
 
@@ -93,8 +94,8 @@ type checkpointRequestJSON struct {
 // its immediately following run projection.
 type checkpointEffectPayload struct {
 	Request    checkpointRequestJSON
-	Repository github.Repository
-	Issue      github.Issue
+	Repository tracker.Repository
+	Issue      tracker.Issue
 	Previous   store.Run
 	Next       store.Run
 }
@@ -114,11 +115,11 @@ type pushRequestJSON struct {
 
 // pullRequestEffectPayload is the serialized intent for one draft PR mutation.
 type pullRequestEffectPayload struct {
-	Repository github.Repository
+	Repository tracker.Repository
 	Number     int
 	Request    github.PullRequestRequest
 	PersistRun bool
-	Issue      github.Issue
+	Issue      tracker.Issue
 	Previous   store.Run
 	Next       store.Run
 }
@@ -144,8 +145,8 @@ type harnessResumeEffectPayload struct {
 // resultAcceptanceEffectPayload is the complete durable intent for accepting
 // a validated structured report.
 type resultAcceptanceEffectPayload struct {
-	Repository github.Repository
-	Issue      github.Issue
+	Repository tracker.Repository
+	Issue      tracker.Issue
 	Session    harness.Session
 	Invocation store.Invocation
 	// WorkerID identifies the worker that owns this invocation. Empty legacy

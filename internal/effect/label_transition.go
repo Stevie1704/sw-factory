@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // labelTransitionHandler owns the standalone complete issue-label replacement.
@@ -19,7 +19,7 @@ type labelTransitionHandler struct {
 }
 
 // ApplyLabels reserves and applies one complete issue-label replacement.
-func (j *Journal) ApplyLabels(ctx context.Context, runStore RunStore, runID string, repository github.Repository, issueNumber int, labels []string) error {
+func (j *Journal) ApplyLabels(ctx context.Context, runStore RunStore, runID string, repository tracker.Repository, issueNumber int, labels []string) error {
 	handler := mustApplyHandler[labelTransitionHandler](j.dispatcher, store.PendingEffectKindLabelTransition)
 	return handler.applyJournaled(ctx, runStore, runID, labelTransitionEffectPayload{
 		Repository:  repository,

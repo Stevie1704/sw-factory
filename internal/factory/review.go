@@ -12,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -224,7 +225,7 @@ func (s *Service) publishReviewStatus(ctx context.Context, registration config.R
 	description = reviewStatusDescription(description)
 	statuses := github.CommitStatusPublisher(s.deps.CommitStatuses)
 	statuses = s.journal().CommitStatusPublisher(runStore, run.ID, statuses)
-	return statuses.CreateCommitStatus(ctx, github.Repository{
+	return statuses.CreateCommitStatus(ctx, tracker.Repository{
 		Owner: registration.GitHub.Owner,
 		Name:  registration.GitHub.Repository,
 	}, github.CommitStatus{
@@ -709,7 +710,7 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 	if err != nil {
 		return fmt.Errorf("decode specification packet for review PR projection: %w", err)
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return fmt.Errorf("find tracked pull request for review projection: %w", err)

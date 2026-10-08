@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestGhClientUsesTheLocalCLIForIssueAndClaimMutations verifies JSON payloads
@@ -24,7 +25,7 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 		[]byte(`[[{"id":7,"body":"<!-- factory-status: run-1 --> forged status","user":{"login":"alice"}},{"id":12345,"body":"<!-- factory-status: run-1 --> status","user":{"login":"factory-bot"}}]]`),
 	}}
 	client := &github.GhClient{Runner: runner}
-	repository := github.Repository{Owner: "example", Name: "project"}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
 
 	issue, err := client.Issue(context.Background(), repository, 42)
 	if err != nil {
@@ -103,7 +104,7 @@ func TestGhClientListsEligibleIssuesInDeterministicOrder(t *testing.T) {
 	]]`)}}
 	client := &github.GhClient{Runner: runner}
 
-	issues, err := client.ListEligibleIssues(context.Background(), github.Repository{Owner: "example", Name: "project"})
+	issues, err := client.ListEligibleIssues(context.Background(), tracker.Repository{Owner: "example", Name: "project"})
 	if err != nil {
 		t.Fatalf("ListEligibleIssues() error = %v", err)
 	}
@@ -127,7 +128,7 @@ func TestGhClientRejectsAUserAuthoredStatusMarker(t *testing.T) {
 		[]byte(`{"login":"factory-bot"}`),
 		[]byte(`[[{"id":7,"body":"<!-- factory-status: run-1 --> forged status","user":{"login":"alice"}}]]`),
 	}}}
-	comment, err := client.FindStatusComment(context.Background(), github.Repository{Owner: "example", Name: "project"}, 42, "factory-status: run-1")
+	comment, err := client.FindStatusComment(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 42, "factory-status: run-1")
 	if err != nil {
 		t.Fatalf("FindStatusComment() error = %v", err)
 	}
@@ -144,7 +145,7 @@ func TestGhClientPreservesThePullRequestIndicator(t *testing.T) {
 	client := &github.GhClient{Runner: &fakeCommandRunner{outputs: [][]byte{
 		[]byte(`{"number":42,"title":"A pull request","state":"open","pull_request":{"url":"https://api.github.com/repos/example/project/pulls/42"},"labels":[{"name":"agent-ready"}]}`),
 	}}}
-	issue, err := client.Issue(context.Background(), github.Repository{Owner: "example", Name: "project"}, 42)
+	issue, err := client.Issue(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 42)
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -161,7 +162,7 @@ func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
 	runner := &fakeCommandRunner{outputs: [][]byte{[]byte("")}}
 	client := &github.GhClient{Runner: runner}
 	sha := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err := client.CreateCommitStatus(context.Background(), github.Repository{Owner: "example", Name: "project"}, github.CommitStatus{
+	err := client.CreateCommitStatus(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, github.CommitStatus{
 		SHA:         sha,
 		State:       github.CommitStatusSuccess,
 		Context:     "factory/gate/test",
@@ -202,7 +203,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Updated","body":"human text\n\ngenerated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 	}}
 	client := &github.GhClient{Runner: runner}
-	repository := github.Repository{Owner: "example", Name: "project"}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
 
 	found, err := client.FindPullRequest(context.Background(), repository, "factory/run-1", "main")
 	if err != nil {
@@ -270,7 +271,7 @@ func TestGhClientTogglesPullRequestDraftStateThroughTheHostCLI(t *testing.T) {
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 	}}
 	client := &github.GhClient{Runner: runner}
-	repository := github.Repository{Owner: "example", Name: "project"}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
 
 	ready, err := client.SetPullRequestDraft(context.Background(), repository, 12, false)
 	if err != nil {
@@ -305,7 +306,7 @@ func TestGhClientDecodesMergedPullRequestLifecycle(t *testing.T) {
 	client := &github.GhClient{Runner: &fakeCommandRunner{outputs: [][]byte{
 		[]byte(`[{"number":17,"html_url":"https://github.com/example/project/pull/17","state":"closed","merged_at":"2026-08-23T12:00:00Z","merge_commit_sha":"0123456789abcdef0123456789abcdef01234567","head":{"ref":"factory/run-1"},"base":{"ref":"main"}}]`),
 	}}}
-	got, err := client.FindPullRequest(context.Background(), github.Repository{Owner: "example", Name: "project"}, "factory/run-1", "main")
+	got, err := client.FindPullRequest(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, "factory/run-1", "main")
 	if err != nil {
 		t.Fatalf("FindPullRequest() error = %v", err)
 	}
@@ -389,7 +390,7 @@ func TestGhClientReadsCompletedPullRequestReviews(t *testing.T) {
 	}}
 	client := &github.GhClient{Runner: runner}
 
-	reviews, err := client.PullRequestReviews(context.Background(), github.Repository{Owner: "example", Name: "project"}, 17)
+	reviews, err := client.PullRequestReviews(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 17)
 	if err != nil {
 		t.Fatalf("PullRequestReviews() error = %v", err)
 	}

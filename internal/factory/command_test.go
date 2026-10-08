@@ -16,6 +16,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -26,7 +27,7 @@ func TestHandleCommandAcceptsAuthorizedStatusAndPersistsTheWatermark(t *testing.
 	t.Parallel()
 
 	run := commandRun(t, store.StatusActive)
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandRunStore{current: &run, latest: &run}
 	service := newCommandService(runStore, githubAdapter, nil)
 
@@ -54,7 +55,7 @@ func TestHandleCommandRejectsAnUnauthorizedAuthorWithoutWorkflowMutation(t *test
 	t.Parallel()
 
 	run := commandRun(t, store.StatusActive)
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandRunStore{current: &run, latest: &run}
 	service := newCommandService(runStore, githubAdapter, nil)
 
@@ -83,7 +84,7 @@ func TestHandleCommandNeverReexecutesAnEditedComment(t *testing.T) {
 	t.Parallel()
 
 	run := commandRun(t, store.StatusActive)
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandRunStore{current: &run, latest: &run}
 	service := newCommandService(runStore, githubAdapter, nil)
 
@@ -109,7 +110,7 @@ func TestHandleCommandRetriesAFailedRun(t *testing.T) {
 	t.Parallel()
 
 	run := commandRun(t, store.StatusFailed)
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentFailed}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentFailed}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandRunStore{latest: &run}
 	service := newCommandService(runStore, githubAdapter, nil)
 
@@ -237,7 +238,7 @@ func TestHandleCommandRejectsResumeForAnUnrelatedHumanPause(t *testing.T) {
 	run := commandRun(t, store.StatusWaitingForHuman)
 	run.LifecycleReason = "test agent requested clarification"
 	run.PendingQuestions = []store.PendingQuestion{{ID: "clarification-1", Prompt: "choose a format"}}
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandRunStore{current: &run, latest: &run}
 	service := newCommandService(runStore, githubAdapter, nil)
 
@@ -261,7 +262,7 @@ func TestHandleCommandPersistsHarnessConfiguration(t *testing.T) {
 	t.Parallel()
 
 	run := commandRun(t, store.StatusActive)
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandRunStore{current: &run, latest: &run}
 	service := newCommandService(runStore, githubAdapter, nil)
 
@@ -288,7 +289,7 @@ func TestHandleCommandAmendsAReadyPullRequest(t *testing.T) {
 	run.PullRequestNumber = 17
 	run.PullRequestURL = "https://github.com/example/project/pull/17"
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, Title: "Amended issue", Body: "new requirements", State: "open", Labels: []string{github.LabelAgentRunning}},
+		issue:         tracker.Issue{Number: 42, Title: "Amended issue", Body: "new requirements", State: "open", Labels: []string{github.LabelAgentRunning}},
 		statusComment: github.Comment{ID: "status-1"},
 		pullRequest:   github.PullRequest{Number: 17, URL: run.PullRequestURL, State: "open", Draft: false, HeadBranch: run.Branch, BaseBranch: "main"},
 	}
@@ -350,7 +351,7 @@ func TestHandleCommandRefreshDemotesAReadyPullRequest(t *testing.T) {
 	run.PullRequestNumber = 17
 	run.PullRequestURL = "https://github.com/example/project/pull/17"
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, Title: "Refreshed issue", Body: "unchanged requirements", State: "open", Labels: []string{github.LabelAgentRunning}},
+		issue:         tracker.Issue{Number: 42, Title: "Refreshed issue", Body: "unchanged requirements", State: "open", Labels: []string{github.LabelAgentRunning}},
 		statusComment: github.Comment{ID: "status-1"},
 		pullRequest: github.PullRequest{
 			Number: 17, URL: run.PullRequestURL, State: "open", Draft: false,
@@ -389,7 +390,7 @@ func TestHandleCommandPersistsAClaudeHarnessConfiguration(t *testing.T) {
 	t.Parallel()
 
 	run := commandRun(t, store.StatusActive)
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandRunStore{current: &run, latest: &run}
 	service := newCommandService(runStore, githubAdapter, nil)
 
@@ -418,7 +419,7 @@ func TestHandleCommandRefusesIssueSuppliedProcessArguments(t *testing.T) {
 			t.Parallel()
 
 			run := commandRun(t, store.StatusActive)
-			githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+			githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 			runStore := &commandRunStore{current: &run, latest: &run}
 			service := newCommandService(runStore, githubAdapter, nil)
 
@@ -444,7 +445,7 @@ func TestPollCommandsSkipsThePersistedWatermark(t *testing.T) {
 
 	run := commandRun(t, store.StatusActive)
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}},
+		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}},
 		statusComment: github.Comment{ID: "status-1"},
 		comments:      []github.Comment{{ID: "15", Author: "alice", Body: "/factory refresh"}},
 	}
@@ -626,7 +627,7 @@ func (s *commandRunStore) Close() error {
 
 // commandGitHub records command-related effects.
 type commandGitHub struct {
-	issue           github.Issue
+	issue           tracker.Issue
 	comments        []github.Comment
 	statusComment   github.Comment
 	replacedLabels  []string
@@ -637,63 +638,63 @@ type commandGitHub struct {
 }
 
 // Issue returns the issue projection used by retry transitions.
-func (g *commandGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+func (g *commandGitHub) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
 	return g.issue, nil
 }
 
 // CreateLabel is unused by command handling.
-func (g *commandGitHub) CreateLabel(context.Context, github.Repository, github.Label) error {
+func (g *commandGitHub) CreateLabel(context.Context, tracker.Repository, github.Label) error {
 	return nil
 }
 
 // ReplaceIssueLabels records the workflow label mutation.
-func (g *commandGitHub) ReplaceIssueLabels(_ context.Context, _ github.Repository, _ int, labels []string) error {
+func (g *commandGitHub) ReplaceIssueLabels(_ context.Context, _ tracker.Repository, _ int, labels []string) error {
 	g.replacedLabels = append([]string(nil), labels...)
 	g.issue.Labels = append([]string(nil), labels...)
 	return nil
 }
 
 // CreateIssueComment records accidental duplicate status-comment creation.
-func (g *commandGitHub) CreateIssueComment(_ context.Context, _ github.Repository, _ int, body string) (github.Comment, error) {
+func (g *commandGitHub) CreateIssueComment(_ context.Context, _ tracker.Repository, _ int, body string) (github.Comment, error) {
 	g.createdComments = append(g.createdComments, body)
 	return github.Comment{ID: "created-status", Body: body}, nil
 }
 
 // FindStatusComment returns the existing editable status comment.
-func (g *commandGitHub) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+func (g *commandGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
 	return g.statusComment, nil
 }
 
 // EditIssueComment records one edit of the single status comment.
-func (g *commandGitHub) EditIssueComment(_ context.Context, _ github.Repository, id, body string) error {
+func (g *commandGitHub) EditIssueComment(_ context.Context, _ tracker.Repository, id, body string) error {
 	g.editedComments = append(g.editedComments, commandEditedComment{id: id, body: body})
 	return nil
 }
 
 // IssueComments supplies the comments observed by polling.
-func (g *commandGitHub) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
+func (g *commandGitHub) IssueComments(context.Context, tracker.Repository, int) ([]github.Comment, error) {
 	return append([]github.Comment(nil), g.comments...), nil
 }
 
 // FindPullRequest returns the tracked pull request used by revision commands.
-func (g *commandGitHub) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
+func (g *commandGitHub) FindPullRequest(context.Context, tracker.Repository, string, string) (github.PullRequest, error) {
 	return g.pullRequest, nil
 }
 
 // CreatePullRequest is unused by command tests but completes the pull-request
 // client seam supplied by the command GitHub fixture.
-func (g *commandGitHub) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
+func (g *commandGitHub) CreatePullRequest(context.Context, tracker.Repository, github.PullRequestRequest) (github.PullRequest, error) {
 	return g.pullRequest, nil
 }
 
 // UpdatePullRequest is unused by revision handling because draft transitions
 // use the dedicated readiness method.
-func (g *commandGitHub) UpdatePullRequest(context.Context, github.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
+func (g *commandGitHub) UpdatePullRequest(context.Context, tracker.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
 	return g.pullRequest, nil
 }
 
 // SetPullRequestDraft records the explicit readiness mutation for revisions.
-func (g *commandGitHub) SetPullRequestDraft(_ context.Context, _ github.Repository, _ int, draft bool) (github.PullRequest, error) {
+func (g *commandGitHub) SetPullRequestDraft(_ context.Context, _ tracker.Repository, _ int, draft bool) (github.PullRequest, error) {
 	g.draftChanges = append(g.draftChanges, draft)
 	g.pullRequest.Draft = draft
 	return g.pullRequest, nil
@@ -713,7 +714,7 @@ func TestHandleCommandRefreshKeepsAClaimStageRunAtClaim(t *testing.T) {
 	t.Parallel()
 
 	run := claimStageCommandRun(t, store.StatusActive)
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandInvocationRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
 	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
 
@@ -740,7 +741,7 @@ func TestHandleCommandAnswerKeepsAClaimStageRunAtClaim(t *testing.T) {
 
 	run := claimStageCommandRun(t, store.StatusWaitingForHuman)
 	run.PendingQuestions = []store.PendingQuestion{{ID: "format", Prompt: "Which format should be used?"}}
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandInvocationRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
 	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
 
@@ -773,7 +774,7 @@ func TestHandleCommandRefreshParksAClaimStageRunWithoutATestRolePolicy(t *testin
 	// role, which is exactly the mandatory policy the test stage requires.
 	run := commandRun(t, store.StatusActive)
 	run.Stage = store.StageClaim
-	githubAdapter := &commandGitHub{issue: github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
+	githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: "status-1"}}
 	runStore := &commandInvocationRunStore{commandRunStore: &commandRunStore{current: &run, latest: &run}}
 	service := newCommandServiceWithStore(runStore, githubAdapter, nil)
 
@@ -854,7 +855,7 @@ func TestHandleCommandRepairResumesImplementationOnASingleAccountHost(t *testing
 
 	run := repairRun(t)
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
+		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
 		statusComment: github.Comment{ID: "status-1"},
 		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: false},
 	}
@@ -911,7 +912,7 @@ func TestHandleCommandRepairRefusesAnUnauthorizedMaintainer(t *testing.T) {
 
 	run := repairRun(t)
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
+		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
 		statusComment: github.Comment{ID: "status-1"},
 		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: true},
 	}
@@ -989,7 +990,7 @@ func TestHandleCommandRepairRefusesOutsideItsAdmissionContract(t *testing.T) {
 				pullRequest = github.PullRequest{Number: 7, State: "open", Draft: true}
 			}
 			githubAdapter := &commandGitHub{
-				issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
+				issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
 				statusComment: github.Comment{ID: "status-1"},
 				pullRequest:   pullRequest,
 			}
@@ -1022,7 +1023,7 @@ func TestPollCommandsAppliesOneRepairInstructionExactlyOnce(t *testing.T) {
 
 	run := repairRun(t)
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
+		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{github.LabelAgentNeedsInput}},
 		statusComment: github.Comment{ID: "status-1"},
 		pullRequest:   github.PullRequest{Number: 7, State: "open", Draft: true, HeadSHA: strings.Repeat("a", 40)},
 		comments:      []github.Comment{{ID: "41", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}},
@@ -1074,7 +1075,7 @@ func TestPollCommandsPrefersPullRequestLifecycleOverARepairInstruction(t *testin
 
 	run := repairRun(t)
 	githubAdapter := &commandGitHub{
-		issue:         github.Issue{Number: 42, State: "closed", Labels: []string{github.LabelAgentNeedsInput}},
+		issue:         tracker.Issue{Number: 42, State: "closed", Labels: []string{github.LabelAgentNeedsInput}},
 		statusComment: github.Comment{ID: "status-1"},
 		pullRequest:   github.PullRequest{Number: 7, State: "closed", Merged: true, MergeCommitSHA: strings.Repeat("d", 40)},
 		comments:      []github.Comment{{ID: "51", Author: "alice", Body: "/factory repair validate permitted paths before adoption"}},

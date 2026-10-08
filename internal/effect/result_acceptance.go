@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // ResultAcceptance is the complete durable intent for accepting one validated
@@ -18,7 +18,7 @@ import (
 // reserving the effect.
 type ResultAcceptance struct {
 	// Repository is the tracked GitHub repository.
-	Repository github.Repository
+	Repository tracker.Repository
 	// WorkerID identifies the worker that owns the accepted invocation.
 	WorkerID string
 	// Harness finalizes the accepted native session.
@@ -71,7 +71,7 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 	}
 	payload := resultAcceptanceEffectPayload{
 		Repository:       request.Repository,
-		Issue:            github.Issue{Number: next.IssueNumber},
+		Issue:            tracker.Issue{Number: next.IssueNumber},
 		Session:          request.Session,
 		Invocation:       invocation,
 		WorkerID:         request.WorkerID,

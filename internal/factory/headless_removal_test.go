@@ -11,8 +11,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -286,7 +286,7 @@ func newHeadlessRemovalFixture(t *testing.T, harnessName config.Harness) headles
 			return store.OpenReadOnly(ctx, path)
 		},
 		Worker: runtime, GitWorkspace: gitRuntime,
-		GitHub: &fakeGitHub{issueValue: github.Issue{Number: 165, State: "open"}},
+		GitHub: &fakeGitHub{issueValue: tracker.Issue{Number: 165, State: "open"}},
 		Now:    func() time.Time { return time.Now().UTC() },
 	})
 	return headlessRemovalFixture{

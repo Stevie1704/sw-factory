@@ -9,6 +9,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // DoctorClient is the read-only GitHub health seam used by startup diagnosis.
@@ -16,8 +17,8 @@ import (
 // gain mutation authority.
 type DoctorClient interface {
 	CheckAuthentication(context.Context) error
-	CheckRepositoryAccess(context.Context, Repository) error
-	CheckFactoryLabels(context.Context, Repository) error
+	CheckRepositoryAccess(context.Context, tracker.Repository) error
+	CheckFactoryLabels(context.Context, tracker.Repository) error
 }
 
 // Sentinel errors preserve safe repository and label diagnosis categories
@@ -69,7 +70,7 @@ func (e *missingFactoryLabelError) Error() string {
 
 // StartupChecks returns the GitHub-owned authentication, permission, and
 // factory-label checks in deterministic order.
-func StartupChecks(client DoctorClient, repository Repository) []doctor.Check {
+func StartupChecks(client DoctorClient, repository tracker.Repository) []doctor.Check {
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			if client == nil {
@@ -124,7 +125,7 @@ func (c *GhClient) CheckAuthentication(ctx context.Context) error {
 // CheckRepositoryAccess verifies the registered repository exists and exposes
 // the write permissions required for labels, comments, commits, and pull
 // requests. The API response is discarded after this bounded validation.
-func (c *GhClient) CheckRepositoryAccess(ctx context.Context, repository Repository) error {
+func (c *GhClient) CheckRepositoryAccess(ctx context.Context, repository tracker.Repository) error {
 	if err := validateDoctorRepository(repository); err != nil {
 		return err
 	}
@@ -211,7 +212,7 @@ func repositoryAccessDiagnosis(err error) (string, string) {
 
 // CheckFactoryLabels verifies all factory-owned labels exist without creating
 // or changing any label.
-func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository Repository) error {
+func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository tracker.Repository) error {
 	if err := validateDoctorRepository(repository); err != nil {
 		return err
 	}
@@ -253,7 +254,7 @@ func factoryLabelsDiagnosis(err error) (string, string) {
 
 // validateDoctorRepository rejects values that could alter a read-only API
 // endpoint assembled by the GitHub adapter.
-func validateDoctorRepository(repository Repository) error {
+func validateDoctorRepository(repository tracker.Repository) error {
 	if strings.TrimSpace(repository.Owner) == "" || strings.TrimSpace(repository.Name) == "" {
 		return errors.New("GitHub repository owner and name are required")
 	}

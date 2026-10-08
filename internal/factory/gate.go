@@ -19,6 +19,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -411,7 +412,7 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 	}
 	return (gate.Runner{
 		Runtime:    s.deps.Worker,
-		Repository: github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
+		Repository: tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
 		Statuses:   statuses,
 	}).RunSuite(ctx, gate.SuiteRequest{
 		RunID:                  run.ID,

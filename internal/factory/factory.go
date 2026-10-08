@@ -17,6 +17,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"github.com/google/uuid"
@@ -166,7 +167,7 @@ type Dependencies struct {
 	GitHub            github.Client
 	// IssuePoller lists eligible GitHub work without broadening the mutation
 	// authority of the existing issue client seam.
-	IssuePoller github.IssuePoller
+	IssuePoller tracker.IssuePoller
 	// Lease publishes the coordinator's visible GitHub heartbeat.
 	Lease          github.LeaseClient
 	CommitStatuses github.CommitStatusPublisher
@@ -178,7 +179,7 @@ type Dependencies struct {
 	RepositoryDiscoverer gitadapter.RepositoryDiscoverer
 	// GitHubAccount resolves the authenticated GitHub login used to infer the
 	// default authorized user. It is read-only.
-	GitHubAccount github.AccountReader
+	GitHubAccount tracker.AccountReader
 	// PullRequests owns idempotent draft pull-request discovery and mutation.
 	PullRequests github.PullRequestClient
 	// PullRequestReviews lists completed human reviews of a tracked pull
@@ -349,7 +350,7 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		dependencies.GitHub = github.NewClient()
 	}
 	if dependencies.IssuePoller == nil {
-		if poller, ok := dependencies.GitHub.(github.IssuePoller); ok {
+		if poller, ok := dependencies.GitHub.(tracker.IssuePoller); ok {
 			dependencies.IssuePoller = poller
 		}
 	}
@@ -377,7 +378,7 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 		}
 	}
 	if dependencies.GitHubAccount == nil {
-		if account, ok := dependencies.GitHub.(github.AccountReader); ok {
+		if account, ok := dependencies.GitHub.(tracker.AccountReader); ok {
 			dependencies.GitHubAccount = account
 		}
 	}

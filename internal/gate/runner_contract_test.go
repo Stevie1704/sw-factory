@@ -10,6 +10,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -417,7 +418,7 @@ type fakeStatusPublisher struct {
 }
 
 // CreateCommitStatus implements the GitHub status seam for contract tests.
-func (f *fakeStatusPublisher) CreateCommitStatus(_ context.Context, _ github.Repository, status github.CommitStatus) error {
+func (f *fakeStatusPublisher) CreateCommitStatus(_ context.Context, _ tracker.Repository, status github.CommitStatus) error {
 	f.statuses = append(f.statuses, status)
 	return nil
 }

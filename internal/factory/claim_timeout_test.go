@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestClaimKeepsARunWhoseLabelTransitionTimedOut verifies that a claim whose
@@ -32,7 +33,7 @@ func TestClaimKeepsARunWhoseLabelTransitionTimedOut(t *testing.T) {
 	githubAdapter := &labelTimeoutGitHub{
 		pollingGitHub: &pollingGitHub{
 			fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}},
-			issues:     []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}},
+			issues:     []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}},
 		},
 		labelErrors: []error{timeout, timeout},
 	}
@@ -126,7 +127,7 @@ type labelTimeoutGitHub struct {
 
 // ReplaceIssueLabels returns the next configured failure, then records the
 // mutation once the failures are used.
-func (f *labelTimeoutGitHub) ReplaceIssueLabels(ctx context.Context, repository github.Repository, number int, labels []string) error {
+func (f *labelTimeoutGitHub) ReplaceIssueLabels(ctx context.Context, repository tracker.Repository, number int, labels []string) error {
 	if len(f.labelErrors) > 0 {
 		err := f.labelErrors[0]
 		f.labelErrors = f.labelErrors[1:]

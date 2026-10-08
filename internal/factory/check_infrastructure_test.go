@@ -16,6 +16,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -87,7 +88,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	if journaled {
 		opened = &journaledAgentRunStore{agentRunStore: runStore, pending: map[string]store.PendingEffect{}}
 	}
-	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Recover checks", Body: "Retry checks after setup failures.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Recover checks", Body: "Retry checks after setup failures.", State: "open", Labels: []string{github.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace:      gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: branch, Worktree: worktreePath},
 		state:          gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: branch, HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"python/pyproject.toml"}},

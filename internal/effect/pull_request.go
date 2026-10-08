@@ -8,6 +8,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // pullRequestHandler owns draft pull-request mutation and the run projection
@@ -23,7 +24,7 @@ type pullRequestHandler struct {
 // mutation. The expected number prevents a replay from silently attaching to
 // another pull request. It is exported because the pre-journal compatibility
 // path performs the same idempotent mutation without a reservation.
-func UpsertPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, expectedNumber int, request github.PullRequestRequest) (github.PullRequest, error) {
+func UpsertPullRequest(ctx context.Context, client github.PullRequestClient, repository tracker.Repository, expectedNumber int, request github.PullRequestRequest) (github.PullRequest, error) {
 	if client == nil {
 		return github.PullRequest{}, errors.New("pull-request client is required")
 	}
@@ -64,20 +65,20 @@ func UpsertPullRequest(ctx context.Context, client github.PullRequestClient, rep
 // with the run projection that records its identity. Recovery can therefore
 // discover a created pull request and finish the missing durable state without
 // creating a second one.
-func (j *Journal) UpsertPullRequestAndPersist(ctx context.Context, runStore RunStore, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
+func (j *Journal) UpsertPullRequestAndPersist(ctx context.Context, runStore RunStore, repository tracker.Repository, issue tracker.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
 	handler := mustApplyHandler[pullRequestHandler](j.dispatcher, store.PendingEffectKindPullRequest)
 	return handler.upsertAndPersist(ctx, runStore, repository, issue, previous, next, request, expectedNumber)
 }
 
 // UpdatePullRequest journals a standalone generated-body update, such as
 // review regeneration, when no run-state change accompanies it.
-func (j *Journal) UpdatePullRequest(ctx context.Context, runStore RunStore, runID string, repository github.Repository, number int, request github.PullRequestRequest) error {
+func (j *Journal) UpdatePullRequest(ctx context.Context, runStore RunStore, runID string, repository tracker.Repository, number int, request github.PullRequestRequest) error {
 	handler := mustApplyHandler[pullRequestHandler](j.dispatcher, store.PendingEffectKindPullRequest)
 	return handler.update(ctx, runStore, runID, repository, number, request)
 }
 
 // upsertAndPersist reserves the pull-request mutation and its run projection.
-func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunStore, repository github.Repository, issue github.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
+func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunStore, repository tracker.Repository, issue tracker.Issue, previous, next store.Run, request github.PullRequestRequest, expectedNumber int) (github.PullRequest, store.Run, error) {
 	if err := validateRunBeforeEffect(store.PendingEffectKindPullRequest, next); err != nil {
 		return github.PullRequest{}, next, err
 	}
@@ -118,7 +119,7 @@ func (h pullRequestHandler) upsertAndPersist(ctx context.Context, runStore RunSt
 }
 
 // update reserves a standalone generated-body update.
-func (h pullRequestHandler) update(ctx context.Context, runStore RunStore, runID string, repository github.Repository, number int, request github.PullRequestRequest) error {
+func (h pullRequestHandler) update(ctx context.Context, runStore RunStore, runID string, repository tracker.Repository, number int, request github.PullRequestRequest) error {
 	payload := pullRequestEffectPayload{Repository: repository, Number: number, Request: request}
 	effect, err := reserve(h.now, runID, store.PendingEffectKindPullRequest, fmt.Sprintf("update=%d\x00%s", number, request.Body), payload)
 	if err != nil {

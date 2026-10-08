@@ -17,6 +17,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -47,7 +48,7 @@ func TestTestStageAcceptsVerifiedRedTestsAndLaunchesImplementation(t *testing.T)
 	storeRuntime := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 1, Stdout: "expected behavior assertion"}}}
 	harnessRuntime := &agentHarness{}
-	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: 12, Title: "Test stage", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: 12, Title: "Test stage", State: "open", Labels: []string{github.LabelAgentReady}}}
 	workspace := &testStageWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-test-stage", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-test-stage", HeadSHA: factoryGateCheckpoint},
@@ -556,7 +557,7 @@ func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (
 	storeRuntime := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 1, Stdout: "expected behavior assertion"}}}
 	harnessRuntime := &agentHarness{}
-	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: 13, Title: "Test objection", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: 13, Title: "Test objection", State: "open", Labels: []string{github.LabelAgentReady}}}
 	workspace := &testStageWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-objection", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-objection", HeadSHA: factoryGateCheckpoint},

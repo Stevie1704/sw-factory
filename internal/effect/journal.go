@@ -8,6 +8,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -29,11 +30,11 @@ type InvocationStore interface {
 // issueClient is the GitHub issue and comment seam used by the label,
 // status-comment, clarification, and state-transition kinds.
 type issueClient interface {
-	Issue(context.Context, github.Repository, int) (github.Issue, error)
-	ReplaceIssueLabels(context.Context, github.Repository, int, []string) error
-	CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error)
-	FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error)
-	EditIssueComment(context.Context, github.Repository, string, string) error
+	Issue(context.Context, tracker.Repository, int) (tracker.Issue, error)
+	ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error
+	CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error)
+	FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error)
+	EditIssueComment(context.Context, tracker.Repository, string, string) error
 }
 
 // runPresentation renders the coordinator-owned issue projection of a run.

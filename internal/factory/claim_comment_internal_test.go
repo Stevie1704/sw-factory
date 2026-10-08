@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestSafeStatusCommentValueReplacesC1Controls verifies that every Unicode
@@ -33,7 +33,7 @@ func TestSafeStatusCommentValueReplacesC1Controls(t *testing.T) {
 func TestClaimCommentWatermarkFailsClosedWithoutCommentReader(t *testing.T) {
 	t.Parallel()
 
-	_, err := (&Service{}).claimCommentWatermark(context.Background(), github.Repository{}, 42)
+	_, err := (&Service{}).claimCommentWatermark(context.Background(), tracker.Repository{}, 42)
 	if err == nil || !strings.Contains(err.Error(), "comment reader is required") {
 		t.Fatalf("claimCommentWatermark() error = %v, want missing comment-reader failure", err)
 	}

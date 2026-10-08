@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -157,7 +158,7 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 	policy.ModelOptions["spec_review"] = []string{"gpt-5"}
 	policy.RoleHarnessDefaults["standards_review"] = config.HarnessCodex
 	policy.ModelOptions["standards_review"] = []string{"gpt-5"}
-	issue := github.Issue{Number: 42, Title: "Honor non-blocking gates", Body: "Reach readiness with a non-blocking gate failure.", State: "open", Labels: []string{github.LabelAgentReady}}
+	issue := tracker.Issue{Number: 42, Title: "Honor non-blocking gates", Body: "Reach readiness with a non-blocking gate failure.", State: "open", Labels: []string{github.LabelAgentReady}}
 	workspace := &reviewableDraftWorkspace{draftGitWorkspace: &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-nonblocking", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-nonblocking", HeadSHA: factoryGateCheckpoint},

@@ -12,6 +12,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -121,7 +122,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if err := validateProtectedTestPaths(run.Worktree, protectedState, run.ProtectedTestPaths); err != nil {
 		return DraftPullRequestResult{}, err
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return DraftPullRequestResult{}, err
@@ -279,7 +280,7 @@ func (s *Service) runConfiguredGates(ctx context.Context, registration config.Re
 
 // upsertDraftPullRequest finds a prior branch pull request before creating one
 // and merges the generated section into its existing body when present.
-func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequest, error) {
+func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository tracker.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequest, error) {
 	request, expectedNumber, err := s.planDraftPullRequest(ctx, client, repository, run, packet, gates, intervention)
 	if err != nil {
 		return github.PullRequest{}, err
@@ -289,7 +290,7 @@ func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.Pull
 
 // planDraftPullRequest reads the current branch PR once and freezes the exact
 // request used by both the first mutation and a restart replay.
-func (s *Service) planDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequestRequest, int, error) {
+func (s *Service) planDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository tracker.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequestRequest, int, error) {
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return github.PullRequestRequest{}, 0, err
@@ -316,7 +317,7 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 	if client == nil {
 		return github.PullRequest{}, errors.New("GitHub client does not support pull-request operations")
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return github.PullRequest{}, err
@@ -358,7 +359,7 @@ func checkpointMessage(run store.Run) string {
 
 // ensureIssueIdentity fills the fallback issue identity used by test doubles
 // and GitHub adapters that return an otherwise valid issue without a number.
-func ensureIssueIdentity(issue, fallback github.Issue, issueNumber int) github.Issue {
+func ensureIssueIdentity(issue, fallback tracker.Issue, issueNumber int) tracker.Issue {
 	if issue.Number == 0 {
 		issue = fallback
 		issue.Number = issueNumber

@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -658,7 +659,7 @@ type progressionDispatchPullRequests struct {
 }
 
 // FindPullRequest records a pull-request lookup and returns its configured error.
-func (p *progressionDispatchPullRequests) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
+func (p *progressionDispatchPullRequests) FindPullRequest(context.Context, tracker.Repository, string, string) (github.PullRequest, error) {
 	p.findCalls++
 	if len(p.findErrors) == 0 {
 		return github.PullRequest{}, nil
@@ -669,12 +670,12 @@ func (p *progressionDispatchPullRequests) FindPullRequest(context.Context, githu
 }
 
 // CreatePullRequest satisfies the pull-request creation seam.
-func (*progressionDispatchPullRequests) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
+func (*progressionDispatchPullRequests) CreatePullRequest(context.Context, tracker.Repository, github.PullRequestRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, context.Canceled
 }
 
 // UpdatePullRequest satisfies the pull-request update seam.
-func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, github.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
+func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, tracker.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, context.Canceled
 }
 
@@ -683,32 +684,32 @@ func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, githu
 type progressionDispatchGitHub struct{}
 
 // Issue reports an open issue during lifecycle observation.
-func (progressionDispatchGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
-	return github.Issue{State: "open"}, nil
+func (progressionDispatchGitHub) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
+	return tracker.Issue{State: "open"}, nil
 }
 
 // CreateLabel satisfies the issue client seam.
-func (progressionDispatchGitHub) CreateLabel(context.Context, github.Repository, github.Label) error {
+func (progressionDispatchGitHub) CreateLabel(context.Context, tracker.Repository, github.Label) error {
 	return context.Canceled
 }
 
 // ReplaceIssueLabels satisfies the issue client seam.
-func (progressionDispatchGitHub) ReplaceIssueLabels(context.Context, github.Repository, int, []string) error {
+func (progressionDispatchGitHub) ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error {
 	return context.Canceled
 }
 
 // CreateIssueComment satisfies the issue client seam.
-func (progressionDispatchGitHub) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+func (progressionDispatchGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
 	return github.Comment{}, context.Canceled
 }
 
 // FindStatusComment satisfies the issue client seam.
-func (progressionDispatchGitHub) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+func (progressionDispatchGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (github.Comment, error) {
 	return github.Comment{}, context.Canceled
 }
 
 // EditIssueComment satisfies the issue client seam.
-func (progressionDispatchGitHub) EditIssueComment(context.Context, github.Repository, string, string) error {
+func (progressionDispatchGitHub) EditIssueComment(context.Context, tracker.Repository, string, string) error {
 	return context.Canceled
 }
 

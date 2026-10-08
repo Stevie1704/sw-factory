@@ -9,6 +9,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // LifecycleRequest selects the run whose GitHub lifecycle should be observed.
@@ -160,7 +161,7 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 // inputs.
 type lifecycleObservation struct {
 	// Issue is the observed issue snapshot.
-	Issue github.Issue
+	Issue tracker.Issue
 	// PullRequest is the tracked pull request, when one exists.
 	PullRequest github.PullRequest
 	// HasPullRequest reports whether a tracked pull request was found.
@@ -199,7 +200,7 @@ type lifecycleDecision struct {
 // whether an observed issue and pull request complete, cancel, or leave a run
 // unchanged. It is the only interpretation of GitHub lifecycle state, so no
 // caller can invent a reset-specific or cleanup-specific variant.
-func classifyLifecycle(run store.Run, issue github.Issue, pullRequest github.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
+func classifyLifecycle(run store.Run, issue tracker.Issue, pullRequest github.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
 	// GitHub reports a merged pull request as closed, so merge detection must
 	// happen before either ordinary closed-state cancellation branch.
 	if hasPullRequest && pullRequest.Merged {
@@ -257,7 +258,7 @@ func pullRequestIsOpen(pullRequest github.PullRequest, found bool) bool {
 
 // retryTargetIsOpen confirms that a cancelled run has an explicitly reopened
 // GitHub target before the retry command reactivates its persisted state.
-func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.RepositoryRegistration, run store.Run, issue github.Issue) (bool, error) {
+func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.RepositoryRegistration, run store.Run, issue tracker.Issue) (bool, error) {
 	issueOpen := strings.EqualFold(strings.TrimSpace(issue.State), "open")
 	if run.PullRequestNumber == 0 {
 		return issueOpen, nil
@@ -275,7 +276,7 @@ func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.Rep
 
 // transitionTerminal stops active workers and projects the final state to
 // durable GitHub and store surfaces. Branches, worktrees, and logs remain.
-func (s *Service) transitionTerminal(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run, issue github.Issue) (store.Run, error) {
+func (s *Service) transitionTerminal(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run, issue tracker.Issue) (store.Run, error) {
 	if store.IsTerminalStatus(previous.Status) {
 		return previous, nil
 	}

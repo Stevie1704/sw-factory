@@ -4,19 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // errAccountUnavailable is the bounded diagnosis returned when the
 // authenticated GitHub account cannot be established. It never contains gh
 // output, so no credential material can reach an operator message.
 var errAccountUnavailable = errors.New("the authenticated GitHub account could not be read: run gh auth login for the account that supervises the repository")
-
-// AccountReader resolves the login of the locally authenticated GitHub
-// account. It is the only reliable coordinator identity available to the
-// adapter, and it is read-only: the CLI credential is never read or stored.
-type AccountReader interface {
-	AuthenticatedLogin(context.Context) (string, error)
-}
 
 // AuthenticatedLogin returns the login of the account gh is authenticated as.
 func (c *GhClient) AuthenticatedLogin(ctx context.Context) (string, error) {
@@ -37,4 +32,4 @@ type accountResponse struct {
 	Login string `json:"login"`
 }
 
-var _ AccountReader = (*GhClient)(nil)
+var _ tracker.AccountReader = (*GhClient)(nil)

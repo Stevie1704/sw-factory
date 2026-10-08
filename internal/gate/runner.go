@@ -11,6 +11,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -251,7 +252,7 @@ type Runner struct {
 	// Runtime is the portable worker execution seam.
 	Runtime worker.WorkerRuntime
 	// Repository is the host-side GitHub repository receiving statuses.
-	Repository github.Repository
+	Repository tracker.Repository
 	// Statuses publishes exact-SHA GitHub results.
 	Statuses github.CommitStatusPublisher
 }

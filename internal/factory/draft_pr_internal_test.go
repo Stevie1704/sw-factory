@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestGeneratedPullRequestBodyDeclaresTheClosingKeyword pins the reference that
@@ -18,7 +18,7 @@ func TestGeneratedPullRequestBodyDeclaresTheClosingKeyword(t *testing.T) {
 
 	packet := SpecificationPacket{
 		Version: 1,
-		Issue:   github.Issue{Number: 42, Title: "Close the issue on merge", Body: "Link the pull request to its issue."},
+		Issue:   tracker.Issue{Number: 42, Title: "Close the issue on merge", Body: "Link the pull request to its issue."},
 		RepositoryConfig: config.RepositoryConfig{
 			TargetBranch: "main",
 			TestPolicy:   config.TestPolicy{Mode: config.TestModeAdvisory},

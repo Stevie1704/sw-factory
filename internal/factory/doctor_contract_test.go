@@ -10,8 +10,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -164,10 +164,10 @@ func (*doctorContractGitWorkspace) SynchronizeBase(context.Context, gitadapter.B
 func (*fakeGitHub) CheckAuthentication(context.Context) error { return nil }
 
 // CheckRepositoryAccess implements the GitHub diagnosis seam.
-func (*fakeGitHub) CheckRepositoryAccess(context.Context, github.Repository) error { return nil }
+func (*fakeGitHub) CheckRepositoryAccess(context.Context, tracker.Repository) error { return nil }
 
 // CheckFactoryLabels implements the GitHub diagnosis seam.
-func (*fakeGitHub) CheckFactoryLabels(context.Context, github.Repository) error { return nil }
+func (*fakeGitHub) CheckFactoryLabels(context.Context, tracker.Repository) error { return nil }
 
 // CheckRemote implements the Git diagnosis seam.
 func (*doctorContractGitWorkspace) CheckRemote(context.Context, gitadapter.DoctorRequest) error {

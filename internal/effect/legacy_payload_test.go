@@ -9,6 +9,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // The payloads below are literal JSON in the shape that the GitHub-typed
@@ -21,64 +22,64 @@ const (
 )
 
 // legacyRepository is the repository identity every legacy payload names.
-var legacyRepository = github.Repository{Owner: "acme", Name: "widget"}
+var legacyRepository = tracker.Repository{Owner: "acme", Name: "widget"}
 
 // recordingIssuesForTest records the complete label replacement a replay
 // sends to the work tracker.
 type recordingIssuesForTest struct {
 	journalIssuesForTest
-	repository github.Repository
+	repository tracker.Repository
 	number     int
 	labels     []string
 }
 
 // Issue returns an issue whose labels differ from the replayed set.
-func (r *recordingIssuesForTest) Issue(_ context.Context, _ github.Repository, number int) (github.Issue, error) {
-	return github.Issue{Number: number, Labels: []string{"old"}}, nil
+func (r *recordingIssuesForTest) Issue(_ context.Context, _ tracker.Repository, number int) (tracker.Issue, error) {
+	return tracker.Issue{Number: number, Labels: []string{"old"}}, nil
 }
 
 // ReplaceIssueLabels records the replayed label replacement.
-func (r *recordingIssuesForTest) ReplaceIssueLabels(_ context.Context, repository github.Repository, number int, labels []string) error {
+func (r *recordingIssuesForTest) ReplaceIssueLabels(_ context.Context, repository tracker.Repository, number int, labels []string) error {
 	r.repository, r.number, r.labels = repository, number, labels
 	return nil
 }
 
 // recordingStatusesForTest records the commit status a replay publishes.
 type recordingStatusesForTest struct {
-	repository github.Repository
+	repository tracker.Repository
 	status     github.CommitStatus
 }
 
 // ListCommitStatuses reports no existing status, so replay must publish.
-func (*recordingStatusesForTest) ListCommitStatuses(context.Context, github.Repository, string) ([]github.CommitStatus, error) {
+func (*recordingStatusesForTest) ListCommitStatuses(context.Context, tracker.Repository, string) ([]github.CommitStatus, error) {
 	return nil, nil
 }
 
 // CreateCommitStatus records the replayed status.
-func (r *recordingStatusesForTest) CreateCommitStatus(_ context.Context, repository github.Repository, status github.CommitStatus) error {
+func (r *recordingStatusesForTest) CreateCommitStatus(_ context.Context, repository tracker.Repository, status github.CommitStatus) error {
 	r.repository, r.status = repository, status
 	return nil
 }
 
 // recordingPullRequestsForTest records the pull-request update a replay sends.
 type recordingPullRequestsForTest struct {
-	repository github.Repository
+	repository tracker.Repository
 	number     int
 	request    github.PullRequestRequest
 }
 
 // FindPullRequest reports the existing pull request with an outdated body.
-func (*recordingPullRequestsForTest) FindPullRequest(_ context.Context, _ github.Repository, head, base string) (github.PullRequest, error) {
+func (*recordingPullRequestsForTest) FindPullRequest(_ context.Context, _ tracker.Repository, head, base string) (github.PullRequest, error) {
 	return github.PullRequest{Number: 9, Title: "Fix the widget", Body: "outdated", HeadBranch: head, BaseBranch: base, Draft: true}, nil
 }
 
 // CreatePullRequest is never reached when the pull request exists.
-func (*recordingPullRequestsForTest) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
+func (*recordingPullRequestsForTest) CreatePullRequest(context.Context, tracker.Repository, github.PullRequestRequest) (github.PullRequest, error) {
 	return github.PullRequest{}, errExternal
 }
 
 // UpdatePullRequest records the replayed update.
-func (r *recordingPullRequestsForTest) UpdatePullRequest(_ context.Context, repository github.Repository, number int, request github.PullRequestRequest) (github.PullRequest, error) {
+func (r *recordingPullRequestsForTest) UpdatePullRequest(_ context.Context, repository tracker.Repository, number int, request github.PullRequestRequest) (github.PullRequest, error) {
 	r.repository, r.number, r.request = repository, number, request
 	return github.PullRequest{Number: number}, nil
 }

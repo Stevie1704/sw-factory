@@ -17,6 +17,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -281,7 +282,7 @@ func (s *Service) diagnoseInterruptedRunWithStore(ctx context.Context, registrat
 	inspector := s.worktreeInspector()
 	inspectWorktreeProjection(ctx, &diagnosis, inspector, registration.Path, run)
 
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	inspectGitHubProjection(ctx, &diagnosis, s.deps.GitHub, s.pullRequestClient(), repository, run)
 	inspectRemoteBranchProjection(ctx, &diagnosis, s.gitWorkspace(), run)
 	s.inspectInvocationProjection(ctx, &diagnosis, registration, runStore, run)
@@ -1932,7 +1933,7 @@ func inspectWorktreeProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 
 // inspectGitHubProjection compares the issue, state label, status comment, and
 // optional pull request through read-only GitHub adapter methods.
-func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client github.Client, pullRequests github.PullRequestClient, repository github.Repository, run store.Run) {
+func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client github.Client, pullRequests github.PullRequestClient, repository tracker.Repository, run store.Run) {
 	if client == nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "client", Expected: "read-only GitHub client", Observed: "client unavailable"})
 		return
@@ -1975,7 +1976,7 @@ func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, 
 
 // inspectPullRequestProjection checks an existing or unexpectedly discovered
 // pull request without creating, updating, or otherwise mutating it.
-func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, pullRequests github.PullRequestClient, repository github.Repository, run store.Run) {
+func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, pullRequests github.PullRequestClient, repository tracker.Repository, run store.Run) {
 	hasPersistedIdentity := run.PullRequestNumber > 0 || strings.TrimSpace(run.PullRequestURL) != ""
 	if pullRequests == nil {
 		if hasPersistedIdentity {

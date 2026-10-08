@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -39,7 +40,7 @@ type Clarification struct {
 // configuration captured when a run is claimed or intentionally refreshed.
 type SpecificationPacket struct {
 	Version          int                     `json:"version"`
-	Issue            github.Issue            `json:"issue"`
+	Issue            tracker.Issue           `json:"issue"`
 	RepositoryConfig config.RepositoryConfig `json:"repository_config"`
 	// RepositoryGuidance contains checked-in guidance captured at the run's
 	// immutable base checkpoint and later presented as untrusted prompt input.
@@ -61,7 +62,7 @@ type SpecificationPacket struct {
 
 // BootstrapLabelsResult reports the labels explicitly created for a repository.
 type BootstrapLabelsResult struct {
-	Repository github.Repository
+	Repository tracker.Repository
 	Labels     []string
 }
 
@@ -112,7 +113,7 @@ func (s *Service) BootstrapLabels(ctx context.Context) (BootstrapLabelsResult, e
 	if err != nil {
 		return BootstrapLabelsResult{}, err
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	for _, label := range factoryLabels {
 		if err := s.deps.GitHub.CreateLabel(ctx, repository, label); err != nil {
 			return BootstrapLabelsResult{}, err
@@ -144,7 +145,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err := harness.ValidateNativeResumeCapabilities(repositoryConfig, s.deps.HarnessCapabilities); err != nil {
 		return IssueResult{}, fmt.Errorf("validate harness capabilities before claim: %w", err)
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	if current != nil {
 		return IssueResult{}, fmt.Errorf("an active run already exists: %s", current.ID)
 	}
@@ -275,7 +276,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 // claimCommentWatermark captures the latest existing issue comment before a
 // run can receive commands. Every claimed run accepts commands, so the reader
 // must be available before the claim creates any durable or external effects.
-func (s *Service) claimCommentWatermark(ctx context.Context, repository github.Repository, issueNumber int) (string, error) {
+func (s *Service) claimCommentWatermark(ctx context.Context, repository tracker.Repository, issueNumber int) (string, error) {
 	if s.deps.Comments == nil {
 		return "", errors.New("GitHub comment reader is required to establish the command cutoff before claim")
 	}
@@ -348,7 +349,7 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	if err := s.ensureTransitionBaseline(ctx, runStore, *run, request); err != nil {
 		return store.Run{}, err
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return store.Run{}, err
@@ -763,7 +764,7 @@ func (s *Service) ensureLegacyAgentStartup(ctx context.Context, registration con
 
 // failClaim records a terminal failure and best-effort moves the issue label
 // away from running so a partial claim is visible and retryable.
-func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Run, repository github.Repository, issue github.Issue, cause error) (IssueResult, error) {
+func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Run, repository tracker.Repository, issue tracker.Issue, cause error) (IssueResult, error) {
 	if journal, journaled := runStore.(PendingEffectStore); journaled {
 		// Claim failure owns the partially created run. Abandon the in-flight
 		// success transition before recording failure, otherwise a restart
@@ -1134,7 +1135,7 @@ func replaceFactoryState(labels []string, state string) []string {
 }
 
 // cloneIssue copies the mutable label slice before freezing the packet.
-func cloneIssue(issue github.Issue) github.Issue {
+func cloneIssue(issue tracker.Issue) tracker.Issue {
 	issue.Labels = append([]string(nil), issue.Labels...)
 	return issue
 }

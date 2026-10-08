@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestPollOnceClaimsTheOldestEligibleIssue verifies deterministic queue
@@ -23,7 +24,7 @@ func TestPollOnceClaimsTheOldestEligibleIssue(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{
+	issues := []tracker.Issue{
 		{Number: 12, Title: "newer", State: "open", Labels: []string{github.LabelAgentReady}},
 		{Number: 9, Title: "pull request", State: "open", Labels: []string{github.LabelAgentReady}, IsPullRequest: true},
 		{Number: 5, Title: "oldest", State: "open", Labels: []string{github.LabelAgentReady}},
@@ -58,7 +59,7 @@ func TestPollOnceDoesNotClaimWhileARunIsActive(t *testing.T) {
 	root := t.TempDir()
 	active := store.Run{ID: "run-active", RepositoryPath: "/repo", IssueNumber: 42, Stage: store.StageImplementation, Status: store.StatusActive}
 	runStore := &fakeRunStore{saved: []store.Run{active}}
-	issues := []github.Issue{{Number: 7, State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}, issues: issues}
 	service := newPollingService(root, githubAdapter, githubAdapter, nil, runStore, &fakeWorktree{}, nil)
 
@@ -105,7 +106,7 @@ func TestStartPollsThenStopsWithoutCancellingTheActiveRun(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}, issues: issues}
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
@@ -151,7 +152,7 @@ func TestStartKeepsPollingThroughALongIdlePeriod(t *testing.T) {
 	lease := &pollingLease{}
 	lease.onRenew = func(value github.Lease) {
 		if len(lease.calls) == idleRenewals {
-			githubAdapter.issues = []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+			githubAdapter.issues = []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 		}
 		if value.RunID == "run-fixed" && cancel != nil {
 			cancel()
@@ -247,7 +248,7 @@ func TestStartUsesTransportBackoffWithoutChangingRunState(t *testing.T) {
 
 	root := t.TempDir()
 	var cancel context.CancelFunc
-	reader := &pollingIssueReader{onList: func(call int) ([]github.Issue, error) {
+	reader := &pollingIssueReader{onList: func(call int) ([]tracker.Issue, error) {
 		if call == 1 {
 			return nil, errors.New("GitHub transport unavailable")
 		}
@@ -293,7 +294,7 @@ func TestStartAppliesIssueCommandsPostedAfterClaim(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
@@ -339,7 +340,7 @@ func TestStartBacksOffCommandTransportFailures(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
@@ -380,7 +381,7 @@ func TestStartAppliesACancelAfterAHungGitHubCallTimesOut(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
 	runStore := &fakeRunStore{}
 	timeout := &hostcmd.TimeoutError{Operation: "gh api", Timeout: github.CommandTimeout}
@@ -435,7 +436,7 @@ func TestStartRetriesAClaimWhoseGitHubCallTimedOut(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{
 		statusComment: github.Comment{ID: "status-1"},
 		issueErr:      &hostcmd.TimeoutError{Operation: "gh api", Timeout: github.CommandTimeout},
@@ -473,7 +474,7 @@ func TestStartEmitsTypedPollAndClaimEvents(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{}, issues: issues}
 	runStore := &fakeRunStore{}
 	var cancel context.CancelFunc
@@ -566,7 +567,7 @@ func TestStartEmitsSwallowedCommandFailure(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	issues := []github.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
+	issues := []tracker.Issue{{Number: 7, Title: "claim me", State: "open", Labels: []string{github.LabelAgentReady}}}
 	githubAdapter := &pollingGitHub{fakeGitHub: &fakeGitHub{statusComment: github.Comment{ID: "status-1"}}, issues: issues}
 	runStore := &fakeRunStore{}
 	var commandSeen bool
@@ -633,8 +634,8 @@ func TestStartEmitsACommandStageTransitionAfterRestart(t *testing.T) {
 		return &copy, nil
 	}}
 	githubAdapter := &pollingGitHub{
-		fakeGitHub: &fakeGitHub{issueValue: github.Issue{Number: 42, State: "open"}},
-		issues:     []github.Issue{{Number: 42, State: "open"}},
+		fakeGitHub: &fakeGitHub{issueValue: tracker.Issue{Number: 42, State: "open"}},
+		issues:     []tracker.Issue{{Number: 42, State: "open"}},
 	}
 	comments := &pollingCommentReader{onList: func(int) {
 		persisted.Stage = store.StageClaim
@@ -705,7 +706,7 @@ type pollingCommentReader struct {
 // IssueComments records the listing time, runs the optional test hook, and
 // then replays the next configured transport failure, or the comment set once
 // the failures are exhausted.
-func (r *pollingCommentReader) IssueComments(context.Context, github.Repository, int) ([]github.Comment, error) {
+func (r *pollingCommentReader) IssueComments(context.Context, tracker.Repository, int) ([]github.Comment, error) {
 	r.calls++
 	r.times = append(r.times, time.Now())
 	if r.onList != nil {
@@ -728,21 +729,21 @@ func (r *pollingCommentReader) IssueComments(context.Context, github.Repository,
 // listing adapter for coordinator polling tests.
 type pollingGitHub struct {
 	*fakeGitHub
-	issues            []github.Issue
+	issues            []tracker.Issue
 	listCalls         int
 	claimedIssue      int
 	lastLabelMutation string
 }
 
 // ListEligibleIssues returns the configured issue queue in its source order.
-func (f *pollingGitHub) ListEligibleIssues(context.Context, github.Repository) ([]github.Issue, error) {
+func (f *pollingGitHub) ListEligibleIssues(context.Context, tracker.Repository) ([]tracker.Issue, error) {
 	f.listCalls++
-	return append([]github.Issue(nil), f.issues...), nil
+	return append([]tracker.Issue(nil), f.issues...), nil
 }
 
 // Issue returns the requested issue so the claim path observes the selected
 // queue candidate rather than a shared fixture value.
-func (f *pollingGitHub) Issue(ctx context.Context, repository github.Repository, number int) (github.Issue, error) {
+func (f *pollingGitHub) Issue(ctx context.Context, repository tracker.Repository, number int) (tracker.Issue, error) {
 	for _, issue := range f.issues {
 		if issue.Number == number {
 			f.claimedIssue = number
@@ -750,12 +751,12 @@ func (f *pollingGitHub) Issue(ctx context.Context, repository github.Repository,
 			return f.fakeGitHub.Issue(ctx, repository, number)
 		}
 	}
-	return github.Issue{}, errors.New("issue not found")
+	return tracker.Issue{}, errors.New("issue not found")
 }
 
 // ReplaceIssueLabels records label mutations without changing the polling
 // assertions' access to the embedded claim fake.
-func (f *pollingGitHub) ReplaceIssueLabels(ctx context.Context, repository github.Repository, number int, labels []string) error {
+func (f *pollingGitHub) ReplaceIssueLabels(ctx context.Context, repository tracker.Repository, number int, labels []string) error {
 	f.lastLabelMutation = strings.Join(labels, ",")
 	return f.fakeGitHub.ReplaceIssueLabels(ctx, repository, number, labels)
 }
@@ -763,11 +764,11 @@ func (f *pollingGitHub) ReplaceIssueLabels(ctx context.Context, repository githu
 // pollingIssueReader is a small issue-listing seam with controllable retries.
 type pollingIssueReader struct {
 	calls  int
-	onList func(int) ([]github.Issue, error)
+	onList func(int) ([]tracker.Issue, error)
 }
 
 // ListEligibleIssues invokes the configured polling response.
-func (f *pollingIssueReader) ListEligibleIssues(_ context.Context, _ github.Repository) ([]github.Issue, error) {
+func (f *pollingIssueReader) ListEligibleIssues(_ context.Context, _ tracker.Repository) ([]tracker.Issue, error) {
 	f.calls++
 	if f.onList == nil {
 		return nil, nil
@@ -783,7 +784,7 @@ type pollingLease struct {
 }
 
 // RenewLease records the lease and invokes its optional test hook.
-func (f *pollingLease) RenewLease(_ context.Context, _ github.Repository, lease github.Lease) error {
+func (f *pollingLease) RenewLease(_ context.Context, _ tracker.Repository, lease github.Lease) error {
 	f.calls = append(f.calls, lease)
 	if f.onRenew != nil {
 		f.onRenew(lease)
@@ -820,7 +821,7 @@ func (s *pollingHeartbeatRunStore) SaveSupervisorHeartbeat(_ context.Context, he
 
 // newPollingService constructs a service with real queue/claim behavior and
 // isolated fakes for the external polling and lease adapters.
-func newPollingService(root string, githubAdapter github.Client, issuePoller github.IssuePoller, lease github.LeaseClient, runStore factory.OperationalStore, worktree gitadapter.WorktreeManager, comments github.CommentReader) *factory.Service {
+func newPollingService(root string, githubAdapter github.Client, issuePoller tracker.IssuePoller, lease github.LeaseClient, runStore factory.OperationalStore, worktree gitadapter.WorktreeManager, comments github.CommentReader) *factory.Service {
 	registration := config.RepositoryRegistration{
 		Path:                 filepath.Join(root, "repository"),
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},

@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -308,8 +309,8 @@ func testHeadlessHarnesses(runtime *agentHarness) map[config.Harness]harness.Hea
 }
 
 // githubIssueFixture returns the claimed issue used by agent tests.
-func githubIssueFixture() github.Issue {
-	return github.Issue{Number: 6, Title: "Implementation", Body: "Repository guidance", State: "open"}
+func githubIssueFixture() tracker.Issue {
+	return tracker.Issue{Number: 6, Title: "Implementation", Body: "Repository guidance", State: "open"}
 }
 
 // newAgentService creates a claimed implementation fixture with detached
@@ -366,7 +367,7 @@ func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime w
 	repackageSpecification(t, runStore, policy)
 	run := *runStore.current
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Authentication: authentication, OperationalDataPath: filepath.Join(filepath.Dir(run.RepositoryPath), "state", "factory.db"), RepositoryConfigPath: filepath.Join(run.RepositoryPath, "factory.yaml")}}}
-	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}}
 	runStore.github = githubRuntime
 	worktree := &inspectingWorktree{fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}}, state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{Config: &fakeConfig{value: host}, OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil }, LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil }, Worker: runtime, GitHub: githubRuntime, Worktree: worktree, Now: func() time.Time { return time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC) }, NewRunID: func() (string, error) { return "generated-dispatch", nil }})
@@ -377,7 +378,7 @@ func newFreshAgentService(t *testing.T, runStore *agentRunStore, worktree *inspe
 	t.Helper()
 	run := *runStore.current
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, OperationalDataPath: filepath.Join(filepath.Dir(run.RepositoryPath), "state", "factory.db"), RepositoryConfigPath: filepath.Join(run.RepositoryPath, "factory.yaml")}}}
-	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}}, statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{Config: &fakeConfig{value: host}, OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil }, LoadRepository: func(string) (config.RepositoryConfig, error) { return validRepositoryConfig(), nil }, Worker: runtime, HeadlessHarnesses: testHeadlessHarnesses(harnessRuntime), GitHub: githubRuntime, Worktree: worktree, Now: func() time.Time { return time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC) }, NewRunID: func() (string, error) { return "generated", nil }})
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestStartupChecksReportMissingFactoryLabelsAlongsideSuccessfulAccessChecks
@@ -21,7 +22,7 @@ func TestStartupChecksReportMissingFactoryLabelsAlongsideSuccessfulAccessChecks(
 		{output: []byte(`[[{"name":"agent-ready"}]]`)},
 	}}
 	client := &github.GhClient{Runner: runner}
-	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+	report := doctor.Run(context.Background(), github.StartupChecks(client, tracker.Repository{Owner: "example", Name: "project"})...)
 
 	if report.Ready() {
 		t.Fatal("GitHub report is ready despite missing factory labels")
@@ -39,7 +40,7 @@ func TestStartupChecksReportMissingFactoryLabelsAlongsideSuccessfulAccessChecks(
 // missing login or permission.
 func TestStartupChecksReportAnUnresponsiveGitHub(t *testing.T) {
 	client := &github.GhClient{Runner: unresponsiveRunner{}}
-	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+	report := doctor.Run(context.Background(), github.StartupChecks(client, tracker.Repository{Owner: "example", Name: "project"})...)
 
 	if len(report.Results) != 3 {
 		t.Fatalf("GitHub check count = %d, want three", len(report.Results))
@@ -83,7 +84,7 @@ func TestStartupChecksDistinguishLabelReadFailuresFromMissingLabels(t *testing.T
 				{output: test.output, err: test.err},
 			}}
 			client := &github.GhClient{Runner: runner}
-			report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+			report := doctor.Run(context.Background(), github.StartupChecks(client, tracker.Repository{Owner: "example", Name: "project"})...)
 			result := report.Results[2]
 			if !strings.Contains(result.Problem, test.problem) {
 				t.Fatalf("label problem = %q, want substring %q", result.Problem, test.problem)
@@ -101,7 +102,7 @@ func TestStartupChecksNeverRenderAnAuthenticationError(t *testing.T) {
 	secret := "credential-value-must-not-appear"
 	runner := &doctorRunner{responses: []doctorResponse{{err: errors.New(secret)}}}
 	client := &github.GhClient{Runner: runner}
-	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+	report := doctor.Run(context.Background(), github.StartupChecks(client, tracker.Repository{Owner: "example", Name: "project"})...)
 	for _, result := range report.Results {
 		if strings.Contains(result.Problem+result.Action, secret) {
 			t.Fatalf("diagnosis result exposed authentication error: %#v", result)
@@ -118,7 +119,7 @@ func TestStartupChecksRejectMissingTokenScopes(t *testing.T) {
 		{output: []byte(`{"hosts":{"github.com":[{"state":"success","active":true,"scopes":"public_repo"}]}}`)},
 	}}
 	client := &github.GhClient{Runner: runner}
-	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+	report := doctor.Run(context.Background(), github.StartupChecks(client, tracker.Repository{Owner: "example", Name: "project"})...)
 	result := report.Results[1]
 	if result.Status != doctor.StatusFailed || !strings.Contains(result.Problem, "token") || result.Action == "" {
 		t.Fatalf("permission result = %#v, want missing-token-scope diagnosis", result)
@@ -135,7 +136,7 @@ func TestStartupChecksAcceptPublicRepoScopeForPublicRepository(t *testing.T) {
 		{output: []byte(`[[{"name":"agent-ready"},{"name":"agent-running"},{"name":"agent-needs-input"},{"name":"agent-failed"},{"name":"agent-cancelled"},{"name":"agent-complete"}]]`)},
 	}}
 	client := &github.GhClient{Runner: runner}
-	report := doctor.Run(context.Background(), github.StartupChecks(client, github.Repository{Owner: "example", Name: "project"})...)
+	report := doctor.Run(context.Background(), github.StartupChecks(client, tracker.Repository{Owner: "example", Name: "project"})...)
 	if !report.Ready() {
 		t.Fatalf("GitHub report failed with public_repo scope on public repository: %+v", report.Results)
 	}
@@ -158,10 +159,10 @@ func TestGhClientDoctorUsesReadOnlyGitHubOperations(t *testing.T) {
 	if err := client.CheckAuthentication(context.Background()); err != nil {
 		t.Fatalf("CheckAuthentication() error = %v", err)
 	}
-	if err := client.CheckRepositoryAccess(context.Background(), github.Repository{Owner: "example", Name: "project"}); err != nil {
+	if err := client.CheckRepositoryAccess(context.Background(), tracker.Repository{Owner: "example", Name: "project"}); err != nil {
 		t.Fatalf("CheckRepositoryAccess() error = %v", err)
 	}
-	if err := client.CheckFactoryLabels(context.Background(), github.Repository{Owner: "example", Name: "project"}); err != nil {
+	if err := client.CheckFactoryLabels(context.Background(), tracker.Repository{Owner: "example", Name: "project"}); err != nil {
 		t.Fatalf("CheckFactoryLabels() error = %v", err)
 	}
 	joined := ""
