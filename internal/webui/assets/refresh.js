@@ -50,20 +50,44 @@
     });
   }
 
+  // Timer ticks and visibility changes can start reads that overlap and
+  // finish out of order. Each read gets a number, and only a read newer than
+  // the last applied one may change the page, so older state never replaces
+  // newer state.
+  var started = 0;
+  var applied = 0;
+
+  // claim reports whether read number may change the page, and records it as
+  // the last applied read when it may.
+  function claim(number) {
+    if (number <= applied) {
+      return false;
+    }
+    applied = number;
+    return true;
+  }
+
   // refresh reads the current page again and swaps its regions in place, so
   // the scroll position stays. A hidden tab skips the read.
   function refresh() {
     if (document.hidden) {
       return;
     }
+    var number = ++started;
     fetch(window.location.href, { cache: "no-store", credentials: "same-origin" })
       .then(readPage)
       .then(function (fresh) {
-        swapRegions(fresh);
-        showUnreachable(false);
+        if (claim(number)) {
+          swapRegions(fresh);
+          showUnreachable(false);
+        }
       })
       .catch(function () {
-        showUnreachable(true);
+        // A read that claimed the page and then failed to swap is still the
+        // newest read, so its failure is shown too.
+        if (claim(number) || number === applied) {
+          showUnreachable(true);
+        }
       });
   }
 
