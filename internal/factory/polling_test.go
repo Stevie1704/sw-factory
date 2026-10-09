@@ -866,6 +866,9 @@ func newPollingService(root string, githubAdapter tracker.Client, issuePoller tr
 		Lease:          lease,
 		Worktree:       worktree,
 		Comments:       comments,
+		// A fake runtime keeps the cancel path independent of a host Docker
+		// daemon, which the worker image does not have.
+		Worker: &agentWorker{},
 		Now: func() time.Time {
 			return time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 		},
