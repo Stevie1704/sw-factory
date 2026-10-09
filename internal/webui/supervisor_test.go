@@ -31,6 +31,12 @@ func (reader fakeReader) RunDetail(_ context.Context, runID string) (factory.Run
 	}, nil
 }
 
+// RunEvaluation returns the run identity with no run and no summary, and the
+// fixed supervisor view.
+func (reader fakeReader) RunEvaluation(_ context.Context, runID string) (factory.RunEvaluation, error) {
+	return factory.RunEvaluation{Supervisor: reader.supervisor, RunID: runID}, nil
+}
+
 // fixtureHeartbeat is a heartbeat renewed shortly before fixtureNow that
 // expires one minute after it.
 var fixtureHeartbeat = &store.SupervisorHeartbeat{
