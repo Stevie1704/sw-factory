@@ -75,7 +75,9 @@ type GateCheckpointResults struct {
 	Results []store.GateResult
 }
 
-// GateFailureDiagnostic is the host-side diagnostic of one failed gate phase.
+// GateFailureDiagnostic is the host-side diagnostic of the latest failure of
+// one gate phase. Each failure replaces the file, so it can belong to an
+// older checkpoint than the retained gate results.
 type GateFailureDiagnostic struct {
 	Phase store.GatePhase
 	// Content is a bounded read of repository command output. It stays on
@@ -84,6 +86,8 @@ type GateFailureDiagnostic struct {
 	// Truncated reports that the file is longer than the read bound, so
 	// Content holds only its leading part.
 	Truncated bool
+	// ModifiedAt is when the diagnostic file was last written.
+	ModifiedAt time.Time
 }
 
 // RunDetail is the run detail page model.

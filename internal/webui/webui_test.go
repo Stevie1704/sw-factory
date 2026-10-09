@@ -316,6 +316,21 @@ func TestRunDetailMarksATruncatedDiagnostic(t *testing.T) {
 	assertContains(t, get(t, fixture.handler, "/runs/"+waitingRunID).Body.String(), diagnosticOutput, notice)
 }
 
+// TestRunDetailDatesTheDiagnostic verifies the run page presents the
+// diagnostic as the latest failure of its phase with the time the file was
+// written, because it can belong to an older checkpoint than the gate table.
+func TestRunDetailDatesTheDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUIFixture(t)
+	writtenAt := time.Date(2026, 10, 9, 11, 30, 0, 0, time.UTC)
+	if err := os.Chtimes(filepath.Join(fixture.diagnosticDirectory, "checkpoint.log"), writtenAt, writtenAt); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, get(t, fixture.handler, "/runs/"+waitingRunID).Body.String(),
+		"Latest checkpoint failure diagnostic", "written 2026-10-09T11:30:00Z")
+}
+
 // TestUnknownRunIsNotFound verifies an unknown run identity renders a 404
 // page instead of an error.
 func TestUnknownRunIsNotFound(t *testing.T) {

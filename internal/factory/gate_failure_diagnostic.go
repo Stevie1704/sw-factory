@@ -149,7 +149,7 @@ func readGateFailureDiagnostics(run store.Run) ([]GateFailureDiagnostic, error) 
 			return nil, fmt.Errorf("read %s gate failure diagnostic: %w", phase, err)
 		}
 		if found {
-			diagnostics = append(diagnostics, GateFailureDiagnostic{Phase: store.GatePhase(phase), Content: read.content, Truncated: read.truncated})
+			diagnostics = append(diagnostics, GateFailureDiagnostic{Phase: store.GatePhase(phase), Content: read.content, Truncated: read.truncated, ModifiedAt: read.modifiedAt})
 		}
 	}
 	return diagnostics, nil
@@ -160,6 +160,8 @@ type boundedRead struct {
 	content string
 	// truncated reports that the file is longer than the bound.
 	truncated bool
+	// modifiedAt is the file's modification time.
+	modifiedAt time.Time
 }
 
 // readBoundedRegularFile reads at most maxGateFailureDiagnosticReadBytes of a
@@ -190,7 +192,7 @@ func readBoundedRegularFile(root *os.Root, name string) (boundedRead, bool, erro
 	if truncated {
 		content = content[:maxGateFailureDiagnosticReadBytes]
 	}
-	return boundedRead{content: string(content), truncated: truncated}, true, nil
+	return boundedRead{content: string(content), truncated: truncated, modifiedAt: info.ModTime()}, true, nil
 }
 
 // gateFailureDiagnosticName maps a declared phase to its fixed file name. An
