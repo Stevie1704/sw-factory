@@ -1091,7 +1091,8 @@ Pages:
 
 Every page shows a supervisor banner. The banner tells if the coordinator
 heartbeat is live, expired, or not recorded, and it shows when the page read
-the store. While the browser tab is visible, the page reads the run data and
+the store. When a run is active and the supervisor is not live, the banner
+shows a warning that names the run; run `factory start` to continue it. While the browser tab is visible, the page reads the run data and
 the banner again after each `--refresh` interval. When the UI server does not
 answer, the page shows that the server is unreachable.
 
