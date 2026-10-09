@@ -28,7 +28,9 @@ type workItemResponse struct {
 	MultilineFieldsFormat map[string]string `json:"multilineFieldsFormat"`
 }
 
-// Issue reads one work item as an issue snapshot.
+// Issue reads one work item as an issue snapshot. It applies the same
+// tag-author check as the queue, so a claim cannot admit a work item whose
+// agent-ready tag an unauthorized user added.
 func (c *Client) Issue(ctx context.Context, repository tracker.Repository, number int) (tracker.Issue, error) {
 	if err := validateIssueTarget(repository, number); err != nil {
 		return tracker.Issue{}, err
@@ -37,7 +39,28 @@ func (c *Client) Issue(ctx context.Context, repository tracker.Repository, numbe
 	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", number), nil, apiVersion)}, &response); err != nil {
 		return tracker.Issue{}, fmt.Errorf("read work item %d: %w", number, err)
 	}
-	return c.issue(ctx, repository, response)
+	issue, err := c.issue(ctx, repository, response)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	return c.authorizeReadyTag(ctx, repository, issue)
+}
+
+// authorizeReadyTag removes the agent-ready label from an issue when its last
+// adder is not an authorized user. A claimed work item no longer carries the
+// tag, so the history is read only before a claim.
+func (c *Client) authorizeReadyTag(ctx context.Context, repository tracker.Repository, issue tracker.Issue) (tracker.Issue, error) {
+	if !slices.Contains(issue.Labels, tracker.LabelAgentReady) {
+		return issue, nil
+	}
+	tagger, err := c.readyTagger(ctx, repository, issue.Number)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	if !c.authorized(tagger) {
+		issue.Labels = slices.DeleteFunc(issue.Labels, func(label string) bool { return label == tracker.LabelAgentReady })
+	}
+	return issue, nil
 }
 
 // issue converts one work item into the neutral issue snapshot. The state is
@@ -180,18 +203,12 @@ func (c *Client) eligibleIssue(ctx context.Context, repository tracker.Repositor
 		return tracker.Issue{}, nil
 	}
 	issue, err := c.issue(ctx, repository, response)
-	if err != nil {
+	if err != nil || issue.State != "open" {
 		return tracker.Issue{}, err
 	}
-	if issue.State != "open" || !slices.Contains(issue.Labels, tracker.LabelAgentReady) {
-		return tracker.Issue{}, nil
-	}
-	tagger, err := c.readyTagger(ctx, repository, issue.Number)
-	if err != nil {
+	issue, err = c.authorizeReadyTag(ctx, repository, issue)
+	if err != nil || !slices.Contains(issue.Labels, tracker.LabelAgentReady) {
 		return tracker.Issue{}, err
-	}
-	if !c.authorized(tagger) {
-		return tracker.Issue{}, nil
 	}
 	return issue, nil
 }

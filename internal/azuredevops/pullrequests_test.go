@@ -151,30 +151,42 @@ func TestCommitStatusesUseTheGitStatusAPI(t *testing.T) {
 	}
 }
 
-// reviewThreads is a pull request with a rejecting vote by alice, her file
-// and general findings, a resolved thread, a later approval by bob, and a
-// conversation comment.
+// serviceAccount is the author of system comments, such as a vote.
+const serviceAccount = `{"id":"41113706-4320-4083-9150-925feb93fc22","displayName":"[contoso]\\Project Collection Service Accounts","isContainer":true}`
+
+// markdownProperty is the numeric property every text thread carries.
+const markdownProperty = `"properties":{"Microsoft.TeamFoundation.Discussion.SupportsMarkdown":{"$type":"System.Int32","$value":1}}`
+
+// reviewThreads is a pull request in the documented response shape: a
+// rejecting vote by alice, her file and general findings, a resolved thread,
+// a later approval by bob, and a conversation comment. A vote names the
+// voter only by identity id.
 const reviewThreads = `{"value":[
-	{"id":1,"publishedDate":"2026-10-09T10:00:00Z","status":"active",
-	 "threadContext":{"filePath":"/internal/export.go","rightFileStart":{"line":12}},
+	{"id":1,"publishedDate":"2026-10-09T10:00:00Z","status":"active",` + markdownProperty + `,
+	 "threadContext":{"filePath":"/internal/export.go","rightFileStart":{"line":12,"offset":1}},
 	 "comments":[{"id":1,"author":{"uniqueName":"alice@contoso.com"},"content":"Handle the empty case.","commentType":"text","publishedDate":"2026-10-09T10:00:00Z"}]},
-	{"id":2,"publishedDate":"2026-10-09T10:01:00Z","status":"active",
+	{"id":2,"publishedDate":"2026-10-09T10:01:00Z","status":"active",` + markdownProperty + `,
 	 "comments":[{"id":1,"author":{"uniqueName":"alice@contoso.com"},"content":"Add a test for CSV quoting.","commentType":"text","publishedDate":"2026-10-09T10:01:00Z"}]},
-	{"id":3,"publishedDate":"2026-10-09T10:01:30Z","status":"fixed",
+	{"id":3,"publishedDate":"2026-10-09T10:01:30Z","status":"fixed",` + markdownProperty + `,
 	 "threadContext":{"filePath":"/README.md","rightFileStart":{"line":1}},
 	 "comments":[{"id":1,"author":{"uniqueName":"alice@contoso.com"},"content":"Resolved already.","commentType":"text","publishedDate":"2026-10-09T10:01:30Z"}]},
 	{"id":4,"publishedDate":"2026-10-09T10:02:00Z",
-	 "properties":{"CodeReviewThreadType":{"$value":"VoteUpdate"},"CodeReviewVoteResult":{"$value":"-5"},"CodeReviewVotedByIdentity":{"$value":"1"}},
-	 "identities":{"1":{"uniqueName":"alice@contoso.com"}},
-	 "comments":[{"id":1,"author":{"uniqueName":"alice@contoso.com"},"content":"Alice voted -5","commentType":"system","publishedDate":"2026-10-09T10:02:00Z"}]},
+	 "properties":{"CodeReviewThreadType":{"$type":"System.String","$value":"VoteUpdate"},"CodeReviewVoteResult":{"$type":"System.String","$value":"-5"},
+	  "CodeReviewVotedByDisplayName":{"$type":"System.String","$value":"Alice"},"CodeReviewVotedByTfId":{"$type":"System.String","$value":"A1A1A1A1-0000-0000-0000-000000000001"}},
+	 "comments":[{"id":1,"author":` + serviceAccount + `,"content":"Alice voted -5","commentType":"system","publishedDate":"2026-10-09T10:02:00Z"}]},
 	{"id":5,"publishedDate":"2026-10-09T11:00:00Z",
-	 "properties":{"CodeReviewThreadType":{"$value":"VoteUpdate"},"CodeReviewVoteResult":{"$value":"10"},"CodeReviewVotedByIdentity":{"$value":"2"}},
-	 "identities":{"2":{"uniqueName":"bob@contoso.com"}},
-	 "comments":[{"id":1,"author":{"uniqueName":"bob@contoso.com"},"content":"Bob voted 10","commentType":"system","publishedDate":"2026-10-09T11:00:00Z"}]},
-	{"id":6,"publishedDate":"2026-10-09T11:05:00Z","status":"active",
+	 "properties":{"CodeReviewThreadType":{"$type":"System.String","$value":"VoteUpdate"},"CodeReviewVoteResult":{"$type":"System.String","$value":"10"},
+	  "CodeReviewVotedByTfId":{"$type":"System.String","$value":"b2b2b2b2000000000000000000000002"}},
+	 "comments":[{"id":1,"author":` + serviceAccount + `,"content":"Bob voted 10","commentType":"system","publishedDate":"2026-10-09T11:00:00Z"}]},
+	{"id":6,"publishedDate":"2026-10-09T11:05:00Z","status":"active",` + markdownProperty + `,
 	 "comments":[
 	  {"id":1,"author":{"uniqueName":"bob@contoso.com"},"content":"/factory status","commentType":"text","publishedDate":"2026-10-09T11:05:00Z","lastUpdatedDate":"2026-10-09T11:06:00Z"},
 	  {"id":2,"author":{"uniqueName":"bob@contoso.com"},"content":"deleted","isDeleted":true,"commentType":"text","publishedDate":"2026-10-09T11:07:00Z"}]}]}`
+
+// reviewers is the reviewer list that resolves the voters' identity ids.
+const reviewers = `{"value":[
+	{"id":"a1a1a1a1-0000-0000-0000-000000000001","uniqueName":"alice@contoso.com","vote":-5},
+	{"id":"b2b2b2b2-0000-0000-0000-000000000002","uniqueName":"bob@contoso.com","vote":10}]}`
 
 // TestPullRequestReviewsTurnVoteThreadsIntoReviews verifies that a vote is
 // a review with a stable identity, that waiting-for-author maps to changes
@@ -182,7 +194,9 @@ const reviewThreads = `{"value":[
 func TestPullRequestReviewsTurnVoteThreadsIntoReviews(t *testing.T) {
 	t.Parallel()
 
-	az := newFakeAz(t).on("GET "+repositoryPath+"/pullRequests/17/threads", reviewThreads)
+	az := newFakeAz(t).
+		on("GET "+repositoryPath+"/pullRequests/17/threads", reviewThreads).
+		on("GET "+repositoryPath+"/pullRequests/17/reviewers", reviewers)
 
 	reviews, err := newClient(az).PullRequestReviews(context.Background(), repository, 17)
 	if err != nil {

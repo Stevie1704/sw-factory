@@ -11,7 +11,7 @@ import (
 // Azure DevOps security namespaces and the paths of their permission checks.
 const (
 	gitPermissionsPath = "/contoso/_apis/permissions/2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87"
-	cssPermissionsPath = "/contoso/_apis/permissions/83e28ad4-2d72-4ceb-97b0-c7726e7a4da1"
+	cssPermissionsPath = "/contoso/_apis/permissions/83e28ad4-2d72-4ceb-97b0-c7726d5502c3"
 )
 
 // readyAzure returns a fake az CLI for an identity with every permission.

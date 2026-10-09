@@ -2,6 +2,7 @@ package azuredevops
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -295,9 +296,20 @@ func (c *Client) ListCommitStatuses(ctx context.Context, repository tracker.Repo
 	}
 }
 
-// threadProperty is one typed thread property value.
+// threadProperty is one typed thread property value. A value keeps its type
+// in the response, for example the System.Int32 SupportsMarkdown flag, so it
+// is kept raw and read as text only where the factory needs it.
 type threadProperty struct {
-	Value string `json:"$value"`
+	Value json.RawMessage `json:"$value"`
+}
+
+// text returns a string value unquoted and any other value as its JSON text.
+func (p threadProperty) text() string {
+	var value string
+	if err := json.Unmarshal(p.Value, &value); err == nil {
+		return value
+	}
+	return string(p.Value)
 }
 
 // threadCommentResponse is one comment of a pull-request thread.
@@ -312,14 +324,14 @@ type threadCommentResponse struct {
 }
 
 // threadResponse is one pull-request thread. A vote creates a system thread
-// whose properties name the vote and the voter.
+// whose properties name the vote and the voter's identity id; the service
+// account authors its comment.
 type threadResponse struct {
 	ID            int                       `json:"id"`
 	PublishedDate time.Time                 `json:"publishedDate"`
 	Status        string                    `json:"status"`
 	IsDeleted     bool                      `json:"isDeleted"`
 	Properties    map[string]threadProperty `json:"properties"`
-	Identities    map[string]identityRef    `json:"identities"`
 	ThreadContext *struct {
 		FilePath       string `json:"filePath"`
 		RightFileStart *struct {
@@ -331,18 +343,18 @@ type threadResponse struct {
 
 // isVote reports whether the thread records a reviewer vote.
 func (t threadResponse) isVote() bool {
-	return t.Properties["CodeReviewThreadType"].Value == "VoteUpdate"
+	return t.Properties["CodeReviewThreadType"].text() == "VoteUpdate"
 }
 
-// voter returns the identity that cast the vote of a vote thread.
-func (t threadResponse) voter() string {
-	if identity, ok := t.Identities[t.Properties["CodeReviewVotedByIdentity"].Value]; ok && identity.UniqueName != "" {
-		return identity.UniqueName
-	}
-	if len(t.Comments) > 0 {
-		return t.Comments[0].Author.UniqueName
-	}
-	return ""
+// voterID returns the normalized identity id of the voter of a vote thread.
+func (t threadResponse) voterID() string {
+	return identityKey(t.Properties["CodeReviewVotedByTfId"].text())
+}
+
+// identityKey normalizes an identity id. Thread properties write it with or
+// without dashes and in either case.
+func identityKey(id string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(id), "-", ""))
 }
 
 // isOpenFinding reports whether a text thread still asks for a change.
@@ -376,38 +388,64 @@ var voteStates = map[string]codehost.PullRequestReviewState{
 }
 
 // PullRequestReviews returns one review for each reviewer vote. A vote is
-// not an event in Azure Repos, but every vote change creates a system
-// thread, so the thread gives the review a stable identity. The voter's open
-// threads published up to the vote are the review content: general threads
-// form the body and file threads the inline comments.
+// not an event in Azure Repos, but every vote change creates a system thread,
+// so the thread gives the review a stable identity. The thread names the
+// voter by identity id only, so the reviewer list resolves the login. The
+// voter's open threads published up to the vote are the review content:
+// general threads form the body and file threads the inline comments.
 func (c *Client) PullRequestReviews(ctx context.Context, repository tracker.Repository, number int) ([]codehost.PullRequestReview, error) {
 	threads, err := c.threads(ctx, repository, number)
 	if err != nil {
 		return nil, err
 	}
+	var logins map[string]string
 	reviews := make([]codehost.PullRequestReview, 0)
 	for _, thread := range threads {
 		if !thread.isVote() || thread.IsDeleted {
 			continue
 		}
-		state, ok := voteStates[thread.Properties["CodeReviewVoteResult"].Value]
+		state, ok := voteStates[thread.Properties["CodeReviewVoteResult"].text()]
 		if !ok {
 			continue
 		}
+		if logins == nil {
+			if logins, err = c.reviewerLogins(ctx, repository, number); err != nil {
+				return nil, err
+			}
+		}
 		review := codehost.PullRequestReview{
 			ID:          eventID(thread.PublishedDate, "p", number, "t", thread.ID),
-			Author:      thread.voter(),
+			Author:      logins[thread.voterID()],
 			State:       state,
 			URL:         pullRequestURL(repository, number),
 			SubmittedAt: thread.PublishedDate,
 			Comments:    []codehost.PullRequestReviewComment{},
 		}
-		if state == codehost.PullRequestReviewChangesRequested {
+		if state == codehost.PullRequestReviewChangesRequested && review.Author != "" {
 			review.Body, review.Comments = reviewFindings(threads, review.Author, thread.PublishedDate)
 		}
 		reviews = append(reviews, review)
 	}
 	return reviews, nil
+}
+
+// reviewerLogins maps the normalized identity id of every reviewer of a pull
+// request to its login. A vote adds the voter as a reviewer.
+func (c *Client) reviewerLogins(ctx context.Context, repository tracker.Repository, number int) (map[string]string, error) {
+	var response struct {
+		Value []struct {
+			ID         string `json:"id"`
+			UniqueName string `json:"uniqueName"`
+		} `json:"value"`
+	}
+	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/reviewers", number), nil)}, &response); err != nil {
+		return nil, fmt.Errorf("list reviewers of pull request %d: %w", number, err)
+	}
+	logins := make(map[string]string, len(response.Value))
+	for _, reviewer := range response.Value {
+		logins[identityKey(reviewer.ID)] = reviewer.UniqueName
+	}
+	return logins, nil
 }
 
 // reviewFindings collects the open threads that author started up to the

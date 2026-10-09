@@ -17,7 +17,7 @@ var _ tracker.ReadinessChecker = (*Client)(nil)
 // Security namespaces whose permissions the factory needs.
 const (
 	gitRepositoriesNamespace = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87"
-	areaNamespace            = "83e28ad4-2d72-4ceb-97b0-c7726e7a4da1"
+	areaNamespace            = "83e28ad4-2d72-4ceb-97b0-c7726d5502c3"
 )
 
 // permission is one required permission bit and how to report its absence.

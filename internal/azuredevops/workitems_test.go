@@ -209,3 +209,36 @@ func TestStatusCommentIsCreatedFoundAndEditedAsMarkdown(t *testing.T) {
 		t.Fatal("EditIssueComment() with a foreign identity error = nil, want a rejection")
 	}
 }
+
+// TestIssueHidesAnAgentReadyTagThatAnUnauthorizedUserAdded verifies that a
+// direct read, as used by a claim, applies the same tag-author check as the
+// queue, so an unauthorized tag cannot admit work.
+func TestIssueHidesAnAgentReadyTagThatAnUnauthorizedUserAdded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		tagger string
+		want   []string
+	}{
+		{tagger: "alice@contoso.com", want: []string{"backend", "agent-ready"}},
+		{tagger: "mallory@contoso.com", want: []string{"backend"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.tagger, func(t *testing.T) {
+			t.Parallel()
+
+			az := newFakeAz(t).
+				on("GET "+projectPath+"/wit/workitems/42", `{"id":42,"fields":{"System.Title":"t","System.WorkItemType":"User Story","System.State":"New","System.Tags":"backend; agent-ready"}}`).
+				on("GET "+projectPath+"/wit/workitemtypes/User Story/states", userStoryStates).
+				on("GET "+projectPath+"/wit/workItems/42/updates", `{"value":[{"revisedBy":{"uniqueName":"`+tc.tagger+`"},"fields":{"System.Tags":{"newValue":"backend; agent-ready"}}}]}`)
+
+			issue, err := newClient(az).Issue(context.Background(), repository, 42)
+			if err != nil {
+				t.Fatalf("Issue() error = %v", err)
+			}
+			if strings.Join(issue.Labels, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("Issue().Labels = %v, want %v", issue.Labels, tc.want)
+			}
+		})
+	}
+}
