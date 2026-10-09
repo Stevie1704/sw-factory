@@ -233,8 +233,8 @@ func assertContains(t *testing.T, body string, wanted ...string) {
 }
 
 // TestRunListShowsEveryRunFromTheStore verifies the run list renders every
-// persisted run with its issue, stage, status, waiting reason, route,
-// activity, and pull request, plus the supervisor heartbeat.
+// persisted run with its issue, stage, status, waiting reason, route
+// description, activity, and pull request, plus the supervisor heartbeat.
 func TestRunListShowsEveryRunFromTheStore(t *testing.T) {
 	t.Parallel()
 
@@ -251,7 +251,8 @@ func TestRunListShowsEveryRunFromTheStore(t *testing.T) {
 	assertContains(t, body,
 		`href="/runs/run-waiting"`, `href="/runs/run-terminal"`,
 		"#42", "Checkout keeps the cart total", "#41", "Show the cart total",
-		"check", "waiting_for_human", "deterministic gate failure: test", "acceptance", "waiting-for-human",
+		"check", "waiting_for_human", "deterministic gate failure: test", "waiting-for-human",
+		workflow.RouteAcceptance.Description(), workflow.RouteDefault.Description(),
 		"ready", "complete", "terminal",
 		`href="`+pullRequestURL+`"`,
 		"live", "host-a", "4242",

@@ -16,7 +16,7 @@
 <td>{{.Run.Stage}}</td>
 <td>{{.Run.Status}}</td>
 <td>{{.Activity}}</td>
-<td>{{with .Route}}{{.}}{{else}}default{{end}}</td>
+<td>{{.Route.Description}}</td>
 <td>{{.Run.LifecycleReason}}</td>
 <td>{{if .Run.PullRequestURL}}<a href="{{.Run.PullRequestURL}}" rel="noreferrer noopener">#{{.Run.PullRequestNumber}}</a>{{end}}</td>
 <td>{{formatTime .Run.UpdatedAt}}</td>
