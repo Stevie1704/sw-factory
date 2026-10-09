@@ -3,6 +3,7 @@
 {{define "content" -}}
 <h1>Run {{.Run.ID}}</h1>
 <p>Issue #{{.Run.IssueNumber}} {{.IssueTitle}}</p>
+<p><a href="/runs/{{.Run.ID}}/evaluation">Evaluation</a></p>
 
 <h2>State</h2>
 <dl>

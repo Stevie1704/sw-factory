@@ -159,6 +159,18 @@ type EvaluationUsage struct {
 	Currency          string `json:"currency,omitempty"`
 }
 
+// CostStatus reports whether cost was reported or why it remains
+// unavailable, independently of token availability.
+func (usage EvaluationUsage) CostStatus() string {
+	if usage.CostReported {
+		return "reported"
+	}
+	if usage.UnavailableReason == "" {
+		return EvaluationUsageNotReported
+	}
+	return "unavailable:" + usage.UnavailableReason
+}
+
 // EvaluationSummary is the content-free local evidence retained for one run.
 // It is deliberately separate from Run, Invocation, gate output, and run
 // artifacts, and it never contains issue text, prompts, transcripts, diffs,
@@ -342,7 +354,7 @@ func (s *Store) SaveEvaluationSummary(ctx context.Context, summary EvaluationSum
 			usage_output_tokens, usage_total_tokens, usage_cost_reported,
 			usage_cost_micros, usage_currency, active_stage,
 			active_stage_started_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(run_id) DO UPDATE SET
 			outcome = excluded.outcome,
 			started_at = excluded.started_at,
