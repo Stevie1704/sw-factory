@@ -81,13 +81,20 @@ func joinTags(labels []string) string {
 // comments and pull-request threads (ADR 0019).
 const eventIDTime = "20060102T150405.000000000Z"
 
+// idPart is one tagged number of an event identity, for example work item
+// 42 as {"w", 42}.
+type idPart struct {
+	tag    string
+	number int
+}
+
 // eventID returns an identity that sorts by created and names its source by
 // the tagged numbers, for example ".w42.c7" for comment 7 of work item 42.
-func eventID(created time.Time, parts ...any) string {
+func eventID(created time.Time, parts ...idPart) string {
 	var builder strings.Builder
 	builder.WriteString(created.UTC().Format(eventIDTime))
-	for index := 0; index+1 < len(parts); index += 2 {
-		fmt.Fprintf(&builder, ".%s%d", parts[index], parts[index+1])
+	for _, part := range parts {
+		fmt.Fprintf(&builder, ".%s%d", part.tag, part.number)
 	}
 	return builder.String()
 }

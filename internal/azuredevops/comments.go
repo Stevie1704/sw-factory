@@ -52,7 +52,7 @@ func (r workItemCommentResponse) comment(number int) tracker.Comment {
 	if updated.IsZero() {
 		updated = r.CreatedDate
 	}
-	return tracker.Comment{ID: eventID(r.CreatedDate, "w", number, "c", r.ID), Body: richText(r.Text, r.Format), Author: r.CreatedBy.UniqueName, UpdatedAt: updated}
+	return tracker.Comment{ID: eventID(r.CreatedDate, idPart{"w", number}, idPart{"c", r.ID}), Body: richText(r.Text, r.Format), Author: r.CreatedBy.UniqueName, UpdatedAt: updated}
 }
 
 // IssueComments lists the comments of one work item in creation order.

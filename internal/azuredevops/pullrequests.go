@@ -105,7 +105,8 @@ func pullRequestURL(repository tracker.Repository, number int) string {
 }
 
 // FindPullRequest returns the newest pull request of one exact source and
-// target branch pair in any status, so a retry cannot create a duplicate.
+// target branch pair in any status, so a retry cannot create a duplicate. It
+// reads the match by id to get the complete description.
 func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) (codehost.PullRequest, error) {
 	if err := validateRepository(repository); err != nil {
 		return codehost.PullRequest{}, err
@@ -127,10 +128,21 @@ func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Reposit
 	}
 	for _, candidate := range response.Value {
 		if candidate.SourceRefName == branchRef(headBranch) && candidate.TargetRefName == branchRef(baseBranch) {
-			return candidate.pullRequest(repository), nil
+			return c.pullRequestByID(ctx, repository, candidate.PullRequestID)
 		}
 	}
 	return codehost.PullRequest{}, nil
+}
+
+// pullRequestByID reads one pull request. The list endpoint truncates the
+// description to 400 characters, so a body that regeneration preserves must
+// come from this read.
+func (c *Client) pullRequestByID(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error) {
+	var response pullRequestResponse
+	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullrequests/%d", number), nil)}, &response); err != nil {
+		return codehost.PullRequest{}, fmt.Errorf("read pull request %d: %w", number, err)
+	}
+	return response.pullRequest(repository), nil
 }
 
 // CreatePullRequest creates one pull request from a pushed run branch.
@@ -414,7 +426,7 @@ func (c *Client) PullRequestReviews(ctx context.Context, repository tracker.Repo
 			}
 		}
 		review := codehost.PullRequestReview{
-			ID:          eventID(thread.PublishedDate, "p", number, "t", thread.ID),
+			ID:          eventID(thread.PublishedDate, idPart{"p", number}, idPart{"t", thread.ID}),
 			Author:      logins[thread.voterID()],
 			State:       state,
 			URL:         pullRequestURL(repository, number),
@@ -482,7 +494,7 @@ func threadComment(number, thread int, comment threadCommentResponse) tracker.Co
 	if updated.IsZero() {
 		updated = comment.PublishedDate
 	}
-	return tracker.Comment{ID: eventID(comment.PublishedDate, "p", number, "t", thread, "c", comment.ID), Body: comment.Content, Author: comment.Author.UniqueName, UpdatedAt: updated}
+	return tracker.Comment{ID: eventID(comment.PublishedDate, idPart{"p", number}, idPart{"t", thread}, idPart{"c", comment.ID}), Body: comment.Content, Author: comment.Author.UniqueName, UpdatedAt: updated}
 }
 
 // PullRequestComments lists the text comments of every thread of a pull

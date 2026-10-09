@@ -15,11 +15,16 @@ const activePullRequest = `{"pullRequestId":17,"status":"active","isDraft":true,
 	"lastMergeSourceCommit":{"commitId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`
 
 // TestFindPullRequestSearchesTheExactBranchPairInEveryStatus verifies the
-// search criteria and the conversion to the neutral pull request.
+// search criteria, that the selected pull request is read by id because the
+// list truncates descriptions to 400 characters, and the conversion to the
+// neutral pull request.
 func TestFindPullRequestSearchesTheExactBranchPairInEveryStatus(t *testing.T) {
 	t.Parallel()
 
-	az := newFakeAz(t).on("GET "+repositoryPath+"/pullrequests", `{"value":[`+activePullRequest+`]}`)
+	truncated := strings.Replace(activePullRequest, `"description":"body"`, `"description":"bo"`, 1)
+	az := newFakeAz(t).
+		on("GET "+repositoryPath+"/pullrequests", `{"value":[`+truncated+`]}`).
+		on("GET "+repositoryPath+"/pullrequests/17", activePullRequest)
 
 	pullRequest, err := newClient(az).FindPullRequest(context.Background(), repository, "factory/run-1", "main")
 	if err != nil {
@@ -44,11 +49,15 @@ func TestFindPullRequestSearchesTheExactBranchPairInEveryStatus(t *testing.T) {
 func TestPullRequestStatusMapsCompletedToMergedAndAbandonedToClosed(t *testing.T) {
 	t.Parallel()
 
-	az := newFakeAz(t).on("GET "+repositoryPath+"/pullrequests", `{"value":[
-		{"pullRequestId":20,"status":"abandoned","sourceRefName":"refs/heads/other","targetRefName":"refs/heads/main"},
-		{"pullRequestId":17,"status":"completed","sourceRefName":"refs/heads/factory/run-1","targetRefName":"refs/heads/main",
-		 "lastMergeCommit":{"commitId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}`,
-		`{"value":[{"pullRequestId":18,"status":"abandoned","sourceRefName":"refs/heads/factory/run-2","targetRefName":"refs/heads/main"}]}`)
+	completedJSON := `{"pullRequestId":17,"status":"completed","sourceRefName":"refs/heads/factory/run-1","targetRefName":"refs/heads/main",
+		 "lastMergeCommit":{"commitId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`
+	abandonedJSON := `{"pullRequestId":18,"status":"abandoned","sourceRefName":"refs/heads/factory/run-2","targetRefName":"refs/heads/main"}`
+	az := newFakeAz(t).
+		on("GET "+repositoryPath+"/pullrequests", `{"value":[
+		{"pullRequestId":20,"status":"abandoned","sourceRefName":"refs/heads/other","targetRefName":"refs/heads/main"},`+completedJSON+`]}`,
+			`{"value":[`+abandonedJSON+`]}`).
+		on("GET "+repositoryPath+"/pullrequests/17", completedJSON).
+		on("GET "+repositoryPath+"/pullrequests/18", abandonedJSON)
 	client := newClient(az)
 
 	merged, err := client.FindPullRequest(context.Background(), repository, "factory/run-1", "main")

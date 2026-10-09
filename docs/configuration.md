@@ -314,8 +314,9 @@ registration into the host file by hand, then run `factory doctor`.
   authorized user. Any editor can add a tag, so the tag alone is not enough.
   A work item is open unless its state is in the Completed or Removed category.
 - **Run state.** The factory labels are work item tags. The factory never
-  changes the work item state, so board rules stay intact. Tags need no setup;
-  `factory bootstrap-labels` changes nothing.
+  changes the work item state, so board rules stay intact. A tag is created
+  on first use, which needs the Create tag definition permission until every
+  factory tag exists; `factory bootstrap-labels` changes nothing.
 - **Text.** HTML descriptions and comments are read as text with HTML comments
   kept, so `<!-- factory-route: ... -->` works whether it is typed as text or
   stored as a comment. The factory writes its own comments as Markdown.
@@ -339,7 +340,7 @@ registration into the host file by hand, then run `factory doctor`.
 | --- | --- |
 | `azure devops authentication` | `az` has no usable identity for the organization |
 | `azure devops repository` | the organization, project, or repository cannot be read |
-| `azure devops permissions` | the identity lacks Contribute, Create branch, or Contribute to pull requests on the repository, or View and Edit work items in the project's root area |
+| `azure devops permissions` | the identity lacks Contribute, Create branch, or Contribute to pull requests on the repository, or View and Edit work items in the project's root area, or a factory tag does not exist yet and the identity lacks Create tag definition |
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 
