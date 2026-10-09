@@ -1,7 +1,7 @@
 # Versioned factory worker base image. The repository worker definition adds
 # only the project toolchain that its gates require.
 
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 
 # Building the report in a stage that has the target platform selected makes
 # the copied binary native to the image platform, including under buildx.

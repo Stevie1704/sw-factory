@@ -2,7 +2,7 @@
 # it locally before this definition when the factory is evaluated offline.
 
 ARG FACTORY_BASE_IMAGE=ghcr.io/stevie1704/sw-factory-base:v1
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 
 # The Go toolchain stage follows the final image platform. Copying the
 # toolchain avoids adding a second runtime base image to the worker.
@@ -10,7 +10,7 @@ FROM golang:${GO_VERSION}-bookworm AS go-toolchain
 
 FROM ${FACTORY_BASE_IMAGE}
 
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 
 USER root
 
