@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -16,6 +17,7 @@ import (
 type clarificationHandler struct {
 	now          func() time.Time
 	issues       issueClient
+	pullRequests codehost.PullRequestCommentClient
 	presentation runPresentation
 	projector    runProjector
 }
@@ -34,6 +36,7 @@ func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, re
 	}
 	payload := clarificationCommentEffectPayload{
 		Repository: repository, Target: target, Body: body,
+		PullRequest:   run.PullRequestNumber > 0 && target == run.PullRequestNumber,
 		PacketVersion: packetVersion,
 	}
 	effect, err := reserve(h.now, run.ID, store.PendingEffectKindClarificationComment, fmt.Sprintf("target=%d\x00version=%d", target, packetVersion), payload)
@@ -42,7 +45,7 @@ func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, re
 	}
 	updated := run
 	action := func() error {
-		comment, findErr := h.findOrCreateComment(ctx, payload.Repository, target, run.ID, packetVersion, body)
+		comment, findErr := h.findOrCreateComment(ctx, h.surface(payload), run.ID, packetVersion, body)
 		if findErr != nil {
 			return findErr
 		}
@@ -62,24 +65,25 @@ func (h clarificationHandler) publish(ctx context.Context, runStore RunStore, re
 // findOrCreateComment observes the coordinator-owned marker and repairs its
 // body before creating a question comment, making publication safe across
 // response loss and stale question edits.
-func (h clarificationHandler) findOrCreateComment(ctx context.Context, repository tracker.Repository, target int, runID string, packetVersion int, body string) (tracker.Comment, error) {
+func (h clarificationHandler) findOrCreateComment(ctx context.Context, surface commentSurface, runID string, packetVersion int, body string) (tracker.Comment, error) {
 	if h.issues == nil {
-		return tracker.Comment{}, errors.New("GitHub client is required for clarification publication")
+		return tracker.Comment{}, errors.New("tracker client is required for clarification publication")
 	}
-	comment, err := h.issues.FindStatusComment(ctx, repository, target, h.presentation.ClarificationCommentMarker(runID, packetVersion))
+	target := surface.target()
+	comment, err := surface.find(ctx, h.presentation.ClarificationCommentMarker(runID, packetVersion))
 	if err != nil {
 		return tracker.Comment{}, fmt.Errorf("find existing clarification questions on #%d: %w", target, err)
 	}
 	if strings.TrimSpace(comment.ID) != "" {
 		if comment.Body != body {
-			if err := h.issues.EditIssueComment(ctx, repository, comment.ID, body); err != nil {
+			if err := surface.edit(ctx, comment.ID, body); err != nil {
 				return tracker.Comment{}, fmt.Errorf("repair clarification questions on #%d: %w", target, err)
 			}
 			comment.Body = body
 		}
 		return comment, nil
 	}
-	created, err := h.issues.CreateIssueComment(ctx, repository, target, body)
+	created, err := surface.create(ctx, body)
 	if err != nil {
 		return tracker.Comment{}, fmt.Errorf("post clarification questions on #%d: %w", target, err)
 	}
@@ -87,6 +91,76 @@ func (h clarificationHandler) findOrCreateComment(ctx context.Context, repositor
 		return tracker.Comment{}, fmt.Errorf("post clarification questions on #%d returned an empty comment id", target)
 	}
 	return created, nil
+}
+
+// surface selects where the clarification comment of one payload lives: the
+// pull request through the code-host seam when the adapter keeps pull-request
+// comments apart, and otherwise the shared issue comment stream.
+func (h clarificationHandler) surface(payload clarificationCommentEffectPayload) commentSurface {
+	if payload.PullRequest && h.pullRequests != nil {
+		return pullRequestCommentSurface{client: h.pullRequests, repository: payload.Repository, number: payload.Target}
+	}
+	return issueCommentSurface{client: h.issues, repository: payload.Repository, number: payload.Target}
+}
+
+// commentSurface finds, creates, and edits coordinator comments on one issue
+// or pull request.
+type commentSurface interface {
+	target() int
+	find(ctx context.Context, marker string) (tracker.Comment, error)
+	create(ctx context.Context, body string) (tracker.Comment, error)
+	edit(ctx context.Context, commentID, body string) error
+}
+
+// issueCommentSurface is the comment stream of an issue, which on GitHub also
+// carries pull-request conversation comments.
+type issueCommentSurface struct {
+	client     issueClient
+	repository tracker.Repository
+	number     int
+}
+
+// target returns the issue number.
+func (s issueCommentSurface) target() int { return s.number }
+
+// find returns the coordinator comment that carries marker on the issue.
+func (s issueCommentSurface) find(ctx context.Context, marker string) (tracker.Comment, error) {
+	return s.client.FindStatusComment(ctx, s.repository, s.number, marker)
+}
+
+// create posts one comment on the issue.
+func (s issueCommentSurface) create(ctx context.Context, body string) (tracker.Comment, error) {
+	return s.client.CreateIssueComment(ctx, s.repository, s.number, body)
+}
+
+// edit replaces the body of one comment on the issue.
+func (s issueCommentSurface) edit(ctx context.Context, commentID, body string) error {
+	return s.client.EditIssueComment(ctx, s.repository, commentID, body)
+}
+
+// pullRequestCommentSurface is the separate comment stream of a pull request.
+type pullRequestCommentSurface struct {
+	client     codehost.PullRequestCommentClient
+	repository tracker.Repository
+	number     int
+}
+
+// target returns the pull request number.
+func (s pullRequestCommentSurface) target() int { return s.number }
+
+// find returns the coordinator comment that carries marker on the pull request.
+func (s pullRequestCommentSurface) find(ctx context.Context, marker string) (tracker.Comment, error) {
+	return s.client.FindPullRequestComment(ctx, s.repository, s.number, marker)
+}
+
+// create posts one comment on the pull request.
+func (s pullRequestCommentSurface) create(ctx context.Context, body string) (tracker.Comment, error) {
+	return s.client.CreatePullRequestComment(ctx, s.repository, s.number, body)
+}
+
+// edit replaces the body of one comment on the pull request.
+func (s pullRequestCommentSurface) edit(ctx context.Context, commentID, body string) error {
+	return s.client.EditPullRequestComment(ctx, s.repository, s.number, commentID, body)
 }
 
 // Replay completes a question publication after a response-loss boundary by
@@ -111,7 +185,7 @@ func (h clarificationHandler) Replay(ctx context.Context, request replayRequest)
 	if err := validateRunBeforeReplay(store.PendingEffectKindClarificationComment, *current); err != nil {
 		return store.Run{}, err
 	}
-	comment, err := h.findOrCreateComment(ctx, payload.Repository, payload.Target, effect.RunID, payload.PacketVersion, payload.Body)
+	comment, err := h.findOrCreateComment(ctx, h.surface(payload), effect.RunID, payload.PacketVersion, payload.Body)
 	if err != nil {
 		return store.Run{}, fmt.Errorf("replay clarification comment: %w", err)
 	}

@@ -112,6 +112,10 @@ type Adapters struct {
 	Workspace gitadapter.GitWorkspace
 	// PullRequests owns idempotent draft pull-request mutation.
 	PullRequests codehost.PullRequestClient
+	// PullRequestComments publishes coordinator comments on a pull request
+	// when the code host keeps them apart from issue comments. It is nil
+	// when pull-request comments share the issue comment stream.
+	PullRequestComments codehost.PullRequestCommentClient
 	// CommitStatuses publishes exact-SHA commit statuses.
 	CommitStatuses codehost.CommitStatusPublisher
 	// Worker launches the per-run isolated execution environment.
@@ -138,7 +142,7 @@ func New(adapters Adapters) *Journal {
 	journal := &Journal{dispatcher: newDispatcher()}
 	register(journal.dispatcher, store.PendingEffectKindStateTransition, stateTransitionHandler{now: clock, labels: labels, projector: adapters.Projector, lifecycle: adapters.Lifecycle})
 	register(journal.dispatcher, store.PendingEffectKindStatusComment, statusCommentHandler{now: clock, labels: labels, projector: adapters.Projector})
-	register(journal.dispatcher, store.PendingEffectKindClarificationComment, clarificationHandler{now: clock, issues: adapters.Issues, presentation: adapters.Presentation, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindClarificationComment, clarificationHandler{now: clock, issues: adapters.Issues, pullRequests: adapters.PullRequestComments, presentation: adapters.Presentation, projector: adapters.Projector})
 	register(journal.dispatcher, store.PendingEffectKindLabelTransition, labelTransitionHandler{now: clock, issues: adapters.Issues, projector: adapters.Projector})
 	register(journal.dispatcher, store.PendingEffectKindCommitStatus, commitStatusHandler{now: clock, statuses: adapters.CommitStatuses, workspace: adapters.Workspace, projector: adapters.Projector})
 	register(journal.dispatcher, store.PendingEffectKindPush, pushHandler{now: clock, workspace: adapters.Workspace, projector: adapters.Projector})

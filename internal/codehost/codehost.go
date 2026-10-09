@@ -121,6 +121,24 @@ type PullRequestReviewReader interface {
 	PullRequestReviews(context.Context, tracker.Repository, int) ([]PullRequestReview, error)
 }
 
+// PullRequestCommentReader lists the conversation comments of a pull request.
+// An adapter whose pull requests share the issue number space and comment
+// stream, such as GitHub, does not need it: the coordinator then reads the
+// pull request through tracker.CommentReader. Comment identities of both
+// surfaces must sort in creation order with the same comparison (ADR 0019).
+type PullRequestCommentReader interface {
+	PullRequestComments(context.Context, tracker.Repository, int) ([]tracker.Comment, error)
+}
+
+// PullRequestCommentClient finds, creates, and edits a coordinator-authored
+// pull-request comment, such as clarification questions. It has the same
+// optional status as PullRequestCommentReader.
+type PullRequestCommentClient interface {
+	FindPullRequestComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error)
+	CreatePullRequestComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error)
+	EditPullRequestComment(context.Context, tracker.Repository, int, string, string) error
+}
+
 // PullRequestDraftClient owns the explicit draft/readiness mutation for an
 // existing pull request. Keeping it separate prevents body updates from
 // accidentally changing merge readiness.

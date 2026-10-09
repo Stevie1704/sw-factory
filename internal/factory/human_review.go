@@ -197,13 +197,13 @@ func applicableHumanReviews(reviews []codehost.PullRequestReview, authorized []s
 		if !authorizedCommentAuthor(authorized, review.Author) {
 			continue
 		}
-		if githubIDAlreadyProcessed(watermark, review.ID) {
+		if eventIDAlreadyProcessed(watermark, review.ID) {
 			continue
 		}
 		applicable = append(applicable, review)
 	}
 	sort.SliceStable(applicable, func(left, right int) bool {
-		return compareGitHubIDs(applicable[left].ID, applicable[right].ID) < 0
+		return compareEventIDs(applicable[left].ID, applicable[right].ID) < 0
 	})
 	return applicable
 }

@@ -183,7 +183,7 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	if request.IssueNumber != run.IssueNumber && request.IssueNumber != run.PullRequestNumber {
 		return CommandResult{Outcome: CommandRejected, Run: *run}, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("comment target #%d does not belong to run %q", request.IssueNumber, run.ID)}
 	}
-	if githubIDAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
+	if eventIDAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
 	}
 	if !authorizedCommentAuthor(registration.AuthorizedUsers, request.Comment.Author) {
@@ -1257,7 +1257,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 	comments := make([]polledComment, 0)
 	repository := commandRepository(registration)
 	for _, target := range targets {
-		listed, listErr := s.deps.Comments.IssueComments(ctx, repository, target)
+		listed, listErr := s.targetComments(ctx, repository, *run, target)
 		if listErr != nil {
 			return nil, &pollingTransportError{err: fmt.Errorf("list comments for #%d: %w", target, listErr)}
 		}
@@ -1266,7 +1266,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 		}
 	}
 	sort.SliceStable(comments, func(left, right int) bool {
-		return compareGitHubIDs(comments[left].comment.ID, comments[right].comment.ID) < 0
+		return compareEventIDs(comments[left].comment.ID, comments[right].comment.ID) < 0
 	})
 	results := make([]CommandResult, 0)
 	currentRun := *run
@@ -1298,6 +1298,18 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 type polledComment struct {
 	target  int
 	comment tracker.Comment
+}
+
+// targetComments lists the comments of one polling target. The run's pull
+// request is read through the code-host comment seam when the adapter keeps
+// pull-request comments apart from issue comments.
+func (s *Service) targetComments(ctx context.Context, repository tracker.Repository, run store.Run, target int) ([]tracker.Comment, error) {
+	if target == run.PullRequestNumber {
+		if reader := s.pullRequestCommentReader(); reader != nil {
+			return reader.PullRequestComments(ctx, repository, target)
+		}
+	}
+	return s.deps.Comments.IssueComments(ctx, repository, target)
 }
 
 // commandRepository maps one registered GitHub identity for all command
@@ -1667,28 +1679,21 @@ func authorizedCommentAuthor(authorized []string, author string) bool {
 	return false
 }
 
-// githubIDAlreadyProcessed checks a persisted numeric GitHub watermark, such
-// as a processed comment or an applied review, and falls back to identity
-// equality for synthetic or nonnumeric test IDs.
-func githubIDAlreadyProcessed(processed, current string) bool {
+// eventIDAlreadyProcessed checks a persisted watermark, such as a processed
+// comment or an applied review. Numeric identities (GitHub) compare as
+// numbers; other identities compare as text, which adapters such as Azure
+// DevOps make sort in creation order (ADR 0019).
+func eventIDAlreadyProcessed(processed, current string) bool {
 	if strings.TrimSpace(processed) == "" || strings.TrimSpace(current) == "" {
 		return false
 	}
-	if processed == current {
-		return true
-	}
-	processedID, processedErr := strconv.ParseUint(processed, 10, 64)
-	currentID, currentErr := strconv.ParseUint(current, 10, 64)
-	if processedErr == nil && currentErr == nil {
-		return currentID <= processedID
-	}
-	return false
+	return compareEventIDs(current, processed) <= 0
 }
 
-// compareGitHubIDs orders numeric GitHub identities numerically and keeps
+// compareEventIDs orders numeric GitHub identities numerically and keeps
 // other identities deterministic without allowing a human-readable message to
 // control flow.
-func compareGitHubIDs(left, right string) int {
+func compareEventIDs(left, right string) int {
 	leftID, leftErr := strconv.ParseUint(left, 10, 64)
 	rightID, rightErr := strconv.ParseUint(right, 10, 64)
 	if leftErr == nil && rightErr == nil {

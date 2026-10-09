@@ -288,7 +288,7 @@ func (s *Service) claimCommentWatermark(ctx context.Context, repository tracker.
 		if strings.TrimSpace(comment.ID) == "" {
 			continue
 		}
-		if latestCommentID == "" || compareGitHubIDs(latestCommentID, comment.ID) < 0 {
+		if latestCommentID == "" || compareEventIDs(latestCommentID, comment.ID) < 0 {
 			latestCommentID = comment.ID
 		}
 	}

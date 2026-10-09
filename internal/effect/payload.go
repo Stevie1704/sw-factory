@@ -60,6 +60,10 @@ type clarificationCommentEffectPayload struct {
 	Repository tracker.Repository
 	Target     int
 	Body       string
+	// PullRequest reports that Target is the run's pull request rather than
+	// its issue. A payload stored before this field existed decodes as false,
+	// which matches its meaning for a GitHub run (ADR 0019).
+	PullRequest bool
 	// PacketVersion scopes the comment marker to one clarification round so a
 	// replay repairs that round's comment instead of overwriting an earlier one.
 	PacketVersion int
