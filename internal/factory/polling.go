@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // PollOutcome identifies the result of one queue observation.
@@ -78,8 +78,9 @@ func (e *StartupBlockedError) Error() string {
 
 // Start runs the supervised polling loop until its context is cancelled. It
 // diagnoses the full host before taking the lock, acquires exclusive ownership
-// before reconciliation, renews a visible GitHub lease, and backs off read-only
-// queue or lease transport failures without changing run state or retry
+// before reconciliation, renews the coordinator lease when the tracker has one,
+// and backs off
+// read-only queue or lease transport failures without changing run state or retry
 // budgets. After every observation that found or claimed a run it drives that
 // run toward its draft pull request, so the routine path needs no
 // stage-driving CLI command. Claim failures are returned because the claim
@@ -102,10 +103,11 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		return err
 	}
 	if s.issuePoller() == nil {
-		return errors.New("GitHub issue poller is required to start the coordinator")
+		return errors.New("tracker issue poller is required to start the coordinator")
 	}
-	if s.deps.Lease == nil {
-		return errors.New("GitHub lease client is required to start the coordinator")
+	lease := s.deps.Lease
+	if lease == nil {
+		lease = absentLease{}
 	}
 	interval, backoff, err := pollingDurations(registration.Polling)
 	if err != nil {
@@ -136,7 +138,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	}
 	s.observeCoordinatorStageFromStore(pollContext, registration, events)
 
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	leaseRunID := ""
 	delay := time.Duration(0)
 	consecutiveHeartbeatFailures := 0
@@ -173,7 +175,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 			}
 		}
 		now := s.deps.Now().UTC()
-		if err := s.deps.Lease.RenewLease(pollContext, repository, github.Lease{
+		if err := lease.RenewLease(pollContext, repository, tracker.Lease{
 			Coordinator: s.deps.Coordinator,
 			RunID:       leaseRunID,
 			RenewedAt:   now,
@@ -550,9 +552,9 @@ func (s *Service) pollOnce(ctx context.Context, registration config.RepositoryRe
 
 	poller := s.issuePoller()
 	if poller == nil {
-		return PollResult{}, errors.New("GitHub issue poller is required for polling")
+		return PollResult{}, errors.New("tracker issue poller is required for polling")
 	}
-	issues, err := poller.ListEligibleIssues(ctx, github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository})
+	issues, err := poller.ListEligibleIssues(ctx, tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository})
 	if err != nil {
 		return PollResult{}, &pollingTransportError{err: fmt.Errorf("poll eligible issues: %w", err)}
 	}
@@ -598,11 +600,11 @@ func (s *Service) startupDiagnosis(ctx context.Context) (DoctorResult, error) {
 
 // issuePoller resolves the configured queue adapter without broadening the
 // existing GitHub mutation client seam.
-func (s *Service) issuePoller() github.IssuePoller {
+func (s *Service) issuePoller() tracker.IssuePoller {
 	if s.deps.IssuePoller != nil {
 		return s.deps.IssuePoller
 	}
-	if poller, ok := s.deps.GitHub.(github.IssuePoller); ok {
+	if poller, ok := s.deps.Tracker.(tracker.IssuePoller); ok {
 		return poller
 	}
 	return nil
@@ -610,10 +612,10 @@ func (s *Service) issuePoller() github.IssuePoller {
 
 // eligibleIssueQueue defensively applies the queue contract even when a test
 // or alternate GitHub adapter does not filter its endpoint response.
-func eligibleIssueQueue(issues []github.Issue) []github.Issue {
-	eligible := make([]github.Issue, 0, len(issues))
+func eligibleIssueQueue(issues []tracker.Issue) []tracker.Issue {
+	eligible := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {
-		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !hasLabel(issue.Labels, github.LabelAgentReady) {
+		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !hasLabel(issue.Labels, tracker.LabelAgentReady) {
 			continue
 		}
 		eligible = append(eligible, issue)
@@ -689,3 +691,11 @@ func (s *Service) clearPollCancel() {
 		s.pollCancel = nil
 	}
 }
+
+// absentLease stands in for a tracker adapter without a lease port. The lease
+// is a diagnostic projection and the host lock owns the repository (ADR 0018),
+// so the coordinator polls without one.
+type absentLease struct{}
+
+// RenewLease publishes nothing.
+func (absentLease) RenewLease(context.Context, tracker.Repository, tracker.Lease) error { return nil }

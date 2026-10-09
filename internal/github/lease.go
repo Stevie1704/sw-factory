@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // LeaseMilestoneTitle is the repository-unique title of the closed milestone
@@ -21,24 +23,7 @@ const (
 	leaseBlockEnd = "<!-- factory-lease:end -->"
 )
 
-// Lease describes one visible coordinator ownership heartbeat.
-type Lease struct {
-	// Coordinator identifies the host holding the lease.
-	Coordinator string
-	// RunID identifies the active run, when one has been claimed.
-	RunID string
-	// RenewedAt is the coordinator's latest heartbeat time.
-	RenewedAt time.Time
-	// ExpiresAt is the time after which the GitHub projection is stale.
-	ExpiresAt time.Time
-}
-
-// LeaseClient publishes a renewable, operator-visible coordinator lease.
-type LeaseClient interface {
-	RenewLease(context.Context, Repository, Lease) error
-}
-
-var _ LeaseClient = (*GhClient)(nil)
+var _ tracker.LeaseClient = (*GhClient)(nil)
 
 // leaseCache keeps the coordinator login and the owned milestone number so a
 // steady-state renewal costs one read and one edit.
@@ -53,7 +38,7 @@ type leaseCache struct {
 // after a restart or a lost response, discover and edit the same milestone.
 // Text outside the factory block is preserved. A stale expiry stays visible
 // after the host process disappears.
-func (c *GhClient) RenewLease(ctx context.Context, repository Repository, lease Lease) error {
+func (c *GhClient) RenewLease(ctx context.Context, repository tracker.Repository, lease tracker.Lease) error {
 	if err := validateLease(lease); err != nil {
 		return err
 	}
@@ -67,7 +52,7 @@ func (c *GhClient) RenewLease(ctx context.Context, repository Repository, lease 
 }
 
 // renewLease edits the cached milestone, or discovers or creates it.
-func (c *GhClient) renewLease(ctx context.Context, repository Repository, lease Lease) error {
+func (c *GhClient) renewLease(ctx context.Context, repository tracker.Repository, lease tracker.Lease) error {
 	login, err := c.leaseLogin(ctx)
 	if err != nil {
 		return err
@@ -103,7 +88,7 @@ func (c *GhClient) leaseLogin(ctx context.Context) (string, error) {
 // ownedLeaseMilestone returns the owned lease milestone, or a zero milestone
 // when none exists yet. It refuses a lease-titled milestone that another
 // author created or that lacks the factory block.
-func (c *GhClient) ownedLeaseMilestone(ctx context.Context, repository Repository, login string) (milestoneResponse, error) {
+func (c *GhClient) ownedLeaseMilestone(ctx context.Context, repository tracker.Repository, login string) (milestoneResponse, error) {
 	if c.lease.milestone != 0 {
 		var milestone milestoneResponse
 		path := fmt.Sprintf("repos/%s/milestones/%d", repository.String(), c.lease.milestone)
@@ -136,7 +121,7 @@ func (c *GhClient) ownedLeaseMilestone(ctx context.Context, repository Repositor
 
 // createLeaseMilestone creates the closed lease milestone. A lost response is
 // returned as an error; the next renewal discovers the created milestone.
-func (c *GhClient) createLeaseMilestone(ctx context.Context, repository Repository, lease Lease) error {
+func (c *GhClient) createLeaseMilestone(ctx context.Context, repository tracker.Repository, lease tracker.Lease) error {
 	var milestone milestoneResponse
 	payload := map[string]string{"title": LeaseMilestoneTitle, "state": "closed", "description": leaseBlock(lease)}
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/milestones", repository.String()), "--method", "POST"}, payload, &milestone); err != nil {
@@ -147,7 +132,7 @@ func (c *GhClient) createLeaseMilestone(ctx context.Context, repository Reposito
 }
 
 // validateLease rejects values that cannot form a readable lease block.
-func validateLease(lease Lease) error {
+func validateLease(lease tracker.Lease) error {
 	if strings.TrimSpace(lease.Coordinator) == "" || strings.ContainsAny(lease.Coordinator, "\x00\r\n") {
 		return errors.New("lease coordinator is required and must be a single line")
 	}
@@ -158,7 +143,7 @@ func validateLease(lease Lease) error {
 }
 
 // leaseBlock renders the complete, untruncated factory-owned lease block.
-func leaseBlock(lease Lease) string {
+func leaseBlock(lease tracker.Lease) string {
 	run := singleLine(lease.RunID)
 	if run == "" {
 		run = "none"

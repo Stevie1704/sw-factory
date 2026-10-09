@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // statusCommentHandler owns a command's local watermark together with the
@@ -21,13 +21,13 @@ type statusCommentHandler struct {
 // its status-comment mutation. The local projection is part of the action so a
 // process stop between the two writes leaves a replayable intent instead of an
 // apparently processed but stale command.
-func (j *Journal) PersistCommandProjection(ctx context.Context, runStore RunStore, repository github.Repository, previous, next store.Run) (store.Run, error) {
+func (j *Journal) PersistCommandProjection(ctx context.Context, runStore RunStore, repository tracker.Repository, previous, next store.Run) (store.Run, error) {
 	handler := mustApplyHandler[statusCommentHandler](j.dispatcher, store.PendingEffectKindStatusComment)
 	return handler.persist(ctx, runStore, repository, previous, next)
 }
 
 // persist reserves the watermark and its status-comment edit as one effect.
-func (h statusCommentHandler) persist(ctx context.Context, runStore RunStore, repository github.Repository, previous, next store.Run) (store.Run, error) {
+func (h statusCommentHandler) persist(ctx context.Context, runStore RunStore, repository tracker.Repository, previous, next store.Run) (store.Run, error) {
 	if err := validateRunBeforeEffect(store.PendingEffectKindStatusComment, next); err != nil {
 		return next, err
 	}

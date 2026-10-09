@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -56,7 +57,7 @@ func TestDoctorChecksBothHarnessesWithoutATerminalDependency(t *testing.T) {
 	gitWorkspace := &doctorContractGitWorkspace{}
 	workerRuntime := &doctorContractWorker{headlessAgentWorker: &headlessAgentWorker{agentWorker: &agentWorker{}}}
 	service := factory.NewWithDependencies(configPath, factory.Dependencies{
-		GitHub: &fakeGitHub{}, GitWorkspace: gitWorkspace, Worktree: gitWorkspace, Worker: workerRuntime,
+		Tracker: &fakeGitHub{}, GitWorkspace: gitWorkspace, Worktree: gitWorkspace, Worker: workerRuntime,
 	})
 	result, err := service.Doctor(t.Context())
 	if err != nil {
@@ -116,7 +117,7 @@ func TestDoctorReportsTheInvalidRepositoryFieldAlongsideLaterChecks(t *testing.T
 	gitWorkspace := &doctorContractGitWorkspace{}
 	workerRuntime := &doctorContractWorker{headlessAgentWorker: &headlessAgentWorker{agentWorker: &agentWorker{}}}
 	service := factory.NewWithDependencies(configPath, factory.Dependencies{
-		GitHub: &fakeGitHub{}, GitWorkspace: gitWorkspace, Worktree: gitWorkspace, Worker: workerRuntime,
+		Tracker: &fakeGitHub{}, GitWorkspace: gitWorkspace, Worktree: gitWorkspace, Worker: workerRuntime,
 	})
 	result, err := service.Doctor(t.Context())
 	if err != nil {
@@ -136,6 +137,74 @@ func TestDoctorReportsTheInvalidRepositoryFieldAlongsideLaterChecks(t *testing.T
 	if strings.Contains(configuration.Problem+configuration.Action, "sentinel") {
 		t.Fatalf("Doctor() configuration result exposed the digest: %#v", configuration)
 	}
+}
+
+// TestDoctorRunsTheTrackerAdapterReadinessChecks verifies that doctor asks
+// the tracker adapter for its own readiness checks instead of knowing how a
+// provider is diagnosed.
+func TestDoctorRunsTheTrackerAdapterReadinessChecks(t *testing.T) {
+	ready := &readinessTracker{fakeGitHub: &fakeGitHub{}}
+
+	result := doctorWithTracker(t, ready)
+
+	if ready.repository != (tracker.Repository{}) {
+		t.Fatalf("readiness repository = %v, want the unregistered empty repository", ready.repository)
+	}
+	if !hasDoctorResult(result, doctor.Success("tracker reachable")) {
+		t.Fatalf("Doctor() results = %#v, want the adapter's tracker reachable check", result.Report.Results)
+	}
+}
+
+// TestDoctorReportsATrackerWithoutReadinessChecks verifies that an adapter
+// without a readiness check is a finding, not a silent pass.
+func TestDoctorReportsATrackerWithoutReadinessChecks(t *testing.T) {
+	result := doctorWithTracker(t, &fakeGitHub{})
+
+	for _, check := range result.Report.Results {
+		if check.Name == "tracker readiness" && check.Status == doctor.StatusFailed {
+			return
+		}
+	}
+	t.Fatalf("Doctor() results = %#v, want a failed tracker readiness check", result.Report.Results)
+}
+
+// doctorWithTracker runs doctor against a missing host configuration with
+// host-free Git and worker fakes and the supplied tracker adapter.
+func doctorWithTracker(t *testing.T, adapter tracker.Client) factory.DoctorResult {
+	t.Helper()
+	gitWorkspace := &doctorContractGitWorkspace{}
+	workerRuntime := &doctorContractWorker{headlessAgentWorker: &headlessAgentWorker{agentWorker: &agentWorker{}}}
+	service := factory.NewWithDependencies(filepath.Join(t.TempDir(), "config.yaml"), factory.Dependencies{
+		Tracker: adapter, GitWorkspace: gitWorkspace, Worktree: gitWorkspace, Worker: workerRuntime,
+	})
+	result, err := service.Doctor(t.Context())
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	return result
+}
+
+// hasDoctorResult reports whether the report contains want.
+func hasDoctorResult(result factory.DoctorResult, want doctor.Result) bool {
+	for _, check := range result.Report.Results {
+		if check == want {
+			return true
+		}
+	}
+	return false
+}
+
+// readinessTracker is a tracker adapter that reports one readiness check and
+// records the repository it was asked about.
+type readinessTracker struct {
+	*fakeGitHub
+	repository tracker.Repository
+}
+
+// StartupChecks implements tracker.ReadinessChecker.
+func (r *readinessTracker) StartupChecks(repository tracker.Repository) []doctor.Check {
+	r.repository = repository
+	return []doctor.Check{func(context.Context) doctor.Result { return doctor.Success("tracker reachable") }}
 }
 
 // doctorContractGitWorkspace supplies both the task-oriented Git seam and its
@@ -159,15 +228,6 @@ func (*doctorContractGitWorkspace) Push(context.Context, gitadapter.PushRequest)
 func (*doctorContractGitWorkspace) SynchronizeBase(context.Context, gitadapter.BaseSyncRequest) error {
 	return nil
 }
-
-// CheckAuthentication implements the GitHub diagnosis seam.
-func (*fakeGitHub) CheckAuthentication(context.Context) error { return nil }
-
-// CheckRepositoryAccess implements the GitHub diagnosis seam.
-func (*fakeGitHub) CheckRepositoryAccess(context.Context, github.Repository) error { return nil }
-
-// CheckFactoryLabels implements the GitHub diagnosis seam.
-func (*fakeGitHub) CheckFactoryLabels(context.Context, github.Repository) error { return nil }
 
 // CheckRemote implements the Git diagnosis seam.
 func (*doctorContractGitWorkspace) CheckRemote(context.Context, gitadapter.DoctorRequest) error {

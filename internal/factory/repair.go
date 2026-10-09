@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/gate"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
@@ -73,7 +73,7 @@ type CheckRepairGate struct {
 	// Blocking records whether the gate blocks the suite.
 	Blocking bool `json:"blocking"`
 	// Status is the exact GitHub status state published for the checkpoint.
-	Status github.CommitStatusState `json:"status"`
+	Status codehost.CommitStatusState `json:"status"`
 	// Command is the deterministic gate command observation.
 	Command CheckRepairCommand `json:"command"`
 	// Skipped reports that the command was not executed.

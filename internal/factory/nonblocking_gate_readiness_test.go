@@ -9,12 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -89,10 +90,10 @@ func TestNonBlockingGateFailureReachesReadiness(t *testing.T) {
 		t.Fatal("pull request remained draft despite only a non-blocking gate failure")
 	}
 	results := fixture.checkpointGateResults(t, ready)
-	if len(results) != 2 || results[0].GateName != "lint" || results[0].Outcome != store.GateOutcomeFailed || results[0].Status != string(github.CommitStatusFailure) || results[1].Outcome != store.GateOutcomePassed {
+	if len(results) != 2 || results[0].GateName != "lint" || results[0].Outcome != store.GateOutcomeFailed || results[0].Status != string(codehost.CommitStatusFailure) || results[1].Outcome != store.GateOutcomePassed {
 		t.Fatalf("persisted checkpoint results = %#v, want the non-blocking gate failure retained beside the required success", results)
 	}
-	if !fixture.publishedStatus("lint", draft.Run.CheckpointSHA, github.CommitStatusFailure) {
+	if !fixture.publishedStatus("lint", draft.Run.CheckpointSHA, codehost.CommitStatusFailure) {
 		t.Fatalf("published statuses = %#v, want an exact-checkpoint non-blocking gate failure", fixture.statuses.values)
 	}
 	body := fixture.pullRequests.createdRequests[0].Body
@@ -111,7 +112,7 @@ func TestNonBlockingGateFailureReachesReadiness(t *testing.T) {
 		t.Fatalf("run after replay = %#v draft=%v, want ready non-draft", replayed, fixture.pullRequests.existing.Draft)
 	}
 	again := fixture.checkpointGateResults(t, replayed)
-	if len(again) != 2 || again[0].Outcome != store.GateOutcomeFailed || again[0].Status != string(github.CommitStatusFailure) {
+	if len(again) != 2 || again[0].Outcome != store.GateOutcomeFailed || again[0].Status != string(codehost.CommitStatusFailure) {
 		t.Fatalf("checkpoint results after replay = %#v, want unchanged non-blocking gate failure", again)
 	}
 }
@@ -157,7 +158,7 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 	policy.ModelOptions["spec_review"] = []string{"gpt-5"}
 	policy.RoleHarnessDefaults["standards_review"] = config.HarnessCodex
 	policy.ModelOptions["standards_review"] = []string{"gpt-5"}
-	issue := github.Issue{Number: 42, Title: "Honor non-blocking gates", Body: "Reach readiness with a non-blocking gate failure.", State: "open", Labels: []string{github.LabelAgentReady}}
+	issue := tracker.Issue{Number: 42, Title: "Honor non-blocking gates", Body: "Reach readiness with a non-blocking gate failure.", State: "open", Labels: []string{tracker.LabelAgentReady}}
 	workspace := &reviewableDraftWorkspace{draftGitWorkspace: &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-nonblocking", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-nonblocking", HeadSHA: factoryGateCheckpoint},
@@ -165,7 +166,7 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 	// Baseline: setup plus both gates pass before any agent edit.
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 0}}}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 21, URL: "https://github.com/example/project/pull/21", State: "open", Draft: true, HeadBranch: "factory/run-nonblocking", BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{Number: 21, URL: "https://github.com/example/project/pull/21", State: "open", Draft: true, HeadBranch: "factory/run-nonblocking", BaseBranch: "main"}}
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		OperationalDataPath: operationalPath, RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
@@ -176,7 +177,7 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: &fakeGitHub{issueValue: issue}},
+		Tracker:           &fakeGitHubWithPullRequests{fakeGitHub: &fakeGitHub{issueValue: issue}},
 		PullRequests:      pullRequests,
 		Worktree:          workspace,
 		GitWorkspace:      workspace,
@@ -244,7 +245,7 @@ func (f *nonBlockingReadinessFixture) checkpointGateResults(t *testing.T, run st
 }
 
 // publishedStatus reports whether one exact-checkpoint gate status was sent.
-func (f *nonBlockingReadinessFixture) publishedStatus(gateName, sha string, state github.CommitStatusState) bool {
+func (f *nonBlockingReadinessFixture) publishedStatus(gateName, sha string, state codehost.CommitStatusState) bool {
 	for _, status := range f.statuses.values {
 		if status.SHA == sha && status.State == state && strings.HasSuffix(status.Context, gateName) {
 			return true

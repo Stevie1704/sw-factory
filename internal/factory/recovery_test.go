@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -30,8 +31,8 @@ func TestProgressionRefusesAnAgreeingInterruptedRun(t *testing.T) {
 	}
 	run := recoveryRun(worktreePath)
 	githubAdapter := &fakeGitHub{
-		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}},
+		statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 	storeAdapter := &recoveryRunStore{run: run}
@@ -93,21 +94,21 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			name: "stale GitHub label",
 			configure: func(run *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
 				run.Status = store.StatusWaitingForHuman
-				githubAdapter.issueValue.Labels = []string{github.LabelAgentRunning}
+				githubAdapter.issueValue.Labels = []string{tracker.LabelAgentRunning}
 			},
 			wantFields: []string{"github.state label"},
 		},
 		{
 			name: "missing status comment",
 			configure: func(_ *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
-				githubAdapter.statusComment = github.Comment{}
+				githubAdapter.statusComment = tracker.Comment{}
 			},
 			wantFields: []string{"github.status comment"},
 		},
 		{
 			name: "mismatched status comment",
 			configure: func(run *store.Run, _ *recoveryWorktree, githubAdapter *fakeGitHub, _ *fakePullRequests) {
-				githubAdapter.statusComment = github.Comment{ID: "comment-other", Body: factory.StatusCommentBody(*run)}
+				githubAdapter.statusComment = tracker.Comment{ID: "comment-other", Body: factory.StatusCommentBody(*run)}
 			},
 			wantFields: []string{"github.status comment"},
 		},
@@ -131,7 +132,7 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			configure: func(run *store.Run, _ *recoveryWorktree, _ *fakeGitHub, pullRequests *fakePullRequests) {
 				run.PullRequestNumber = 17
 				run.PullRequestURL = "https://github.com/example/project/pull/17"
-				pullRequests.existing = github.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", HeadBranch: run.Branch, BaseBranch: "main"}
+				pullRequests.existing = codehost.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", HeadBranch: run.Branch, BaseBranch: "main"}
 			},
 			wantFields: []string{"github.pull request number", "github.pull request URL"},
 		},
@@ -147,8 +148,8 @@ func TestStatusReportsEveryRecoveryDiscrepancy(t *testing.T) {
 			}
 			run := recoveryRun(worktreePath)
 			githubAdapter := &fakeGitHub{
-				issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-				statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+				issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}},
+				statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 			}
 			worktree := &recoveryWorktree{state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
 			pullRequests := &fakePullRequests{}
@@ -221,13 +222,13 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 		OperationalDataPath: databasePath, RepositoryConfigPath: filepath.Join(root, "factory.yaml"),
 	}}}
 	githubAdapter := &fakeGitHub{
-		issueValue:    github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{github.LabelAgentRunning}},
-		statusComment: github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
+		issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}},
+		statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)},
 	}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:    &fakeConfig{value: host},
 		OpenStore: func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
-		GitHub:    githubAdapter,
+		Tracker:   githubAdapter,
 		Worker:    &recoveryWorker{},
 		Now:       func() time.Time { return time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC) },
 	})
@@ -261,7 +262,7 @@ func TestAbandonPendingEffectLeavesTheRunWaitingForHuman(t *testing.T) {
 
 // recoveryRun returns a complete persisted run fixture for startup diagnosis.
 func recoveryRun(worktreePath string) store.Run {
-	packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, Issue: github.Issue{Number: 42, Title: "Recovery", Body: "diagnose"}, RepositoryConfig: validRepositoryConfig()})
+	packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, Issue: tracker.Issue{Number: 42, Title: "Recovery", Body: "diagnose"}, RepositoryConfig: validRepositoryConfig()})
 	if err != nil {
 		panic(err)
 	}
@@ -285,7 +286,7 @@ func newRecoveryService(t *testing.T, runStore *recoveryRunStore, githubAdapter 
 	dependencies := factory.Dependencies{
 		Config:    &fakeConfig{value: host},
 		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		GitHub:    githubAdapter, Worktree: worktree,
+		Tracker:   githubAdapter, Worktree: worktree,
 		Worker: &recoveryWorker{},
 	}
 	if pullRequests != nil {

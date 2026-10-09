@@ -9,12 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -85,7 +86,7 @@ func TestDriveRunPausesAnExpiredActiveInvocation(t *testing.T) {
 			OpenStore: func(context.Context, string) (OperationalStore, error) {
 				return runStore, nil
 			},
-			GitHub: progressionDispatchGitHub{},
+			Tracker: progressionDispatchGitHub{},
 			Now: func() time.Time {
 				return now
 			},
@@ -149,7 +150,7 @@ func TestDriveRunKeepsAnActiveInvocationInsideItsDeadline(t *testing.T) {
 			OpenStore: func(context.Context, string) (OperationalStore, error) {
 				return runStore, nil
 			},
-			GitHub: progressionDispatchGitHub{},
+			Tracker: progressionDispatchGitHub{},
 			Now: func() time.Time {
 				return now
 			},
@@ -418,7 +419,7 @@ func TestDriveRunDispatchesEveryProgressionCommand(t *testing.T) {
 					OpenStore: func(context.Context, string) (OperationalStore, error) {
 						return runStore, nil
 					},
-					GitHub:       progressionDispatchGitHub{},
+					Tracker:      progressionDispatchGitHub{},
 					GitWorkspace: workspace,
 					PullRequests: pullRequests,
 					Now: func() time.Time {
@@ -481,7 +482,7 @@ func TestDriveRunKeepsTheRunActiveWhenAHostCommandTimesOut(t *testing.T) {
 		deps: Dependencies{
 			Config:       progressionDispatchConfig{registration: registration},
 			OpenStore:    func(context.Context, string) (OperationalStore, error) { return runStore, nil },
-			GitHub:       progressionDispatchGitHub{},
+			Tracker:      progressionDispatchGitHub{},
 			GitWorkspace: workspace,
 			PullRequests: &progressionDispatchPullRequests{},
 			Now:          func() time.Time { return time.Unix(1, 0).UTC() },
@@ -658,24 +659,24 @@ type progressionDispatchPullRequests struct {
 }
 
 // FindPullRequest records a pull-request lookup and returns its configured error.
-func (p *progressionDispatchPullRequests) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
+func (p *progressionDispatchPullRequests) FindPullRequest(context.Context, tracker.Repository, string, string) (codehost.PullRequest, error) {
 	p.findCalls++
 	if len(p.findErrors) == 0 {
-		return github.PullRequest{}, nil
+		return codehost.PullRequest{}, nil
 	}
 	err := p.findErrors[0]
 	p.findErrors = p.findErrors[1:]
-	return github.PullRequest{}, err
+	return codehost.PullRequest{}, err
 }
 
 // CreatePullRequest satisfies the pull-request creation seam.
-func (*progressionDispatchPullRequests) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, context.Canceled
+func (*progressionDispatchPullRequests) CreatePullRequest(context.Context, tracker.Repository, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, context.Canceled
 }
 
 // UpdatePullRequest satisfies the pull-request update seam.
-func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, github.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, context.Canceled
+func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, tracker.Repository, int, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, context.Canceled
 }
 
 // progressionDispatchGitHub is the minimal issue client needed to let a
@@ -683,44 +684,44 @@ func (*progressionDispatchPullRequests) UpdatePullRequest(context.Context, githu
 type progressionDispatchGitHub struct{}
 
 // Issue reports an open issue during lifecycle observation.
-func (progressionDispatchGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
-	return github.Issue{State: "open"}, nil
+func (progressionDispatchGitHub) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
+	return tracker.Issue{State: "open"}, nil
 }
 
 // CreateLabel satisfies the issue client seam.
-func (progressionDispatchGitHub) CreateLabel(context.Context, github.Repository, github.Label) error {
+func (progressionDispatchGitHub) CreateLabel(context.Context, tracker.Repository, tracker.Label) error {
 	return context.Canceled
 }
 
 // ReplaceIssueLabels satisfies the issue client seam.
-func (progressionDispatchGitHub) ReplaceIssueLabels(context.Context, github.Repository, int, []string) error {
+func (progressionDispatchGitHub) ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error {
 	return context.Canceled
 }
 
 // CreateIssueComment satisfies the issue client seam.
-func (progressionDispatchGitHub) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, context.Canceled
+func (progressionDispatchGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, context.Canceled
 }
 
 // FindStatusComment satisfies the issue client seam.
-func (progressionDispatchGitHub) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, context.Canceled
+func (progressionDispatchGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, context.Canceled
 }
 
 // EditIssueComment satisfies the issue client seam.
-func (progressionDispatchGitHub) EditIssueComment(context.Context, github.Repository, string, string) error {
+func (progressionDispatchGitHub) EditIssueComment(context.Context, tracker.Repository, string, string) error {
 	return context.Canceled
 }
 
 var (
-	_ RunStore                 = (*progressionDispatchStore)(nil)
-	_ ActiveInvocationsStore   = (*progressionDispatchStore)(nil)
-	_ LatestInvocationStore    = (*progressionDispatchStore)(nil)
-	_ GateResultStore          = (*progressionDispatchStore)(nil)
-	_ InvocationStore          = (*progressionDispatchStore)(nil)
-	_ gitadapter.GitWorkspace  = (*progressionDispatchWorkspace)(nil)
-	_ github.Client            = progressionDispatchGitHub{}
-	_ github.PullRequestClient = (*progressionDispatchPullRequests)(nil)
+	_ RunStore                   = (*progressionDispatchStore)(nil)
+	_ ActiveInvocationsStore     = (*progressionDispatchStore)(nil)
+	_ LatestInvocationStore      = (*progressionDispatchStore)(nil)
+	_ GateResultStore            = (*progressionDispatchStore)(nil)
+	_ InvocationStore            = (*progressionDispatchStore)(nil)
+	_ gitadapter.GitWorkspace    = (*progressionDispatchWorkspace)(nil)
+	_ tracker.Client             = progressionDispatchGitHub{}
+	_ codehost.PullRequestClient = (*progressionDispatchPullRequests)(nil)
 )
 
 // progressionRunWithConcurrentReviews builds a frozen packet that enables

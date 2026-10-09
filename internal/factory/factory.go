@@ -11,12 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"github.com/google/uuid"
@@ -163,29 +164,32 @@ type Dependencies struct {
 	OpenStoreReadOnly ReadOnlyStoreOpener
 	CheckRepository   RepositoryChecker
 	LoadRepository    RepositoryConfigLoader
-	GitHub            github.Client
-	// IssuePoller lists eligible GitHub work without broadening the mutation
+	// Tracker is the work-tracker adapter selected by the composition root.
+	// The narrower tracker and code-host seams below default to it when it
+	// implements them.
+	Tracker tracker.Client
+	// IssuePoller lists eligible tracker work without broadening the mutation
 	// authority of the existing issue client seam.
-	IssuePoller github.IssuePoller
-	// Lease publishes the coordinator's visible GitHub heartbeat.
-	Lease          github.LeaseClient
-	CommitStatuses github.CommitStatusPublisher
+	IssuePoller tracker.IssuePoller
+	// Lease publishes the coordinator's visible heartbeat. It is optional.
+	Lease          tracker.LeaseClient
+	CommitStatuses codehost.CommitStatusPublisher
 	Worktree       gitadapter.WorktreeManager
 	// GitWorkspace owns checkpoint, base-sync, push, and cleanup effects on the host.
 	GitWorkspace gitadapter.GitWorkspace
 	// RepositoryDiscoverer resolves the checkout root and GitHub identity used
 	// to infer registration values. It is read-only.
 	RepositoryDiscoverer gitadapter.RepositoryDiscoverer
-	// GitHubAccount resolves the authenticated GitHub login used to infer the
+	// TrackerAccount resolves the authenticated tracker login used to infer the
 	// default authorized user. It is read-only.
-	GitHubAccount github.AccountReader
+	TrackerAccount tracker.AccountReader
 	// PullRequests owns idempotent draft pull-request discovery and mutation.
-	PullRequests github.PullRequestClient
+	PullRequests codehost.PullRequestClient
 	// PullRequestReviews lists completed human reviews of a tracked pull
 	// request. It is read-only: the factory never submits or dismisses one.
-	PullRequestReviews github.PullRequestReviewReader
+	PullRequestReviews codehost.PullRequestReviewReader
 	// Comments lists issue and pull-request comments for command polling.
-	Comments github.CommentReader
+	Comments tracker.CommentReader
 	Worker   worker.WorkerRuntime
 	// HeadlessHarnesses own detached role lifecycle, keyed by the
 	// repository-selected harness.
@@ -318,13 +322,11 @@ func (fileConfigRepository) Create(path string) (config.HostConfig, error) {
 	return config.CreateHost(path)
 }
 
-// New creates a Service configured with the specified host configuration path and default dependencies.
-func New(configPath string) *Service {
-	return NewWithDependencies(configPath, Dependencies{})
-}
-
 // NewWithDependencies creates a Service with the specified configuration path
-// and fills missing dependencies with their default implementations.
+// and fills missing dependencies with their default implementations. The
+// tracker and code-host adapter has no default: the composition root selects
+// it, and every narrower tracker and code-host seam left empty is resolved
+// from it.
 func NewWithDependencies(configPath string, dependencies Dependencies) *Service {
 	if dependencies.Config == nil {
 		dependencies.Config = fileConfigRepository{}
@@ -345,21 +347,18 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.LoadRepository == nil {
 		dependencies.LoadRepository = config.LoadRepository
 	}
-	if dependencies.GitHub == nil {
-		dependencies.GitHub = github.NewClient()
-	}
 	if dependencies.IssuePoller == nil {
-		if poller, ok := dependencies.GitHub.(github.IssuePoller); ok {
+		if poller, ok := dependencies.Tracker.(tracker.IssuePoller); ok {
 			dependencies.IssuePoller = poller
 		}
 	}
 	if dependencies.Lease == nil {
-		if lease, ok := dependencies.GitHub.(github.LeaseClient); ok {
+		if lease, ok := dependencies.Tracker.(tracker.LeaseClient); ok {
 			dependencies.Lease = lease
 		}
 	}
 	if dependencies.CommitStatuses == nil {
-		if publisher, ok := dependencies.GitHub.(github.CommitStatusPublisher); ok {
+		if publisher, ok := dependencies.Tracker.(codehost.CommitStatusPublisher); ok {
 			dependencies.CommitStatuses = publisher
 		}
 	}
@@ -376,23 +375,23 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 			dependencies.RepositoryDiscoverer = discoverer
 		}
 	}
-	if dependencies.GitHubAccount == nil {
-		if account, ok := dependencies.GitHub.(github.AccountReader); ok {
-			dependencies.GitHubAccount = account
+	if dependencies.TrackerAccount == nil {
+		if account, ok := dependencies.Tracker.(tracker.AccountReader); ok {
+			dependencies.TrackerAccount = account
 		}
 	}
 	if dependencies.PullRequests == nil {
-		if client, ok := dependencies.GitHub.(github.PullRequestClient); ok {
+		if client, ok := dependencies.Tracker.(codehost.PullRequestClient); ok {
 			dependencies.PullRequests = client
 		}
 	}
 	if dependencies.PullRequestReviews == nil {
-		if reader, ok := dependencies.GitHub.(github.PullRequestReviewReader); ok {
+		if reader, ok := dependencies.Tracker.(codehost.PullRequestReviewReader); ok {
 			dependencies.PullRequestReviews = reader
 		}
 	}
 	if dependencies.Comments == nil {
-		if reader, ok := dependencies.GitHub.(github.CommentReader); ok {
+		if reader, ok := dependencies.Tracker.(tracker.CommentReader); ok {
 			dependencies.Comments = reader
 		}
 	}

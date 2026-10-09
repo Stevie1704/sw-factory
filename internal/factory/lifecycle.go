@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // LifecycleRequest selects the run whose GitHub lifecycle should be observed.
@@ -160,9 +161,9 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 // inputs.
 type lifecycleObservation struct {
 	// Issue is the observed issue snapshot.
-	Issue github.Issue
+	Issue tracker.Issue
 	// PullRequest is the tracked pull request, when one exists.
-	PullRequest github.PullRequest
+	PullRequest codehost.PullRequest
 	// HasPullRequest reports whether a tracked pull request was found.
 	HasPullRequest bool
 }
@@ -173,7 +174,7 @@ type lifecycleObservation struct {
 // Classification is deliberately left to the caller, because a transition and a
 // read-only refusal report an uninterpretable lifecycle differently.
 func (s *Service) observeGitHubLifecycle(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (lifecycleObservation, error) {
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return lifecycleObservation{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
 	}
@@ -199,7 +200,7 @@ type lifecycleDecision struct {
 // whether an observed issue and pull request complete, cancel, or leave a run
 // unchanged. It is the only interpretation of GitHub lifecycle state, so no
 // caller can invent a reset-specific or cleanup-specific variant.
-func classifyLifecycle(run store.Run, issue github.Issue, pullRequest github.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
+func classifyLifecycle(run store.Run, issue tracker.Issue, pullRequest codehost.PullRequest, hasPullRequest bool) (lifecycleDecision, error) {
 	// GitHub reports a merged pull request as closed, so merge detection must
 	// happen before either ordinary closed-state cancellation branch.
 	if hasPullRequest && pullRequest.Merged {
@@ -220,30 +221,30 @@ func classifyLifecycle(run store.Run, issue github.Issue, pullRequest github.Pul
 
 // trackedPullRequest loads the PR found by the run's exact branch and frozen
 // target branch. A missing PR is valid before draft-PR creation.
-func (s *Service) trackedPullRequest(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (github.PullRequest, bool, error) {
+func (s *Service) trackedPullRequest(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (codehost.PullRequest, bool, error) {
 	if run.PullRequestNumber == 0 {
-		return github.PullRequest{}, false, nil
+		return codehost.PullRequest{}, false, nil
 	}
 	client := s.pullRequestClient()
 	if client == nil {
-		return github.PullRequest{}, false, errors.New("GitHub pull-request client is required to observe a tracked pull request")
+		return codehost.PullRequest{}, false, errors.New("GitHub pull-request client is required to observe a tracked pull request")
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
-		return github.PullRequest{}, false, fmt.Errorf("decode specification packet for lifecycle observation: %w", err)
+		return codehost.PullRequest{}, false, fmt.Errorf("decode specification packet for lifecycle observation: %w", err)
 	}
 	if strings.TrimSpace(packet.RepositoryConfig.TargetBranch) == "" {
-		return github.PullRequest{}, false, errors.New("tracked run has no frozen pull-request target branch")
+		return codehost.PullRequest{}, false, errors.New("tracked run has no frozen pull-request target branch")
 	}
 	pullRequest, err := client.FindPullRequest(ctx, commandRepository(registration), run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
-		return github.PullRequest{}, false, fmt.Errorf("observe pull request #%d: %w", run.PullRequestNumber, err)
+		return codehost.PullRequest{}, false, fmt.Errorf("observe pull request #%d: %w", run.PullRequestNumber, err)
 	}
 	if pullRequest.Number == 0 {
-		return github.PullRequest{}, false, nil
+		return codehost.PullRequest{}, false, nil
 	}
 	if pullRequest.Number != run.PullRequestNumber {
-		return github.PullRequest{}, false, fmt.Errorf("tracked pull request changed from #%d to #%d", run.PullRequestNumber, pullRequest.Number)
+		return codehost.PullRequest{}, false, fmt.Errorf("tracked pull request changed from #%d to #%d", run.PullRequestNumber, pullRequest.Number)
 	}
 	return pullRequest, true, nil
 }
@@ -251,13 +252,13 @@ func (s *Service) trackedPullRequest(ctx context.Context, registration config.Re
 // pullRequestIsOpen reports whether a tracked pull request can still receive
 // work. A merged pull request is reported by GitHub as closed, so the merge
 // flag is checked before the lifecycle state.
-func pullRequestIsOpen(pullRequest github.PullRequest, found bool) bool {
+func pullRequestIsOpen(pullRequest codehost.PullRequest, found bool) bool {
 	return found && !pullRequest.Merged && strings.EqualFold(strings.TrimSpace(pullRequest.State), "open")
 }
 
 // retryTargetIsOpen confirms that a cancelled run has an explicitly reopened
 // GitHub target before the retry command reactivates its persisted state.
-func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.RepositoryRegistration, run store.Run, issue github.Issue) (bool, error) {
+func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.RepositoryRegistration, run store.Run, issue tracker.Issue) (bool, error) {
 	issueOpen := strings.EqualFold(strings.TrimSpace(issue.State), "open")
 	if run.PullRequestNumber == 0 {
 		return issueOpen, nil
@@ -275,7 +276,7 @@ func (s *Service) retryTargetIsOpen(ctx context.Context, registration config.Rep
 
 // transitionTerminal stops active workers and projects the final state to
 // durable GitHub and store surfaces. Branches, worktrees, and logs remain.
-func (s *Service) transitionTerminal(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run, issue github.Issue) (store.Run, error) {
+func (s *Service) transitionTerminal(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run, issue tracker.Issue) (store.Run, error) {
 	if store.IsTerminalStatus(previous.Status) {
 		return previous, nil
 	}
@@ -287,7 +288,7 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 	}
 	repository := commandRepository(registration)
 	if next.StatusCommentID == "" {
-		comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, next.IssueNumber, statusCommentMarker(next.ID))
+		comment, err := s.deps.Tracker.FindStatusComment(ctx, repository, next.IssueNumber, statusCommentMarker(next.ID))
 		if err != nil {
 			return next, fmt.Errorf("recover status comment for lifecycle transition: %w", err)
 		}

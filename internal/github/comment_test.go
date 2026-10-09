@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestIssueCommentsReturnsAuthorAndRevision verifies that command polling gets
@@ -17,7 +18,7 @@ func TestIssueCommentsReturnsAuthorAndRevision(t *testing.T) {
 	runner := &fakeCommandRunner{outputs: [][]byte{[]byte(`[[{"id":42,"body":"/factory status","user":{"login":"alice"},"updated_at":"` + updatedAt + `"}]]`)}}
 	client := &github.GhClient{Runner: runner}
 
-	comments, err := client.IssueComments(context.Background(), github.Repository{Owner: "example", Name: "project"}, 8)
+	comments, err := client.IssueComments(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 8)
 	if err != nil {
 		t.Fatalf("IssueComments() error = %v", err)
 	}

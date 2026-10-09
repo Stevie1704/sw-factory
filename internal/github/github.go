@@ -11,252 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
-
-const (
-	// LabelAgentReady authorizes an issue for a factory claim.
-	LabelAgentReady = "agent-ready"
-	// LabelAgentRunning marks an active factory run.
-	LabelAgentRunning = "agent-running"
-	// LabelAgentNeedsInput marks a run waiting for human input.
-	LabelAgentNeedsInput = "agent-needs-input"
-	// LabelAgentFailed marks a failed factory run.
-	LabelAgentFailed = "agent-failed"
-	// LabelAgentCancelled marks a cancelled factory run.
-	LabelAgentCancelled = "agent-cancelled"
-	// LabelAgentComplete marks a completed factory run.
-	LabelAgentComplete = "agent-complete"
-)
-
-// FactoryStateLabels is the complete set of labels owned by the factory.
-// Claiming and transitioning only replace labels from this set; ordinary issue
-// labels are preserved.
-var FactoryStateLabels = []string{
-	LabelAgentReady,
-	LabelAgentRunning,
-	LabelAgentNeedsInput,
-	LabelAgentFailed,
-	LabelAgentCancelled,
-	LabelAgentComplete,
-}
-
-// Repository identifies a GitHub repository.
-type Repository struct {
-	Owner string
-	Name  string
-}
-
-// String returns the owner/name form accepted by the GitHub CLI.
-func (r Repository) String() string { return r.Owner + "/" + r.Name }
-
-// Issue is the content-free GitHub issue snapshot needed by a claim.
-type Issue struct {
-	Number        int
-	Title         string
-	Body          string
-	State         string
-	Labels        []string
-	IsPullRequest bool
-	UpdatedAt     time.Time
-}
-
-// Label describes a factory-owned GitHub label.
-type Label struct {
-	Name        string
-	Description string
-	Color       string
-}
-
-// Comment is the coordinator-neutral identity and revision of a GitHub issue
-// or pull-request comment.
-type Comment struct {
-	// ID is the immutable GitHub comment identity used as a replay watermark.
-	ID string
-	// Body is the complete user-authored comment text.
-	Body string
-	// Author is the GitHub login that authored the comment.
-	Author string
-	// UpdatedAt is the current edit revision of the comment.
-	UpdatedAt time.Time
-}
-
-// CommentReader lists comments for an issue or pull request through the
-// shared GitHub issue-comments endpoint.
-type CommentReader interface {
-	IssueComments(context.Context, Repository, int) ([]Comment, error)
-}
-
-// IssuePoller lists the repository's open, agent-authorized issue queue.
-type IssuePoller interface {
-	ListEligibleIssues(context.Context, Repository) ([]Issue, error)
-}
-
-// PullRequest is the pull-request identity and body returned to the
-// coordinator after a host-side GitHub operation.
-type PullRequest struct {
-	// Number is the repository-local pull-request number.
-	Number int
-	// URL is the browser URL for operator supervision.
-	URL string
-	// Title is the pull-request title.
-	Title string
-	// Body is the current complete pull-request body.
-	Body string
-	// State is the GitHub lifecycle state.
-	State string
-	// Draft reports whether GitHub marks the pull request as a draft.
-	Draft bool
-	// Merged reports whether GitHub has completed the pull request merge.
-	Merged bool
-	// MergeCommitSHA is the immutable commit created by a successful merge.
-	MergeCommitSHA string
-	// HeadBranch is the source branch name.
-	HeadBranch string
-	// HeadSHA is the exact commit currently referenced by the source branch.
-	HeadSHA string
-	// BaseBranch is the target branch name.
-	BaseBranch string
-}
-
-// PullRequestRequest contains the stable fields used to create or update a
-// draft pull request.
-type PullRequestRequest struct {
-	// Title is the pull-request title.
-	Title string
-	// Body is the complete body, including any preserved human-authored text.
-	Body string
-	// HeadBranch is the source branch to publish.
-	HeadBranch string
-	// BaseBranch is the target branch to merge into.
-	BaseBranch string
-	// Draft requests a draft pull request on creation and update.
-	Draft bool
-}
-
-// CommitStatusState is the GitHub state vocabulary used for deterministic
-// checkpoint results.
-type CommitStatusState string
-
-const (
-	// CommitStatusPending is an in-progress status state.
-	CommitStatusPending CommitStatusState = "pending"
-	// CommitStatusSuccess marks a successful checkpoint result.
-	CommitStatusSuccess CommitStatusState = "success"
-	// CommitStatusFailure marks a declared command that exited unsuccessfully.
-	CommitStatusFailure CommitStatusState = "failure"
-	// CommitStatusError marks setup or runtime infrastructure failure.
-	CommitStatusError CommitStatusState = "error"
-)
-
-// CommitStatus identifies one status attached to one exact commit SHA.
-type CommitStatus struct {
-	// SHA is the immutable commit being reported.
-	SHA string
-	// State is the GitHub status state.
-	State CommitStatusState
-	// Context is the stable status context used for repeated reports.
-	Context string
-	// Description is a content-free human-readable summary.
-	Description string
-	// TargetURL is an optional operator-facing evidence URL.
-	TargetURL string
-}
-
-// CommitStatusPublisher is the host-side seam for publishing exact-SHA
-// Commit Statuses without exposing GitHub credentials to workflow code.
-type CommitStatusPublisher interface {
-	CreateCommitStatus(context.Context, Repository, CommitStatus) error
-}
-
-// CommitStatusReader is the read-only projection used to recognize a status
-// that GitHub accepted before the coordinator process stopped.
-type CommitStatusReader interface {
-	ListCommitStatuses(context.Context, Repository, string) ([]CommitStatus, error)
-}
-
-// Client is the small host-side seam used by the claim coordinator. It keeps
-// GitHub credentials inside the local gh process and returns only workflow
-// data to the coordinator.
-type Client interface {
-	Issue(context.Context, Repository, int) (Issue, error)
-	CreateLabel(context.Context, Repository, Label) error
-	ReplaceIssueLabels(context.Context, Repository, int, []string) error
-	CreateIssueComment(context.Context, Repository, int, string) (Comment, error)
-	FindStatusComment(context.Context, Repository, int, string) (Comment, error)
-	EditIssueComment(context.Context, Repository, string, string) error
-}
-
-// PullRequestClient is the host-side seam for idempotent draft pull-request
-// discovery and mutation. It is separate from Client so existing issue/state
-// adapters do not gain GitHub pull-request authority accidentally.
-type PullRequestClient interface {
-	FindPullRequest(context.Context, Repository, string, string) (PullRequest, error)
-	CreatePullRequest(context.Context, Repository, PullRequestRequest) (PullRequest, error)
-	UpdatePullRequest(context.Context, Repository, int, PullRequestRequest) (PullRequest, error)
-}
-
-// PullRequestReviewState is the bounded GitHub review decision vocabulary.
-// Only a submitted review carries one; an unsubmitted draft is `PENDING`.
-type PullRequestReviewState string
-
-const (
-	// PullRequestReviewPending is an unsubmitted review draft. It is visible
-	// only to its author and must never start factory work.
-	PullRequestReviewPending PullRequestReviewState = "PENDING"
-	// PullRequestReviewCommented is a submitted review without a decision.
-	PullRequestReviewCommented PullRequestReviewState = "COMMENTED"
-	// PullRequestReviewApproved is a submitted approval.
-	PullRequestReviewApproved PullRequestReviewState = "APPROVED"
-	// PullRequestReviewChangesRequested is the only review decision the
-	// coordinator treats as a progression event.
-	PullRequestReviewChangesRequested PullRequestReviewState = "CHANGES_REQUESTED"
-	// PullRequestReviewDismissed is a decision a maintainer later withdrew.
-	PullRequestReviewDismissed PullRequestReviewState = "DISMISSED"
-)
-
-// PullRequestReviewComment is one inline, file-anchored review finding.
-type PullRequestReviewComment struct {
-	// Path is the repository-relative file the reviewer annotated.
-	Path string
-	// Line is the annotated line in the file, or zero when GitHub reports none.
-	Line int
-	// Body is the reviewer's complete comment text.
-	Body string
-}
-
-// PullRequestReview is one completed human review of a tracked pull request.
-type PullRequestReview struct {
-	// ID is the immutable GitHub review identity used as a replay watermark.
-	ID string
-	// Author is the GitHub login that submitted the review.
-	Author string
-	// State is the submitted review decision.
-	State PullRequestReviewState
-	// Body is the completed review summary text.
-	Body string
-	// URL is the browser URL for operator supervision.
-	URL string
-	// SubmittedAt is the submission time. It is the zero value while GitHub
-	// still holds the review as an unsubmitted draft.
-	SubmittedAt time.Time
-	// Comments contains the review's inline findings in GitHub order.
-	Comments []PullRequestReviewComment
-}
-
-// PullRequestReviewReader is the read-only seam for observing completed human
-// reviews. It is separate from the mutation clients because the factory never
-// submits, approves, dismisses, or merges a review.
-type PullRequestReviewReader interface {
-	PullRequestReviews(context.Context, Repository, int) ([]PullRequestReview, error)
-}
-
-// PullRequestDraftClient owns the explicit draft/readiness mutation for an
-// existing pull request. Keeping it separate prevents body updates from
-// accidentally changing merge readiness.
-type PullRequestDraftClient interface {
-	SetPullRequestDraft(context.Context, Repository, int, bool) (PullRequest, error)
-}
 
 // CommandRunner is the executable seam for the local GitHub CLI adapter.
 type CommandRunner interface {
@@ -312,10 +70,10 @@ type GhClient struct {
 	lease leaseCache
 }
 
-var _ CommentReader = (*GhClient)(nil)
-var _ IssuePoller = (*GhClient)(nil)
-var _ CommitStatusReader = (*GhClient)(nil)
-var _ PullRequestDraftClient = (*GhClient)(nil)
+var _ tracker.CommentReader = (*GhClient)(nil)
+var _ tracker.IssuePoller = (*GhClient)(nil)
+var _ codehost.CommitStatusReader = (*GhClient)(nil)
+var _ codehost.PullRequestDraftClient = (*GhClient)(nil)
 
 // NewClient returns a GitHub CLI-backed client.
 func NewClient() *GhClient { return &GhClient{Runner: commandRunner{}} }
@@ -329,13 +87,13 @@ func (c *GhClient) runner() CommandRunner {
 }
 
 // Issue fetches one issue snapshot from GitHub.
-func (c *GhClient) Issue(ctx context.Context, repository Repository, number int) (Issue, error) {
+func (c *GhClient) Issue(ctx context.Context, repository tracker.Repository, number int) (tracker.Issue, error) {
 	if number <= 0 {
-		return Issue{}, errors.New("issue number must be positive")
+		return tracker.Issue{}, errors.New("issue number must be positive")
 	}
 	var response issueResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d", repository.String(), number)}, nil, &response); err != nil {
-		return Issue{}, fmt.Errorf("fetch issue #%d: %w", number, err)
+		return tracker.Issue{}, fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 	return response.issue(), nil
 }
@@ -343,11 +101,11 @@ func (c *GhClient) Issue(ctx context.Context, repository Repository, number int)
 // ListEligibleIssues reads open issues labeled agent-ready and returns them in
 // ascending issue-number order. GitHub's issues endpoint also returns pull
 // requests, so those are filtered before the result crosses the adapter seam.
-func (c *GhClient) ListEligibleIssues(ctx context.Context, repository Repository) ([]Issue, error) {
+func (c *GhClient) ListEligibleIssues(ctx context.Context, repository tracker.Repository) ([]tracker.Issue, error) {
 	args := []string{
 		"api", fmt.Sprintf("repos/%s/issues", repository.String()),
 		"--paginate", "--slurp", "--method", "GET",
-		"-f", "state=open", "-f", "labels=" + LabelAgentReady,
+		"-f", "state=open", "-f", "labels=" + tracker.LabelAgentReady,
 	}
 	output, err := c.callBytes(ctx, args, nil)
 	if err != nil {
@@ -357,10 +115,10 @@ func (c *GhClient) ListEligibleIssues(ctx context.Context, repository Repository
 	if err != nil {
 		return nil, fmt.Errorf("decode eligible issues: %w", err)
 	}
-	issues := make([]Issue, 0, len(responses))
+	issues := make([]tracker.Issue, 0, len(responses))
 	for _, response := range responses {
 		issue := response.issue()
-		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !containsLabel(issue.Labels, LabelAgentReady) {
+		if issue.Number <= 0 || issue.IsPullRequest || !strings.EqualFold(strings.TrimSpace(issue.State), "open") || !containsLabel(issue.Labels, tracker.LabelAgentReady) {
 			continue
 		}
 		issues = append(issues, issue)
@@ -372,7 +130,7 @@ func (c *GhClient) ListEligibleIssues(ctx context.Context, repository Repository
 }
 
 // CreateLabel creates or updates one factory label through gh.
-func (c *GhClient) CreateLabel(ctx context.Context, repository Repository, label Label) error {
+func (c *GhClient) CreateLabel(ctx context.Context, repository tracker.Repository, label tracker.Label) error {
 	if strings.TrimSpace(label.Name) == "" {
 		return errors.New("GitHub label name is required")
 	}
@@ -390,7 +148,7 @@ func (c *GhClient) CreateLabel(ctx context.Context, repository Repository, label
 }
 
 // ReplaceIssueLabels replaces an issue's labels with the supplied complete set.
-func (c *GhClient) ReplaceIssueLabels(ctx context.Context, repository Repository, number int, labels []string) error {
+func (c *GhClient) ReplaceIssueLabels(ctx context.Context, repository tracker.Repository, number int, labels []string) error {
 	if number <= 0 {
 		return errors.New("issue number must be positive")
 	}
@@ -401,17 +159,17 @@ func (c *GhClient) ReplaceIssueLabels(ctx context.Context, repository Repository
 }
 
 // CreateIssueComment creates one issue comment and returns its immutable id.
-func (c *GhClient) CreateIssueComment(ctx context.Context, repository Repository, number int, body string) (Comment, error) {
+func (c *GhClient) CreateIssueComment(ctx context.Context, repository tracker.Repository, number int, body string) (tracker.Comment, error) {
 	var response commentResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--method", "POST"}, map[string]string{"body": body}, &response); err != nil {
-		return Comment{}, fmt.Errorf("create status comment on issue #%d: %w", number, err)
+		return tracker.Comment{}, fmt.Errorf("create status comment on issue #%d: %w", number, err)
 	}
 	return response.comment(), nil
 }
 
 // IssueComments lists all comments for an issue or pull request in GitHub's
 // stable API order. The caller uses comment IDs as the exactly-once watermark.
-func (c *GhClient) IssueComments(ctx context.Context, repository Repository, number int) ([]Comment, error) {
+func (c *GhClient) IssueComments(ctx context.Context, repository tracker.Repository, number int) ([]tracker.Comment, error) {
 	if number <= 0 {
 		return nil, errors.New("issue number must be positive")
 	}
@@ -419,7 +177,7 @@ func (c *GhClient) IssueComments(ctx context.Context, repository Repository, num
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
 		return nil, fmt.Errorf("list comments on issue #%d: %w", number, err)
 	}
-	comments := make([]Comment, 0)
+	comments := make([]tracker.Comment, 0)
 	for _, page := range pages {
 		for _, response := range page {
 			comments = append(comments, response.comment())
@@ -431,20 +189,20 @@ func (c *GhClient) IssueComments(ctx context.Context, repository Repository, num
 // FindStatusComment recovers a previously created status comment by its
 // immutable run marker when persistence was interrupted after GitHub mutation.
 // It only returns a marker match authored by the authenticated coordinator.
-func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository, number int, marker string) (Comment, error) {
+func (c *GhClient) FindStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (tracker.Comment, error) {
 	if number <= 0 {
-		return Comment{}, errors.New("issue number must be positive")
+		return tracker.Comment{}, errors.New("issue number must be positive")
 	}
 	if strings.TrimSpace(marker) == "" {
-		return Comment{}, errors.New("status comment marker is required")
+		return tracker.Comment{}, errors.New("status comment marker is required")
 	}
 	coordinator, err := c.AuthenticatedLogin(ctx)
 	if err != nil {
-		return Comment{}, err
+		return tracker.Comment{}, err
 	}
 	var pages [][]commentResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d/comments", repository.String(), number), "--paginate", "--slurp"}, nil, &pages); err != nil {
-		return Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
+		return tracker.Comment{}, fmt.Errorf("find status comment on issue #%d: %w", number, err)
 	}
 	for _, page := range pages {
 		for _, response := range page {
@@ -454,11 +212,11 @@ func (c *GhClient) FindStatusComment(ctx context.Context, repository Repository,
 			}
 		}
 	}
-	return Comment{}, nil
+	return tracker.Comment{}, nil
 }
 
 // EditIssueComment edits an existing issue comment by id.
-func (c *GhClient) EditIssueComment(ctx context.Context, repository Repository, commentID string, body string) error {
+func (c *GhClient) EditIssueComment(ctx context.Context, repository tracker.Repository, commentID string, body string) error {
 	if strings.TrimSpace(commentID) == "" {
 		return errors.New("status comment id is required")
 	}
@@ -470,9 +228,9 @@ func (c *GhClient) EditIssueComment(ctx context.Context, repository Repository, 
 
 // FindPullRequest finds the pull request for one exact source/target branch
 // pair, including closed pull requests so a retry cannot create a duplicate.
-func (c *GhClient) FindPullRequest(ctx context.Context, repository Repository, headBranch, baseBranch string) (PullRequest, error) {
+func (c *GhClient) FindPullRequest(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) (codehost.PullRequest, error) {
 	if err := validatePullRequestBranches(headBranch, baseBranch); err != nil {
-		return PullRequest{}, err
+		return codehost.PullRequest{}, err
 	}
 	args := []string{
 		"api", fmt.Sprintf("repos/%s/pulls", repository.String()),
@@ -484,11 +242,11 @@ func (c *GhClient) FindPullRequest(ctx context.Context, repository Repository, h
 	}
 	output, err := c.callBytes(ctx, args, nil)
 	if err != nil {
-		return PullRequest{}, fmt.Errorf("find pull request for %q: %w", headBranch, err)
+		return codehost.PullRequest{}, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}
 	responses, err := decodeJSONPages[pullRequestResponse](output)
 	if err != nil {
-		return PullRequest{}, fmt.Errorf("decode pull requests for %q: %w", headBranch, err)
+		return codehost.PullRequest{}, fmt.Errorf("decode pull requests for %q: %w", headBranch, err)
 	}
 	for _, response := range responses {
 		pullRequest := response.pullRequest()
@@ -496,13 +254,13 @@ func (c *GhClient) FindPullRequest(ctx context.Context, repository Repository, h
 			return pullRequest, nil
 		}
 	}
-	return PullRequest{}, nil
+	return codehost.PullRequest{}, nil
 }
 
 // CreatePullRequest creates one draft pull request from a pushed run branch.
-func (c *GhClient) CreatePullRequest(ctx context.Context, repository Repository, request PullRequestRequest) (PullRequest, error) {
+func (c *GhClient) CreatePullRequest(ctx context.Context, repository tracker.Repository, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	if err := validatePullRequestRequest(request); err != nil {
-		return PullRequest{}, err
+		return codehost.PullRequest{}, err
 	}
 	var response pullRequestResponse
 	payload := pullRequestCreatePayload{
@@ -510,7 +268,7 @@ func (c *GhClient) CreatePullRequest(ctx context.Context, repository Repository,
 		Base: request.BaseBranch, Draft: request.Draft,
 	}
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls", repository.String()), "--method", "POST"}, payload, &response); err != nil {
-		return PullRequest{}, fmt.Errorf("create draft pull request: %w", err)
+		return codehost.PullRequest{}, fmt.Errorf("create draft pull request: %w", err)
 	}
 	return response.pullRequest(), nil
 }
@@ -518,17 +276,17 @@ func (c *GhClient) CreatePullRequest(ctx context.Context, repository Repository,
 // UpdatePullRequest replaces the complete body and title.
 // It preserves the current state of closed pull requests and does not include
 // the Draft field in PATCH payloads to avoid state conflicts.
-func (c *GhClient) UpdatePullRequest(ctx context.Context, repository Repository, number int, request PullRequestRequest) (PullRequest, error) {
+func (c *GhClient) UpdatePullRequest(ctx context.Context, repository tracker.Repository, number int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	if number <= 0 {
-		return PullRequest{}, errors.New("pull request number must be positive")
+		return codehost.PullRequest{}, errors.New("pull request number must be positive")
 	}
 	if err := validatePullRequestRequest(request); err != nil {
-		return PullRequest{}, err
+		return codehost.PullRequest{}, err
 	}
 	// Fetch current PR state to detect closed pull requests
 	var currentResponse pullRequestResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number)}, nil, &currentResponse); err != nil {
-		return PullRequest{}, fmt.Errorf("fetch pull request #%d state: %w", number, err)
+		return codehost.PullRequest{}, fmt.Errorf("fetch pull request #%d state: %w", number, err)
 	}
 	var response pullRequestResponse
 	payload := pullRequestUpdatePayload{Title: request.Title, Body: request.Body}
@@ -537,38 +295,38 @@ func (c *GhClient) UpdatePullRequest(ctx context.Context, repository Repository,
 		payload.State = "open"
 	}
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number), "--method", "PATCH"}, payload, &response); err != nil {
-		return PullRequest{}, fmt.Errorf("update draft pull request #%d: %w", number, err)
+		return codehost.PullRequest{}, fmt.Errorf("update draft pull request #%d: %w", number, err)
 	}
 	return response.pullRequest(), nil
 }
 
 // SetPullRequestDraft explicitly toggles GitHub readiness through the host CLI
 // and then reads the resulting pull-request projection.
-func (c *GhClient) SetPullRequestDraft(ctx context.Context, repository Repository, number int, draft bool) (PullRequest, error) {
+func (c *GhClient) SetPullRequestDraft(ctx context.Context, repository tracker.Repository, number int, draft bool) (codehost.PullRequest, error) {
 	if number <= 0 {
-		return PullRequest{}, errors.New("pull request number must be positive")
+		return codehost.PullRequest{}, errors.New("pull request number must be positive")
 	}
 	args := []string{"pr", "ready", strconv.Itoa(number), "--repo", repository.String()}
 	if draft {
 		args = append(args, "--undo")
 	}
 	if _, err := c.runner().Run(ctx, args, nil); err != nil {
-		return PullRequest{}, fmt.Errorf("set pull request #%d draft=%t: %w", number, draft, err)
+		return codehost.PullRequest{}, fmt.Errorf("set pull request #%d draft=%t: %w", number, draft, err)
 	}
 	var response pullRequestResponse
 	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number)}, nil, &response); err != nil {
-		return PullRequest{}, fmt.Errorf("read pull request #%d after readiness change: %w", number, err)
+		return codehost.PullRequest{}, fmt.Errorf("read pull request #%d after readiness change: %w", number, err)
 	}
 	return response.pullRequest(), nil
 }
 
 // CreateCommitStatus publishes one deterministic result for an exact commit.
 // The status context is caller-defined but must be stable and single-line.
-func (c *GhClient) CreateCommitStatus(ctx context.Context, repository Repository, status CommitStatus) error {
-	if !ValidCommitSHA(status.SHA) {
+func (c *GhClient) CreateCommitStatus(ctx context.Context, repository tracker.Repository, status codehost.CommitStatus) error {
+	if !codehost.ValidCommitSHA(status.SHA) {
 		return errors.New("commit status SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
 	}
-	if status.State != CommitStatusPending && status.State != CommitStatusSuccess && status.State != CommitStatusFailure && status.State != CommitStatusError {
+	if status.State != codehost.CommitStatusPending && status.State != codehost.CommitStatusSuccess && status.State != codehost.CommitStatusFailure && status.State != codehost.CommitStatusError {
 		return fmt.Errorf("unsupported commit status state %q", status.State)
 	}
 	if strings.TrimSpace(status.Context) == "" || strings.ContainsAny(status.Context, "\r\n") {
@@ -593,8 +351,8 @@ func (c *GhClient) CreateCommitStatus(ctx context.Context, repository Repository
 
 // ListCommitStatuses reads all statuses attached to one exact commit so a
 // pending status effect can be recognized without publishing a duplicate.
-func (c *GhClient) ListCommitStatuses(ctx context.Context, repository Repository, sha string) ([]CommitStatus, error) {
-	if !ValidCommitSHA(sha) {
+func (c *GhClient) ListCommitStatuses(ctx context.Context, repository tracker.Repository, sha string) ([]codehost.CommitStatus, error) {
+	if !codehost.ValidCommitSHA(sha) {
 		return nil, errors.New("commit status SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
 	}
 	output, err := c.callBytes(ctx, []string{"api", fmt.Sprintf("repos/%s/commits/%s/statuses", repository.String(), sha), "--method", "GET", "--paginate", "--slurp"}, nil)
@@ -605,11 +363,11 @@ func (c *GhClient) ListCommitStatuses(ctx context.Context, repository Repository
 	if err != nil {
 		return nil, fmt.Errorf("decode commit statuses for %s: %w", sha, err)
 	}
-	statuses := make([]CommitStatus, 0, len(responses))
+	statuses := make([]codehost.CommitStatus, 0, len(responses))
 	for _, response := range responses {
-		statuses = append(statuses, CommitStatus{
+		statuses = append(statuses, codehost.CommitStatus{
 			SHA:         sha,
-			State:       CommitStatusState(response.State),
+			State:       codehost.CommitStatusState(response.State),
 			Context:     response.Context,
 			Description: response.Description,
 			TargetURL:   response.TargetURL,
@@ -650,21 +408,6 @@ func (c *GhClient) callBytes(ctx context.Context, args []string, payload any) ([
 	return c.runner().Run(ctx, args, input)
 }
 
-// ValidCommitSHA reports whether value is a full 40- or 64-character lowercase
-// hexadecimal commit SHA while rejecting values that could alter a GitHub API path.
-func ValidCommitSHA(value string) bool {
-	if len(value) != 40 && len(value) != 64 {
-		return false
-	}
-	for _, character := range value {
-		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 // issueResponse is the subset of the GitHub issue API response needed by a
 // specification packet.
 type issueResponse struct {
@@ -680,12 +423,12 @@ type issueResponse struct {
 }
 
 // issue converts the GitHub issue response into the adapter-neutral model.
-func (r issueResponse) issue() Issue {
+func (r issueResponse) issue() tracker.Issue {
 	labels := make([]string, 0, len(r.Labels))
 	for _, label := range r.Labels {
 		labels = append(labels, label.Name)
 	}
-	return Issue{
+	return tracker.Issue{
 		Number:        r.Number,
 		Title:         r.Title,
 		Body:          r.Body,
@@ -746,8 +489,8 @@ type commentResponse struct {
 
 // comment converts the GitHub response shape into the coordinator-neutral
 // comment model.
-func (r commentResponse) comment() Comment {
-	return Comment{ID: fmt.Sprint(r.ID), Body: r.Body, Author: r.User.Login, UpdatedAt: r.UpdatedAt}
+func (r commentResponse) comment() tracker.Comment {
+	return tracker.Comment{ID: fmt.Sprint(r.ID), Body: r.Body, Author: r.User.Login, UpdatedAt: r.UpdatedAt}
 }
 
 // pullRequestResponse is the GitHub API subset used by the factory.
@@ -791,8 +534,8 @@ type pullRequestUpdatePayload struct {
 }
 
 // pullRequest converts an API response into the adapter-neutral model.
-func (r pullRequestResponse) pullRequest() PullRequest {
-	return PullRequest{
+func (r pullRequestResponse) pullRequest() codehost.PullRequest {
+	return codehost.PullRequest{
 		Number: r.Number, URL: r.HTMLURL, Title: r.Title, Body: r.Body,
 		State: r.State, Draft: r.Draft, Merged: r.Merged || r.MergedAt != nil,
 		MergeCommitSHA: r.MergeCommitSHA, HeadBranch: r.Head.Ref, HeadSHA: r.Head.SHA, BaseBranch: r.Base.Ref,
@@ -812,7 +555,7 @@ func validatePullRequestBranches(headBranch, baseBranch string) error {
 
 // validatePullRequestRequest validates the fields used by a create or update
 // mutation before invoking the authenticated GitHub CLI.
-func validatePullRequestRequest(request PullRequestRequest) error {
+func validatePullRequestRequest(request codehost.PullRequestRequest) error {
 	if strings.TrimSpace(request.Title) == "" || strings.ContainsAny(request.Title, "\x00\r\n") {
 		return errors.New("pull request title is required and must be a single line")
 	}
@@ -841,14 +584,14 @@ type pullRequestReviewResponse struct {
 // review converts the GitHub response shape into the coordinator-neutral
 // review model. A review GitHub has not submitted has no submission time, and
 // the coordinator uses that absence to ignore an incomplete draft.
-func (r pullRequestReviewResponse) review() PullRequestReview {
-	value := PullRequestReview{
+func (r pullRequestReviewResponse) review() codehost.PullRequestReview {
+	value := codehost.PullRequestReview{
 		ID:       fmt.Sprint(r.ID),
 		Author:   r.User.Login,
-		State:    PullRequestReviewState(strings.ToUpper(strings.TrimSpace(r.State))),
+		State:    codehost.PullRequestReviewState(strings.ToUpper(strings.TrimSpace(r.State))),
 		Body:     r.Body,
 		URL:      r.HTMLURL,
-		Comments: []PullRequestReviewComment{},
+		Comments: []codehost.PullRequestReviewComment{},
 	}
 	if r.SubmittedAt != nil {
 		value.SubmittedAt = *r.SubmittedAt
@@ -867,18 +610,18 @@ type pullRequestReviewCommentResponse struct {
 
 // comment converts one inline review comment into the neutral model, keeping
 // the newer `line` anchor and falling back to the legacy diff position.
-func (r pullRequestReviewCommentResponse) comment() PullRequestReviewComment {
+func (r pullRequestReviewCommentResponse) comment() codehost.PullRequestReviewComment {
 	line := r.Line
 	if line == 0 {
 		line = r.Position
 	}
-	return PullRequestReviewComment{Path: r.Path, Line: line, Body: r.Body}
+	return codehost.PullRequestReviewComment{Path: r.Path, Line: line, Body: r.Body}
 }
 
 // PullRequestReviews lists every submitted review for one pull request,
 // including the inline comments of the reviews that carry them. It is
 // read-only: the factory never submits, approves, or dismisses a review.
-func (c *GhClient) PullRequestReviews(ctx context.Context, repository Repository, number int) ([]PullRequestReview, error) {
+func (c *GhClient) PullRequestReviews(ctx context.Context, repository tracker.Repository, number int) ([]codehost.PullRequestReview, error) {
 	if number <= 0 {
 		return nil, errors.New("pull request number must be positive")
 	}
@@ -893,10 +636,10 @@ func (c *GhClient) PullRequestReviews(ctx context.Context, repository Repository
 	if err != nil {
 		return nil, fmt.Errorf("decode reviews for pull request #%d: %w", number, err)
 	}
-	reviews := make([]PullRequestReview, 0, len(responses))
+	reviews := make([]codehost.PullRequestReview, 0, len(responses))
 	for _, response := range responses {
 		review := response.review()
-		if review.State == PullRequestReviewChangesRequested {
+		if review.State == codehost.PullRequestReviewChangesRequested {
 			comments, commentErr := c.pullRequestReviewComments(ctx, repository, number, response.ID)
 			if commentErr != nil {
 				return nil, commentErr
@@ -909,7 +652,7 @@ func (c *GhClient) PullRequestReviews(ctx context.Context, repository Repository
 }
 
 // pullRequestReviewComments lists the inline findings of one review.
-func (c *GhClient) pullRequestReviewComments(ctx context.Context, repository Repository, number int, reviewID int64) ([]PullRequestReviewComment, error) {
+func (c *GhClient) pullRequestReviewComments(ctx context.Context, repository tracker.Repository, number int, reviewID int64) ([]codehost.PullRequestReviewComment, error) {
 	output, err := c.callBytes(ctx, []string{
 		"api", fmt.Sprintf("repos/%s/pulls/%d/reviews/%d/comments", repository.String(), number, reviewID),
 		"--method", "GET", "--paginate", "--slurp",
@@ -921,7 +664,7 @@ func (c *GhClient) pullRequestReviewComments(ctx context.Context, repository Rep
 	if err != nil {
 		return nil, fmt.Errorf("decode inline comments for review %d: %w", reviewID, err)
 	}
-	comments := make([]PullRequestReviewComment, 0, len(responses))
+	comments := make([]codehost.PullRequestReviewComment, 0, len(responses))
 	for _, response := range responses {
 		comments = append(comments, response.comment())
 	}

@@ -24,7 +24,7 @@ type commandHandler func(context.Context, []string, string, io.Writer, io.Writer
 // the flag and output handling independent from factory construction lets the
 // CLI contract be tested without requiring a live GitHub or worker runtime.
 var authRefreshForCLI = func(ctx context.Context, configPath string, request factory.AuthRefreshRequest) (factory.AuthRefreshResult, error) {
-	return factory.New(configPath).RefreshAuth(ctx, request)
+	return newService(configPath).RefreshAuth(ctx, request)
 }
 
 // commandDefinition associates a user-facing command name with its handler.
@@ -111,7 +111,7 @@ func runBootstrapLabels(ctx context.Context, args []string, defaultConfigPath st
 		writeError(errorsOutput, errors.New("bootstrap-labels does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).BootstrapLabels(ctx)
+	result, err := newService(*configPath).BootstrapLabels(ctx)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -135,7 +135,7 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 		writeError(errorsOutput, errors.New("doctor does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).Doctor(ctx)
+	result, err := newService(*configPath).Doctor(ctx)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -198,7 +198,7 @@ func runStart(ctx context.Context, args []string, defaultConfigPath string, outp
 	if *verbose {
 		events = factory.NewTextEventSink(errorsOutput)
 	}
-	if err := factory.New(*configPath).Start(ctx, events); err != nil {
+	if err := newService(*configPath).Start(ctx, events); err != nil {
 		var blocked *factory.StartupBlockedError
 		if errors.As(err, &blocked) {
 			for _, check := range blocked.Diagnosis.Report.Failures() {
@@ -229,7 +229,7 @@ func runStop(ctx context.Context, args []string, defaultConfigPath string, outpu
 		writeError(errorsOutput, errors.New("stop does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).Stop(ctx)
+	result, err := newService(*configPath).Stop(ctx)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -261,7 +261,7 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 		writeError(errorsOutput, errors.New("resume does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).Resume(ctx, factory.ResumeRequest{RunID: *runID})
+	result, err := newService(*configPath).Resume(ctx, factory.ResumeRequest{RunID: *runID})
 	if result.Invocation.ID != "" {
 		status := "resumed"
 		switch {
@@ -352,7 +352,7 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 		writeError(errorsOutput, errors.New("issue requires a positive issue number"))
 		return 2
 	}
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	result, err := service.ClaimIssue(ctx, issueNumber)
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -393,7 +393,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 		writeError(errorsOutput, errors.New("agent does not accept positional arguments"))
 		return 2
 	}
-	launch, err := factory.New(*configPath).StartAgent(ctx, factory.AgentRequest{
+	launch, err := newService(*configPath).StartAgent(ctx, factory.AgentRequest{
 		RunID:           *runID,
 		Role:            *role,
 		Stage:           store.Stage(*stage),
@@ -435,7 +435,7 @@ func runAgentReport(ctx context.Context, args []string, defaultConfigPath string
 		writeError(errorsOutput, errors.New("agent-report requires --invocation-id"))
 		return 2
 	}
-	result, err := factory.New(*configPath).AcceptAgentReport(ctx, factory.AgentReportRequest{RunID: *runID, InvocationID: *invocationID, PermittedPaths: append([]string(nil), permittedPaths...)})
+	result, err := newService(*configPath).AcceptAgentReport(ctx, factory.AgentReportRequest{RunID: *runID, InvocationID: *invocationID, PermittedPaths: append([]string(nil), permittedPaths...)})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -461,7 +461,7 @@ func runDraftPullRequest(ctx context.Context, args []string, defaultConfigPath s
 		writeError(errorsOutput, errors.New("draft-pr does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).CreateDraftPullRequest(ctx, factory.DraftPullRequestRequest{RunID: *runID, Intervention: *intervention})
+	result, err := newService(*configPath).CreateDraftPullRequest(ctx, factory.DraftPullRequestRequest{RunID: *runID, Intervention: *intervention})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -503,7 +503,7 @@ func runPollCommands(ctx context.Context, args []string, defaultConfigPath strin
 		writeError(errorsOutput, errors.New("poll does not accept positional arguments"))
 		return 2
 	}
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	lifecycle, err := service.PollLifecycle(ctx, factory.LifecycleRequest{RunID: *runID})
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -553,7 +553,7 @@ func runInit(ctx context.Context, args []string, defaultConfigPath string, outpu
 		writeError(errorsOutput, errors.New("init does not accept positional arguments"))
 		return 2
 	}
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	result, err := service.Init(ctx)
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -608,7 +608,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		writeError(errorsOutput, fmt.Errorf("resolve the current directory for registration inference: %w", err))
 		return 1
 	}
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	result, err := service.Register(ctx, factory.RegisterRequest{
 		Update:               *update,
 		RepositoryPath:       *repositoryPath,
@@ -653,7 +653,7 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		writeError(errorsOutput, errors.New("status does not accept positional arguments"))
 		return 2
 	}
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	result, err := service.Status(ctx)
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -774,7 +774,7 @@ func runReconcile(ctx context.Context, args []string, defaultConfigPath string, 
 		writeError(errorsOutput, errors.New("--run-id applies only to --abandon-effect"))
 		return 2
 	}
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	var (
 		result factory.RecoveryResult
 		err    error
@@ -837,7 +837,7 @@ func runEvaluation(ctx context.Context, args []string, defaultConfigPath string,
 		writeError(errorsOutput, errors.New("evaluation does not accept positional arguments"))
 		return 2
 	}
-	result, err := factory.New(*configPath).EvaluationReport(ctx, factory.EvaluationReportRequest{RunID: *runID})
+	result, err := newService(*configPath).EvaluationReport(ctx, factory.EvaluationReportRequest{RunID: *runID})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -914,7 +914,7 @@ func runEvaluationDelete(ctx context.Context, args []string, defaultConfigPath s
 		writeError(errorsOutput, errors.New("evaluation-delete requires --before as an RFC3339 timestamp"))
 		return 2
 	}
-	result, err := factory.New(*configPath).DeleteEvaluation(ctx, factory.EvaluationDeleteRequest{Before: cutoff})
+	result, err := newService(*configPath).DeleteEvaluation(ctx, factory.EvaluationDeleteRequest{Before: cutoff})
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -946,7 +946,7 @@ func runEvaluationDisposition(ctx context.Context, args []string, defaultConfigP
 		writeError(errorsOutput, errors.New("evaluation-disposition requires --run-id, --event-id, --category, and --disposition"))
 		return 2
 	}
-	result, err := factory.New(*configPath).AttachEvaluationDisposition(ctx, factory.EvaluationDispositionRequest{
+	result, err := newService(*configPath).AttachEvaluationDisposition(ctx, factory.EvaluationDispositionRequest{
 		RunID:       *runID,
 		EventID:     *eventID,
 		Category:    store.EvaluationEscalationCategory(*category),
@@ -979,7 +979,7 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		return 2
 	}
 
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	preview, err := service.Cleanup(ctx, factory.CleanupRequest{RunID: *runID})
 	var confirmationErr *factory.CleanupConfirmationRequiredError
 	if err != nil && !errors.As(err, &confirmationErr) {
@@ -1081,7 +1081,7 @@ func runReset(ctx context.Context, args []string, _ string, output, errorsOutput
 		return 2
 	}
 
-	service := factory.New(*configPath)
+	service := newService(*configPath)
 	preview, err := service.Reset(ctx, factory.ResetRequest{})
 	var confirmationErr *factory.ResetConfirmationRequiredError
 	if err != nil && !errors.As(err, &confirmationErr) {

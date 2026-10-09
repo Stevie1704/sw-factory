@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -130,13 +130,13 @@ func sameStringSlice(left, right []string) bool {
 
 // sameCommitStatus compares every semantic field that makes a status replay
 // safe; GitHub may assign its own numeric status identity.
-func sameCommitStatus(left, right github.CommitStatus) bool {
+func sameCommitStatus(left, right codehost.CommitStatus) bool {
 	return left.SHA == right.SHA && left.State == right.State && left.Context == right.Context && left.Description == right.Description && left.TargetURL == right.TargetURL
 }
 
 // samePullRequestRequest suppresses a redundant update after an interrupted
 // create or update has already reached GitHub.
-func samePullRequestRequest(existing github.PullRequest, request github.PullRequestRequest) bool {
+func samePullRequestRequest(existing codehost.PullRequest, request codehost.PullRequestRequest) bool {
 	return existing.Title == request.Title && existing.Body == request.Body && existing.Draft == request.Draft &&
 		existing.HeadBranch == request.HeadBranch && existing.BaseBranch == request.BaseBranch
 }

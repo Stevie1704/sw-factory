@@ -10,6 +10,8 @@ The lease is now the description of one closed milestone titled `factory coordin
 
 The host lock remains the ownership authority. The GitHub lease is a diagnostic projection, not distributed fencing.
 
+ADR 0018 makes the coordinator lease optional per adapter. This decision applies to the GitHub adapter only.
+
 ## Considered options
 
 - Rotate status contexts, or attach statuses to new commits. Rejected: this only delays the cap and leaves an unbounded stream of statuses.

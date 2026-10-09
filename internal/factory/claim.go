@@ -12,9 +12,9 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -39,7 +39,7 @@ type Clarification struct {
 // configuration captured when a run is claimed or intentionally refreshed.
 type SpecificationPacket struct {
 	Version          int                     `json:"version"`
-	Issue            github.Issue            `json:"issue"`
+	Issue            tracker.Issue           `json:"issue"`
 	RepositoryConfig config.RepositoryConfig `json:"repository_config"`
 	// RepositoryGuidance contains checked-in guidance captured at the run's
 	// immutable base checkpoint and later presented as untrusted prompt input.
@@ -61,7 +61,7 @@ type SpecificationPacket struct {
 
 // BootstrapLabelsResult reports the labels explicitly created for a repository.
 type BootstrapLabelsResult struct {
-	Repository github.Repository
+	Repository tracker.Repository
 	Labels     []string
 }
 
@@ -80,23 +80,23 @@ type TransitionRequest struct {
 }
 
 // factoryLabels is the sole factory-owned label definition set.
-var factoryLabels = []github.Label{
-	{Name: github.LabelAgentReady, Description: "Issue is explicitly authorized for factory work", Color: "0e8a16"},
-	{Name: github.LabelAgentRunning, Description: "Factory run is active", Color: "1d76db"},
-	{Name: github.LabelAgentNeedsInput, Description: "Factory run is waiting for human input", Color: "fbca04"},
-	{Name: github.LabelAgentFailed, Description: "Factory run failed and needs attention", Color: "b60205"},
-	{Name: github.LabelAgentCancelled, Description: "Factory run was cancelled", Color: "6f42c1"},
-	{Name: github.LabelAgentComplete, Description: "Factory run completed", Color: "5319e7"},
+var factoryLabels = []tracker.Label{
+	{Name: tracker.LabelAgentReady, Description: "Issue is explicitly authorized for factory work", Color: "0e8a16"},
+	{Name: tracker.LabelAgentRunning, Description: "Factory run is active", Color: "1d76db"},
+	{Name: tracker.LabelAgentNeedsInput, Description: "Factory run is waiting for human input", Color: "fbca04"},
+	{Name: tracker.LabelAgentFailed, Description: "Factory run failed and needs attention", Color: "b60205"},
+	{Name: tracker.LabelAgentCancelled, Description: "Factory run was cancelled", Color: "6f42c1"},
+	{Name: tracker.LabelAgentComplete, Description: "Factory run completed", Color: "5319e7"},
 }
 
 // factoryLabelByStatus maps orthogonal status values to product labels.
 var factoryLabelByStatus = map[store.Status]string{
-	store.StatusActive:            github.LabelAgentRunning,
-	store.StatusWaitingForHarness: github.LabelAgentRunning,
-	store.StatusWaitingForHuman:   github.LabelAgentNeedsInput,
-	store.StatusFailed:            github.LabelAgentFailed,
-	store.StatusCancelled:         github.LabelAgentCancelled,
-	store.StatusComplete:          github.LabelAgentComplete,
+	store.StatusActive:            tracker.LabelAgentRunning,
+	store.StatusWaitingForHarness: tracker.LabelAgentRunning,
+	store.StatusWaitingForHuman:   tracker.LabelAgentNeedsInput,
+	store.StatusFailed:            tracker.LabelAgentFailed,
+	store.StatusCancelled:         tracker.LabelAgentCancelled,
+	store.StatusComplete:          tracker.LabelAgentComplete,
 }
 
 // validStatuses contains the independent statuses accepted by transitions.
@@ -112,9 +112,9 @@ func (s *Service) BootstrapLabels(ctx context.Context) (BootstrapLabelsResult, e
 	if err != nil {
 		return BootstrapLabelsResult{}, err
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	for _, label := range factoryLabels {
-		if err := s.deps.GitHub.CreateLabel(ctx, repository, label); err != nil {
+		if err := s.deps.Tracker.CreateLabel(ctx, repository, label); err != nil {
 			return BootstrapLabelsResult{}, err
 		}
 	}
@@ -144,12 +144,12 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err := harness.ValidateNativeResumeCapabilities(repositoryConfig, s.deps.HarnessCapabilities); err != nil {
 		return IssueResult{}, fmt.Errorf("validate harness capabilities before claim: %w", err)
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	if current != nil {
 		return IssueResult{}, fmt.Errorf("an active run already exists: %s", current.ID)
 	}
 
-	issue, err := s.deps.GitHub.Issue(ctx, repository, issueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, issueNumber)
 	if err != nil {
 		return IssueResult{}, err
 	}
@@ -165,8 +165,8 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if !strings.EqualFold(strings.TrimSpace(issue.State), "open") {
 		return IssueResult{}, fmt.Errorf("issue #%d is %s; only open issues can be claimed", issueNumber, defaultString(issue.State, "not open"))
 	}
-	if !hasLabel(issue.Labels, github.LabelAgentReady) {
-		return IssueResult{}, fmt.Errorf("issue #%d is not labeled %q", issueNumber, github.LabelAgentReady)
+	if !hasLabel(issue.Labels, tracker.LabelAgentReady) {
+		return IssueResult{}, fmt.Errorf("issue #%d is not labeled %q", issueNumber, tracker.LabelAgentReady)
 	}
 	if conflictingFactoryLabel(issue.Labels) {
 		return IssueResult{}, fmt.Errorf("issue #%d has another factory state label", issueNumber)
@@ -275,7 +275,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 // claimCommentWatermark captures the latest existing issue comment before a
 // run can receive commands. Every claimed run accepts commands, so the reader
 // must be available before the claim creates any durable or external effects.
-func (s *Service) claimCommentWatermark(ctx context.Context, repository github.Repository, issueNumber int) (string, error) {
+func (s *Service) claimCommentWatermark(ctx context.Context, repository tracker.Repository, issueNumber int) (string, error) {
 	if s.deps.Comments == nil {
 		return "", errors.New("GitHub comment reader is required to establish the command cutoff before claim")
 	}
@@ -348,13 +348,13 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	if err := s.ensureTransitionBaseline(ctx, runStore, *run, request); err != nil {
 		return store.Run{}, err
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return store.Run{}, err
 	}
 	if run.StatusCommentID == "" {
-		comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
+		comment, err := s.deps.Tracker.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
 		if err != nil {
 			return store.Run{}, err
 		}
@@ -763,7 +763,7 @@ func (s *Service) ensureLegacyAgentStartup(ctx context.Context, registration con
 
 // failClaim records a terminal failure and best-effort moves the issue label
 // away from running so a partial claim is visible and retryable.
-func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Run, repository github.Repository, issue github.Issue, cause error) (IssueResult, error) {
+func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Run, repository tracker.Repository, issue tracker.Issue, cause error) (IssueResult, error) {
 	if journal, journaled := runStore.(PendingEffectStore); journaled {
 		// Claim failure owns the partially created run. Abandon the in-flight
 		// success transition before recording failure, otherwise a restart
@@ -811,10 +811,10 @@ func (s *Service) failClaim(ctx context.Context, runStore RunStore, run store.Ru
 	run.Status = store.StatusFailed
 	run.UpdatedAt = s.deps.Now().UTC()
 	compensationErrors := []error{
-		s.deps.GitHub.ReplaceIssueLabels(ctx, repository, run.IssueNumber, replaceFactoryState(issue.Labels, github.LabelAgentFailed)),
+		s.deps.Tracker.ReplaceIssueLabels(ctx, repository, run.IssueNumber, replaceFactoryState(issue.Labels, tracker.LabelAgentFailed)),
 	}
 	if run.StatusCommentID != "" {
-		compensationErrors = append(compensationErrors, s.deps.GitHub.EditIssueComment(ctx, repository, run.StatusCommentID, statusCommentBody(run)))
+		compensationErrors = append(compensationErrors, s.deps.Tracker.EditIssueComment(ctx, repository, run.StatusCommentID, statusCommentBody(run)))
 	}
 	if err := runStore.SaveRun(ctx, run); err != nil {
 		compensationErrors = append(compensationErrors, fmt.Errorf("persist failed claim: %w", err))
@@ -1073,7 +1073,7 @@ func factoryLabelForStatus(status store.Status) string {
 	if label, ok := factoryLabelByStatus[status]; ok {
 		return label
 	}
-	return github.LabelAgentRunning
+	return tracker.LabelAgentRunning
 }
 
 // validateStage rejects values outside the factory-owned workflow registry.
@@ -1105,7 +1105,7 @@ func hasLabel(labels []string, wanted string) bool {
 // conflictingFactoryLabel rejects an issue already owned by another run state.
 func conflictingFactoryLabel(labels []string) bool {
 	for _, label := range labels {
-		if label != github.LabelAgentReady && hasLabel(github.FactoryStateLabels, label) {
+		if label != tracker.LabelAgentReady && hasLabel(tracker.FactoryStateLabels, label) {
 			return true
 		}
 	}
@@ -1118,7 +1118,7 @@ func replaceFactoryState(labels []string, state string) []string {
 	result := make([]string, 0, len(labels)+1)
 	seen := make(map[string]struct{}, len(labels)+1)
 	for _, label := range labels {
-		if hasLabel(github.FactoryStateLabels, label) {
+		if hasLabel(tracker.FactoryStateLabels, label) {
 			continue
 		}
 		if _, exists := seen[label]; exists {
@@ -1134,7 +1134,7 @@ func replaceFactoryState(labels []string, state string) []string {
 }
 
 // cloneIssue copies the mutable label slice before freezing the packet.
-func cloneIssue(issue github.Issue) github.Issue {
+func cloneIssue(issue tracker.Issue) tracker.Issue {
 	issue.Labels = append([]string(nil), issue.Labels...)
 	return issue
 }

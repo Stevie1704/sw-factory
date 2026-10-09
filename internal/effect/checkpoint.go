@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // checkpointHandler owns the checkpoint commit and the run projection that
@@ -24,13 +25,13 @@ type checkpointHandler struct {
 // Checkpoint makes a checkpoint commit and the immediate run projection one
 // restart-safe operation. The marker in the Git adapter handles a commit that
 // was created just before the process stopped.
-func (j *Journal) Checkpoint(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
+func (j *Journal) Checkpoint(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository tracker.Repository, issue tracker.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
 	handler := mustApplyHandler[checkpointHandler](j.dispatcher, store.PendingEffectKindCheckpoint)
 	return handler.commit(ctx, runStore, request, repository, issue, previous, nextTemplate)
 }
 
 // commit reserves the checkpoint, creates it, and persists its projection.
-func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository github.Repository, issue github.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
+func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, request gitadapter.CheckpointRequest, repository tracker.Repository, issue tracker.Issue, previous, nextTemplate store.Run) (gitadapter.CheckpointResult, store.Run, error) {
 	if err := validateRunBeforeEffect(store.PendingEffectKindCheckpoint, nextTemplate); err != nil {
 		return gitadapter.CheckpointResult{}, nextTemplate, err
 	}
@@ -59,7 +60,7 @@ func (h checkpointHandler) commit(ctx context.Context, runStore RunStore, reques
 		if err != nil {
 			return fmt.Errorf("create checkpoint: %w", err)
 		}
-		if !github.ValidCommitSHA(checkpoint.SHA) {
+		if !codehost.ValidCommitSHA(checkpoint.SHA) {
 			return errors.New("GitWorkspace returned an invalid checkpoint SHA")
 		}
 		next.AcceptedImplementationCheckpointSHA = ""
@@ -131,7 +132,7 @@ func (h checkpointHandler) Replay(ctx context.Context, request replayRequest) (s
 	if err != nil {
 		return store.Run{}, fmt.Errorf("replay checkpoint: %w", err)
 	}
-	if !github.ValidCommitSHA(checkpoint.SHA) {
+	if !codehost.ValidCommitSHA(checkpoint.SHA) {
 		return store.Run{}, errors.New("replayed checkpoint returned an invalid SHA")
 	}
 	next := payload.Next

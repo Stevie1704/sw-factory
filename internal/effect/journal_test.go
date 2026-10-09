@@ -10,12 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -167,45 +168,45 @@ var errExternal = errors.New("external mutation unavailable")
 type journalIssuesForTest struct{}
 
 // Issue returns the injected external failure.
-func (journalIssuesForTest) Issue(context.Context, github.Repository, int) (github.Issue, error) {
-	return github.Issue{}, errExternal
+func (journalIssuesForTest) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
+	return tracker.Issue{}, errExternal
 }
 
 // ReplaceIssueLabels returns the injected external failure.
-func (journalIssuesForTest) ReplaceIssueLabels(context.Context, github.Repository, int, []string) error {
+func (journalIssuesForTest) ReplaceIssueLabels(context.Context, tracker.Repository, int, []string) error {
 	return errExternal
 }
 
 // CreateIssueComment returns the injected external failure.
-func (journalIssuesForTest) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errExternal
+func (journalIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errExternal
 }
 
 // FindStatusComment returns the injected external failure.
-func (journalIssuesForTest) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errExternal
+func (journalIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errExternal
 }
 
 // EditIssueComment returns the injected external failure.
-func (journalIssuesForTest) EditIssueComment(context.Context, github.Repository, string, string) error {
+func (journalIssuesForTest) EditIssueComment(context.Context, tracker.Repository, string, string) error {
 	return errExternal
 }
 
 // recoveringLabelIssuesForTest mutates its label projection before returning
 // one lost-response error.
 type recoveringLabelIssuesForTest struct {
-	issue        github.Issue
+	issue        tracker.Issue
 	failOnce     bool
 	replacements int
 }
 
 // Issue returns the current label projection.
-func (i *recoveringLabelIssuesForTest) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+func (i *recoveringLabelIssuesForTest) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
 	return i.issue, nil
 }
 
 // ReplaceIssueLabels applies labels and optionally loses the first response.
-func (i *recoveringLabelIssuesForTest) ReplaceIssueLabels(_ context.Context, _ github.Repository, _ int, labels []string) error {
+func (i *recoveringLabelIssuesForTest) ReplaceIssueLabels(_ context.Context, _ tracker.Repository, _ int, labels []string) error {
 	i.issue.Labels = append([]string(nil), labels...)
 	i.replacements++
 	if i.failOnce {
@@ -216,17 +217,17 @@ func (i *recoveringLabelIssuesForTest) ReplaceIssueLabels(_ context.Context, _ g
 }
 
 // CreateIssueComment is unused by the label handler.
-func (*recoveringLabelIssuesForTest) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected comment creation")
+func (*recoveringLabelIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected comment creation")
 }
 
 // FindStatusComment is unused by the label handler.
-func (*recoveringLabelIssuesForTest) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected status-comment read")
+func (*recoveringLabelIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected status-comment read")
 }
 
 // EditIssueComment is unused by the label handler.
-func (*recoveringLabelIssuesForTest) EditIssueComment(context.Context, github.Repository, string, string) error {
+func (*recoveringLabelIssuesForTest) EditIssueComment(context.Context, tracker.Repository, string, string) error {
 	return errors.New("unexpected status-comment edit")
 }
 
@@ -267,25 +268,25 @@ func (journalWorkspaceForTest) SynchronizeBase(context.Context, gitadapter.BaseS
 type journalPullRequestsForTest struct{}
 
 // FindPullRequest returns the injected external failure.
-func (journalPullRequestsForTest) FindPullRequest(context.Context, github.Repository, string, string) (github.PullRequest, error) {
-	return github.PullRequest{}, errExternal
+func (journalPullRequestsForTest) FindPullRequest(context.Context, tracker.Repository, string, string) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, errExternal
 }
 
 // CreatePullRequest returns the injected external failure.
-func (journalPullRequestsForTest) CreatePullRequest(context.Context, github.Repository, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, errExternal
+func (journalPullRequestsForTest) CreatePullRequest(context.Context, tracker.Repository, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, errExternal
 }
 
 // UpdatePullRequest returns the injected external failure.
-func (journalPullRequestsForTest) UpdatePullRequest(context.Context, github.Repository, int, github.PullRequestRequest) (github.PullRequest, error) {
-	return github.PullRequest{}, errExternal
+func (journalPullRequestsForTest) UpdatePullRequest(context.Context, tracker.Repository, int, codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	return codehost.PullRequest{}, errExternal
 }
 
 // journalStatusesForTest fails every commit-status publication.
 type journalStatusesForTest struct{}
 
 // CreateCommitStatus returns the injected external failure.
-func (journalStatusesForTest) CreateCommitStatus(context.Context, github.Repository, github.CommitStatus) error {
+func (journalStatusesForTest) CreateCommitStatus(context.Context, tracker.Repository, codehost.CommitStatus) error {
 	return errExternal
 }
 
@@ -374,33 +375,33 @@ func (h *responseLossHarness) FinishHeadless(context.Context, harness.Session) e
 
 // convergedIssuesForTest exposes an already-current GitHub projection.
 type convergedIssuesForTest struct {
-	issue   github.Issue
-	comment github.Comment
+	issue   tracker.Issue
+	comment tracker.Comment
 }
 
 // Issue returns the current issue projection.
-func (i *convergedIssuesForTest) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+func (i *convergedIssuesForTest) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
 	return i.issue, nil
 }
 
 // ReplaceIssueLabels accepts an already-converged label projection.
-func (i *convergedIssuesForTest) ReplaceIssueLabels(_ context.Context, _ github.Repository, _ int, labels []string) error {
+func (i *convergedIssuesForTest) ReplaceIssueLabels(_ context.Context, _ tracker.Repository, _ int, labels []string) error {
 	i.issue.Labels = append([]string(nil), labels...)
 	return nil
 }
 
 // CreateIssueComment is unused when the status comment already exists.
-func (*convergedIssuesForTest) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected comment creation")
+func (*convergedIssuesForTest) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected comment creation")
 }
 
 // FindStatusComment returns the existing coordinator-owned projection.
-func (i *convergedIssuesForTest) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+func (i *convergedIssuesForTest) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
 	return i.comment, nil
 }
 
 // EditIssueComment updates the fixture's status body.
-func (i *convergedIssuesForTest) EditIssueComment(_ context.Context, _ github.Repository, _ string, body string) error {
+func (i *convergedIssuesForTest) EditIssueComment(_ context.Context, _ tracker.Repository, _ string, body string) error {
 	i.comment.Body = body
 	return nil
 }
@@ -499,7 +500,7 @@ func TestJournalLabelApplyReplaysALostResponse(t *testing.T) {
 	run := journalRunForTest()
 	runStore := &journalStoreForTest{run: run}
 	issues := &recoveringLabelIssuesForTest{
-		issue:    github.Issue{Number: run.IssueNumber, Labels: []string{"old"}},
+		issue:    tracker.Issue{Number: run.IssueNumber, Labels: []string{"old"}},
 		failOnce: true,
 	}
 	journal := effect.New(effect.Adapters{
@@ -507,7 +508,7 @@ func TestJournalLabelApplyReplaysALostResponse(t *testing.T) {
 		Issues:    issues,
 		Projector: journalProjectorForTest{run: run},
 	})
-	repository := github.Repository{Owner: "example", Name: "project"}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
 	labels := []string{"ordinary", "agent-failed"}
 	if err := journal.ApplyLabels(ctx, runStore, run.ID, repository, run.IssueNumber, labels); !errors.Is(err, errExternal) {
 		t.Fatalf("ApplyLabels() error = %v, want lost response", err)
@@ -539,15 +540,15 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 		ID: "inv-1", RunID: run.ID, Role: "implementation", Stage: store.StageImplementation,
 		Status: store.InvocationStatusCompleted, Harness: "codex", RecoveryResumeCount: 2, ManualResumeCount: 2,
 	}
-	repository := github.Repository{Owner: "example", Name: "project"}
-	issue := github.Issue{Number: run.IssueNumber}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
+	issue := tracker.Issue{Number: run.IssueNumber}
 	pushRequest := gitadapter.PushRequest{WorktreePath: "/worktree", Branch: "factory/run-effects"}
 	checkpointRequest := gitadapter.CheckpointRequest{
 		RunID: run.ID, WorktreePath: "/worktree", ParentSHA: "parent",
 		Kind: gitadapter.CheckpointKindImplementation, Paths: []string{"a", "b"}, Message: "checkpoint",
 	}
-	pullRequest := github.PullRequestRequest{Title: "title", Body: "body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
-	status := github.CommitStatus{SHA: "checkpoint", State: github.CommitStatusSuccess, Context: "factory/test", Description: "passed"}
+	pullRequest := codehost.PullRequestRequest{Title: "title", Body: "body", HeadBranch: "factory/run-effects", BaseBranch: "main", Draft: true}
+	status := codehost.CommitStatus{SHA: "checkpoint", State: codehost.CommitStatusSuccess, Context: "factory/test", Description: "passed"}
 	workerRequest := worker.StartRequest{RunID: run.ID, Role: "implementation", InvocationPath: "/invocation", ResultPath: "/result"}
 	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, Role: invocation.Role}
 
@@ -779,8 +780,8 @@ func TestResultAcceptanceReplayDoesNotRepeatFinalization(t *testing.T) {
 	runStore := &journalStoreForTest{run: run, invocation: invocation}
 	runtime := &responseLossHarness{failOnce: true}
 	issues := &convergedIssuesForTest{
-		issue:   github.Issue{Number: run.IssueNumber, Labels: []string{string(next.Status)}},
-		comment: github.Comment{ID: next.StatusCommentID, Body: journalPresentationForTest{}.StatusCommentBody(next)},
+		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{string(next.Status)}},
+		comment: tracker.Comment{ID: next.StatusCommentID, Body: journalPresentationForTest{}.StatusCommentBody(next)},
 	}
 	journal := effect.New(effect.Adapters{
 		Now: func() time.Time { return time.Unix(10, 0).UTC() }, Issues: issues,
@@ -789,7 +790,7 @@ func TestResultAcceptanceReplayDoesNotRepeatFinalization(t *testing.T) {
 	})
 
 	_, _, err := journal.AcceptResult(ctx, runStore, runStore, effect.ResultAcceptance{
-		Repository: github.Repository{Owner: "example", Name: "project"}, Harness: runtime,
+		Repository: tracker.Repository{Owner: "example", Name: "project"}, Harness: runtime,
 		Session:    harness.Session{InvocationID: invocation.ID, NativeSessionID: invocation.NativeSessionID},
 		Invocation: accepted, Previous: run, Next: next,
 		Report: report.Report{SchemaVersion: report.SchemaVersion, InvocationID: invocation.ID, RunID: run.ID},

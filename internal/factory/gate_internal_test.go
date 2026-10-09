@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -190,8 +190,8 @@ func finalGateFixture(t *testing.T) (checkpointFiles, store.Run, SpecificationPa
 		t.Fatalf("final fingerprint: %v", err)
 	}
 	results := []store.GateResult{
-		{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "required", Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: true, SetupFingerprint: fingerprint},
-		{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 1, GateName: "advisory", Outcome: store.GateOutcomeFailed, Status: string(github.CommitStatusFailure), Blocking: false, SetupFingerprint: fingerprint},
+		{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "required", Outcome: store.GateOutcomePassed, Status: string(codehost.CommitStatusSuccess), Blocking: true, SetupFingerprint: fingerprint},
+		{RunID: run.ID, CheckpointSHA: run.CheckpointSHA, Phase: store.GatePhaseCheckpoint, Ordinal: 1, GateName: "advisory", Outcome: store.GateOutcomeFailed, Status: string(codehost.CommitStatusFailure), Blocking: false, SetupFingerprint: fingerprint},
 	}
 	return files, run, packet, results
 }
@@ -217,27 +217,27 @@ func TestFinalReadinessRejectsUnacceptableGateResults(t *testing.T) {
 		want   string
 	}{
 		{"failed required gate", func(r []store.GateResult) []store.GateResult {
-			r[0].Outcome, r[0].Status = store.GateOutcomeFailed, string(github.CommitStatusFailure)
+			r[0].Outcome, r[0].Status = store.GateOutcomeFailed, string(codehost.CommitStatusFailure)
 			return r
 		}, `"required" has outcome "failed"`},
 		{"required gate skipped after an advisory prerequisite failed", func(r []store.GateResult) []store.GateResult {
-			r[0].Outcome, r[0].Status = store.GateOutcomeSkipped, string(github.CommitStatusPending)
+			r[0].Outcome, r[0].Status = store.GateOutcomeSkipped, string(codehost.CommitStatusPending)
 			return r
 		}, `"required" has outcome "skipped"`},
 		{"advisory runtime error", func(r []store.GateResult) []store.GateResult {
-			r[1].Outcome, r[1].Status = store.GateOutcomeError, string(github.CommitStatusError)
+			r[1].Outcome, r[1].Status = store.GateOutcomeError, string(codehost.CommitStatusError)
 			return r
 		}, `"advisory" has outcome "error"`},
 		{"advisory setup failure", func(r []store.GateResult) []store.GateResult {
-			r[1].Outcome, r[1].Status = store.GateOutcomeSetupFailed, string(github.CommitStatusError)
+			r[1].Outcome, r[1].Status = store.GateOutcomeSetupFailed, string(codehost.CommitStatusError)
 			return r
 		}, `"advisory" has outcome "setup_failed"`},
 		{"advisory skip", func(r []store.GateResult) []store.GateResult {
-			r[1].Outcome, r[1].Status = store.GateOutcomeSkipped, string(github.CommitStatusError)
+			r[1].Outcome, r[1].Status = store.GateOutcomeSkipped, string(codehost.CommitStatusError)
 			return r
 		}, `"advisory" has outcome "skipped"`},
 		{"advisory failure with a fabricated success status", func(r []store.GateResult) []store.GateResult {
-			r[1].Status = string(github.CommitStatusSuccess)
+			r[1].Status = string(codehost.CommitStatusSuccess)
 			return r
 		}, `"advisory" has status "success"`},
 		{"missing advisory result", func(r []store.GateResult) []store.GateResult {

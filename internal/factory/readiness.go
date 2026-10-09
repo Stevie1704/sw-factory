@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // reviewReadinessEligible reports whether the complete review round has passed
@@ -44,7 +45,7 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	if client == nil {
 		return run, errors.New("GitHub client does not support pull-request operations")
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return run, fmt.Errorf("find pull request before readiness: %w", err)
@@ -138,7 +139,7 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 // rejectUnreviewedPullRequestHead keeps a mismatched remote head non-ready and
 // retryable. It retries the compensating draft transition after a coordinator
 // restart, covering both a concurrent push and a crash after readiness changed.
-func (s *Service) rejectUnreviewedPullRequestHead(ctx context.Context, repository github.Repository, existing github.PullRequest, checkpointSHA string) error {
+func (s *Service) rejectUnreviewedPullRequestHead(ctx context.Context, repository tracker.Repository, existing codehost.PullRequest, checkpointSHA string) error {
 	mismatch := fmt.Errorf("pull request #%d head %q does not match reviewed checkpoint %q", existing.Number, existing.HeadSHA, checkpointSHA)
 	if existing.Draft {
 		return mismatch
@@ -178,26 +179,26 @@ func (s *Service) retryReviewReadiness(ctx context.Context, runID string) error 
 // setPullRequestDraft toggles readiness through the dedicated adapter when
 // available and retains an update-body fallback for older test/embedding
 // clients.
-func (s *Service) setPullRequestDraft(ctx context.Context, repository github.Repository, existing github.PullRequest, draft bool) (github.PullRequest, error) {
+func (s *Service) setPullRequestDraft(ctx context.Context, repository tracker.Repository, existing codehost.PullRequest, draft bool) (codehost.PullRequest, error) {
 	if existing.Draft == draft {
 		return existing, nil
 	}
 	client := s.pullRequestClient()
-	if draftClient, ok := client.(github.PullRequestDraftClient); ok {
+	if draftClient, ok := client.(codehost.PullRequestDraftClient); ok {
 		updated, err := draftClient.SetPullRequestDraft(ctx, repository, existing.Number, draft)
 		if err != nil {
-			return github.PullRequest{}, fmt.Errorf("set pull request #%d draft=%t: %w", existing.Number, draft, err)
+			return codehost.PullRequest{}, fmt.Errorf("set pull request #%d draft=%t: %w", existing.Number, draft, err)
 		}
 		if updated.Number == 0 {
-			return github.PullRequest{}, fmt.Errorf("set pull request #%d draft=%t returned no pull-request identity", existing.Number, draft)
+			return codehost.PullRequest{}, fmt.Errorf("set pull request #%d draft=%t returned no pull-request identity", existing.Number, draft)
 		}
 		return updated, nil
 	}
-	updated, err := client.UpdatePullRequest(ctx, repository, existing.Number, github.PullRequestRequest{
+	updated, err := client.UpdatePullRequest(ctx, repository, existing.Number, codehost.PullRequestRequest{
 		Title: existing.Title, Body: existing.Body, HeadBranch: existing.HeadBranch, BaseBranch: existing.BaseBranch, Draft: draft,
 	})
 	if err != nil {
-		return github.PullRequest{}, fmt.Errorf("fallback pull-request readiness update #%d: %w", existing.Number, err)
+		return codehost.PullRequest{}, fmt.Errorf("fallback pull-request readiness update #%d: %w", existing.Number, err)
 	}
 	if updated.Number == 0 {
 		updated = existing

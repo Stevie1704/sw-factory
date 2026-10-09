@@ -27,7 +27,7 @@ func TestFactoryInitializesRegistersAndReportsAnEmptyRunStore(t *testing.T) {
 	}
 	writeRepositoryConfig(t, repositoryPath)
 	operationalPath := filepath.Join(root, "state", "factory.db")
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 
 	initialized, err := service.Init(context.Background())
 	if err != nil {
@@ -69,7 +69,7 @@ func TestFactoryRefusesAnInvalidRegistrationBeforePersistingIt(t *testing.T) {
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestFactoryRefusesAnOperationalStoreInsideTheRepositoryCheckout(t *testing.
 		t.Fatal(err)
 	}
 	writeRepositoryConfig(t, repositoryPath)
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestFactoryRefusesASymlinkedOperationalStoreInsideTheRepositoryCheckout(t *
 	if err := os.Symlink(repositoryPath, aliasPath); err != nil {
 		t.Fatal(err)
 	}
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestFactoryStatusRefusesAHandEditedOperationalStoreInsideTheRepositoryCheck
 		t.Fatal(err)
 	}
 
-	_, err := factory.New(configPath).Status(context.Background())
+	_, err := factory.NewWithDependencies(configPath, factory.Dependencies{}).Status(context.Background())
 	var validationErr *config.ValidationError
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("error = %v, want ValidationError", err)
@@ -201,7 +201,7 @@ func TestFactoryRefusesAnInvalidRepositoryConfigurationBeforePersistingRegistrat
 	if err := os.WriteFile(filepath.Join(repositoryPath, config.RepositoryConfigFileName), []byte("schema_version: 99\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestServiceInitFailsWhenTheConfigurationAlreadyExists(t *testing.T) {
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatalf("first Init() error = %v", err)
 	}
@@ -392,7 +392,7 @@ func TestServiceRegisterFailsWhenARepositoryIsAlreadyRegistered(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeRepositoryConfig(t, repositoryPath)
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestServiceRegisterUpdatesCredentialSourcesForAMatchingRepository(t *testin
 	writeRepositoryConfig(t, repositoryPath)
 	operationalPath := filepath.Join(root, "state", "factory.db")
 	originalClaudeAuthPath := filepath.Join(root, "credentials", "original-claude-credentials.json")
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +491,7 @@ func TestServiceRegisterRejectsCredentialUpdatesForADifferentRepository(t *testi
 		}
 		writeRepositoryConfig(t, repositoryPath)
 	}
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestServiceRegisterRequiresCredentialSourcesForAnUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeRepositoryConfig(t, repositoryPath)
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +561,7 @@ func TestServiceRegisterUsesDefaultOperationalAndRepositoryConfigPathsWhenNotPro
 		t.Fatal(err)
 	}
 	writeRepositoryConfig(t, repositoryPath)
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +599,7 @@ func TestServiceRegisterAppliesDefaultPollingValuesWhenOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeRepositoryConfig(t, repositoryPath)
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func TestServiceRegisterRejectsARepositoryConfigPathOutsideTheRepositoryCheckout
 	if err := os.MkdirAll(filepath.Dir(outsidePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +664,7 @@ func TestServiceRegisterRejectsANonexistentRepositoryPath(t *testing.T) {
 
 	root := t.TempDir()
 	configPath := filepath.Join(root, "host", "config.yaml")
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestServiceRegisterRejectsARepositoryPathThatIsAFile(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +819,7 @@ func TestServiceStatusReturnsAnEmptyResultWhenNoRepositoryIsRegistered(t *testin
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	service := factory.New(configPath)
+	service := factory.NewWithDependencies(configPath, factory.Dependencies{})
 	if _, err := service.Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}

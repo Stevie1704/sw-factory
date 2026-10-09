@@ -9,7 +9,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
-	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestCoordinatorLockPreventsASecondOwner verifies the host lock is enforced
@@ -159,7 +159,7 @@ func (c lockTestConfig) Create(string) (config.HostConfig, error) { return c.hos
 type lockTestIssuePoller struct{}
 
 // ListEligibleIssues returns an empty queue.
-func (lockTestIssuePoller) ListEligibleIssues(context.Context, github.Repository) ([]github.Issue, error) {
+func (lockTestIssuePoller) ListEligibleIssues(context.Context, tracker.Repository) ([]tracker.Issue, error) {
 	return nil, nil
 }
 
@@ -167,4 +167,4 @@ func (lockTestIssuePoller) ListEligibleIssues(context.Context, github.Repository
 type lockTestLease struct{}
 
 // RenewLease accepts the fixture heartbeat.
-func (lockTestLease) RenewLease(context.Context, github.Repository, github.Lease) error { return nil }
+func (lockTestLease) RenewLease(context.Context, tracker.Repository, tracker.Lease) error { return nil }

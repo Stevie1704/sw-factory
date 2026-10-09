@@ -13,13 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -37,7 +38,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if launch.Invocation.Role != "spec_review" || launch.Invocation.Stage != store.StageReview {
 		t.Fatalf("review invocation = %#v, want spec_review/review", launch.Invocation)
 	}
-	if len(fixture.statuses.values) != 1 || fixture.statuses.values[0].State != github.CommitStatusPending || fixture.statuses.values[0].SHA != reviewCheckpoint || fixture.statuses.values[0].Context != factory.SpecificationReviewStatusContext {
+	if len(fixture.statuses.values) != 1 || fixture.statuses.values[0].State != codehost.CommitStatusPending || fixture.statuses.values[0].SHA != reviewCheckpoint || fixture.statuses.values[0].Context != factory.SpecificationReviewStatusContext {
 		t.Fatalf("review statuses after launch = %#v, want pending exact-checkpoint status", fixture.statuses.values)
 	}
 	if len(fixture.worker.starts) != 1 || len(fixture.worker.commands) != 0 {
@@ -112,7 +113,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	if len(fixture.runStore.current.ActiveInvocationIDs) != 0 {
 		t.Fatalf("ready projection = %#v, want no active invocation", fixture.runStore.current)
 	}
-	if len(fixture.statuses.values) != 2 || fixture.statuses.values[1].State != github.CommitStatusSuccess {
+	if len(fixture.statuses.values) != 2 || fixture.statuses.values[1].State != codehost.CommitStatusSuccess {
 		t.Fatalf("review statuses after acceptance = %#v, want pending then success", fixture.statuses.values)
 	}
 	body := fixture.pullRequests.updatedRequests[len(fixture.pullRequests.updatedRequests)-1].Body
@@ -226,7 +227,7 @@ func TestSpecificationReviewRefusesReadinessWithoutFinalCheckpointGates(t *testi
 	for index := range results {
 		if results[index].Phase == store.GatePhaseCheckpoint {
 			results[index].Outcome = store.GateOutcomeFailed
-			results[index].Status = string(github.CommitStatusFailure)
+			results[index].Status = string(codehost.CommitStatusFailure)
 		}
 	}
 	fixture.runStore.gateResults[run.ID] = results
@@ -323,7 +324,7 @@ func TestSpecificationReviewBlocksOnlyConcreteViolations(t *testing.T) {
 	if len(fixture.runStore.current.ActiveInvocationIDs) != 1 {
 		t.Fatalf("active repair invocations = %#v, want one implementation session", fixture.runStore.current.ActiveInvocationIDs)
 	}
-	if got := fixture.statuses.values[len(fixture.statuses.values)-1].State; got != github.CommitStatusFailure {
+	if got := fixture.statuses.values[len(fixture.statuses.values)-1].State; got != codehost.CommitStatusFailure {
 		t.Fatalf("final review status = %q, want failure", got)
 	}
 }
@@ -697,7 +698,7 @@ func TestStandardsReviewCanBlockAProvisionalTestExemption(t *testing.T) {
 	if fixture.runStore.current.Stage != store.StageReview || fixture.runStore.current.Status != store.StatusActive || fixture.runStore.current.StandardsReview == nil {
 		t.Fatalf("standards-blocked run = %#v, want active review waiting for the other reviewer", fixture.runStore.current)
 	}
-	if got := fixture.statuses.values[len(fixture.statuses.values)-1]; got.Context != factory.StandardsReviewStatusContext || got.State != github.CommitStatusFailure {
+	if got := fixture.statuses.values[len(fixture.statuses.values)-1]; got.Context != factory.StandardsReviewStatusContext || got.State != codehost.CommitStatusFailure {
 		t.Fatalf("standards status = %#v, want failure in standards context", got)
 	}
 }
@@ -748,7 +749,7 @@ func TestStandardsReviewLaunchCanRetryFromDraftPullRequest(t *testing.T) {
 
 	retry, err := fixture.service.HandleCommand(context.Background(), factory.CommandRequest{
 		RunID: run.ID, IssueNumber: run.IssueNumber,
-		Comment: github.Comment{ID: "retry-standards-launch", Author: "alice", Body: "/factory retry"},
+		Comment: tracker.Comment{ID: "retry-standards-launch", Author: "alice", Body: "/factory retry"},
 	})
 	if err != nil {
 		t.Fatalf("HandleCommand(standards review) error = %v", err)
@@ -825,10 +826,10 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	policy := validRepositoryConfig()
 	policy.RoleHarnessDefaults["spec_review"] = config.HarnessCodex
 	policy.ModelOptions["spec_review"] = []string{"gpt-5"}
-	issue := github.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{github.LabelAgentReady}}
+	issue := tracker.Issue{Number: 42, Title: "Review the checkpoint", Body: "Review the exact implementation checkpoint.", State: "open", Labels: []string{tracker.LabelAgentReady}}
 	githubAdapter := &fakeGitHub{issueValue: issue}
 	statuses := &gateStatuses{}
-	pullRequests := &fakePullRequests{existing: github.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{existing: codehost.PullRequest{Number: 17, URL: "https://github.com/example/project/pull/17", Body: "<!-- factory-generated:start -->\nold\n<!-- factory-generated:end -->", State: "open", Draft: true, HeadBranch: "factory/run-review", HeadSHA: reviewCheckpoint, BaseBranch: "main"}}
 	baseWorktree := &inspectingWorktree{
 		fakeWorktree: fakeWorktree{
 			workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-review", Worktree: worktreePath},
@@ -853,7 +854,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		Tracker:           &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
 		PullRequests:      pullRequests,
 		Worktree:          worktree,
 		Worker:            runtime,
@@ -888,12 +889,12 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	if err := runStore.SaveRun(context.Background(), run); err != nil {
 		t.Fatalf("SaveRun() review fixture error = %v", err)
 	}
-	githubAdapter.statusComment = github.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
+	githubAdapter.statusComment = tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
 	worktree.state.HeadSHA = reviewCheckpoint
 	worktree.state.ChangedPaths = nil
 	runStore.gateResults[run.ID] = []store.GateResult{
-		{RunID: run.ID, CheckpointSHA: factoryGateCheckpoint, Phase: store.GatePhaseBaseline, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
-		{RunID: run.ID, CheckpointSHA: reviewCheckpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
+		{RunID: run.ID, CheckpointSHA: factoryGateCheckpoint, Phase: store.GatePhaseBaseline, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(codehost.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
+		{RunID: run.ID, CheckpointSHA: reviewCheckpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed, Status: string(codehost.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking},
 	}
 	return reviewFixture{root: root, service: service, runStore: runStore, worker: runtime, worktree: worktree, statuses: statuses, pullRequests: pullRequests, harness: harnessRuntime}
 }

@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -61,7 +61,7 @@ func (w *reviewDiffHashWriter) Write(value []byte) (int, error) {
 // artifact before the invocation packet is written.
 func (s *Service) materialiseReviewDiff(ctx context.Context, run store.Run, invocation store.Invocation) (reviewDiffMetadata, error) {
 	base := reviewDiffBase(run)
-	if !github.ValidCommitSHA(base) || !github.ValidCommitSHA(run.CheckpointSHA) {
+	if !codehost.ValidCommitSHA(base) || !codehost.ValidCommitSHA(run.CheckpointSHA) {
 		return reviewDiffMetadata{}, errors.New("review diff requires valid immutable base and checkpoint SHAs")
 	}
 	directory := invocation.InvocationDirectory

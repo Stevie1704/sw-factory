@@ -11,10 +11,10 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -48,7 +48,7 @@ func TestHeadlessStartupRecreatesWorkerAndResumesOnce(t *testing.T) {
 
 			packet := SpecificationPacket{
 				Version: specificationPacketVersion,
-				Issue:   github.Issue{Number: 165, Title: "Recover headless work", Body: "resume the persisted invocation"},
+				Issue:   tracker.Issue{Number: 165, Title: "Recover headless work", Body: "resume the persisted invocation"},
 				RepositoryConfig: config.RepositoryConfig{
 					TargetBranch: "main", WorkerBuild: config.WorkerBuildConfig{Image: "ghcr.io/example/factory-worker"},
 				},
@@ -105,15 +105,15 @@ func TestHeadlessStartupRecreatesWorkerAndResumesOnce(t *testing.T) {
 				registration.Authentication.ClaudeAuthPath = authPath
 			}
 			githubRuntime := &headlessRecoveryGitHub{
-				issue:   github.Issue{Number: run.IssueNumber, State: "open", Labels: []string{factoryLabelForStatus(run.Status)}},
-				comment: github.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
+				issue:   tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{factoryLabelForStatus(run.Status)}},
+				comment: tracker.Comment{ID: run.StatusCommentID, Body: statusCommentBody(run)},
 			}
 			workerRuntime := &headlessRecoveryWorker{}
 			harnessRuntime := &headlessRecoveryHarness{name: string(harnessName), nativeSessionID: invocation.NativeSessionID}
 			dependencies := Dependencies{
 				Config:    &headlessRecoveryConfig{host: config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}},
 				OpenStore: func(ctx context.Context, path string) (OperationalStore, error) { return store.Open(ctx, path) },
-				GitHub:    githubRuntime, Worktree: &headlessRecoveryWorktree{state: gitadapter.WorktreeState{
+				Tracker:   githubRuntime, Worktree: &headlessRecoveryWorktree{state: gitadapter.WorktreeState{
 					RepositoryPath: root, Branch: run.Branch, HeadSHA: run.CheckpointSHA,
 				}}, Worker: workerRuntime,
 				HeadlessHarnesses: map[config.Harness]harness.HeadlessRuntime{harnessName: harnessRuntime},
@@ -185,38 +185,38 @@ func (*headlessRecoveryConfig) Create(string) (config.HostConfig, error) {
 
 // headlessRecoveryGitHub exposes a converged issue and status comment.
 type headlessRecoveryGitHub struct {
-	issue   github.Issue
-	comment github.Comment
+	issue   tracker.Issue
+	comment tracker.Comment
 }
 
 // Issue returns the current issue projection.
-func (g *headlessRecoveryGitHub) Issue(context.Context, github.Repository, int) (github.Issue, error) {
+func (g *headlessRecoveryGitHub) Issue(context.Context, tracker.Repository, int) (tracker.Issue, error) {
 	return g.issue, nil
 }
 
 // CreateLabel is unused by recovery.
-func (*headlessRecoveryGitHub) CreateLabel(context.Context, github.Repository, github.Label) error {
+func (*headlessRecoveryGitHub) CreateLabel(context.Context, tracker.Repository, tracker.Label) error {
 	return errors.New("unexpected label creation")
 }
 
 // ReplaceIssueLabels updates the fixture issue projection.
-func (g *headlessRecoveryGitHub) ReplaceIssueLabels(_ context.Context, _ github.Repository, _ int, labels []string) error {
+func (g *headlessRecoveryGitHub) ReplaceIssueLabels(_ context.Context, _ tracker.Repository, _ int, labels []string) error {
 	g.issue.Labels = append([]string(nil), labels...)
 	return nil
 }
 
 // CreateIssueComment is unused because the run has a status comment.
-func (*headlessRecoveryGitHub) CreateIssueComment(context.Context, github.Repository, int, string) (github.Comment, error) {
-	return github.Comment{}, errors.New("unexpected comment creation")
+func (*headlessRecoveryGitHub) CreateIssueComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
+	return tracker.Comment{}, errors.New("unexpected comment creation")
 }
 
 // FindStatusComment returns the current coordinator-owned status projection.
-func (g *headlessRecoveryGitHub) FindStatusComment(context.Context, github.Repository, int, string) (github.Comment, error) {
+func (g *headlessRecoveryGitHub) FindStatusComment(context.Context, tracker.Repository, int, string) (tracker.Comment, error) {
 	return g.comment, nil
 }
 
 // EditIssueComment updates the fixture status projection.
-func (g *headlessRecoveryGitHub) EditIssueComment(_ context.Context, _ github.Repository, _ string, body string) error {
+func (g *headlessRecoveryGitHub) EditIssueComment(_ context.Context, _ tracker.Repository, _ string, body string) error {
 	g.comment.Body = body
 	return nil
 }

@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -46,7 +47,7 @@ type DraftPullRequestResult struct {
 	// suite did not yet produce a draft pull request.
 	Repair *CheckRepairResult
 	// PullRequest is the created or recovered draft PR.
-	PullRequest github.PullRequest
+	PullRequest codehost.PullRequest
 }
 
 // CreateDraftPullRequest advances an accepted implementation through its host
@@ -121,8 +122,8 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if err := validateProtectedTestPaths(run.Worktree, protectedState, run.ProtectedTestPaths); err != nil {
 		return DraftPullRequestResult{}, err
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return DraftPullRequestResult{}, err
 	}
@@ -168,7 +169,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		if checkpointErr != nil {
 			return DraftPullRequestResult{}, checkpointErr
 		}
-		if !github.ValidCommitSHA(checkpoint.SHA) {
+		if !codehost.ValidCommitSHA(checkpoint.SHA) {
 			return DraftPullRequestResult{}, errors.New("GitWorkspace returned an invalid implementation checkpoint SHA")
 		}
 		next.AcceptedImplementationCheckpointSHA = ""
@@ -220,7 +221,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if pullRequests == nil {
 		return result, errors.New("GitHub client does not support pull-request operations")
 	}
-	pullRequest := github.PullRequest{}
+	pullRequest := codehost.PullRequest{}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		plannedRequest, expectedNumber, planErr := s.planDraftPullRequest(ctx, pullRequests, repository, next, packet, gates, request.Intervention)
 		if planErr != nil {
@@ -279,23 +280,23 @@ func (s *Service) runConfiguredGates(ctx context.Context, registration config.Re
 
 // upsertDraftPullRequest finds a prior branch pull request before creating one
 // and merges the generated section into its existing body when present.
-func (s *Service) upsertDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequest, error) {
+func (s *Service) upsertDraftPullRequest(ctx context.Context, client codehost.PullRequestClient, repository tracker.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (codehost.PullRequest, error) {
 	request, expectedNumber, err := s.planDraftPullRequest(ctx, client, repository, run, packet, gates, intervention)
 	if err != nil {
-		return github.PullRequest{}, err
+		return codehost.PullRequest{}, err
 	}
 	return effectkernel.UpsertPullRequest(ctx, client, repository, expectedNumber, request)
 }
 
 // planDraftPullRequest reads the current branch PR once and freezes the exact
 // request used by both the first mutation and a restart replay.
-func (s *Service) planDraftPullRequest(ctx context.Context, client github.PullRequestClient, repository github.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (github.PullRequestRequest, int, error) {
+func (s *Service) planDraftPullRequest(ctx context.Context, client codehost.PullRequestClient, repository tracker.Repository, run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) (codehost.PullRequestRequest, int, error) {
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
-		return github.PullRequestRequest{}, 0, err
+		return codehost.PullRequestRequest{}, 0, err
 	}
 	body := generatedPullRequestBody(run, packet, gates, intervention)
-	request := github.PullRequestRequest{
+	request := codehost.PullRequestRequest{
 		Title:      defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number)),
 		Body:       body,
 		HeadBranch: run.Branch,
@@ -311,21 +312,21 @@ func (s *Service) planDraftPullRequest(ctx context.Context, client github.PullRe
 // regenerateDraftPullRequest refreshes a previously created PR without
 // rerunning gates or pushing again. The branch lookup supplies the current
 // human-authored body for preservation.
-func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket, intervention string) (github.PullRequest, error) {
+func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, packet SpecificationPacket, intervention string) (codehost.PullRequest, error) {
 	client := s.pullRequestClient()
 	if client == nil {
-		return github.PullRequest{}, errors.New("GitHub client does not support pull-request operations")
+		return codehost.PullRequest{}, errors.New("GitHub client does not support pull-request operations")
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
-		return github.PullRequest{}, err
+		return codehost.PullRequest{}, err
 	}
 	if existing.Number == 0 {
-		return github.PullRequest{}, fmt.Errorf("draft pull request for branch %q was not found", run.Branch)
+		return codehost.PullRequest{}, fmt.Errorf("draft pull request for branch %q was not found", run.Branch)
 	}
 	body := mergeGeneratedPullRequestBody(existing.Body, generatedPullRequestBody(run, packet, nil, intervention))
-	updateRequest := github.PullRequestRequest{
+	updateRequest := codehost.PullRequestRequest{
 		Title: defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number)), Body: body,
 		HeadBranch: run.Branch, BaseBranch: packet.RepositoryConfig.TargetBranch, Draft: true,
 	}
@@ -336,13 +337,13 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 		updated, err = client.UpdatePullRequest(ctx, repository, existing.Number, updateRequest)
 	}
 	if err != nil {
-		return github.PullRequest{}, err
+		return codehost.PullRequest{}, err
 	}
 	updated.Body = updateRequest.Body
 	updated.Title = updateRequest.Title
 	updated.Draft = updateRequest.Draft
 	if updated.Number <= 0 {
-		return github.PullRequest{}, errors.New("pull-request regeneration returned no pull-request identity")
+		return codehost.PullRequest{}, errors.New("pull-request regeneration returned no pull-request identity")
 	}
 	return updated, nil
 }
@@ -358,7 +359,7 @@ func checkpointMessage(run store.Run) string {
 
 // ensureIssueIdentity fills the fallback issue identity used by test doubles
 // and GitHub adapters that return an otherwise valid issue without a number.
-func ensureIssueIdentity(issue, fallback github.Issue, issueNumber int) github.Issue {
+func ensureIssueIdentity(issue, fallback tracker.Issue, issueNumber int) tracker.Issue {
 	if issue.Number == 0 {
 		issue = fallback
 		issue.Number = issueNumber
@@ -387,13 +388,13 @@ func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates [
 			}
 		} else {
 			switch result.Status.State {
-			case github.CommitStatusSuccess:
+			case codehost.CommitStatusSuccess:
 				status = "passed"
-			case github.CommitStatusFailure:
+			case codehost.CommitStatusFailure:
 				status = "failed"
-			case github.CommitStatusError:
+			case codehost.CommitStatusError:
 				status = "error"
-			case github.CommitStatusPending:
+			case codehost.CommitStatusPending:
 				status = "pending"
 			default:
 				status = "unknown"

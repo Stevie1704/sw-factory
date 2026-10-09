@@ -14,10 +14,10 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -125,7 +125,7 @@ type CommandRequest struct {
 	// IssueNumber identifies the issue or pull request being commented on.
 	IssueNumber int
 	// Comment contains the immutable comment identity, author, and body.
-	Comment github.Comment
+	Comment tracker.Comment
 }
 
 // CommandPollRequest selects the run whose issue and pull-request comments
@@ -250,7 +250,7 @@ type atomicAllPacketTransitionStore interface {
 
 // handleAnswerCommand applies one authorized answer, versions the packet, and
 // resumes the implementation role with that answer mounted in its packet.
-func (s *Service) handleAnswerCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleAnswerCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if run.Status != store.StatusWaitingForHuman && !(run.Status == store.StatusActive && len(run.PendingQuestions) > 0) {
 		rejection := &PolicyRejection{Code: PolicyRejectionAnswerState, Problem: fmt.Sprintf("answer is only allowed while the run waits for human input, not status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -284,7 +284,7 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for answer: %w", err)
 	}
@@ -308,7 +308,7 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 // handleResumeCommand continues a paused run through the same explicit
 // recovery lifecycle as the host resume command, then records the GitHub
 // comment watermark against the resulting run projection.
-func (s *Service) handleResumeCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleResumeCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if reason := resumeAdmissionReason(run); reason != "" {
 		rejection := &PolicyRejection{Code: PolicyRejectionResumeState, Problem: reason}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -428,7 +428,7 @@ func resumeAdmissionReason(run store.Run) string {
 // An explicit command refuses a store without durable invocation history,
 // where the equivalent submitted review is silently left unread: a maintainer
 // who addressed the coordinator directly is owed the refusal.
-func (s *Service) handleRepairCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRepairCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if reason := repairAdmissionReason(run); reason != "" {
 		rejection := &PolicyRejection{Code: PolicyRejectionRepairState, Problem: reason}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -461,7 +461,7 @@ func (s *Service) handleRepairCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for maintainer repair: %w", err)
 	}
@@ -488,7 +488,7 @@ func (s *Service) handleRepairCommand(ctx context.Context, registration config.R
 
 // handleRefreshCommand re-reads the issue, creates a new packet version, and
 // resumes implementation against the refreshed specification.
-func (s *Service) handleRefreshCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRefreshCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if store.IsTerminalStatus(run.Status) {
 		rejection := &PolicyRejection{Code: PolicyRejectionRefreshState, Problem: fmt.Sprintf("refresh is not allowed after run status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -501,7 +501,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("decode specification packet for refresh: %w", err)
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for refresh: %w", err)
 	}
@@ -567,7 +567,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 // ready pull request. It preserves the existing branch, worktree, checkpoint,
 // pull-request identity, and invocation artifacts while invalidating every
 // result from the superseded packet and restarting at the current checkpoint.
-func (s *Service) handleRevisionCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRevisionCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	readyStatus := run.Status == store.StatusActive || run.Status == store.StatusWaitingForHuman
 	if run.Stage != store.StageReady || !readyStatus {
 		rejection := &PolicyRejection{Code: PolicyRejectionRevisionState, Problem: fmt.Sprintf("revision is only allowed for a ready run, not stage %q/status %q", run.Stage, run.Status)}
@@ -586,7 +586,7 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 		return CommandResult{}, fmt.Errorf("decode specification packet for revision: %w", err)
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for revision: %w", err)
 	}
@@ -1053,14 +1053,14 @@ func (s *Service) stopRunWorkerIfActive(ctx context.Context, runStore RunStore, 
 // invalidation commit or roll back together. The command watermark (ProcessedCommentID)
 // is intentionally not set here; it is deferred until after successful resumption
 // to keep packet-change resumption retryable when startAgentWithStore fails.
-func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run) (store.Run, error) {
+func (s *Service) applyPacketChangeTransition(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue tracker.Issue, previous, next store.Run) (store.Run, error) {
 	return s.applyPacketChangeTransitionWithInvalidation(ctx, runStore, registration, issue, previous, next, false)
 }
 
 // applyPacketChangeTransitionWithInvalidation applies a packet transition and
 // chooses whether ordinary refresh invalidation or complete amendment
 // invalidation is required.
-func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue github.Issue, previous, next store.Run, invalidateAll bool) (store.Run, error) {
+func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Context, runStore RunStore, registration config.RepositoryRegistration, issue tracker.Issue, previous, next store.Run, invalidateAll bool) (store.Run, error) {
 	repository := commandRepository(registration)
 	next.UpdatedAt = s.deps.Now().UTC()
 	if next.Revision <= previous.Revision {
@@ -1080,11 +1080,11 @@ func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Contex
 	// Apply GitHub effects first (labels and status comment update)
 	oldLabels := append([]string(nil), issue.Labels...)
 	newLabels := replaceFactoryState(oldLabels, factoryLabelForStatus(next.Status))
-	if err := s.deps.GitHub.ReplaceIssueLabels(ctx, repository, next.IssueNumber, newLabels); err != nil {
+	if err := s.deps.Tracker.ReplaceIssueLabels(ctx, repository, next.IssueNumber, newLabels); err != nil {
 		return next, fmt.Errorf("set issue #%d state: %w", next.IssueNumber, err)
 	}
-	if err := s.deps.GitHub.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
-		_ = s.deps.GitHub.ReplaceIssueLabels(ctx, repository, next.IssueNumber, oldLabels)
+	if err := s.deps.Tracker.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
+		_ = s.deps.Tracker.ReplaceIssueLabels(ctx, repository, next.IssueNumber, oldLabels)
 		return next, fmt.Errorf("edit status comment: %w", err)
 	}
 
@@ -1188,7 +1188,7 @@ func removePendingQuestion(questions []store.PendingQuestion, questionID string)
 
 // handleCancelCommand applies an authorized, idempotent cancellation request
 // while retaining every run artifact needed for later inspection or retry.
-func (s *Service) handleCancelCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleCancelCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if run.Status == store.StatusCancelled {
 		next := commandProjection(run, comment, parsed, string(parsed.Kind), "command accepted; run was already cancelled")
 		updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
@@ -1199,7 +1199,7 @@ func (s *Service) handleCancelCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for cancellation: %w", err)
 	}
@@ -1297,13 +1297,13 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 // because GitHub's comment object does not repeat its parent target.
 type polledComment struct {
 	target  int
-	comment github.Comment
+	comment tracker.Comment
 }
 
 // commandRepository maps one registered GitHub identity for all command
 // operations, keeping polling and command effects on the same repository.
-func commandRepository(registration config.RepositoryRegistration) github.Repository {
-	return github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+func commandRepository(registration config.RepositoryRegistration) tracker.Repository {
+	return tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 }
 
 // commandRevisionStore is the optional atomic persistence seam implemented by
@@ -1314,7 +1314,7 @@ type commandRevisionStore interface {
 
 // handleRetryCommand reopens a failed run at its existing stage and applies
 // the normal label/comment transition without creating a new status comment.
-func (s *Service) handleRetryCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleRetryCommand(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	var launch *store.Invocation
 	launchRetry := false
 	if run.Status == store.StatusWaitingForHuman {
@@ -1348,7 +1348,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 		run = updated
 	}
 	repository := commandRepository(registration)
-	issue, err := s.deps.GitHub.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -1388,7 +1388,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 
 // handleReviewAuthorization records an authorized fan-out ceiling for the
 // exact current review manifest and reopens unattended progression.
-func (s *Service) handleReviewAuthorization(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleReviewAuthorization(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if run.Stage != store.StageDraftPR && run.Stage != store.StageReview {
 		rejection := &PolicyRejection{Code: PolicyRejectionReviewAuthorization, Problem: fmt.Sprintf("review fan-out authorization is only available in draft_pr or review stage, not %q", run.Stage)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -1504,7 +1504,7 @@ func isRetryableFailedLaunch(run store.Run, invocation store.Invocation) bool {
 
 // handleHarnessConfiguration validates an authorized harness override against
 // the frozen repository configuration before recording it for a later invocation.
-func (s *Service) handleHarnessConfiguration(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request) (CommandResult, error) {
+func (s *Service) handleHarnessConfiguration(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request) (CommandResult, error) {
 	if store.IsTerminalStatus(run.Status) {
 		rejection := &PolicyRejection{Code: PolicyRejectionHarnessOverride, Problem: fmt.Sprintf("harness configuration is not available after run status %q", run.Status)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
@@ -1531,7 +1531,7 @@ func (s *Service) handleHarnessConfiguration(ctx context.Context, registration c
 
 // persistCommandRejection records a typed policy refusal in the existing
 // status comment and watermark while leaving workflow state and labels intact.
-func (s *Service) persistCommandRejection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request, rejection *PolicyRejection) (CommandResult, error) {
+func (s *Service) persistCommandRejection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request, rejection *PolicyRejection) (CommandResult, error) {
 	next := commandProjection(run, comment, parsed, commandResultName(parsed), rejection.Error())
 	next.LastCommandOutcome = string(CommandRejected)
 	updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
@@ -1544,7 +1544,7 @@ func (s *Service) persistCommandRejection(ctx context.Context, registration conf
 
 // persistCommandProjection stores a successful status/refresh result in the
 // single editable comment and returns the updated run.
-func (s *Service) persistCommandProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment github.Comment, parsed commandlanguage.Request, name, message string) (store.Run, error) {
+func (s *Service) persistCommandProjection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request, name, message string) (store.Run, error) {
 	next := commandProjection(run, comment, parsed, name, message)
 	return s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
 }
@@ -1567,7 +1567,7 @@ func (s *Service) persistCommandProjectionWithRun(ctx context.Context, registrat
 		return next, fmt.Errorf("persist command watermark: %w", err)
 	}
 	repository := commandRepository(registration)
-	if err := s.deps.GitHub.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
+	if err := s.deps.Tracker.EditIssueComment(ctx, repository, next.StatusCommentID, statusCommentBody(next)); err != nil {
 		return next, fmt.Errorf("edit status comment for command: %w", err)
 	}
 	return next, nil
@@ -1586,7 +1586,7 @@ func saveCommandRun(ctx context.Context, runStore effectkernel.RunStore, expecte
 // comment when an earlier process stopped before persisting its identity.
 func (s *Service) recoverCommandStatusComment(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (store.Run, error) {
 	repository := commandRepository(registration)
-	comment, err := s.deps.GitHub.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
+	comment, err := s.deps.Tracker.FindStatusComment(ctx, repository, run.IssueNumber, statusCommentMarker(run.ID))
 	if err != nil {
 		return run, err
 	}
@@ -1599,7 +1599,7 @@ func (s *Service) recoverCommandStatusComment(ctx context.Context, registration 
 
 // commandProjection creates the next revision and advances the immutable
 // comment watermark without changing workflow stage or status.
-func commandProjection(previous store.Run, comment github.Comment, parsed commandlanguage.Request, name, message string) store.Run {
+func commandProjection(previous store.Run, comment tracker.Comment, parsed commandlanguage.Request, name, message string) store.Run {
 	next := previous
 	next.Revision = previous.Revision + 1
 	next.ProcessedCommentID = comment.ID

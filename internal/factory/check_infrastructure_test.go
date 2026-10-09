@@ -10,12 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -87,7 +88,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	if journaled {
 		opened = &journaledAgentRunStore{agentRunStore: runStore, pending: map[string]store.PendingEffect{}}
 	}
-	githubAdapter := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Recover checks", Body: "Retry checks after setup failures.", State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Recover checks", Body: "Retry checks after setup failures.", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
 		workspace:      gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: branch, Worktree: worktreePath},
 		state:          gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: branch, HeadSHA: factoryGateCheckpoint, ChangedPaths: []string{"python/pyproject.toml"}},
@@ -95,7 +96,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	}
 	runtime := &agentWorker{}
 	harnessRuntime := &agentHarness{}
-	pullRequests := &fakePullRequests{created: github.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: branch, BaseBranch: "main"}}
+	pullRequests := &fakePullRequests{created: codehost.PullRequest{Number: 18, URL: "https://github.com/example/project/pull/18", State: "open", Draft: true, HeadBranch: branch, BaseBranch: "main"}}
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
@@ -105,7 +106,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return opened, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
+		Tracker:           &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
 		PullRequests:      pullRequests,
 		Worktree:          workspace,
 		GitWorkspace:      workspace,
@@ -128,7 +129,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	}
 	// Resume restarts reconciliation, which compares the run with the issue's
 	// status comment; edits keep this fixture comment current.
-	githubAdapter.statusComment = github.Comment{ID: claimed.Run.StatusCommentID, Body: githubAdapter.createdComments[len(githubAdapter.createdComments)-1]}
+	githubAdapter.statusComment = tracker.Comment{ID: claimed.Run.StatusCommentID, Body: githubAdapter.createdComments[len(githubAdapter.createdComments)-1]}
 	claimed.Run.TestStageSkipped = true
 	claimed.Run.TestExemption = &store.TestExemption{Kind: "human", Justification: "check recovery fixture"}
 	if err := runStore.SaveRun(context.Background(), claimed.Run); err != nil {
@@ -137,7 +138,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	runStore.gateResults[claimed.Run.ID] = []store.GateResult{{
 		RunID: claimed.Run.ID, CheckpointSHA: claimed.Run.CheckpointSHA, Phase: store.GatePhaseBaseline,
 		Ordinal: 0, GateName: policy.Gates[0].Name, Outcome: store.GateOutcomePassed,
-		Status: string(github.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
+		Status: string(codehost.CommitStatusSuccess), Blocking: policy.Gates[0].Blocking,
 	}}
 	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
 	if err != nil {

@@ -9,12 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -41,7 +42,7 @@ func TestRunBaselineRecordsAHealthyPreEditSuiteBeforeAgentProgression(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Outcome != store.GateOutcomePassed || results[0].Status != string(github.CommitStatusSuccess) {
+	if len(results) != 1 || results[0].Outcome != store.GateOutcomePassed || results[0].Status != string(codehost.CommitStatusSuccess) {
 		t.Fatalf("stored baseline results = %#v, want exact-checkpoint success", results)
 	}
 }
@@ -230,7 +231,7 @@ func TestRunBaselineBlocksAnUnhealthyPreEditSuite(t *testing.T) {
 	if baseline.Run.Status != store.StatusFailed || baseline.Run.Stage != store.StagePreflight {
 		t.Fatalf("blocked baseline run = %#v, want failed preflight", baseline.Run)
 	}
-	if got := fixture.github.replacedHistory[len(fixture.github.replacedHistory)-1]; len(got) != 1 || got[0] != github.LabelAgentFailed {
+	if got := fixture.github.replacedHistory[len(fixture.github.replacedHistory)-1]; len(got) != 1 || got[0] != tracker.LabelAgentFailed {
 		t.Fatalf("baseline failure labels = %#v, want agent-failed", got)
 	}
 	results, err := fixture.openedGateResults(t, claimed.Run.ID, store.GatePhaseBaseline, claimed.Run.CheckpointSHA)
@@ -359,7 +360,7 @@ func newBaselineFixture(t *testing.T, issueBody string, results []worker.Command
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "1m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
 	policyRef := &policy
-	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: 42, Title: "Baseline", Body: issueBody, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Baseline", Body: issueBody, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workerRuntime := &gateWorker{results: results}
 	worktree := &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-baseline", Worktree: worktreePath},
@@ -375,7 +376,7 @@ func newBaselineFixture(t *testing.T, issueBody string, results []worker.Command
 		Config:         &fakeConfig{value: host},
 		OpenStore:      func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
 		LoadRepository: func(string) (config.RepositoryConfig, error) { return *policyRef, nil },
-		GitHub:         githubRuntime, Worktree: worktree, GitWorkspace: worktree, Worker: workerRuntime,
+		Tracker:        githubRuntime, Worktree: worktree, GitWorkspace: worktree, Worker: workerRuntime,
 		CommitStatuses: &gateStatuses{},
 		Now:            func() time.Time { return time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC) },
 		NewRunID:       func() (string, error) { return "run-baseline", nil },

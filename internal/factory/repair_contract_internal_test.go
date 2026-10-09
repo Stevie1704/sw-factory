@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/gate"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -99,8 +99,8 @@ func TestRepairableCheckFailureRejectsInfrastructure(t *testing.T) {
 func TestBuildCheckRepairPacketRetainsTheBoundedSuite(t *testing.T) {
 	const checkpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	results := []gate.Result{
-		{CheckpointSHA: checkpoint, GateName: "format", Blocking: true, Setup: worker.CommandResult{Stdout: "setup ok"}, Gate: worker.CommandResult{ExitCode: 1, Stdout: strings.Repeat("x", maxRepairDiagnosticRunes+100)}, Outcome: gate.OutcomeFailed, Status: github.CommitStatus{SHA: checkpoint, State: github.CommitStatusFailure}},
-		{CheckpointSHA: checkpoint, GateName: "test", Blocking: true, Skipped: true, SkipReason: "dependency format failed", Outcome: gate.OutcomeSkipped, Status: github.CommitStatus{SHA: checkpoint, State: github.CommitStatusPending}},
+		{CheckpointSHA: checkpoint, GateName: "format", Blocking: true, Setup: worker.CommandResult{Stdout: "setup ok"}, Gate: worker.CommandResult{ExitCode: 1, Stdout: strings.Repeat("x", maxRepairDiagnosticRunes+100)}, Outcome: gate.OutcomeFailed, Status: codehost.CommitStatus{SHA: checkpoint, State: codehost.CommitStatusFailure}},
+		{CheckpointSHA: checkpoint, GateName: "test", Blocking: true, Skipped: true, SkipReason: "dependency format failed", Outcome: gate.OutcomeSkipped, Status: codehost.CommitStatus{SHA: checkpoint, State: codehost.CommitStatusPending}},
 	}
 	packet := buildCheckRepairPacket(store.Run{ID: "run-1", CheckpointSHA: checkpoint}, results, &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "format", TimedOut: true}}}, 2, 3)
 	if packet.Version != checkRepairPacketVersion || packet.Attempt != 2 || packet.Budget != 3 || packet.CheckpointSHA != checkpoint || len(packet.Gates) != 2 {
@@ -109,7 +109,7 @@ func TestBuildCheckRepairPacketRetainsTheBoundedSuite(t *testing.T) {
 	if packet.Gates[0].GateName != "format" || !packet.Gates[0].TimedOut || len([]rune(packet.Gates[0].Command.Stdout)) > maxRepairDiagnosticRunes+len("\n[truncated]") {
 		t.Fatalf("first packet gate = %#v, want bounded timed-out failure", packet.Gates[0])
 	}
-	if !packet.Gates[1].Skipped || packet.Gates[1].SkipReason == "" || packet.Setup.Stdout != "setup ok" || fmt.Sprint(packet.Gates[0].Status) != string(github.CommitStatusFailure) {
+	if !packet.Gates[1].Skipped || packet.Gates[1].SkipReason == "" || packet.Setup.Stdout != "setup ok" || fmt.Sprint(packet.Gates[0].Status) != string(codehost.CommitStatusFailure) {
 		t.Fatalf("packet suite = %#v, want exact setup, status, and skipped evidence", packet)
 	}
 }
@@ -155,8 +155,8 @@ func TestRouteCheckRepairParksAnUnconfirmedTerminationWithoutSpendingBudget(t *t
 	const checkpoint = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	unconfirmed := fmt.Errorf("run command in worker %q: %w", "issue-210-run-20261005T094500Z", &worker.CommandTerminationError{Reason: "the command process group survived forced termination"})
 	results := []gate.Result{
-		{CheckpointSHA: checkpoint, GateName: "test", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeError, SetupRan: true, Status: github.CommitStatus{State: github.CommitStatusError}},
-		{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeSkipped, Skipped: true, SkipReason: "worker command termination is unconfirmed", Status: github.CommitStatus{State: github.CommitStatusPending}},
+		{CheckpointSHA: checkpoint, GateName: "test", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeError, SetupRan: true, Status: codehost.CommitStatus{State: codehost.CommitStatusError}},
+		{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeSkipped, Skipped: true, SkipReason: "worker command termination is unconfirmed", Status: codehost.CommitStatus{State: codehost.CommitStatusPending}},
 	}
 	suiteErr := &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Blocking: true, Cause: unconfirmed}}}
 	run := store.Run{ID: "issue-210-run-20261005T094500Z", Stage: store.StageCheck, Status: store.StatusActive, CheckpointSHA: checkpoint, CheckRepairAttempts: 1, CheckRepairBudget: 3, Worktree: filepath.Join(t.TempDir(), "worktrees", "run")}
@@ -238,7 +238,7 @@ func TestRouteCheckRepairNamesTheDeterministicCauseWhenParking(t *testing.T) {
 	}{
 		{
 			name:        "setup runtime failure pauses for a check retry",
-			results:     []gate.Result{{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: setup, Status: github.CommitStatus{State: github.CommitStatusError}}},
+			results:     []gate.Result{{CheckpointSHA: checkpoint, GateName: "build", Phase: gate.PhaseCheckpoint, Blocking: true, Skipped: true, SkipReason: "setup failed", Outcome: gate.OutcomeSetupFailed, SetupRan: true, Setup: setup, Status: codehost.CommitStatus{State: codehost.CommitStatusError}}},
 			suiteErr:    &gate.SuiteFailure{Failures: []error{&gate.SetupFailure{Result: setup, Cause: errors.New("worker unavailable")}}},
 			wantOutcome: CheckRepairInfrastructurePause,
 			wantReason:  LifecycleReasonCheckInfrastructureUnavailable + ": ",
@@ -247,7 +247,7 @@ func TestRouteCheckRepairNamesTheDeterministicCauseWhenParking(t *testing.T) {
 		{
 			name:        "exhausted budget waits for a human",
 			attempts:    3,
-			results:     []gate.Result{{CheckpointSHA: checkpoint, GateName: "test", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeFailed, SetupRan: true, Gate: gateCommand, Status: github.CommitStatus{State: github.CommitStatusFailure}}},
+			results:     []gate.Result{{CheckpointSHA: checkpoint, GateName: "test", Phase: gate.PhaseCheckpoint, Blocking: true, Outcome: gate.OutcomeFailed, SetupRan: true, Gate: gateCommand, Status: codehost.CommitStatus{State: codehost.CommitStatusFailure}}},
 			suiteErr:    &gate.SuiteFailure{Failures: []error{&gate.GateFailure{Name: "test", Blocking: true, Result: gateCommand}}},
 			wantOutcome: CheckRepairExhausted,
 			wantReason:  "check-repair budget exhausted: ",

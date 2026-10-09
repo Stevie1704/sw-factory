@@ -13,9 +13,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -327,7 +327,7 @@ func TestRouteStaysFrozenAcrossASpecificationRefresh(t *testing.T) {
 
 	result, err := service.HandleCommand(context.Background(), factory.CommandRequest{
 		IssueNumber: run.IssueNumber,
-		Comment:     github.Comment{ID: "refresh-route", Author: "alice", Body: "/factory refresh"},
+		Comment:     tracker.Comment{ID: "refresh-route", Author: "alice", Body: "/factory refresh"},
 	})
 	if err != nil {
 		t.Fatalf("HandleCommand() error = %v", err)
@@ -452,7 +452,7 @@ func TestAcceptanceRouteRunsTheVerifiedRedHandoffUnderAdvisoryPolicy(t *testing.
 	policy.TestPolicy.Mode = config.TestModeAdvisory
 	storeRuntime := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 1, Stdout: "expected behavior assertion"}}}
-	githubRuntime := &fakeGitHub{issueValue: github.Issue{Number: 12, Title: "Routed", Body: acceptanceMarker, State: "open", Labels: []string{github.LabelAgentReady}}}
+	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: 12, Title: "Routed", Body: acceptanceMarker, State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &testStageWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-routed", Worktree: worktreePath},
 		state:     gitadapter.WorktreeState{RepositoryPath: repositoryPath, Branch: "factory/run-routed", HeadSHA: factoryGateCheckpoint},
@@ -468,7 +468,7 @@ func TestAcceptanceRouteRunsTheVerifiedRedHandoffUnderAdvisoryPolicy(t *testing.
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return storeRuntime, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
-		GitHub:            githubRuntime,
+		Tracker:           githubRuntime,
 		CommitStatuses:    &gateStatuses{},
 		Worktree:          workspace,
 		GitWorkspace:      workspace,

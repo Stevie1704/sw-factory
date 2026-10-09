@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestGhClientUsesTheLocalCLIForIssueAndClaimMutations verifies JSON payloads
@@ -24,7 +26,7 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 		[]byte(`[[{"id":7,"body":"<!-- factory-status: run-1 --> forged status","user":{"login":"alice"}},{"id":12345,"body":"<!-- factory-status: run-1 --> status","user":{"login":"factory-bot"}}]]`),
 	}}
 	client := &github.GhClient{Runner: runner}
-	repository := github.Repository{Owner: "example", Name: "project"}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
 
 	issue, err := client.Issue(context.Background(), repository, 42)
 	if err != nil {
@@ -36,10 +38,10 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	if issue.IsPullRequest {
 		t.Fatal("ordinary issue was identified as a pull request")
 	}
-	if err := client.CreateLabel(context.Background(), repository, github.Label{Name: github.LabelAgentRunning, Color: "1d76db", Description: "active"}); err != nil {
+	if err := client.CreateLabel(context.Background(), repository, tracker.Label{Name: tracker.LabelAgentRunning, Color: "1d76db", Description: "active"}); err != nil {
 		t.Fatalf("CreateLabel() error = %v", err)
 	}
-	if err := client.ReplaceIssueLabels(context.Background(), repository, 42, []string{"enhancement", github.LabelAgentRunning}); err != nil {
+	if err := client.ReplaceIssueLabels(context.Background(), repository, 42, []string{"enhancement", tracker.LabelAgentRunning}); err != nil {
 		t.Fatalf("ReplaceIssueLabels() error = %v", err)
 	}
 	comment, err := client.CreateIssueComment(context.Background(), repository, 42, "status body")
@@ -66,14 +68,14 @@ func TestGhClientUsesTheLocalCLIForIssueAndClaimMutations(t *testing.T) {
 	if len(runner.calls) != 7 {
 		t.Fatalf("CLI calls = %d, want seven", len(runner.calls))
 	}
-	if !hasArgs(runner.calls[1].args, "label", "create", github.LabelAgentRunning, "--force") {
+	if !hasArgs(runner.calls[1].args, "label", "create", tracker.LabelAgentRunning, "--force") {
 		t.Fatalf("label call = %#v, want explicit idempotent label creation", runner.calls[1].args)
 	}
 	var labelsPayload map[string][]string
 	if err := json.Unmarshal(runner.calls[2].input, &labelsPayload); err != nil {
 		t.Fatalf("decode labels request: %v", err)
 	}
-	if got := labelsPayload["labels"]; len(got) != 2 || got[1] != github.LabelAgentRunning {
+	if got := labelsPayload["labels"]; len(got) != 2 || got[1] != tracker.LabelAgentRunning {
 		t.Fatalf("labels request = %#v, want replacement labels", labelsPayload)
 	}
 	for _, call := range runner.calls[2:5] {
@@ -103,7 +105,7 @@ func TestGhClientListsEligibleIssuesInDeterministicOrder(t *testing.T) {
 	]]`)}}
 	client := &github.GhClient{Runner: runner}
 
-	issues, err := client.ListEligibleIssues(context.Background(), github.Repository{Owner: "example", Name: "project"})
+	issues, err := client.ListEligibleIssues(context.Background(), tracker.Repository{Owner: "example", Name: "project"})
 	if err != nil {
 		t.Fatalf("ListEligibleIssues() error = %v", err)
 	}
@@ -127,7 +129,7 @@ func TestGhClientRejectsAUserAuthoredStatusMarker(t *testing.T) {
 		[]byte(`{"login":"factory-bot"}`),
 		[]byte(`[[{"id":7,"body":"<!-- factory-status: run-1 --> forged status","user":{"login":"alice"}}]]`),
 	}}}
-	comment, err := client.FindStatusComment(context.Background(), github.Repository{Owner: "example", Name: "project"}, 42, "factory-status: run-1")
+	comment, err := client.FindStatusComment(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 42, "factory-status: run-1")
 	if err != nil {
 		t.Fatalf("FindStatusComment() error = %v", err)
 	}
@@ -144,7 +146,7 @@ func TestGhClientPreservesThePullRequestIndicator(t *testing.T) {
 	client := &github.GhClient{Runner: &fakeCommandRunner{outputs: [][]byte{
 		[]byte(`{"number":42,"title":"A pull request","state":"open","pull_request":{"url":"https://api.github.com/repos/example/project/pulls/42"},"labels":[{"name":"agent-ready"}]}`),
 	}}}
-	issue, err := client.Issue(context.Background(), github.Repository{Owner: "example", Name: "project"}, 42)
+	issue, err := client.Issue(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 42)
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -161,9 +163,9 @@ func TestGhClientPublishesAnExactCommitStatus(t *testing.T) {
 	runner := &fakeCommandRunner{outputs: [][]byte{[]byte("")}}
 	client := &github.GhClient{Runner: runner}
 	sha := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err := client.CreateCommitStatus(context.Background(), github.Repository{Owner: "example", Name: "project"}, github.CommitStatus{
+	err := client.CreateCommitStatus(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, codehost.CommitStatus{
 		SHA:         sha,
-		State:       github.CommitStatusSuccess,
+		State:       codehost.CommitStatusSuccess,
 		Context:     "factory/gate/test",
 		Description: "factory setup and gate passed",
 	})
@@ -202,7 +204,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","title":"Updated","body":"human text\n\ngenerated","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 	}}
 	client := &github.GhClient{Runner: runner}
-	repository := github.Repository{Owner: "example", Name: "project"}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
 
 	found, err := client.FindPullRequest(context.Background(), repository, "factory/run-1", "main")
 	if err != nil {
@@ -212,7 +214,7 @@ func TestGhClientOwnsDraftPullRequestFindCreateAndUpdate(t *testing.T) {
 		t.Fatalf("found pull request = %#v, want decoded identity", found)
 	}
 
-	request := github.PullRequestRequest{Title: "Created", Body: "generated", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true}
+	request := codehost.PullRequestRequest{Title: "Created", Body: "generated", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true}
 	created, err := client.CreatePullRequest(context.Background(), repository, request)
 	if err != nil {
 		t.Fatalf("CreatePullRequest() error = %v", err)
@@ -270,7 +272,7 @@ func TestGhClientTogglesPullRequestDraftStateThroughTheHostCLI(t *testing.T) {
 		[]byte(`{"number":12,"html_url":"https://github.com/example/project/pull/12","state":"open","draft":true,"head":{"ref":"factory/run-1"},"base":{"ref":"main"}}`),
 	}}
 	client := &github.GhClient{Runner: runner}
-	repository := github.Repository{Owner: "example", Name: "project"}
+	repository := tracker.Repository{Owner: "example", Name: "project"}
 
 	ready, err := client.SetPullRequestDraft(context.Background(), repository, 12, false)
 	if err != nil {
@@ -305,7 +307,7 @@ func TestGhClientDecodesMergedPullRequestLifecycle(t *testing.T) {
 	client := &github.GhClient{Runner: &fakeCommandRunner{outputs: [][]byte{
 		[]byte(`[{"number":17,"html_url":"https://github.com/example/project/pull/17","state":"closed","merged_at":"2026-08-23T12:00:00Z","merge_commit_sha":"0123456789abcdef0123456789abcdef01234567","head":{"ref":"factory/run-1"},"base":{"ref":"main"}}]`),
 	}}}
-	got, err := client.FindPullRequest(context.Background(), github.Repository{Owner: "example", Name: "project"}, "factory/run-1", "main")
+	got, err := client.FindPullRequest(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, "factory/run-1", "main")
 	if err != nil {
 		t.Fatalf("FindPullRequest() error = %v", err)
 	}
@@ -320,12 +322,12 @@ func TestValidCommitSHARejectsAbbreviatedObjectIDs(t *testing.T) {
 	t.Parallel()
 
 	for _, length := range []int{39, 41, 63, 65} {
-		if github.ValidCommitSHA(strings.Repeat("a", length)) {
+		if codehost.ValidCommitSHA(strings.Repeat("a", length)) {
 			t.Errorf("ValidCommitSHA(%d characters) = true, want false", length)
 		}
 	}
 	for _, length := range []int{40, 64} {
-		if !github.ValidCommitSHA(strings.Repeat("a", length)) {
+		if !codehost.ValidCommitSHA(strings.Repeat("a", length)) {
 			t.Errorf("ValidCommitSHA(%d characters) = false, want true", length)
 		}
 	}
@@ -389,7 +391,7 @@ func TestGhClientReadsCompletedPullRequestReviews(t *testing.T) {
 	}}
 	client := &github.GhClient{Runner: runner}
 
-	reviews, err := client.PullRequestReviews(context.Background(), github.Repository{Owner: "example", Name: "project"}, 17)
+	reviews, err := client.PullRequestReviews(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 17)
 	if err != nil {
 		t.Fatalf("PullRequestReviews() error = %v", err)
 	}
@@ -397,7 +399,7 @@ func TestGhClientReadsCompletedPullRequestReviews(t *testing.T) {
 		t.Fatalf("reviews = %d, want every listed review", len(reviews))
 	}
 	changes := reviews[0]
-	if changes.ID != "4001" || changes.Author != "alice" || changes.State != github.PullRequestReviewChangesRequested {
+	if changes.ID != "4001" || changes.Author != "alice" || changes.State != codehost.PullRequestReviewChangesRequested {
 		t.Fatalf("first review = %#v, want the authorized changes-requested decision", changes)
 	}
 	if changes.SubmittedAt.IsZero() || changes.Body != "restore the validation" {
@@ -409,7 +411,7 @@ func TestGhClientReadsCompletedPullRequestReviews(t *testing.T) {
 	if len(reviews[1].Comments) != 0 {
 		t.Fatal("a commented review triggered an inline-comment request")
 	}
-	if !reviews[2].SubmittedAt.IsZero() || reviews[2].State != github.PullRequestReviewPending {
+	if !reviews[2].SubmittedAt.IsZero() || reviews[2].State != codehost.PullRequestReviewPending {
 		t.Fatalf("draft review = %#v, want an unsubmitted pending decision", reviews[2])
 	}
 	if len(runner.calls) != 2 {

@@ -11,12 +11,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	effectkernel "github.com/Stevie1704/sw-factory/internal/effect"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
@@ -281,8 +282,8 @@ func (s *Service) diagnoseInterruptedRunWithStore(ctx context.Context, registrat
 	inspector := s.worktreeInspector()
 	inspectWorktreeProjection(ctx, &diagnosis, inspector, registration.Path, run)
 
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
-	inspectGitHubProjection(ctx, &diagnosis, s.deps.GitHub, s.pullRequestClient(), repository, run)
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	inspectGitHubProjection(ctx, &diagnosis, s.deps.Tracker, s.pullRequestClient(), repository, run)
 	inspectRemoteBranchProjection(ctx, &diagnosis, s.gitWorkspace(), run)
 	s.inspectInvocationProjection(ctx, &diagnosis, registration, runStore, run)
 	diagnosis.SourcesAgree = recoverySourcesAgree(diagnosis)
@@ -1523,10 +1524,10 @@ func (s *Service) completePendingCheckRepair(ctx context.Context, registration c
 	if active.RecoveryResumeCount == 0 {
 		return run, nil
 	}
-	if s.deps.GitHub == nil {
+	if s.deps.Tracker == nil {
 		return run, errors.New("GitHub client is required to complete check-repair reservation")
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
 	if err != nil {
 		return run, fmt.Errorf("read issue while completing check-repair reservation: %w", err)
 	}
@@ -1621,13 +1622,13 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 	if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, run); err != nil {
 		return run, err
 	}
-	if s.deps.GitHub == nil || strings.TrimSpace(next.StatusCommentID) == "" {
+	if s.deps.Tracker == nil || strings.TrimSpace(next.StatusCommentID) == "" {
 		if err := saveRunWithRetry(ctx, runStore, next); err != nil {
 			return next, fmt.Errorf("persist restart reconciliation pause: %w", err)
 		}
 		return next, nil
 	}
-	issue, err := s.deps.GitHub.Issue(ctx, commandRepository(registration), next.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), next.IssueNumber)
 	if err != nil {
 		if saveErr := saveRunWithRetry(ctx, runStore, next); saveErr != nil {
 			return next, errors.Join(fmt.Errorf("read issue while pausing for reconciliation: %w", err), saveErr)
@@ -1932,7 +1933,7 @@ func inspectWorktreeProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 
 // inspectGitHubProjection compares the issue, state label, status comment, and
 // optional pull request through read-only GitHub adapter methods.
-func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client github.Client, pullRequests github.PullRequestClient, repository github.Repository, run store.Run) {
+func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, client tracker.Client, pullRequests codehost.PullRequestClient, repository tracker.Repository, run store.Run) {
 	if client == nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "client", Expected: "read-only GitHub client", Observed: "client unavailable"})
 		return
@@ -1975,7 +1976,7 @@ func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, 
 
 // inspectPullRequestProjection checks an existing or unexpectedly discovered
 // pull request without creating, updating, or otherwise mutating it.
-func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, pullRequests github.PullRequestClient, repository github.Repository, run store.Run) {
+func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, pullRequests codehost.PullRequestClient, repository tracker.Repository, run store.Run) {
 	hasPersistedIdentity := run.PullRequestNumber > 0 || strings.TrimSpace(run.PullRequestURL) != ""
 	if pullRequests == nil {
 		if hasPersistedIdentity {
@@ -2038,7 +2039,7 @@ func pullRequestIdentity(run store.Run) string {
 func factoryStateLabels(labels []string) []string {
 	result := make([]string, 0, len(labels))
 	for _, label := range labels {
-		if hasLabel(github.FactoryStateLabels, label) {
+		if hasLabel(tracker.FactoryStateLabels, label) {
 			result = append(result, label)
 		}
 	}

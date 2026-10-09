@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/codehost"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
-	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -124,10 +125,10 @@ func ensureReviewStartForRoleWithInspector(ctx context.Context, run store.Run, r
 	if run.PullRequestNumber <= 0 {
 		return fmt.Errorf("%s requires a tracked pull request", role)
 	}
-	if !github.ValidCommitSHA(run.CheckpointSHA) {
+	if !codehost.ValidCommitSHA(run.CheckpointSHA) {
 		return fmt.Errorf("%s requires a valid checkpoint SHA", role)
 	}
-	if !github.ValidCommitSHA(reviewDiffBase(run)) {
+	if !codehost.ValidCommitSHA(reviewDiffBase(run)) {
 		return fmt.Errorf("%s requires a valid base checkpoint SHA", role)
 	}
 	if review := reviewResultForRole(run, role); review != nil && review.CheckpointSHA == run.CheckpointSHA {
@@ -203,18 +204,18 @@ func reviewDiffBase(run store.Run) string {
 // The stable context is deliberately independent of invocation identity so a
 // later review replaces the status for the same checkpoint rather than adding
 // an unrelated status stream.
-func (s *Service) publishSpecificationReviewStatus(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, state github.CommitStatusState, description string) error {
+func (s *Service) publishSpecificationReviewStatus(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, state codehost.CommitStatusState, description string) error {
 	return s.publishReviewStatus(ctx, registration, runStore, run, workflow.RoleSpecificationReview, state, description)
 }
 
 // publishReviewStatus publishes one role-owned exact-SHA review status. The
 // context is stable per reviewer role so the two results never overwrite each
 // other on GitHub.
-func (s *Service) publishReviewStatus(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, role string, state github.CommitStatusState, description string) error {
+func (s *Service) publishReviewStatus(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, role string, state codehost.CommitStatusState, description string) error {
 	if s.deps.CommitStatuses == nil {
 		return fmt.Errorf("commit-status publisher is required for %s", role)
 	}
-	if !github.ValidCommitSHA(run.CheckpointSHA) {
+	if !codehost.ValidCommitSHA(run.CheckpointSHA) {
 		return fmt.Errorf("%s requires a valid checkpoint SHA", role)
 	}
 	statusContext := reviewStatusContext(role)
@@ -222,12 +223,12 @@ func (s *Service) publishReviewStatus(ctx context.Context, registration config.R
 		return fmt.Errorf("unsupported review role %q", role)
 	}
 	description = reviewStatusDescription(description)
-	statuses := github.CommitStatusPublisher(s.deps.CommitStatuses)
+	statuses := codehost.CommitStatusPublisher(s.deps.CommitStatuses)
 	statuses = s.journal().CommitStatusPublisher(runStore, run.ID, statuses)
-	return statuses.CreateCommitStatus(ctx, github.Repository{
+	return statuses.CreateCommitStatus(ctx, tracker.Repository{
 		Owner: registration.GitHub.Owner,
 		Name:  registration.GitHub.Repository,
-	}, github.CommitStatus{
+	}, codehost.CommitStatus{
 		SHA:         run.CheckpointSHA,
 		State:       state,
 		Context:     statusContext,
@@ -538,7 +539,7 @@ func (s *Service) acceptSpecificationReviewReport(ctx context.Context, registrat
 // round. A successful first result leaves the run in review until every
 // configured reviewer has produced a result for the same checkpoint.
 func (s *Service) acceptReviewReport(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, invocation *store.Invocation, value report.Report) (AgentResult, error) {
-	if run.CheckpointSHA == "" || !github.ValidCommitSHA(run.CheckpointSHA) {
+	if run.CheckpointSHA == "" || !codehost.ValidCommitSHA(run.CheckpointSHA) {
 		return AgentResult{}, errors.New("cannot accept review without a valid immutable checkpoint")
 	}
 	roleDefinition, err := roleDefinitionForInvocation(*invocation)
@@ -570,7 +571,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 			run.Status = store.StatusWaitingForHuman
 			run.LifecycleReason = fmt.Sprintf("%s review unit aggregate requires human recovery: %v", invocation.Role, aggregateErr)
 			run.UpdatedAt = s.deps.Now().UTC()
-			if statusErr := s.publishReviewStatus(ctx, registration, runStore, *run, invocation.Role, github.CommitStatusError, "review unit aggregate requires human recovery"); statusErr != nil {
+			if statusErr := s.publishReviewStatus(ctx, registration, runStore, *run, invocation.Role, codehost.CommitStatusError, "review unit aggregate requires human recovery"); statusErr != nil {
 				return AgentResult{}, statusErr
 			}
 			if persistErr := s.persistAgentRunState(ctx, registration, runStore, previous, *run); persistErr != nil {
@@ -607,7 +608,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 	complete := reviewRoundComplete(*run)
 	incomplete := reviewHasIncompleteResult(*run)
 	ownBlocking := review != nil && reviewHasBlockingFindingForRole(invocation.Role, review.Findings)
-	statusState := github.CommitStatusSuccess
+	statusState := codehost.CommitStatusSuccess
 	statusDescription := fmt.Sprintf("%s passed; %d advisory findings", invocation.Role, reviewFindingCount(review))
 	switch {
 	case incomplete && invocation.ReviewUnitID != "":
@@ -616,14 +617,14 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		if review == nil || !reviewIsIncomplete(review) {
 			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
 		} else {
-			statusState = github.CommitStatusError
+			statusState = codehost.CommitStatusError
 			statusDescription = fmt.Sprintf("%s reported %s; human disposition required", invocation.Role, effectiveReviewOutcome(review))
 		}
 	case complete && blocking:
 		run.Status = store.StatusActive
 		run.LifecycleReason = fmt.Sprintf("review round has blocking violations; routing repair (%s)", invocation.Role)
 		if ownBlocking {
-			statusState = github.CommitStatusFailure
+			statusState = codehost.CommitStatusFailure
 			statusDescription = fmt.Sprintf("%s found blocking findings", invocation.Role)
 		} else {
 			statusDescription = fmt.Sprintf("%s passed; another review has blocking findings", invocation.Role)
@@ -632,7 +633,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		run.Status = store.StatusActive
 		if ownBlocking {
 			run.LifecycleReason = fmt.Sprintf("%s reported %s with blocking findings; waiting for the other review", invocation.Role, effectiveReviewOutcome(review))
-			statusState = github.CommitStatusFailure
+			statusState = codehost.CommitStatusFailure
 			statusDescription = fmt.Sprintf("%s reported %s with blocking findings; waiting for the other review", invocation.Role, effectiveReviewOutcome(review))
 		} else {
 			run.LifecycleReason = fmt.Sprintf("%s reported %s; another review has blocking findings", invocation.Role, effectiveReviewOutcome(review))
@@ -644,7 +645,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		if review == nil || !reviewIsIncomplete(review) {
 			statusDescription = fmt.Sprintf("%s passed; another review still needs human disposition", invocation.Role)
 		} else {
-			statusState = github.CommitStatusError
+			statusState = codehost.CommitStatusError
 			statusDescription = fmt.Sprintf("%s reported %s; human disposition required", invocation.Role, effectiveReviewOutcome(review))
 		}
 	case complete:
@@ -660,7 +661,7 @@ func (s *Service) acceptReviewReport(ctx context.Context, registration config.Re
 		statusDescription = fmt.Sprintf("%s passed; waiting for the other review", invocation.Role)
 	}
 	if unitPending {
-		statusState = github.CommitStatusPending
+		statusState = codehost.CommitStatusPending
 		statusDescription = fmt.Sprintf("%s unit complete; waiting for remaining review units", invocation.Role)
 	}
 	run.UpdatedAt = s.deps.Now().UTC()
@@ -709,7 +710,7 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 	if err != nil {
 		return fmt.Errorf("decode specification packet for review PR projection: %w", err)
 	}
-	repository := github.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return fmt.Errorf("find tracked pull request for review projection: %w", err)
@@ -722,7 +723,7 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 		return fmt.Errorf("build review progress projection: %w", err)
 	}
 	body := mergeGeneratedReviewSection(existing.Body, section)
-	updateRequest := github.PullRequestRequest{
+	updateRequest := codehost.PullRequestRequest{
 		Title:      defaultString(existing.Title, defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number))),
 		Body:       body,
 		HeadBranch: run.Branch,
