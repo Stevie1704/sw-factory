@@ -1,0 +1,231 @@
+package factory
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
+)
+
+// RunReadStore is the read-only store seam for the run list and run detail.
+type RunReadStore interface {
+	OperationalStore
+	SupervisorHeartbeatReader
+	ListRuns(context.Context) ([]store.Run, error)
+	Run(context.Context, string) (*store.Run, error)
+	Invocations(context.Context, string) ([]store.Invocation, error)
+	RunGateResults(context.Context, string) ([]store.GateResult, error)
+	PendingEffect(context.Context, string) (*store.PendingEffect, error)
+}
+
+// ErrRunNotFound reports that no persisted run has the requested identity.
+var ErrRunNotFound = errors.New("run not found")
+
+// SupervisorView is the coordinator liveness shown on every page. It reads
+// only the persisted heartbeat: probing the coordinator lock would take an
+// exclusive lock for a moment and could race a starting coordinator.
+type SupervisorView struct {
+	// Heartbeat is the persisted heartbeat, or nil when none was recorded.
+	Heartbeat *store.SupervisorHeartbeat
+	// Live reports an unexpired heartbeat at ObservedAt.
+	Live bool
+	// ObservedAt is when the page read the store.
+	ObservedAt time.Time
+}
+
+// RunListEntry is one row of the run list.
+type RunListEntry struct {
+	Run store.Run
+	// IssueTitle comes from the frozen packet; it is empty when unreadable.
+	IssueTitle string
+	// Route is the frozen workflow route, or unknown when unreadable.
+	Route    workflow.Route
+	Activity RunActivity
+}
+
+// RunOverview is the run list page model.
+type RunOverview struct {
+	RepositoryPath string
+	Supervisor     SupervisorView
+	// Runs holds every persisted run, newest update first.
+	Runs []RunListEntry
+}
+
+// GateCheckpointResults groups the gate results of one phase at one exact
+// checkpoint.
+type GateCheckpointResults struct {
+	Phase         store.GatePhase
+	CheckpointSHA string
+	// Results are in repository declaration order.
+	Results []store.GateResult
+}
+
+// GateFailureDiagnostic is the host-side diagnostic of one failed gate phase.
+type GateFailureDiagnostic struct {
+	Phase store.GatePhase
+	// Content is a bounded read of repository command output. It stays on
+	// the coordinator host.
+	Content string
+}
+
+// RunDetail is the run detail page model.
+type RunDetail struct {
+	Supervisor     SupervisorView
+	Run            store.Run
+	IssueTitle     string
+	Route          workflow.Route
+	TestPolicyMode config.TestMode
+	Activity       RunActivity
+	// Invocations are in update order, oldest first.
+	Invocations []store.Invocation
+	// Gates are grouped by phase, then checkpoint.
+	Gates []GateCheckpointResults
+	// PendingEffect is the in-flight external effect, or nil. Its Payload
+	// holds replay intent and is not for display.
+	PendingEffect *store.PendingEffect
+	// Diagnostics hold the retained gate failure diagnostics; absent files
+	// are omitted.
+	Diagnostics []GateFailureDiagnostic
+}
+
+// RunOverview reads the run list without contacting any external service or
+// changing the store.
+func (s *Service) RunOverview(ctx context.Context) (RunOverview, error) {
+	repositoryPath, reader, err := s.openRunReader(ctx)
+	if err != nil {
+		return RunOverview{}, err
+	}
+	defer func() { _ = reader.Close() }()
+	supervisor, err := s.supervisorView(ctx, reader)
+	if err != nil {
+		return RunOverview{}, err
+	}
+	runs, err := reader.ListRuns(ctx)
+	if err != nil {
+		return RunOverview{}, err
+	}
+	overview := RunOverview{RepositoryPath: repositoryPath, Supervisor: supervisor, Runs: make([]RunListEntry, 0, len(runs))}
+	for _, run := range runs {
+		overview.Runs = append(overview.Runs, RunListEntry{
+			Run:        run,
+			IssueTitle: issueTitleForRun(run),
+			Route:      statusRouteForRun(run),
+			Activity:   RunActivityFor(run),
+		})
+	}
+	return overview, nil
+}
+
+// RunDetail reads one run without contacting any external service or
+// changing the store. It returns ErrRunNotFound for an unknown identity.
+func (s *Service) RunDetail(ctx context.Context, runID string) (RunDetail, error) {
+	_, reader, err := s.openRunReader(ctx)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	defer func() { _ = reader.Close() }()
+	supervisor, err := s.supervisorView(ctx, reader)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	run, err := reader.Run(ctx, runID)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	if run == nil {
+		return RunDetail{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+	}
+	invocations, err := reader.Invocations(ctx, runID)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	gateResults, err := reader.RunGateResults(ctx, runID)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	pendingEffect, err := reader.PendingEffect(ctx, runID)
+	if err != nil {
+		return RunDetail{}, fmt.Errorf("read pending effect: %w", err)
+	}
+	diagnostics, err := readGateFailureDiagnostics(*run)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	return RunDetail{
+		Supervisor:     supervisor,
+		Run:            *run,
+		IssueTitle:     issueTitleForRun(*run),
+		Route:          statusRouteForRun(*run),
+		TestPolicyMode: testPolicyModeForRun(*run),
+		Activity:       RunActivityFor(*run),
+		Invocations:    invocations,
+		Gates:          groupGateResults(gateResults),
+		PendingEffect:  pendingEffect,
+		Diagnostics:    diagnostics,
+	}, nil
+}
+
+// groupGateResults splits results ordered by phase, checkpoint, and ordinal
+// into one group per phase and checkpoint.
+func groupGateResults(results []store.GateResult) []GateCheckpointResults {
+	groups := []GateCheckpointResults{}
+	for _, result := range results {
+		last := len(groups) - 1
+		if last < 0 || groups[last].Phase != result.Phase || groups[last].CheckpointSHA != result.CheckpointSHA {
+			groups = append(groups, GateCheckpointResults{Phase: result.Phase, CheckpointSHA: result.CheckpointSHA})
+			last++
+		}
+		groups[last].Results = append(groups[last].Results, result)
+	}
+	return groups
+}
+
+// openRunReader opens the registered operational store read-only. It never
+// uses the read-write opener, so a page view cannot create, migrate, or back
+// up the store. It returns the registered repository path with the reader.
+func (s *Service) openRunReader(ctx context.Context) (string, RunReadStore, error) {
+	registration, err := s.registration()
+	if err != nil {
+		return "", nil, err
+	}
+	if err := validateOperationalPath(registration.Path, registration.OperationalDataPath); err != nil {
+		return "", nil, err
+	}
+	opened, err := s.deps.OpenStoreReadOnly(ctx, registration.OperationalDataPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("open operational store read-only: %w", err)
+	}
+	reader, ok := opened.(RunReadStore)
+	if !ok {
+		_ = opened.Close()
+		return "", nil, errors.New("operational store does not support run views")
+	}
+	return registration.Path, reader, nil
+}
+
+// supervisorView reads the persisted heartbeat and judges it at the
+// service clock.
+func (s *Service) supervisorView(ctx context.Context, reader SupervisorHeartbeatReader) (SupervisorView, error) {
+	view := SupervisorView{ObservedAt: s.deps.Now().UTC()}
+	heartbeat, err := reader.ReadSupervisorHeartbeat(ctx)
+	if err != nil {
+		return SupervisorView{}, fmt.Errorf("read supervisor heartbeat: %w", err)
+	}
+	view.Heartbeat = heartbeat
+	view.Live = heartbeat != nil && heartbeat.Live(view.ObservedAt)
+	return view, nil
+}
+
+// issueTitleForRun returns the issue title frozen in the run's packet, or an
+// empty title when the packet is unreadable.
+func issueTitleForRun(run store.Run) string {
+	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
+	if err != nil {
+		return ""
+	}
+	return packet.Issue.Title
+}
