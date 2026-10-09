@@ -17,8 +17,34 @@ import (
 // nonzero. Stub executables replace gh, git, and docker so the diagnosis needs
 // no live GitHub account, Docker daemon, or credentials.
 func TestRunDoctorRendersTheInvalidRepositoryField(t *testing.T) {
+	configPath := doctorFixture(t, func(registration config.RepositoryRegistration) config.RepositoryRegistration { return registration })
+
+	var output, errorsOutput bytes.Buffer
+	code := cli.Run(context.Background(), []string{"doctor", "--config", configPath}, &output, &errorsOutput)
+	if code == 0 {
+		t.Fatalf("doctor exit code = 0, want failure, stdout=%q stderr=%q", output.String(), errorsOutput.String())
+	}
+	reported := output.String()
+	for _, want := range []string{
+		"doctor: configuration: failed",
+		"model_options.test: must declare at least one model",
+		"action: repair the repository factory.yaml and its declared workflow policy",
+		"doctor: worker limits: passed (memory 8g, swap 8g, cpus 4, pids 4096, log 3 x 10m)",
+		"doctor: blocked",
+	} {
+		if !strings.Contains(reported, want) {
+			t.Fatalf("doctor stdout = %q, want it to contain %q", reported, want)
+		}
+	}
+}
+
+// doctorFixture writes a host configuration whose repository policy has an
+// invalid model list, with stub executables in place of gh, az, git, docker,
+// and the harnesses. mutate adjusts the registration before it is saved.
+func doctorFixture(t *testing.T, mutate func(config.RepositoryRegistration) config.RepositoryRegistration) string {
+	t.Helper()
 	stubs := t.TempDir()
-	for _, name := range []string{"gh", "git", "docker", "codex", "claude"} {
+	for _, name := range []string{"gh", "az", "git", "docker", "codex", "claude"} {
 		if err := os.WriteFile(filepath.Join(stubs, name), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -68,32 +94,35 @@ base_synchronization:
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(root, "host", "config.yaml")
+	registration := config.RepositoryRegistration{
+		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
+		AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"},
+		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: repositoryConfigPath,
+	}
 	if err := config.SaveHost(configPath, config.HostConfig{
 		SchemaVersion: config.CurrentHostSchemaVersion,
-		Repositories: []config.RepositoryRegistration{{
-			Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
-			AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"},
-			OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: repositoryConfigPath,
-		}},
+		Repositories:  []config.RepositoryRegistration{mutate(registration)},
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return configPath
+
+}
+
+// TestRunDoctorSelectsTheAzureDevOpsAdapter verifies that an Azure DevOps
+// registration makes the composition root run the Azure DevOps checks
+// instead of the GitHub checks.
+func TestRunDoctorSelectsTheAzureDevOpsAdapter(t *testing.T) {
+	configPath := doctorFixture(t, func(registration config.RepositoryRegistration) config.RepositoryRegistration {
+		registration.GitHub = config.GitHubConfig{}
+		registration.AzureDevOps = config.AzureDevOpsConfig{Organization: "contoso", Project: "Factory Pilot", Repository: "service"}
+		return registration
+	})
 
 	var output, errorsOutput bytes.Buffer
-	code := cli.Run(context.Background(), []string{"doctor", "--config", configPath}, &output, &errorsOutput)
-	if code == 0 {
-		t.Fatalf("doctor exit code = 0, want failure, stdout=%q stderr=%q", output.String(), errorsOutput.String())
-	}
+	cli.Run(context.Background(), []string{"doctor", "--config", configPath}, &output, &errorsOutput)
 	reported := output.String()
-	for _, want := range []string{
-		"doctor: configuration: failed",
-		"model_options.test: must declare at least one model",
-		"action: repair the repository factory.yaml and its declared workflow policy",
-		"doctor: worker limits: passed (memory 8g, swap 8g, cpus 4, pids 4096, log 3 x 10m)",
-		"doctor: blocked",
-	} {
-		if !strings.Contains(reported, want) {
-			t.Fatalf("doctor stdout = %q, want it to contain %q", reported, want)
-		}
+	if !strings.Contains(reported, "doctor: azure devops authentication: failed") || strings.Contains(reported, "github authentication") {
+		t.Fatalf("doctor stdout = %q, want the Azure DevOps checks only", reported)
 	}
 }
