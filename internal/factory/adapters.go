@@ -55,3 +55,25 @@ func (s *Service) pullRequestClient() codehost.PullRequestClient {
 	client, _ := s.deps.Tracker.(codehost.PullRequestClient)
 	return client
 }
+
+// pullRequestCommentReader resolves the optional pull-request comment seam. It
+// returns nil when pull-request comments share the issue comment stream.
+func (s *Service) pullRequestCommentReader() codehost.PullRequestCommentReader {
+	if s.deps.PullRequestComments != nil {
+		return s.deps.PullRequestComments
+	}
+	reader, _ := s.deps.Tracker.(codehost.PullRequestCommentReader)
+	return reader
+}
+
+// pullRequestCommentClient resolves the optional pull-request comment mutation
+// seam: the dedicated code-host dependency, or the tracker adapter when it
+// implements it. It returns nil when pull-request comments share the issue
+// comment stream.
+func (s *Service) pullRequestCommentClient() codehost.PullRequestCommentClient {
+	if s.deps.PullRequestCommentPublisher != nil {
+		return s.deps.PullRequestCommentPublisher
+	}
+	client, _ := s.deps.Tracker.(codehost.PullRequestCommentClient)
+	return client
+}

@@ -37,7 +37,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	if configuration.Registration != nil {
 		registration = *configuration.Registration
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	repositoryPolicy := configuration.Repository
 	image := worker.ImageReference{}
 	if repositoryPolicy != nil {
@@ -51,8 +51,9 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	checks = append(checks, gitadapter.StartupChecks(s.doctorGitWorkspace(), gitadapter.DoctorRequest{
 		RepositoryPath:     registration.Path,
 		RemoteName:         gitadapter.DefaultRemoteName,
-		ExpectedOwner:      registration.GitHub.Owner,
-		ExpectedRepository: registration.GitHub.Repository,
+		ExpectedOwner:      repository.Owner,
+		ExpectedProject:    repository.Project,
+		ExpectedRepository: repository.Name,
 		TargetBranch:       targetBranch(repositoryPolicy),
 		RoleCraft:          roleCraft(repositoryPolicy),
 	})...)

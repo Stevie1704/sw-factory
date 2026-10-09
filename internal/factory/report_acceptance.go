@@ -726,7 +726,7 @@ func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceR
 func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, outcome AcceptanceOutcome, projection acceptanceProjection) error {
 	next := projection.JournaledNext
 	accepted, committed, err := a.journal.AcceptResult(ctx, request.RunStore, invocationStore, effectkernel.ResultAcceptance{
-		Repository: commandRepository(request.Registration),
+		Repository: registeredRepository(request.Registration),
 		WorkerID:   workerIDForInvocation(projection.Invocation),
 		Harness:    harnessRuntime,
 		Session: harness.Session{

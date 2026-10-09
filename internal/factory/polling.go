@@ -138,7 +138,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	}
 	s.observeCoordinatorStageFromStore(pollContext, registration, events)
 
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	leaseRunID := ""
 	delay := time.Duration(0)
 	consecutiveHeartbeatFailures := 0
@@ -554,7 +554,7 @@ func (s *Service) pollOnce(ctx context.Context, registration config.RepositoryRe
 	if poller == nil {
 		return PollResult{}, errors.New("tracker issue poller is required for polling")
 	}
-	issues, err := poller.ListEligibleIssues(ctx, tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository})
+	issues, err := poller.ListEligibleIssues(ctx, registeredRepository(registration))
 	if err != nil {
 		return PollResult{}, &pollingTransportError{err: fmt.Errorf("poll eligible issues: %w", err)}
 	}

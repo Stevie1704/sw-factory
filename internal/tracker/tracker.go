@@ -18,12 +18,24 @@ import (
 // Repository identifies the registered repository that the tracker and the
 // code host serve.
 type Repository struct {
+	// Owner is the GitHub owner or the Azure DevOps organization.
 	Owner string
-	Name  string
+	// Project is the Azure DevOps project between the organization and the
+	// repository. It is empty for a provider without projects, such as
+	// GitHub. A payload stored before this field existed decodes as empty.
+	Project string
+	// Name is the repository name.
+	Name string
 }
 
-// String returns the owner/name form of the repository.
-func (r Repository) String() string { return r.Owner + "/" + r.Name }
+// String returns the owner/name form of the repository, or
+// owner/project/name when the repository has a project.
+func (r Repository) String() string {
+	if r.Project != "" {
+		return r.Owner + "/" + r.Project + "/" + r.Name
+	}
+	return r.Owner + "/" + r.Name
+}
 
 // Issue is the content-free issue snapshot needed by a claim.
 type Issue struct {

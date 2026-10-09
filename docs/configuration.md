@@ -210,7 +210,7 @@ operation; they are not part of routine unattended progression.
 ## Host configuration
 
 The generated host file uses schema version 2 and contains the repository path,
-GitHub identity, authorized maintainers, polling settings, credential sources,
+GitHub or Azure DevOps identity, authorized maintainers, polling settings, credential sources,
 the checked-in repository configuration path, and the operational-data path.
 
 ```yaml
@@ -271,6 +271,76 @@ field-level error, for example `repositories[0].worker_limits.pids`.
 The limits apply when the coordinator creates a worker container. A worker
 that already exists keeps the limits it was created with.
 `docs/worker-runtime.md` describes how a command that reaches a limit fails.
+
+### Azure DevOps registration
+
+A registration can name an Azure DevOps Services repository in place of the
+GitHub owner and repository. Azure Boards work items of the project are then
+the work tracker, and Azure Repos is the code host (ADR 0019). A registration
+names exactly one of `github` and `azure_devops`; validation rejects both, and
+each `azure_devops` field is required and must be a plain name without `/`,
+`\`, `?`, `#`, or `%`.
+
+```yaml
+schema_version: 2
+repositories:
+  - path: /Users/me/src/service
+    azure_devops:
+      organization: contoso
+      project: Factory Pilot
+      repository: service
+    authorized_users:
+      - alice@contoso.com
+    polling:
+      interval: 30s
+      backoff: 5m
+    operational_data_path: /Users/me/.local/share/factory/factory.db
+    repository_config_path: /Users/me/src/service/factory.yaml
+```
+
+`factory register` infers only a GitHub identity. For Azure DevOps, write the
+registration into the host file by hand, then run `factory doctor`.
+
+- **Credential.** The factory calls the Azure DevOps REST API through
+  `az rest`. Install the Azure CLI and sign in with `az login` as the
+  company-managed identity that supervises the repository, for example
+  `az login --service-principal` or `az login --identity`. The factory never
+  reads or stores the credential.
+- **Authorized users.** `authorized_users` holds account names (user principal
+  names) such as `alice@contoso.com`, because comment, vote, and work item
+  update authors carry that name.
+- **Intake.** A work item is eligible when it is open and has the
+  `agent-ready` tag, and the last update that added that tag came from an
+  authorized user. Any editor can add a tag, so the tag alone is not enough.
+  A work item is open unless its state is in the Completed or Removed category.
+- **Run state.** The factory labels are work item tags. The factory never
+  changes the work item state, so board rules stay intact. A tag is created
+  on first use, which needs the Create tag definition permission until every
+  factory tag exists; `factory bootstrap-labels` changes nothing.
+- **Text.** HTML descriptions and comments are read as text with HTML comments
+  kept, so `<!-- factory-route: ... -->` works whether it is typed as text or
+  stored as a comment. The factory writes its own comments as Markdown.
+- **Pull requests.** Commands and clarification questions on the pull request
+  are thread comments. A factory comment opens a closed thread, so a "comments
+  must be resolved" branch policy does not block the merge. A reviewer vote of
+  "waiting for author" (-5) or "rejected" (-10) is a change request; the
+  voter's open threads up to the vote are its findings.
+- **Limits.** Azure Repos accepts at most 4,000 characters in a pull-request
+  description. A longer generated body fails at the draft pull request instead
+  of being truncated. There is no coordinator lease, because Azure DevOps has
+  no milestones.
+- **Remote.** The checkout's `origin` remote must be the registered Azure Repos
+  repository in the HTTPS (`https://dev.azure.com/contoso/Factory%20Pilot/_git/service`)
+  or SSH (`git@ssh.dev.azure.com:v3/contoso/Factory%20Pilot/service`) form.
+  Host Git uses its own credential helper or SSH agent for push and fetch.
+
+`factory doctor` reports three Azure DevOps checks:
+
+| Check | Fails when |
+| --- | --- |
+| `azure devops authentication` | `az` has no usable identity for the organization |
+| `azure devops repository` | the organization, project, or repository cannot be read |
+| `azure devops permissions` | the identity lacks Contribute, Create branch, or Contribute to pull requests on the repository, or View and Edit work items in the project's root area, or a factory tag does not exist yet and the identity lacks Create tag definition |
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 

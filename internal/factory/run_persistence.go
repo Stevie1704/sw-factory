@@ -9,7 +9,6 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // persistAgentRunState uses the coordinator's GitHub label/comment transition
@@ -56,7 +55,7 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 		}
 		return saveRunWithRetry(ctx, runStore, next)
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	issue, err := s.deps.Tracker.Issue(ctx, repository, next.IssueNumber)
 	if err != nil {
 		return fmt.Errorf("read issue for agent state transition: %w", err)

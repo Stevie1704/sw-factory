@@ -282,7 +282,7 @@ func (s *Service) diagnoseInterruptedRunWithStore(ctx context.Context, registrat
 	inspector := s.worktreeInspector()
 	inspectWorktreeProjection(ctx, &diagnosis, inspector, registration.Path, run)
 
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	inspectGitHubProjection(ctx, &diagnosis, s.deps.Tracker, s.pullRequestClient(), repository, run)
 	inspectRemoteBranchProjection(ctx, &diagnosis, s.gitWorkspace(), run)
 	s.inspectInvocationProjection(ctx, &diagnosis, registration, runStore, run)
@@ -1527,7 +1527,7 @@ func (s *Service) completePendingCheckRepair(ctx context.Context, registration c
 	if s.deps.Tracker == nil {
 		return run, errors.New("GitHub client is required to complete check-repair reservation")
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
 	if err != nil {
 		return run, fmt.Errorf("read issue while completing check-repair reservation: %w", err)
 	}
@@ -1537,7 +1537,7 @@ func (s *Service) completePendingCheckRepair(ctx context.Context, registration c
 	next.LifecycleReason = fmt.Sprintf("check-repair attempt %d active", next.CheckRepairAttempts)
 	next.UpdatedAt = s.deps.Now().UTC()
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository: commandRepository(registration),
+		Repository: registeredRepository(registration),
 		Issue:      issue,
 		Previous:   run,
 		Next:       next,
@@ -1628,7 +1628,7 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 		}
 		return next, nil
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), next.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), next.IssueNumber)
 	if err != nil {
 		if saveErr := saveRunWithRetry(ctx, runStore, next); saveErr != nil {
 			return next, errors.Join(fmt.Errorf("read issue while pausing for reconciliation: %w", err), saveErr)
@@ -1636,7 +1636,7 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 		return next, fmt.Errorf("read issue while pausing for reconciliation: %w", err)
 	}
 	updated, err := s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository: commandRepository(registration),
+		Repository: registeredRepository(registration),
 		Issue:      issue,
 		Previous:   run,
 		Next:       next,

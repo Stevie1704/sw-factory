@@ -32,10 +32,13 @@ type HostConfig struct {
 }
 
 type RepositoryRegistration struct {
-	Path            string        `yaml:"path"`
-	GitHub          GitHubConfig  `yaml:"github"`
-	AuthorizedUsers []string      `yaml:"authorized_users"`
-	Polling         PollingConfig `yaml:"polling"`
+	Path   string       `yaml:"path"`
+	GitHub GitHubConfig `yaml:"github,omitempty"`
+	// AzureDevOps names an Azure DevOps Services repository in place of
+	// GitHub. A registration names exactly one of the two.
+	AzureDevOps     AzureDevOpsConfig `yaml:"azure_devops,omitempty"`
+	AuthorizedUsers []string          `yaml:"authorized_users"`
+	Polling         PollingConfig     `yaml:"polling"`
 	// Authentication contains optional narrowly scoped host credential sources.
 	Authentication       AuthenticationConfig `yaml:"authentication"`
 	OperationalDataPath  string               `yaml:"operational_data_path"`
@@ -85,6 +88,23 @@ func workerLimits(value WorkerLimitsConfig) worker.ResourceLimits {
 type GitHubConfig struct {
 	Owner      string `yaml:"owner"`
 	Repository string `yaml:"repository"`
+}
+
+// AzureDevOpsConfig identifies one Azure DevOps Services repository. Boards
+// work items of the project are the work tracker, and Azure Repos is the code
+// host.
+type AzureDevOpsConfig struct {
+	// Organization is the dev.azure.com organization name.
+	Organization string `yaml:"organization"`
+	// Project is the project that holds the work items and the repository.
+	Project string `yaml:"project"`
+	// Repository is the Git repository name inside the project.
+	Repository string `yaml:"repository"`
+}
+
+// IsZero reports whether no Azure DevOps field is set.
+func (c AzureDevOpsConfig) IsZero() bool {
+	return c == AzureDevOpsConfig{}
 }
 
 type PollingConfig struct {
@@ -812,6 +832,37 @@ func validateTestPolicyPaths(field string, values []string) error {
 	return nil
 }
 
+// validateProvider requires exactly one tracker and code-host identity: the
+// GitHub owner and repository, or the Azure DevOps organization, project, and
+// repository.
+func validateProvider(prefix string, repository RepositoryRegistration) error {
+	if repository.AzureDevOps.IsZero() {
+		if strings.TrimSpace(repository.GitHub.Owner) == "" {
+			return validation(prefix+".github.owner", "is required")
+		}
+		if strings.TrimSpace(repository.GitHub.Repository) == "" {
+			return validation(prefix+".github.repository", "is required")
+		}
+		return nil
+	}
+	if repository.GitHub != (GitHubConfig{}) {
+		return validation(prefix+".azure_devops", "must not be set together with github")
+	}
+	for _, field := range []struct{ name, value string }{
+		{"organization", repository.AzureDevOps.Organization},
+		{"project", repository.AzureDevOps.Project},
+		{"repository", repository.AzureDevOps.Repository},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			return validation(prefix+".azure_devops."+field.name, "is required")
+		}
+		if strings.ContainsAny(field.value, "/\\?#%") || strings.IndexFunc(field.value, unicode.IsControl) >= 0 {
+			return validation(prefix+".azure_devops."+field.name, "must be a plain name without path, query, or control characters")
+		}
+	}
+	return nil
+}
+
 // validateRegistration validates a repository registration and its associated paths, metadata, users, and polling settings.
 func validateRegistration(prefix string, repository RepositoryRegistration) error {
 	if strings.TrimSpace(repository.Path) == "" {
@@ -820,11 +871,8 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 	if !filepath.IsAbs(repository.Path) {
 		return validation(prefix+".path", "must be absolute")
 	}
-	if strings.TrimSpace(repository.GitHub.Owner) == "" {
-		return validation(prefix+".github.owner", "is required")
-	}
-	if strings.TrimSpace(repository.GitHub.Repository) == "" {
-		return validation(prefix+".github.repository", "is required")
+	if err := validateProvider(prefix, repository); err != nil {
+		return err
 	}
 	if err := validateUniqueStrings(prefix+".authorized_users", repository.AuthorizedUsers); err != nil {
 		return err

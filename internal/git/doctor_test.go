@@ -37,6 +37,42 @@ func TestLocalWorktreeManagerChecksTheConfiguredRemoteAndTargetBranch(t *testing
 	}
 }
 
+// TestLocalWorktreeManagerAcceptsAzureReposRemotes verifies that the remote
+// check accepts the HTTPS and SSH URL forms of the registered Azure Repos
+// repository and rejects a remote of another project.
+func TestLocalWorktreeManagerAcceptsAzureReposRemotes(t *testing.T) {
+	tests := []struct {
+		remote string
+		ok     bool
+	}{
+		{remote: "https://dev.azure.com/contoso/Factory%20Pilot/_git/service", ok: true},
+		{remote: "https://contoso@dev.azure.com/contoso/Factory%20Pilot/_git/service", ok: true},
+		{remote: "https://contoso.visualstudio.com/Factory%20Pilot/_git/service", ok: true},
+		{remote: "https://contoso.visualstudio.com/DefaultCollection/Factory%20Pilot/_git/service", ok: true},
+		{remote: "git@ssh.dev.azure.com:v3/contoso/Factory%20Pilot/service", ok: true},
+		{remote: "contoso@vs-ssh.visualstudio.com:v3/contoso/Factory%20Pilot/service", ok: true},
+		{remote: "https://dev.azure.com/contoso/Other/_git/service", ok: false},
+		{remote: "git@github.com:contoso/service.git", ok: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.remote, func(t *testing.T) {
+			repositoryPath := t.TempDir()
+			manager := &gitadapter.LocalWorktreeManager{Runner: &gitDoctorRunner{repositoryPath: repositoryPath, remoteURL: tc.remote}}
+			err := manager.CheckRemote(context.Background(), gitadapter.DoctorRequest{
+				RepositoryPath:     repositoryPath,
+				RemoteName:         "origin",
+				ExpectedOwner:      "contoso",
+				ExpectedProject:    "Factory Pilot",
+				ExpectedRepository: "service",
+				TargetBranch:       "main",
+			})
+			if (err == nil) != tc.ok {
+				t.Fatalf("CheckRemote() error = %v, want accepted = %t", err, tc.ok)
+			}
+		})
+	}
+}
+
 // TestLocalWorktreeManagerChecksHooksAndWorktreeSupport verifies the two
 // repository-local capability checks use read-only Git observations.
 func TestLocalWorktreeManagerChecksHooksAndWorktreeSupport(t *testing.T) {
@@ -184,7 +220,9 @@ type gitDoctorRunner struct {
 	hooksPath      string
 	treeMode       string
 	lsRemoteErr    error
-	commands       []string
+	// remoteURL replaces the default GitHub fetch and push URL.
+	remoteURL string
+	commands  []string
 }
 
 // Run records one host-side Git command and returns its safe fixture output.
@@ -195,6 +233,8 @@ func (r *gitDoctorRunner) Run(_ context.Context, _ string, args []string) ([]byt
 		return []byte(r.repositoryPath + "\n"), nil
 	case len(args) == 2 && args[0] == "rev-parse" && args[1] == "--is-inside-work-tree":
 		return []byte("true\n"), nil
+	case len(args) >= 3 && args[0] == "remote" && r.remoteURL != "":
+		return []byte(r.remoteURL + "\n"), nil
 	case len(args) == 3 && args[0] == "remote":
 		return []byte("git@github.com:example/project.git\n"), nil
 	case len(args) == 4 && args[0] == "remote" && args[2] == "--push":

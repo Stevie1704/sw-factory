@@ -57,7 +57,7 @@ func (s *Service) consumeHumanReview(ctx context.Context, registration config.Re
 		// write a structured result for the current checkpoint.
 		return nil
 	}
-	reviews, err := reader.PullRequestReviews(ctx, commandRepository(registration), run.PullRequestNumber)
+	reviews, err := reader.PullRequestReviews(ctx, registeredRepository(registration), run.PullRequestNumber)
 	if err != nil {
 		return fmt.Errorf("read reviews for pull request #%d: %w", run.PullRequestNumber, err)
 	}
@@ -197,13 +197,13 @@ func applicableHumanReviews(reviews []codehost.PullRequestReview, authorized []s
 		if !authorizedCommentAuthor(authorized, review.Author) {
 			continue
 		}
-		if githubIDAlreadyProcessed(watermark, review.ID) {
+		if eventIDAlreadyProcessed(watermark, review.ID) {
 			continue
 		}
 		applicable = append(applicable, review)
 	}
 	sort.SliceStable(applicable, func(left, right int) bool {
-		return compareGitHubIDs(applicable[left].ID, applicable[right].ID) < 0
+		return compareEventIDs(applicable[left].ID, applicable[right].ID) < 0
 	})
 	return applicable
 }
@@ -273,7 +273,7 @@ func (s *Service) returnPullRequestToDraft(ctx context.Context, registration con
 	if pullRequest.Draft {
 		return nil
 	}
-	reverted, err := s.setPullRequestDraft(ctx, commandRepository(registration), pullRequest, true)
+	reverted, err := s.setPullRequestDraft(ctx, registeredRepository(registration), pullRequest, true)
 	if err != nil {
 		return err
 	}

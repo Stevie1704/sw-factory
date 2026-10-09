@@ -190,7 +190,15 @@ type Dependencies struct {
 	PullRequestReviews codehost.PullRequestReviewReader
 	// Comments lists issue and pull-request comments for command polling.
 	Comments tracker.CommentReader
-	Worker   worker.WorkerRuntime
+	// PullRequestComments lists pull-request comments when the code host
+	// keeps them apart from issue comments. It defaults to the tracker
+	// adapter when it implements the seam, and otherwise to Comments.
+	PullRequestComments codehost.PullRequestCommentReader
+	// PullRequestCommentPublisher finds, creates, and edits coordinator
+	// comments on a pull request when the code host keeps them apart. It
+	// defaults to the tracker adapter when it implements the seam.
+	PullRequestCommentPublisher codehost.PullRequestCommentClient
+	Worker                      worker.WorkerRuntime
 	// HeadlessHarnesses own detached role lifecycle, keyed by the
 	// repository-selected harness.
 	HeadlessHarnesses map[config.Harness]harness.HeadlessRuntime

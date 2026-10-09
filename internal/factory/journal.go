@@ -24,15 +24,16 @@ type stateTransition = effectkernel.StateTransition
 // handlers exactly as a direct `s.deps` read did before the extraction.
 func (s *Service) journal() *effectkernel.Journal {
 	return effectkernel.New(effectkernel.Adapters{
-		Now:            s.deps.Now,
-		Issues:         s.deps.Tracker,
-		Presentation:   runPresentation{},
-		Projector:      runProjector{},
-		Workspace:      s.gitWorkspace(),
-		PullRequests:   s.pullRequestClient(),
-		CommitStatuses: s.deps.CommitStatuses,
-		Worker:         s.deps.Worker,
-		Lifecycle:      journalLifecycle{service: s},
+		Now:                 s.deps.Now,
+		Issues:              s.deps.Tracker,
+		Presentation:        runPresentation{},
+		Projector:           runProjector{},
+		Workspace:           s.gitWorkspace(),
+		PullRequests:        s.pullRequestClient(),
+		PullRequestComments: s.pullRequestCommentClient(),
+		CommitStatuses:      s.deps.CommitStatuses,
+		Worker:              s.deps.Worker,
+		Lifecycle:           journalLifecycle{service: s},
 	})
 }
 
