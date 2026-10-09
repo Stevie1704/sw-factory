@@ -1028,6 +1028,73 @@ attach a human classification, and the separately confirmed
 selected terminal summaries. Ordinary run-artifact cleanup does not touch this
 projection.
 
+## Local web UI
+
+`factory ui` serves a read-only view of the runs in the operational store. Open
+the printed URL in a browser on the same host. Stop the server with `Ctrl-C`
+(SIGINT) or SIGTERM.
+
+```sh
+factory ui --config /Users/me/.config/factory/config.yaml \
+  --address 127.0.0.1:8765 \
+  --refresh 5s
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--config` | Host configuration path | Host configuration of the registered repository. |
+| `--address` | `127.0.0.1:8765` | Listen address. The host must be exactly `127.0.0.1` and the port must be explicit. Port `0` selects a free port. |
+| `--refresh` | `5s` | Interval between two automatic page reads. It must be greater than zero. |
+
+The command prints `factory ui listening on http://127.0.0.1:<port>` when it is
+ready and `factory ui stopped` when it stops. An invalid address, an interval
+that is not greater than zero, or a positional argument stops the command with
+exit status 2 before it opens a socket.
+
+Access:
+
+- The UI has no login. For this reason it listens only on `127.0.0.1`. The
+  command refuses `0.0.0.0`, `::`, `::1`, `localhost`, and all other hosts.
+- The UI answers only requests whose `Host` header is `127.0.0.1` or
+  `localhost`. This stops a DNS-rebinding page from reading run data through
+  the browser.
+
+Store use:
+
+- Each page request opens the operational store read-only, reads, and closes
+  it. The UI never creates, migrates, or changes the store, and it does not
+  probe the coordinator lock. Thus the UI works while `factory start` runs and
+  also while the coordinator is stopped.
+- The read-only open requires the current store schema. After an upgrade, run
+  `factory start` or `factory status` once to migrate the store. Until then,
+  and when the store is missing or busy, the page shows "Operational store
+  unavailable" (HTTP 503). The next refresh tries again.
+
+Data and network:
+
+- The UI sends no request to GitHub, Azure DevOps, a remote Git host, or any
+  other service, and it sends no telemetry (ADR 0001). Pages and assets load
+  only from the UI server; the Content-Security-Policy blocks all other
+  origins. The pull-request link on a run page is the only external URL, and
+  the browser opens it only when you click it.
+- Run pages show repository content: issue titles, pending questions, the last
+  command message, and gate failure diagnostics. This content stays on the
+  host; the UI serves it only on the loopback interface.
+
+Pages:
+
+| Path | Content |
+|---|---|
+| `/` | All runs, newest update first: stage, status, workflow route, and activity. |
+| `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. |
+| `/runs/{id}/evaluation` | The local evaluation summary of one run: outcome, wall time per stage, attempts, invocation versions, and reported usage. The summary is content-free (ADR 0001). When cleanup removed the run row, the page shows only the summary. |
+
+Every page shows a supervisor banner. The banner tells if the coordinator
+heartbeat is live, expired, or not recorded, and it shows when the page read
+the store. While the browser tab is visible, the page reads the run data and
+the banner again after each `--refresh` interval. When the UI server does not
+answer, the page shows that the server is unreachable.
+
 ## Run-artifact cleanup
 
 Ordinary run data becomes eligible seven days after a run enters its current
