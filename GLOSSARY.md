@@ -12,13 +12,15 @@ _Avoid_: Job, task, workflow instance
 The external system that holds the issues the factory claims, their run-state
 labels, the status and command comments, and the optional coordinator lease.
 It stays the source of truth for product intent. The coordinator reaches it
-only through the tracker port; GitHub is the first adapter.
+only through the tracker port. The adapters are GitHub and Azure DevOps
+(Boards work items, with tags as labels).
 _Avoid_: GitHub (for the concept), ticket store
 
 **Code host**:
 The external system that holds the run branch's pull request, its human
 reviews, and the checkpoint commit statuses. The coordinator reaches it only
-through the code-host port; GitHub is the first adapter.
+through the code-host port. The adapters are GitHub and Azure DevOps
+(Azure Repos, where a reviewer vote is a review).
 _Avoid_: GitHub (for the concept), forge
 
 **Lifecycle observation**:
@@ -239,7 +241,7 @@ _Avoid_: Cleanup, retention, restart
 
 **Coordinator lease**:
 The operator-visible projection of the coordinator heartbeat. It is optional
-per tracker adapter. The GitHub adapter publishes it as one closed
+per tracker adapter; the Azure DevOps adapter has none. The GitHub adapter publishes it as one closed
 milestone titled `factory coordinator lease` that the coordinator account
 created. Every renewal rewrites only the factory block in its description with
 the coordinator, the active run, and the complete renewal and expiry times. A
