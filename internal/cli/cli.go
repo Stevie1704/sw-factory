@@ -226,7 +226,7 @@ func runUI(ctx context.Context, args []string, defaultConfigPath string, output,
 	flags.SetOutput(errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	address := flags.String("address", "127.0.0.1:8765", "listen address; the host must be 127.0.0.1")
-	refresh := flags.Duration("refresh", 5*time.Second, "page refresh interval")
+	refresh := flags.Duration("refresh", 5*time.Second, "page refresh interval; 0 turns automatic refresh off")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -238,8 +238,8 @@ func runUI(ctx context.Context, args []string, defaultConfigPath string, output,
 		writeError(errorsOutput, err)
 		return 2
 	}
-	if *refresh <= 0 {
-		writeError(errorsOutput, fmt.Errorf("--refresh must be greater than zero, got %s", *refresh))
+	if *refresh < 0 {
+		writeError(errorsOutput, fmt.Errorf("--refresh must not be negative, got %s", *refresh))
 		return 2
 	}
 	handler := webui.NewHandler(newService(*configPath), webui.Options{RefreshInterval: *refresh})

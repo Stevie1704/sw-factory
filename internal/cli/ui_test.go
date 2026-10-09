@@ -16,8 +16,8 @@ import (
 )
 
 // TestRunUIRefusesInvalidArguments verifies the UI verb refuses a
-// non-loopback address, a bad refresh interval, or a positional argument as a
-// usage error before it opens a socket.
+// non-loopback address, a negative refresh interval, or a positional argument
+// as a usage error before it opens a socket.
 func TestRunUIRefusesInvalidArguments(t *testing.T) {
 	t.Parallel()
 
@@ -30,8 +30,7 @@ func TestRunUIRefusesInvalidArguments(t *testing.T) {
 		{name: "localhost address", args: []string{"--address", "localhost:8765"}, want: "the host must be 127.0.0.1"},
 		{name: "IPv6 loopback address", args: []string{"--address", "[::1]:8765"}, want: "the host must be 127.0.0.1"},
 		{name: "address without port", args: []string{"--address", "127.0.0.1"}, want: "invalid UI address"},
-		{name: "zero refresh", args: []string{"--refresh", "0s"}, want: "--refresh must be greater than zero"},
-		{name: "negative refresh", args: []string{"--refresh", "-5s"}, want: "--refresh must be greater than zero"},
+		{name: "negative refresh", args: []string{"--refresh", "-5s"}, want: "--refresh must not be negative"},
 		{name: "positional argument", args: []string{"extra-arg"}, want: "does not accept positional arguments"},
 	}
 	for _, test := range tests {
@@ -94,6 +93,45 @@ func TestRunUIServesUntilCancelled(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "factory ui stopped") {
 		t.Fatalf("output = %q, want a stop line", output.String())
+	}
+}
+
+// TestRunUIZeroRefreshTurnsAutomaticRefreshOff verifies --refresh 0 starts
+// the UI and serves pages that do not load the refresh script.
+func TestRunUIZeroRefreshTurnsAutomaticRefreshOff(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	output := &lockedBuffer{}
+	done := make(chan int, 1)
+	go func() {
+		done <- cli.Run(ctx, []string{"ui", "--config", configPath, "--address", "127.0.0.1:0", "--refresh", "0"}, output, output)
+	}()
+
+	url := waitForUIURL(t, output, done)
+	response, err := http.Get(url + "/")
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "refresh.js") {
+		t.Fatalf("page with --refresh 0 loads the refresh script: %q", body)
+	}
+
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0, output = %s", code, output.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ui did not stop after cancel")
 	}
 }
 

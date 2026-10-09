@@ -1044,12 +1044,12 @@ factory ui --config /Users/me/.config/factory/config.yaml \
 |---|---|---|
 | `--config` | Host configuration path | Host configuration of the registered repository. |
 | `--address` | `127.0.0.1:8765` | Listen address. The host must be exactly `127.0.0.1` and the port must be explicit. Port `0` selects a free port. |
-| `--refresh` | `5s` | Interval between two automatic page reads. It must be greater than zero. |
+| `--refresh` | `5s` | Interval between two automatic page reads. `0` turns automatic refresh off. It must not be negative. |
 
 The command prints `factory ui listening on http://127.0.0.1:<port>` when it is
-ready and `factory ui stopped` when it stops. An invalid address, an interval
-that is not greater than zero, or a positional argument stops the command with
-exit status 2 before it opens a socket.
+ready and `factory ui stopped` when it stops. An invalid address, a negative
+interval, or a positional argument stops the command with exit status 2 before
+it opens a socket.
 
 Access:
 
@@ -1093,8 +1093,9 @@ Every page shows a supervisor banner. The banner tells if the coordinator
 heartbeat is live, expired, or not recorded, and it shows when the page read
 the store. When a run is active and the supervisor is not live, the banner
 shows a warning that names the run; run `factory start` to continue it. While the browser tab is visible, the page reads the run data and
-the banner again after each `--refresh` interval. When the UI server does not
-answer, the page shows that the server is unreachable.
+the banner again after each `--refresh` interval; with `--refresh 0` the page
+changes only when you reload it. When the UI server does not answer, the page
+shows that the server is unreachable.
 
 ## Run-artifact cleanup
 
