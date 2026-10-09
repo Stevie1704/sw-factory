@@ -1,17 +1,22 @@
 {{define "title"}}Evaluation of run {{.RunID}}{{end}}
 
 {{define "content" -}}
-<h1>Evaluation of run {{.RunID}}</h1>
+<div class="page-head">
 {{with .Run -}}
-<p><a href="/runs/{{.ID}}">Run {{.ID}}</a>, issue #{{.IssueNumber}}</p>
+<p class="crumbs"><a href="/">Runs</a> / <a href="/runs/{{.ID}}">Run {{.ID}}</a>, issue #{{.IssueNumber}}</p>
 {{- else -}}
-<p>The run record was removed by cleanup. Only the evaluation summary is retained.</p>
+<p class="crumbs"><a href="/">Runs</a></p>
 {{- end}}
+<h1>Evaluation of run {{.RunID}}</h1>
+{{- if not .Run}}
+<p class="quiet">The run record was removed by cleanup. Only the evaluation summary is retained.</p>
+{{- end}}
+</div>
 
 {{with .Summary -}}
 <h2>Outcome</h2>
-<dl>
-<dt>Outcome</dt><dd>{{.Outcome}}</dd>
+<dl class="facts">
+<dt>Outcome</dt><dd>{{template "status" .Outcome}}</dd>
 <dt>Started</dt><dd>{{formatTime .StartedAt}}</dd>
 {{with formatTime .CompletedAt}}<dt>Completed</dt><dd>{{.}}</dd>{{end}}
 <dt>Total wall time</dt><dd>{{.TotalWallTime}}</dd>
@@ -19,19 +24,19 @@
 
 <h2>Stage durations</h2>
 {{with .StageDurations -}}
-<table>
+<div class="scroll"><table>
 <thead><tr><th>Stage</th><th>Duration</th></tr></thead>
 <tbody>
 {{range .}}<tr><td>{{.Stage}}</td><td>{{.Duration}}</td></tr>
 {{end -}}
 </tbody>
-</table>
+</table></div>
 {{- else -}}
-<p>No stage durations are recorded.</p>
+<p class="quiet">No stage durations are recorded.</p>
 {{- end}}
 
 <h2>Attempts</h2>
-<dl>
+<dl class="facts">
 <dt>Invocations</dt><dd>{{.InvocationCount}}</dd>
 <dt>Check repairs</dt><dd>{{.CheckRepairCount}}</dd>
 <dt>Test revisions</dt><dd>{{.TestRevisionCount}}</dd>
@@ -41,21 +46,21 @@
 
 <h2>Versions</h2>
 {{with .InvocationVersions -}}
-<table>
+<div class="scroll"><table>
 <thead><tr><th>Invocation</th><th>Harness</th><th>Model</th><th>Prompt version</th><th>Worker version</th><th>Report schema</th></tr></thead>
 <tbody>
 {{range .}}<tr><td><code>{{.InvocationID}}</code></td><td>{{.Harness}}</td><td>{{.Model}}</td><td>{{.PromptVersion}}</td><td>{{.WorkerVersion}}</td><td>{{.ReportSchemaVersion}}</td></tr>
 {{end -}}
 </tbody>
-</table>
+</table></div>
 {{- else -}}
-<p>No versions are recorded.</p>
+<p class="quiet">No versions are recorded.</p>
 {{- end}}
 
 <h2>Usage estimate</h2>
 {{with .Usage -}}
 {{if .Available -}}
-<dl>
+<dl class="facts">
 <dt>Input tokens</dt><dd>{{.InputTokens}}</dd>
 <dt>Output tokens</dt><dd>{{.OutputTokens}}</dd>
 <dt>Total tokens</dt><dd>{{.TotalTokens}}</dd>
@@ -63,10 +68,10 @@
 <dt>Cost status</dt><dd>{{.CostStatus}}</dd>
 </dl>
 {{- else -}}
-<p>Usage unavailable ({{.UnavailableReason}}).</p>
+<p class="quiet">Usage unavailable ({{.UnavailableReason}}).</p>
 {{- end}}
 {{- end}}
 {{- else -}}
-<p>No evaluation summary is retained for this run.</p>
+<p class="quiet">No evaluation summary is retained for this run.</p>
 {{- end}}
 {{- end}}

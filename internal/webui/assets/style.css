@@ -1,65 +1,733 @@
-body {
-  font-family: system-ui, sans-serif;
-  margin: 0 auto;
-  max-width: 72rem;
-  padding: 1rem;
-  color: #1b1b1b;
-  background: #fff;
+/* Factory floor: machine-enamel surfaces, indicator-lamp status colors, and
+   DIN signage type. Every font is a local system face, because the content
+   security policy allows no external resource. */
+
+:root {
+  --paper: #e6eae3;
+  --panel: #f4f6f1;
+  --ink: #1d2a2f;
+  --ink-soft: #55625d;
+  --rule: #c4ccc1;
+  --steel: #8e9a93;
+  --strip: #1d2a2f;
+  --strip-ink: #e6eae3;
+  --strip-soft: #a9b5ae;
+  --lamp-run: #2a62a3;
+  --lamp-human: #b97f00;
+  --lamp-ok: #2b7a45;
+  --lamp-stop: #b8382a;
+  --callout: #f6ecd2;
+  --console: #19221f;
+  --console-ink: #d6dfd8;
+
+  --display: "DIN Condensed", "Bahnschrift Condensed", "Bahnschrift", "Arial Narrow", sans-serif;
+  --numeric: "DIN Alternate", "Bahnschrift", system-ui, sans-serif;
+  --text: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --gutter: max(1rem, (100% - 72rem) / 2);
+  color-scheme: light;
 }
 
-header {
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #17201e;
+    --panel: #1e2926;
+    --ink: #e1e7df;
+    --ink-soft: #9aa8a1;
+    --rule: #34433f;
+    --steel: #61716b;
+    --strip: #24312e;
+    --strip-ink: #e1e7df;
+    --strip-soft: #9aa8a1;
+    --lamp-run: #6ea2df;
+    --lamp-human: #f0b429;
+    --lamp-ok: #5cbf7a;
+    --lamp-stop: #f06a5a;
+    --callout: #2e2a1c;
+    --console: #101715;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #17201e;
+  --panel: #1e2926;
+  --ink: #e1e7df;
+  --ink-soft: #9aa8a1;
+  --rule: #34433f;
+  --steel: #61716b;
+  --strip: #24312e;
+  --strip-ink: #e1e7df;
+  --strip-soft: #9aa8a1;
+  --lamp-run: #6ea2df;
+  --lamp-human: #f0b429;
+  --lamp-ok: #5cbf7a;
+  --lamp-stop: #f06a5a;
+  --callout: #2e2a1c;
+  --console: #101715;
+  color-scheme: dark;
+}
+
+/* Base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 1rem/1.5 var(--text);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration-color: var(--steel);
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+:focus-visible {
+  outline: 2px solid var(--lamp-run);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+code {
+  overflow-wrap: anywhere;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--display);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.1rem, 5vw, 3.4rem);
+}
+
+h2 {
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.6rem;
+  border-top: 2px solid var(--ink);
+  font-size: 1.5rem;
+}
+
+h3 {
+  margin: 1.5rem 0 0.25rem;
+  font-size: 1.2rem;
+}
+
+h3 code {
+  font-family: var(--mono);
+  font-size: 0.7em;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+main {
+  padding: 2rem var(--gutter) 4rem;
+}
+
+.quiet,
+.stamp {
+  color: var(--ink-soft);
+}
+
+.stamp {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+/* Control strip */
+
+.strip {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  border-bottom: 1px solid #ccc;
+  gap: 0.5rem 2rem;
+  padding: 0.6rem var(--gutter);
+  color: var(--strip-ink);
+  background: var(--strip);
+}
+
+.mark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  font: 700 1.6rem/1 var(--display);
+  text-decoration: none;
+}
+
+/* A sawtooth roof, the outline of a factory hall. */
+.mark-glyph {
+  width: 1.6rem;
+  height: 1.05rem;
+  margin-bottom: 0.2rem;
+  background: currentColor;
+  clip-path: polygon(0 100%, 0 45%, 33% 0, 33% 45%, 66% 0, 66% 45%, 100% 0, 100% 100%);
 }
 
 #supervisor {
-  padding: 0 0.5rem;
-  border-left: 0.25rem solid #888;
+  --lamp: var(--steel);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  color: var(--strip-soft);
+}
+
+#supervisor p {
+  flex: 1 1 12rem;
+  margin: 0;
 }
 
 #supervisor[data-state="live"] {
-  border-left-color: #2e7d32;
+  --lamp: var(--lamp-ok);
 }
 
 #supervisor[data-state="expired"],
 #supervisor[data-state="missing"] {
-  border-left-color: #c62828;
+  --lamp: var(--lamp-stop);
 }
 
-.warning {
-  padding: 0.25rem 0.5rem;
-  color: #6d1b00;
-  background: #fff3e0;
-  border: 1px solid #e65100;
+.lamp {
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--lamp);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lamp) 30%, transparent);
+}
+
+.notice {
+  margin: 0;
+  padding: 0.5rem var(--gutter);
+  font-size: 0.9rem;
+}
+
+#supervisor .notice {
+  flex-basis: 100%;
+  padding: 0.35rem 0.6rem;
+  border-radius: 3px;
+}
+
+.notice-alarm {
+  color: #fff;
+  background: var(--lamp-stop);
+}
+
+.notice-alarm a {
+  color: inherit;
+}
+
+/* Page head */
+
+.page-head {
+  margin-bottom: 2rem;
+}
+
+.page-head p {
+  margin: 0.5rem 0 0;
+}
+
+.crumbs {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.issue {
+  color: var(--ink-soft);
+}
+
+.run-id {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.repo {
+  color: var(--ink-soft);
+}
+
+.stop h1 {
+  color: var(--lamp-stop);
+}
+
+/* Status vocabulary: each run status lights one lamp color. */
+
+[data-status] {
+  --lamp: var(--steel);
+}
+
+[data-status="active"],
+[data-status="waiting_for_harness"] {
+  --lamp: var(--lamp-run);
+}
+
+[data-status="waiting_for_human"] {
+  --lamp: var(--lamp-human);
+}
+
+[data-status="failed"] {
+  --lamp: var(--lamp-stop);
+}
+
+[data-status="complete"] {
+  --lamp: var(--lamp-ok);
+}
+
+.status,
+.outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status::before,
+.outcome::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--lamp);
+}
+
+.outcome {
+  --lamp: var(--steel);
+  font-weight: 500;
+}
+
+.outcome[data-outcome="passed"] {
+  --lamp: var(--lamp-ok);
+}
+
+.outcome[data-outcome="failed"],
+.outcome[data-outcome="error"],
+.outcome[data-outcome="setup_failed"] {
+  --lamp: var(--lamp-stop);
+  color: var(--lamp-stop);
+}
+
+.activity,
+.reason {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+/* Stage track: the run's position on the production line. */
+
+.track {
+  --cell: 0.9rem;
+  --done: var(--ink);
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.track[data-status="complete"] {
+  --done: var(--lamp-ok);
+}
+
+.track li {
+  position: relative;
+  padding-top: calc(var(--cell) + 0.45rem);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: var(--ink-soft);
+}
+
+/* The rail between stations. */
+.track li::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--cell) / 2 - 1.5px);
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--rule);
+}
+
+.track li:last-child::before {
+  right: auto;
+  width: var(--cell);
+}
+
+/* The station cell. */
+.track li::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--cell);
+  height: var(--cell);
+  border: 2px solid var(--steel);
+  border-radius: 3px;
+  background: var(--paper);
+}
+
+.track span {
+  display: block;
+  padding-right: 0.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track [data-state="done"] {
+  color: var(--ink);
+}
+
+.track [data-state="done"]::before {
+  background: var(--done);
+}
+
+.track [data-state="done"]::after {
+  border-color: var(--done);
+  background: var(--done);
+}
+
+.track [data-state="current"] {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.track [data-state="current"]::after {
+  border-color: var(--lamp);
+  background: var(--lamp);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--lamp) 28%, transparent);
+}
+
+.track [data-state="bypassed"] {
+  color: var(--steel);
+  text-decoration: line-through;
+}
+
+.track [data-state="bypassed"]::after {
+  border-style: dashed;
+  background: transparent;
+}
+
+.track [data-state="bypassed"]::before {
+  background: repeating-linear-gradient(90deg, var(--rule) 0 4px, transparent 4px 7px);
+}
+
+/* The one moving element: the station a run is working on now. */
+@media (prefers-reduced-motion: no-preference) {
+  .track[data-status="active"] [data-state="current"]::after {
+    animation: working 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes working {
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--lamp) 10%, transparent);
+  }
+}
+
+/* Run list */
+
+.runs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 2px solid var(--ink);
+}
+
+.run {
+  padding: 1.25rem 0 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+}
+
+.run-title {
+  font: 700 1.6rem/1.1 var(--display);
+  text-decoration: none;
+}
+
+.run-title:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+}
+
+.run .track {
+  margin: 0.9rem 0 0.8rem;
+}
+
+.run-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+  margin: 0;
+}
+
+.run-facts dt {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+
+.run-facts dd {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.empty {
+  max-width: 34rem;
+  padding: 2rem;
+  border: 2px dashed var(--rule);
+  border-radius: 6px;
+}
+
+.empty p {
+  margin: 0;
+}
+
+.empty p + p {
+  margin-top: 0.5rem;
+  color: var(--ink-soft);
+}
+
+/* Run detail */
+
+.run-hero h1 {
+  max-width: 34ch;
+  margin-top: 0.4rem;
+}
+
+.run-hero .track {
+  --cell: 1.35rem;
+  margin: 1.75rem 0 1.25rem;
+}
+
+.run-hero .track li {
+  padding-top: calc(var(--cell) + 0.6rem);
+  font-size: 0.85rem;
+}
+
+.hero-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+}
+
+.hero-links {
+  display: flex;
+  gap: 1.5rem;
+  font-weight: 600;
+}
+
+.callout {
+  padding: 0.25rem 1.25rem 0.75rem;
+  border-radius: 6px;
+  background: var(--callout);
+}
+
+.callout h2 {
+  margin-top: 0.75rem;
+  border-top: 0;
+  color: var(--lamp-human);
+}
+
+.callout ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.callout li + li {
+  margin-top: 0.4rem;
+}
+
+.columns {
+  display: grid;
+  gap: 0 3rem;
+}
+
+@media (min-width: 54rem) {
+  .columns {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  }
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.4rem 1.25rem;
+  margin: 0;
+}
+
+.facts dt {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.budgets {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 0.6rem 1.25rem;
+  margin: 0;
+}
+
+.budgets dt {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.budgets dd {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.count {
+  min-width: 3.2rem;
+  font: 700 1.2rem/1 var(--numeric);
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.gauge span {
+  width: 1.4rem;
+  height: 0.6rem;
+  border: 1.5px solid var(--steel);
+  border-radius: 2px;
+}
+
+.gauge [data-used] {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.gate-group {
+  padding-left: 1rem;
+  border-left: 3px solid var(--rule);
+}
+
+.gate-group[data-current] {
+  border-left-color: var(--ink);
+}
+
+.gate-group + .gate-group {
+  margin-top: 1.5rem;
+}
+
+.gate-group h3 {
+  margin-top: 0;
+}
+
+.console {
+  max-height: 28rem;
+  margin: 0;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--console-ink);
+  background: var(--console);
+  border-radius: 6px;
+}
+
+/* Tables */
+
+.scroll {
+  overflow-x: auto;
 }
 
 table {
-  border-collapse: collapse;
   width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
 }
 
 th,
 td {
-  border-bottom: 1px solid #ddd;
-  padding: 0.25rem 0.5rem;
+  padding: 0.45rem 0.75rem 0.45rem 0;
   text-align: left;
   vertical-align: top;
 }
 
-dl {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.25rem 1rem;
+th {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  border-bottom: 1.5px solid var(--ink);
+  white-space: nowrap;
 }
 
-dd {
-  margin: 0;
+td {
+  border-bottom: 1px solid var(--rule);
 }
 
-pre {
-  overflow-x: auto;
-  padding: 0.5rem;
-  background: #f4f4f4;
+/* Narrow screens keep only the current station's name on the track. */
+@media (max-width: 40rem) {
+  .track li:not([aria-current]) span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .track li {
+    min-height: calc(var(--cell) + 1.6rem);
+  }
+
+  .track [aria-current] span {
+    position: absolute;
+    left: 0;
+    overflow: visible;
+  }
+
+  .track [aria-current]:nth-last-child(-n + 4) span {
+    left: auto;
+    right: 0;
+    padding-right: 0;
+  }
 }

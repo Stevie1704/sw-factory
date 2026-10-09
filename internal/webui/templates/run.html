@@ -1,12 +1,28 @@
 {{define "title"}}Run {{.Run.ID}}{{end}}
 
 {{define "content" -}}
-<h1>Run {{.Run.ID}}</h1>
-<p>Issue #{{.Run.IssueNumber}} {{.IssueTitle}}</p>
-<p><a href="/runs/{{.Run.ID}}/evaluation">Evaluation</a></p>
+<div class="page-head run-hero" data-status="{{.Run.Status}}">
+<p class="crumbs"><a href="/">Runs</a> / <span class="run-id">Run {{.Run.ID}}</span></p>
+<h1><span class="issue">#{{.Run.IssueNumber}}</span> {{.IssueTitle}}</h1>
+<p class="hero-state">{{template "status" .Run.Status}} <span class="activity">{{.Activity}}</span>{{with .Run.LifecycleReason}} <span class="reason">{{.}}</span>{{end}}</p>
+{{template "track" .}}
+<p class="hero-links"><a href="/runs/{{.Run.ID}}/evaluation">Evaluation</a>{{with .Run.PullRequestURL}} <a href="{{.}}" rel="noreferrer noopener">Pull request #{{$.Run.PullRequestNumber}}</a>{{end}}</p>
+</div>
 
-<h2>State</h2>
-<dl>
+{{with .Run.PendingQuestions -}}
+<section class="callout" aria-labelledby="questions">
+<h2 id="questions">Pending questions</h2>
+<ul>
+{{range .}}<li><code>{{.ID}}</code> {{.Prompt}}</li>
+{{end -}}
+</ul>
+</section>
+{{- end}}
+
+<div class="columns">
+<section aria-labelledby="state">
+<h2 id="state">State</h2>
+<dl class="facts">
 <dt>Stage</dt><dd>{{.Run.Stage}}</dd>
 <dt>Status</dt><dd>{{.Run.Status}}</dd>
 <dt>Activity</dt><dd>{{.Activity}}</dd>
@@ -19,62 +35,81 @@
 <dt>Updated</dt><dd>{{formatTime .Run.UpdatedAt}}</dd>
 {{with formatTime .Run.TerminalAt}}<dt>Terminal</dt><dd>{{.}}</dd>{{end}}
 </dl>
+</section>
 
-{{with .Run.PendingQuestions -}}
-<h2>Pending questions</h2>
-<ul>
-{{range .}}<li><code>{{.ID}}</code> {{.Prompt}}</li>
-{{end -}}
-</ul>
-{{- end}}
-
-{{if .Run.LastCommandName -}}
-<h2>Last command</h2>
-<p><code>{{.Run.LastCommandName}}</code> {{.Run.LastCommandOutcome}}: {{.Run.LastCommandMessage}}</p>
-{{- end}}
-
-<h2>Budgets</h2>
-<dl>
-<dt>Check repair</dt><dd>{{.Run.CheckRepairAttempts}} / {{.Run.CheckRepairBudget}}</dd>
-<dt>Review repair</dt><dd>{{.Run.ReviewRepairAttempts}} / {{.Run.ReviewRepairBudget}}</dd>
-<dt>Test revision</dt><dd>{{.Run.TestRevisionAttempts}} / {{.Run.TestRevisionBudget}}</dd>
+<div>
+<section aria-labelledby="budgets">
+<h2 id="budgets">Budgets</h2>
+<dl class="budgets">
+<dt>Check repair</dt><dd><span class="count">{{.Run.CheckRepairAttempts}} / {{.Run.CheckRepairBudget}}</span>{{template "budget" (gauge .Run.CheckRepairAttempts .Run.CheckRepairBudget)}}</dd>
+<dt>Review repair</dt><dd><span class="count">{{.Run.ReviewRepairAttempts}} / {{.Run.ReviewRepairBudget}}</span>{{template "budget" (gauge .Run.ReviewRepairAttempts .Run.ReviewRepairBudget)}}</dd>
+<dt>Test revision</dt><dd><span class="count">{{.Run.TestRevisionAttempts}} / {{.Run.TestRevisionBudget}}</span>{{template "budget" (gauge .Run.TestRevisionAttempts .Run.TestRevisionBudget)}}</dd>
 </dl>
+</section>
 
-<h2>Checkpoints</h2>
-<dl>
+<section aria-labelledby="checkpoints">
+<h2 id="checkpoints">Checkpoints</h2>
+<dl class="facts">
 {{with .Run.BaseCheckpointSHA}}<dt>Base</dt><dd><code>{{.}}</code></dd>{{end}}
 {{with .Run.TestCheckpointSHA}}<dt>Test</dt><dd><code>{{.}}</code></dd>{{end}}
 {{with .Run.AcceptedImplementationCheckpointSHA}}<dt>Accepted implementation</dt><dd><code>{{.}}</code></dd>{{end}}
 {{with .Run.CheckpointSHA}}<dt>Current</dt><dd><code>{{.}}</code></dd>{{end}}
 {{with .Run.MergeCommitSHA}}<dt>Merge commit</dt><dd><code>{{.}}</code></dd>{{end}}
 </dl>
+</section>
 
-<h2>Gates</h2>
+{{if .Run.LastCommandName -}}
+<section aria-labelledby="last-command">
+<h2 id="last-command">Last command</h2>
+<p><code>{{.Run.LastCommandName}}</code> {{.Run.LastCommandOutcome}}: {{.Run.LastCommandMessage}}</p>
+</section>
+{{- end}}
+
+{{with .PendingEffect -}}
+<section aria-labelledby="pending-effect">
+<h2 id="pending-effect">Pending effect</h2>
+<p><code>{{.Kind}}</code> {{.ID}}, reserved {{formatTime .UpdatedAt}}</p>
+</section>
+{{- end}}
+</div>
+</div>
+
+<section aria-labelledby="gates">
+<h2 id="gates">Gates</h2>
 {{range .Gates -}}
+<div class="gate-group"{{if .Current}} data-current{{end}}>
 <h3>{{.Phase}} at <code>{{.CheckpointSHA}}</code>{{if .Current}} (current checkpoint){{end}}</h3>
-<p>recorded {{formatTime .RecordedAt}}</p>
+<p class="stamp">recorded {{formatTime .RecordedAt}}</p>
+<div class="scroll">
 <table>
 <thead><tr><th>Gate</th><th>Outcome</th><th>Status</th><th>Blocking</th><th>Skip reason</th></tr></thead>
 <tbody>
-{{range .Results}}<tr><td>{{.GateName}}</td><td>{{.Outcome}}</td><td>{{.Status}}</td><td>{{.Blocking}}</td><td>{{.SkipReason}}</td></tr>
+{{range .Results}}<tr><td>{{.GateName}}</td><td><span class="outcome" data-outcome="{{.Outcome}}">{{.Outcome}}</span></td><td>{{.Status}}</td><td>{{.Blocking}}</td><td>{{.SkipReason}}</td></tr>
 {{end -}}
 </tbody>
 </table>
+</div>
+</div>
 {{else -}}
-<p>No gate results are retained.</p>
+<p class="quiet">No gate results are retained.</p>
 {{end}}
+</section>
 
 {{with .Diagnostics -}}
-<h2>Gate failure diagnostics</h2>
+<section aria-labelledby="diagnostics">
+<h2 id="diagnostics">Gate failure diagnostics</h2>
 {{range .}}<h3>Latest {{.Phase}} failure diagnostic</h3>
-<p>written {{formatTime .ModifiedAt}}</p>
-<pre>{{.Content}}</pre>
-{{if .Truncated}}<p>diagnostic truncated at 256 KiB</p>{{end}}
+<p class="stamp">written {{formatTime .ModifiedAt}}</p>
+<pre class="console">{{.Content}}</pre>
+{{if .Truncated}}<p class="stamp">diagnostic truncated at 256 KiB</p>{{end}}
 {{end -}}
+</section>
 {{- end}}
 
-<h2>Invocations</h2>
+<section aria-labelledby="invocations">
+<h2 id="invocations">Invocations</h2>
 {{with .Invocations -}}
+<div class="scroll">
 <table>
 <thead><tr><th>Invocation</th><th>Role</th><th>Stage</th><th>Harness</th><th>Model</th><th>Prompt version</th><th>Status</th><th>Updated</th></tr></thead>
 <tbody>
@@ -82,12 +117,13 @@
 {{end -}}
 </tbody>
 </table>
+</div>
 {{- else -}}
-<p>No invocations are recorded.</p>
+<p class="quiet">No invocations are recorded.</p>
+{{- end}}
+</section>
 {{- end}}
 
-{{with .PendingEffect -}}
-<h2>Pending effect</h2>
-<p><code>{{.Kind}}</code> {{.ID}}, reserved {{formatTime .UpdatedAt}}</p>
-{{- end}}
+{{define "budget" -}}
+<span class="gauge" aria-hidden="true">{{range .}}<span{{if .}} data-used{{end}}></span>{{end}}</span>
 {{- end}}
