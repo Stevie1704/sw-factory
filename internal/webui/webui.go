@@ -60,6 +60,14 @@ type errorPage struct {
 	Supervisor *factory.SupervisorView
 }
 
+// layoutData is what the layout renders around one page model.
+type layoutData struct {
+	// RefreshSeconds is the automatic refresh interval; 0 turns it off.
+	RefreshSeconds int
+	// Page is the page model; it has a Supervisor field.
+	Page any
+}
+
 // server renders the UI pages from one Reader.
 type server struct {
 	reader  Reader
@@ -136,7 +144,7 @@ func (ui *server) renderStoreError(w http.ResponseWriter, err error) {
 // clean 500 instead of a half-written page.
 func (ui *server) render(w http.ResponseWriter, status int, name page, data any) {
 	var body bytes.Buffer
-	if err := ui.pages[name].ExecuteTemplate(&body, "layout", data); err != nil {
+	if err := ui.pages[name].ExecuteTemplate(&body, "layout", layoutData{RefreshSeconds: refreshSeconds(ui.options.RefreshInterval), Page: data}); err != nil {
 		http.Error(w, "render page: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -177,6 +185,16 @@ func loopbackHost(host string) bool {
 // it reaches the store or a page.
 func validRunID(runID string) bool {
 	return runID != "" && !strings.ContainsFunc(runID, unicode.IsControl)
+}
+
+// refreshSeconds converts the refresh interval to whole seconds for the
+// browser. A positive interval below one second becomes one second, so it
+// does not turn refresh off.
+func refreshSeconds(interval time.Duration) int {
+	if interval <= 0 {
+		return 0
+	}
+	return max(1, int(interval.Round(time.Second)/time.Second))
 }
 
 // formatTime renders a time in UTC RFC 3339; the zero time renders empty.

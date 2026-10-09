@@ -35,6 +35,15 @@ type SupervisorView struct {
 	Live bool
 	// ObservedAt is when the page read the store.
 	ObservedAt time.Time
+	// ActiveRunID names the newest non-terminal run, or is empty when no run
+	// is active. With Live false it means a run waits for a coordinator.
+	ActiveRunID string
+}
+
+// supervisorReader is the store seam the supervisor view reads.
+type supervisorReader interface {
+	OperationalStore
+	SupervisorHeartbeatReader
 }
 
 // RunListEntry is one row of the run list.
@@ -207,9 +216,9 @@ func (s *Service) openRunReader(ctx context.Context) (string, RunReadStore, erro
 	return registration.Path, reader, nil
 }
 
-// supervisorView reads the persisted heartbeat and judges it at the
-// service clock.
-func (s *Service) supervisorView(ctx context.Context, reader SupervisorHeartbeatReader) (SupervisorView, error) {
+// supervisorView reads the persisted heartbeat and the active run, and
+// judges the heartbeat at the service clock.
+func (s *Service) supervisorView(ctx context.Context, reader supervisorReader) (SupervisorView, error) {
 	view := SupervisorView{ObservedAt: s.deps.Now().UTC()}
 	heartbeat, err := reader.ReadSupervisorHeartbeat(ctx)
 	if err != nil {
@@ -217,6 +226,13 @@ func (s *Service) supervisorView(ctx context.Context, reader SupervisorHeartbeat
 	}
 	view.Heartbeat = heartbeat
 	view.Live = heartbeat != nil && heartbeat.Live(view.ObservedAt)
+	active, err := reader.CurrentRun(ctx)
+	if err != nil {
+		return SupervisorView{}, fmt.Errorf("read active run: %w", err)
+	}
+	if active != nil {
+		view.ActiveRunID = active.ID
+	}
 	return view, nil
 }
 
