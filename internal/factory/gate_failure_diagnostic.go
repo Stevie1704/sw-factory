@@ -144,40 +144,53 @@ func readGateFailureDiagnostics(run store.Run) ([]GateFailureDiagnostic, error) 
 	}
 	defer func() { _ = root.Close() }()
 	for _, phase := range []gate.Phase{gate.PhaseBaseline, gate.PhaseCheckpoint} {
-		content, found, err := readBoundedRegularFile(root, filepath.Join(gateFailureDiagnosticDirectoryName, gateFailureDiagnosticName(phase)))
+		read, found, err := readBoundedRegularFile(root, filepath.Join(gateFailureDiagnosticDirectoryName, gateFailureDiagnosticName(phase)))
 		if err != nil {
 			return nil, fmt.Errorf("read %s gate failure diagnostic: %w", phase, err)
 		}
 		if found {
-			diagnostics = append(diagnostics, GateFailureDiagnostic{Phase: store.GatePhase(phase), Content: content})
+			diagnostics = append(diagnostics, GateFailureDiagnostic{Phase: store.GatePhase(phase), Content: read.content, Truncated: read.truncated})
 		}
 	}
 	return diagnostics, nil
 }
 
+// boundedRead is the leading part of one file read with a size bound.
+type boundedRead struct {
+	content string
+	// truncated reports that the file is longer than the bound.
+	truncated bool
+}
+
 // readBoundedRegularFile reads at most maxGateFailureDiagnosticReadBytes of a
 // regular file inside root. It reports found=false when the file is absent.
-func readBoundedRegularFile(root *os.Root, name string) (string, bool, error) {
+func readBoundedRegularFile(root *os.Root, name string) (boundedRead, bool, error) {
 	file, err := root.Open(name)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
+		return boundedRead{}, false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return boundedRead{}, false, err
 	}
 	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
-		return "", false, err
+		return boundedRead{}, false, err
 	}
 	if !info.Mode().IsRegular() {
-		return "", false, errors.New("diagnostic is not a regular file")
+		return boundedRead{}, false, errors.New("diagnostic is not a regular file")
 	}
-	content, err := io.ReadAll(io.LimitReader(file, maxGateFailureDiagnosticReadBytes))
+	// One byte past the bound tells a truncated file from one of exactly
+	// the bound's size.
+	content, err := io.ReadAll(io.LimitReader(file, maxGateFailureDiagnosticReadBytes+1))
 	if err != nil {
-		return "", false, err
+		return boundedRead{}, false, err
 	}
-	return string(content), true, nil
+	truncated := len(content) > maxGateFailureDiagnosticReadBytes
+	if truncated {
+		content = content[:maxGateFailureDiagnosticReadBytes]
+	}
+	return boundedRead{content: string(content), truncated: truncated}, true, nil
 }
 
 // gateFailureDiagnosticName maps a declared phase to its fixed file name. An

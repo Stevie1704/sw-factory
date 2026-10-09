@@ -40,6 +40,9 @@ type uiFixture struct {
 	handler    http.Handler
 	configPath string
 	storePath  string
+	// diagnosticDirectory holds the gate failure diagnostics of the
+	// waiting run.
+	diagnosticDirectory string
 }
 
 // newUIFixture writes a host configuration and a real operational store with
@@ -153,7 +156,7 @@ func newUIFixture(t *testing.T) uiFixture {
 		t.Fatal(err)
 	}
 
-	return uiFixture{handler: newHandler(configPath), configPath: configPath, storePath: storePath}
+	return uiFixture{handler: newHandler(configPath), configPath: configPath, storePath: storePath, diagnosticDirectory: diagnosticDirectory}
 }
 
 // saveHost writes a host configuration that registers one repository under
@@ -292,6 +295,25 @@ func TestRunDetailShowsTheRunRecord(t *testing.T) {
 
 	terminal := get(t, fixture.handler, "/runs/"+terminalRunID).Body.String()
 	assertContains(t, terminal, `href="`+pullRequestURL+`"`, "#77", "pull request merged", "complete")
+}
+
+// TestRunDetailMarksATruncatedDiagnostic verifies a diagnostic larger than
+// the read bound shows its leading part and says that it was truncated, and
+// that a complete diagnostic carries no such notice.
+func TestRunDetailMarksATruncatedDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	const notice = "diagnostic truncated at 256 KiB"
+	fixture := newUIFixture(t)
+	if body := get(t, fixture.handler, "/runs/"+waitingRunID).Body.String(); strings.Contains(body, notice) {
+		t.Fatalf("complete diagnostic shows %q", notice)
+	}
+
+	oversized := diagnosticOutput + "\n" + strings.Repeat("x", 300<<10)
+	if err := os.WriteFile(filepath.Join(fixture.diagnosticDirectory, "checkpoint.log"), []byte(oversized), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, get(t, fixture.handler, "/runs/"+waitingRunID).Body.String(), diagnosticOutput, notice)
 }
 
 // TestUnknownRunIsNotFound verifies an unknown run identity renders a 404

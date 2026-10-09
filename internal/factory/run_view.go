@@ -81,6 +81,9 @@ type GateFailureDiagnostic struct {
 	// Content is a bounded read of repository command output. It stays on
 	// the coordinator host.
 	Content string
+	// Truncated reports that the file is longer than the read bound, so
+	// Content holds only its leading part.
+	Truncated bool
 }
 
 // RunDetail is the run detail page model.

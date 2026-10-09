@@ -67,6 +67,7 @@
 <h2>Gate failure diagnostics</h2>
 {{range .}}<h3>{{.Phase}}</h3>
 <pre>{{.Content}}</pre>
+{{if .Truncated}}<p>diagnostic truncated at 256 KiB</p>{{end}}
 {{end -}}
 {{- end}}
 
