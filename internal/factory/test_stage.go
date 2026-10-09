@@ -55,11 +55,12 @@ func testPolicyDescription(mode config.TestMode) string {
 // policy mode to adapters such as the CLI without exposing packet internals.
 func TestPolicyDescription(mode config.TestMode) string { return testPolicyDescription(mode) }
 
-// implementationStartIsClean reports whether an implementation invocation may
-// begin without a separate test handoff. Required-mode skips retain their
-// recorded exemption, while the implementation-owned path has no skip marker
-// at all.
-func implementationStartIsClean(run store.Run) bool {
+// testStageBypassed reports whether a run passes from claim to
+// implementation without the independent test stage: an authorized exemption
+// skipped it, or the frozen packet declares none. An implementation invocation
+// on such a run may begin without a separate test handoff. An unreadable
+// packet reports false, so no projection claims a skip it cannot verify.
+func testStageBypassed(run store.Run) bool {
 	if run.TestStageSkipped {
 		return true
 	}
