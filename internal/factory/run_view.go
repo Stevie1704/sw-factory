@@ -118,105 +118,109 @@ type RunEvaluation struct {
 // RunOverview reads the run list without contacting any external service or
 // changing the store.
 func (s *Service) RunOverview(ctx context.Context) (RunOverview, error) {
-	repositoryPath, reader, err := s.openRunReader(ctx)
-	if err != nil {
-		return RunOverview{}, err
-	}
-	defer func() { _ = reader.Close() }()
-	supervisor, err := s.supervisorView(ctx, reader)
-	if err != nil {
-		return RunOverview{}, err
-	}
-	runs, err := reader.ListRuns(ctx)
-	if err != nil {
-		return RunOverview{}, err
-	}
-	overview := RunOverview{RepositoryPath: repositoryPath, Supervisor: supervisor, Runs: make([]RunListEntry, 0, len(runs))}
-	for _, run := range runs {
-		overview.Runs = append(overview.Runs, RunListEntry{
-			Run:        run,
-			IssueTitle: issueTitleForRun(run),
-			Route:      statusRouteForRun(run),
-			Activity:   RunActivityFor(run),
-		})
-	}
-	return overview, nil
+	return readRunView(ctx, s, func(view runViewRead) (RunOverview, error) {
+		runs, err := view.reader.ListRuns(ctx)
+		if err != nil {
+			return RunOverview{}, err
+		}
+		overview := RunOverview{RepositoryPath: view.repositoryPath, Supervisor: view.supervisor, Runs: make([]RunListEntry, 0, len(runs))}
+		for _, run := range runs {
+			overview.Runs = append(overview.Runs, RunListEntry{
+				Run:        run,
+				IssueTitle: issueTitleForRun(run),
+				Route:      statusRouteForRun(run),
+				Activity:   RunActivityFor(run),
+			})
+		}
+		return overview, nil
+	})
 }
 
 // RunDetail reads one run without contacting any external service or
 // changing the store. It returns ErrRunNotFound for an unknown identity.
 func (s *Service) RunDetail(ctx context.Context, runID string) (RunDetail, error) {
-	_, reader, err := s.openRunReader(ctx)
-	if err != nil {
-		return RunDetail{}, err
-	}
-	defer func() { _ = reader.Close() }()
-	supervisor, err := s.supervisorView(ctx, reader)
-	if err != nil {
-		return RunDetail{}, err
-	}
-	run, err := reader.Run(ctx, runID)
-	if err != nil {
-		return RunDetail{}, err
-	}
-	if run == nil {
-		return RunDetail{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
-	}
-	invocations, err := reader.Invocations(ctx, runID)
-	if err != nil {
-		return RunDetail{}, err
-	}
-	gateResults, err := reader.RunGateResults(ctx, runID)
-	if err != nil {
-		return RunDetail{}, err
-	}
-	pendingEffect, err := reader.PendingEffect(ctx, runID)
-	if err != nil {
-		return RunDetail{}, fmt.Errorf("read pending effect: %w", err)
-	}
-	diagnostics, err := readGateFailureDiagnostics(*run)
-	if err != nil {
-		return RunDetail{}, err
-	}
-	return RunDetail{
-		Supervisor:     supervisor,
-		Run:            *run,
-		IssueTitle:     issueTitleForRun(*run),
-		Route:          statusRouteForRun(*run),
-		TestPolicyMode: testPolicyModeForRun(*run),
-		Activity:       RunActivityFor(*run),
-		Invocations:    invocations,
-		Gates:          groupGateResults(gateResults),
-		PendingEffect:  pendingEffect,
-		Diagnostics:    diagnostics,
-	}, nil
+	return readRunView(ctx, s, func(view runViewRead) (RunDetail, error) {
+		run, err := view.reader.Run(ctx, runID)
+		if err != nil {
+			return RunDetail{}, err
+		}
+		if run == nil {
+			return RunDetail{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+		}
+		invocations, err := view.reader.Invocations(ctx, runID)
+		if err != nil {
+			return RunDetail{}, err
+		}
+		gateResults, err := view.reader.RunGateResults(ctx, runID)
+		if err != nil {
+			return RunDetail{}, err
+		}
+		pendingEffect, err := view.reader.PendingEffect(ctx, runID)
+		if err != nil {
+			return RunDetail{}, fmt.Errorf("read pending effect: %w", err)
+		}
+		diagnostics, err := readGateFailureDiagnostics(*run)
+		if err != nil {
+			return RunDetail{}, err
+		}
+		return RunDetail{
+			Supervisor:     view.supervisor,
+			Run:            *run,
+			IssueTitle:     issueTitleForRun(*run),
+			Route:          statusRouteForRun(*run),
+			TestPolicyMode: testPolicyModeForRun(*run),
+			Activity:       RunActivityFor(*run),
+			Invocations:    invocations,
+			Gates:          groupGateResults(gateResults),
+			PendingEffect:  pendingEffect,
+			Diagnostics:    diagnostics,
+		}, nil
+	})
 }
 
 // RunEvaluation reads one run's evaluation summary without contacting any
 // external service or changing the store. It returns ErrRunNotFound when
 // neither the run nor a summary exists.
 func (s *Service) RunEvaluation(ctx context.Context, runID string) (RunEvaluation, error) {
-	_, reader, err := s.openRunReader(ctx)
+	return readRunView(ctx, s, func(view runViewRead) (RunEvaluation, error) {
+		run, err := view.reader.Run(ctx, runID)
+		if err != nil {
+			return RunEvaluation{}, err
+		}
+		summary, err := view.reader.EvaluationSummary(ctx, runID)
+		if err != nil {
+			return RunEvaluation{}, fmt.Errorf("read evaluation summary: %w", err)
+		}
+		if run == nil && summary == nil {
+			return RunEvaluation{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+		}
+		return RunEvaluation{Supervisor: view.supervisor, RunID: runID, Run: run, Summary: summary}, nil
+	})
+}
+
+// runViewRead is what every run view page reads first: the registered
+// repository, the open read-only store, and the supervisor view.
+type runViewRead struct {
+	repositoryPath string
+	reader         RunReadStore
+	supervisor     SupervisorView
+}
+
+// readRunView opens the store read-only, reads the supervisor view, and
+// passes both to read. It closes the store when read returns, so no page
+// model keeps a store handle.
+func readRunView[T any](ctx context.Context, s *Service, read func(runViewRead) (T, error)) (T, error) {
+	var none T
+	repositoryPath, reader, err := s.openRunReader(ctx)
 	if err != nil {
-		return RunEvaluation{}, err
+		return none, err
 	}
 	defer func() { _ = reader.Close() }()
 	supervisor, err := s.supervisorView(ctx, reader)
 	if err != nil {
-		return RunEvaluation{}, err
+		return none, err
 	}
-	run, err := reader.Run(ctx, runID)
-	if err != nil {
-		return RunEvaluation{}, err
-	}
-	summary, err := reader.EvaluationSummary(ctx, runID)
-	if err != nil {
-		return RunEvaluation{}, fmt.Errorf("read evaluation summary: %w", err)
-	}
-	if run == nil && summary == nil {
-		return RunEvaluation{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
-	}
-	return RunEvaluation{Supervisor: supervisor, RunID: runID, Run: run, Summary: summary}, nil
+	return read(runViewRead{repositoryPath: repositoryPath, reader: reader, supervisor: supervisor})
 }
 
 // groupGateResults splits results ordered by phase, checkpoint, and ordinal
