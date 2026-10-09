@@ -3,6 +3,7 @@ package factory
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,10 @@ const (
 	// A failing command commonly states the failure on its first line and what
 	// to change on the next, so one line alone is not actionable.
 	gateFailureCauseLines = 2
+	// maxGateFailureDiagnosticReadBytes bounds one diagnostic read for
+	// display. The writer already bounds command output; this limit guards
+	// against a file that something else changed.
+	maxGateFailureDiagnosticReadBytes = 256 << 10
 )
 
 // gateFailureCause renders one bounded line naming the failed setup or gate
@@ -119,6 +124,75 @@ func writeGateFailureDiagnostic(run store.Run, phase gate.Phase, results []gate.
 		return
 	}
 	_ = os.WriteFile(filepath.Join(directory, name), []byte(renderGateFailureDiagnostic(run, phase, results, suiteErr, observedAt)), 0o600)
+}
+
+// readGateFailureDiagnostics reads the retained diagnostic of each gate
+// phase of one run. An absent file is no diagnostic, not an error. The read
+// goes through an os.Root at the run artifact root, so a symbolic link cannot
+// lead it outside the run's artifacts.
+func readGateFailureDiagnostics(run store.Run) ([]GateFailureDiagnostic, error) {
+	diagnostics := []GateFailureDiagnostic{}
+	if strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.Worktree) == "" {
+		return diagnostics, nil
+	}
+	root, err := os.OpenRoot(runArtifactRoot(run))
+	if errors.Is(err, os.ErrNotExist) {
+		return diagnostics, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open run artifacts: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	for _, phase := range []gate.Phase{gate.PhaseBaseline, gate.PhaseCheckpoint} {
+		read, found, err := readBoundedRegularFile(root, filepath.Join(gateFailureDiagnosticDirectoryName, gateFailureDiagnosticName(phase)))
+		if err != nil {
+			return nil, fmt.Errorf("read %s gate failure diagnostic: %w", phase, err)
+		}
+		if found {
+			diagnostics = append(diagnostics, GateFailureDiagnostic{Phase: store.GatePhase(phase), Content: read.content, Truncated: read.truncated, ModifiedAt: read.modifiedAt})
+		}
+	}
+	return diagnostics, nil
+}
+
+// boundedRead is the leading part of one file read with a size bound.
+type boundedRead struct {
+	content string
+	// truncated reports that the file is longer than the bound.
+	truncated bool
+	// modifiedAt is the file's modification time.
+	modifiedAt time.Time
+}
+
+// readBoundedRegularFile reads at most maxGateFailureDiagnosticReadBytes of a
+// regular file inside root. It reports found=false when the file is absent.
+func readBoundedRegularFile(root *os.Root, name string) (boundedRead, bool, error) {
+	file, err := root.Open(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return boundedRead{}, false, nil
+	}
+	if err != nil {
+		return boundedRead{}, false, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return boundedRead{}, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return boundedRead{}, false, errors.New("diagnostic is not a regular file")
+	}
+	// One byte past the bound tells a truncated file from one of exactly
+	// the bound's size.
+	content, err := io.ReadAll(io.LimitReader(file, maxGateFailureDiagnosticReadBytes+1))
+	if err != nil {
+		return boundedRead{}, false, err
+	}
+	truncated := len(content) > maxGateFailureDiagnosticReadBytes
+	if truncated {
+		content = content[:maxGateFailureDiagnosticReadBytes]
+	}
+	return boundedRead{content: string(content), truncated: truncated, modifiedAt: info.ModTime()}, true, nil
 }
 
 // gateFailureDiagnosticName maps a declared phase to its fixed file name. An

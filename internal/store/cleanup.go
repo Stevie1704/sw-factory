@@ -145,8 +145,8 @@ func (s *Store) ListRunRemovalCandidates(ctx context.Context, before time.Time, 
 		return nil, errors.New("cleanup run id contains a control character")
 	}
 	cutoff := before.UTC().Format(runTimestampLayout)
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id
+	runs, err := s.queryRuns(ctx, `
+		SELECT `+runColumns+`
 		FROM operational_runs
 		WHERE status IN (?, ?, ?)
 		  AND COALESCE(NULLIF(terminal_at, ''), updated_at) <= ?
@@ -156,20 +156,7 @@ func (s *Store) ListRunRemovalCandidates(ctx context.Context, before time.Time, 
 	if err != nil {
 		return nil, fmt.Errorf("list cleanup candidates: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	ids := make([]string, 0)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan cleanup candidate: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read cleanup candidates: %w", err)
-	}
-
-	return s.removalCandidates(ctx, ids)
+	return s.removalCandidates(ctx, runs)
 }
 
 // DeleteCleanupRun reserves and atomically removes one already-planned run and
@@ -221,68 +208,36 @@ func (t *cleanupTransaction) Commit() error { return t.tx.Commit() }
 // Rollback releases the reservation and preserves rows not yet committed.
 func (t *cleanupTransaction) Rollback() error { return t.tx.Rollback() }
 
-// cleanupRun loads one run using the complete operational projection needed
-// by cleanup planning.
-func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
+// Run returns the complete operational projection of one persisted run, or
+// nil when no run has that identity.
+func (s *Store) Run(ctx context.Context, runID string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
-		       test_handoff, test_invocation_id, test_revision_attempts,
-		       test_revision_budget, test_revision_history, test_objection,
-		       test_revision_base_changed_paths,
-		       implementation_handoff, specification_review, standards_review,
-		       review_repair_attempts, review_repair_budget,
-		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
-		       test_exemption, protected_test_paths, test_stage_skipped,
-		       active_invocation_ids,
-		       image_digest, coordinator, status_comment_id,
-		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason,
-		       revision, processed_comment_id, processed_comment_revision,
-		       processed_review_id, processed_review_revision,
-		       last_command_name, last_command_outcome, last_command_message,
-		       harness_override, check_repair_attempts, check_repair_budget,
-		       check_repair_pending_attempt,
-		       specification_packet, pending_questions, clarification_comment_id,
-		       terminal_at, created_at, updated_at
+		SELECT `+runColumns+`
 		FROM operational_runs
 		WHERE id = ?`, runID)
 	return scanRun(row)
 }
 
-// cleanupInvocations loads every invocation directory associated with one
-// candidate so the Factory can display and validate stored-output targets.
-func (s *Store) cleanupInvocations(ctx context.Context, runID string) ([]Invocation, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id
+// Invocations returns every invocation of one run, oldest update first.
+func (s *Store) Invocations(ctx context.Context, runID string) ([]Invocation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+invocationColumns+`
 		FROM invocations
 		WHERE run_id = ?
 		ORDER BY updated_at, id`, runID)
 	if err != nil {
-		return nil, fmt.Errorf("list invocations for cleanup run %q: %w", runID, err)
+		return nil, fmt.Errorf("list invocations for run %q: %w", runID, err)
 	}
 	defer func() { _ = rows.Close() }()
-	ids := make([]string, 0)
+	invocations := make([]Invocation, 0)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan invocation for cleanup run %q: %w", runID, err)
+		invocation, err := scanInvocation(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan invocation for run %q: %w", runID, err)
 		}
-		ids = append(ids, id)
+		invocations = append(invocations, *invocation)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read invocations for cleanup run %q: %w", runID, err)
-	}
-
-	invocations := make([]Invocation, 0, len(ids))
-	for _, id := range ids {
-		invocation, err := s.Invocation(ctx, runID, id)
-		if err != nil {
-			return nil, fmt.Errorf("read invocation %q for cleanup run %q: %w", id, runID, err)
-		}
-		if invocation != nil {
-			invocations = append(invocations, *invocation)
-		}
+		return nil, fmt.Errorf("read invocations for run %q: %w", runID, err)
 	}
 	return invocations, nil
 }
@@ -325,56 +280,70 @@ func deleteCleanupRunRow(ctx context.Context, tx *sql.Tx, runID string) (int, er
 	return int(changed), nil
 }
 
+// ListRuns returns every persisted run, newest update first.
+func (s *Store) ListRuns(ctx context.Context) ([]Run, error) {
+	runs, err := s.queryRuns(ctx, `
+		SELECT `+runColumns+`
+		FROM operational_runs
+		ORDER BY updated_at DESC, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	return runs, nil
+}
+
 // ListResetCandidates returns every persisted run with the operational records
 // a complete local reset needs, regardless of status or retention age. It is
 // separate from ListRunRemovalCandidates because reset owns the whole
 // installation rather than the seven-day terminal-run retention window.
 func (s *Store) ListResetCandidates(ctx context.Context) ([]RunRemovalCandidate, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id
+	runs, err := s.queryRuns(ctx, `
+		SELECT `+runColumns+`
 		FROM operational_runs
 		ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list reset candidates: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	ids := make([]string, 0)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan reset candidate: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read reset candidates: %w", err)
-	}
-
-	return s.removalCandidates(ctx, ids)
+	return s.removalCandidates(ctx, runs)
 }
 
-// removalCandidates hydrates the complete operational projection of each
-// selected run. Both removal commands share it, so neither can plan from a
-// narrower view of a run than the other.
-func (s *Store) removalCandidates(ctx context.Context, ids []string) ([]RunRemovalCandidate, error) {
-	candidates := make([]RunRemovalCandidate, 0, len(ids))
-	for _, id := range ids {
-		run, err := s.cleanupRun(ctx, id)
+// queryRuns runs one SELECT of runColumns and decodes every row, so a list
+// reads its runs in one query instead of one query per run.
+func (s *Store) queryRuns(ctx context.Context, query string, args ...any) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	runs := make([]Run, 0)
+	for rows.Next() {
+		run, err := scanRun(rows)
 		if err != nil {
 			return nil, err
 		}
-		if run == nil {
-			continue
-		}
-		invocations, err := s.cleanupInvocations(ctx, id)
+		runs = append(runs, *run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return runs, nil
+}
+
+// removalCandidates adds the invocations and pending effect of each selected
+// run. Both removal commands share it, so neither can plan from a narrower
+// view of a run than the other.
+func (s *Store) removalCandidates(ctx context.Context, runs []Run) ([]RunRemovalCandidate, error) {
+	candidates := make([]RunRemovalCandidate, 0, len(runs))
+	for _, run := range runs {
+		invocations, err := s.Invocations(ctx, run.ID)
 		if err != nil {
 			return nil, err
 		}
-		pendingEffect, err := s.PendingEffect(ctx, id)
+		pendingEffect, err := s.PendingEffect(ctx, run.ID)
 		if err != nil {
-			return nil, fmt.Errorf("read pending effect for removal candidate %q: %w", id, err)
+			return nil, fmt.Errorf("read pending effect for removal candidate %q: %w", run.ID, err)
 		}
-		candidates = append(candidates, RunRemovalCandidate{Run: *run, Invocations: invocations, PendingEffect: pendingEffect})
+		candidates = append(candidates, RunRemovalCandidate{Run: run, Invocations: invocations, PendingEffect: pendingEffect})
 	}
 	return candidates, nil
 }

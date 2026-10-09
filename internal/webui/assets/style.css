@@ -1,0 +1,65 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0 auto;
+  max-width: 72rem;
+  padding: 1rem;
+  color: #1b1b1b;
+  background: #fff;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #ccc;
+}
+
+#supervisor {
+  padding: 0 0.5rem;
+  border-left: 0.25rem solid #888;
+}
+
+#supervisor[data-state="live"] {
+  border-left-color: #2e7d32;
+}
+
+#supervisor[data-state="expired"],
+#supervisor[data-state="missing"] {
+  border-left-color: #c62828;
+}
+
+.warning {
+  padding: 0.25rem 0.5rem;
+  color: #6d1b00;
+  background: #fff3e0;
+  border: 1px solid #e65100;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid #ddd;
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+dd {
+  margin: 0;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 0.5rem;
+  background: #f4f4f4;
+}

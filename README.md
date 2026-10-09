@@ -80,7 +80,9 @@ shows how they fit together.
    initialization](docs/repository-initialization.md).
 3. **Start supervision.** Start the coordinator or use the deliberate
    one-shot operations described in the [end-to-end
-   demonstration](docs/configuration.md#end-to-end-demonstration).
+   demonstration](docs/configuration.md#end-to-end-demonstration). To watch
+   the runs in a browser on the same host, run `factory ui` (see [Local web
+   UI](docs/configuration.md#local-web-ui)).
 4. **Let the role work.** The selected headless harness works inside the
    isolated worker and submits a structured proposal. The packet, report
    contract, and recovery behavior are documented in [Agent

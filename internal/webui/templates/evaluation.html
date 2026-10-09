@@ -1,0 +1,72 @@
+{{define "title"}}Evaluation of run {{.RunID}}{{end}}
+
+{{define "content" -}}
+<h1>Evaluation of run {{.RunID}}</h1>
+{{with .Run -}}
+<p><a href="/runs/{{.ID}}">Run {{.ID}}</a>, issue #{{.IssueNumber}}</p>
+{{- else -}}
+<p>The run record was removed by cleanup. Only the evaluation summary is retained.</p>
+{{- end}}
+
+{{with .Summary -}}
+<h2>Outcome</h2>
+<dl>
+<dt>Outcome</dt><dd>{{.Outcome}}</dd>
+<dt>Started</dt><dd>{{formatTime .StartedAt}}</dd>
+{{with formatTime .CompletedAt}}<dt>Completed</dt><dd>{{.}}</dd>{{end}}
+<dt>Total wall time</dt><dd>{{.TotalWallTime}}</dd>
+</dl>
+
+<h2>Stage durations</h2>
+{{with .StageDurations -}}
+<table>
+<thead><tr><th>Stage</th><th>Duration</th></tr></thead>
+<tbody>
+{{range .}}<tr><td>{{.Stage}}</td><td>{{.Duration}}</td></tr>
+{{end -}}
+</tbody>
+</table>
+{{- else -}}
+<p>No stage durations are recorded.</p>
+{{- end}}
+
+<h2>Attempts</h2>
+<dl>
+<dt>Invocations</dt><dd>{{.InvocationCount}}</dd>
+<dt>Check repairs</dt><dd>{{.CheckRepairCount}}</dd>
+<dt>Test revisions</dt><dd>{{.TestRevisionCount}}</dd>
+<dt>Review revisions</dt><dd>{{.ReviewRevisionCount}}</dd>
+<dt>Budget exhausted</dt><dd>{{if .BudgetExhausted}}yes{{else}}no{{end}}</dd>
+</dl>
+
+<h2>Versions</h2>
+{{with .InvocationVersions -}}
+<table>
+<thead><tr><th>Invocation</th><th>Harness</th><th>Model</th><th>Prompt version</th><th>Worker version</th><th>Report schema</th></tr></thead>
+<tbody>
+{{range .}}<tr><td><code>{{.InvocationID}}</code></td><td>{{.Harness}}</td><td>{{.Model}}</td><td>{{.PromptVersion}}</td><td>{{.WorkerVersion}}</td><td>{{.ReportSchemaVersion}}</td></tr>
+{{end -}}
+</tbody>
+</table>
+{{- else -}}
+<p>No versions are recorded.</p>
+{{- end}}
+
+<h2>Usage estimate</h2>
+{{with .Usage -}}
+{{if .Available -}}
+<dl>
+<dt>Input tokens</dt><dd>{{.InputTokens}}</dd>
+<dt>Output tokens</dt><dd>{{.OutputTokens}}</dd>
+<dt>Total tokens</dt><dd>{{.TotalTokens}}</dd>
+{{if .CostReported}}<dt>Cost</dt><dd>{{micros .CostMicros}} {{.Currency}}</dd>{{end}}
+<dt>Cost status</dt><dd>{{.CostStatus}}</dd>
+</dl>
+{{- else -}}
+<p>Usage unavailable ({{.UnavailableReason}}).</p>
+{{- end}}
+{{- end}}
+{{- else -}}
+<p>No evaluation summary is retained for this run.</p>
+{{- end}}
+{{- end}}

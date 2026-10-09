@@ -1,0 +1,30 @@
+{{define "title"}}Runs{{end}}
+
+{{define "content" -}}
+<h1>Runs</h1>
+<p>Repository: <code>{{.RepositoryPath}}</code></p>
+{{if .Runs -}}
+<table>
+<thead>
+<tr><th>Run</th><th>Issue</th><th>Stage</th><th>Status</th><th>Activity</th><th>Route</th><th>Reason</th><th>Pull request</th><th>Updated</th></tr>
+</thead>
+<tbody>
+{{range .Runs -}}
+<tr>
+<td><a href="/runs/{{.Run.ID}}">{{.Run.ID}}</a></td>
+<td>#{{.Run.IssueNumber}} {{.IssueTitle}}</td>
+<td>{{.Run.Stage}}</td>
+<td>{{.Run.Status}}</td>
+<td>{{.Activity}}</td>
+<td>{{.Route.Description}}</td>
+<td>{{.Run.LifecycleReason}}</td>
+<td>{{if .Run.PullRequestURL}}<a href="{{.Run.PullRequestURL}}" rel="noreferrer noopener">#{{.Run.PullRequestNumber}}</a>{{end}}</td>
+<td>{{formatTime .Run.UpdatedAt}}</td>
+</tr>
+{{end -}}
+</tbody>
+</table>
+{{- else -}}
+<p>No runs are recorded.</p>
+{{- end}}
+{{- end}}

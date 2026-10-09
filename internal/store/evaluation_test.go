@@ -383,6 +383,44 @@ func TestEvaluationSummaryRejectsUnsafeMetadata(t *testing.T) {
 	}
 }
 
+// TestSaveEvaluationSummaryRoundTrips verifies a valid summary saved directly
+// reads back with its outcome, timing, attempts, versions, and usage.
+func TestSaveEvaluationSummaryRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	opened, err := store.Open(ctx, filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	started := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
+	if err := opened.SaveEvaluationSummary(ctx, store.EvaluationSummary{
+		RunID: "run-saved", Outcome: store.EvaluationOutcomeComplete,
+		StartedAt: started, CompletedAt: started.Add(2 * time.Hour), TotalWallTime: 2 * time.Hour,
+		StageDurations:     []store.EvaluationStageDuration{{Stage: store.StageReview, Duration: 20 * time.Minute}},
+		InvocationVersions: []store.EvaluationInvocationVersion{{InvocationID: "inv-1", Harness: "claude", Model: "opus-test", PromptVersion: "review-v7", WorkerVersion: "worker-1", ReportSchemaVersion: 4}},
+		InvocationCount:    5, CheckRepairCount: 1, BudgetExhausted: true,
+		Usage: store.EvaluationUsage{Available: true, TotalTokens: 15400, CostReported: true, CostMicros: 1250000, Currency: "USD"},
+	}); err != nil {
+		t.Fatalf("SaveEvaluationSummary() error = %v", err)
+	}
+
+	summary, err := opened.EvaluationSummary(ctx, "run-saved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary == nil {
+		t.Fatal("EvaluationSummary() = nil, want the saved summary")
+	}
+	if summary.Outcome != store.EvaluationOutcomeComplete || summary.TotalWallTime != 2*time.Hour ||
+		summary.InvocationCount != 5 || summary.CheckRepairCount != 1 || !summary.BudgetExhausted ||
+		len(summary.StageDurations) != 1 || summary.StageDurations[0].Duration != 20*time.Minute ||
+		len(summary.InvocationVersions) != 1 || summary.InvocationVersions[0].PromptVersion != "review-v7" ||
+		summary.Usage.TotalTokens != 15400 || summary.Usage.CostMicros != 1250000 || summary.Usage.Currency != "USD" {
+		t.Fatalf("EvaluationSummary() = %+v, want the saved values", summary)
+	}
+}
+
 // TestSaveEvaluationSummaryValidatesPromptCraftIdentity verifies direct
 // summary callers cannot serialize an unpaired or malformed craft identity.
 func TestSaveEvaluationSummaryValidatesPromptCraftIdentity(t *testing.T) {
