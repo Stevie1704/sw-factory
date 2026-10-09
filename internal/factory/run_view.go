@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -71,6 +72,10 @@ type RunOverview struct {
 type GateCheckpointResults struct {
 	Phase         store.GatePhase
 	CheckpointSHA string
+	// Current reports that CheckpointSHA is the run's current checkpoint.
+	Current bool
+	// RecordedAt is the newest record time of the group's results.
+	RecordedAt time.Time
 	// Results are in repository declaration order.
 	Results []store.GateResult
 }
@@ -100,7 +105,7 @@ type RunDetail struct {
 	Activity       RunActivity
 	// Invocations are in update order, oldest first.
 	Invocations []store.Invocation
-	// Gates are grouped by phase, then checkpoint.
+	// Gates are grouped by phase and checkpoint, newest record first.
 	Gates []GateCheckpointResults
 	// PendingEffect is the in-flight external effect, or nil. Its Payload
 	// holds replay intent and is not for display.
@@ -178,7 +183,7 @@ func (s *Service) RunDetail(ctx context.Context, runID string) (RunDetail, error
 			TestPolicyMode: testPolicyModeForRun(*run),
 			Activity:       RunActivityFor(*run),
 			Invocations:    invocations,
-			Gates:          groupGateResults(gateResults),
+			Gates:          groupGateResults(gateResults, run.CheckpointSHA),
 			PendingEffect:  pendingEffect,
 			Diagnostics:    diagnostics,
 		}, nil
@@ -231,17 +236,28 @@ func readRunView[T any](ctx context.Context, s *Service, read func(runViewRead) 
 }
 
 // groupGateResults splits results ordered by phase, checkpoint, and ordinal
-// into one group per phase and checkpoint.
-func groupGateResults(results []store.GateResult) []GateCheckpointResults {
+// into one group per phase and checkpoint, orders the groups newest record
+// first, and marks the groups at the current checkpoint.
+func groupGateResults(results []store.GateResult, currentCheckpointSHA string) []GateCheckpointResults {
 	groups := []GateCheckpointResults{}
 	for _, result := range results {
 		last := len(groups) - 1
 		if last < 0 || groups[last].Phase != result.Phase || groups[last].CheckpointSHA != result.CheckpointSHA {
-			groups = append(groups, GateCheckpointResults{Phase: result.Phase, CheckpointSHA: result.CheckpointSHA})
+			groups = append(groups, GateCheckpointResults{
+				Phase:         result.Phase,
+				CheckpointSHA: result.CheckpointSHA,
+				Current:       currentCheckpointSHA != "" && result.CheckpointSHA == currentCheckpointSHA,
+			})
 			last++
 		}
 		groups[last].Results = append(groups[last].Results, result)
+		if result.UpdatedAt.After(groups[last].RecordedAt) {
+			groups[last].RecordedAt = result.UpdatedAt
+		}
 	}
+	slices.SortStableFunc(groups, func(a, b GateCheckpointResults) int {
+		return b.RecordedAt.Compare(a.RecordedAt)
+	})
 	return groups
 }
 

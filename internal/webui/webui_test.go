@@ -331,6 +331,47 @@ func TestRunDetailDatesTheDiagnostic(t *testing.T) {
 		"Latest checkpoint failure diagnostic", "written 2026-10-09T11:30:00Z")
 }
 
+// TestRunDetailOrdersGateResultsByRecordTime verifies the gate result groups
+// are newest record first, and that only the group at the run's current
+// checkpoint is marked as current.
+func TestRunDetailOrdersGateResultsByRecordTime(t *testing.T) {
+	t.Parallel()
+
+	const olderSHA = "1111111111111111111111111111111111111111"
+	fixture := newUIFixture(t)
+	opened, err := store.Open(t.Context(), fixture.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range []store.GateResult{
+		{RunID: waitingRunID, CheckpointSHA: baseSHA, Phase: store.GatePhaseBaseline, GateName: "unit-tests", Outcome: store.GateOutcomePassed, Status: "success", Blocking: true, UpdatedAt: fixtureNow.Add(-50 * time.Minute)},
+		{RunID: waitingRunID, CheckpointSHA: checkpointSHA, Phase: store.GatePhaseCheckpoint, GateName: "unit-tests", Outcome: store.GateOutcomeFailed, Status: "failure", Blocking: true, UpdatedAt: fixtureNow.Add(-5 * time.Minute)},
+		{RunID: waitingRunID, CheckpointSHA: olderSHA, Phase: store.GatePhaseCheckpoint, GateName: "unit-tests", Outcome: store.GateOutcomeFailed, Status: "failure", Blocking: true, UpdatedAt: fixtureNow.Add(-30 * time.Minute)},
+	} {
+		if err := opened.SaveGateResults(t.Context(), []store.GateResult{result}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	body := get(t, fixture.handler, "/runs/"+waitingRunID).Body.String()
+	current := `checkpoint at <code>` + checkpointSHA + `</code> (current checkpoint)`
+	assertContains(t, body, current)
+	if count := strings.Count(body, "(current checkpoint)"); count != 1 {
+		t.Errorf("page marks %d gate groups as current, want 1", count)
+	}
+	positions := []int{
+		strings.Index(body, current),
+		strings.Index(body, `checkpoint at <code>`+olderSHA+`</code>`),
+		strings.Index(body, `baseline at <code>`+baseSHA+`</code>`),
+	}
+	if slices.Contains(positions, -1) || !slices.IsSorted(positions) {
+		t.Errorf("gate groups at positions %v, want newest record first", positions)
+	}
+}
+
 // TestUnknownRunIsNotFound verifies an unknown run identity renders a 404
 // page instead of an error.
 func TestUnknownRunIsNotFound(t *testing.T) {

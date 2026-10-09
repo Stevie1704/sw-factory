@@ -51,7 +51,8 @@
 
 <h2>Gates</h2>
 {{range .Gates -}}
-<h3>{{.Phase}} at <code>{{.CheckpointSHA}}</code></h3>
+<h3>{{.Phase}} at <code>{{.CheckpointSHA}}</code>{{if .Current}} (current checkpoint){{end}}</h3>
+<p>recorded {{formatTime .RecordedAt}}</p>
 <table>
 <thead><tr><th>Gate</th><th>Outcome</th><th>Status</th><th>Blocking</th><th>Skip reason</th></tr></thead>
 <tbody>
