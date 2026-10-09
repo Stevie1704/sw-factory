@@ -26,6 +26,9 @@ const (
 	checkpointSHA    = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 	pullRequestURL   = "https://github.com/example/project/pull/77"
 	diagnosticOutput = "FAIL TestCheckout: cart total mismatch"
+	// deletedRunID names a run whose row was cleaned up while its
+	// evaluation summary was retained.
+	deletedRunID = "run-deleted"
 )
 
 // fixtureNow is the fixed observation time of every fixture page.
@@ -39,7 +42,8 @@ type uiFixture struct {
 }
 
 // newUIFixture writes a host configuration and a real operational store with
-// one waiting run and one terminal run, then builds the UI handler over a
+// one waiting run, one terminal run with an evaluation summary, and one
+// retained evaluation summary whose run row is gone, then builds the UI handler over a
 // factory service with no tracker adapter.
 func newUIFixture(t *testing.T) uiFixture {
 	t.Helper()
@@ -111,6 +115,34 @@ func newUIFixture(t *testing.T) uiFixture {
 		Payload: `{"secret":"replay-intent"}`, CreatedAt: fixtureNow.Add(-time.Minute), UpdatedAt: fixtureNow.Add(-time.Minute),
 	}); err != nil {
 		t.Fatal(err)
+	}
+	for _, summary := range []store.EvaluationSummary{
+		{
+			RunID: terminalRunID, Outcome: store.EvaluationOutcomeComplete,
+			StartedAt: fixtureNow.Add(-4 * time.Hour), CompletedAt: fixtureNow.Add(-2 * time.Hour), TotalWallTime: 2 * time.Hour,
+			StageDurations: []store.EvaluationStageDuration{
+				{Stage: store.StageImplementation, Duration: 45 * time.Minute},
+				{Stage: store.StageReview, Duration: 20 * time.Minute},
+			},
+			InvocationVersions: []store.EvaluationInvocationVersion{{
+				InvocationID: "inv-review", Harness: "claude", Model: "opus-test",
+				PromptVersion: "review-v7", WorkerVersion: "worker-1.9.0", ReportSchemaVersion: 4,
+			}},
+			InvocationCount: 5, CheckRepairCount: 1, TestRevisionCount: 2, ReviewRevisionCount: 3, BudgetExhausted: true,
+			Usage: store.EvaluationUsage{
+				Available: true, InputTokens: 12000, OutputTokens: 3400, TotalTokens: 15400,
+				CostReported: true, CostMicros: 1250000, Currency: "USD",
+			},
+		},
+		{
+			RunID: deletedRunID, Outcome: store.EvaluationOutcomeCancelled,
+			StartedAt: fixtureNow.Add(-72 * time.Hour), CompletedAt: fixtureNow.Add(-70 * time.Hour), TotalWallTime: 2 * time.Hour,
+			InvocationCount: 1,
+		},
+	} {
+		if err := opened.SaveEvaluationSummary(t.Context(), summary); err != nil {
+			t.Fatalf("SaveEvaluationSummary(%s) error = %v", summary.RunID, err)
+		}
 	}
 	diagnosticDirectory := filepath.Join(filepath.Dir(waitingWorktree), ".factory-agents", waitingRunID, "gate-failure")
 	if err := os.MkdirAll(diagnosticDirectory, 0o700); err != nil {
@@ -275,8 +307,93 @@ func TestUnknownRunIsNotFound(t *testing.T) {
 	assertContains(t, response.Body.String(), "Run not found", "run-missing")
 }
 
+// TestRunEvaluationShowsTheSummary verifies the evaluation page renders the
+// outcome, timing, stage durations, attempts, invocation versions, and the
+// usage estimate of a run's retained evaluation summary.
+func TestRunEvaluationShowsTheSummary(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUIFixture(t)
+	response := get(t, fixture.handler, "/runs/"+terminalRunID+"/evaluation")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET evaluation status = %d, want 200; body:\n%s", response.Code, response.Body)
+	}
+	assertContains(t, response.Body.String(),
+		`href="/runs/run-terminal"`, "#41",
+		"complete", "2026-10-09T08:00:00Z", "2026-10-09T10:00:00Z", "2h0m0s",
+		"implementation", "45m0s", "review", "20m0s",
+		"<dt>Invocations</dt><dd>5</dd>", "<dt>Check repairs</dt><dd>1</dd>",
+		"<dt>Test revisions</dt><dd>2</dd>", "<dt>Review revisions</dt><dd>3</dd>",
+		"<dt>Budget exhausted</dt><dd>yes</dd>",
+		"inv-review", "claude", "opus-test", "review-v7", "worker-1.9.0", "<td>4</td>",
+		"<dt>Input tokens</dt><dd>12000</dd>", "<dt>Output tokens</dt><dd>3400</dd>", "<dt>Total tokens</dt><dd>15400</dd>",
+		"1.250000 USD", "reported",
+		"host-a",
+	)
+}
+
+// TestRunEvaluationShowsTheSummaryOfARemovedRun verifies a summary retained
+// after cleanup removed its run row still renders, and says the run is gone.
+func TestRunEvaluationShowsTheSummaryOfARemovedRun(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUIFixture(t)
+	response := get(t, fixture.handler, "/runs/"+deletedRunID+"/evaluation")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET evaluation status = %d, want 200; body:\n%s", response.Code, response.Body)
+	}
+	body := response.Body.String()
+	assertContains(t, body, deletedRunID, "cancelled", "The run record was removed by cleanup.", "Usage unavailable (not_reported).")
+	if strings.Contains(body, `href="/runs/`+deletedRunID+`"`) {
+		t.Errorf("evaluation page links to the removed run")
+	}
+}
+
+// TestRunEvaluationWithoutSummary verifies a run with no retained summary
+// renders an explanation instead of an error.
+func TestRunEvaluationWithoutSummary(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUIFixture(t)
+	response := get(t, fixture.handler, "/runs/"+waitingRunID+"/evaluation")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET evaluation status = %d, want 200; body:\n%s", response.Code, response.Body)
+	}
+	assertContains(t, response.Body.String(), `href="/runs/run-waiting"`, "No evaluation summary is retained for this run.")
+}
+
+// TestUnknownRunEvaluationIsNotFound verifies the evaluation page is a 404
+// when neither the run nor a summary exists.
+func TestUnknownRunEvaluationIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUIFixture(t)
+	response := get(t, fixture.handler, "/runs/run-missing/evaluation")
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("GET /runs/run-missing/evaluation status = %d, want 404", response.Code)
+	}
+	assertContains(t, response.Body.String(), "Run not found", "run-missing")
+}
+
+// TestRunDetailLinksToTheEvaluation verifies the run detail links to the
+// run's evaluation page.
+func TestRunDetailLinksToTheEvaluation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newUIFixture(t)
+	assertContains(t, get(t, fixture.handler, "/runs/"+terminalRunID).Body.String(), `href="/runs/run-terminal/evaluation"`)
+}
+
 // pagePaths are the pages every page-wide assertion covers.
-var pagePaths = []string{"/", "/runs/" + waitingRunID, "/runs/" + terminalRunID, "/runs/run-missing"}
+var pagePaths = []string{
+	"/", "/runs/" + waitingRunID, "/runs/" + terminalRunID, "/runs/run-missing",
+	"/runs/" + waitingRunID + "/evaluation", "/runs/" + terminalRunID + "/evaluation",
+	"/runs/" + deletedRunID + "/evaluation", "/runs/run-missing/evaluation",
+}
 
 // TestPagesLeaveTheStoreUnchanged verifies that reading every page leaves
 // the operational store byte-identical, with the same modification time and

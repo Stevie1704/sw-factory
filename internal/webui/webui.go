@@ -8,6 +8,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net"
@@ -36,6 +37,13 @@ type Reader interface {
 	RunDetail(context.Context, string) (factory.RunDetail, error)
 }
 
+// EvaluationReader is the read-only evaluation view. When the Reader passed
+// to NewHandler also implements it, the evaluation page is served.
+// *factory.Service implements it.
+type EvaluationReader interface {
+	RunEvaluation(context.Context, string) (factory.RunEvaluation, error)
+}
+
 // Options configure page behavior.
 type Options struct {
 	// RefreshInterval is how often a page reloads its content; 0 disables
@@ -47,9 +55,10 @@ type Options struct {
 type page string
 
 const (
-	pageRuns  page = "runs"
-	pageRun   page = "run"
-	pageError page = "error"
+	pageRuns       page = "runs"
+	pageRun        page = "run"
+	pageEvaluation page = "evaluation"
+	pageError      page = "error"
 )
 
 // errorPage is the model of a page that explains why no content is shown.
@@ -79,6 +88,9 @@ func NewHandler(reader Reader, options Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", ui.runList)
 	mux.HandleFunc("GET /runs/{id}", ui.runDetail)
+	if evaluations, ok := reader.(EvaluationReader); ok {
+		mux.HandleFunc("GET /runs/{id}/evaluation", ui.runEvaluation(evaluations))
+	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServerFS(assets)))
 	return protect(mux)
 }
@@ -89,9 +101,10 @@ func parsePages() map[page]*template.Template {
 	functions := template.FuncMap{
 		"formatTime": formatTime,
 		"testPolicy": factory.TestPolicyDescription,
+		"micros":     formatMicros,
 	}
 	pages := map[page]*template.Template{}
-	for _, name := range []page{pageRuns, pageRun, pageError} {
+	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError} {
 		pages[name] = template.Must(template.New("").Funcs(functions).ParseFS(templateFiles, "templates/layout.html", "templates/"+string(name)+".html"))
 	}
 	return pages
@@ -124,6 +137,29 @@ func (ui *server) runDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ui.render(w, http.StatusOK, pageRun, detail)
+}
+
+// runEvaluation renders one run's evaluation summary. It shows the summary
+// alone when cleanup removed the run, and a not-found page when neither the
+// run nor a summary exists.
+func (ui *server) runEvaluation(reader EvaluationReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		runID := r.PathValue("id")
+		if !validRunID(runID) {
+			ui.render(w, http.StatusBadRequest, pageError, errorPage{Title: "Invalid run", Message: "The run identity is empty or contains control characters."})
+			return
+		}
+		evaluation, err := reader.RunEvaluation(r.Context(), runID)
+		if errors.Is(err, factory.ErrRunNotFound) {
+			ui.render(w, http.StatusNotFound, pageError, errorPage{Title: "Run not found", Message: "No persisted run or evaluation summary has the identity " + runID + "."})
+			return
+		}
+		if err != nil {
+			ui.renderStoreError(w, err)
+			return
+		}
+		ui.render(w, http.StatusOK, pageEvaluation, evaluation)
+	}
 }
 
 // renderStoreError explains a failed store read. A refresh retries the read,
@@ -185,4 +221,10 @@ func formatTime(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339)
+}
+
+// formatMicros renders an amount in millionths of a currency unit as a
+// decimal with six fraction digits, for example 1250000 as 1.250000.
+func formatMicros(micros int64) string {
+	return fmt.Sprintf("%d.%06d", micros/1_000_000, micros%1_000_000)
 }

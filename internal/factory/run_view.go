@@ -11,7 +11,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
-// RunReadStore is the read-only store seam for the run list and run detail.
+// RunReadStore is the read-only store seam for the run list, run detail, and
+// run evaluation.
 type RunReadStore interface {
 	OperationalStore
 	SupervisorHeartbeatReader
@@ -20,6 +21,7 @@ type RunReadStore interface {
 	Invocations(context.Context, string) ([]store.Invocation, error)
 	RunGateResults(context.Context, string) ([]store.GateResult, error)
 	PendingEffect(context.Context, string) (*store.PendingEffect, error)
+	EvaluationSummary(context.Context, string) (*store.EvaluationSummary, error)
 }
 
 // ErrRunNotFound reports that no persisted run has the requested identity.
@@ -90,6 +92,18 @@ type RunDetail struct {
 	// Diagnostics hold the retained gate failure diagnostics; absent files
 	// are omitted.
 	Diagnostics []GateFailureDiagnostic
+}
+
+// RunEvaluation is the evaluation page model of one run. A summary outlives
+// cleanup, so either the run or the summary can be absent, never both.
+type RunEvaluation struct {
+	Supervisor SupervisorView
+	RunID      string
+	// Run is the persisted run, or nil when cleanup removed its row.
+	Run *store.Run
+	// Summary is the content-free evaluation summary, or nil when none is
+	// retained.
+	Summary *store.EvaluationSummary
 }
 
 // RunOverview reads the run list without contacting any external service or
@@ -167,6 +181,33 @@ func (s *Service) RunDetail(ctx context.Context, runID string) (RunDetail, error
 		PendingEffect:  pendingEffect,
 		Diagnostics:    diagnostics,
 	}, nil
+}
+
+// RunEvaluation reads one run's evaluation summary without contacting any
+// external service or changing the store. It returns ErrRunNotFound when
+// neither the run nor a summary exists.
+func (s *Service) RunEvaluation(ctx context.Context, runID string) (RunEvaluation, error) {
+	_, reader, err := s.openRunReader(ctx)
+	if err != nil {
+		return RunEvaluation{}, err
+	}
+	defer func() { _ = reader.Close() }()
+	supervisor, err := s.supervisorView(ctx, reader)
+	if err != nil {
+		return RunEvaluation{}, err
+	}
+	run, err := reader.Run(ctx, runID)
+	if err != nil {
+		return RunEvaluation{}, err
+	}
+	summary, err := reader.EvaluationSummary(ctx, runID)
+	if err != nil {
+		return RunEvaluation{}, fmt.Errorf("read evaluation summary: %w", err)
+	}
+	if run == nil && summary == nil {
+		return RunEvaluation{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+	}
+	return RunEvaluation{Supervisor: supervisor, RunID: runID, Run: run, Summary: summary}, nil
 }
 
 // groupGateResults splits results ordered by phase, checkpoint, and ordinal

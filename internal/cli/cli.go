@@ -857,7 +857,7 @@ func runEvaluation(ctx context.Context, args []string, defaultConfigPath string,
 			return 1
 		}
 		if summary.Usage.Available {
-			if !writeOutput(output, errorsOutput, "run usage: run=%s input_tokens=%d output_tokens=%d total_tokens=%d cost_reported=%t cost_micros=%d currency=%s cost_status=%s\n", summary.RunID, summary.Usage.InputTokens, summary.Usage.OutputTokens, summary.Usage.TotalTokens, summary.Usage.CostReported, summary.Usage.CostMicros, summary.Usage.Currency, evaluationCostStatus(summary.Usage)) {
+			if !writeOutput(output, errorsOutput, "run usage: run=%s input_tokens=%d output_tokens=%d total_tokens=%d cost_reported=%t cost_micros=%d currency=%s cost_status=%s\n", summary.RunID, summary.Usage.InputTokens, summary.Usage.OutputTokens, summary.Usage.TotalTokens, summary.Usage.CostReported, summary.Usage.CostMicros, summary.Usage.Currency, summary.Usage.CostStatus()) {
 				return 1
 			}
 		} else if !writeOutput(output, errorsOutput, "run usage: run=%s unavailable (%s)\n", summary.RunID, summary.Usage.UnavailableReason) {
@@ -869,25 +869,13 @@ func runEvaluation(ctx context.Context, args []string, defaultConfigPath string,
 		return 1
 	}
 	if aggregate.Usage.Available {
-		if !writeOutput(output, errorsOutput, "aggregate usage: input_tokens=%d output_tokens=%d total_tokens=%d cost_reported=%t cost_micros=%d currency=%s cost_status=%s\n", aggregate.Usage.InputTokens, aggregate.Usage.OutputTokens, aggregate.Usage.TotalTokens, aggregate.Usage.CostReported, aggregate.Usage.CostMicros, aggregate.Usage.Currency, evaluationCostStatus(aggregate.Usage)) {
+		if !writeOutput(output, errorsOutput, "aggregate usage: input_tokens=%d output_tokens=%d total_tokens=%d cost_reported=%t cost_micros=%d currency=%s cost_status=%s\n", aggregate.Usage.InputTokens, aggregate.Usage.OutputTokens, aggregate.Usage.TotalTokens, aggregate.Usage.CostReported, aggregate.Usage.CostMicros, aggregate.Usage.Currency, aggregate.Usage.CostStatus()) {
 			return 1
 		}
 	} else if !writeOutput(output, errorsOutput, "aggregate usage: unavailable (%s)\n", aggregate.Usage.UnavailableReason) {
 		return 1
 	}
 	return 0
-}
-
-// evaluationCostStatus renders whether aggregate cost was reported or why it
-// remains unavailable, independently of token availability.
-func evaluationCostStatus(usage store.EvaluationUsage) string {
-	if usage.CostReported {
-		return "reported"
-	}
-	if usage.UnavailableReason == "" {
-		return "not_reported"
-	}
-	return "unavailable:" + usage.UnavailableReason
 }
 
 // runEvaluationDelete performs deliberate, visible deletion of selected
