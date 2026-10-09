@@ -921,26 +921,7 @@ func (s *Store) SchemaVersion() int { return s.schemaVersion }
 // CurrentRun returns the newest non-terminal run, if one is active.
 func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
-		       test_handoff, test_invocation_id, test_revision_attempts,
-		       test_revision_budget, test_revision_history, test_objection,
-		       test_revision_base_changed_paths,
-		       implementation_handoff, specification_review, standards_review,
-		       review_repair_attempts, review_repair_budget,
-		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
-		       test_exemption, protected_test_paths, test_stage_skipped,
-			active_invocation_ids,
-		       image_digest, coordinator, status_comment_id,
-		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason,
-		       revision, processed_comment_id, processed_comment_revision,
-		       processed_review_id, processed_review_revision,
-		       last_command_name, last_command_outcome, last_command_message,
-		       harness_override, check_repair_attempts, check_repair_budget,
-		       check_repair_pending_attempt,
-		       specification_packet, pending_questions, clarification_comment_id,
-		       terminal_at, created_at, updated_at
+		SELECT `+runColumns+`
 		FROM operational_runs
 		WHERE status NOT IN (?, ?, ?)
 		ORDER BY updated_at DESC
@@ -952,26 +933,7 @@ func (s *Store) CurrentRun(ctx context.Context) (*Run, error) {
 // runs so status can show the last known branch and worktree.
 func (s *Store) LatestRun(ctx context.Context) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
-		       checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
-		       test_handoff, test_invocation_id, test_revision_attempts,
-		       test_revision_budget, test_revision_history, test_objection,
-		       test_revision_base_changed_paths,
-		       implementation_handoff, specification_review, standards_review,
-		       review_repair_attempts, review_repair_budget,
-		       review_repair_pending_attempt, review_repair_history, review_repair_packet,
-		       test_exemption, protected_test_paths, test_stage_skipped,
-		       active_invocation_ids,
-		       image_digest, coordinator, status_comment_id,
-		       pull_request_number, pull_request_url, merge_commit_sha,
-		       lifecycle_reason,
-		       revision, processed_comment_id, processed_comment_revision,
-		       processed_review_id, processed_review_revision,
-		       last_command_name, last_command_outcome, last_command_message,
-		       harness_override, check_repair_attempts, check_repair_budget,
-		       check_repair_pending_attempt,
-		       specification_packet, pending_questions, clarification_comment_id,
-		       terminal_at, created_at, updated_at
+		SELECT `+runColumns+`
 		FROM operational_runs
 		ORDER BY updated_at DESC
 		LIMIT 1`)
@@ -1034,8 +996,32 @@ func (s *Store) SaveSupervisorHeartbeat(ctx context.Context, heartbeat Superviso
 	return nil
 }
 
-// scanRun decodes one operational run row and its RFC3339 timestamps.
-func scanRun(row *sql.Row) (*Run, error) {
+// runColumns is the canonical column order of every operational run read;
+// scanRun decodes exactly this order.
+const runColumns = `id, repository_path, issue_number, stage, status, branch, worktree,
+	checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
+	test_handoff, test_invocation_id, test_revision_attempts,
+	test_revision_budget, test_revision_history, test_objection,
+	test_revision_base_changed_paths,
+	implementation_handoff, specification_review, standards_review,
+	review_repair_attempts, review_repair_budget,
+	review_repair_pending_attempt, review_repair_history, review_repair_packet,
+	test_exemption, protected_test_paths, test_stage_skipped,
+	active_invocation_ids,
+	image_digest, coordinator, status_comment_id,
+	pull_request_number, pull_request_url, merge_commit_sha,
+	lifecycle_reason,
+	revision, processed_comment_id, processed_comment_revision,
+	processed_review_id, processed_review_revision,
+	last_command_name, last_command_outcome, last_command_message,
+	harness_override, check_repair_attempts, check_repair_budget,
+	check_repair_pending_attempt,
+	specification_packet, pending_questions, clarification_comment_id,
+	terminal_at, created_at, updated_at`
+
+// scanRun decodes one operational run row in runColumns order and its
+// RFC3339 timestamps. A single-row read with no row returns nil.
+func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, acceptedImplementationCheckpointSHA, testCheckpointSHA string
 	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON, standardsReviewJSON string
