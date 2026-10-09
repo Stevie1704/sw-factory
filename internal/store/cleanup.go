@@ -221,9 +221,9 @@ func (t *cleanupTransaction) Commit() error { return t.tx.Commit() }
 // Rollback releases the reservation and preserves rows not yet committed.
 func (t *cleanupTransaction) Rollback() error { return t.tx.Rollback() }
 
-// cleanupRun loads one run using the complete operational projection needed
-// by cleanup planning.
-func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
+// Run returns the complete operational projection of one persisted run, or
+// nil when no run has that identity.
+func (s *Store) Run(ctx context.Context, runID string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, repository_path, issue_number, stage, status, branch, worktree,
 		       checkpoint_sha, base_checkpoint_sha, accepted_implementation_checkpoint_sha, test_checkpoint_sha,
@@ -250,35 +250,34 @@ func (s *Store) cleanupRun(ctx context.Context, runID string) (*Run, error) {
 	return scanRun(row)
 }
 
-// cleanupInvocations loads every invocation directory associated with one
-// candidate so the Factory can display and validate stored-output targets.
-func (s *Store) cleanupInvocations(ctx context.Context, runID string) ([]Invocation, error) {
+// Invocations returns every invocation of one run, oldest update first.
+func (s *Store) Invocations(ctx context.Context, runID string) ([]Invocation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id
 		FROM invocations
 		WHERE run_id = ?
 		ORDER BY updated_at, id`, runID)
 	if err != nil {
-		return nil, fmt.Errorf("list invocations for cleanup run %q: %w", runID, err)
+		return nil, fmt.Errorf("list invocations for run %q: %w", runID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	ids := make([]string, 0)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan invocation for cleanup run %q: %w", runID, err)
+			return nil, fmt.Errorf("scan invocation for run %q: %w", runID, err)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read invocations for cleanup run %q: %w", runID, err)
+		return nil, fmt.Errorf("read invocations for run %q: %w", runID, err)
 	}
 
 	invocations := make([]Invocation, 0, len(ids))
 	for _, id := range ids {
 		invocation, err := s.Invocation(ctx, runID, id)
 		if err != nil {
-			return nil, fmt.Errorf("read invocation %q for cleanup run %q: %w", id, runID, err)
+			return nil, fmt.Errorf("read invocation %q for run %q: %w", id, runID, err)
 		}
 		if invocation != nil {
 			invocations = append(invocations, *invocation)
@@ -325,6 +324,40 @@ func deleteCleanupRunRow(ctx context.Context, tx *sql.Tx, runID string) (int, er
 	return int(changed), nil
 }
 
+// ListRuns returns every persisted run, newest update first.
+func (s *Store) ListRuns(ctx context.Context) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id
+		FROM operational_runs
+		ORDER BY updated_at DESC, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read runs: %w", err)
+	}
+	runs := make([]Run, 0, len(ids))
+	for _, id := range ids {
+		run, err := s.Run(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if run != nil {
+			runs = append(runs, *run)
+		}
+	}
+	return runs, nil
+}
+
 // ListResetCandidates returns every persisted run with the operational records
 // a complete local reset needs, regardless of status or retention age. It is
 // separate from ListRunRemovalCandidates because reset owns the whole
@@ -359,14 +392,14 @@ func (s *Store) ListResetCandidates(ctx context.Context) ([]RunRemovalCandidate,
 func (s *Store) removalCandidates(ctx context.Context, ids []string) ([]RunRemovalCandidate, error) {
 	candidates := make([]RunRemovalCandidate, 0, len(ids))
 	for _, id := range ids {
-		run, err := s.cleanupRun(ctx, id)
+		run, err := s.Run(ctx, id)
 		if err != nil {
 			return nil, err
 		}
 		if run == nil {
 			continue
 		}
-		invocations, err := s.cleanupInvocations(ctx, id)
+		invocations, err := s.Invocations(ctx, id)
 		if err != nil {
 			return nil, err
 		}

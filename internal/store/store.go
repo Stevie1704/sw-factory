@@ -2729,6 +2729,30 @@ func (s *Store) GateResults(ctx context.Context, runID string, phase GatePhase, 
 	if err != nil {
 		return nil, fmt.Errorf("read gate results: %w", err)
 	}
+	return scanGateResultRows(rows)
+}
+
+// RunGateResults returns every retained gate result of one run, ordered by
+// phase, checkpoint, and repository declaration order. A run keeps results for
+// several checkpoints until a packet change invalidates them.
+func (s *Store) RunGateResults(ctx context.Context, runID string) ([]GateResult, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, errors.New("gate result run id is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT run_id, checkpoint_sha, phase, ordinal, gate_name, outcome, status,
+		       blocking, skip_reason, setup_fingerprint, created_at, updated_at
+		FROM gate_results
+		WHERE run_id = ?
+		ORDER BY phase, checkpoint_sha, ordinal, gate_name`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("read gate results: %w", err)
+	}
+	return scanGateResultRows(rows)
+}
+
+// scanGateResultRows decodes gate result rows and closes them.
+func scanGateResultRows(rows *sql.Rows) ([]GateResult, error) {
 	defer func() { _ = rows.Close() }()
 	results := []GateResult{}
 	for rows.Next() {
@@ -2859,9 +2883,10 @@ func openConfiguredDatabase(ctx context.Context, path string) (*sql.DB, error) {
 }
 
 // openReadOnlyDatabase opens a SQLite URI in read-only mode and applies only
-// connection-pool settings, never database-changing pragmas.
+// connection settings, never database-changing pragmas. The busy timeout lets
+// a reader wait for a coordinator commit instead of failing with SQLITE_BUSY.
 func openReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}).String()
 	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open operational store read-only: %w", err)
