@@ -38,6 +38,9 @@ const devOpsResource = "499b84ac-1321-427f-aa17-267ca6975798"
 const (
 	apiVersion        = "7.1"
 	commentAPIVersion = "7.1-preview.4"
+	// connectionDataAPIVersion is required because connection data exists
+	// only as a preview resource.
+	connectionDataAPIVersion = "7.1-preview.1"
 )
 
 // serviceURL is the Azure DevOps Services root.
@@ -152,8 +155,8 @@ func redactedPath(value string) string {
 }
 
 // organizationURL returns an organization-level API URL.
-func organizationURL(organization, path string, query url.Values) string {
-	return buildURL(url.PathEscape(organization)+"/_apis/"+path, query, apiVersion)
+func organizationURL(organization, path string, query url.Values, version string) string {
+	return buildURL(url.PathEscape(organization)+"/_apis/"+path, query, version)
 }
 
 // projectURL returns a project-level API URL.
@@ -223,7 +226,7 @@ func (c *Client) AuthenticatedLogin(ctx context.Context) (string, error) {
 		return "", errors.New("Azure DevOps organization is required to read the authenticated identity")
 	}
 	var response connectionDataResponse
-	if err := c.call(ctx, request{Method: "GET", URL: organizationURL(c.Organization, "connectionData", nil)}, &response); err != nil {
+	if err := c.call(ctx, request{Method: "GET", URL: organizationURL(c.Organization, "connectionData", nil, connectionDataAPIVersion)}, &response); err != nil {
 		var timeout *hostcmd.TimeoutError
 		if errors.As(err, &timeout) {
 			return "", fmt.Errorf("%w: %w", errAccountUnavailable, timeout)

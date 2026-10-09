@@ -27,9 +27,33 @@ var (
 // description.
 const maxDescriptionLength = 4000
 
+// branchPrefix starts the full reference name of a branch.
+const branchPrefix = "refs/heads/"
+
 // branchRef is the full reference name of a branch.
 func branchRef(branch string) string {
-	return "refs/heads/" + branch
+	return branchPrefix + branch
+}
+
+// branchName is the branch name of a full reference name.
+func branchName(ref string) string {
+	return strings.TrimPrefix(ref, branchPrefix)
+}
+
+// maxStatusDescriptionLength is the longest commit status description the
+// factory publishes, the same bound as on GitHub.
+const maxStatusDescriptionLength = 140
+
+// validatePullRequestTarget rejects an incomplete repository or a
+// non-positive pull request number before any call.
+func validatePullRequestTarget(repository tracker.Repository, number int) error {
+	if err := validateRepository(repository); err != nil {
+		return err
+	}
+	if number <= 0 {
+		return errors.New("pull request number must be positive")
+	}
+	return nil
 }
 
 // pullRequestResponse is the Azure Repos pull-request projection.
@@ -60,9 +84,9 @@ func (r pullRequestResponse) pullRequest(repository tracker.Repository) codehost
 		Body:       r.Description,
 		State:      "closed",
 		Draft:      r.IsDraft,
-		HeadBranch: strings.TrimPrefix(r.SourceRefName, "refs/heads/"),
+		HeadBranch: branchName(r.SourceRefName),
 		HeadSHA:    r.LastMergeSourceCommit.CommitID,
-		BaseBranch: strings.TrimPrefix(r.TargetRefName, "refs/heads/"),
+		BaseBranch: branchName(r.TargetRefName),
 	}
 	switch r.Status {
 	case "active":
@@ -126,8 +150,8 @@ func (c *Client) CreatePullRequest(ctx context.Context, repository tracker.Repos
 // UpdatePullRequest replaces the title and description. It leaves the status
 // and the draft flag unchanged.
 func (c *Client) UpdatePullRequest(ctx context.Context, repository tracker.Repository, number int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
-	if number <= 0 {
-		return codehost.PullRequest{}, errors.New("pull request number must be positive")
+	if err := validatePullRequestTarget(repository, number); err != nil {
+		return codehost.PullRequest{}, err
 	}
 	if err := validatePullRequestRequest(repository, request); err != nil {
 		return codehost.PullRequest{}, err
@@ -138,11 +162,8 @@ func (c *Client) UpdatePullRequest(ctx context.Context, repository tracker.Repos
 
 // SetPullRequestDraft sets or clears the draft flag of one pull request.
 func (c *Client) SetPullRequestDraft(ctx context.Context, repository tracker.Repository, number int, draft bool) (codehost.PullRequest, error) {
-	if err := validateRepository(repository); err != nil {
+	if err := validatePullRequestTarget(repository, number); err != nil {
 		return codehost.PullRequest{}, err
-	}
-	if number <= 0 {
-		return codehost.PullRequest{}, errors.New("pull request number must be positive")
 	}
 	return c.sendPullRequest(ctx, repository, "PATCH", fmt.Sprintf("/pullrequests/%d", number), map[string]any{"isDraft": draft}, fmt.Sprintf("set pull request %d draft=%t", number, draft))
 }
@@ -218,7 +239,7 @@ func (c *Client) CreateCommitStatus(ctx context.Context, repository tracker.Repo
 	if strings.TrimSpace(status.Context) == "" || strings.ContainsAny(status.Context, "\r\n") {
 		return errors.New("commit status context must be a nonempty single line")
 	}
-	if len(status.Description) > 140 {
+	if len(status.Description) > maxStatusDescriptionLength {
 		return errors.New("commit status description must be at most 140 characters")
 	}
 	payload := map[string]any{"state": state, "description": status.Description, "context": statusContext{Name: status.Context}}
@@ -331,11 +352,8 @@ func (t threadResponse) isOpenFinding() bool {
 
 // threads reads every thread of one pull request.
 func (c *Client) threads(ctx context.Context, repository tracker.Repository, number int) ([]threadResponse, error) {
-	if err := validateRepository(repository); err != nil {
+	if err := validatePullRequestTarget(repository, number); err != nil {
 		return nil, err
-	}
-	if number <= 0 {
-		return nil, errors.New("pull request number must be positive")
 	}
 	var response struct {
 		Value []threadResponse `json:"value"`
@@ -477,11 +495,8 @@ func (c *Client) FindPullRequestComment(ctx context.Context, repository tracker.
 // closed, so a branch policy that requires resolved comments does not block
 // the merge on a factory message.
 func (c *Client) CreatePullRequestComment(ctx context.Context, repository tracker.Repository, number int, body string) (tracker.Comment, error) {
-	if err := validateRepository(repository); err != nil {
+	if err := validatePullRequestTarget(repository, number); err != nil {
 		return tracker.Comment{}, err
-	}
-	if number <= 0 {
-		return tracker.Comment{}, errors.New("pull request number must be positive")
 	}
 	payload := map[string]any{
 		"comments": []map[string]any{{"parentCommentId": 0, "content": body, "commentType": "text"}},

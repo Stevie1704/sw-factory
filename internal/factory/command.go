@@ -1693,9 +1693,9 @@ func eventIDAlreadyProcessed(processed, current string) bool {
 	return compareEventIDs(current, processed) <= 0
 }
 
-// compareEventIDs orders numeric GitHub identities numerically and keeps
-// other identities deterministic without allowing a human-readable message to
-// control flow.
+// compareEventIDs orders numeric identities numerically and other identities
+// as text, which keeps them deterministic without allowing a human-readable
+// message to control flow.
 func compareEventIDs(left, right string) int {
 	leftID, leftErr := strconv.ParseUint(left, 10, 64)
 	rightID, rightErr := strconv.ParseUint(right, 10, 64)

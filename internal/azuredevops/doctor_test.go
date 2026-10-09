@@ -46,6 +46,9 @@ func TestStartupChecksPassForAReadyIdentity(t *testing.T) {
 	if strings.Join(names, ",") != "azure devops authentication,azure devops repository,azure devops permissions" {
 		t.Fatalf("check names = %v", names)
 	}
+	if version := az.called("GET /contoso/_apis/connectionData")[0].url.Query().Get("api-version"); version != "7.1-preview.1" {
+		t.Fatalf("connectionData api-version = %q, want the preview version the resource requires", version)
+	}
 	if token := az.called("GET " + gitPermissionsPath + "/4")[0].url.Query().Get("tokens"); token != "repoV2/project-id/repo-id" {
 		t.Fatalf("Git token = %q", token)
 	}

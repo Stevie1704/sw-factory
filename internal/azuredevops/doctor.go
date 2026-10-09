@@ -141,7 +141,7 @@ func (c *Client) hasPermission(ctx context.Context, organization string, require
 	}
 	path := "permissions/" + required.namespace + "/" + strconv.Itoa(required.bit)
 	query := url.Values{"tokens": {token}, "alwaysAllowAdministrators": {"false"}}
-	if err := c.call(ctx, request{Method: "GET", URL: organizationURL(organization, path, query)}, &response); err != nil {
+	if err := c.call(ctx, request{Method: "GET", URL: organizationURL(organization, path, query, apiVersion)}, &response); err != nil {
 		return false, err
 	}
 	return len(response.Value) == 1 && response.Value[0], nil
