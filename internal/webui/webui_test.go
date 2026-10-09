@@ -289,6 +289,7 @@ func TestRunDetailShowsTheRunRecord(t *testing.T) {
 		"push", "effect-push-1",
 		diagnosticOutput,
 		"host-a",
+		`aria-current="step"`, "current stage", "skipped by this run",
 	)
 	if strings.Contains(body, "replay-intent") {
 		t.Errorf("run detail shows the pending effect payload")

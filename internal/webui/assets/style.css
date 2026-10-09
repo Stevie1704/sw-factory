@@ -16,6 +16,8 @@
   --lamp-human: #b97f00;
   --lamp-ok: #2b7a45;
   --lamp-stop: #b8382a;
+  --human-ink: #855b00;
+  --on-alarm: #ffffff;
   --callout: #f6ecd2;
   --console: #19221f;
   --console-ink: #d6dfd8;
@@ -44,6 +46,8 @@
     --lamp-human: #f0b429;
     --lamp-ok: #5cbf7a;
     --lamp-stop: #f06a5a;
+    --human-ink: #f0b429;
+    --on-alarm: #17201e;
     --callout: #2e2a1c;
     --console: #101715;
     color-scheme: dark;
@@ -64,6 +68,8 @@
   --lamp-human: #f0b429;
   --lamp-ok: #5cbf7a;
   --lamp-stop: #f06a5a;
+  --human-ink: #f0b429;
+  --on-alarm: #17201e;
   --callout: #2e2a1c;
   --console: #101715;
   color-scheme: dark;
@@ -234,7 +240,7 @@ main {
 }
 
 .notice-alarm {
-  color: #fff;
+  color: var(--on-alarm);
   background: var(--lamp-stop);
 }
 
@@ -393,7 +399,7 @@ main {
   background: var(--paper);
 }
 
-.track span {
+.track .label {
   display: block;
   padding-right: 0.3rem;
   overflow: hidden;
@@ -426,7 +432,7 @@ main {
 }
 
 .track [data-state="bypassed"] {
-  color: var(--steel);
+  color: var(--ink-soft);
   text-decoration: line-through;
 }
 
@@ -560,7 +566,7 @@ main {
 .callout h2 {
   margin-top: 0.75rem;
   border-top: 0;
-  color: var(--lamp-human);
+  color: var(--human-ink);
 }
 
 .callout ul {
@@ -707,7 +713,7 @@ td {
 
 /* Narrow screens keep only the current station's name on the track. */
 @media (max-width: 40rem) {
-  .track li:not([aria-current]) span {
+  .track li:not([aria-current]) .label {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -719,15 +725,25 @@ td {
     min-height: calc(var(--cell) + 1.6rem);
   }
 
-  .track [aria-current] span {
+  .track [aria-current] .label {
     position: absolute;
     left: 0;
     overflow: visible;
   }
 
-  .track [aria-current]:nth-last-child(-n + 4) span {
+  .track [aria-current]:nth-last-child(-n + 4) .label {
     left: auto;
     right: 0;
     padding-right: 0;
   }
+}
+
+/* Text for assistive technology only. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

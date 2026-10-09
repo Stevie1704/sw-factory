@@ -99,11 +99,11 @@ func NewHandler(reader Reader, options Options) http.Handler {
 // can define its own "title" and "content" templates.
 func parsePages() map[page]*template.Template {
 	functions := template.FuncMap{
-		"formatTime": formatTime,
-		"testPolicy": factory.TestPolicyDescription,
-		"micros":     formatMicros,
-		"stageTrack": stageTrack,
-		"gauge":      gaugeSegments,
+		"formatTime":  formatTime,
+		"testPolicy":  factory.TestPolicyDescription,
+		"micros":      formatMicros,
+		"stageTrack":  stageTrack,
+		"budgetGauge": newBudgetGauge,
 	}
 	pages := map[page]*template.Template{}
 	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError} {

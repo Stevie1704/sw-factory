@@ -9,8 +9,8 @@ import (
 )
 
 // states returns the station states of a track in line order.
-func states(track []station) []string {
-	result := make([]string, len(track))
+func states(track []station) []stationState {
+	result := make([]stationState, len(track))
 	for index, item := range track {
 		result[index] = item.State
 	}
@@ -18,41 +18,48 @@ func states(track []station) []string {
 }
 
 // TestStageTrackPlacesTheRunOnTheLine verifies the stages before the run's
-// stage are done, its stage is current, and the later stages are ahead.
+// stage are done, its stage is current, the later stages are ahead, and the
+// stages the run skips are bypassed.
 func TestStageTrackPlacesTheRunOnTheLine(t *testing.T) {
 	t.Parallel()
 
 	for name, test := range map[string]struct {
-		run   store.Run
-		route workflow.Route
-		want  []string
+		run          store.Run
+		route        workflow.Route
+		testBypassed bool
+		want         []stationState
 	}{
 		"default route at check": {
 			run:  store.Run{Stage: store.StageCheck, Status: store.StatusWaitingForHuman},
-			want: []string{"done", "done", "bypassed", "done", "done", "current", "ahead", "ahead", "ahead"},
+			want: []stationState{"done", "done", "bypassed", "done", "done", "current", "ahead", "ahead", "ahead"},
 		},
 		"design route at architecture": {
 			run:   store.Run{Stage: store.StageArchitecture, Status: store.StatusActive},
 			route: workflow.RouteDesignAcceptance,
-			want:  []string{"done", "done", "current", "ahead", "ahead", "ahead", "ahead", "ahead", "ahead"},
+			want:  []stationState{"done", "done", "current", "ahead", "ahead", "ahead", "ahead", "ahead", "ahead"},
 		},
 		"standards review shares the review station": {
 			run:  store.Run{Stage: workflow.StageStandardsReview, Status: store.StatusActive},
-			want: []string{"done", "done", "bypassed", "done", "done", "done", "done", "current", "ahead"},
+			want: []stationState{"done", "done", "bypassed", "done", "done", "done", "done", "current", "ahead"},
 		},
 		"complete run": {
 			run:  store.Run{Stage: store.StageReady, Status: store.StatusComplete},
-			want: []string{"done", "done", "bypassed", "done", "done", "done", "done", "done", "done"},
+			want: []stationState{"done", "done", "bypassed", "done", "done", "done", "done", "done", "done"},
+		},
+		"test stage skipped": {
+			run:          store.Run{Stage: store.StageImplementation, Status: store.StatusActive},
+			testBypassed: true,
+			want:         []stationState{"done", "done", "bypassed", "bypassed", "current", "ahead", "ahead", "ahead", "ahead"},
 		},
 		"stage off the line": {
 			run:  store.Run{Stage: "unknown", Status: store.StatusActive},
-			want: []string{"ahead", "ahead", "bypassed", "ahead", "ahead", "ahead", "ahead", "ahead", "ahead"},
+			want: []stationState{"ahead", "ahead", "bypassed", "ahead", "ahead", "ahead", "ahead", "ahead", "ahead"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := states(stageTrack(test.run, test.route)); !slices.Equal(got, test.want) {
+			if got := states(stageTrack(test.run, test.route, test.testBypassed)); !slices.Equal(got, test.want) {
 				t.Errorf("stageTrack states = %v, want %v", got, test.want)
 			}
 		})
@@ -64,15 +71,32 @@ func TestStageTrackPlacesTheRunOnTheLine(t *testing.T) {
 func TestStageTrackLabelsThePullRequestStage(t *testing.T) {
 	t.Parallel()
 
-	track := stageTrack(store.Run{Stage: store.StageClaim}, workflow.RouteDefault)
+	track := stageTrack(store.Run{Stage: store.StageClaim}, workflow.RouteDefault, false)
 	if got := track[stationIndex(store.StageDraftPR)].Label; got != "draft PR" {
 		t.Errorf("draft_pr label = %q, want %q", got, "draft PR")
 	}
 }
 
-// TestGaugeSegmentsFillTheUsedBudget verifies one segment per budget unit,
+// TestStationStatesAreSpoken verifies every station state has words for
+// assistive technology, which cannot see the station colors.
+func TestStationStatesAreSpoken(t *testing.T) {
+	t.Parallel()
+
+	for state, want := range map[stationState]string{
+		stationDone:     "done",
+		stationCurrent:  "current stage",
+		stationAhead:    "not reached",
+		stationBypassed: "skipped by this run",
+	} {
+		if got := state.Spoken(); got != want {
+			t.Errorf("%s spoken = %q, want %q", state, got, want)
+		}
+	}
+}
+
+// TestBudgetGaugeFillsTheUsedBudget verifies one segment per budget unit,
 // filled for each used unit and never more than the budget.
-func TestGaugeSegmentsFillTheUsedBudget(t *testing.T) {
+func TestBudgetGaugeFillsTheUsedBudget(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -84,8 +108,8 @@ func TestGaugeSegmentsFillTheUsedBudget(t *testing.T) {
 		{used: 0, budget: 0, want: []bool{}},
 		{used: 1, budget: -1, want: []bool{}},
 	} {
-		if got := gaugeSegments(test.used, test.budget); !slices.Equal(got, test.want) {
-			t.Errorf("gaugeSegments(%d, %d) = %v, want %v", test.used, test.budget, got, test.want)
+		if got := newBudgetGauge(test.used, test.budget).Segments(); !slices.Equal(got, test.want) {
+			t.Errorf("budget %d / %d segments = %v, want %v", test.used, test.budget, got, test.want)
 		}
 	}
 }

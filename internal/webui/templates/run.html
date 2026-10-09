@@ -41,9 +41,9 @@
 <section aria-labelledby="budgets">
 <h2 id="budgets">Budgets</h2>
 <dl class="budgets">
-<dt>Check repair</dt><dd><span class="count">{{.Run.CheckRepairAttempts}} / {{.Run.CheckRepairBudget}}</span>{{template "budget" (gauge .Run.CheckRepairAttempts .Run.CheckRepairBudget)}}</dd>
-<dt>Review repair</dt><dd><span class="count">{{.Run.ReviewRepairAttempts}} / {{.Run.ReviewRepairBudget}}</span>{{template "budget" (gauge .Run.ReviewRepairAttempts .Run.ReviewRepairBudget)}}</dd>
-<dt>Test revision</dt><dd><span class="count">{{.Run.TestRevisionAttempts}} / {{.Run.TestRevisionBudget}}</span>{{template "budget" (gauge .Run.TestRevisionAttempts .Run.TestRevisionBudget)}}</dd>
+<dt>Check repair</dt><dd>{{template "budgetGauge" (budgetGauge .Run.CheckRepairAttempts .Run.CheckRepairBudget)}}</dd>
+<dt>Review repair</dt><dd>{{template "budgetGauge" (budgetGauge .Run.ReviewRepairAttempts .Run.ReviewRepairBudget)}}</dd>
+<dt>Test revision</dt><dd>{{template "budgetGauge" (budgetGauge .Run.TestRevisionAttempts .Run.TestRevisionBudget)}}</dd>
 </dl>
 </section>
 
@@ -124,6 +124,6 @@
 </section>
 {{- end}}
 
-{{define "budget" -}}
-<span class="gauge" aria-hidden="true">{{range .}}<span{{if .}} data-used{{end}}></span>{{end}}</span>
+{{define "budgetGauge" -}}
+<span class="count">{{.Used}} / {{.Budget}}</span><span class="gauge" aria-hidden="true">{{range .Segments}}<span{{if .}} data-used{{end}}></span>{{end}}</span>
 {{- end}}

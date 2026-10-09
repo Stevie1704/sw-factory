@@ -51,8 +51,8 @@
 
 {{define "track" -}}
 <ol class="track" data-status="{{.Run.Status}}" aria-label="Stages">
-{{- range stageTrack .Run .Route}}
-<li data-state="{{.State}}"{{if eq .State "current"}} aria-current="step"{{end}}><span>{{.Label}}</span></li>
+{{- range stageTrack .Run .Route .TestStageBypassed}}
+<li data-state="{{.State}}"{{if .Current}} aria-current="step"{{end}}><span class="label">{{.Label}}</span><span class="visually-hidden">: {{.State.Spoken}}</span></li>
 {{- end}}
 </ol>
 {{- end}}
