@@ -37,8 +37,9 @@ var fixtureNow = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 // uiFixture is one registered repository with a populated operational store
 // and the UI handler that reads it through the factory service.
 type uiFixture struct {
-	handler   http.Handler
-	storePath string
+	handler    http.Handler
+	configPath string
+	storePath  string
 }
 
 // newUIFixture writes a host configuration and a real operational store with
@@ -152,7 +153,7 @@ func newUIFixture(t *testing.T) uiFixture {
 		t.Fatal(err)
 	}
 
-	return uiFixture{handler: newHandler(configPath), storePath: storePath}
+	return uiFixture{handler: newHandler(configPath), configPath: configPath, storePath: storePath}
 }
 
 // saveHost writes a host configuration that registers one repository under

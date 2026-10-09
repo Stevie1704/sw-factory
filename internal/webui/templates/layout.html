@@ -4,22 +4,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{template "title" .}} · factory</title>
-<link rel="stylesheet" href="/assets/style.css"></head>
+<title>{{template "title" .Page}} · factory</title>
+<link rel="stylesheet" href="/assets/style.css">
+{{- if .RefreshSeconds}}
+<script src="/assets/refresh.js" defer></script>
+{{- end}}
+</head>
+{{if .RefreshSeconds -}}
+<body data-refresh-seconds="{{.RefreshSeconds}}">
+{{- else -}}
 <body>
+{{- end}}
 <header>
 <nav><a href="/">factory runs</a></nav>
-{{template "supervisor" .Supervisor}}
+{{template "supervisor" .Page.Supervisor}}
 </header>
+{{if .RefreshSeconds -}}
+<p id="refresh-status" class="warning" role="status" hidden>UI server unreachable: the page shows the last successful read.</p>
+{{end -}}
 <main id="content">
-{{template "content" .}}
+{{template "content" .Page}}
 </main>
 </body>
 </html>
 {{- end}}
 
 {{define "supervisor" -}}
-<p id="supervisor">supervisor:
+<div id="supervisor" data-state="
+{{- with .}}{{if .Live}}live{{else if .Heartbeat}}expired{{else}}missing{{end}}{{else}}unknown{{end}}">
+<p>supervisor:
 {{- with . -}}
 {{- if .Live}} live (coordinator {{.Heartbeat.Coordinator}}, pid {{.Heartbeat.PID}}, renewed {{formatTime .Heartbeat.RenewedAt}}, expires {{formatTime .Heartbeat.ExpiresAt}})
 {{- else if .Heartbeat}} not live (coordinator {{.Heartbeat.Coordinator}}, pid {{.Heartbeat.PID}}, expired {{formatTime .Heartbeat.ExpiresAt}})
@@ -28,4 +41,8 @@
 {{- else}} unknown
 {{- end -}}
 </p>
+{{- with .}}{{if and .ActiveRunID (not .Live)}}
+<p class="warning" role="alert">supervisor warning: active run {{.ActiveRunID}} has no live supervisor; run factory start (<a href="/runs/{{.ActiveRunID}}">open run</a>)</p>
+{{- end}}{{end}}
+</div>
 {{- end}}
