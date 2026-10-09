@@ -1,30 +1,34 @@
 {{define "title"}}Runs{{end}}
 
 {{define "content" -}}
+<div class="page-head">
 <h1>Runs</h1>
-<p>Repository: <code>{{.RepositoryPath}}</code></p>
+<p class="repo">Repository <code>{{.RepositoryPath}}</code></p>
+</div>
 {{if .Runs -}}
-<table>
-<thead>
-<tr><th>Run</th><th>Issue</th><th>Stage</th><th>Status</th><th>Activity</th><th>Route</th><th>Reason</th><th>Pull request</th><th>Updated</th></tr>
-</thead>
-<tbody>
+<ol class="runs">
 {{range .Runs -}}
-<tr>
-<td><a href="/runs/{{.Run.ID}}">{{.Run.ID}}</a></td>
-<td>#{{.Run.IssueNumber}} {{.IssueTitle}}</td>
-<td>{{.Run.Stage}}</td>
-<td>{{.Run.Status}}</td>
-<td>{{.Activity}}</td>
-<td>{{.Route.Description}}</td>
-<td>{{.Run.LifecycleReason}}</td>
-<td>{{if .Run.PullRequestURL}}<a href="{{.Run.PullRequestURL}}" rel="noreferrer noopener">#{{.Run.PullRequestNumber}}</a>{{end}}</td>
-<td>{{formatTime .Run.UpdatedAt}}</td>
-</tr>
+<li class="run" data-status="{{.Run.Status}}">
+<div class="run-head">
+<a class="run-title" href="/runs/{{.Run.ID}}"><span class="issue">#{{.Run.IssueNumber}}</span> {{.IssueTitle}}</a>
+<span class="run-id">{{.Run.ID}}</span>
+</div>
+{{template "track" .}}
+<dl class="run-facts">
+<div><dt>Status</dt><dd>{{template "status" .Run.Status}} <span class="activity">{{.Activity}}</span></dd></div>
+<div><dt>Stage</dt><dd>{{.Run.Stage}}</dd></div>
+{{with .Run.LifecycleReason}}<div class="wide"><dt>Reason</dt><dd>{{.}}</dd></div>{{end}}
+<div class="wide"><dt>Route</dt><dd>{{.Route.Description}}</dd></div>
+{{if .Run.PullRequestURL}}<div><dt>Pull request</dt><dd><a href="{{.Run.PullRequestURL}}" rel="noreferrer noopener">#{{.Run.PullRequestNumber}}</a></dd></div>{{end}}
+<div><dt>Updated</dt><dd>{{formatTime .Run.UpdatedAt}}</dd></div>
+</dl>
+</li>
 {{end -}}
-</tbody>
-</table>
+</ol>
 {{- else -}}
+<div class="empty">
 <p>No runs are recorded.</p>
+<p>Authorize an issue and start supervision with <code>factory start</code>. Its run shows here.</p>
+</div>
 {{- end}}
 {{- end}}

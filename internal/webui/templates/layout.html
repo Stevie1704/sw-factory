@@ -4,6 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>{{template "title" .Page}} · factory</title>
 <link rel="stylesheet" href="/assets/style.css">
 {{- if .RefreshSeconds}}
@@ -15,12 +16,12 @@
 {{- else -}}
 <body>
 {{- end}}
-<header>
-<nav><a href="/">factory runs</a></nav>
+<header class="strip">
+<nav><a class="mark" href="/"><span class="mark-glyph" aria-hidden="true"></span>factory</a></nav>
 {{template "supervisor" .Page.Supervisor}}
 </header>
 {{if .RefreshSeconds -}}
-<p id="refresh-status" class="warning" role="status" hidden>UI server unreachable: the page shows the last successful read.</p>
+<p id="refresh-status" class="notice notice-alarm" role="status" hidden>UI server unreachable: the page shows the last successful read.</p>
 {{end -}}
 <main id="content">
 {{template "content" .Page}}
@@ -32,6 +33,7 @@
 {{define "supervisor" -}}
 <div id="supervisor" data-state="
 {{- with .}}{{if .Live}}live{{else if .Heartbeat}}expired{{else}}missing{{end}}{{else}}unknown{{end}}">
+<span class="lamp" aria-hidden="true"></span>
 <p>supervisor:
 {{- with . -}}
 {{- if .Live}} live (coordinator {{.Heartbeat.Coordinator}}, pid {{.Heartbeat.PID}}, renewed {{formatTime .Heartbeat.RenewedAt}}, expires {{formatTime .Heartbeat.ExpiresAt}})
@@ -42,7 +44,19 @@
 {{- end -}}
 </p>
 {{- with .}}{{if and .ActiveRunID (not .Live)}}
-<p class="warning" role="alert">supervisor warning: active run {{.ActiveRunID}} has no live supervisor; run factory start (<a href="/runs/{{.ActiveRunID}}">open run</a>)</p>
+<p class="notice notice-alarm" role="alert">supervisor warning: active run {{.ActiveRunID}} has no live supervisor; run factory start (<a href="/runs/{{.ActiveRunID}}">open run</a>)</p>
 {{- end}}{{end}}
 </div>
+{{- end}}
+
+{{define "track" -}}
+<ol class="track" data-status="{{.Run.Status}}" aria-label="Stages">
+{{- range stageTrack .Run .Route .TestStageBypassed}}
+<li data-state="{{.State}}"{{if .Current}} aria-current="step"{{end}}><span class="label">{{.Label}}</span><span class="visually-hidden">: {{.State.Spoken}}</span></li>
+{{- end}}
+</ol>
+{{- end}}
+
+{{define "status" -}}
+<span class="status" data-status="{{.}}">{{.}}</span>
 {{- end}}

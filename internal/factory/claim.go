@@ -845,7 +845,8 @@ func isCleanStartStage(run store.Run) bool {
 		route, readable := routeForRun(run)
 		return readable && route == workflow.RouteDesignAcceptance
 	case store.StageImplementation:
-		return implementationStartIsClean(run)
+		// Implementation starts clean when no test handoff precedes it.
+		return testStageBypassed(run)
 	default:
 		return false
 	}

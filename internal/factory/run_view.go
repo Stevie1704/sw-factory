@@ -55,8 +55,11 @@ type RunListEntry struct {
 	// IssueTitle comes from the frozen packet; it is empty when unreadable.
 	IssueTitle string
 	// Route is the frozen workflow route, or unknown when unreadable.
-	Route    workflow.Route
-	Activity RunActivity
+	Route workflow.Route
+	// TestStageBypassed reports that the run skips the independent test
+	// stage.
+	TestStageBypassed bool
+	Activity          RunActivity
 }
 
 // RunOverview is the run list page model.
@@ -102,7 +105,10 @@ type RunDetail struct {
 	IssueTitle     string
 	Route          workflow.Route
 	TestPolicyMode config.TestMode
-	Activity       RunActivity
+	// TestStageBypassed reports that the run skips the independent test
+	// stage.
+	TestStageBypassed bool
+	Activity          RunActivity
 	// Invocations are in update order, oldest first.
 	Invocations []store.Invocation
 	// Gates are grouped by phase and checkpoint, newest record first.
@@ -138,10 +144,11 @@ func (s *Service) RunOverview(ctx context.Context) (RunOverview, error) {
 		overview := RunOverview{RepositoryPath: view.repositoryPath, Supervisor: view.supervisor, Runs: make([]RunListEntry, 0, len(runs))}
 		for _, run := range runs {
 			overview.Runs = append(overview.Runs, RunListEntry{
-				Run:        run,
-				IssueTitle: issueTitleForRun(run),
-				Route:      statusRouteForRun(run),
-				Activity:   RunActivityFor(run),
+				Run:               run,
+				IssueTitle:        issueTitleForRun(run),
+				Route:             statusRouteForRun(run),
+				TestStageBypassed: testStageBypassed(run),
+				Activity:          RunActivityFor(run),
 			})
 		}
 		return overview, nil
@@ -176,16 +183,17 @@ func (s *Service) RunDetail(ctx context.Context, runID string) (RunDetail, error
 			return RunDetail{}, err
 		}
 		return RunDetail{
-			Supervisor:     view.supervisor,
-			Run:            *run,
-			IssueTitle:     issueTitleForRun(*run),
-			Route:          statusRouteForRun(*run),
-			TestPolicyMode: testPolicyModeForRun(*run),
-			Activity:       RunActivityFor(*run),
-			Invocations:    invocations,
-			Gates:          groupGateResults(gateResults, run.CheckpointSHA),
-			PendingEffect:  pendingEffect,
-			Diagnostics:    diagnostics,
+			Supervisor:        view.supervisor,
+			Run:               *run,
+			IssueTitle:        issueTitleForRun(*run),
+			Route:             statusRouteForRun(*run),
+			TestPolicyMode:    testPolicyModeForRun(*run),
+			TestStageBypassed: testStageBypassed(*run),
+			Activity:          RunActivityFor(*run),
+			Invocations:       invocations,
+			Gates:             groupGateResults(gateResults, run.CheckpointSHA),
+			PendingEffect:     pendingEffect,
+			Diagnostics:       diagnostics,
 		}, nil
 	})
 }
