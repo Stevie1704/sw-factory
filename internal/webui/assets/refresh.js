@@ -19,8 +19,22 @@
     }
   }
 
-  // swapRegions replaces every region with its fresh copy. It throws when the
-  // fresh page lacks a region, so a non-page answer counts as a failure.
+  // readPage returns the parsed page of an HTML response. Any status counts,
+  // because a 503 error page is valid state. It throws for an answer that is
+  // not HTML.
+  function readPage(response) {
+    var type = response.headers.get("Content-Type") || "";
+    if (type.indexOf("text/html") !== 0) {
+      throw new Error("refreshed answer is not HTML: " + type);
+    }
+    return response.text().then(function (html) {
+      return new DOMParser().parseFromString(html, "text/html");
+    });
+  }
+
+  // swapRegions replaces every region with its fresh copy. It throws before it
+  // changes anything when the fresh page lacks a region, so a page that is
+  // not a UI page counts as a failure.
   function swapRegions(fresh) {
     var replacements = regions.map(function (id) {
       var next = fresh.getElementById(id);
@@ -43,11 +57,9 @@
       return;
     }
     fetch(window.location.href, { cache: "no-store", credentials: "same-origin" })
-      .then(function (response) {
-        return response.text();
-      })
-      .then(function (html) {
-        swapRegions(new DOMParser().parseFromString(html, "text/html"));
+      .then(readPage)
+      .then(function (fresh) {
+        swapRegions(fresh);
         showUnreachable(false);
       })
       .catch(function () {
