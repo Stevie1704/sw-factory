@@ -21,8 +21,12 @@ type DoctorRequest struct {
 	RepositoryPath string
 	// RemoteName is the Git remote used by factory operations.
 	RemoteName string
-	// ExpectedOwner is the registered GitHub owner.
+	// ExpectedOwner is the registered GitHub owner or Azure DevOps
+	// organization.
 	ExpectedOwner string
+	// ExpectedProject is the registered Azure DevOps project. It is empty for
+	// a GitHub repository.
+	ExpectedProject string
 	// ExpectedRepository is the registered GitHub repository name.
 	ExpectedRepository string
 	// TargetBranch is the branch fetched to begin a run.
@@ -184,14 +188,14 @@ func (m *LocalWorktreeManager) CheckRemote(ctx context.Context, request DoctorRe
 	if err != nil {
 		return remoteFailure(remoteFailureFetchRead)
 	}
-	if !remoteMatches(string(remoteOutput), request.ExpectedOwner, request.ExpectedRepository) {
+	if !remoteMatches(string(remoteOutput), request) {
 		return remoteFailure(remoteFailureFetchIdentity)
 	}
 	pushRemoteOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"remote", "get-url", "--push", request.RemoteName})
 	if err != nil {
 		return remoteFailure(remoteFailurePushRead)
 	}
-	if !remoteMatches(string(pushRemoteOutput), request.ExpectedOwner, request.ExpectedRepository) {
+	if !remoteMatches(string(pushRemoteOutput), request) {
 		return remoteFailure(remoteFailurePushIdentity)
 	}
 	branchOutput, err := m.runner().Run(ctx, request.RepositoryPath, []string{"ls-remote", "--exit-code", request.RemoteName, "refs/heads/" + request.TargetBranch})
@@ -225,11 +229,11 @@ func remoteDiagnosis(err error) (string, string) {
 	case remoteFailureFetchRead:
 		return "the configured Git fetch remote is missing or unreadable", "configure the factory remote and verify the checkout can read it"
 	case remoteFailureFetchIdentity:
-		return "the Git fetch remote does not identify the registered GitHub repository", "set the configured remote's fetch URL to the registered GitHub repository"
+		return "the Git fetch remote does not identify the registered repository", "set the configured remote's fetch URL to the registered GitHub or Azure Repos repository"
 	case remoteFailurePushRead:
 		return "the configured Git push remote is missing or unreadable", "configure a push URL for the factory remote and verify the checkout can read it"
 	case remoteFailurePushIdentity:
-		return "the Git push remote does not identify the registered GitHub repository", "set the configured remote's push URL to the registered GitHub repository"
+		return "the Git push remote does not identify the registered repository", "set the configured remote's push URL to the registered GitHub or Azure Repos repository"
 	case remoteFailureBranchRead:
 		return "the configured Git target branch cannot be read from the remote", "fetch the target branch and verify network and remote permissions"
 	case remoteFailureBranchNoCommit:
@@ -380,12 +384,18 @@ func validateDoctorRepository(path string) error {
 
 // remoteMatches compares a GitHub owner/repository identity against one Git
 // remote URL in any form the Git command emits.
-func remoteMatches(value, owner, repository string) bool {
+func remoteMatches(value string, request DoctorRequest) bool {
+	owner := strings.TrimSpace(request.ExpectedOwner)
+	repository := strings.TrimSuffix(strings.TrimSpace(request.ExpectedRepository), ".git")
+	if project := strings.TrimSpace(request.ExpectedProject); project != "" {
+		remote, ok := parseAzureReposRemote(value)
+		return ok && strings.EqualFold(remote.organization, owner) && strings.EqualFold(remote.project, project) && strings.EqualFold(remote.repository, repository)
+	}
 	remoteOwner, remoteRepository, ok := parseGitHubRemote(value)
 	if !ok {
 		return false
 	}
-	return strings.EqualFold(remoteOwner, strings.TrimSpace(owner)) && strings.EqualFold(remoteRepository, strings.TrimSuffix(strings.TrimSpace(repository), ".git"))
+	return strings.EqualFold(remoteOwner, owner) && strings.EqualFold(remoteRepository, repository)
 }
 
 var _ DoctorChecker = (*LocalWorktreeManager)(nil)

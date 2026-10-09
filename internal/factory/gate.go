@@ -19,7 +19,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -198,7 +197,7 @@ func (s *Service) runBaselineProjection(ctx context.Context, registration config
 	next.UpdatedAt = s.deps.Now().UTC()
 	issue := packet.Issue
 	updated, transitionErr := s.applyStateTransition(ctx, runStore, stateTransition{
-		Repository: commandRepository(registration),
+		Repository: registeredRepository(registration),
 		Issue:      issue,
 		Previous:   run,
 		Next:       next,
@@ -412,7 +411,7 @@ func (s *Service) runGateSuite(ctx context.Context, registration config.Reposito
 	}
 	return (gate.Runner{
 		Runtime:    s.deps.Worker,
-		Repository: tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository},
+		Repository: registeredRepository(registration),
 		Statuses:   statuses,
 	}).RunSuite(ctx, gate.SuiteRequest{
 		RunID:                  run.ID,

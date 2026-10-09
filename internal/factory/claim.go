@@ -112,7 +112,7 @@ func (s *Service) BootstrapLabels(ctx context.Context) (BootstrapLabelsResult, e
 	if err != nil {
 		return BootstrapLabelsResult{}, err
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	for _, label := range factoryLabels {
 		if err := s.deps.Tracker.CreateLabel(ctx, repository, label); err != nil {
 			return BootstrapLabelsResult{}, err
@@ -144,7 +144,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if err := harness.ValidateNativeResumeCapabilities(repositoryConfig, s.deps.HarnessCapabilities); err != nil {
 		return IssueResult{}, fmt.Errorf("validate harness capabilities before claim: %w", err)
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	if current != nil {
 		return IssueResult{}, fmt.Errorf("an active run already exists: %s", current.ID)
 	}
@@ -348,7 +348,7 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	if err := s.ensureTransitionBaseline(ctx, runStore, *run, request); err != nil {
 		return store.Run{}, err
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return store.Run{}, err

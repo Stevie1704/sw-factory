@@ -1210,3 +1210,54 @@ func validRegistration() config.RepositoryRegistration {
 		RepositoryConfigPath: "/work/repository/factory.yaml",
 	}
 }
+
+// TestValidateHostAcceptsAnAzureDevOpsRegistration verifies that an Azure
+// DevOps organization, project, and repository can replace the GitHub
+// identity of a registration.
+func TestValidateHostAcceptsAnAzureDevOpsRegistration(t *testing.T) {
+	t.Parallel()
+
+	registration := validRegistration()
+	registration.GitHub = config.GitHubConfig{}
+	registration.AzureDevOps = config.AzureDevOpsConfig{Organization: "contoso", Project: "Factory Pilot", Repository: "service"}
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}}
+	if err := config.ValidateHost(host); err != nil {
+		t.Fatalf("ValidateHost() error = %v, want an accepted Azure DevOps registration", err)
+	}
+}
+
+// TestValidateHostRejectsAnIncompleteOrAmbiguousAzureDevOpsRegistration
+// verifies that every Azure DevOps field is required and safe, and that a
+// registration names exactly one provider.
+func TestValidateHostRejectsAnIncompleteOrAmbiguousAzureDevOpsRegistration(t *testing.T) {
+	t.Parallel()
+
+	azure := config.AzureDevOpsConfig{Organization: "contoso", Project: "Factory Pilot", Repository: "service"}
+	tests := []struct {
+		name   string
+		github config.GitHubConfig
+		azure  func(config.AzureDevOpsConfig) config.AzureDevOpsConfig
+		field  string
+	}{
+		{name: "both providers", github: config.GitHubConfig{Owner: "example", Repository: "project"}, azure: func(a config.AzureDevOpsConfig) config.AzureDevOpsConfig { return a }, field: "repositories[0].azure_devops"},
+		{name: "missing organization", azure: func(a config.AzureDevOpsConfig) config.AzureDevOpsConfig { a.Organization = ""; return a }, field: "repositories[0].azure_devops.organization"},
+		{name: "missing project", azure: func(a config.AzureDevOpsConfig) config.AzureDevOpsConfig { a.Project = " "; return a }, field: "repositories[0].azure_devops.project"},
+		{name: "missing repository", azure: func(a config.AzureDevOpsConfig) config.AzureDevOpsConfig { a.Repository = ""; return a }, field: "repositories[0].azure_devops.repository"},
+		{name: "path in organization", azure: func(a config.AzureDevOpsConfig) config.AzureDevOpsConfig { a.Organization = "contoso/other"; return a }, field: "repositories[0].azure_devops.organization"},
+		{name: "query in repository", azure: func(a config.AzureDevOpsConfig) config.AzureDevOpsConfig { a.Repository = "service?x=1"; return a }, field: "repositories[0].azure_devops.repository"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registration := validRegistration()
+			registration.GitHub = tc.github
+			registration.AzureDevOps = tc.azure(azure)
+			err := config.ValidateHost(config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{registration}})
+			var validationErr *config.ValidationError
+			if !errors.As(err, &validationErr) || validationErr.Field != tc.field {
+				t.Fatalf("ValidateHost() error = %v, want a validation error for %q", err, tc.field)
+			}
+		})
+	}
+}

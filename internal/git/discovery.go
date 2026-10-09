@@ -96,3 +96,62 @@ func parseGitHubRemote(value string) (string, string, bool) {
 	}
 	return owner, repository, true
 }
+
+// azureReposRemote is the organization, project, and repository named by an
+// Azure Repos remote URL.
+type azureReposRemote struct {
+	organization string
+	project      string
+	repository   string
+}
+
+// parseAzureReposRemote extracts the identity named by one Azure Repos remote
+// URL. It accepts the dev.azure.com and legacy visualstudio.com HTTPS forms
+// and the v3 SSH forms that Azure Repos shows for cloning. Path segments are
+// unescaped, so a project name with a space matches its registered name.
+func parseAzureReposRemote(value string) (azureReposRemote, bool) {
+	remote := strings.TrimSpace(value)
+	if remote == "" || strings.ContainsAny(remote, "\x00\r\n") {
+		return azureReposRemote{}, false
+	}
+	if !strings.Contains(remote, "://") {
+		at := strings.LastIndex(remote, "@")
+		colon := strings.Index(remote, ":")
+		if colon <= at {
+			return azureReposRemote{}, false
+		}
+		remote = "ssh://" + remote[:colon] + "/" + remote[colon+1:]
+	}
+	parsed, err := url.Parse(remote)
+	if err != nil {
+		return azureReposRemote{}, false
+	}
+	segments := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
+	host := strings.ToLower(parsed.Hostname())
+	var parts []string
+	switch {
+	case host == "dev.azure.com" && len(segments) == 4 && segments[2] == "_git":
+		parts = []string{segments[0], segments[1], segments[3]}
+	case strings.HasSuffix(host, ".visualstudio.com") && host != "vs-ssh.visualstudio.com":
+		organization := strings.TrimSuffix(host, ".visualstudio.com")
+		if len(segments) == 4 && strings.EqualFold(segments[0], "DefaultCollection") {
+			segments = segments[1:]
+		}
+		if len(segments) != 3 || segments[1] != "_git" {
+			return azureReposRemote{}, false
+		}
+		parts = []string{organization, segments[0], segments[2]}
+	case (host == "ssh.dev.azure.com" || host == "vs-ssh.visualstudio.com") && len(segments) == 4 && segments[0] == "v3":
+		parts = segments[1:]
+	default:
+		return azureReposRemote{}, false
+	}
+	for index, part := range parts {
+		unescaped, err := url.PathUnescape(part)
+		if err != nil || strings.TrimSpace(unescaped) == "" {
+			return azureReposRemote{}, false
+		}
+		parts[index] = unescaped
+	}
+	return azureReposRemote{organization: parts[0], project: parts[1], repository: strings.TrimSuffix(parts[2], ".git")}, true
+}

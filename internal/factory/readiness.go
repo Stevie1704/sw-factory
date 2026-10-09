@@ -45,7 +45,7 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	if client == nil {
 		return run, errors.New("GitHub client does not support pull-request operations")
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return run, fmt.Errorf("find pull request before readiness: %w", err)

@@ -109,7 +109,7 @@ func (s *Service) ensureClarificationPublication(ctx context.Context, registrati
 			target = run.PullRequestNumber
 		}
 		body := clarificationCommentBody(run, packet.Version, run.PendingQuestions)
-		published, publishErr := s.journal().PublishClarificationComment(ctx, runStore, commandRepository(registration), target, run, packet.Version, body)
+		published, publishErr := s.journal().PublishClarificationComment(ctx, runStore, registeredRepository(registration), target, run, packet.Version, body)
 		run = published
 		if publishErr != nil {
 			return run, publishErr

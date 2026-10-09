@@ -122,7 +122,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if err := validateProtectedTestPaths(run.Worktree, protectedState, run.ProtectedTestPaths); err != nil {
 		return DraftPullRequestResult{}, err
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
 		return DraftPullRequestResult{}, err
@@ -317,7 +317,7 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 	if client == nil {
 		return codehost.PullRequest{}, errors.New("GitHub client does not support pull-request operations")
 	}
-	repository := tracker.Repository{Owner: registration.GitHub.Owner, Name: registration.GitHub.Repository}
+	repository := registeredRepository(registration)
 	existing, err := client.FindPullRequest(ctx, repository, run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return codehost.PullRequest{}, err

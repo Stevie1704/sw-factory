@@ -174,7 +174,7 @@ type lifecycleObservation struct {
 // Classification is deliberately left to the caller, because a transition and a
 // read-only refusal report an uninterpretable lifecycle differently.
 func (s *Service) observeGitHubLifecycle(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (lifecycleObservation, error) {
-	issue, err := s.deps.Tracker.Issue(ctx, commandRepository(registration), run.IssueNumber)
+	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
 	if err != nil {
 		return lifecycleObservation{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
 	}
@@ -236,7 +236,7 @@ func (s *Service) trackedPullRequest(ctx context.Context, registration config.Re
 	if strings.TrimSpace(packet.RepositoryConfig.TargetBranch) == "" {
 		return codehost.PullRequest{}, false, errors.New("tracked run has no frozen pull-request target branch")
 	}
-	pullRequest, err := client.FindPullRequest(ctx, commandRepository(registration), run.Branch, packet.RepositoryConfig.TargetBranch)
+	pullRequest, err := client.FindPullRequest(ctx, registeredRepository(registration), run.Branch, packet.RepositoryConfig.TargetBranch)
 	if err != nil {
 		return codehost.PullRequest{}, false, fmt.Errorf("observe pull request #%d: %w", run.PullRequestNumber, err)
 	}
@@ -286,7 +286,7 @@ func (s *Service) transitionTerminal(ctx context.Context, registration config.Re
 			return next, err
 		}
 	}
-	repository := commandRepository(registration)
+	repository := registeredRepository(registration)
 	if next.StatusCommentID == "" {
 		comment, err := s.deps.Tracker.FindStatusComment(ctx, repository, next.IssueNumber, statusCommentMarker(next.ID))
 		if err != nil {

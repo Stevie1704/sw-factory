@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/codehost"
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -166,5 +167,48 @@ func TestPollCommandsPostsClarificationQuestionsOnThePullRequest(t *testing.T) {
 	stored, err := runStore.CurrentRun(context.Background())
 	if err != nil || stored == nil || stored.ClarificationCommentID != "pr-comment-1" {
 		t.Fatalf("CurrentRun() = %#v/%v, want the pull-request comment identity", stored, err)
+	}
+}
+
+// repositoryRecorder records the repository identity of every comment read.
+type repositoryRecorder struct {
+	repositories []tracker.Repository
+}
+
+// IssueComments records the repository and returns no comments.
+func (r *repositoryRecorder) IssueComments(_ context.Context, repository tracker.Repository, _ int) ([]tracker.Comment, error) {
+	r.repositories = append(r.repositories, repository)
+	return nil, nil
+}
+
+// TestPollCommandsUsesTheAzureDevOpsRepositoryIdentity verifies that an
+// Azure DevOps registration reaches the adapters as organization, project,
+// and repository.
+func TestPollCommandsUsesTheAzureDevOpsRepositoryIdentity(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusActive)
+	host := commandHost()
+	host.Repositories[0].GitHub = config.GitHubConfig{}
+	host.Repositories[0].AzureDevOps = config.AzureDevOpsConfig{Organization: "contoso", Project: "Factory Pilot", Repository: "service"}
+	recorder := &repositoryRecorder{}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:    commandConfig{host: host},
+		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		Tracker:   &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentRunning}}},
+		Comments:  recorder,
+		Worker:    &agentWorker{},
+	})
+
+	if _, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: run.ID}); err != nil {
+		t.Fatalf("PollCommands() error = %v", err)
+	}
+	want := tracker.Repository{Owner: "contoso", Project: "Factory Pilot", Name: "service"}
+	if len(recorder.repositories) != 1 || recorder.repositories[0] != want {
+		t.Fatalf("repositories = %#v, want %#v", recorder.repositories, want)
+	}
+	if got := want.String(); got != "contoso/Factory Pilot/service" {
+		t.Fatalf("String() = %q, want the three-part Azure DevOps name", got)
 	}
 }
