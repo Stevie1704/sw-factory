@@ -67,9 +67,13 @@ func (s *Service) pullRequestCommentReader() codehost.PullRequestCommentReader {
 }
 
 // pullRequestCommentClient resolves the optional pull-request comment mutation
-// seam from the tracker adapter. It returns nil when pull-request comments
-// share the issue comment stream.
+// seam: the dedicated code-host dependency, or the tracker adapter when it
+// implements it. It returns nil when pull-request comments share the issue
+// comment stream.
 func (s *Service) pullRequestCommentClient() codehost.PullRequestCommentClient {
+	if s.deps.PullRequestCommentPublisher != nil {
+		return s.deps.PullRequestCommentPublisher
+	}
 	client, _ := s.deps.Tracker.(codehost.PullRequestCommentClient)
 	return client
 }

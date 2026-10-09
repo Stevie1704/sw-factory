@@ -1250,19 +1250,15 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 	if s.deps.Comments == nil {
 		return nil, errors.New("GitHub comment reader is required for command polling")
 	}
-	targets := []int{run.IssueNumber}
-	if run.PullRequestNumber > 0 && run.PullRequestNumber != run.IssueNumber {
-		targets = append(targets, run.PullRequestNumber)
-	}
 	comments := make([]polledComment, 0)
 	repository := registeredRepository(registration)
-	for _, target := range targets {
-		listed, listErr := s.targetComments(ctx, repository, *run, target)
+	for _, target := range s.commentTargets(*run) {
+		listed, listErr := target.comments(ctx, repository)
 		if listErr != nil {
-			return nil, &pollingTransportError{err: fmt.Errorf("list comments for #%d: %w", target, listErr)}
+			return nil, &pollingTransportError{err: fmt.Errorf("list comments for #%d: %w", target.number, listErr)}
 		}
 		for _, comment := range listed {
-			comments = append(comments, polledComment{target: target, comment: comment})
+			comments = append(comments, polledComment{target: target.number, comment: comment})
 		}
 	}
 	sort.SliceStable(comments, func(left, right int) bool {
@@ -1300,16 +1296,37 @@ type polledComment struct {
 	comment tracker.Comment
 }
 
-// targetComments lists the comments of one polling target. The run's pull
-// request is read through the code-host comment seam when the adapter keeps
-// pull-request comments apart from issue comments.
-func (s *Service) targetComments(ctx context.Context, repository tracker.Repository, run store.Run, target int) ([]tracker.Comment, error) {
-	if target == run.PullRequestNumber {
-		if reader := s.pullRequestCommentReader(); reader != nil {
-			return reader.PullRequestComments(ctx, repository, target)
-		}
+// commentTarget is one comment stream that command polling reads: the
+// run's issue, or its pull request through the code-host seam.
+type commentTarget struct {
+	number   int
+	comments func(context.Context, tracker.Repository) ([]tracker.Comment, error)
+}
+
+// commentTargets returns the comment streams of a run. When the code host
+// keeps pull-request comments apart, the pull request is its own stream even
+// if its number equals the issue number. Otherwise a pull request with the
+// issue's number is the same stream and is read once.
+func (s *Service) commentTargets(run store.Run) []commentTarget {
+	issue := run.IssueNumber
+	targets := []commentTarget{{number: issue, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+		return s.deps.Comments.IssueComments(ctx, repository, issue)
+	}}}
+	pullRequest := run.PullRequestNumber
+	if pullRequest <= 0 {
+		return targets
 	}
-	return s.deps.Comments.IssueComments(ctx, repository, target)
+	if reader := s.pullRequestCommentReader(); reader != nil {
+		return append(targets, commentTarget{number: pullRequest, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+			return reader.PullRequestComments(ctx, repository, pullRequest)
+		}})
+	}
+	if pullRequest == issue {
+		return targets
+	}
+	return append(targets, commentTarget{number: pullRequest, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+		return s.deps.Comments.IssueComments(ctx, repository, pullRequest)
+	}})
 }
 
 // registeredRepository maps the registered GitHub or Azure DevOps identity to

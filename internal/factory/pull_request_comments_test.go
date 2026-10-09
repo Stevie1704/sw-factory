@@ -68,6 +68,41 @@ func TestPollCommandsReadsThePullRequestThroughTheCodeHost(t *testing.T) {
 	}
 }
 
+// TestPollCommandsReadsAnIssueAndAPullRequestWithTheSameNumber verifies
+// that work item 42 and pull request 42 are both read when the code host
+// keeps them apart, instead of one number standing for both.
+func TestPollCommandsReadsAnIssueAndAPullRequestWithTheSameNumber(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusActive)
+	run.PullRequestNumber = run.IssueNumber
+	githubAdapter := &commandGitHub{
+		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentRunning}},
+		statusComment: tracker.Comment{ID: "status-1"},
+	}
+	surfaces := separateCommentSurfaces{
+		issueComments:       map[int][]tracker.Comment{42: {{ID: "80", Author: "alice", Body: "/factory status"}}},
+		pullRequestComments: map[int][]tracker.Comment{42: {{ID: "90", Author: "alice", Body: "/factory status"}}},
+	}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:              commandConfig{host: commandHost()},
+		OpenStore:           func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		Tracker:             githubAdapter,
+		Comments:            surfaces,
+		PullRequestComments: surfaces,
+		Worker:              &agentWorker{},
+	})
+
+	results, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: run.ID})
+	if err != nil {
+		t.Fatalf("PollCommands() error = %v", err)
+	}
+	if len(results) != 2 || results[0].Outcome != factory.CommandAccepted || results[1].Outcome != factory.CommandAccepted {
+		t.Fatalf("PollCommands() = %#v, want the issue and the pull-request command", results)
+	}
+}
+
 // TestPollCommandsKeepsATimeOrderedTextWatermark verifies that comment
 // identities which are not numbers, but sort as text in creation order, are
 // processed once. An earlier comment must not run again after a later one set
@@ -210,5 +245,40 @@ func TestPollCommandsUsesTheAzureDevOpsRepositoryIdentity(t *testing.T) {
 	}
 	if got := want.String(); got != "contoso/Factory Pilot/service" {
 		t.Fatalf("String() = %q, want the three-part Azure DevOps name", got)
+	}
+}
+
+// TestClarificationUsesASeparateCodeHostCommentPublisher verifies ADR 0018:
+// a code-host adapter that is not the tracker supplies its pull-request
+// comment mutations through the dependencies.
+func TestClarificationUsesASeparateCodeHostCommentPublisher(t *testing.T) {
+	t.Parallel()
+
+	run := commandRun(t, store.StatusWaitingForHuman)
+	run.PullRequestNumber = 7
+	run.LifecycleReason = "test agent requested clarification"
+	run.PendingQuestions = []store.PendingQuestion{{ID: "format", Prompt: "Which format should be used?"}}
+	trackerAdapter := &commandGitHub{
+		issue:         tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentNeedsInput}},
+		statusComment: tracker.Comment{ID: "status-1"},
+		pullRequest:   codehost.PullRequest{Number: 7, State: "open", Draft: true},
+	}
+	codeHost := &pullRequestCommentHost{commandGitHub: &commandGitHub{}, pullRequestPosts: map[int][]string{}}
+	runStore := &commandRunStore{current: &run, latest: &run}
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:                      commandConfig{host: commandHost()},
+		OpenStore:                   func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		Tracker:                     trackerAdapter,
+		Comments:                    trackerAdapter,
+		PullRequestComments:         codeHost,
+		PullRequestCommentPublisher: codeHost,
+		Worker:                      &agentWorker{},
+	})
+
+	if _, err := service.PollCommands(context.Background(), factory.CommandPollRequest{RunID: run.ID}); err != nil {
+		t.Fatalf("PollCommands() error = %v", err)
+	}
+	if len(codeHost.pullRequestPosts[7]) != 1 || len(trackerAdapter.editedComments) != 0 || len(trackerAdapter.createdComments) != 0 {
+		t.Fatalf("code-host posts = %#v, tracker edits = %#v, want the questions through the code host only", codeHost.pullRequestPosts, trackerAdapter.editedComments)
 	}
 }
