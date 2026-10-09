@@ -102,6 +102,8 @@ func parsePages() map[page]*template.Template {
 		"formatTime": formatTime,
 		"testPolicy": factory.TestPolicyDescription,
 		"micros":     formatMicros,
+		"stageTrack": stageTrack,
+		"gauge":      gaugeSegments,
 	}
 	pages := map[page]*template.Template{}
 	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError} {
