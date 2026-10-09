@@ -15,6 +15,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/webui"
 )
 
 // commandHandler runs one validated CLI command.
@@ -51,6 +52,7 @@ var commandTable = []commandDefinition{
 	{name: "poll", handler: runPollCommands},
 	{name: "reconcile", handler: runReconcile},
 	{name: "status", handler: runStatus},
+	{name: "ui", handler: runUI},
 	{name: "evaluation", handler: runEvaluation},
 	{name: "evaluation-delete", handler: runEvaluationDelete},
 	{name: "evaluation-disposition", handler: runEvaluationDisposition},
@@ -211,6 +213,45 @@ func runStart(ctx context.Context, args []string, defaultConfigPath string, outp
 		return 1
 	}
 	if !writeOutput(output, errorsOutput, "factory polling stopped\n") {
+		return 1
+	}
+	return 0
+}
+
+// runUI serves the read-only local web UI on a loopback address until its
+// context is cancelled by an operating-system signal. It never starts the
+// coordinator and works while the coordinator is stopped.
+func runUI(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := flag.NewFlagSet("ui", flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	address := flags.String("address", "127.0.0.1:8765", "listen address; the host must be 127.0.0.1")
+	refresh := flags.Duration("refresh", 5*time.Second, "page refresh interval")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeError(errorsOutput, errors.New("ui does not accept positional arguments"))
+		return 2
+	}
+	if err := webui.ValidateAddress(*address); err != nil {
+		writeError(errorsOutput, err)
+		return 2
+	}
+	if *refresh <= 0 {
+		writeError(errorsOutput, fmt.Errorf("--refresh must be greater than zero, got %s", *refresh))
+		return 2
+	}
+	handler := webui.NewHandler(newService(*configPath), webui.Options{RefreshInterval: *refresh})
+	writeFailed := false
+	ready := func(url string) {
+		writeFailed = !writeOutput(output, errorsOutput, "factory ui listening on %s\n", url)
+	}
+	if err := webui.Serve(ctx, *address, handler, ready); err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if writeFailed || !writeOutput(output, errorsOutput, "factory ui stopped\n") {
 		return 1
 	}
 	return 0
