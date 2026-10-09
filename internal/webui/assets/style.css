@@ -1,0 +1,44 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0 auto;
+  max-width: 72rem;
+  padding: 1rem;
+  color: #1b1b1b;
+  background: #fff;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #ccc;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid #ddd;
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+dd {
+  margin: 0;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 0.5rem;
+  background: #f4f4f4;
+}

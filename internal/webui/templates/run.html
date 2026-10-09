@@ -1,0 +1,89 @@
+{{define "title"}}Run {{.Run.ID}}{{end}}
+
+{{define "content" -}}
+<h1>Run {{.Run.ID}}</h1>
+<p>Issue #{{.Run.IssueNumber}} {{.IssueTitle}}</p>
+
+<h2>State</h2>
+<dl>
+<dt>Stage</dt><dd>{{.Run.Stage}}</dd>
+<dt>Status</dt><dd>{{.Run.Status}}</dd>
+<dt>Activity</dt><dd>{{.Activity}}</dd>
+<dt>Route</dt><dd>{{.Route.Description}}</dd>
+<dt>Test policy</dt><dd>{{testPolicy .TestPolicyMode}}</dd>
+{{with .Run.LifecycleReason}}<dt>Reason</dt><dd>{{.}}</dd>{{end}}
+<dt>Branch</dt><dd><code>{{.Run.Branch}}</code></dd>
+{{with .Run.PullRequestURL}}<dt>Pull request</dt><dd><a href="{{.}}" rel="noreferrer noopener">#{{$.Run.PullRequestNumber}}</a></dd>{{end}}
+<dt>Created</dt><dd>{{formatTime .Run.CreatedAt}}</dd>
+<dt>Updated</dt><dd>{{formatTime .Run.UpdatedAt}}</dd>
+{{with formatTime .Run.TerminalAt}}<dt>Terminal</dt><dd>{{.}}</dd>{{end}}
+</dl>
+
+{{with .Run.PendingQuestions -}}
+<h2>Pending questions</h2>
+<ul>
+{{range .}}<li><code>{{.ID}}</code> {{.Prompt}}</li>
+{{end -}}
+</ul>
+{{- end}}
+
+{{if .Run.LastCommandName -}}
+<h2>Last command</h2>
+<p><code>{{.Run.LastCommandName}}</code> {{.Run.LastCommandOutcome}}: {{.Run.LastCommandMessage}}</p>
+{{- end}}
+
+<h2>Budgets</h2>
+<dl>
+<dt>Check repair</dt><dd>{{.Run.CheckRepairAttempts}} / {{.Run.CheckRepairBudget}}</dd>
+<dt>Review repair</dt><dd>{{.Run.ReviewRepairAttempts}} / {{.Run.ReviewRepairBudget}}</dd>
+<dt>Test revision</dt><dd>{{.Run.TestRevisionAttempts}} / {{.Run.TestRevisionBudget}}</dd>
+</dl>
+
+<h2>Checkpoints</h2>
+<dl>
+{{with .Run.BaseCheckpointSHA}}<dt>Base</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .Run.TestCheckpointSHA}}<dt>Test</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .Run.AcceptedImplementationCheckpointSHA}}<dt>Accepted implementation</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .Run.CheckpointSHA}}<dt>Current</dt><dd><code>{{.}}</code></dd>{{end}}
+{{with .Run.MergeCommitSHA}}<dt>Merge commit</dt><dd><code>{{.}}</code></dd>{{end}}
+</dl>
+
+<h2>Gates</h2>
+{{range .Gates -}}
+<h3>{{.Phase}} at <code>{{.CheckpointSHA}}</code></h3>
+<table>
+<thead><tr><th>Gate</th><th>Outcome</th><th>Status</th><th>Blocking</th><th>Skip reason</th></tr></thead>
+<tbody>
+{{range .Results}}<tr><td>{{.GateName}}</td><td>{{.Outcome}}</td><td>{{.Status}}</td><td>{{.Blocking}}</td><td>{{.SkipReason}}</td></tr>
+{{end -}}
+</tbody>
+</table>
+{{else -}}
+<p>No gate results are retained.</p>
+{{end}}
+
+{{with .Diagnostics -}}
+<h2>Gate failure diagnostics</h2>
+{{range .}}<h3>{{.Phase}}</h3>
+<pre>{{.Content}}</pre>
+{{end -}}
+{{- end}}
+
+<h2>Invocations</h2>
+{{with .Invocations -}}
+<table>
+<thead><tr><th>Invocation</th><th>Role</th><th>Stage</th><th>Harness</th><th>Model</th><th>Prompt version</th><th>Status</th><th>Updated</th></tr></thead>
+<tbody>
+{{range .}}<tr><td><code>{{.ID}}</code></td><td>{{.Role}}</td><td>{{.Stage}}</td><td>{{.Harness}}</td><td>{{.Model}}</td><td>{{.PromptVersion}}</td><td>{{.Status}}</td><td>{{formatTime .UpdatedAt}}</td></tr>
+{{end -}}
+</tbody>
+</table>
+{{- else -}}
+<p>No invocations are recorded.</p>
+{{- end}}
+
+{{with .PendingEffect -}}
+<h2>Pending effect</h2>
+<p><code>{{.Kind}}</code> {{.ID}}, reserved {{formatTime .UpdatedAt}}</p>
+{{- end}}
+{{- end}}

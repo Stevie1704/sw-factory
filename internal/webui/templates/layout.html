@@ -1,0 +1,31 @@
+{{define "layout" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{template "title" .}} · factory</title>
+<link rel="stylesheet" href="/assets/style.css"></head>
+<body>
+<header>
+<nav><a href="/">factory runs</a></nav>
+{{template "supervisor" .Supervisor}}
+</header>
+<main id="content">
+{{template "content" .}}
+</main>
+</body>
+</html>
+{{- end}}
+
+{{define "supervisor" -}}
+<p id="supervisor">supervisor:
+{{- with . -}}
+{{- if .Live}} live (coordinator {{.Heartbeat.Coordinator}}, pid {{.Heartbeat.PID}}, renewed {{formatTime .Heartbeat.RenewedAt}}, expires {{formatTime .Heartbeat.ExpiresAt}})
+{{- else if .Heartbeat}} not live (coordinator {{.Heartbeat.Coordinator}}, pid {{.Heartbeat.PID}}, expired {{formatTime .Heartbeat.ExpiresAt}})
+{{- else}} not live (no heartbeat recorded)
+{{- end}} · read at {{formatTime .ObservedAt}}
+{{- else}} unknown
+{{- end -}}
+</p>
+{{- end}}
