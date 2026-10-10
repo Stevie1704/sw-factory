@@ -291,7 +291,7 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 		case progressionActionAcceptPullRequestSummary:
 			stepErr = s.acceptPullRequestWriterReport(ctx, step.runID, step.invocationID)
 		case progressionActionAbandonPullRequestWriter:
-			stepErr = s.abandonPullRequestWriter(ctx, step.runID, step.invocationID, fmt.Sprintf("pr_writer exceeded the agent timeout of %s", state.AgentTimeout))
+			stepErr = s.abandonPullRequestWriter(ctx, step.runID, step.invocationID, fmt.Sprintf("pr_writer exceeded the agent timeout of %s", state.AgentTimeout), nil)
 		default:
 			stepErr = &progressionActionError{Action: step, Reason: "kind is not declared for dispatch"}
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/prompt"
@@ -25,6 +26,20 @@ const (
 	// event. The saved summary keeps the detailed cause.
 	pullRequestSummaryWarning = "pr_writer produced no summary; hand-off continues with the coordinator section only"
 )
+
+// pullRequestSummarySections are the headings the `pr` skill template
+// requires, in template order. A body without one of them is invalid.
+var pullRequestSummarySections = []string{"Summary", "Evidence", "Merge Danger"}
+
+// pullRequestSummaryHeadings matches one markdown heading of any level for
+// each template section, in the order of pullRequestSummarySections.
+var pullRequestSummaryHeadings = func() []*regexp.Regexp {
+	headings := make([]*regexp.Regexp, 0, len(pullRequestSummarySections))
+	for _, section := range pullRequestSummarySections {
+		headings = append(headings, regexp.MustCompile(`(?im)^#{1,6}[ \t]+`+regexp.QuoteMeta(section)+`[ \t]*#*[ \t]*$`))
+	}
+	return headings
+}()
 
 // pullRequestWriterConfigured reports whether the frozen packet declares a
 // harness and model for the optional PR writer.
@@ -83,9 +98,24 @@ func pullRequestSummaryFromReport(invocation store.Invocation, value report.Repo
 		summary.Reason = "pr_writer body contains a coordinator marker"
 		return summary
 	}
+	if missing := missingPullRequestSummarySection(body); missing != "" {
+		summary.Reason = fmt.Sprintf("pr_writer body has no %s section", missing)
+		return summary
+	}
 	summary.Status = store.PullRequestSummaryWritten
 	summary.Body = body
 	return summary
+}
+
+// missingPullRequestSummarySection returns the first template section that has
+// no markdown heading of its own in body, or an empty string when all exist.
+func missingPullRequestSummarySection(body string) string {
+	for index, heading := range pullRequestSummaryHeadings {
+		if !heading.MatchString(body) {
+			return pullRequestSummarySections[index]
+		}
+	}
+	return ""
 }
 
 // failedPullRequestSummary records that the PR writer produced no usable body
@@ -150,15 +180,41 @@ func mergePullRequestSummarySection(existing, section string) string {
 	return strings.TrimRight(existing, "\n") + "\n\n" + section
 }
 
+// runDisposition is the run status and its lifecycle reason at one moment.
+type runDisposition struct {
+	Status          store.Status
+	LifecycleReason string
+}
+
 // startPullRequestWriter launches the PR writer for the current checkpoint.
-// A launch failure never blocks the hand-off: it saves a failed summary so
-// readiness continues with the coordinator section only.
+// A launch failure never blocks the hand-off. A failed launch can pause the
+// run, for example for harness capacity or credentials, so the abandonment
+// restores the disposition the run had before the launch. Readiness then
+// continues with the coordinator section only.
 func (s *Service) startPullRequestWriter(ctx context.Context, runID string) error {
-	_, err := s.StartAgent(ctx, AgentRequest{RunID: runID, Role: workflow.RolePullRequestWriter, Stage: workflow.StagePullRequestSummary})
+	before, err := s.currentRunDisposition(ctx, runID)
+	if err != nil {
+		return err
+	}
+	_, err = s.StartAgent(ctx, AgentRequest{RunID: runID, Role: workflow.RolePullRequestWriter, Stage: workflow.StagePullRequestSummary})
 	if err == nil {
 		return nil
 	}
-	return s.abandonPullRequestWriter(ctx, runID, "", "pr_writer launch failed: "+err.Error())
+	return s.abandonPullRequestWriter(ctx, runID, "", "pr_writer launch failed: "+err.Error(), &before)
+}
+
+// currentRunDisposition reads the status and lifecycle reason of the active
+// run.
+func (s *Service) currentRunDisposition(ctx context.Context, runID string) (runDisposition, error) {
+	_, runStore, run, err := s.openActiveRunStore(ctx)
+	if err != nil {
+		return runDisposition{}, err
+	}
+	defer func() { _ = runStore.Close() }()
+	if run == nil || run.ID != runID {
+		return runDisposition{}, fmt.Errorf("active run is no longer %s", runID)
+	}
+	return runDisposition{Status: run.Status, LifecycleReason: run.LifecycleReason}, nil
 }
 
 // acceptPullRequestWriterReport accepts the PR writer's report. An
@@ -169,14 +225,16 @@ func (s *Service) acceptPullRequestWriterReport(ctx context.Context, runID, invo
 	if err == nil {
 		return nil
 	}
-	return s.abandonPullRequestWriter(ctx, runID, invocationID, "pr_writer report was not accepted: "+err.Error())
+	return s.abandonPullRequestWriter(ctx, runID, invocationID, "pr_writer report was not accepted: "+err.Error(), nil)
 }
 
 // abandonPullRequestWriter ends one PR-writer invocation without a usable
 // summary: it stops the invocation's worker, supersedes the invocation,
 // releases it from the run, and saves a failed summary for the checkpoint.
-// A summary that already exists for the checkpoint is kept.
-func (s *Service) abandonPullRequestWriter(ctx context.Context, runID, invocationID, reason string) error {
+// A summary that already exists for the checkpoint is kept. A non-nil
+// restore resets the run to that disposition, which undoes a pause that the
+// optional writer caused.
+func (s *Service) abandonPullRequestWriter(ctx context.Context, runID, invocationID, reason string, restore *runDisposition) error {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 	registration, runStore, run, err := s.openActiveRunStore(ctx)
@@ -196,6 +254,10 @@ func (s *Service) abandonPullRequestWriter(ctx context.Context, runID, invocatio
 	releaseActiveInvocation(&next, invocationID)
 	if !pullRequestSummarySettled(next) {
 		next.PullRequestSummary = failedPullRequestSummary(next, invocationID, reason)
+	}
+	if restore != nil {
+		next.Status = restore.Status
+		next.LifecycleReason = restore.LifecycleReason
 	}
 	next.Revision = run.Revision + 1
 	next.UpdatedAt = s.deps.Now().UTC()

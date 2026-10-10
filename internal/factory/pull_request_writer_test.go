@@ -11,6 +11,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -23,6 +24,8 @@ const (
 	coordinatorSectionStart = "<!-- factory-generated:start -->"
 	// humanPullRequestText is text a person added to the PR body.
 	humanPullRequestText = "Human note: please check the migration first."
+	// passingGateOutput is what the required gate prints at the checkpoint.
+	passingGateOutput = "ok  example/project  0.42s"
 )
 
 // configurePullRequestWriter declares the optional PR-writer role.
@@ -57,7 +60,7 @@ func reachReviewedCheckpoint(t *testing.T, fixture *nonBlockingReadinessFixture)
 			FocusedCommands:        []string{"go test ./internal/factory"},
 		},
 	})
-	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 0}, worker.CommandResult{ExitCode: 0}, worker.CommandResult{ExitCode: 0})
+	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 0}, worker.CommandResult{ExitCode: 0}, worker.CommandResult{ExitCode: 0, Stdout: passingGateOutput})
 	draft, err := fixture.service.CreateDraftPullRequest(ctx, factory.DraftPullRequestRequest{RunID: claimed.Run.ID})
 	if err != nil {
 		t.Fatalf("CreateDraftPullRequest() error = %v", err)
@@ -191,11 +194,18 @@ func TestPullRequestWriterSummaryPrecedesTheReadinessHandOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read pr_writer packet: %v", err)
 	}
-	if !strings.Contains(string(packet), `"relevant_logs"`) || !strings.Contains(string(packet), run.CheckpointSHA) {
-		t.Fatalf("pr_writer packet = %s, want gate results for the checkpoint", packet)
+	if !strings.Contains(string(packet), `"relevant_logs"`) || !strings.Contains(string(packet), run.CheckpointSHA) || !strings.Contains(string(packet), `"gate_output_path": "/invocation/gate-output.log"`) {
+		t.Fatalf("pr_writer packet = %s, want gate results and the gate-output path for the checkpoint", packet)
+	}
+	gateOutput, err := os.ReadFile(filepath.Join(writers[0].InvocationDirectory, "gate-output.log"))
+	if err != nil {
+		t.Fatalf("read pr_writer gate output: %v", err)
+	}
+	if !strings.Contains(string(gateOutput), passingGateOutput) || !strings.Contains(string(gateOutput), run.CheckpointSHA) {
+		t.Fatalf("pr_writer gate output = %s, want the passing gate's output for the checkpoint", gateOutput)
 	}
 
-	body := "## Summary\n\nAdds the behavior.\n\n## Merge Danger\n\n**Door:** two-way"
+	body := "## Summary\n\nAdds the behavior.\n\n## Evidence\n\nThe `test` gate passed.\n\n## Merge Danger\n\n**Door:** two-way"
 	writePullRequestWriterReport(t, writers[0], report.Report{
 		Outcome: report.OutcomeCompleted, Summary: "summary written",
 		PullRequestSummary: &report.PullRequestSummary{Body: body},
@@ -257,6 +267,12 @@ func TestPullRequestWriterFailureDoesNotBlockTheHandOff(t *testing.T) {
 				Evidence: []report.Evidence{{Kind: "diff", Detail: "diff unreadable"}},
 			})
 		},
+		"incomplete template": func(t *testing.T, _ *nonBlockingReadinessFixture, writer store.Invocation) {
+			writePullRequestWriterReport(t, writer, report.Report{
+				Outcome: report.OutcomeCompleted, Summary: "summary written",
+				PullRequestSummary: &report.PullRequestSummary{Body: "## Summary\n\nAdds the behavior."},
+			})
+		},
 		"empty body": func(t *testing.T, _ *nonBlockingReadinessFixture, writer store.Invocation) {
 			data := `{"schema_version":1,"invocation_id":"` + writer.ID + `","run_id":"` + writer.RunID + `","harness":"codex","role":"pr_writer","stage":"pr_summary","outcome":"completed","summary":"empty","pull_request_summary":{"body":"  "},"native_session_id":"session-pr-writer","reported_at":"2026-10-05T10:00:00Z"}`
 			if err := os.WriteFile(filepath.Join(writer.ResultDirectory, report.ReportFileName), []byte(data), 0o600); err != nil {
@@ -282,14 +298,21 @@ func TestPullRequestWriterFailureDoesNotBlockTheHandOff(t *testing.T) {
 			assertHandOffWithoutSummary(t, fixture, events)
 		})
 	}
-	t.Run("launch failure", func(t *testing.T) {
-		fixture := newNonBlockingReadinessFixture(t, configurePullRequestWriter)
-		reachReviewedCheckpoint(t, fixture)
-		fixture.harness.startErr = errors.New("harness unavailable")
-		events := &recordedEvents{}
-		drive(t, fixture, events)
-		assertHandOffWithoutSummary(t, fixture, events)
-	})
+	launchFailures := map[string]error{
+		"launch failure":            errors.New("harness unavailable"),
+		"rate-limited launch":       harness.NewRateLimitError(harness.NameCodex),
+		"expired-credential launch": harness.NewAuthenticationExpiredError(harness.NameCodex),
+	}
+	for name, launchErr := range launchFailures {
+		t.Run(name, func(t *testing.T) {
+			fixture := newNonBlockingReadinessFixture(t, configurePullRequestWriter)
+			reachReviewedCheckpoint(t, fixture)
+			fixture.harness.startErr = launchErr
+			events := &recordedEvents{}
+			drive(t, fixture, events)
+			assertHandOffWithoutSummary(t, fixture, events)
+		})
+	}
 }
 
 // assertHandOffWithoutSummary verifies a ready PR without a writer section,
