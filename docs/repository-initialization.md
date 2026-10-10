@@ -88,12 +88,11 @@ Run these checks before any other step:
 docker info
 gh auth status
 command -v factory factory-report factory-worker-headless
-claude --version
-codex --version
 ~~~
 
-One harness is sufficient when the repository uses only that
-harness. When a check fails, stop and tell the operator what is missing. Do not
+The harness that runs this session needs no check. The worker image carries
+both harnesses, and `factory doctor` checks them inside the image, not on the
+host. When a check fails, stop and tell the operator what is missing. Do not
 install or sign in on the operator's behalf.
 
 ## Step 1: survey the target repository
@@ -632,9 +631,11 @@ registration, and it runs the full startup diagnosis.
 ## Step 8: prove the setup with a disposable issue
 
 Once the diagnosis is ready, prove the setup with one disposable issue before
-trusting the configuration on real work. Ask the operator whether to run the
-proof, and against which repository. The demonstration changes GitHub state, so
-the operator can choose a disposable repository instead of the target.
+trusting the configuration on real work. The proof uses the registration from
+Step 6, so it runs in the target repository with a new disposable issue. It
+creates a branch and a draft pull request there. Ask the operator before you
+start it. When the operator declines, for example because the target is a
+production repository, skip the proof.
 
 After approval, follow the [end-to-end
 demonstration](configuration.md#end-to-end-demonstration). Report the
