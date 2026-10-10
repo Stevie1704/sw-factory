@@ -101,7 +101,7 @@ func checkpointGateLogs(ctx context.Context, run store.Run, runStore RunStore) (
 	}
 	results, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseCheckpoint, run.CheckpointSHA)
 	if err != nil {
-		return nil, fmt.Errorf("read exact-checkpoint gate results for review: %w", err)
+		return nil, fmt.Errorf("read exact-checkpoint gate results: %w", err)
 	}
 	logs := make([]prompt.ReviewLog, 0, len(results))
 	for _, result := range results {

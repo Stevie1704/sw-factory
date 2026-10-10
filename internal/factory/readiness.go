@@ -59,6 +59,12 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	if existing.HeadSHA != run.CheckpointSHA {
 		return run, s.rejectUnreviewedPullRequestHead(ctx, repository, existing, run.CheckpointSHA)
 	}
+	if existing.Draft && pullRequestSummaryPending(run) {
+		// Progression starts the PR writer first. No caller may synchronize
+		// the base or change the draft flag under a writer that reads this
+		// checkpoint; the hand-off resumes once its summary is saved.
+		return run, nil
+	}
 
 	if packet.RepositoryConfig.BaseSynchronization.Mode == config.BaseSynchronizationBeforeReady {
 		workspace := s.gitWorkspace()
@@ -109,11 +115,6 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	}
 
 	if existing.Draft {
-		if pullRequestSummaryPending(run) {
-			// Progression starts the PR writer first. The hand-off resumes
-			// once a summary for this checkpoint is saved.
-			return run, nil
-		}
 		summarized, err := s.publishPullRequestSummary(ctx, runStore, repository, run, packet, existing)
 		if err != nil {
 			return run, err

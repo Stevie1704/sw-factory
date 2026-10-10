@@ -1766,8 +1766,6 @@ func validateReviewRepairProjection(run Run) error {
 	return nil
 }
 
-// validateReviewProjection checks one nullable exact-checkpoint review result
-// before it is serialized into the operational store.
 // validatePullRequestSummary checks the saved PR-writer result. A summary may
 // describe an earlier checkpoint; readiness compares it with the current one.
 func validatePullRequestSummary(summary *PullRequestSummary) error {
@@ -1795,6 +1793,8 @@ func validatePullRequestSummary(summary *PullRequestSummary) error {
 	return nil
 }
 
+// validateReviewProjection checks one nullable exact-checkpoint review result
+// before it is serialized into the operational store.
 func validateReviewProjection(label string, review *ReviewResult, checkpoint string) error {
 	if review == nil {
 		return nil

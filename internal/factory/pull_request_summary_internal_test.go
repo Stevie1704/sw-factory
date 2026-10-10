@@ -147,3 +147,19 @@ func TestPullRequestSummaryFromReportKeepsOnlyAUsableBody(t *testing.T) {
 		})
 	}
 }
+
+// TestMergePullRequestSummarySectionIgnoresAnOrphanMarker verifies a start
+// marker left without its end marker never makes a later merge replace the
+// human text that follows it.
+func TestMergePullRequestSummarySectionIgnoresAnOrphanMarker(t *testing.T) {
+	coordinator := generatedPullRequestStart + "\nfactory\n" + generatedPullRequestEnd
+	section := renderPullRequestSummarySection(store.PullRequestSummary{CheckpointSHA: summaryCheckpoint, Status: store.PullRequestSummaryWritten, Body: "summary"})
+	orphaned := pullRequestSummaryStart + "\nHuman text a person kept\n\n" + coordinator
+	first := mergePullRequestSummarySection(orphaned, section)
+	second := mergePullRequestSummarySection(first, section)
+	for _, body := range []string{first, second} {
+		if !strings.Contains(body, "Human text a person kept") || strings.Count(body, "summary\n"+pullRequestSummaryEnd) != 1 {
+			t.Fatalf("merged body = %q, want the human text kept and one section", body)
+		}
+	}
+}

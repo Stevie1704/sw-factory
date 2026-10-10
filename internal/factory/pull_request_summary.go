@@ -123,9 +123,14 @@ func renderPullRequestSummarySection(summary store.PullRequestSummary) string {
 // empty section removes an existing one. Text outside both marker pairs stays
 // unchanged.
 func mergePullRequestSummarySection(existing, section string) string {
-	start := strings.Index(existing, pullRequestSummaryStart)
-	end := strings.Index(existing, pullRequestSummaryEnd)
-	if start >= 0 && end >= start {
+	// Pair the first end marker with the nearest start marker before it, so an
+	// orphan marker that a person left behind never widens the replaced span
+	// over human text.
+	start, end := -1, strings.Index(existing, pullRequestSummaryEnd)
+	if end >= 0 {
+		start = strings.LastIndex(existing[:end], pullRequestSummaryStart)
+	}
+	if start >= 0 {
 		end += len(pullRequestSummaryEnd)
 		if section == "" {
 			// Also drop the separator inserted with the section.

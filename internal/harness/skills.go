@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // SkillEvidenceFile is the repository-relative path of the recorded worker
@@ -25,10 +26,6 @@ func MandatorySkills() []string {
 // prompt requires by name.
 const PullRequestWriterSkill = "pr"
 
-// pullRequestWriterRole is the optional role that requires
-// PullRequestWriterSkill.
-const pullRequestWriterRole = "pr_writer"
-
 // RequiredSkills returns the role-mandated skills one repository policy can
 // use: the mandatory set, and the PR-writer skill when the policy declares
 // that optional role. An unavailable policy requires every role skill, so the
@@ -38,7 +35,7 @@ func RequiredSkills(policy *config.RepositoryConfig) []string {
 	if policy == nil {
 		return append(required, PullRequestWriterSkill)
 	}
-	if _, declared := policy.RoleHarnessDefaults[pullRequestWriterRole]; declared {
+	if _, declared := policy.RoleHarnessDefaults[workflow.RolePullRequestWriter]; declared {
 		required = append(required, PullRequestWriterSkill)
 	}
 	return required
