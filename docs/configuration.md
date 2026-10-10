@@ -660,6 +660,55 @@ force-updates the branch. A changed head returns the run to checks and a fresh
 review round. Merge conflicts remain for human disposition. `never` skips this
 boundary synchronization.
 
+### Optional PR writer
+
+The `pr_writer` role writes a short summary for the human reviewer before the
+coordinator hands the pull request over. It is off by default. To turn it on,
+declare the role in all policy maps that you use:
+
+```yaml
+role_harness_defaults:
+  pr_writer: claude
+model_options:
+  pr_writer: [claude-sonnet-5-5]
+reasoning_effort_options:
+  pr_writer: [medium]
+```
+
+When the role is not declared, readiness is the same as before and no
+`pr_writer` invocation starts.
+
+When the role is declared, the coordinator runs it inside the readiness step,
+after all reviews pass and before the draft flag changes:
+
+- The role reads the base-to-checkpoint diff, the frozen specification, the
+  gate results for the checkpoint, the findings of both review axes, and
+  `GLOSSARY.md` when it exists. Its worktree is read-only and it has no
+  code-host credentials, so it cannot change the run branch.
+- It returns markdown that follows the `pr` worker skill: **Summary**,
+  **Evidence**, and **Merge Danger**. The worker cannot take screenshots, so
+  the role must not invent before/after evidence.
+- The coordinator saves the text with the checkpoint before it updates the
+  pull request. A retry of readiness at the same checkpoint reuses the saved
+  text and starts no new invocation.
+- The coordinator puts the text above its own generated section, between
+  `<!-- factory-pr-writer:start -->` and `<!-- factory-pr-writer:end -->`, with
+  a note that an agent wrote it. It replaces only the text between these
+  markers. Text that a person wrote stays unchanged.
+- Each new hand-off checkpoint, for example after a repair, runs the role again
+  and replaces the earlier section.
+- Merge Danger is advice. It is not a gate.
+
+A failure never blocks the hand-off. When the role fails to start, returns
+`cannot_proceed`, returns an empty or invalid body, or passes `timeouts.agent`,
+the coordinator saves a failed summary, removes an earlier `pr_writer` section,
+emits a `pr_summary_warning` event, and makes the pull request ready with the
+coordinator section only.
+
+The `pr` skill is in the worker image. `factory doctor` requires smoke evidence
+for it only when the repository declares `pr_writer`, so record a smoke result
+for the pinned digest before you turn the role on.
+
 Repository configuration cannot declare a workflow route. A route is selected
 per issue with a frozen `factory-route` marker before claim, and it needs the
 roles it runs to be declared in `role_harness_defaults` and `model_options`:

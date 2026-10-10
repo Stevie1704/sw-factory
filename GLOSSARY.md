@@ -294,6 +294,23 @@ _Avoid_: Host auth mount
 A concrete violation that prevents readiness, on the axis that owns it. The specification axis blocks on correctness, security, and frozen-specification violations; the standards axis blocks on documented-standards violations. A finding that crosses into the other axis is advisory, as is a standards-review heuristic baseline finding: only a concrete violation of a named repository rule can block on the standards axis.
 _Avoid_: Suggestion, preference, advisory finding
 
+**Generated section**:
+The coordinator-owned part of a pull-request body between
+`<!-- factory-generated:start -->` and `<!-- factory-generated:end -->`. It
+holds the run identity, checkpoint, gate results, review projections, and the
+closing keyword. Each regeneration replaces only this section.
+_Avoid_: PR template, factory block
+
+**PR summary**:
+The advisory markdown that the optional `pr_writer` role writes for one
+hand-off checkpoint, with Summary, Evidence, and Merge Danger. The coordinator
+saves it with the checkpoint, then places it directly above the generated
+section between its own `factory-pr-writer` markers, with a note that an agent
+wrote it. It explains the change to the human reviewer; the generated section
+stays the factual record. It is never a gate, and a failed PR summary leaves
+the hand-off with the generated section only.
+_Avoid_: PR description, merge verdict
+
 **Local evaluation summary**:
 A content-free record of run outcomes, effort, escalations, and human dispositions retained locally to evaluate and tune the factory.
 _Avoid_: Telemetry, transcript, audit log
