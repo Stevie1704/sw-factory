@@ -22,8 +22,14 @@ one host registration:
 
 ## Starting the onboarding
 
-Install Software Factory with `make install`, then run one command from the
-checkout of the repository to onboard:
+Before you start, make sure that:
+
+- Software Factory is installed with `make install` from its checkout;
+- the Docker daemon runs;
+- the GitHub CLI is authenticated (`gh auth status`);
+- Claude Code or Codex is installed and signed in on the host.
+
+Then run one command from the checkout of the repository to onboard:
 
 ~~~sh
 factory onboard
@@ -34,33 +40,61 @@ The command starts an interactive Claude Code session in that repository. Use
 the target repository, the Software Factory checkout the binary was built from,
 and this document. In the steps below, `<TARGET_REPO_PATH>` and
 `<SW_FACTORY_CHECKOUT>` mean those two paths. Pass `--factory-checkout` when
-the binary was not installed from a checkout.
+the binary was not built with `make` from a checkout.
+
+The session can also use the Software Factory checkout, because the procedure
+builds images and runs scripts there. Docker and network commands can need
+access outside the harness sandbox. The harness then asks you to approve them.
 
 The agent runs every step of this procedure itself. You approve the actions
 listed in the next section and answer its questions.
 
-The prompt is deliberately short. The procedure lives in this document, so
-repeating it in the prompt only creates a second copy that can drift.
+The prompt is deliberately short. This document owns the steps and the
+approval list, so the prompt does not repeat them. A second copy could drift.
 
 ## Actions that need operator approval
 
-Four actions in this procedure change the host, GitHub, or the operator's bill:
+These actions change the host configuration or GitHub, or cost money:
 
 - `factory init` and `factory register` write host configuration and create the
   operational store.
 - `factory bootstrap-labels` creates six labels in the GitHub repository.
 - `scripts/smoke-skills.sh` streams a host harness credential into a container
   and makes one real, paid model call per mandated skill per harness.
-- Any commit or pull request in the target repository.
+- The export of a Keychain credential to a temporary file for the smoke.
+- The end-to-end demonstration in Step 8. It creates an issue, a branch, and a
+  draft pull request, and it starts paid agent sessions.
+- Any commit, push, issue change, or pull request in the target repository.
 
 The agent shows each command, asks, and runs it after the operator approves.
-The agent never reads a credential file. It may check whether a default
-credential path exists, but the operator confirms every credential path.
+
+Docker builds, image checks, and gate proofs in Steps 3 and 5 change only local
+images and temporary copies. They need no approval from this procedure. The
+harness can still ask for them under its own permission settings.
+
+The agent never reads a credential file. It can check whether a default
+credential path exists. The operator confirms every credential path.
 
 The agent also stops before it writes any file. That is a review point
 rather than a boundary: the gate list and the role policy are decisions about
 how the repository is verified, and they are cheaper to correct before the file
 exists.
+
+## Step 0: check the prerequisites
+
+Run these checks before any other step:
+
+~~~sh
+docker info
+gh auth status
+command -v factory factory-report factory-worker-headless
+claude --version
+codex --version
+~~~
+
+One harness is sufficient when the repository uses only that
+harness. When a check fails, stop and tell the operator what is missing. Do not
+install or sign in on the operator's behalf.
 
 ## Step 1: survey the target repository
 
@@ -505,16 +539,18 @@ factory register \
   --codex-auth <CODEX_AUTH_PATH> \
   --claude-auth <CLAUDE_AUTH_PATH>
 factory bootstrap-labels
-factory doctor
 ~~~
 
 `factory register` infers the repository path, the GitHub owner and repository
 from the `origin` remote, and the authorized user from the authenticated `gh`
-account. Replace each credential placeholder with an existing private regular
-credential file that the operator confirmed, and omit the option when that
-harness has no host-side file. The authentication paths are never inferred. See [Quick start](configuration.md#quick-start)
+account. The authentication paths are never inferred. Replace each credential
+placeholder with a credential file that the operator confirmed. Omit the option
+when that harness has no host-side file, for example a Claude Code credential
+in the macOS login Keychain. See [Quick start](configuration.md#quick-start)
 for the explicit fallback flags and the `--update` command for an existing
 registration.
+
+## Step 7: record the skill smoke
 
 The skill smoke runs once per worker digest, from the Software Factory checkout,
 writing its evidence into the target repository:
@@ -544,10 +580,16 @@ asked to prove without a credential and exits nonzero, while startup blocks
 only if that harness is eligible under the repository policy.
 
 The smoke looks for `~/.codex/auth.json` and `~/.claude/.credentials.json`, and
-`CODEX_AUTH_PATH` and `CLAUDE_AUTH_PATH` override those defaults. A macOS
-operator whose Claude Code credential lives in the login Keychain has no file at
-the default path, and the smoke reports Claude as unrecorded until one is
-supplied.
+`CODEX_AUTH_PATH` and `CLAUDE_AUTH_PATH` override those defaults. On macOS,
+Claude Code keeps its credential in the login Keychain, and a file at the
+default path can be old and expired. In that case, export the Keychain
+credential to a temporary file, point `CLAUDE_AUTH_PATH` at it, and delete the
+file after the smoke. The commands are in [worker
+skills](../worker/SKILLS.md). The export needs operator approval, and the agent
+does not read the exported file.
+
+Then run `factory doctor` from the target checkout, as the next section
+describes, until it reports ready.
 
 ## Verifying the result
 
@@ -559,10 +601,12 @@ the headless worker helper, harness authentication, and SQLite. It runs every
 check even after a failure, so a configuration finding is visible alongside the
 others.
 
-Run it against the host configuration that registers the repository:
+Run it from the target checkout. It reads the default host configuration that
+`factory init` created; pass `--config` only when the registration lives
+somewhere else:
 
 ```sh
-factory doctor --config /Users/me/.config/factory/config.yaml
+factory doctor
 ```
 
 An invalid `factory.yaml` makes the `configuration` check name the first
@@ -585,9 +629,20 @@ For these errors, compare the file with the field reference above.
 The doctor does not validate `factory.yaml` alone. It needs the host
 registration, and it runs the full startup diagnosis.
 
+## Step 8: prove the setup with a disposable issue
+
 Once the diagnosis is ready, prove the setup with one disposable issue before
-trusting the configuration on real work. Follow the [end-to-end
-demonstration](configuration.md#end-to-end-demonstration).
+trusting the configuration on real work. Ask the operator whether to run the
+proof, and against which repository. The demonstration changes GitHub state, so
+the operator can choose a disposable repository instead of the target.
+
+After approval, follow the [end-to-end
+demonstration](configuration.md#end-to-end-demonstration). Report the
+pull-request URL and the status-comment URL to the operator. Ask before you
+close the pull request or the issue.
+
+The onboarding is complete when this proof succeeds, or when the operator
+declines it and `factory doctor` reports ready.
 
 ## Keeping it valid
 

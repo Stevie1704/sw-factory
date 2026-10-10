@@ -46,12 +46,16 @@ Factory, then run this command from the checkout of that repository:
 factory onboard
 ~~~
 
-The command starts Claude Code (or Codex with `--harness codex`) with a
-prompt that hands the whole [Repository
-initialization](docs/repository-initialization.md) procedure to the agent. The
-agent produces the worker image, the pinned digest, and the checked-in
-`factory.yaml`, and registers the host. It asks before it writes files, runs
-host or GitHub commands, makes paid smoke calls, or commits.
+The command starts Claude Code (or Codex with `--harness codex`). Its prompt
+gives the agent the full [Repository
+initialization](docs/repository-initialization.md) procedure. The agent checks
+the prerequisites, makes the worker image, the pinned digest, and the
+checked-in `factory.yaml`, registers the host, and proves the setup with a
+disposable issue. It asks before it writes files, changes host configuration
+or GitHub, makes paid calls, or commits.
+
+You need a running Docker daemon, an authenticated GitHub CLI, and a signed-in
+Claude Code or Codex before you start.
 
 ## Install
 
