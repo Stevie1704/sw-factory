@@ -58,6 +58,7 @@ func TestRoleSkillsLeaveCoordinatorProtocolToThePrompt(t *testing.T) {
 		"skills/implement/SKILL.md",
 		"skills/specification-review/SKILL.md",
 		"skills/standards-review/SKILL.md",
+		"skills/pr/SKILL.md",
 	} {
 		t.Run(path, func(t *testing.T) {
 			body := readSkill(t, path)
@@ -67,6 +68,27 @@ func TestRoleSkillsLeaveCoordinatorProtocolToThePrompt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPullRequestWriterPromptMandatesTheShippedPRSkill verifies the
+// pr_writer role prompt names the `pr` skill as mandatory and the image ships
+// it. The generic prompt scan skips two-letter names, so this check is
+// explicit.
+func TestPullRequestWriterPromptMandatesTheShippedPRSkill(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "internal", "prompt", "prompts", "pr-writer.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(pr-writer prompt) error = %v", err)
+	}
+	if !strings.Contains(string(body), "You must use the `"+harness.PullRequestWriterSkill+"` skill") {
+		t.Fatalf("pr-writer prompt does not mandate the %q skill:\n%s", harness.PullRequestWriterSkill, body)
+	}
+	if _, ok := workerSkillSet(t)[harness.PullRequestWriterSkill]; !ok {
+		t.Fatalf("worker skill set does not ship %q", harness.PullRequestWriterSkill)
+	}
+	skill := readSkill(t, "skills/pr/SKILL.md")
+	if !strings.Contains(skill, "Never invent a before or after") || strings.Contains(skill, "Screenshots are S-tier") {
+		t.Fatalf("pr skill keeps evidence the worker cannot observe:\n%s", skill)
 	}
 }
 
@@ -101,7 +123,7 @@ const (
 // hides a skill whose openai.yaml denies implicit invocation; Claude hides one
 // whose SKILL.md front matter disables model invocation.
 func TestMandatorySkillsAreModelVisibleUnderEveryHarness(t *testing.T) {
-	for _, skill := range harness.MandatorySkills() {
+	for _, skill := range harness.RequiredSkills(nil) {
 		t.Run(skill, func(t *testing.T) {
 			body := readSkill(t, "skills/"+skill+"/SKILL.md")
 			if !strings.Contains(body, "name: "+skill+"\n") {

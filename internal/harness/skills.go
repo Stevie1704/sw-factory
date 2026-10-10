@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"strings"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
 )
 
 // SkillEvidenceFile is the repository-relative path of the recorded worker
@@ -17,6 +19,29 @@ const SkillEvidenceFile = "worker/skill-smoke.json"
 // them, because a repository may assign any role to any supported harness.
 func MandatorySkills() []string {
 	return []string{"implement", "specification-review", "standards-review"}
+}
+
+// PullRequestWriterSkill is the worker skill the optional pr_writer role
+// prompt requires by name.
+const PullRequestWriterSkill = "pr"
+
+// pullRequestWriterRole is the optional role that requires
+// PullRequestWriterSkill.
+const pullRequestWriterRole = "pr_writer"
+
+// RequiredSkills returns the role-mandated skills one repository policy can
+// use: the mandatory set, and the PR-writer skill when the policy declares
+// that optional role. An unavailable policy requires every role skill, so the
+// check fails closed.
+func RequiredSkills(policy *config.RepositoryConfig) []string {
+	required := MandatorySkills()
+	if policy == nil {
+		return append(required, PullRequestWriterSkill)
+	}
+	if _, declared := policy.RoleHarnessDefaults[pullRequestWriterRole]; declared {
+		required = append(required, PullRequestWriterSkill)
+	}
+	return required
 }
 
 // SkillSmokeRecord is one recorded proof that a real worker invocation of one
