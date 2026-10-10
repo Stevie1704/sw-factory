@@ -9,6 +9,11 @@ BINDIR ?= bin
 GO_TOOLCHAIN := $(shell sed -n 's/^toolchain //p' go.mod)
 export GOTOOLCHAIN := $(GO_TOOLCHAIN)
 
+# factory onboard hands this checkout to the onboarding agent, so the installed
+# binary records where it was built from. The single quotes keep a checkout
+# path with spaces in one link flag.
+LDFLAGS := -X 'github.com/Stevie1704/sw-factory/internal/cli.factoryCheckout=$(CURDIR)'
+
 BINARIES := \
 	$(BINDIR)/factory \
 	$(BINDIR)/factory-report \
@@ -34,7 +39,7 @@ toolchain-check: ## Refuse to continue unless Go runs the approved go.mod toolch
 
 build: toolchain-check ## Build all command binaries into BINDIR (default: bin).
 	@mkdir -p "$(BINDIR)"
-	$(GO) build -o "$(BINDIR)/factory" ./cmd/factory
+	$(GO) build -ldflags "$(LDFLAGS)" -o "$(BINDIR)/factory" ./cmd/factory
 	$(GO) build -o "$(BINDIR)/factory-report" ./cmd/factory-report
 	$(GO) build -o "$(BINDIR)/factory-worker-headless" ./cmd/factory-worker-headless
 
@@ -69,10 +74,10 @@ tidy: ## Synchronize go.mod and go.sum with the source tree.
 	$(GO) mod tidy
 
 install: toolchain-check ## Install all command binaries into Go's configured bin directory.
-	$(GO) install ./cmd/...
+	$(GO) install -ldflags "$(LDFLAGS)" ./cmd/...
 
 run: ## Run the coordinator CLI; pass arguments with ARGS='status --help'.
-	$(GO) run ./cmd/factory $(ARGS)
+	$(GO) run -ldflags "$(LDFLAGS)" ./cmd/factory $(ARGS)
 
 report: ## Run the structured-report CLI; pass arguments with ARGS='--help'.
 	$(GO) run ./cmd/factory-report $(ARGS)

@@ -39,16 +39,23 @@ worker, harness, authentication, and operational-store prerequisites together.
 
 ## Onboard a repository with an agent
 
-To prepare a repository that has none of this yet, give an agent [the
-onboarding prompt](docs/repository-initialization.md#the-prompt). The agent
-needs shell access to this checkout and to the target repository. Replace the
-two path placeholders in the prompt before you paste it.
+To prepare a repository that has none of this yet, [install](#install) Software
+Factory, then run this command from the checkout of that repository:
 
-The prompt is short on purpose. It points the agent to [Repository
-initialization](docs/repository-initialization.md), the ordered procedure that
-produces the worker image, the pinned digest, and the checked-in
-`factory.yaml`. The agent stops and asks before it writes files, runs host or
-GitHub commands, makes paid smoke calls, or commits.
+~~~sh
+factory onboard
+~~~
+
+The command starts Claude Code (or Codex with `--harness codex`). Its prompt
+gives the agent the full [Repository
+initialization](docs/repository-initialization.md) procedure. The agent checks
+the prerequisites, makes the worker image, the pinned digest, and the
+checked-in `factory.yaml`, registers the host, and proves the setup with a
+disposable issue. It asks before it writes files, changes host configuration
+or GitHub, makes paid calls, or commits.
+
+You need a running Docker daemon, an authenticated GitHub CLI, and a signed-in
+Claude Code or Codex before you start.
 
 ## Install
 

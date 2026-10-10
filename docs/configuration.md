@@ -6,6 +6,10 @@ The host configuration is created with `factory init`. Its path is selected by `
 
 ## Quick start
 
+To let an agent prepare the repository and run this sequence for you, run
+`factory onboard` from the target checkout. See [Repository
+initialization](repository-initialization.md#starting-the-onboarding).
+
 `factory register` infers the values it can from the checkout you run it in.
 Inside a Git checkout whose `origin` remote points at GitHub, with the GitHub
 CLI authenticated, the complete first-run sequence is:
