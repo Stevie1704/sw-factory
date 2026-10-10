@@ -56,7 +56,8 @@ func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutp
 		writeError(errorsOutput, errors.New("onboard does not accept positional arguments"))
 		return 2
 	}
-	if selected := config.Harness(*harness); selected != config.HarnessClaude && selected != config.HarnessCodex {
+	selected := config.Harness(*harness)
+	if selected != config.HarnessClaude && selected != config.HarnessCodex {
 		writeError(errorsOutput, fmt.Errorf("--harness must be claude or codex, got %q", *harness))
 		return 2
 	}
@@ -70,7 +71,7 @@ func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutp
 		writeError(errorsOutput, err)
 		return 1
 	}
-	if err := startOnboardingSession(ctx, *harness, targetPath, checkoutPath, output, errorsOutput); err != nil {
+	if err := startOnboardingSession(ctx, selected, targetPath, checkoutPath, output, errorsOutput); err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
@@ -81,11 +82,11 @@ func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutp
 // until the operator ends the session. The checkout is added as a second
 // working directory, because the procedure builds images and runs scripts
 // from it.
-func startOnboardingSession(ctx context.Context, harness, targetPath, checkoutPath string, output, errorsOutput io.Writer) error {
+func startOnboardingSession(ctx context.Context, harness config.Harness, targetPath, checkoutPath string, output, errorsOutput io.Writer) error {
 	prompt := fmt.Sprintf(onboardingPrompt, targetPath, checkoutPath, onboardingProcedure)
 	// The prompt comes first: Claude Code's --add-dir accepts several values and
 	// would take a later positional prompt as a directory.
-	session := exec.CommandContext(ctx, harness, prompt, "--add-dir", checkoutPath)
+	session := exec.CommandContext(ctx, string(harness), prompt, "--add-dir", checkoutPath)
 	session.Dir = targetPath
 	// The command handler signature carries no input stream; the session is
 	// interactive, so it reads the operator's terminal directly.
