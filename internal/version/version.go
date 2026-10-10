@@ -19,12 +19,12 @@ const SchemaVersion = 1
 
 // Build kinds distinguish a deliberate release from every other build.
 const (
-	BuildRelease     = "release"
-	BuildDevelopment = "development"
+	buildRelease     = "release"
+	buildDevelopment = "development"
 )
 
-// Unknown marks a value the build did not record.
-const Unknown = "unknown"
+// unknown marks a value the build did not record.
+const unknown = "unknown"
 
 // Identity is the documented identity of one Factory build.
 type Identity struct {
@@ -46,7 +46,7 @@ var pseudoVersion = regexp.MustCompile(`\d{14}-[0-9a-f]{12}`)
 
 // Current returns the identity of the running binary.
 func Current() Identity {
-	identity := Identity{SchemaVersion: SchemaVersion, Version: BuildDevelopment, Build: BuildDevelopment, Revision: Unknown}
+	identity := Identity{SchemaVersion: SchemaVersion, Version: buildDevelopment, Build: buildDevelopment, Revision: unknown}
 	info, ok := debug.ReadBuildInfo()
 	if ok {
 		for _, setting := range info.Settings {
@@ -60,10 +60,10 @@ func Current() Identity {
 	}
 	switch {
 	case release != "":
-		identity.Version, identity.Build = release, BuildRelease
+		identity.Version, identity.Build = release, buildRelease
 	case ok && isTaggedModuleVersion(info.Main.Version):
 		// go install module@vX.Y.Z records the tag but no VCS settings.
-		identity.Version, identity.Build = info.Main.Version, BuildRelease
+		identity.Version, identity.Build = info.Main.Version, buildRelease
 	}
 	return identity
 }
@@ -83,7 +83,7 @@ func (i Identity) Text() string {
 	if i.Modified {
 		revision += ", modified"
 	}
-	if i.Build == BuildRelease {
+	if i.Build == buildRelease {
 		return "factory " + i.Version + " (release, " + revision + ")"
 	}
 	return "factory development build (" + revision + ")"

@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -74,7 +76,7 @@ func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int
 		writeError(errorsOutput, fmt.Errorf("a command is required: %s\n%s", expectedCommands, guideHint))
 		return 2
 	}
-	if args[0] == "-h" || args[0] == "-help" || args[0] == "--help" || args[0] == "help" {
+	if slices.Contains([]string{"-h", "-help", "--help", "help"}, args[0]) {
 		if !writeOutput(output, errorsOutput, "Usage: factory <command> [flags]\n\nCommands: %s\n\n%s\nRun 'factory <command> -h' for the flags of one command.\n", expectedCommands, guideHint) {
 			return 1
 		}
@@ -1248,4 +1250,17 @@ func (s *stringList) Set(value string) error {
 	}
 	*s = append(*s, value)
 	return nil
+}
+
+// newFlagSet returns a command flag set that writes its diagnostics to
+// errorsOutput and whose help names the guide entry point.
+func newFlagSet(name string, errorsOutput io.Writer) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	flags.Usage = func() {
+		writeOutput(errorsOutput, errorsOutput, "Usage of factory %s:\n", name)
+		flags.PrintDefaults()
+		writeOutput(errorsOutput, errorsOutput, "\n%s\n", guideHint)
+	}
+	return flags
 }

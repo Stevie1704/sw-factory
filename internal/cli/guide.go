@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -70,17 +69,4 @@ func runVersion(_ context.Context, args []string, _ string, output, errorsOutput
 		return 1
 	}
 	return 0
-}
-
-// newFlagSet returns a command flag set that writes its diagnostics to
-// errorsOutput and whose help names the guide entry point.
-func newFlagSet(name string, errorsOutput io.Writer) *flag.FlagSet {
-	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
-	flags.Usage = func() {
-		writeOutput(errorsOutput, errorsOutput, "Usage of factory %s:\n", name)
-		flags.PrintDefaults()
-		writeOutput(errorsOutput, errorsOutput, "\n%s\n", guideHint)
-	}
-	return flags
 }

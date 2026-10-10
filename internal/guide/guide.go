@@ -49,9 +49,6 @@ func Topics() []string {
 
 // Topic returns the Markdown body of one topic, or ErrUnknownTopic.
 func Topic(name string) (string, error) {
-	if name == "" || strings.ContainsAny(name, `/\.`) {
-		return "", fmt.Errorf("%w %q", ErrUnknownTopic, name)
-	}
 	data, err := topicFS.ReadFile(path.Join("topics", name+".md"))
 	if err != nil {
 		return "", fmt.Errorf("%w %q", ErrUnknownTopic, name)

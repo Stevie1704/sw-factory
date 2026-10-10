@@ -34,7 +34,9 @@ and `modified` (uncommitted source changes at build time).
 
 Every operational command reads the host configuration from
 `$FACTORY_CONFIG`, or from `factory/config.yaml` in the user configuration
-directory. Use `--config <path>` to select a different file.
+directory: `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or
+`~/.config` on Linux. `factory status` prints the path it uses. Use
+`--config <path>` to select a different file.
 
 ## What Factory coordinates
 
