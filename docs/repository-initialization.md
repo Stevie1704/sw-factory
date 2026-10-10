@@ -20,35 +20,31 @@ one host registration:
 | `worker/skill-smoke.json` | target repository | Recorded proof that each harness loaded the mandated skills at the pinned digest |
 | Host registration | operator host | Created by `factory init` and `factory register`; never checked in |
 
-## The prompt
+## Starting the onboarding
 
-Paste this into an agent that has shell access to both checkouts. Replace the
-two bracketed values first.
+Install Software Factory with `make install`, then run one command from the
+checkout of the repository to onboard:
 
-~~~text
-Prepare the repository at <TARGET_REPO_PATH> for Software Factory runs.
-
-The Software Factory checkout is at <SW_FACTORY_CHECKOUT>. Read
-<SW_FACTORY_CHECKOUT>/docs/repository-initialization.md in full and follow its
-ordered procedure. Use its field reference rather than another repository's
-factory.yaml; where the two disagree, docs/configuration.md decides.
-
-Stop and ask me before:
-- writing any file in the target repository,
-- running factory init, factory register, or factory bootstrap-labels,
-- running scripts/smoke-skills.sh,
-- committing anything.
-
-Never invent a credential path and never read a credential file. If one is
-missing, stop and ask. Never commit an absolute host path into factory.yaml.
+~~~sh
+factory onboard
 ~~~
+
+The command starts an interactive Claude Code session in that repository. Use
+`--harness codex` to start Codex instead. The first message of the session names
+the target repository, the Software Factory checkout the binary was built from,
+and this document. In the steps below, `<TARGET_REPO_PATH>` and
+`<SW_FACTORY_CHECKOUT>` mean those two paths. Pass `--factory-checkout` when
+the binary was not installed from a checkout.
+
+The agent runs every step of this procedure itself. You approve the actions
+listed in the next section and answer its questions.
 
 The prompt is deliberately short. The procedure lives in this document, so
 repeating it in the prompt only creates a second copy that can drift.
 
-## Boundaries the agent must not cross alone
+## Actions that need operator approval
 
-Four actions in this procedure are the operator's, not the agent's:
+Four actions in this procedure change the host, GitHub, or the operator's bill:
 
 - `factory init` and `factory register` write host configuration and create the
   operational store.
@@ -57,10 +53,11 @@ Four actions in this procedure are the operator's, not the agent's:
   and makes one real, paid model call per mandated skill per harness.
 - Any commit or pull request in the target repository.
 
-The agent prepares each command and asks. A missing credential file is a
-question for the operator, never a search.
+The agent shows each command, asks, and runs it after the operator approves.
+The agent never reads a credential file. It may check whether a default
+credential path exists, but the operator confirms every credential path.
 
-The prompt also stops the agent before writing any file. That is a review point
+The agent also stops before it writes any file. That is a review point
 rather than a boundary: the gate list and the role policy are decisions about
 how the repository is verified, and they are cheaper to correct before the file
 exists.
@@ -496,11 +493,11 @@ dependencies from a registry. It reaches Git through a read-only projection at
 hooks, and no Git configuration. A command that reads Git configuration, pushes,
 or fetches will not behave the same way in a run.
 
-## Step 6: hand the host steps back to the operator
+## Step 6: register the host
 
 The coordinator binaries come from the Software Factory checkout; `make install`
-places them on the operator's Go bin path. Print these commands and let the
-operator run them from the target checkout:
+places them on the operator's Go bin path. Ask the operator for approval, then
+run these commands from the target checkout:
 
 ~~~sh
 factory init
@@ -514,8 +511,8 @@ factory doctor
 `factory register` infers the repository path, the GitHub owner and repository
 from the `origin` remote, and the authorized user from the authenticated `gh`
 account. Replace each credential placeholder with an existing private regular
-credential file and omit the option when that harness has no host-side file.
-The authentication paths are never inferred. See [Quick start](configuration.md#quick-start)
+credential file that the operator confirmed, and omit the option when that
+harness has no host-side file. The authentication paths are never inferred. See [Quick start](configuration.md#quick-start)
 for the explicit fallback flags and the `--update` command for an existing
 registration.
 
