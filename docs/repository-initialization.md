@@ -85,10 +85,14 @@ exists.
 Run these checks before any other step:
 
 ~~~sh
+factory version
 docker info
 gh auth status
 command -v factory factory-report factory-worker-headless
 ~~~
+
+`factory guide` prints the installed release's orientation, and `factory guide
+setup` its setup topic. Read both before Step 1.
 
 The harness that runs this session needs no check. The worker image carries
 both harnesses, and `factory doctor` checks them inside the image, not on the
@@ -644,6 +648,13 @@ close the pull request or the issue.
 
 The onboarding is complete when this proof succeeds, or when the operator
 declines it and `factory doctor` reports ready.
+
+## Agent discovery
+
+Point later agents in the target repository at the installed guide. Append the
+section that `factory guide setup` shows under "Agent discovery in a target
+repository" to the repository's agent instruction file. Keep every other line
+of that file unchanged. The commit needs operator approval.
 
 ## Keeping it valid
 

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -29,7 +28,8 @@ const onboardingProcedure = "docs/repository-initialization.md"
 // document.
 const onboardingPrompt = `Prepare the repository at %[1]s for Software Factory runs.
 
-The Software Factory checkout is at %[2]s. Read
+Run factory guide and factory guide setup first; they describe the installed
+release. The Software Factory checkout is at %[2]s. Read
 %[2]s/%[3]s in full and follow its ordered procedure from
 the first step to the last. Run every step yourself; do not hand steps back to me.
 
@@ -45,8 +45,7 @@ host path into factory.yaml.
 // runOnboard starts an interactive harness session in the current repository
 // with a prompt that gives the whole repository initialization to the agent.
 func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("onboard", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("onboard", errorsOutput)
 	harness := flags.String("harness", string(config.HarnessClaude), "interactive harness that runs the onboarding: claude or codex")
 	checkout := flags.String("factory-checkout", factoryCheckout, "Software Factory checkout; defaults to the checkout the binary was built from")
 	if err := flags.Parse(args); err != nil {
