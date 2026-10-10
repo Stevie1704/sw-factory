@@ -44,6 +44,10 @@ const (
 	maxTestFiles = 256
 	// maxUncoveredCriteria bounds criteria the test role explicitly leaves open.
 	maxUncoveredCriteria = 64
+	// MaxPullRequestSummaryRunes bounds the markdown body a PR writer returns.
+	// It keeps the summary well inside the code host's pull-request body limit
+	// beside the coordinator-generated section.
+	MaxPullRequestSummaryRunes = 16000
 )
 
 // ReportFileName is the only accepted report filename in an invocation result
@@ -250,6 +254,12 @@ type ReviewHandoff struct {
 	Findings []ReviewFinding `json:"findings"`
 }
 
+// PullRequestSummary is the structured output of a PR-writer invocation.
+type PullRequestSummary struct {
+	// Body is the markdown summary the coordinator places in the pull request.
+	Body string `json:"body"`
+}
+
 // ReviewFindingBlocks reports whether a finding is allowed to gate readiness.
 // Taste and scope-expansion findings are advisory even if a harness attempts
 // to label them as blockers.
@@ -329,6 +339,8 @@ type Report struct {
 	TestHandoff *TestHandoff `json:"test_handoff,omitempty"`
 	// ReviewHandoff is required for a completed review-role outcome.
 	ReviewHandoff *ReviewHandoff `json:"review_handoff,omitempty"`
+	// PullRequestSummary is required for a completed PR-writer outcome.
+	PullRequestSummary *PullRequestSummary `json:"pull_request_summary,omitempty"`
 	// TestObjectionResponse is required when a test-stage invocation is
 	// reviewing an active implementation objection. A rejected response need
 	// not contain a revised test handoff.
@@ -605,9 +617,23 @@ func validate(value Report, context ValidationContext, allowEmptyProductionFiles
 	if value.ReportedAt.IsZero() {
 		return errors.New("report reported_at is required")
 	}
+	summaryReport := isSummaryReportForContext(value, context)
+	if value.PullRequestSummary != nil && (!summaryReport || value.Outcome != OutcomeCompleted) {
+		return errors.New("only a completed PR-writer report may contain a pull-request summary")
+	}
 	switch value.Outcome {
 	case OutcomeCompleted:
-		if isTestReportForContext(value, context) {
+		if summaryReport {
+			if value.Handoff != nil || value.TestHandoff != nil || value.ReviewHandoff != nil || value.TestObjectionResponse != nil {
+				return errors.New("PR-writer completed report must contain only a pull-request summary")
+			}
+			if value.PullRequestSummary == nil {
+				return errors.New("completed PR-writer report requires a pull-request summary")
+			}
+			if err := validatePullRequestSummary(*value.PullRequestSummary); err != nil {
+				return err
+			}
+		} else if isTestReportForContext(value, context) {
 			if value.Handoff != nil || value.ReviewHandoff != nil {
 				return errors.New("test completed report must contain only a test handoff or objection response")
 			}
@@ -917,6 +943,39 @@ func isTestReport(value Report) bool {
 func isReviewReport(value Report) bool {
 	return (value.Role == "spec_review" && value.Stage == "review") ||
 		(value.Role == "standards_review" && value.Stage == "standards_review")
+}
+
+// isSummaryReport identifies the PR-writer envelope when no registry
+// projection is available.
+func isSummaryReport(value Report) bool {
+	return value.Role == "pr_writer" && value.Stage == "pr_summary"
+}
+
+// isSummaryReportForContext selects the coordinator-resolved summary contract
+// when available and falls back to the role identity otherwise.
+func isSummaryReportForContext(value Report, context ValidationContext) bool {
+	if context.RoleKind != "" {
+		return context.RoleKind == "summary"
+	}
+	return isSummaryReport(value)
+}
+
+// validatePullRequestSummary enforces a nonempty, bounded markdown body.
+// Unlike other protocol text, the body may span several lines.
+func validatePullRequestSummary(value PullRequestSummary) error {
+	if strings.TrimSpace(value.Body) == "" {
+		return errors.New("pull-request summary body must not be empty")
+	}
+	if strings.ContainsRune(value.Body, '\x00') {
+		return errors.New("pull-request summary body must not contain NUL characters")
+	}
+	if !utf8.ValidString(value.Body) {
+		return errors.New("pull-request summary body must be valid UTF-8")
+	}
+	if utf8.RuneCountInString(value.Body) > MaxPullRequestSummaryRunes {
+		return fmt.Errorf("pull-request summary body exceeds %d characters", MaxPullRequestSummaryRunes)
+	}
+	return nil
 }
 
 // isTestReportForContext selects the coordinator-resolved test contract when

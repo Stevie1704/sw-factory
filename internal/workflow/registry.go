@@ -23,6 +23,9 @@ const (
 	// RoleStandardsReview identifies the independent documented-standards
 	// reviewer.
 	RoleStandardsReview = "standards_review"
+	// RolePullRequestWriter identifies the optional role that writes the
+	// pull-request summary before the human review hand-off.
+	RolePullRequestWriter = "pr_writer"
 
 	// PromptVersionTest identifies the immutable test-role prompt.
 	PromptVersionTest = "test-v3"
@@ -34,11 +37,16 @@ const (
 	PromptVersionSpecificationReview = "specification-review-v8"
 	// PromptVersionStandardsReview identifies the immutable standards-review prompt.
 	PromptVersionStandardsReview = "standards-review-v8"
+	// PromptVersionPullRequestWriter identifies the immutable PR-writer prompt.
+	PromptVersionPullRequestWriter = "pr-writer-v1"
 
 	// StageArchitecture identifies the optional architecture invocation stage.
 	StageArchitecture store.Stage = store.StageArchitecture
 	// StageStandardsReview identifies the documented-standards review invocation stage.
 	StageStandardsReview store.Stage = "standards_review"
+	// StagePullRequestSummary identifies the PR-writer invocation stage. The
+	// run itself stays in review while this invocation is active.
+	StagePullRequestSummary store.Stage = "pr_summary"
 )
 
 const (
@@ -48,6 +56,8 @@ const (
 	RoleKindTest RoleKind = "test"
 	// RoleKindReview is a role that produces exact-checkpoint findings.
 	RoleKindReview RoleKind = "review"
+	// RoleKindSummary is a role that produces an advisory pull-request summary.
+	RoleKindSummary RoleKind = "summary"
 )
 
 // RoleKind identifies the structured report contract a role uses.
@@ -72,6 +82,13 @@ type RoleDefinition struct {
 	// RequiresTestHandoff reports whether the role may start only after the
 	// required test-stage handoff has been accepted.
 	RequiresTestHandoff bool
+}
+
+// ReadOnly reports whether the role reads one immutable checkpoint and must
+// not change the run worktree. Such a role gets its own worker and a
+// read-only worktree mount.
+func (d RoleDefinition) ReadOnly() bool {
+	return d.Kind == RoleKindReview || d.Kind == RoleKindSummary
 }
 
 // StageTransition is the coordinator-owned result of accepting one report
@@ -222,6 +239,15 @@ func DefaultRegistry() Registry {
 			StartStages:           []store.Stage{store.StageDraftPR, store.StageReview},
 			RunStages:             []store.Stage{StageStandardsReview},
 		},
+		{
+			Name:                  RolePullRequestWriter,
+			Stage:                 StagePullRequestSummary,
+			PromptVersion:         PromptVersionPullRequestWriter,
+			DefaultPermittedPaths: []string{"."},
+			Kind:                  RoleKindSummary,
+			StartStages:           []store.Stage{store.StageReview},
+			RunStages:             []store.Stage{StagePullRequestSummary},
+		},
 	}
 
 	stages := []StageDefinition{
@@ -272,6 +298,12 @@ func DefaultRegistry() Registry {
 				StageTransition{Stage: StageStandardsReview, Status: store.StatusWaitingForHuman},
 				StageTransition{Stage: StageStandardsReview, Status: store.StatusWaitingForHuman},
 			),
+		},
+		{
+			// A summary result never moves the run. The coordinator records it
+			// and the readiness boundary continues from review.
+			Name:      StagePullRequestSummary,
+			AgentRole: RolePullRequestWriter,
 		},
 		{Name: store.StageReady},
 		{
@@ -403,7 +435,7 @@ func validateRoleDefinition(index int, definition RoleDefinition, registry Regis
 		return fmt.Errorf("workflow role %q prompt version must be a nonempty single token", definition.Name)
 	}
 	switch definition.Kind {
-	case RoleKindHandoff, RoleKindTest, RoleKindReview:
+	case RoleKindHandoff, RoleKindTest, RoleKindReview, RoleKindSummary:
 	default:
 		return fmt.Errorf("workflow role %q has unsupported report kind %q", definition.Name, definition.Kind)
 	}

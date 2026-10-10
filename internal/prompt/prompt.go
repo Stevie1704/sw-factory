@@ -31,6 +31,10 @@ const ReviewVersion = workflow.PromptVersionSpecificationReview
 // version.
 const StandardsReviewVersion = workflow.PromptVersionStandardsReview
 
+// PullRequestWriterVersion identifies the factory-owned PR-writer prompt
+// version.
+const PullRequestWriterVersion = workflow.PromptVersionPullRequestWriter
+
 // rolePromptFS contains the factory-owned role bodies. The files are compiled
 // into the factory binary; the target repository cannot replace them at run
 // time.
@@ -55,6 +59,7 @@ var rolePromptFiles = map[string]string{
 	workflow.RoleArchitecture:        "prompts/architecture.md",
 	workflow.RoleSpecificationReview: "prompts/specification-review.md",
 	workflow.RoleStandardsReview:     "prompts/standards-review.md",
+	workflow.RolePullRequestWriter:   "prompts/pr-writer.md",
 }
 
 // rolePromptVersions maps each supported persisted prompt version to its
@@ -101,6 +106,9 @@ var rolePromptVersions = map[string]map[string]string{
 		"standards-review-v7":                 "prompts/legacy/standards-review-v7.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
+	workflow.RolePullRequestWriter: {
+		workflow.PromptVersionPullRequestWriter: rolePromptFiles[workflow.RolePullRequestWriter],
+	},
 }
 
 // expectedPromptSHA256 records the checked-in content identity for each
@@ -119,6 +127,7 @@ var expectedPromptSHA256 = map[string]string{
 	"standards-review-v6":                     "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469",
 	"standards-review-v7":                     "b773948d204ff17301cde3663a8d449deef6a904560bc4dbdd9dd9f324457dcd",
 	workflow.PromptVersionStandardsReview:     "b55ea69e303fbbde83931681a7fb2691849030afe43e975e4f57c69f87f731a0",
+	workflow.PromptVersionPullRequestWriter:   "92bf484ec1728eea93f48efa3c566acfd355a114904cc6c8a290a178bd27c5f4",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
@@ -442,7 +451,7 @@ Review-repair packet (coordinator-owned):
 		}
 		dynamicContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n", data)
 	}
-	if definition.Kind == workflow.RoleKindReview && request.ReviewContext != nil {
+	if definition.ReadOnly() && request.ReviewContext != nil {
 		if request.ReviewContext.DiffPath != "" {
 			// Historical packet fields are deliberately cleared before an artifact-
 			// backed context is rendered. File-backed review prompts use one procedure

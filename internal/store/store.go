@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 40
+const CurrentSchemaVersion = 41
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -537,6 +537,34 @@ type SpecificationReview = ReviewResult
 // durable projection.
 type StandardsReview = ReviewResult
 
+// PullRequestSummaryStatus identifies how the PR writer ended for one
+// checkpoint.
+type PullRequestSummaryStatus string
+
+const (
+	// PullRequestSummaryWritten means the PR writer returned a valid body.
+	PullRequestSummaryWritten PullRequestSummaryStatus = "written"
+	// PullRequestSummaryFailed means the PR writer produced no usable body.
+	// The hand-off continues with the coordinator section only.
+	PullRequestSummaryFailed PullRequestSummaryStatus = "failed"
+)
+
+// PullRequestSummary is the saved PR-writer result for one checkpoint. The
+// coordinator saves it before the pull-request update, so a readiness retry
+// at the same checkpoint reuses it instead of starting a new invocation.
+type PullRequestSummary struct {
+	// CheckpointSHA is the checkpoint the summary describes.
+	CheckpointSHA string `json:"checkpoint_sha"`
+	// InvocationID identifies the PR-writer invocation, when one started.
+	InvocationID string `json:"invocation_id,omitempty"`
+	// Status records whether a usable body exists.
+	Status PullRequestSummaryStatus `json:"status"`
+	// Body is the markdown summary. It is empty for a failed summary.
+	Body string `json:"body,omitempty"`
+	// Reason is a bounded single-line cause of a failed summary.
+	Reason string `json:"reason,omitempty"`
+}
+
 // ProtectedTestPath records the content identity implementation must preserve.
 type ProtectedTestPath struct {
 	// Path is the repository-relative protected test path.
@@ -590,6 +618,8 @@ type Run struct {
 	SpecificationReview *SpecificationReview
 	// StandardsReview is the latest exact-checkpoint standards result.
 	StandardsReview *StandardsReview
+	// PullRequestSummary is the latest saved PR-writer result.
+	PullRequestSummary *PullRequestSummary
 	// ReviewRepairAttempts is the number of review-repair rounds started.
 	ReviewRepairAttempts int
 	// ReviewRepairBudget is the frozen maximum number of review-repair rounds.
@@ -1004,6 +1034,7 @@ const runColumns = `id, repository_path, issue_number, stage, status, branch, wo
 	test_revision_budget, test_revision_history, test_objection,
 	test_revision_base_changed_paths,
 	implementation_handoff, specification_review, standards_review,
+	pull_request_summary,
 	review_repair_attempts, review_repair_budget,
 	review_repair_pending_attempt, review_repair_history, review_repair_packet,
 	test_exemption, protected_test_paths, test_stage_skipped,
@@ -1025,6 +1056,7 @@ func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 	var run Run
 	var baseCheckpointSHA, acceptedImplementationCheckpointSHA, testCheckpointSHA string
 	var testHandoffJSON, roleHandoffJSON, specificationReviewJSON, standardsReviewJSON string
+	var pullRequestSummaryJSON string
 	var reviewRepairHistoryJSON, reviewRepairPacketJSON string
 	var testRevisionHistoryJSON, testObjectionJSON, testRevisionBaseChangedPathsJSON string
 	var testExemptionJSON, protectedTestPathsJSON string
@@ -1053,6 +1085,7 @@ func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 		&roleHandoffJSON,
 		&specificationReviewJSON,
 		&standardsReviewJSON,
+		&pullRequestSummaryJSON,
 		&run.ReviewRepairAttempts,
 		&run.ReviewRepairBudget,
 		&run.ReviewRepairPendingAttempt,
@@ -1142,6 +1175,12 @@ func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 		run.StandardsReview = &StandardsReview{}
 		if err := json.Unmarshal([]byte(standardsReviewJSON), run.StandardsReview); err != nil {
 			return nil, fmt.Errorf("decode standards review: %w", err)
+		}
+	}
+	if pullRequestSummaryJSON != "" {
+		run.PullRequestSummary = &PullRequestSummary{}
+		if err := json.Unmarshal([]byte(pullRequestSummaryJSON), run.PullRequestSummary); err != nil {
+			return nil, fmt.Errorf("decode pull-request summary: %w", err)
 		}
 	}
 	if reviewRepairHistoryJSON != "" {
@@ -1628,6 +1667,9 @@ func validateTestProjection(run Run) error {
 	if err := validateReviewProjection("standards", run.StandardsReview, run.CheckpointSHA); err != nil {
 		return err
 	}
+	if err := validatePullRequestSummary(run.PullRequestSummary); err != nil {
+		return err
+	}
 	if len(run.ActiveInvocationIDs) > 32 {
 		return errors.New("run active invocation ids exceed 32 entries")
 	}
@@ -1726,6 +1768,33 @@ func validateReviewRepairProjection(run Run) error {
 
 // validateReviewProjection checks one nullable exact-checkpoint review result
 // before it is serialized into the operational store.
+// validatePullRequestSummary checks the saved PR-writer result. A summary may
+// describe an earlier checkpoint; readiness compares it with the current one.
+func validatePullRequestSummary(summary *PullRequestSummary) error {
+	if summary == nil {
+		return nil
+	}
+	if !validGateCheckpointSHA(summary.CheckpointSHA) {
+		return errors.New("pull-request summary checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters")
+	}
+	if strings.ContainsAny(summary.Reason, "\x00\r\n") || strings.ContainsAny(summary.InvocationID, "\x00\r\n") {
+		return errors.New("pull-request summary reason and invocation id must be single-line")
+	}
+	switch summary.Status {
+	case PullRequestSummaryWritten:
+		if strings.TrimSpace(summary.Body) == "" {
+			return errors.New("written pull-request summary must retain a body")
+		}
+	case PullRequestSummaryFailed:
+		if summary.Body != "" {
+			return errors.New("failed pull-request summary must not retain a body")
+		}
+	default:
+		return fmt.Errorf("unsupported pull-request summary status %q", summary.Status)
+	}
+	return nil
+}
+
 func validateReviewProjection(label string, review *ReviewResult, checkpoint string) error {
 	if review == nil {
 		return nil
@@ -1940,6 +2009,10 @@ func runValues(run Run) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode standards review: %w", err)
 	}
+	pullRequestSummary, err := nullableJSON(run.PullRequestSummary)
+	if err != nil {
+		return nil, fmt.Errorf("encode pull-request summary: %w", err)
+	}
 	reviewRepairHistory, err := sliceJSON(run.ReviewRepairHistory)
 	if err != nil {
 		return nil, fmt.Errorf("encode review repair history: %w", err)
@@ -1986,6 +2059,7 @@ func runValues(run Run) ([]any, error) {
 		roleHandoff,
 		specificationReview,
 		standardsReview,
+		pullRequestSummary,
 		run.ReviewRepairAttempts,
 		run.ReviewRepairBudget,
 		run.ReviewRepairPendingAttempt,
@@ -2039,7 +2113,7 @@ const saveRunStatement = `
 			test_handoff, test_invocation_id, test_revision_attempts,
 			test_revision_budget, test_revision_history, test_objection,
 			test_revision_base_changed_paths, implementation_handoff,
-			specification_review, standards_review,
+			specification_review, standards_review, pull_request_summary,
 			review_repair_attempts, review_repair_budget,
 			review_repair_pending_attempt, review_repair_history, review_repair_packet,
 			test_exemption, protected_test_paths, test_stage_skipped,
@@ -2059,7 +2133,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?
+			?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -2082,6 +2156,7 @@ const saveRunStatement = `
 			implementation_handoff = excluded.implementation_handoff,
 			specification_review = excluded.specification_review,
 			standards_review = excluded.standards_review,
+			pull_request_summary = excluded.pull_request_summary,
 			review_repair_attempts = excluded.review_repair_attempts,
 			review_repair_budget = excluded.review_repair_budget,
 			review_repair_pending_attempt = excluded.review_repair_pending_attempt,
@@ -2123,7 +2198,7 @@ const saveRunIfRevisionStatement = `
 			test_handoff = ?, test_invocation_id = ?, test_revision_attempts = ?,
 			test_revision_budget = ?, test_revision_history = ?, test_objection = ?,
 			test_revision_base_changed_paths = ?, implementation_handoff = ?,
-			specification_review = ?, standards_review = ?,
+			specification_review = ?, standards_review = ?, pull_request_summary = ?,
 			review_repair_attempts = ?, review_repair_budget = ?,
 			review_repair_pending_attempt = ?, review_repair_history = ?, review_repair_packet = ?,
 			test_exemption = ?, protected_test_paths = ?, test_stage_skipped = ?,
@@ -3460,6 +3535,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			)`); err != nil {
 				return fmt.Errorf("apply store migration 40: %w", err)
 			}
+		case 41:
+			if err := addOperationalRunColumnIfMissing(ctx, tx, "pull_request_summary"); err != nil {
+				return fmt.Errorf("apply store migration 41: %w", err)
+			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
 		}
@@ -3477,9 +3556,41 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 // dropOperationalRunColumnIfPresent removes one obsolete run projection while
 // tolerating reduced schema fixtures that never carried that historical field.
 func dropOperationalRunColumnIfPresent(ctx context.Context, tx *sql.Tx, column string) error {
+	found, err := operationalRunHasColumn(ctx, tx, column)
+	if err != nil || !found {
+		return err
+	}
+	switch column {
+	case "lifecycle_notification_sent", "ready_notification_sent", "clarification_notification_sent":
+		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs DROP COLUMN "+column)
+		return err
+	default:
+		return fmt.Errorf("refuse unknown operational run column %q", column)
+	}
+}
+
+// addOperationalRunColumnIfMissing adds one run projection column. It
+// tolerates a store whose schema metadata names an older version than the
+// columns it already holds.
+func addOperationalRunColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
+	found, err := operationalRunHasColumn(ctx, tx, column)
+	if err != nil || found {
+		return err
+	}
+	switch column {
+	case "pull_request_summary":
+		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN pull_request_summary TEXT NOT NULL DEFAULT ''")
+		return err
+	default:
+		return fmt.Errorf("refuse unknown operational run column %q", column)
+	}
+}
+
+// operationalRunHasColumn reports whether the run table holds one column.
+func operationalRunHasColumn(ctx context.Context, tx *sql.Tx, column string) (bool, error) {
 	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(operational_runs)")
 	if err != nil {
-		return fmt.Errorf("inspect operational run columns: %w", err)
+		return false, fmt.Errorf("inspect operational run columns: %w", err)
 	}
 	found := false
 	for rows.Next() {
@@ -3489,7 +3600,7 @@ func dropOperationalRunColumnIfPresent(ctx context.Context, tx *sql.Tx, column s
 		var defaultValue any
 		if err := rows.Scan(&ordinal, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("scan operational run column: %w", err)
+			return false, fmt.Errorf("scan operational run column: %w", err)
 		}
 		if name == column {
 			found = true
@@ -3497,21 +3608,12 @@ func dropOperationalRunColumnIfPresent(ctx context.Context, tx *sql.Tx, column s
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("read operational run columns: %w", err)
+		return false, fmt.Errorf("read operational run columns: %w", err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close operational run columns: %w", err)
+		return false, fmt.Errorf("close operational run columns: %w", err)
 	}
-	if !found {
-		return nil
-	}
-	switch column {
-	case "lifecycle_notification_sent", "ready_notification_sent", "clarification_notification_sent":
-		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs DROP COLUMN "+column)
-		return err
-	default:
-		return fmt.Errorf("refuse unknown operational run column %q", column)
-	}
+	return found, nil
 }
 
 // addInvocationColumnIfMissing keeps the newest migration compatible with
