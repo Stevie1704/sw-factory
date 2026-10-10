@@ -70,6 +70,11 @@ func (snapshot AcceptanceSnapshot) ReviewInvocation() bool {
 	return snapshot.Role.Kind == workflow.RoleKindReview
 }
 
+// SummaryInvocation reports whether the PR writer owns this report.
+func (snapshot AcceptanceSnapshot) SummaryInvocation() bool {
+	return snapshot.Role.Kind == workflow.RoleKindSummary
+}
+
 // TestRevisionActive reports whether this report answers an open
 // implementation objection rather than opening the test stage.
 func (snapshot AcceptanceSnapshot) TestRevisionActive() bool {
@@ -93,6 +98,9 @@ const (
 	// AcceptanceOutcomeTestObjection means an accepted implementation report
 	// disputes a protected test and redirects the run to the test role.
 	AcceptanceOutcomeTestObjection AcceptanceOutcome = "test-objection"
+	// AcceptanceOutcomePullRequestSummary means the PR writer returned its
+	// result. The coordinator saves it; the run stage does not change.
+	AcceptanceOutcomePullRequestSummary AcceptanceOutcome = "pull-request-summary"
 	// AcceptanceOutcomeUnverifiable means a test report failed schema
 	// validation in the one shape the coordinator parks for a person instead
 	// of refusing.
@@ -370,11 +378,11 @@ func (a *reportAcceptance) gather(ctx context.Context, registration config.Repos
 // admitAcceptanceIdentity enforces the run-state, stage-ownership, and
 // path-policy preconditions that hold before the report itself is read.
 func admitAcceptanceIdentity(run store.Run, invocation store.Invocation, roleDefinition workflow.RoleDefinition, request AgentReportRequest) error {
-	reviewInvocation := roleDefinition.Kind == workflow.RoleKindReview
+	readOnlyInvocation := roleDefinition.ReadOnly()
 	if err := validateAgentRunState(run); err != nil && !reviewCanBeAcceptedWhileWaiting(run, invocation) {
 		return err
 	}
-	if run.Stage != invocation.Stage && !(reviewInvocation && run.Stage == store.StageReview) {
+	if run.Stage != invocation.Stage && !(readOnlyInvocation && run.Stage == store.StageReview) {
 		return fmt.Errorf("invocation stage %q does not match active run stage %q", invocation.Stage, run.Stage)
 	}
 	if len(request.PermittedPaths) == 0 {
@@ -416,7 +424,7 @@ func AdmitReport(snapshot AcceptanceSnapshot) (AcceptanceOutcome, error) {
 	if err := admitAcceptancePathOwnership(snapshot); err != nil {
 		return "", err
 	}
-	if snapshot.Report.Outcome == report.OutcomeNeedsClarification {
+	if snapshot.Report.Outcome == report.OutcomeNeedsClarification && !snapshot.SummaryInvocation() {
 		if err := validateClarificationQuestions(snapshot.Packet, snapshot.Run.PendingQuestions, snapshot.Report.Questions); err != nil {
 			return "", err
 		}
@@ -428,6 +436,8 @@ func AdmitReport(snapshot AcceptanceSnapshot) (AcceptanceOutcome, error) {
 		return AcceptanceOutcomeTestStage, nil
 	case snapshot.ReviewInvocation():
 		return AcceptanceOutcomeReview, nil
+	case snapshot.SummaryInvocation():
+		return AcceptanceOutcomePullRequestSummary, nil
 	}
 	return AcceptanceOutcomeHandoff, nil
 }
@@ -439,7 +449,7 @@ func admitAcceptanceCheckpoint(snapshot AcceptanceSnapshot) error {
 	if snapshot.Run.CheckpointSHA != "" && snapshot.Worktree.HeadSHA != snapshot.Run.CheckpointSHA {
 		return fmt.Errorf("agent report worktree HEAD %q does not match checkpoint %q", snapshot.Worktree.HeadSHA, snapshot.Run.CheckpointSHA)
 	}
-	if snapshot.ReviewInvocation() && len(snapshot.Worktree.ChangedPaths) != 0 {
+	if snapshot.Role.ReadOnly() && len(snapshot.Worktree.ChangedPaths) != 0 {
 		return fmt.Errorf("%s changed the immutable checkpoint worktree", snapshot.Invocation.Role)
 	}
 	return nil
@@ -674,6 +684,10 @@ func projectAcceptance(snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, n
 		}
 	case AcceptanceOutcomeTestStage:
 		// The test-stage policy owns its run transition after commitment.
+	case AcceptanceOutcomePullRequestSummary:
+		summary := pullRequestSummaryFromReport(snapshot.Invocation, snapshot.Report, previous.CheckpointSHA)
+		next.PullRequestSummary = &summary
+		next.UpdatedAt = now
 	default:
 		next = agentReportRunProjection(previous, snapshot.Invocation.Stage, snapshot.Report)
 		next.UpdatedAt = now
@@ -738,7 +752,7 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 		Invocation:       projection.Invocation,
 		Previous:         projection.Previous,
 		Next:             next,
-		StopWorker:       snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview || outcome == AcceptanceOutcomeTestObjection,
+		StopWorker:       snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview || outcome == AcceptanceOutcomePullRequestSummary || outcome == AcceptanceOutcomeTestObjection,
 		Report:           snapshot.Report,
 		ReviewUnitResult: projection.ReviewUnitResult,
 	})
@@ -757,7 +771,7 @@ func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAccep
 	if err := harnessRuntime.FinishHeadless(ctx, harness.Session{InvocationID: invocation.ID, RunID: invocation.RunID, WorkerID: workerIDForInvocation(*invocation), NativeSessionID: projection.Invocation.NativeSessionID}); err != nil {
 		return fmt.Errorf("finish accepted harness session: %w", err)
 	}
-	if snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview {
+	if snapshot.Report.Outcome == report.OutcomeNeedsClarification || outcome == AcceptanceOutcomeReview || outcome == AcceptanceOutcomePullRequestSummary {
 		if err := a.lifecycle.StopWorker(ctx, workerIDForInvocation(*invocation)); err != nil {
 			return err
 		}
@@ -807,6 +821,10 @@ func (a *reportAcceptance) dispatch(ctx context.Context, request ReportAcceptanc
 		return a.hooks.acceptTestStage(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report, snapshot.Worktree)
 	case AcceptanceOutcomeReview:
 		return a.hooks.acceptReview(ctx, request.Registration, request.RunStore, request.Run, invocation, snapshot.Report)
+	case AcceptanceOutcomePullRequestSummary:
+		// A summary is advisory. Its questions never reach a human; the next
+		// progression pass continues the readiness hand-off.
+		return AgentResult{Invocation: *invocation, Report: snapshot.Report}, nil
 	}
 	if snapshot.Report.Outcome == report.OutcomeNeedsClarification {
 		published, err := a.hooks.publishClarification(ctx, request.Registration, request.RunStore, *request.Run)

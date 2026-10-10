@@ -19,7 +19,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
-	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // RecoveryRequiredCode is the stable code for the pre-reconciliation safety
@@ -516,7 +515,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			addRepositoryCraftRecoveryDiscrepancy(diagnosis, *active, craftErr)
 		}
 	}
-	if reviewRoleInvocation(*active) {
+	if checkpointDiffInvocation(*active) {
 		if diffErr := validatePersistedReviewDiff(*active); diffErr != nil {
 			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{
 				InvocationID: active.ID,
@@ -774,7 +773,7 @@ func completedInvocationProjectionExpectedStopped(run store.Run, invocation stor
 	if (run.Stage == store.StageCheck || run.Stage == store.StageDraftPR) && invocation.Stage == store.StageImplementation {
 		return true
 	}
-	if run.Stage == store.StageReview && roleIsKind(invocation, workflow.RoleKindReview) {
+	if run.Stage == store.StageReview && invocationReadOnly(invocation) {
 		return true
 	}
 	return run.Stage == store.StageReady
@@ -1331,7 +1330,7 @@ func inspectWorkerMountContract(diagnosis *RecoveryDiagnosis, registration confi
 	workerRequest := worker.StartRequest{
 		RunID:             run.ID,
 		WorkerID:          workerIDForInvocation(active),
-		WorktreeReadOnly:  roleIsKind(active, workflow.RoleKindReview),
+		WorktreeReadOnly:  invocationReadOnly(active),
 		WorktreePath:      run.Worktree,
 		GitMetadataPath:   gitMetadataProjectionPath(run.ID, run.Worktree),
 		Image:             packet.RepositoryConfig.WorkerBuild.Image,

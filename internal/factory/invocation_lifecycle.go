@@ -565,6 +565,11 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 	if err != nil {
 		return LaunchSnapshot{}, err
 	}
+	if roleDefinition.Kind == workflow.RoleKindSummary {
+		if err := l.gatherPullRequestSummary(ctx, request.RunStore, run, agentRequest.Role, &snapshot); err != nil {
+			return LaunchSnapshot{}, err
+		}
+	}
 	if roleDefinition.Kind == workflow.RoleKindReview {
 		if err := l.gatherReview(ctx, request.RunStore, run, agentRequest.Role, &snapshot); err != nil {
 			return LaunchSnapshot{}, err
@@ -697,6 +702,21 @@ func (l *invocationLifecycle) gatherReview(ctx context.Context, runStore RunStor
 			}
 		}
 	}
+	return nil
+}
+
+// gatherPullRequestSummary reads the PR-writer preconditions and its
+// read-only input. The writer reads the same clean immutable checkpoint a
+// reviewer reads, so it shares the reviewer's start check.
+func (l *invocationLifecycle) gatherPullRequestSummary(ctx context.Context, runStore RunStore, run store.Run, role string, snapshot *LaunchSnapshot) error {
+	if err := ensureReviewStartForRoleWithInspector(ctx, run, role, l.worktree); err != nil {
+		return err
+	}
+	summaryContext, err := pullRequestSummaryContextForRun(ctx, run, runStore)
+	if err != nil {
+		return err
+	}
+	snapshot.ReviewContext = summaryContext
 	return nil
 }
 
@@ -971,7 +991,7 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 	}
 	contextValues := launchContextForPlan(plan)
 	invocation := newLaunchInvocation(plan, packetDirectory, resultDirectory, craft, l.clock().UTC())
-	if plan.RoleDefinition.Kind == workflow.RoleKindReview {
+	if plan.RoleDefinition.ReadOnly() {
 		if plan.ReviewContext == nil {
 			return launchMaterialisation{}, fmt.Errorf("review context is required for %s", plan.Request.Role)
 		}
@@ -994,7 +1014,7 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 		reviewContext.ChangedPathsCommand = ""
 		reviewContext.DiffPathCommand = ""
 		plan.ReviewContext = &reviewContext
-		if partitioned, ok := runStore.(store.ReviewRoundStore); ok {
+		if partitioned, ok := runStore.(store.ReviewRoundStore); ok && plan.RoleDefinition.Kind == workflow.RoleKindReview {
 			prepared, err := l.preparePartitionedReview(ctx, partitioned, plan.Run, invocation, *plan.ReviewContext, plan.Request.ReviewUnitID, registration)
 			if err != nil {
 				return launchMaterialisation{}, err
@@ -1020,7 +1040,7 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 	if err != nil {
 		return launchMaterialisation{}, fmt.Errorf("resolve launch worker caches: %w", err)
 	}
-	workerRequest := worker.StartRequest{RunID: plan.Run.ID, WorkerID: workerID, WorktreeReadOnly: plan.RoleDefinition.Kind == workflow.RoleKindReview, WorktreePath: plan.Run.Worktree, GitMetadataPath: gitMetadataPath, Image: plan.Packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: plan.Run.ImageDigest, Caches: caches, InvocationPath: packetDirectory, ResultPath: resultDirectory, Role: plan.Request.Role, Limits: config.EffectiveWorkerLimits(registration.WorkerLimits)}
+	workerRequest := worker.StartRequest{RunID: plan.Run.ID, WorkerID: workerID, WorktreeReadOnly: plan.RoleDefinition.ReadOnly(), WorktreePath: plan.Run.Worktree, GitMetadataPath: gitMetadataPath, Image: plan.Packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: plan.Run.ImageDigest, Caches: caches, InvocationPath: packetDirectory, ResultPath: resultDirectory, Role: plan.Request.Role, Limits: config.EffectiveWorkerLimits(registration.WorkerLimits)}
 	return launchMaterialisation{root: root, packetDirectory: packetDirectory, resultDirectory: resultDirectory, workerID: workerID, invocation: invocation, invocationPacket: invocationPacket, promptText: promptText, workerRequest: workerRequest}, nil
 }
 
@@ -1028,7 +1048,7 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 // upstream test state for isolated review invocations.
 func launchContextForPlan(plan LaunchPlan) launchContextValues {
 	values := launchContextValues{testHandoff: plan.Run.TestHandoff, testObjection: plan.Run.TestObjection, testRevisionAttempt: plan.Run.TestRevisionAttempts, testRevisionBudget: plan.Run.TestRevisionBudget, reviewRepair: plan.Run.ReviewRepairPacket, protectedTestPaths: append([]store.ProtectedTestPath(nil), plan.Run.ProtectedTestPaths...), testExemption: plan.Run.TestExemption}
-	if plan.RoleDefinition.Kind == workflow.RoleKindReview {
+	if plan.RoleDefinition.ReadOnly() {
 		return launchContextValues{}
 	}
 	return values
@@ -1161,7 +1181,7 @@ func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request In
 	startRequest := harness.StartRequest{
 		InvocationID: invocation.ID, RunID: plan.Run.ID, WorkerID: materialised.workerID,
 		Role: invocation.Role, Stage: string(invocation.Stage),
-		CheckpointSHA: reviewCheckpointSHA(plan.RoleDefinition.Kind == workflow.RoleKindReview, plan.Run.CheckpointSHA),
+		CheckpointSHA: reviewCheckpointSHA(plan.RoleDefinition.ReadOnly(), plan.Run.CheckpointSHA),
 		ReviewRoundID: invocation.ReviewRoundID, ReviewUnitID: invocation.ReviewUnitID,
 		Prompt: materialised.promptText,
 		Model:  invocation.Model, ReasoningEffort: invocation.ReasoningEffort,
@@ -1225,9 +1245,13 @@ func (l *invocationLifecycle) commitLaunchRun(ctx context.Context, request Invoc
 	}
 	previous := *request.Run
 	next := previous
-	if plan.RoleDefinition.Kind == workflow.RoleKindReview {
+	switch plan.RoleDefinition.Kind {
+	case workflow.RoleKindReview:
 		next.Stage = store.StageReview
-	} else {
+	case workflow.RoleKindSummary:
+		// The PR writer runs inside the review readiness boundary and never
+		// moves the run.
+	default:
 		next.Stage = plan.Request.Stage
 	}
 	next.Status = store.StatusActive
@@ -1442,7 +1466,7 @@ func (l *invocationLifecycle) restoreCredentialProjection(ctx context.Context, r
 // ensureWorkerForInvocation validates or recreates the pinned worker and
 // returns the exact request used by the durable worker-launch effect.
 func (l *invocationLifecycle) ensureWorkerForInvocation(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, invocation store.Invocation) (worker.StartRequest, store.Invocation, error) {
-	if reviewRoleInvocation(invocation) {
+	if checkpointDiffInvocation(invocation) {
 		if err := validatePersistedReviewDiff(invocation); err != nil {
 			return worker.StartRequest{}, invocation, fmt.Errorf("validate persisted review diff: %w", err)
 		}
@@ -1463,7 +1487,7 @@ func (l *invocationLifecycle) ensureWorkerForInvocation(ctx context.Context, reg
 	if err != nil {
 		return worker.StartRequest{}, invocation, fmt.Errorf("resolve recovery worker caches: %w", err)
 	}
-	request := worker.StartRequest{RunID: run.ID, WorkerID: workerIDForInvocation(invocation), WorktreeReadOnly: roleIsKind(invocation, workflow.RoleKindReview), WorktreePath: run.Worktree, GitMetadataPath: gitMetadataPath, Image: packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: run.ImageDigest, Caches: caches, InvocationPath: invocation.InvocationDirectory, ResultPath: invocation.ResultDirectory, CredentialStoreID: invocation.CredentialStoreID, Role: invocation.Role, Limits: config.EffectiveWorkerLimits(registration.WorkerLimits)}
+	request := worker.StartRequest{RunID: run.ID, WorkerID: workerIDForInvocation(invocation), WorktreeReadOnly: invocationReadOnly(invocation), WorktreePath: run.Worktree, GitMetadataPath: gitMetadataPath, Image: packet.RepositoryConfig.WorkerBuild.Image, ImageDigest: run.ImageDigest, Caches: caches, InvocationPath: invocation.InvocationDirectory, ResultPath: invocation.ResultDirectory, CredentialStoreID: invocation.CredentialStoreID, Role: invocation.Role, Limits: config.EffectiveWorkerLimits(registration.WorkerLimits)}
 	if l.worker == nil {
 		return worker.StartRequest{}, invocation, errors.New("worker runtime is required for invocation recovery")
 	}
@@ -1547,7 +1571,7 @@ func (l *invocationLifecycle) resumePersistedInvocationWithOptions(ctx context.C
 			return invocation, err
 		}
 	}
-	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.Kind == workflow.RoleKindReview, run.CheckpointSHA), ReviewRoundID: invocation.ReviewRoundID, ReviewUnitID: invocation.ReviewUnitID, Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
+	resumeRequest := harness.StartRequest{InvocationID: invocation.ID, RunID: run.ID, WorkerID: workerIDForInvocation(invocation), Role: invocation.Role, Stage: string(invocation.Stage), CheckpointSHA: reviewCheckpointSHA(roleDefinition.ReadOnly(), run.CheckpointSHA), ReviewRoundID: invocation.ReviewRoundID, ReviewUnitID: invocation.ReviewUnitID, Prompt: promptText, Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort, ResumeSessionID: invocation.NativeSessionID}
 	if automatic {
 		if l.journal == nil {
 			return invocation, errors.New("harness resume hook is required")

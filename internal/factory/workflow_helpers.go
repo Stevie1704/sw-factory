@@ -26,12 +26,18 @@ func roleIsKind(invocation store.Invocation, wanted workflow.RoleKind) bool {
 	return err == nil && definition.Kind == wanted
 }
 
+// invocationReadOnly reports whether a persisted invocation belongs to a role
+// that must not change the run worktree.
+func invocationReadOnly(invocation store.Invocation) bool {
+	definition, err := roleDefinitionForInvocation(invocation)
+	return err == nil && definition.ReadOnly()
+}
+
 // workerIDForInvocation gives each review invocation its own worker,
 // role-home volume, and temporary filesystem while retaining the historical
 // run-scoped worker for ordinary roles.
 func workerIDForInvocation(invocation store.Invocation) string {
-	definition, err := roleDefinitionForInvocation(invocation)
-	if err == nil && definition.Kind == workflow.RoleKindReview {
+	if invocationReadOnly(invocation) {
 		return invocation.RunID + "-" + invocation.ID
 	}
 	return invocation.RunID

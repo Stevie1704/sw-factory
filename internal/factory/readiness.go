@@ -109,6 +109,16 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 	}
 
 	if existing.Draft {
+		if pullRequestSummaryPending(run) {
+			// Progression starts the PR writer first. The hand-off resumes
+			// once a summary for this checkpoint is saved.
+			return run, nil
+		}
+		summarized, err := s.publishPullRequestSummary(ctx, runStore, repository, run, packet, existing)
+		if err != nil {
+			return run, err
+		}
+		existing = summarized
 		updated, err := s.setPullRequestDraft(ctx, repository, existing, false)
 		if err != nil {
 			return run, err
@@ -134,6 +144,39 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 		}
 	}
 	return next, nil
+}
+
+// publishPullRequestSummary places the saved summary for the current
+// checkpoint above the coordinator section while the pull request is still a
+// draft. Without a written summary it removes a section left by an earlier
+// checkpoint, so the PR never shows a summary of code the human does not
+// review. Only the PR-writer section changes.
+func (s *Service) publishPullRequestSummary(ctx context.Context, runStore RunStore, repository tracker.Repository, run store.Run, packet SpecificationPacket, existing codehost.PullRequest) (codehost.PullRequest, error) {
+	section := ""
+	if pullRequestSummarySettled(run) && run.PullRequestSummary.Status == store.PullRequestSummaryWritten {
+		section = renderPullRequestSummarySection(*run.PullRequestSummary)
+	}
+	body := mergePullRequestSummarySection(existing.Body, section)
+	if body == existing.Body {
+		return existing, nil
+	}
+	request := codehost.PullRequestRequest{
+		Title:      defaultString(existing.Title, defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number))),
+		Body:       body,
+		HeadBranch: run.Branch,
+		BaseBranch: packet.RepositoryConfig.TargetBranch,
+		Draft:      true,
+	}
+	if _, journaled := runStore.(PendingEffectStore); journaled {
+		if err := s.journal().UpdatePullRequest(ctx, runStore, run.ID, repository, existing.Number, request); err != nil {
+			return existing, fmt.Errorf("publish pull-request summary: %w", err)
+		}
+	} else if _, err := s.pullRequestClient().UpdatePullRequest(ctx, repository, existing.Number, request); err != nil {
+		return existing, fmt.Errorf("publish pull-request summary: %w", err)
+	}
+	existing.Body = body
+	existing.Title = request.Title
+	return existing, nil
 }
 
 // rejectUnreviewedPullRequestHead keeps a mismatched remote head non-ready and

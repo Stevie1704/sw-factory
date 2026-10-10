@@ -84,23 +84,37 @@ func reviewContextForRole(ctx context.Context, run store.Run, runStore RunStore,
 	if review := reviewResultForRole(run, role); review != nil && review.CheckpointSHA == run.CheckpointSHA {
 		contextValue.PriorFindings = append([]store.ReviewFinding(nil), review.Findings...)
 	}
-	if resultStore, ok := runStore.(GateResultStore); ok {
-		results, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseCheckpoint, run.CheckpointSHA)
-		if err != nil {
-			return nil, fmt.Errorf("read exact-checkpoint gate results for review: %w", err)
-		}
-		for _, result := range results {
-			detail := fmt.Sprintf("outcome=%s status=%s blocking=%t", result.Outcome, result.Status, result.Blocking)
-			if result.SkipReason != "" {
-				detail += " skip_reason=" + result.SkipReason
-			}
-			contextValue.RelevantLogs = append(contextValue.RelevantLogs, prompt.ReviewLog{
-				Source: result.GateName,
-				Detail: reviewSingleLine(detail),
-			})
-		}
+	logs, err := checkpointGateLogs(ctx, run, runStore)
+	if err != nil {
+		return nil, err
 	}
+	contextValue.RelevantLogs = logs
 	return contextValue, nil
+}
+
+// checkpointGateLogs reduces the exact-checkpoint gate results to bounded
+// outcome metadata. Command transcripts never enter an invocation packet.
+func checkpointGateLogs(ctx context.Context, run store.Run, runStore RunStore) ([]prompt.ReviewLog, error) {
+	resultStore, ok := runStore.(GateResultStore)
+	if !ok {
+		return nil, nil
+	}
+	results, err := resultStore.GateResults(ctx, run.ID, store.GatePhaseCheckpoint, run.CheckpointSHA)
+	if err != nil {
+		return nil, fmt.Errorf("read exact-checkpoint gate results for review: %w", err)
+	}
+	logs := make([]prompt.ReviewLog, 0, len(results))
+	for _, result := range results {
+		detail := fmt.Sprintf("outcome=%s status=%s blocking=%t", result.Outcome, result.Status, result.Blocking)
+		if result.SkipReason != "" {
+			detail += " skip_reason=" + result.SkipReason
+		}
+		logs = append(logs, prompt.ReviewLog{
+			Source: result.GateName,
+			Detail: reviewSingleLine(detail),
+		})
+	}
+	return logs, nil
 }
 
 // ensureReviewStart verifies the reviewer receives a clean, immutable draft

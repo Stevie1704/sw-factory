@@ -140,6 +140,13 @@ func reviewRoleInvocation(invocation store.Invocation) bool {
 	return ok && definition.Kind == workflow.RoleKindReview && strings.TrimSpace(invocation.PromptVersion) != ""
 }
 
+// checkpointDiffInvocation reports whether a versioned invocation reads the
+// persisted checkpoint diff artifact: a reviewer or the PR writer.
+func checkpointDiffInvocation(invocation store.Invocation) bool {
+	definition, ok := workflow.DefaultRegistry().Role(invocation.Role)
+	return ok && definition.ReadOnly() && strings.TrimSpace(invocation.PromptVersion) != ""
+}
+
 // packetUsesReviewDiffArtifact distinguishes artifact-backed reviews from
 // historical inline packets. Metadata also recognizes packets written by the
 // first artifact implementation before the packet schema advanced to eleven.

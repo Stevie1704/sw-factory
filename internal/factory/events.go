@@ -29,6 +29,9 @@ const (
 	EventCommandFailure EventKind = "command_failure"
 	// EventStageTransition reports a persisted change of run stage.
 	EventStageTransition EventKind = "stage_transition"
+	// EventPullRequestSummaryWarning reports that the optional PR writer
+	// produced no summary and the hand-off continues without one.
+	EventPullRequestSummaryWarning EventKind = "pr_summary_warning"
 )
 
 // CoordinatorEvent is a content-free, structured observation from the
