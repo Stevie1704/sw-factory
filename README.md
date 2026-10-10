@@ -37,10 +37,18 @@ diagnosis described in [Configuration and local
 operation](docs/configuration.md). It checks the host, repository, GitHub,
 worker, harness, authentication, and operational-store prerequisites together.
 
-To prepare a repository that has none of this yet, follow [Repository
-initialization](docs/repository-initialization.md). It is the ordered procedure
-that produces the worker image, the pinned digest, and the checked-in
-`factory.yaml`, and it contains a prompt that hands the work to an agent.
+## Onboard a repository with an agent
+
+To prepare a repository that has none of this yet, give an agent [the
+onboarding prompt](docs/repository-initialization.md#the-prompt). The agent
+needs shell access to this checkout and to the target repository. Replace the
+two path placeholders in the prompt before you paste it.
+
+The prompt is short on purpose. It points the agent to [Repository
+initialization](docs/repository-initialization.md), the ordered procedure that
+produces the worker image, the pinned digest, and the checked-in
+`factory.yaml`. The agent stops and asks before it writes files, runs host or
+GitHub commands, makes paid smoke calls, or commits.
 
 ## Install
 
