@@ -31,6 +31,10 @@ const ReviewVersion = workflow.PromptVersionSpecificationReview
 // version.
 const StandardsReviewVersion = workflow.PromptVersionStandardsReview
 
+// PullRequestWriterVersion identifies the factory-owned PR-writer prompt
+// version.
+const PullRequestWriterVersion = workflow.PromptVersionPullRequestWriter
+
 // rolePromptFS contains the factory-owned role bodies. The files are compiled
 // into the factory binary; the target repository cannot replace them at run
 // time.
@@ -55,6 +59,7 @@ var rolePromptFiles = map[string]string{
 	workflow.RoleArchitecture:        "prompts/architecture.md",
 	workflow.RoleSpecificationReview: "prompts/specification-review.md",
 	workflow.RoleStandardsReview:     "prompts/standards-review.md",
+	workflow.RolePullRequestWriter:   "prompts/pr-writer.md",
 }
 
 // rolePromptVersions maps each supported persisted prompt version to its
@@ -101,6 +106,9 @@ var rolePromptVersions = map[string]map[string]string{
 		"standards-review-v7":                 "prompts/legacy/standards-review-v7.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
+	workflow.RolePullRequestWriter: {
+		workflow.PromptVersionPullRequestWriter: rolePromptFiles[workflow.RolePullRequestWriter],
+	},
 }
 
 // expectedPromptSHA256 records the checked-in content identity for each
@@ -119,6 +127,7 @@ var expectedPromptSHA256 = map[string]string{
 	"standards-review-v6":                     "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469",
 	"standards-review-v7":                     "b773948d204ff17301cde3663a8d449deef6a904560bc4dbdd9dd9f324457dcd",
 	workflow.PromptVersionStandardsReview:     "b55ea69e303fbbde83931681a7fb2691849030afe43e975e4f57c69f87f731a0",
+	workflow.PromptVersionPullRequestWriter:   "e3b2acce46fabc616e05afc63a7e1288bdf75cc6bd40471bee658ed3a79675fb",
 	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
 	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
 	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
@@ -162,6 +171,9 @@ const (
 	// WorkerReviewUnitDiffPath is the bounded manifest-assigned artifact mounted
 	// beside the complete round artifact.
 	WorkerReviewUnitDiffPath = "/invocation/review-unit.diff"
+	// WorkerGateOutputPath is the bounded gate-output log mounted in a PR-writer
+	// worker when the coordinator kept one for the checkpoint.
+	WorkerGateOutputPath = "/invocation/gate-output.log"
 )
 
 // fenceMarkers are the delimiters that untrusted prompt content must not contain.
@@ -316,6 +328,9 @@ type ReviewContext struct {
 	// TestExemption is the deliberate provisional-exemption signal supplied to
 	// the standards reviewer for documented-standards evaluation.
 	TestExemption *store.TestExemption `json:"test_exemption,omitempty"`
+	// GateOutputPath is the worker path of the bounded gate-output log. Only
+	// a PR-writer packet sets it.
+	GateOutputPath string `json:"gate_output_path,omitempty"`
 	// RelevantLogs contains bounded gate and coordinator observations.
 	RelevantLogs []ReviewLog `json:"relevant_logs,omitempty"`
 	// PriorFindings contains only findings already accepted for this checkpoint.
@@ -442,7 +457,7 @@ Review-repair packet (coordinator-owned):
 		}
 		dynamicContext = fmt.Sprintf("\nProtected test-stage handoff (coordinator-owned):\n%s\n", data)
 	}
-	if definition.Kind == workflow.RoleKindReview && request.ReviewContext != nil {
+	if definition.ReadOnly() && request.ReviewContext != nil {
 		if request.ReviewContext.DiffPath != "" {
 			// Historical packet fields are deliberately cleared before an artifact-
 			// backed context is rendered. File-backed review prompts use one procedure
@@ -457,6 +472,9 @@ Review-repair packet (coordinator-owned):
 				return "", fmt.Errorf("encode review context: %w", err)
 			}
 			location := fmt.Sprintf("The exact review diff is mounted at %s. It contains %d bytes and has SHA-256 %s. Read it in bounded line windows, for example:\n`sed -n '1,200p' %s`\n`sed -n '201,400p' %s`\nUse `rg -n` or another line-numbered search against %s to find the next window.", WorkerReviewDiffPath, request.ReviewContext.DiffBytes, request.ReviewContext.DiffSHA256, WorkerReviewDiffPath, WorkerReviewDiffPath, WorkerReviewDiffPath)
+			if request.ReviewContext.GateOutputPath != "" {
+				location += fmt.Sprintf("\nThe bounded output of every gate at this checkpoint is mounted at %s. Cite only output you read there.", request.ReviewContext.GateOutputPath)
+			}
 			if request.ReviewContext.ReviewUnitID != "" {
 				location += fmt.Sprintf("\nYour assigned review unit is %s (%d of %d), mounted at %s. It contains %d bytes and has SHA-256 %s. Review the complete artifact for bounded nearby context, but attribute findings only to primary changes in this unit; context ranges are judgment-only. Every finding must carry unit_id=%s.", request.ReviewContext.ReviewUnitID, request.ReviewContext.ReviewUnitOrdinal, request.ReviewContext.ReviewUnitCount, WorkerReviewUnitDiffPath, request.ReviewContext.ReviewUnitWorkloadBytes, request.ReviewContext.ReviewUnitDiffSHA256, request.ReviewContext.ReviewUnitID)
 			}

@@ -93,6 +93,7 @@ func Run(request Request) int {
 	costMicros := flags.Int64("cost-micros", 0, "reliable harness-reported cost in millionths of currency")
 	costCurrency := flags.String("cost-currency", "", "three-letter uppercase currency for --cost-micros")
 	nativeSessionID := flags.String("native-session-id", "", "harness-native session identifier")
+	summaryFile := flags.String("summary-file", "", "markdown pull-request summary file; PR-writer role only")
 	if err := flags.Parse(request.Args); err != nil {
 		return 2
 	}
@@ -128,6 +129,15 @@ func Run(request Request) int {
 		writeError(request.ErrorsOutput, errors.New("review reports do not accept implementation or test handoff flags"))
 		return 1
 	}
+	summaryIdentity := isSummaryIdentity(identity["role"], identity["stage"])
+	if *summaryFile != "" && !summaryIdentity {
+		writeError(request.ErrorsOutput, errors.New("--summary-file is only valid for the pr_writer role"))
+		return 1
+	}
+	if summaryIdentity && (hasReviewInapplicableFlags(flags) || len(findings) > 0) {
+		writeError(request.ErrorsOutput, errors.New("PR-writer reports accept only --summary-file as their payload"))
+		return 1
+	}
 	value := report.Report{
 		SchemaVersion:   report.SchemaVersion,
 		InvocationID:    identity["invocation_id"],
@@ -152,6 +162,14 @@ func Run(request Request) int {
 				value.ReviewHandoff.Findings[index].UnitID = reviewUnitID
 			}
 		}
+	}
+	if *summaryFile != "" {
+		body, err := readSummaryFile(*summaryFile)
+		if err != nil {
+			writeError(request.ErrorsOutput, err)
+			return 1
+		}
+		value.PullRequestSummary = &report.PullRequestSummary{Body: body}
 	}
 	for _, item := range exemptions {
 		value.Exemptions = append(value.Exemptions, report.Exemption(item))
@@ -241,6 +259,30 @@ func Run(request Request) int {
 func isReviewIdentity(role, stage string) bool {
 	return (role == "spec_review" && stage == "review") ||
 		(role == "standards_review" && stage == "standards_review")
+}
+
+// isSummaryIdentity identifies the factory-owned PR-writer role.
+func isSummaryIdentity(role, stage string) bool {
+	return role == "pr_writer" && stage == "pr_summary"
+}
+
+// readSummaryFile reads one bounded markdown summary from the worker
+// filesystem. Report validation owns the content rules; this only stops an
+// unbounded read.
+func readSummaryFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open summary file: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, report.MaxReportBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read summary file: %w", err)
+	}
+	if len(data) > report.MaxReportBytes {
+		return "", fmt.Errorf("summary file exceeds %d bytes", report.MaxReportBytes)
+	}
+	return string(data), nil
 }
 
 // hasReviewInapplicableFlags reports whether a review invocation supplied a

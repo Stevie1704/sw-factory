@@ -44,6 +44,8 @@ The implementation body invokes an adapted `implement` workflow and assigns
 terminology and decision records. The specification and standards reviewers
 each invoke a single-axis adaptation of the upstream `code-review` skill; the
 combined subagent orchestration and aggregation remain outside the worker.
+The optional `pr_writer` body requires the `pr` skill. That skill only shapes
+markdown text; the coordinator, not the skill, writes the pull request.
 Every body states that a skill advises craft only and that factory rules decide
 any disagreement.
 

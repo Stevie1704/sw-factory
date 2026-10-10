@@ -51,9 +51,11 @@ appears in this set: role prompts, not activation metadata, decide which role
 uses which skill.
 
 The role-mandated skills are `implement` for the implementation role,
-`specification-review` for the specification reviewer, and `standards-review`
-for the standards reviewer. Every shipped harness must advertise all three,
-because a repository may assign any role to any supported harness.
+`specification-review` for the specification reviewer, `standards-review`
+for the standards reviewer, and `pr` for the optional `pr_writer` role. Every
+shipped harness must advertise all four, because a repository may assign any
+role to any supported harness. Startup diagnosis requires smoke evidence for
+`pr` only when the repository declares `pr_writer`.
 
 ## Verification
 
@@ -158,6 +160,7 @@ files here for any skill listed under local deviations below.
 | `diagnosing-bugs` | skills/engineering/diagnosing-bugs/SKILL.md | `99bd56983e42bc752c52da67f1112e4121781cd1` | yes |
 | `domain-modeling` | skills/engineering/domain-modeling/SKILL.md | `388c9822641805ca2dcd5038e68a1d5282437ee5` | no |
 | `implement` | skills/engineering/implement/SKILL.md | `f07d230f645fc9ac390cf13a450bbff12ad791a3` | yes |
+| `pr` | skills/engineering/pr/SKILL.md | `00b896d811adffad747c7ca30078d909d60c7f93` | yes |
 | `resolving-merge-conflicts` | skills/engineering/resolving-merge-conflicts/SKILL.md | `77f0d7de3143abbf03e55a63522d30bff31ae908` | yes |
 | `specification-review` | skills/engineering/code-review/SKILL.md | `d8e341cee7980127dddda05159bedf25dc853615` | yes |
 | `standards-review` | skills/engineering/code-review/SKILL.md | `d8e341cee7980127dddda05159bedf25dc853615` | yes |
@@ -178,6 +181,11 @@ deliberate and must survive a re-vendor.
   and full-suite workflow, but hands checkpoint and review ownership back to the
   factory. The factory's dedicated reviewers replace the upstream combined
   review step, and the coordinator owns Git history.
+- `pr/SKILL.md`: the worker cannot take screenshots and the `pr_writer` role
+  must not invent evidence. The Evidence section therefore drops the screenshot
+  tier and asks for observed or factory-supplied output only, with "not
+  available" for a before that nobody observed. `pr/CREDITS.md` keeps the
+  upstream attribution for the Summary visuals.
 - `resolving-merge-conflicts/SKILL.md`: upstream forbids `--abort`
   unconditionally. A worker must be able to restore the pre-merge state instead
   of committing a resolution it cannot justify, so an abort is permitted when no

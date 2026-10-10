@@ -126,12 +126,14 @@ type nonBlockingReadinessFixture struct {
 	worker          *agentWorker
 	statuses        *gateStatuses
 	pullRequests    *fakePullRequests
+	harness         *agentHarness
+	now             *time.Time
 }
 
 // newNonBlockingReadinessFixture declares an independent non-blocking gate before a
 // required gate and selects implementation-owned tests so the run reaches
-// review without a separate test stage.
-func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
+// review without a separate test stage. Options adjust the repository policy.
+func newNonBlockingReadinessFixture(t *testing.T, options ...func(*config.RepositoryConfig)) *nonBlockingReadinessFixture {
 	t.Helper()
 	root := t.TempDir()
 	repositoryPath := filepath.Join(root, "repository")
@@ -158,6 +160,9 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 	policy.ModelOptions["spec_review"] = []string{"gpt-5"}
 	policy.RoleHarnessDefaults["standards_review"] = config.HarnessCodex
 	policy.ModelOptions["standards_review"] = []string{"gpt-5"}
+	for _, option := range options {
+		option(&policy)
+	}
 	issue := tracker.Issue{Number: 42, Title: "Honor non-blocking gates", Body: "Reach readiness with a non-blocking gate failure.", State: "open", Labels: []string{tracker.LabelAgentReady}}
 	workspace := &reviewableDraftWorkspace{draftGitWorkspace: &draftGitWorkspace{
 		workspace: gitadapter.Workspace{BaseSHA: factoryGateCheckpoint, Branch: "factory/run-nonblocking", Worktree: worktreePath},
@@ -172,7 +177,9 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 		OperationalDataPath: operationalPath, RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
 		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json")},
 	}}}
-	ids := []string{"run-nonblocking", "implementation", "spec-review", "standards-review"}
+	ids := []string{"run-nonblocking", "implementation", "spec-review", "standards-review", "pr-writer-1", "pr-writer-2", "pr-writer-3"}
+	now := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	harnessRuntime := &agentHarness{}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
@@ -182,9 +189,9 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 		Worktree:          workspace,
 		GitWorkspace:      workspace,
 		Worker:            workerRuntime,
-		HeadlessHarnesses: testHeadlessHarnesses(&agentHarness{}),
+		HeadlessHarnesses: testHeadlessHarnesses(harnessRuntime),
 		CommitStatuses:    statuses,
-		Now:               func() time.Time { return time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC) },
+		Now:               func() time.Time { return now },
 		NewRunID: func() (string, error) {
 			id := ids[0]
 			ids = ids[1:]
@@ -192,7 +199,7 @@ func newNonBlockingReadinessFixture(t *testing.T) *nonBlockingReadinessFixture {
 		},
 		Coordinator: "coordinator-test",
 	})
-	return &nonBlockingReadinessFixture{service: service, operationalPath: operationalPath, workspace: workspace, worker: workerRuntime, statuses: statuses, pullRequests: pullRequests}
+	return &nonBlockingReadinessFixture{service: service, operationalPath: operationalPath, workspace: workspace, worker: workerRuntime, statuses: statuses, pullRequests: pullRequests, harness: harnessRuntime, now: &now}
 }
 
 // acceptReport completes one launched invocation with the given role payload.

@@ -240,7 +240,7 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		if request.SkillChecker == nil {
 			return doctor.Failure(diagnosis, "the worker skill diagnosis adapter is unavailable", "configure the Docker worker runtime")
 		}
-		required := MandatorySkills()
+		required := RequiredSkills(request.Policy)
 		contract, err := request.SkillChecker.CheckSkillContract(ctx, worker.SkillContractRequest{Image: request.Image, Harness: name, Skills: required})
 		if err != nil {
 			return worker.ProbeFailure(diagnosis, err, "the pinned worker image does not satisfy the role-mandated skill contract for "+name, "rebuild the worker image so each role-mandated skill appears once per discovery root and stays model-visible, and verify the configured image digest")

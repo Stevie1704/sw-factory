@@ -14,7 +14,7 @@ WORKER_DIGEST="${WORKER_DIGEST:-$(sed -n 's/^  digest: \(.*\)$/\1/p' "$REPOSITOR
 CODEX_AUTH_PATH="${CODEX_AUTH_PATH:-$HOME/.codex/auth.json}"
 CLAUDE_AUTH_PATH="${CLAUDE_AUTH_PATH:-$HOME/.claude/.credentials.json}"
 HARNESSES="${HARNESSES:-codex claude}"
-MANDATORY_SKILLS="${MANDATORY_SKILLS:-implement specification-review standards-review}"
+MANDATORY_SKILLS="${MANDATORY_SKILLS:-implement specification-review standards-review pr}"
 WORKER_REFERENCE="$WORKER_IMAGE@$WORKER_DIGEST"
 
 # credential_path returns the host credential file one harness authenticates

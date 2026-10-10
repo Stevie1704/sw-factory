@@ -58,7 +58,7 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 	if err := validatePersistedInvocationPacket(run, invocation, persisted); err != nil {
 		return "", err
 	}
-	if reviewRoleInvocation(invocation) {
+	if checkpointDiffInvocation(invocation) {
 		if err := validatePersistedReviewDiff(invocation); err != nil {
 			return "", fmt.Errorf("validate persisted review diff: %w", err)
 		}
@@ -192,7 +192,7 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 	if persisted.ReviewRoundID != invocation.ReviewRoundID || persisted.ReviewUnitID != invocation.ReviewUnitID {
 		return errors.New("persisted invocation packet review unit identity does not match the invocation")
 	}
-	if roleDefinition, ok := workflow.DefaultRegistry().Role(invocation.Role); ok && roleDefinition.Kind == workflow.RoleKindReview {
+	if roleDefinition, ok := workflow.DefaultRegistry().Role(invocation.Role); ok && roleDefinition.ReadOnly() {
 		if persisted.ReviewContext == nil {
 			return fmt.Errorf("persisted %s invocation packet has no review context", invocation.Role)
 		}

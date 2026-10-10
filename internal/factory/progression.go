@@ -112,6 +112,14 @@ const (
 	progressionActionStartReviewRound progressionActionKind = "start_review_round"
 	// progressionActionRetryReviewReadiness retries final pull-request readiness.
 	progressionActionRetryReviewReadiness progressionActionKind = "retry_review_readiness"
+	// progressionActionStartPullRequestWriter launches the optional PR writer
+	// before the readiness hand-off.
+	progressionActionStartPullRequestWriter progressionActionKind = "start_pull_request_writer"
+	// progressionActionAcceptPullRequestSummary accepts the PR writer's report.
+	progressionActionAcceptPullRequestSummary progressionActionKind = "accept_pull_request_summary"
+	// progressionActionAbandonPullRequestWriter ends a PR writer that passed
+	// its deadline without a report.
+	progressionActionAbandonPullRequestWriter progressionActionKind = "abandon_pull_request_writer"
 )
 
 // progressionAction is a typed coordinator command selected from durable run
@@ -191,7 +199,7 @@ func (a progressionAction) validate() error {
 		if a.reviewUnitID != "" && !safeLaunchIdentifier(a.reviewUnitID) {
 			return &progressionActionError{Action: a, Reason: "agent launch review unit id is unsafe"}
 		}
-	case progressionActionAcceptAgentReport:
+	case progressionActionAcceptAgentReport, progressionActionAcceptPullRequestSummary, progressionActionAbandonPullRequestWriter:
 		if strings.TrimSpace(a.invocationID) == "" {
 			return &progressionActionError{Action: a, Reason: "invocation id is required"}
 		}
@@ -199,7 +207,8 @@ func (a progressionAction) validate() error {
 			return &progressionActionError{Action: a, Reason: "report acceptance cannot include role or stage operands"}
 		}
 	case progressionActionRunBaseline, progressionActionCreateDraftPullRequest,
-		progressionActionStartReviewRound, progressionActionRetryReviewReadiness:
+		progressionActionStartReviewRound, progressionActionRetryReviewReadiness,
+		progressionActionStartPullRequestWriter:
 		if err := a.validateNoAgentOperands(); err != nil {
 			return err
 		}
@@ -277,6 +286,12 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 			stepErr = s.startReviewRound(ctx, step.runID)
 		case progressionActionRetryReviewReadiness:
 			stepErr = s.retryReviewReadiness(ctx, step.runID)
+		case progressionActionStartPullRequestWriter:
+			stepErr = s.startPullRequestWriter(ctx, step.runID)
+		case progressionActionAcceptPullRequestSummary:
+			stepErr = s.acceptPullRequestWriterReport(ctx, step.runID, step.invocationID)
+		case progressionActionAbandonPullRequestWriter:
+			stepErr = s.abandonPullRequestWriter(ctx, step.runID, step.invocationID, fmt.Sprintf("pr_writer exceeded the agent timeout of %s", state.AgentTimeout), nil)
 		default:
 			stepErr = &progressionActionError{Action: step, Reason: "kind is not declared for dispatch"}
 		}
@@ -296,6 +311,7 @@ func (s *Service) driveRun(ctx context.Context, registration config.RepositoryRe
 		}
 		result.Run = *advanced.Run
 		s.emitStageTransition(events, state.Run.ID, state.Run.Stage, advanced.Run.Stage)
+		s.emitPullRequestSummaryWarning(events, *state.Run, *advanced.Run)
 		if !progressionAdvancedMany(*state.Run, state.ActiveInvocations, *advanced.Run, advanced.ActiveInvocations) {
 			return s.publishProgressionStop(ctx, registration, *advanced.Run, progressionResult{
 				Outcome: progressionWaiting,
@@ -417,6 +433,9 @@ func progressionStep(state progressionState, registry workflow.Registry) (progre
 		}
 	}
 	if reviewReadinessEligible(run) {
+		if pullRequestSummaryPending(run) {
+			return pullRequestWriterStep(state)
+		}
 		return progressionAction{
 			kind:  progressionActionRetryReviewReadiness,
 			name:  "finalize pull-request readiness",
