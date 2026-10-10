@@ -32,7 +32,7 @@ func onboardFixture(t *testing.T, harness string) (checkout, target, record stri
 	if output, err := exec.Command("git", "init", "-q", target).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
-	script := "#!/bin/sh\n{ pwd; printf '%s' \"$1\"; } > " + record + "\n"
+	script := "#!/bin/sh\n{ pwd; printf '%s\\n' \"$2\" \"$3\"; printf '%s' \"$1\"; } > " + record + "\n"
 	if err := os.WriteFile(filepath.Join(bin, harness), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +41,9 @@ func onboardFixture(t *testing.T, harness string) (checkout, target, record stri
 	return checkout, target, record
 }
 
+// TestOnboardStartsHarnessInTargetWithResolvedPaths proves that onboard starts
+// the selected harness in the target checkout, gives it access to the factory
+// checkout, and fills both paths into the prompt.
 func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 	checkout, target, record := onboardFixture(t, "codex")
 	var output, errorsOutput bytes.Buffer
@@ -54,7 +57,14 @@ func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory, prompt, _ := strings.Cut(string(recorded), "\n")
+	lines := strings.SplitN(string(recorded), "\n", 4)
+	if len(lines) != 4 {
+		t.Fatalf("recorded harness call is incomplete: %q", recorded)
+	}
+	directory, prompt := lines[0], lines[3]
+	if lines[1] != "--add-dir" || lines[2] != checkout {
+		t.Errorf("harness options = %q %q, want --add-dir %q", lines[1], lines[2], checkout)
+	}
 	resolvedTarget, err := filepath.EvalSymlinks(target)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +75,9 @@ func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 	for _, want := range []string{
 		"Prepare the repository at " + resolvedTarget,
 		checkout + "/docs/repository-initialization.md",
-		"Stop and ask me before",
+		"Actions that need",
+		"docs/configuration.md decides",
+		"never invent a",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt does not contain %q:\n%s", want, prompt)
@@ -73,6 +85,9 @@ func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 	}
 }
 
+// TestOnboardRejectsInvalidInput proves that onboard refuses an unknown
+// harness, a positional argument, and a missing or wrong factory checkout
+// before it starts a session.
 func TestOnboardRejectsInvalidInput(t *testing.T) {
 	checkout, _, _ := onboardFixture(t, "claude")
 	tests := []struct {
@@ -84,7 +99,7 @@ func TestOnboardRejectsInvalidInput(t *testing.T) {
 		{"unknown harness", []string{"--harness", "cursor", "--factory-checkout", checkout}, 2, "--harness must be claude or codex"},
 		{"positional argument", []string{"extra"}, 2, "does not accept positional arguments"},
 		{"unknown checkout", []string{}, 1, "the Software Factory checkout is unknown"},
-		{"not a checkout", []string{"--factory-checkout", t.TempDir()}, 1, "is not a Software Factory checkout"},
+		{"not a checkout", []string{"--factory-checkout", t.TempDir()}, 1, "does not contain docs/repository-initialization.md"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

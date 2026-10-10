@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
 )
 
 // factoryCheckout is the Software Factory checkout the binary was built from.
@@ -22,30 +24,30 @@ var factoryCheckout string
 const onboardingProcedure = "docs/repository-initialization.md"
 
 // onboardingPrompt is the first message of the onboarding session. The
-// procedure document owns the steps; the prompt only names the two paths and
-// the actions that need the operator's approval.
+// procedure document owns the steps and the approval list; the prompt names
+// the two paths and the rules that apply before the agent has read the
+// document.
 const onboardingPrompt = `Prepare the repository at %[1]s for Software Factory runs.
 
 The Software Factory checkout is at %[2]s. Read
 %[2]s/%[3]s in full and follow its ordered procedure from
-start to finish. Run every step yourself; do not hand steps back to me.
+the first step to the last. Run every step yourself; do not hand steps back to me.
 
-Stop and ask me before:
-- writing any file in the target repository,
-- running factory init, factory register, or factory bootstrap-labels,
-- running scripts/smoke-skills.sh,
-- committing anything.
+Use its field reference rather than another repository's factory.yaml; where
+the two disagree, docs/configuration.md decides.
 
-Never read a credential file. Never commit an absolute host path into
-factory.yaml. Finish when factory doctor reports ready.
+Stop and ask me before each action that its section "Actions that need
+operator approval" lists. Never read a credential file and never invent a
+credential path; if one is missing, stop and ask. Never commit an absolute
+host path into factory.yaml.
 `
 
 // runOnboard starts an interactive harness session in the current repository
-// with a prompt that hands the whole repository initialization to the agent.
+// with a prompt that gives the whole repository initialization to the agent.
 func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutput io.Writer) int {
 	flags := flag.NewFlagSet("onboard", flag.ContinueOnError)
 	flags.SetOutput(errorsOutput)
-	harness := flags.String("harness", "claude", "interactive harness that runs the onboarding: claude or codex")
+	harness := flags.String("harness", string(config.HarnessClaude), "interactive harness that runs the onboarding: claude or codex")
 	checkout := flags.String("factory-checkout", factoryCheckout, "Software Factory checkout; defaults to the checkout the binary was built from")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -54,7 +56,7 @@ func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutp
 		writeError(errorsOutput, errors.New("onboard does not accept positional arguments"))
 		return 2
 	}
-	if *harness != "claude" && *harness != "codex" {
+	if selected := config.Harness(*harness); selected != config.HarnessClaude && selected != config.HarnessCodex {
 		writeError(errorsOutput, fmt.Errorf("--harness must be claude or codex, got %q", *harness))
 		return 2
 	}
@@ -68,16 +70,32 @@ func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutp
 		writeError(errorsOutput, err)
 		return 1
 	}
-	session := exec.CommandContext(ctx, *harness, fmt.Sprintf(onboardingPrompt, targetPath, checkoutPath, onboardingProcedure))
+	if err := startOnboardingSession(ctx, *harness, targetPath, checkoutPath, output, errorsOutput); err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	return 0
+}
+
+// startOnboardingSession runs the interactive harness in the target repository
+// until the operator ends the session. The checkout is added as a second
+// working directory, because the procedure builds images and runs scripts
+// from it.
+func startOnboardingSession(ctx context.Context, harness, targetPath, checkoutPath string, output, errorsOutput io.Writer) error {
+	prompt := fmt.Sprintf(onboardingPrompt, targetPath, checkoutPath, onboardingProcedure)
+	// The prompt comes first: Claude Code's --add-dir accepts several values and
+	// would take a later positional prompt as a directory.
+	session := exec.CommandContext(ctx, harness, prompt, "--add-dir", checkoutPath)
 	session.Dir = targetPath
+	// The command handler signature carries no input stream; the session is
+	// interactive, so it reads the operator's terminal directly.
 	session.Stdin = os.Stdin
 	session.Stdout = output
 	session.Stderr = errorsOutput
 	if err := session.Run(); err != nil {
-		writeError(errorsOutput, fmt.Errorf("onboarding session with %s: %w", *harness, err))
-		return 1
+		return fmt.Errorf("onboarding session with %s: %w", harness, err)
 	}
-	return 0
+	return nil
 }
 
 // resolveFactoryCheckout returns the absolute checkout path after it confirms
@@ -91,7 +109,7 @@ func resolveFactoryCheckout(path string) (string, error) {
 		return "", fmt.Errorf("resolve --factory-checkout: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(absolute, onboardingProcedure)); err != nil {
-		return "", fmt.Errorf("%s is not a Software Factory checkout: %w", absolute, err)
+		return "", fmt.Errorf("%s does not contain %s; when the checkout moved, run make install from its new location, or pass --factory-checkout: %w", absolute, onboardingProcedure, err)
 	}
 	return absolute, nil
 }

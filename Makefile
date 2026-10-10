@@ -10,8 +10,9 @@ GO_TOOLCHAIN := $(shell sed -n 's/^toolchain //p' go.mod)
 export GOTOOLCHAIN := $(GO_TOOLCHAIN)
 
 # factory onboard hands this checkout to the onboarding agent, so the installed
-# binary records where it was built from.
-LDFLAGS := -X github.com/Stevie1704/sw-factory/internal/cli.factoryCheckout=$(CURDIR)
+# binary records where it was built from. The single quotes keep a checkout
+# path with spaces in one link flag.
+LDFLAGS := -X 'github.com/Stevie1704/sw-factory/internal/cli.factoryCheckout=$(CURDIR)'
 
 BINARIES := \
 	$(BINDIR)/factory \
@@ -76,7 +77,7 @@ install: toolchain-check ## Install all command binaries into Go's configured bi
 	$(GO) install -ldflags "$(LDFLAGS)" ./cmd/...
 
 run: ## Run the coordinator CLI; pass arguments with ARGS='status --help'.
-	$(GO) run ./cmd/factory $(ARGS)
+	$(GO) run -ldflags "$(LDFLAGS)" ./cmd/factory $(ARGS)
 
 report: ## Run the structured-report CLI; pass arguments with ARGS='--help'.
 	$(GO) run ./cmd/factory-report $(ARGS)
