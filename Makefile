@@ -14,6 +14,13 @@ export GOTOOLCHAIN := $(GO_TOOLCHAIN)
 # path with spaces in one link flag.
 LDFLAGS := -X 'github.com/Stevie1704/sw-factory/internal/cli.factoryCheckout=$(CURDIR)'
 
+# A release build passes VERSION=vX.Y.Z; factory version then reports a
+# release. Without it, the build reports itself as a development build.
+VERSION ?=
+ifneq ($(VERSION),)
+LDFLAGS += -X 'github.com/Stevie1704/sw-factory/internal/version.release=$(VERSION)'
+endif
+
 BINARIES := \
 	$(BINDIR)/factory \
 	$(BINDIR)/factory-report \

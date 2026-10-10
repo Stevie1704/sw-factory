@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,14 +30,19 @@ var authRefreshForCLI = func(ctx context.Context, configPath string, request fac
 }
 
 // commandDefinition associates a user-facing command name with its handler.
+// A standalone command needs no host configuration, so dispatch skips the
+// configuration path resolution for it.
 type commandDefinition struct {
-	name    string
-	handler commandHandler
+	name       string
+	handler    commandHandler
+	standalone bool
 }
 
 // commandTable is the single source of truth for supported CLI commands and
 // their dispatch order in validation diagnostics.
 var commandTable = []commandDefinition{
+	{name: "guide", handler: runGuide, standalone: true},
+	{name: "version", handler: runVersion, standalone: true},
 	{name: "init", handler: runInit},
 	{name: "register", handler: runRegister},
 	{name: "onboard", handler: runOnboard},
@@ -67,30 +73,39 @@ var commandTable = []commandDefinition{
 func Run(ctx context.Context, args []string, output, errorsOutput io.Writer) int {
 	expectedCommands := commandNames()
 	if len(args) == 0 {
-		writeError(errorsOutput, fmt.Errorf("a command is required: %s", expectedCommands))
+		writeError(errorsOutput, fmt.Errorf("a command is required: %s\n%s", expectedCommands, guideHint))
 		return 2
 	}
-	handler, ok := commandFor(args[0])
+	if slices.Contains([]string{"-h", "-help", "--help", "help"}, args[0]) {
+		if !writeOutput(output, errorsOutput, "Usage: factory <command> [flags]\n\nCommands: %s\n\n%s\nRun 'factory <command> -h' for the flags of one command.\n", expectedCommands, guideHint) {
+			return 1
+		}
+		return 0
+	}
+	command, ok := commandFor(args[0])
 	if !ok {
-		writeError(errorsOutput, fmt.Errorf("unknown command %q: expected %s", args[0], expectedCommands))
+		writeError(errorsOutput, fmt.Errorf("unknown command %q: expected %s\n%s", args[0], expectedCommands, guideHint))
 		return 2
+	}
+	if command.standalone {
+		return command.handler(ctx, args[1:], "", output, errorsOutput)
 	}
 	configPath, err := config.DefaultHostConfigPath()
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
-	return handler(ctx, args[1:], configPath, output, errorsOutput)
+	return command.handler(ctx, args[1:], configPath, output, errorsOutput)
 }
 
 // commandFor resolves one user-facing command name.
-func commandFor(name string) (commandHandler, bool) {
+func commandFor(name string) (commandDefinition, bool) {
 	for _, command := range commandTable {
 		if command.name == name {
-			return command.handler, true
+			return command, true
 		}
 	}
-	return nil, false
+	return commandDefinition{}, false
 }
 
 // commandNames returns the supported command names in their CLI order.
@@ -104,8 +119,7 @@ func commandNames() string {
 
 // runBootstrapLabels handles explicit creation of the factory-owned labels.
 func runBootstrapLabels(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("bootstrap-labels", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("bootstrap-labels", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -128,8 +142,7 @@ func runBootstrapLabels(ctx context.Context, args []string, defaultConfigPath st
 // runDoctor renders every startup diagnosis and returns a nonzero status when
 // any blocking prerequisite remains unresolved.
 func runDoctor(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("doctor", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -183,8 +196,7 @@ func writeCheckDiagnosis(output, errorsOutput io.Writer, check doctor.Result) bo
 // runStart starts the persistent polling coordinator and returns when its
 // context is cancelled by factory stop or an operating-system signal.
 func runStart(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("start", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("start", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	verbose := flags.Bool("verbose", false, "report coordinator progress")
 	if err := flags.Parse(args); err != nil {
@@ -223,8 +235,7 @@ func runStart(ctx context.Context, args []string, defaultConfigPath string, outp
 // context is cancelled by an operating-system signal. It never starts the
 // coordinator and works while the coordinator is stopped.
 func runUI(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("ui", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("ui", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	address := flags.String("address", "127.0.0.1:8765", "listen address; the host must be 127.0.0.1")
 	refresh := flags.Duration("refresh", 5*time.Second, "page refresh interval; 0 turns automatic refresh off")
@@ -261,8 +272,7 @@ func runUI(ctx context.Context, args []string, defaultConfigPath string, output,
 // runStop signals the persistent polling coordinator without changing any
 // active run state or removing recoverable run artifacts.
 func runStop(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("stop", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("stop", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -292,8 +302,7 @@ func runStop(ctx context.Context, args []string, defaultConfigPath string, outpu
 // for the active run, or re-enters a coordinator-owned check after restart
 // reconciliation.
 func runResume(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("resume", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
 	if err := flags.Parse(args); err != nil {
@@ -334,8 +343,7 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 		writeError(errorsOutput, errors.New("auth requires the refresh subcommand"))
 		return 2
 	}
-	flags := flag.NewFlagSet("auth refresh", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("auth refresh", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
 	harnessName := flags.String("harness", "", "codex or claude; empty uses the invocation harness")
@@ -366,8 +374,7 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 
 // runIssue handles the one-shot issue claim command.
 func runIssue(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("issue", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("issue", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	issueFlag := flags.Int("issue", 0, "GitHub issue number")
 	if err := flags.Parse(args); err != nil {
@@ -415,8 +422,7 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 // runAgent starts the harness invocation for the active run, selecting the frozen
 // policy's independent test stage or implementation-owned TDD path.
 func runAgent(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("agent", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
 	role := flags.String("role", "", "workflow role; empty selects the active stage")
@@ -459,8 +465,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 
 // runAgentReport accepts the structured report written by one harness invocation.
 func runAgentReport(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("agent-report", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("agent-report", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
 	invocationID := flags.String("invocation-id", "", "invocation identifier")
@@ -491,8 +496,7 @@ func runAgentReport(ctx context.Context, args []string, defaultConfigPath string
 // runDraftPullRequest advances the accepted implementation to one draft pull
 // request through host-side checkpoint, gate, Git, and GitHub effects.
 func runDraftPullRequest(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("draft-pr", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("draft-pr", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active factory run identifier")
 	intervention := flags.String("intervention", "", "operator-visible intervention marker")
@@ -534,8 +538,7 @@ func runDraftPullRequest(ctx context.Context, args []string, defaultConfigPath s
 // Repeating this command is safe because the coordinator persists the
 // processed-comment watermark and revision.
 func runPollCommands(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("poll", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("poll", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "active or latest factory run identifier")
 	if err := flags.Parse(args); err != nil {
@@ -585,8 +588,7 @@ func runPollCommands(ctx context.Context, args []string, defaultConfigPath strin
 
 // runInit handles the init command, creating the host configuration at the requested path and reporting its result.
 func runInit(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("init", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("init", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -623,8 +625,7 @@ func writeInferredRegistrationValues(output, errorsOutput io.Writer, result fact
 // identity, and authorized user that were not supplied, and reports every
 // inferred value with the resulting repository and operational store paths.
 func runRegister(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("register", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("register", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	update := flags.Bool("update", false, "update credential sources for the matching registered repository")
 	repositoryPath := flags.String("repository", "", "registered repository path; inferred from the current Git checkout when omitted")
@@ -685,8 +686,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 // runStatus reports the current configuration, repository registration, and active run.
 // It returns 0 on success, 1 when status retrieval fails, or 2 when arguments are invalid.
 func runStatus(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("status", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("status", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -795,8 +795,7 @@ func writeSupervisorStatus(output, errorsOutput io.Writer, result factory.Status
 // runReconcile executes one restart reconciliation or explicitly abandons the
 // effect named by --abandon-effect after a human has inspected it.
 func runReconcile(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("reconcile", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("reconcile", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "optional run identifier")
 	effectID := flags.String("abandon-effect", "", "effect identity to abandon after human review")
@@ -868,8 +867,7 @@ func runReconcile(ctx context.Context, args []string, defaultConfigPath string, 
 // runEvaluation reports retained per-run summaries and local aggregate values
 // without making a network call or displaying work content.
 func runEvaluation(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("evaluation", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("evaluation", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "one opaque evaluation run identifier")
 	if err := flags.Parse(args); err != nil {
@@ -923,8 +921,7 @@ func runEvaluation(ctx context.Context, args []string, defaultConfigPath string,
 // runEvaluationDelete performs deliberate, visible deletion of selected
 // terminal evaluation summaries and requires an explicit confirmation flag.
 func runEvaluationDelete(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("evaluation-delete", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("evaluation-delete", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	before := flags.String("before", "", "RFC3339 cutoff; only terminal summaries before it are deleted")
 	confirm := flags.Bool("confirm", false, "confirm deliberate deletion of evaluation summaries")
@@ -958,8 +955,7 @@ func runEvaluationDelete(ctx context.Context, args []string, defaultConfigPath s
 // runEvaluationDisposition attaches one explicit human disposition to a
 // test-dispute or review-finding escalation without retaining finding text.
 func runEvaluationDisposition(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("evaluation-disposition", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("evaluation-disposition", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "evaluation run identifier")
 	eventID := flags.String("event-id", "", "opaque escalation identity; it is hashed before persistence")
@@ -996,8 +992,7 @@ func runEvaluationDisposition(ctx context.Context, args []string, defaultConfigP
 // runCleanup displays the exact local cleanup plan and requires --confirm
 // before asking the Factory service to remove any run resources.
 func runCleanup(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("cleanup", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("cleanup", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	runID := flags.String("run-id", "", "terminal factory run identifier")
 	confirm := flags.Bool("confirm", false, "confirm cleanup of the displayed local targets")
@@ -1091,8 +1086,7 @@ const resetUsage = `Usage of reset:
 // command, reset requires an explicit --config path: a command that destroys a
 // whole installation must never default to the operator's real configuration.
 func runReset(ctx context.Context, args []string, _ string, output, errorsOutput io.Writer) int {
-	flags := flag.NewFlagSet("reset", flag.ContinueOnError)
-	flags.SetOutput(errorsOutput)
+	flags := newFlagSet("reset", errorsOutput)
 	configPath := flags.String("config", "", "host configuration path (required)")
 	confirm := flags.Bool("confirm", false, "confirm complete removal of the displayed installation targets")
 	flags.Usage = func() {
@@ -1256,4 +1250,17 @@ func (s *stringList) Set(value string) error {
 	}
 	*s = append(*s, value)
 	return nil
+}
+
+// newFlagSet returns a command flag set that writes its diagnostics to
+// errorsOutput and whose help names the guide entry point.
+func newFlagSet(name string, errorsOutput io.Writer) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(errorsOutput)
+	flags.Usage = func() {
+		writeOutput(errorsOutput, errorsOutput, "Usage of factory %s:\n", name)
+		flags.PrintDefaults()
+		writeOutput(errorsOutput, errorsOutput, "\n%s\n", guideHint)
+	}
+	return flags
 }

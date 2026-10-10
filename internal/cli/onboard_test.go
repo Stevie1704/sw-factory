@@ -78,6 +78,7 @@ func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 		"Actions that need",
 		"docs/configuration.md decides",
 		"never invent a",
+		"Run factory guide and factory guide setup first",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt does not contain %q:\n%s", want, prompt)
