@@ -1013,6 +1013,15 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 		reviewContext.OmittedDiffBytes = 0
 		reviewContext.ChangedPathsCommand = ""
 		reviewContext.DiffPathCommand = ""
+		if plan.RoleDefinition.Kind == workflow.RoleKindSummary {
+			copied, err := copyCheckpointGateOutput(plan.Run, packetDirectory)
+			if err != nil {
+				return launchMaterialisation{}, err
+			}
+			if copied {
+				reviewContext.GateOutputPath = prompt.WorkerGateOutputPath
+			}
+		}
 		plan.ReviewContext = &reviewContext
 		if partitioned, ok := runStore.(store.ReviewRoundStore); ok && plan.RoleDefinition.Kind == workflow.RoleKindReview {
 			prepared, err := l.preparePartitionedReview(ctx, partitioned, plan.Run, invocation, *plan.ReviewContext, plan.Request.ReviewUnitID, registration)

@@ -683,7 +683,9 @@ after all reviews pass and before the draft flag changes:
 
 - The role reads the base-to-checkpoint diff, the frozen specification, the
   gate results for the checkpoint, the findings of both review axes, and
-  `GLOSSARY.md` when it exists. Its worktree is read-only and it has no
+  `GLOSSARY.md` when it exists. The coordinator keeps a bounded log of the
+  setup and gate command output for each checkpoint, passed gates included,
+  and mounts it at `/invocation/gate-output.log`. Its worktree is read-only and it has no
   code-host credentials, so it cannot change the run branch.
 - It returns markdown that follows the `pr` worker skill: **Summary**,
   **Evidence**, and **Merge Danger**. The worker cannot take screenshots, so
@@ -701,7 +703,11 @@ after all reviews pass and before the draft flag changes:
 
 A failure never blocks the hand-off. When the role fails to start, returns
 `cannot_proceed`, returns an empty or invalid body, or passes `timeouts.agent`,
-the coordinator saves a failed summary, removes an earlier `pr_writer` section,
+the coordinator ends the role. A body is invalid when it has no Summary,
+Evidence, or Merge Danger heading, or when it contains a coordinator marker.
+A failed start can pause the run, for example for harness capacity; the
+coordinator then restores the status the run had before the start. In each case
+it saves a failed summary, removes an earlier `pr_writer` section,
 emits a `pr_summary_warning` event, and makes the pull request ready with the
 coordinator section only.
 
