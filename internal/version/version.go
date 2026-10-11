@@ -25,7 +25,7 @@ const SchemaVersion = 1
 
 // Build kinds distinguish a deliberate release from every other build.
 const (
-	BuildRelease     = "release"
+	buildRelease     = "release"
 	buildDevelopment = "development"
 )
 
@@ -78,10 +78,10 @@ func Current() Identity {
 	}
 	switch {
 	case release != "":
-		identity.Version, identity.Build = release, BuildRelease
+		identity.Version, identity.Build = release, buildRelease
 	case ok && isTaggedModuleVersion(info.Main.Version):
 		// go install module@vX.Y.Z records the tag but no VCS settings.
-		identity.Version, identity.Build = info.Main.Version, BuildRelease
+		identity.Version, identity.Build = info.Main.Version, buildRelease
 	}
 	return identity
 }
@@ -95,13 +95,22 @@ func isTaggedModuleVersion(moduleVersion string) bool {
 	return !pseudoVersion.MatchString(moduleVersion) && !strings.HasSuffix(moduleVersion, "+dirty")
 }
 
+// Release returns the release version of a release build, or an empty
+// string for a development build.
+func (i Identity) Release() string {
+	if i.Build != buildRelease {
+		return ""
+	}
+	return i.Version
+}
+
 // Text renders the identity as one human-readable line without a newline.
 func (i Identity) Text() string {
 	revision := "revision " + i.Revision
 	if i.Modified {
 		revision += ", modified"
 	}
-	if i.Build == BuildRelease {
+	if i.Build == buildRelease {
 		return "factory " + i.Version + " (release, " + revision + ")"
 	}
 	return "factory development build (" + revision + ")"

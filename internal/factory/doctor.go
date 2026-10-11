@@ -63,7 +63,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	allRolesHeadless := repositoryPolicy != nil && s.allRolesHeadless(*repositoryPolicy)
 	readiness := worker.NewReadiness(s.doctorWorker(), image)
 	checks = append(checks, worker.StartupChecks(readiness)...)
-	checks = append(checks, worker.ReleaseCheck(readiness, s.doctorReleaseChecker(), coordinatorRelease()))
+	checks = append(checks, worker.ReleaseCheck(readiness, s.doctorReleaseChecker(), version.Current().Release()))
 	checks = append(checks, harness.StartupChecks(harness.StartupRequest{
 		Policy:                repositoryPolicy,
 		Authentication:        registration.Authentication,
@@ -121,16 +121,6 @@ func (s *Service) doctorWorker() worker.DoctorChecker {
 func (s *Service) doctorReleaseChecker() worker.ReleaseChecker {
 	checker, _ := s.deps.Worker.(worker.ReleaseChecker)
 	return checker
-}
-
-// coordinatorRelease returns the release version of the running coordinator,
-// or an empty string for a development build.
-func coordinatorRelease() string {
-	identity := version.Current()
-	if identity.Build != version.BuildRelease {
-		return ""
-	}
-	return identity.Version
 }
 
 // doctorHarnessChecker resolves the worker-owned executable probe seam.

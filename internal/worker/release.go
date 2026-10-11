@@ -26,6 +26,10 @@ var (
 	releaseUnreadable     = doctor.Condition{Code: "worker.release.unreadable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "setup"}
 )
 
+// maxReleaseLabelLength bounds the label value a diagnosis repeats, because
+// the label is image content the repository controls.
+const maxReleaseLabelLength = 128
+
 // releaseCheckName is the diagnosis name of the release compatibility check.
 const releaseCheckName = "worker release"
 
@@ -74,7 +78,7 @@ func (r *DockerRuntime) ImageRelease(ctx context.Context, image ImageReference) 
 	if release == "<no value>" {
 		return "", nil
 	}
-	if strings.ContainsAny(release, "\n\r\t ") || len(release) > 128 {
+	if strings.ContainsAny(release, "\n\r\t ") || len(release) > maxReleaseLabelLength {
 		return "", errors.New("worker image release label is malformed")
 	}
 	return release, nil
