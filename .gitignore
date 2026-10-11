@@ -5,3 +5,4 @@ target/
 .DS_Store
 .scan-reports/
 .worker-scan.*
+/dist/
