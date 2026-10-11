@@ -49,8 +49,8 @@ func onboardFixture(t *testing.T, harness string) (target, record string) {
 
 // TestOnboardGivesTheHarnessTheReleaseResources proves that onboard starts the
 // selected harness in the target checkout with a directory of the installed
-// release's resources, names the pinned worker base image in the prompt, and
-// removes the directory after the session.
+// release's resources, names the pinned worker base image and its own
+// executable in the prompt, and removes the directory after the session.
 func TestOnboardGivesTheHarnessTheReleaseResources(t *testing.T) {
 	target, record := onboardFixture(t, "codex")
 	var output, errorsOutput bytes.Buffer
@@ -85,14 +85,24 @@ func TestOnboardGivesTheHarnessTheReleaseResources(t *testing.T) {
 	if _, err := os.Stat(resources); !os.IsNotExist(err) {
 		t.Errorf("resources %q remain after the session: %v", resources, err)
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"Prepare the repository at " + resolvedTarget,
+		"Run every factory command as " + command,
+		"<FACTORY_COMMAND>",
 		resources + "/docs/repository-initialization.md",
 		"The worker base image is " + testBaseImage,
 		"Actions that need",
 		"docs/configuration.md decides",
 		"never invent a",
-		"Run factory guide and factory guide setup first",
+		"Run " + command + " guide and " + command + " guide setup first",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt does not contain %q:\n%s", want, prompt)
