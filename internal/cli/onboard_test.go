@@ -12,43 +12,50 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/cli"
 )
 
-// onboardFixture creates a Software Factory checkout, a target Git checkout,
-// and a fake harness on PATH that records its working directory and prompt.
-func onboardFixture(t *testing.T, harness string) (checkout, target, record string) {
+// testBaseImage is a well-formed digest-pinned worker base image.
+var testBaseImage = "ghcr.io/stevie1704/sw-factory-base@sha256:" + strings.Repeat("cd", 32)
+
+// onboardFixture creates a target Git checkout, a home directory whose path
+// contains spaces, and a fake harness on PATH. The harness records its working
+// directory, its options, whether the procedure exists in the resource
+// directory it was given, and its prompt.
+func onboardFixture(t *testing.T, harness string) (target, record string) {
 	t.Helper()
 	root := t.TempDir()
-	checkout = filepath.Join(root, "sw-factory")
-	target = filepath.Join(root, "target")
+	target = filepath.Join(root, "target repo")
+	home := filepath.Join(root, "operator home")
 	bin := filepath.Join(root, "bin")
 	record = filepath.Join(root, "record")
-	for _, directory := range []string{filepath.Join(checkout, "docs"), target, bin} {
+	for _, directory := range []string{target, home, bin} {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(checkout, "docs", "repository-initialization.md"), []byte("# procedure\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if output, err := exec.Command("git", "init", "-q", target).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
 	}
-	script := "#!/bin/sh\n{ pwd; printf '%s\\n' \"$2\" \"$3\"; printf '%s' \"$1\"; } > " + record + "\n"
+	script := "#!/bin/sh\n{ pwd; printf '%s\\n' \"$2\" \"$3\"; " +
+		"if test -f \"$3/docs/repository-initialization.md\" && test -x \"$3/scripts/smoke-skills.sh\"; then echo present; else echo absent; fi; " +
+		"printf '%s' \"$1\"; } > '" + record + "'\n"
 	if err := os.WriteFile(filepath.Join(bin, harness), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", "")
 	t.Chdir(target)
-	return checkout, target, record
+	return target, record
 }
 
-// TestOnboardStartsHarnessInTargetWithResolvedPaths proves that onboard starts
-// the selected harness in the target checkout, gives it access to the factory
-// checkout, and fills both paths into the prompt.
-func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
-	checkout, target, record := onboardFixture(t, "codex")
+// TestOnboardGivesTheHarnessTheReleaseResources proves that onboard starts the
+// selected harness in the target checkout with a directory of the installed
+// release's resources, names the pinned worker base image in the prompt, and
+// removes the directory after the session.
+func TestOnboardGivesTheHarnessTheReleaseResources(t *testing.T) {
+	target, record := onboardFixture(t, "codex")
 	var output, errorsOutput bytes.Buffer
 
-	status := cli.Run(context.Background(), []string{"onboard", "--harness", "codex", "--factory-checkout", checkout}, &output, &errorsOutput)
+	status := cli.Run(context.Background(), []string{"onboard", "--harness", "codex", "--worker-base-image", testBaseImage}, &output, &errorsOutput)
 
 	if status != 0 {
 		t.Fatalf("status = %d, stderr = %s", status, errorsOutput.String())
@@ -57,14 +64,11 @@ func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.SplitN(string(recorded), "\n", 4)
-	if len(lines) != 4 {
+	lines := strings.SplitN(string(recorded), "\n", 5)
+	if len(lines) != 5 {
 		t.Fatalf("recorded harness call is incomplete: %q", recorded)
 	}
-	directory, prompt := lines[0], lines[3]
-	if lines[1] != "--add-dir" || lines[2] != checkout {
-		t.Errorf("harness options = %q %q, want --add-dir %q", lines[1], lines[2], checkout)
-	}
+	directory, option, resources, presence, prompt := lines[0], lines[1], lines[2], lines[3], lines[4]
 	resolvedTarget, err := filepath.EvalSymlinks(target)
 	if err != nil {
 		t.Fatal(err)
@@ -72,9 +76,19 @@ func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 	if directory != resolvedTarget {
 		t.Errorf("harness ran in %q, want %q", directory, resolvedTarget)
 	}
+	if option != "--add-dir" || presence != "present" {
+		t.Errorf("harness got %s %q with resources %s, want --add-dir and the exported procedure and scripts", option, resources, presence)
+	}
+	if !strings.HasPrefix(resources, os.Getenv("HOME")+string(filepath.Separator)) {
+		t.Errorf("resources %q are outside the operator home, where a VM-backed Docker daemon cannot mount them", resources)
+	}
+	if _, err := os.Stat(resources); !os.IsNotExist(err) {
+		t.Errorf("resources %q remain after the session: %v", resources, err)
+	}
 	for _, want := range []string{
 		"Prepare the repository at " + resolvedTarget,
-		checkout + "/docs/repository-initialization.md",
+		resources + "/docs/repository-initialization.md",
+		"The worker base image is " + testBaseImage,
 		"Actions that need",
 		"docs/configuration.md decides",
 		"never invent a",
@@ -87,20 +101,20 @@ func TestOnboardStartsHarnessInTargetWithResolvedPaths(t *testing.T) {
 }
 
 // TestOnboardRejectsInvalidInput proves that onboard refuses an unknown
-// harness, a positional argument, and a missing or wrong factory checkout
-// before it starts a session.
+// harness, a positional argument, and a missing or mutable worker base image
+// before it starts a session, and names the action that fixes each.
 func TestOnboardRejectsInvalidInput(t *testing.T) {
-	checkout, _, _ := onboardFixture(t, "claude")
+	_, record := onboardFixture(t, "claude")
 	tests := []struct {
 		name   string
 		args   []string
 		status int
 		stderr string
 	}{
-		{"unknown harness", []string{"--harness", "cursor", "--factory-checkout", checkout}, 2, "--harness must be claude or codex"},
+		{"unknown harness", []string{"--harness", "cursor", "--worker-base-image", testBaseImage}, 2, "--harness must be claude or codex"},
 		{"positional argument", []string{"extra"}, 2, "does not accept positional arguments"},
-		{"unknown checkout", []string{}, 1, "the Software Factory checkout is unknown"},
-		{"not a checkout", []string{"--factory-checkout", t.TempDir()}, 1, "does not contain docs/repository-initialization.md"},
+		{"development build without base image", []string{}, 1, "pass --worker-base-image"},
+		{"mutable tag", []string{"--worker-base-image", "ghcr.io/stevie1704/sw-factory-base:v1"}, 2, "must be pinned as IMAGE@sha256:"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -110,5 +124,8 @@ func TestOnboardRejectsInvalidInput(t *testing.T) {
 				t.Errorf("status = %d, stderr = %q; want %d and %q", status, errorsOutput.String(), test.status, test.stderr)
 			}
 		})
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Errorf("a refused onboarding started the harness: %v", err)
 	}
 }
