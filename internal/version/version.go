@@ -5,6 +5,7 @@ package version
 
 import (
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strings"
 )
@@ -13,13 +14,18 @@ import (
 // it at link time with -X; every other build leaves it empty.
 var release string
 
+// workerBaseImage is the worker base image a release was built and verified
+// with, as image@sha256:digest. The release build sets it at link time with
+// -X; every other build leaves it empty.
+var workerBaseImage string
+
 // SchemaVersion is the version of the JSON identity document. Increment it
 // when a field changes meaning or is removed.
 const SchemaVersion = 1
 
 // Build kinds distinguish a deliberate release from every other build.
 const (
-	buildRelease     = "release"
+	BuildRelease     = "release"
 	buildDevelopment = "development"
 )
 
@@ -38,6 +44,11 @@ type Identity struct {
 	Revision string `json:"revision"`
 	// Modified reports that the build's source tree had uncommitted changes.
 	Modified bool `json:"modified"`
+	// WorkerBaseImage is the digest-pinned worker base image the release
+	// names, or empty when the build names none.
+	WorkerBaseImage string `json:"worker_base_image"`
+	// Platform is the OS and architecture the binary runs on, as os/arch.
+	Platform string `json:"platform"`
 }
 
 // pseudoVersion matches the timestamp-and-commit suffix Go adds to a module
@@ -46,7 +57,14 @@ var pseudoVersion = regexp.MustCompile(`\d{14}-[0-9a-f]{12}`)
 
 // Current returns the identity of the running binary.
 func Current() Identity {
-	identity := Identity{SchemaVersion: SchemaVersion, Version: buildDevelopment, Build: buildDevelopment, Revision: unknown}
+	identity := Identity{
+		SchemaVersion:   SchemaVersion,
+		Version:         buildDevelopment,
+		Build:           buildDevelopment,
+		Revision:        unknown,
+		WorkerBaseImage: workerBaseImage,
+		Platform:        runtime.GOOS + "/" + runtime.GOARCH,
+	}
 	info, ok := debug.ReadBuildInfo()
 	if ok {
 		for _, setting := range info.Settings {
@@ -60,10 +78,10 @@ func Current() Identity {
 	}
 	switch {
 	case release != "":
-		identity.Version, identity.Build = release, buildRelease
+		identity.Version, identity.Build = release, BuildRelease
 	case ok && isTaggedModuleVersion(info.Main.Version):
 		// go install module@vX.Y.Z records the tag but no VCS settings.
-		identity.Version, identity.Build = info.Main.Version, buildRelease
+		identity.Version, identity.Build = info.Main.Version, BuildRelease
 	}
 	return identity
 }
@@ -83,7 +101,7 @@ func (i Identity) Text() string {
 	if i.Modified {
 		revision += ", modified"
 	}
-	if i.Build == buildRelease {
+	if i.Build == BuildRelease {
 		return "factory " + i.Version + " (release, " + revision + ")"
 	}
 	return "factory development build (" + revision + ")"
