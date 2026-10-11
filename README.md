@@ -37,6 +37,23 @@ diagnosis described in [Configuration and local
 operation](docs/configuration.md). It checks the host, repository, GitHub,
 worker, harness, authentication, and operational-store prerequisites together.
 
+## Agent guide
+
+The installed binary carries its own operator guide. It works offline,
+outside a Git checkout, and without host configuration:
+
+~~~sh
+factory guide            # orientation and topic index
+factory guide setup      # prerequisites, configuration, onboarding
+factory guide debug      # diagnosis procedure and supported recovery actions
+factory guide reporting  # how to report a suspected Factory defect
+factory version --json   # build identity, schema version 1
+~~~
+
+The topics are canonical in [internal/guide/topics/](internal/guide/topics/);
+the binary embeds those files, so the printed guide and the published files
+cannot differ.
+
 ## Onboard a repository with an agent
 
 To prepare a repository that has none of this yet, [install](#install) Software
@@ -120,6 +137,7 @@ Each operational contract has one owner:
 
 | Topic | Canonical document |
 | --- | --- |
+| Agent orientation, the debugging procedure, supported recovery actions, and defect reporting | [Agent guide](internal/guide/topics/), printed by `factory guide` |
 | Preparing a new repository for factory runs, as an ordered agent-runnable procedure | [Repository initialization](docs/repository-initialization.md) |
 | Host and repository configuration, issue operations, polling, GitHub commands, cleanup, and reset | [Configuration and local operation](docs/configuration.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |

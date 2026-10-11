@@ -82,6 +82,38 @@ func TestBuildEndsEveryRoleWithTheStructuredResultCompletionGate(t *testing.T) {
 	}
 }
 
+// TestBuildGivesEveryRoleTheSuspectedFactoryDefectRule verifies that every
+// role, including a continuation turn, learns how to propose a suspected
+// Factory defect without contacting the upstream tracker itself.
+func TestBuildGivesEveryRoleTheSuspectedFactoryDefectRule(t *testing.T) {
+	roles := map[string]string{
+		workflow.RoleImplementation:      string(store.StageImplementation),
+		workflow.RoleTest:                string(store.StageTest),
+		workflow.RoleArchitecture:        string(workflow.StageArchitecture),
+		workflow.RoleSpecificationReview: string(store.StageReview),
+		workflow.RoleStandardsReview:     string(workflow.StageStandardsReview),
+	}
+	for role, stage := range roles {
+		for _, continuation := range []bool{false, true} {
+			value, err := prompt.Build(prompt.Request{
+				InvocationID:        "inv-defect-" + role,
+				RunID:               "run-defect",
+				Role:                role,
+				Stage:               stage,
+				SpecificationPacket: `{}`,
+				Continuation:        continuation,
+			})
+			if err != nil {
+				t.Fatalf("Build(%s, continuation=%t) error = %v", role, continuation, err)
+			}
+			rules := value[strings.Index(value, "Factory-owned rules:"):strings.Index(value, "Completion gate:")]
+			if !strings.Contains(rules, prompt.SuspectedFactoryDefectRule) {
+				t.Fatalf("%s prompt (continuation=%t) lacks the defect rule in its factory-owned rules:\n%s", role, continuation, value)
+			}
+		}
+	}
+}
+
 // TestBuildAdvisoryImplementationPromptAssignsTheCompleteTDDLoop verifies the
 // implementation role receives explicit red/green/refactor ownership in the
 // advisory path without an independent test handoff.
