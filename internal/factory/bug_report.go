@@ -7,6 +7,7 @@ import (
 	"io/fs"
 
 	"github.com/Stevie1704/sw-factory/internal/bugreport"
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
@@ -47,13 +48,7 @@ func retainedDefectProposals(ctx context.Context, lister invocationLister, run s
 // requests no Run. Collection is read-only and makes no external requests.
 func (s *Service) BugReportEvidence(ctx context.Context, runID string) (bugreport.Evidence, error) {
 	evidence := bugreport.Evidence{Configuration: bugreport.AvailabilityAvailable, Store: bugreport.AvailabilityNotRequested}
-	host, err := s.deps.Config.Load(s.configPath)
-	if err == nil && len(host.Repositories) == 0 {
-		err = errors.New("no repository is registered")
-	}
-	if err == nil {
-		err = validateOperationalPath(host.Repositories[0].Path, host.Repositories[0].OperationalDataPath)
-	}
+	registration, err := s.bugReportRegistration()
 	if err != nil {
 		evidence.Configuration = bugreport.AvailabilityUnavailable
 		evidence.Limitations = append(evidence.Limitations, "The host configuration could not be loaded or has no valid registration; run `factory doctor` for the field-level diagnosis.")
@@ -63,56 +58,76 @@ func (s *Service) BugReportEvidence(ctx context.Context, runID string) (bugrepor
 		}
 		return evidence, nil
 	}
-	registration := host.Repositories[0]
 	evidence.Provider = string(providerOf(registration))
 	if runID == "" {
 		return evidence, nil
 	}
-	evidence.Store = bugreport.AvailabilityUnavailable
+	var limitations []string
+	evidence.Run, evidence.Store, limitations = s.storeRunEvidence(ctx, registration, runID)
+	evidence.Limitations = append(evidence.Limitations, limitations...)
+	return evidence, nil
+}
+
+// bugReportRegistration loads the one registration whose store a draft may
+// read. Its error text is never shown, because it can quote configuration.
+func (s *Service) bugReportRegistration() (config.RepositoryRegistration, error) {
+	host, err := s.deps.Config.Load(s.configPath)
+	if err != nil {
+		return config.RepositoryRegistration{}, err
+	}
+	if len(host.Repositories) == 0 {
+		return config.RepositoryRegistration{}, errors.New("no repository is registered")
+	}
+	registration := host.Repositories[0]
+	if err := validateOperationalPath(registration.Path, registration.OperationalDataPath); err != nil {
+		return config.RepositoryRegistration{}, err
+	}
+	return registration, nil
+}
+
+// storeRunEvidence reads one Run from the registration's store, and states
+// the store's availability and the collection limitations.
+func (s *Service) storeRunEvidence(ctx context.Context, registration config.RepositoryRegistration, runID string) (*bugreport.RunEvidence, bugreport.Availability, []string) {
 	opened, err := s.deps.OpenStoreReadOnly(ctx, registration.OperationalDataPath)
 	if err != nil {
-		evidence.Limitations = append(evidence.Limitations, "The operational store could not be opened.")
-		return evidence, nil
+		return nil, bugreport.AvailabilityUnavailable, []string{"The operational store could not be opened."}
 	}
 	defer func() { _ = opened.Close() }()
 	reader, ok := opened.(bugReportRunReader)
 	if !ok {
-		evidence.Limitations = append(evidence.Limitations, "The operational store does not provide the Run read model.")
-		return evidence, nil
+		return nil, bugreport.AvailabilityUnavailable, []string{"The operational store does not provide the Run read model."}
 	}
-	run, err := collectRunEvidence(ctx, reader, runID, &evidence.Limitations)
+	run, limitations, err := collectRunEvidence(ctx, reader, runID)
 	if err != nil {
-		evidence.Limitations = append(evidence.Limitations, "The operational store could not be read.")
-		return evidence, nil
+		return nil, bugreport.AvailabilityUnavailable, append(limitations, "The operational store could not be read.")
 	}
-	evidence.Store = bugreport.AvailabilityAvailable
-	evidence.Run = run
-	return evidence, nil
+	return run, bugreport.AvailabilityAvailable, limitations
 }
 
-// collectRunEvidence projects one Run onto the allowlist. A missing Run is a
-// limitation; a store read failure is an error.
-func collectRunEvidence(ctx context.Context, reader bugReportRunReader, runID string, limitations *[]string) (*bugreport.RunEvidence, error) {
+// collectRunEvidence projects one Run onto the allowlist and returns the
+// collection limitations. A missing Run is a limitation; a store read
+// failure is an error.
+func collectRunEvidence(ctx context.Context, reader bugReportRunReader, runID string) (*bugreport.RunEvidence, []string, error) {
 	run, err := reader.Run(ctx, runID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if run == nil {
-		*limitations = append(*limitations, fmt.Sprintf("Run %s is not in the operational store.", safeEvidenceIdentifier(runID)))
-		return nil, nil
+		return nil, []string{fmt.Sprintf("Run %s is not in the operational store.", safeEvidenceIdentifier(runID))}, nil
 	}
 	gates, err := reader.RunGateResults(ctx, run.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	invocations, err := reader.Invocations(ctx, run.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	evidence := &bugreport.RunEvidence{ID: run.ID, Stage: string(run.Stage), Status: string(run.Status)}
 	for _, gate := range failedGatesAt(gates, run.CheckpointSHA) {
 		evidence.FailedGates = append(evidence.FailedGates, bugreport.GateEvidence{Phase: string(gate.Phase), Outcome: string(gate.Outcome)})
 	}
+	var limitations []string
 	for _, invocation := range invocations {
 		evidence.Invocations = append(evidence.Invocations, bugreport.InvocationEvidence{
 			ID: invocation.ID, Role: invocation.Role, Stage: string(invocation.Stage),
@@ -120,13 +135,13 @@ func collectRunEvidence(ctx context.Context, reader bugReportRunReader, runID st
 		})
 		proposal, limitation := retainedDefectProposal(*run, invocation)
 		if limitation != "" {
-			*limitations = append(*limitations, limitation)
+			limitations = append(limitations, limitation)
 		}
 		if proposal != nil {
 			evidence.DefectProposals = append(evidence.DefectProposals, *proposal)
 		}
 	}
-	return evidence, nil
+	return evidence, limitations, nil
 }
 
 // retainedDefectProposal reads the defect proposal of one reported
