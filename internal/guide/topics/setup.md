@@ -12,7 +12,7 @@ The host needs:
   release" below);
 - Git and `jq`;
 - a running Docker daemon whose server platform is `linux/arm64` or
-  `linux/amd64`;
+  `linux/amd64`, and that uses the containerd image store;
 - the GitHub CLI, authenticated for the target repository;
 - Codex or Claude Code, installed and signed in.
 
@@ -24,6 +24,7 @@ operator.
 factory version --json
 command -v factory git jq
 docker version --format '{{.Server.Os}}/{{.Server.Arch}}'
+docker info --format '{{.DriverStatus}}'   # must show io.containerd.snapshotter.v1
 gh auth status
 ```
 
