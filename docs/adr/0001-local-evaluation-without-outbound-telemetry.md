@@ -20,3 +20,7 @@ This accepts a small amount of durable local metadata in exchange for an evidenc
 ## Addendum — 2026-09-19
 
 ADR 0014 supersedes only the measured-pilot rollout precondition above. The decision to retain content-free local evaluation summaries remains accepted, and those summaries now provide ongoing evidence for assessing and tuning the shipped workflow.
+
+## Addendum — 2026-10-11
+
+ADR 0020 records that an operator-directed defect report is not outbound telemetry: Factory prepares the draft locally and publishes only when the operator runs `factory bug-report submit`. Nothing is collected or sent in the background.

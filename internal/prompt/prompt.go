@@ -557,7 +557,7 @@ func joinPromptSections(sections ...string) string {
 // SuspectedFactoryDefectRule is the factory-owned rule that tells a role how
 // to propose a suspected Software Factory defect. The operator guide quotes
 // it, and a guide test holds the two texts equal.
-const SuspectedFactoryDefectRule = "- When the evidence shows a defect in Software Factory itself, not in the repository or the environment, return cannot_proceed. Call it a suspected Factory defect, give the observed evidence, and state an unknown cause as unknown. Do not report it anywhere else."
+const SuspectedFactoryDefectRule = "- When the evidence shows a defect in Software Factory itself, not in the repository or the environment, return cannot_proceed. Call it a suspected Factory defect, give the observed evidence, and state an unknown cause as unknown. Add the proposal with the factory-report flags --defect-code, --defect-expected, --defect-observed, and --defect-reason. Do not report it anywhere else."
 
 // factoryOwnedRules is the safety and reporting contract every prompt restates,
 // including a continuation turn. It is one constant so a first prompt and a

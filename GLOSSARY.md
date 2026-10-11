@@ -338,6 +338,14 @@ _Avoid_: Telemetry, transcript, audit log
 Automatic transmission of product-usage or evaluation data from the operator's workstation to an external recipient. The factory prohibits outbound telemetry.
 _Avoid_: Local evaluation summary
 
+**Suspected Factory defect report**:
+A local Markdown draft, prepared by `factory bug-report` from allowlisted evidence and completed by the operator, that describes a suspected defect in Factory itself. Only `factory bug-report submit` publishes it, to Factory's upstream tracker. It is not outbound telemetry and not a confirmed root cause.
+_Avoid_: Bug bundle, crash report, telemetry
+
+**Defect proposal**:
+An optional, bounded field of a worker's structured report that proposes a suspected Factory defect report for its own Invocation. It changes no outcome and authorizes no publication.
+_Avoid_: Defect outcome, worker bug report
+
 **Pilot**:
 A planned evidence-gathering delivery phase comparing the supervised factory with a direct-harness baseline. The measured pilot completed no matched comparisons and is not runtime authority.
 _Avoid_: Production readiness, tracer bullet
