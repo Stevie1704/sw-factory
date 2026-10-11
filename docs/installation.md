@@ -16,6 +16,11 @@ publish an archive for them, and the worker base image has no manifest for
 them. `docker version --format '{{.Server.Os}}/{{.Server.Arch}}'` shows the
 worker platform of a Docker daemon.
 
+The Docker daemon must use the containerd image store. Factory refers to a
+local worker image by its image ID, and only this store finds an image by it.
+Docker Engine 29 and colima use it by default. `docker info --format
+'{{.DriverStatus}}'` must show `io.containerd.snapshotter.v1`.
+
 ## Release artifacts
 
 Each release `vX.Y.Z` publishes these artifacts on its GitHub release page:

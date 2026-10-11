@@ -40,6 +40,15 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
+      # Factory addresses a local worker image as name@<image ID>, which only
+      # the containerd image store resolves. Operator hosts need the same store.
+      - name: Use the containerd image store
+        run: |
+          config=/etc/docker/daemon.json
+          current="$(sudo cat "$config" 2>/dev/null || echo '{}')"
+          printf '%s' "$current" | jq '.features["containerd-snapshotter"] = true' | sudo tee "$config" >/dev/null
+          sudo systemctl restart docker
+          test "$(docker info --format '{{range .DriverStatus}}{{index . 1}}{{end}}')" = io.containerd.snapshotter.v1
       - name: Build and verify the base and the Factory worker
         env:
           FACTORY_RELEASE: ${{ github.ref_name }}
@@ -114,7 +123,7 @@ jobs:
             "$BASE_IMAGE@$(cat base-digest-arm64)"
           digest="$(docker buildx imagetools inspect "$reference" --format '{{json .Manifest}}' | jq -r '.digest')"
           platforms="$(docker buildx imagetools inspect "$BASE_IMAGE@$digest" --format '{{json .Manifest}}' \
-            | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')"
+            | jq -r '[.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"] | sort | join(" ")')"
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || "$platforms" != "linux/amd64 linux/arm64" ]]; then
             echo "::error title=Invalid base index::$reference has digest '$digest' and platforms '$platforms'"
             exit 1
