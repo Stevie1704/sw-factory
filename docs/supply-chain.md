@@ -1,9 +1,9 @@
 # Build toolchain and vulnerability scanning
 
-This document owns three contracts: the approved Go toolchain for every
+This document owns four contracts: the approved Go toolchain for every
 shipped binary, the vulnerability scans of the artifacts that are actually
-deployed, and the procedure to rebuild, scan, publish, and repin the Worker
-image. [Configuration](configuration.md#worker-image-build-and-digest-pinning)
+deployed, the procedure to rebuild, scan, publish, and repin the Worker
+image, and the gates of a release. [Configuration](configuration.md#worker-image-build-and-digest-pinning)
 owns the Worker image layout and the digest format.
 
 ## Approved Go toolchain
@@ -17,7 +17,7 @@ Every build path selects the approved release, or it stops with a diagnosis:
 
 | Build path | How it selects the release | What refuses another release |
 | --- | --- | --- |
-| `make build`, `make install`, `make test`, `make test-race` | The Makefile exports `GOTOOLCHAIN` as the go.mod toolchain line. Go downloads that release when the Go on `PATH` is different. This also applies when you set `GO=/path/to/go`. | `make toolchain-check` compares `go env GOVERSION` with go.mod and stops. Each of these targets runs it first. |
+| `make build`, `make install`, `make test`, `make test-race`, `make release` | The Makefile exports `GOTOOLCHAIN` as the go.mod toolchain line. Go downloads that release when the Go on `PATH` is different. This also applies when you set `GO=/path/to/go`. | `make toolchain-check` compares `go env GOVERSION` with go.mod and stops. Each of these targets runs it first. |
 | CI | `actions/setup-go` reads `go-version-file: go.mod`. The Make targets then select and check the release again. | `make toolchain-check` |
 | Worker base image (`factory-report`, `factory-worker-headless`) | `scripts/build-worker.sh` reads the release from go.mod and passes it as `GO_VERSION`. | The build script refuses a `GO_VERSION` variable that differs from go.mod. After the build, it compares the build metadata of each helper with go.mod. |
 | Worker toolchain (`/usr/local/go`) | The same `GO_VERSION` build argument | The same in-image check runs `go env GOVERSION` and `go version /usr/local/go/bin/go`. |
@@ -143,6 +143,41 @@ scan against the same artifact and database.
 A local-only image uses Docker's local image ID as its digest. See
 [Configuration](configuration.md#worker-image-build-and-digest-pinning). If
 you publish the image, always pin the registry manifest digest.
+
+## Release artifacts
+
+A pushed `vX.Y.Z` tag starts the [release workflow](../.github/workflows/release.yml).
+[Install a Software Factory release](installation.md) owns the artifact layout
+and the support matrix. The workflow keeps every gate of this document:
+
+1. For each worker platform, on a native runner: `scripts/build-worker.sh`
+   builds the base image with `FACTORY_RELEASE=vX.Y.Z` and the approved Go
+   release. Then it builds Software Factory's own worker on that base, checks
+   the toolchain build metadata, runs the repository gates in the image, and
+   runs the headless lifecycle check, including the Go real-worker checks.
+2. `scripts/scan-worker-image.sh` scans that worker image. The worker image
+   contains every layer of the base image. Only a clean scan lets the job push
+   the base image.
+3. The release job joins the two pushed platform manifests into the index
+   `ghcr.io/stevie1704/sw-factory-base:vX.Y.Z`. It reads the index digest and
+   makes sure that the index lists exactly `linux/amd64` and `linux/arm64`.
+4. `make release VERSION=vX.Y.Z WORKER_BASE_IMAGE=<image>@<index digest>`
+   cross-compiles `factory` for each host platform with the approved Go
+   release, and links the version and the digest. It writes the archives,
+   `release.json`, and `checksums.txt`. Then it scans the module source and
+   each packaged binary with `scripts/scan-go-artifacts.sh`. A status other
+   than `0` stops the release.
+5. `gh release create` publishes the archives, `release.json`, and
+   `checksums.txt`.
+
+A release refers to the base image only by its index digest. The tag exists
+for people who browse the registry; no setup step uses it.
+
+The base image carries the label `io.github.stevie1704.sw-factory.release`.
+A local build sets it to `development`. The startup diagnosis of a release
+coordinator refuses a worker image whose label names another release
+(`worker.release.mismatch`). The new coordinator therefore never runs with
+worker helpers and skills of an older release.
 
 ## Active Runs
 
