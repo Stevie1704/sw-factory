@@ -71,12 +71,22 @@ observe.
 | `factory start` | `factory doctor` is ready | Starts polling. Reconciles interrupted work before it continues. |
 | `factory auth refresh` | A run waits for a refreshed harness credential | Copies the host credential into the factory credential store. Changes no workflow state. |
 | `factory auth refresh --resume` | As above | Also reconciles pending effects and continues the paused native session one time. |
-| `factory resume --run-id <id>` | The run paused for harness capacity, authentication, or a native-session interruption | Continues the exact persisted native session. Does not use the retry budget. |
+| `factory resume` | The run is not terminal and `factory status` names `factory resume` as a safe action | Reconciles a pending effect first. Then it does one of the actions in the next table. It does not use the retry budget. |
 | `factory reconcile` | A pending effect or discrepancy is reported after a restart | Runs one restart reconciliation. Pauses the run when it cannot prove a safe repair. |
 | `factory reconcile --abandon-effect <effect-id> --reason <text>` | A human inspected the ambiguous pending effect that `factory status` names | Discards that effect. The run stays paused. |
 | `factory poll` | Authorized `/factory` comments wait on the issue or pull request | Processes them one time. |
 | `factory cleanup` then `factory cleanup --confirm` | The runs are terminal | Prints the plan, then removes local artifacts of terminal runs older than seven days. |
 | `factory reset --config <path>` then add `--confirm` | The coordinator is stopped; the operator wants to remove the installation | Prints the plan, then removes every local resource of the installation. |
+
+`factory resume` selects its action from the persisted run. Add
+`--run-id <id>` to refuse a different active run.
+
+| Persisted state | Action of `factory resume` |
+| --- | --- |
+| The active invocation has a native session | Continues that exact native session. |
+| The active invocation has no native session | Supersedes that invocation and starts a new invocation of the same role. |
+| No active invocation; the check stage paused for check infrastructure or restart reconciliation | Runs the gate checks again at the same checkpoint. |
+| No active invocation, other cases | Starts a new invocation of the role that the run's stage selects. |
 
 An authorized GitHub user can also comment one command on the issue:
 `/factory status`, `/factory refresh`, `/factory resume`,

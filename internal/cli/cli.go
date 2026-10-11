@@ -1092,6 +1092,7 @@ func runReset(ctx context.Context, args []string, _ string, output, errorsOutput
 	flags.Usage = func() {
 		_, _ = fmt.Fprint(errorsOutput, resetUsage)
 		flags.PrintDefaults()
+		_, _ = fmt.Fprintf(errorsOutput, "\n%s\n", guideHint)
 	}
 	if err := flags.Parse(args); err != nil {
 		return 2

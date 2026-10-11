@@ -121,6 +121,7 @@ func TestRunAdvertisesGuideInHelp(t *testing.T) {
 		{[]string{"nonexistent"}, 2},
 		{[]string{"--help"}, 0},
 		{[]string{"doctor", "-h"}, 2},
+		{[]string{"reset", "-h"}, 2},
 	} {
 		var output, errorsOutput bytes.Buffer
 		code := cli.Run(context.Background(), test.args, &output, &errorsOutput)
@@ -133,20 +134,34 @@ func TestRunAdvertisesGuideInHelp(t *testing.T) {
 	}
 }
 
-// TestGuideNamesOnlyImplementedCommands verifies that every factory command
-// the guide names exists in this release.
-func TestGuideNamesOnlyImplementedCommands(t *testing.T) {
-	command := regexp.MustCompile("(?m)(?:`|^)factory ([a-z][a-z-]*)")
+// TestGuideNamesOnlyImplementedCommandsAndFlags verifies that every factory
+// command the guide names exists in this release, and that every flag the
+// guide writes after it is a flag of that command.
+func TestGuideNamesOnlyImplementedCommandsAndFlags(t *testing.T) {
+	invocation := regexp.MustCompile("(?m)`factory ([a-z][a-z-]*)([^`]*)`|^factory ([a-z][a-z-]*)([^#\\n]*)")
+	flagName := regexp.MustCompile(`--([a-z][a-z-]*)`)
 	for _, name := range append([]string{guide.Overview}, guide.Topics()...) {
 		body, err := guide.Topic(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, match := range command.FindAllStringSubmatch(body, -1) {
+		for _, match := range invocation.FindAllStringSubmatch(body, -1) {
+			command, rest := match[1]+match[3], match[2]+match[4]
+			args := []string{command}
+			if command == "auth" {
+				args = append(args, "refresh")
+			}
 			var output, errorsOutput bytes.Buffer
-			cli.Run(context.Background(), []string{match[1], "-h"}, &output, &errorsOutput)
-			if strings.Contains(errorsOutput.String(), "unknown command") {
-				t.Errorf("topic %q names unimplemented command %q", name, match[1])
+			cli.Run(context.Background(), append(args, "-h"), &output, &errorsOutput)
+			help := errorsOutput.String()
+			if strings.Contains(help, "unknown command") {
+				t.Errorf("topic %q names unimplemented command %q", name, command)
+				continue
+			}
+			for _, flag := range flagName.FindAllStringSubmatch(rest, -1) {
+				if !strings.Contains(help, "  -"+flag[1]+" ") && !strings.Contains(help, "  -"+flag[1]+"\n") {
+					t.Errorf("topic %q names flag --%s that factory %s does not accept", name, flag[1], strings.Join(args, " "))
+				}
 			}
 		}
 	}
