@@ -297,3 +297,22 @@ func TestRunStatusNeverExposesSubprocessOutputInRecovery(t *testing.T) {
 		}
 	}
 }
+
+// TestRunStatusJSONDoesNotRecreateAMissingStore verifies inspection reports
+// a deleted operational store as unavailable instead of creating an empty
+// store and reporting that no run exists.
+func TestRunStatusJSONDoesNotRecreateAMissingStore(t *testing.T) {
+	t.Parallel()
+	configPath, operationalPath, _ := registeredStatusFixture(t)
+	if err := os.Remove(operationalPath); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	document, code, _ := runStatusJSON(t, configPath)
+	if code != 1 || document.Error == nil || document.Error.Code != "status.store.unavailable" || document.Run.State != "unavailable" {
+		t.Fatalf("status --json exit = %d document = %+v, want an unavailable store", code, document)
+	}
+	if _, err := os.Stat(operationalPath); !os.IsNotExist(err) {
+		t.Fatalf("operational store exists after inspection (stat error %v), want it untouched", err)
+	}
+}

@@ -678,7 +678,8 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	if err := validateOperationalPath(registration.Path, registration.OperationalDataPath); err != nil {
 		return result, statusUnavailable(StatusSourceConfiguration, err)
 	}
-	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
+	// Inspection never creates, migrates, or backs up the store.
+	opened, err := s.deps.OpenStoreReadOnly(ctx, registration.OperationalDataPath)
 	if err != nil {
 		return result, statusUnavailable(StatusSourceStore, err)
 	}
