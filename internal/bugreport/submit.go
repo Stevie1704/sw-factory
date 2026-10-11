@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // UpstreamRepository is the only destination of Factory defect reports. It
@@ -74,6 +76,9 @@ const (
 	FailureUnconfirmed FailureKind = "unconfirmed"
 	// FailureLocalState means the local submission state could not be used.
 	FailureLocalState FailureKind = "local_state"
+	// FailureInProgress means another submission of the same report is
+	// running.
+	FailureInProgress FailureKind = "in_progress"
 )
 
 // UpstreamError is an adapter failure of a known kind. A creation that fails
@@ -176,7 +181,12 @@ func Submit(ctx context.Context, path string, upstream Upstream, options SubmitO
 	if err != nil {
 		return Result{}, &SubmitError{Kind: FailureInvalidDraft, Action: "complete the draft and submit again", Err: err}
 	}
-	statePath := submissionStatePath(path, submission.ID)
+	unlock, err := lockSubmission(submissionFilePath(path, submission.ID, "lock"))
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
+	statePath := submissionFilePath(path, submission.ID, "submission.json")
 	state, err := readState(statePath)
 	if err != nil {
 		return Result{}, &SubmitError{Kind: FailureLocalState, Action: "inspect or remove " + statePath, Err: err}
@@ -295,10 +305,29 @@ func readDraft(path string) ([]byte, error) {
 	return content, nil
 }
 
-// submissionStatePath names the local submission record of one report
+// submissionFilePath names one hidden local submission file of a report
 // identity beside its draft.
-func submissionStatePath(draftPath, reportID string) string {
-	return filepath.Join(filepath.Dir(draftPath), "."+filepath.Base(draftPath)+"."+reportID+".submission.json")
+func submissionFilePath(draftPath, reportID, suffix string) string {
+	return filepath.Join(filepath.Dir(draftPath), "."+filepath.Base(draftPath)+"."+reportID+"."+suffix)
+}
+
+// lockSubmission takes the exclusive submission lock of one report identity
+// without waiting. The lock covers state reconciliation and creation, so two
+// concurrent commands cannot both create the issue. The kernel releases the
+// lock when the process ends; the returned function releases it earlier.
+func lockSubmission(path string) (func(), error) {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, &SubmitError{Kind: FailureLocalState, Action: "make the draft directory writable and submit again", Err: fmt.Errorf("open submission lock: %w", err)}
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, &SubmitError{Kind: FailureInProgress, Action: "wait until the other submission of this report ends, then submit again", Err: errors.New("another submission of this report is running")}
+		}
+		return nil, &SubmitError{Kind: FailureLocalState, Action: "submit again", Err: fmt.Errorf("lock submission: %w", err)}
+	}
+	return func() { _ = file.Close() }, nil
 }
 
 // readState returns the local submission record, or an empty record.

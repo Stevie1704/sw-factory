@@ -23,6 +23,10 @@ type fakeUpstream struct {
 	createErrs   []error
 	created      []createCall
 	calls        int
+	// entered, when set, receives a signal when CreateIssue starts, and
+	// release then holds the creation until the test closes it.
+	entered chan struct{}
+	release chan struct{}
 }
 
 // createCall is one recorded issue creation.
@@ -63,6 +67,10 @@ func (f *fakeUpstream) LabelExists(context.Context, string) (bool, error) {
 // the upstream accepted the request.
 func (f *fakeUpstream) CreateIssue(_ context.Context, title, body string, labels []string) (bugreport.Issue, error) {
 	f.calls++
+	if f.entered != nil {
+		f.entered <- struct{}{}
+		<-f.release
+	}
 	if len(f.createErrs) > 0 {
 		err := f.createErrs[0]
 		f.createErrs = f.createErrs[1:]
@@ -253,5 +261,34 @@ func TestSubmitRejectsAnIncompleteDraftBeforeAnyUpstreamCall(t *testing.T) {
 	var failure *bugreport.SubmitError
 	if !errors.As(err, &failure) || failure.Kind != bugreport.FailureInvalidDraft || upstream.calls != 0 {
 		t.Fatalf("Submit() error = %v after %d upstream calls, want invalid_draft before any call", err, upstream.calls)
+	}
+}
+
+// TestSubmitRefusesAConcurrentSubmissionOfTheSameReport verifies that a
+// second submission of a report cannot start while the first one is
+// creating the issue, so two commands never both create it.
+func TestSubmitRefusesAConcurrentSubmissionOfTheSameReport(t *testing.T) {
+	path := writeCompletedDraft(t)
+	first := &fakeUpstream{entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := bugreport.Submit(context.Background(), path, first, bugreport.SubmitOptions{})
+		done <- err
+	}()
+	<-first.entered
+
+	second := &fakeUpstream{}
+	_, err := bugreport.Submit(context.Background(), path, second, bugreport.SubmitOptions{})
+	var failure *bugreport.SubmitError
+	if !errors.As(err, &failure) || failure.Kind != bugreport.FailureInProgress || second.calls != 0 {
+		t.Fatalf("Submit(concurrent) error = %v after %d upstream calls, want in_progress before any call", err, second.calls)
+	}
+
+	close(first.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Submit(first) error = %v", err)
+	}
+	if len(first.created) != 1 {
+		t.Fatalf("first submission created %d issues, want 1", len(first.created))
 	}
 }
