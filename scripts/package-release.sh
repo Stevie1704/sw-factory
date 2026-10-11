@@ -6,9 +6,10 @@
 # every onboarding resource, so the archive needs no Factory checkout or Go.
 #
 # Usage: VERSION=vX.Y.Z WORKER_BASE_IMAGE=image@sha256:DIGEST package-release.sh
-# PLATFORMS narrows the host platforms, for example to the build host in
-# tests. DIST_DIR (default dist) receives the archives; the unpacked staging
-# directories stay in DIST_DIR/build for the binary scan.
+# REVISION names the source revision for release.json; it defaults to the
+# checkout's HEAD. PLATFORMS narrows the host platforms, for example to the
+# build host in tests. DIST_DIR (default dist) receives the archives; the
+# unpacked staging directories stay in DIST_DIR/build for the binary scan.
 set -eu
 
 GO="${GO:-go}"
@@ -40,7 +41,13 @@ for platform in $PLATFORMS; do
   esac
 done
 
-revision="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
+# The worker gate runs the packaging test in a sanitized copy without Git
+# metadata, so a revision passed explicitly needs no checkout.
+revision="${REVISION:-}"
+if [ -z "$revision" ] && ! revision="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD 2>/dev/null)"; then
+  echo "REVISION must be set when $REPOSITORY_ROOT is not a Git checkout" >&2
+  exit 2
+fi
 ldflags="-s -w -X 'github.com/Stevie1704/sw-factory/internal/version.release=$VERSION' -X 'github.com/Stevie1704/sw-factory/internal/version.workerBaseImage=$WORKER_BASE_IMAGE'"
 
 # sha256_line prints one checksums.txt line for a file in the current directory.

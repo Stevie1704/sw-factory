@@ -16,6 +16,9 @@ import (
 // releaseBaseImage is the worker base image the packaged test release names.
 var releaseBaseImage = "ghcr.io/stevie1704/sw-factory-base@sha256:" + strings.Repeat("ef", 32)
 
+// releaseRevision is the source revision the packaged test release names.
+var releaseRevision = strings.Repeat("0a", 20)
+
 // TestPackagedReleaseOnboardsWithoutGoOrCheckout packages a release for the
 // host platform, installs it under a path with spaces, moves the installation,
 // and proves that the moved binary reports the release and gives an
@@ -33,7 +36,9 @@ func TestPackagedReleaseOnboardsWithoutGoOrCheckout(t *testing.T) {
 	dist := filepath.Join(root, "release dist")
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 	pack := exec.Command("./scripts/package-release.sh")
-	pack.Env = append(os.Environ(), "VERSION=v9.8.7", "WORKER_BASE_IMAGE="+releaseBaseImage, "PLATFORMS="+platform, "DIST_DIR="+dist)
+	// An explicit revision keeps the test independent of Git metadata, which
+	// the worker gate's sanitized source copy does not carry.
+	pack.Env = append(os.Environ(), "VERSION=v9.8.7", "REVISION="+releaseRevision, "WORKER_BASE_IMAGE="+releaseBaseImage, "PLATFORMS="+platform, "DIST_DIR="+dist)
 	if output, err := pack.CombinedOutput(); err != nil {
 		t.Fatalf("package-release.sh: %v\n%s", err, output)
 	}
@@ -130,9 +135,9 @@ func verifyReleaseManifest(t *testing.T, path string) {
 		t.Fatalf("release.json = %s: %v", data, err)
 	}
 	wantHosts := "darwin/amd64 darwin/arm64 linux/amd64 linux/arm64"
-	if manifest.SchemaVersion != 1 || manifest.Version != "v9.8.7" || manifest.Revision == "" || manifest.WorkerBaseImage != releaseBaseImage ||
+	if manifest.SchemaVersion != 1 || manifest.Version != "v9.8.7" || manifest.Revision != releaseRevision || manifest.WorkerBaseImage != releaseBaseImage ||
 		strings.Join(manifest.HostPlatforms, " ") != wantHosts || strings.Join(manifest.WorkerPlatforms, " ") != "linux/amd64 linux/arm64" {
-		t.Fatalf("release.json = %s, want v9.8.7, %s, hosts %s, workers linux/amd64 linux/arm64", data, releaseBaseImage, wantHosts)
+		t.Fatalf("release.json = %s, want v9.8.7 at %s, %s, hosts %s, workers linux/amd64 linux/arm64", data, releaseRevision, releaseBaseImage, wantHosts)
 	}
 }
 
