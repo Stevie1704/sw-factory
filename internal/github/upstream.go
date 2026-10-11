@@ -49,9 +49,8 @@ func (u *UpstreamIssues) FindReport(ctx context.Context, reportID string) (*bugr
 	if err := u.list(ctx, []string{"issue", "list", "--repo", bugreport.UpstreamRepository, "--state", "all", "--search", reportID + " in:body", "--json", "number,title,url,body", "--limit", "20"}, &issues); err != nil {
 		return nil, err
 	}
-	marker := "factory-bug-report id=" + reportID + " "
 	for _, issue := range issues {
-		if strings.Contains(issue.Body, marker) {
+		if strings.Contains(issue.Body, bugreport.Marker(reportID)) {
 			return &bugreport.Issue{Number: issue.Number, Title: issue.Title, URL: issue.URL}, nil
 		}
 	}
@@ -59,8 +58,7 @@ func (u *UpstreamIssues) FindReport(ctx context.Context, reportID string) (*bugr
 }
 
 // FindCandidates returns open issues whose title matches the report summary.
-func (u *UpstreamIssues) FindCandidates(ctx context.Context, title string) ([]bugreport.Issue, error) {
-	summary := strings.TrimSpace(strings.TrimPrefix(title, "Suspected Factory defect:"))
+func (u *UpstreamIssues) FindCandidates(ctx context.Context, summary string) ([]bugreport.Issue, error) {
 	var issues []upstreamIssue
 	if err := u.list(ctx, []string{"issue", "list", "--repo", bugreport.UpstreamRepository, "--state", "open", "--search", summary + " in:title", "--json", "number,title,url", "--limit", strconv.Itoa(maxCandidates)}, &issues); err != nil {
 		return nil, err

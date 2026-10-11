@@ -41,8 +41,8 @@ type Upstream interface {
 	// in any state, or nil when there is none.
 	FindReport(ctx context.Context, reportID string) (*Issue, error)
 	// FindCandidates returns open issues that are likely duplicates of a
-	// report with this title.
-	FindCandidates(ctx context.Context, title string) ([]Issue, error)
+	// report with this one-line summary.
+	FindCandidates(ctx context.Context, summary string) ([]Issue, error)
 	// LabelExists reports whether the label exists upstream.
 	LabelExists(ctx context.Context, label string) (bool, error)
 	// CreateIssue creates one issue and returns it.
@@ -144,19 +144,22 @@ type SubmitOptions struct {
 	ConfirmNotCreated bool
 }
 
-// Submission states persisted beside the draft.
+// submissionPhase is the persisted phase of one submission.
+type submissionPhase string
+
+// Submission phases persisted beside the draft.
 const (
-	statePending = "pending"
-	stateCreated = "created"
+	statePending submissionPhase = "pending"
+	stateCreated submissionPhase = "created"
 )
 
 // submissionState is the local record that reconciles retries.
 type submissionState struct {
-	SchemaVersion int       `json:"schema_version"`
-	ReportID      string    `json:"report_id"`
-	State         string    `json:"state"`
-	Issue         *Issue    `json:"issue,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	SchemaVersion int             `json:"schema_version"`
+	ReportID      string          `json:"report_id"`
+	State         submissionPhase `json:"state"`
+	Issue         *Issue          `json:"issue,omitempty"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 // Submit validates the draft at path and publishes exactly that content to
@@ -201,7 +204,7 @@ func Submit(ctx context.Context, path string, upstream Upstream, options SubmitO
 			Err:    errors.New("the upstream does not show the report yet"),
 		}
 	}
-	candidates, err := upstream.FindCandidates(ctx, submission.Title)
+	candidates, err := upstream.FindCandidates(ctx, submission.Summary)
 	if err != nil {
 		return Result{}, upstreamFailure(err, FailureUnavailable)
 	}
@@ -215,7 +218,7 @@ func Submit(ctx context.Context, path string, upstream Upstream, options SubmitO
 		return Result{}, upstreamFailure(err, FailureUnavailable)
 	}
 	if !exists {
-		return Result{}, &SubmitError{Kind: FailureMissingLabel, Action: "ask a Factory maintainer to create the label; Factory never creates it", Err: fmt.Errorf("label %q does not exist in %s", TriageLabel, UpstreamRepository)}
+		return Result{}, &SubmitError{Kind: FailureMissingLabel, Action: failureActions[FailureMissingLabel], Err: fmt.Errorf("label %q does not exist in %s", TriageLabel, UpstreamRepository)}
 	}
 	return create(ctx, upstream, submission, statePath)
 }

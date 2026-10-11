@@ -44,7 +44,7 @@ func TestUpstreamIssuesAlwaysTargetsTheFactoryRepository(t *testing.T) {
 	upstream := github.NewUpstreamIssues(runner)
 	ctx := context.Background()
 	_, _ = upstream.FindReport(ctx, "fbr-0123456789abcdef0123456789abcdef")
-	_, _ = upstream.FindCandidates(ctx, "Suspected Factory defect: status exits 1")
+	_, _ = upstream.FindCandidates(ctx, "status exits 1")
 	_, _ = upstream.LabelExists(ctx, "needs-triage")
 	runner.output = []byte("https://github.com/Stevie1704/sw-factory/issues/7\n")
 	_, _ = upstream.CreateIssue(ctx, "title", "body", []string{"needs-triage"})

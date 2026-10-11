@@ -67,9 +67,18 @@ type Submission struct {
 	ID string
 	// Title is the issue title from the draft title line.
 	Title string
+	// Summary is the operator's one-line summary: the title without its
+	// classification prefix.
+	Summary string
 	// Body is the reviewed draft without its title line. It starts with the
 	// identity marker, so the upstream issue carries the report identity.
 	Body string
+}
+
+// Marker returns the identity marker line that starts a draft and the body
+// of its upstream issue.
+func Marker(reportID string) string {
+	return "<!-- factory-bug-report id=" + reportID + " schema=1 -->"
 }
 
 // NewID returns a new random report identity.
@@ -85,7 +94,7 @@ func NewID() (string, error) {
 // sections and the title, then submits the file unchanged otherwise.
 func Render(draft Draft) []byte {
 	var out strings.Builder
-	fmt.Fprintf(&out, "<!-- factory-bug-report id=%s schema=1 -->\n", draft.ID)
+	out.WriteString(Marker(draft.ID) + "\n")
 	fmt.Fprintf(&out, "# %s%s\n\n", titlePrefix, TitlePlaceholder)
 	out.WriteString("> Local draft prepared by `factory bug-report`. Factory sent nothing. Complete the title and the required sections, remove private content, then run `factory bug-report submit <file>`.\n\n")
 	writeSection(&out, sectionExpected, "required: what the guide or the command help says should happen; name the topic or the command")
@@ -185,7 +194,7 @@ func Parse(content []byte) (Submission, error) {
 	if len(problems) > 0 {
 		return Submission{}, fmt.Errorf("the draft is not ready for submission: %s", strings.Join(problems, "; "))
 	}
-	return Submission{ID: match[1], Title: title, Body: body}, nil
+	return Submission{ID: match[1], Title: title, Summary: summary, Body: body}, nil
 }
 
 // sectionTexts maps each "## " heading to the text below it.
