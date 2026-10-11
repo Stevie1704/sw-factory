@@ -12,6 +12,8 @@ NPM_VERSION="${NPM_VERSION:-11.21.0}"
 CLAUDE_VERSION="${CLAUDE_VERSION:-2.1.232}"
 CODEX_VERSION="${CODEX_VERSION:-0.148.0}"
 WORKER_PLATFORM="${WORKER_PLATFORM:-}"
+# A release build names its version; every other base is a development base.
+FACTORY_RELEASE="${FACTORY_RELEASE:-development}"
 WORKER_REFERENCE="${WORKER_IMAGE}:${WORKER_TAG}"
 
 # The go.mod toolchain line is the only approved Go release for the shipped
@@ -44,6 +46,7 @@ echo "Building factory base image $WORKER_BASE_IMAGE with Go $GO_VERSION"
   --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION" \
   --build-arg "CODEX_VERSION=$CODEX_VERSION" \
   --build-arg "FACTORY_BASE_VERSION=1" \
+  --build-arg "FACTORY_RELEASE=$FACTORY_RELEASE" \
   --file worker/base.Dockerfile \
   --tag "$WORKER_BASE_IMAGE" \
   .

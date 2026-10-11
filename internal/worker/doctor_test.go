@@ -246,6 +246,10 @@ func workerProbes(runtime *worker.DockerRuntime, authPath string) []workerProbe 
 		{name: "worker image", diagnosis: "worker image inspection failed", run: func() error {
 			return runtime.CheckImage(context.Background(), probedWorkerImage)
 		}},
+		{name: "worker release", diagnosis: "worker image release label inspection failed", run: func() error {
+			_, err := runtime.ImageRelease(context.Background(), probedWorkerImage)
+			return err
+		}},
 		{name: "harness executable", diagnosis: "harness executable is not usable in the worker image", run: func() error {
 			return runtime.CheckHarness(context.Background(), worker.HarnessCheckRequest{Image: probedWorkerImage, Name: "codex"})
 		}},

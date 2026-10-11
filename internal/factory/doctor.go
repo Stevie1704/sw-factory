@@ -11,6 +11,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
+	"github.com/Stevie1704/sw-factory/internal/version"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -62,6 +63,7 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	allRolesHeadless := repositoryPolicy != nil && s.allRolesHeadless(*repositoryPolicy)
 	readiness := worker.NewReadiness(s.doctorWorker(), image)
 	checks = append(checks, worker.StartupChecks(readiness)...)
+	checks = append(checks, worker.ReleaseCheck(readiness, s.doctorReleaseChecker(), coordinatorRelease()))
 	checks = append(checks, harness.StartupChecks(harness.StartupRequest{
 		Policy:                repositoryPolicy,
 		Authentication:        registration.Authentication,
@@ -113,6 +115,22 @@ func (s *Service) doctorGitWorkspace() gitadapter.DoctorChecker {
 func (s *Service) doctorWorker() worker.DoctorChecker {
 	checker, _ := s.deps.Worker.(worker.DoctorChecker)
 	return checker
+}
+
+// doctorReleaseChecker resolves the worker-owned release label probe seam.
+func (s *Service) doctorReleaseChecker() worker.ReleaseChecker {
+	checker, _ := s.deps.Worker.(worker.ReleaseChecker)
+	return checker
+}
+
+// coordinatorRelease returns the release version of the running coordinator,
+// or an empty string for a development build.
+func coordinatorRelease() string {
+	identity := version.Current()
+	if identity.Build != version.BuildRelease {
+		return ""
+	}
+	return identity.Version
 }
 
 // doctorHarnessChecker resolves the worker-owned executable probe seam.
