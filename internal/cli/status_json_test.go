@@ -123,10 +123,11 @@ func TestRunStatusJSONReportsAPausedRunWithAFailedGate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := opened.SaveGateResults(context.Background(), []store.GateResult{{
-		RunID: "run-json", CheckpointSHA: checkpoint, Phase: store.GatePhaseCheckpoint,
-		GateName: "test", Outcome: store.GateOutcomeFailed, Status: "failure", Blocking: true,
-	}}); err != nil {
+	if err := opened.SaveGateResults(context.Background(), []store.GateResult{
+		{RunID: "run-json", CheckpointSHA: checkpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 0, GateName: "test", Outcome: store.GateOutcomeFailed, Status: "failure", Blocking: true},
+		{RunID: "run-json", CheckpointSHA: checkpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 1, GateName: "lint", Outcome: store.GateOutcomeSetupFailed, Status: "failure", Blocking: true},
+		{RunID: "run-json", CheckpointSHA: checkpoint, Phase: store.GatePhaseCheckpoint, Ordinal: 2, GateName: "build", Outcome: store.GateOutcomeError, Status: "error", Blocking: true},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := opened.SaveSupervisorHeartbeat(context.Background(), store.SupervisorHeartbeat{
@@ -149,8 +150,10 @@ func TestRunStatusJSONReportsAPausedRunWithAFailedGate(t *testing.T) {
 	if run.State != "active" || run.ID != "run-json" || run.Stage != "check" || run.Status != "waiting_for_human" || run.Activity != "waiting-for-human" || run.CheckpointSHA != checkpoint {
 		t.Fatalf("run = %+v, want the paused check run", run)
 	}
-	if origin := document.blocker(t, "run.gate.failed"); origin != "repository" {
-		t.Fatalf("gate blocker origin = %q, want repository", origin)
+	for code, want := range map[string]string{"run.gate.failed": "repository", "run.gate.setup_failed": "unknown", "run.gate.error": "environment"} {
+		if origin := document.blocker(t, code); origin != want {
+			t.Fatalf("%s origin = %q, want %s", code, origin, want)
+		}
 	}
 	if origin := document.blocker(t, "run.supervisor.stale"); origin != "environment" {
 		t.Fatalf("supervisor blocker origin = %q, want environment", origin)

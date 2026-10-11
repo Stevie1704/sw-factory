@@ -307,10 +307,11 @@ func statusBlockers(result factory.StatusResult) []blockerDocument {
 	}
 	if run.Status != store.StatusActive {
 		for _, gate := range result.FailedGates {
+			code, origin := gateBlocker(gate.Outcome)
 			blockers = append(blockers, blockerDocument{
-				Code:         "run.gate.failed",
-				LikelyOrigin: doctor.OriginRepository,
-				Problem:      fmt.Sprintf("blocking gate %q did not pass at the current checkpoint", gate.GateName),
+				Code:         code,
+				LikelyOrigin: origin,
+				Problem:      fmt.Sprintf("blocking gate %q ended with outcome %s at the current checkpoint", gate.GateName, gate.Outcome),
 				Facts:        []factDocument{runFact, {Name: "gate", Value: gate.GateName}, {Name: "phase", Value: string(gate.Phase)}, {Name: "checkpoint_sha", Value: gate.CheckpointSHA}},
 			})
 		}
@@ -327,6 +328,21 @@ func statusBlockers(result factory.StatusResult) []blockerDocument {
 		}
 	}
 	return blockers
+}
+
+// gateBlocker classifies a gate outcome by its evidence. A failed command is
+// repository evidence and a runtime error is environment evidence. A setup
+// failure can come from the repository setup command or from the runtime,
+// so its origin stays unknown.
+func gateBlocker(outcome store.GateOutcome) (string, doctor.Origin) {
+	switch outcome {
+	case store.GateOutcomeFailed:
+		return "run.gate.failed", doctor.OriginRepository
+	case store.GateOutcomeError:
+		return "run.gate.error", doctor.OriginEnvironment
+	default:
+		return "run.gate." + string(outcome), doctor.OriginUnknown
+	}
 }
 
 // pausedRunBlocker classifies a run status that stops unattended progress.

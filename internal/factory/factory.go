@@ -322,8 +322,9 @@ type StatusResult struct {
 	Provider Provider
 	// Repository is the registered tracker and code-host identity.
 	Repository tracker.Repository
-	// FailedGates holds the blocking gates that failed at LatestRun's current
-	// checkpoint, in phase and declaration order.
+	// FailedGates holds the blocking gates that did not pass at LatestRun's
+	// current checkpoint: failed, blocked by setup, or ended in a runtime
+	// error. They keep the store's phase and declaration order.
 	FailedGates []store.GateResult
 }
 
@@ -382,15 +383,17 @@ type gateResultsReader interface {
 	RunGateResults(context.Context, string) ([]store.GateResult, error)
 }
 
-// failedGatesAt selects the blocking gates that failed or could not set up
-// at one exact checkpoint, keeping the store order.
+// failedGatesAt selects the blocking gates that failed, were blocked by
+// setup, or ended in a runtime error at one exact checkpoint, keeping the
+// store order. Each outcome stays visible because their origins differ.
 func failedGatesAt(results []store.GateResult, checkpointSHA string) []store.GateResult {
 	failed := []store.GateResult{}
 	for _, result := range results {
 		if checkpointSHA == "" || result.CheckpointSHA != checkpointSHA || !result.Blocking {
 			continue
 		}
-		if result.Outcome == store.GateOutcomeFailed || result.Outcome == store.GateOutcomeSetupFailed {
+		switch result.Outcome {
+		case store.GateOutcomeFailed, store.GateOutcomeSetupFailed, store.GateOutcomeError:
 			failed = append(failed, result)
 		}
 	}

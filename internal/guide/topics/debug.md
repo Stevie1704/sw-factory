@@ -127,6 +127,8 @@ that Factory could not read the value. Do not treat them as the same.
 | doctor `*.adapter_missing` with origin `factory` | Suspected Factory defect. See `factory guide reporting`. |
 | doctor `doctor.unclassified` | Unknown cause. Record the evidence. Do not call it a Factory defect. |
 | status `run.gate.failed` | Repository failure. The run's repair loop or a human fixes it. |
+| status `run.gate.error` | Environment failure. The worker runtime did not run the gate. |
+| status `run.gate.setup_failed` | Unknown cause. The setup command or the runtime failed before the gate ran. Read the lifecycle reason. |
 | status `run.supervisor.stale` or `run.supervisor.missing` | Environment failure. Run `factory start` after `factory doctor` is ready. |
 | status `recovery.sources_disagree` | Unknown cause. Read `recovery.discrepancies` and `recovery.safe_actions`. |
 
