@@ -361,6 +361,9 @@ type Report struct {
 	Usage *Usage `json:"usage,omitempty"`
 	// NativeSessionID is the harness-native continuation identifier, when known.
 	NativeSessionID string `json:"native_session_id,omitempty"`
+	// SuspectedFactoryDefect optionally proposes a suspected Software Factory
+	// defect report to the host operator. It never changes the outcome.
+	SuspectedFactoryDefect *FactoryDefectProposal `json:"suspected_factory_defect,omitempty"`
 	// ReportedAt records when the harness published the proposal.
 	ReportedAt time.Time `json:"reported_at"`
 }
@@ -738,6 +741,11 @@ func validate(value Report, context ValidationContext, allowEmptyProductionFiles
 	}
 	if err := validateEvaluationSignals(value); err != nil {
 		return err
+	}
+	if value.SuspectedFactoryDefect != nil {
+		if err := ValidateFactoryDefectProposal(*value.SuspectedFactoryDefect, value.InvocationID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
