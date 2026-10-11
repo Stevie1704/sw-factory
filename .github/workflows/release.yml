@@ -109,6 +109,8 @@ jobs:
         with:
           pattern: base-digest-*
           merge-multiple: true
+          # Outside the checkout, so the release binaries record a clean tree.
+          path: ${{ runner.temp }}/base-digests
       - name: Log in to GitHub Container Registry
         env:
           GHCR_TOKEN: ${{ github.token }}
@@ -119,8 +121,8 @@ jobs:
         run: |
           reference="$BASE_IMAGE:${{ github.ref_name }}"
           docker buildx imagetools create --tag "$reference" \
-            "$BASE_IMAGE@$(cat base-digest-amd64)" \
-            "$BASE_IMAGE@$(cat base-digest-arm64)"
+            "$BASE_IMAGE@$(cat "$RUNNER_TEMP/base-digests/base-digest-amd64")" \
+            "$BASE_IMAGE@$(cat "$RUNNER_TEMP/base-digests/base-digest-arm64")"
           digest="$(docker buildx imagetools inspect "$reference" --format '{{json .Manifest}}' | jq -r '.digest')"
           platforms="$(docker buildx imagetools inspect "$BASE_IMAGE@$digest" --format '{{json .Manifest}}' \
             | jq -r '[.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"] | sort | join(" ")')"
@@ -135,8 +137,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A version with a suffix, such as v1.2.3-rc.1, is a release candidate.
+          prerelease=""
+          case "${{ github.ref_name }}" in *-*) prerelease="--prerelease" ;; esac
           gh release create "${{ github.ref_name }}" dist/*.tar.gz dist/release.json dist/checksums.txt \
-            --verify-tag --title "${{ github.ref_name }}" \
+            --verify-tag $prerelease --title "${{ github.ref_name }}" \
             --notes "Worker base image: ${{ steps.base.outputs.image }}. See docs/installation.md for the installation and the support matrix."
       - name: Publish scan metadata
         if: always()
