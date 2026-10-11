@@ -60,11 +60,13 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 
 	headlessChecker := s.doctorHeadlessChecker()
 	allRolesHeadless := repositoryPolicy != nil && s.allRolesHeadless(*repositoryPolicy)
-	checks = append(checks, worker.StartupChecks(s.doctorWorker(), image)...)
+	readiness := worker.NewReadiness(s.doctorWorker(), image)
+	checks = append(checks, worker.StartupChecks(readiness)...)
 	checks = append(checks, harness.StartupChecks(harness.StartupRequest{
 		Policy:                repositoryPolicy,
 		Authentication:        registration.Authentication,
 		Image:                 image,
+		ImageReady:            readiness.Image,
 		Checker:               s.doctorHarnessChecker(),
 		AuthenticationChecker: s.doctorHarnessAuthenticationChecker(),
 		Resolve:               s.deps.HarnessCapabilities,
@@ -93,7 +95,7 @@ func (s *Service) trackerReadiness(repository tracker.Repository) []doctor.Check
 		return checker.StartupChecks(repository)
 	}
 	return []doctor.Check{func(context.Context) doctor.Result {
-		return doctor.Failure("tracker readiness", "the tracker adapter cannot report its readiness", "configure a tracker adapter that provides readiness checks")
+		return doctor.Failure(doctor.AdapterMissing("tracker.readiness.adapter_missing"), "tracker readiness", "the tracker adapter cannot report its readiness", "configure a tracker adapter that provides readiness checks")
 	}}
 }
 

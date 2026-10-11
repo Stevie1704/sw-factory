@@ -47,14 +47,29 @@ func diagnosisError(category, err error) error {
 }
 
 // unresponsiveFailure reports a check whose gh call reached its deadline.
-func unresponsiveFailure(name string, err error) (doctor.Result, bool) {
+func unresponsiveFailure(code, name string, err error) (doctor.Result, bool) {
 	var timeout *hostcmd.TimeoutError
 	if !errors.As(err, &timeout) {
 		return doctor.Result{}, false
 	}
-	return doctor.Failure(name,
+	condition := doctor.Condition{Code: code, Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
+	return doctor.Failure(condition, name,
 		fmt.Sprintf("GitHub did not answer within %s", timeout.Timeout),
 		"check network access to github.com and the gh proxy settings, then run factory doctor again"), true
+}
+
+// authenticationFailed reports a gh process without a usable login.
+var authenticationFailed = doctor.Condition{Code: "github.authentication.failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+
+// environmentCondition classifies a GitHub account, token, or host finding.
+func environmentCondition(code string, effect doctor.Effect, unobserved bool) doctor.Condition {
+	return doctor.Condition{Code: code, Origin: doctor.OriginEnvironment, Effect: effect, Topic: "setup", Unobserved: unobserved}
+}
+
+// unverified classifies a GitHub answer the check could not interpret, so
+// its origin stays unknown.
+func unverified(code string) doctor.Condition {
+	return doctor.Condition{Code: code, Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
 }
 
 // missingFactoryLabelError identifies one required factory label that the
@@ -82,41 +97,41 @@ func StartupChecks(client DoctorClient, repository tracker.Repository) []doctor.
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			if client == nil {
-				return doctor.Failure("github authentication", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
+				return doctor.Failure(doctor.AdapterMissing("github.authentication.adapter_missing"), "github authentication", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckAuthentication(ctx); err != nil {
-				if result, ok := unresponsiveFailure("github authentication", err); ok {
+				if result, ok := unresponsiveFailure("github.authentication.timeout", "github authentication", err); ok {
 					return result
 				}
-				return doctor.Failure("github authentication", "the GitHub CLI is not authenticated", "run gh auth login for the GitHub account that owns the registered repository")
+				return doctor.Failure(authenticationFailed, "github authentication", "the GitHub CLI is not authenticated", "run gh auth login for the GitHub account that owns the registered repository")
 			}
-			return doctor.Success("github authentication")
+			return doctor.Success("github.authentication.ready", "github authentication")
 		},
 		func(ctx context.Context) doctor.Result {
 			if client == nil {
-				return doctor.Failure("github permissions", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
+				return doctor.Failure(doctor.AdapterMissing("github.permissions.adapter_missing"), "github permissions", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckRepositoryAccess(ctx, repository); err != nil {
-				if result, ok := unresponsiveFailure("github permissions", err); ok {
+				if result, ok := unresponsiveFailure("github.permissions.timeout", "github permissions", err); ok {
 					return result
 				}
-				problem, action := repositoryAccessDiagnosis(err)
-				return doctor.Failure("github permissions", problem, action)
+				condition, problem, action := repositoryAccessDiagnosis(err)
+				return doctor.Failure(condition, "github permissions", problem, action)
 			}
-			return doctor.Success("github permissions")
+			return doctor.Success("github.permissions.ready", "github permissions")
 		},
 		func(ctx context.Context) doctor.Result {
 			if client == nil {
-				return doctor.Failure("github labels", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
+				return doctor.Failure(doctor.AdapterMissing("github.labels.adapter_missing"), "github labels", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckFactoryLabels(ctx, repository); err != nil {
-				if result, ok := unresponsiveFailure("github labels", err); ok {
+				if result, ok := unresponsiveFailure("github.labels.timeout", "github labels", err); ok {
 					return result
 				}
-				problem, action := factoryLabelsDiagnosis(err)
-				return doctor.Failure("github labels", problem, action)
+				condition, problem, action := factoryLabelsDiagnosis(err)
+				return doctor.Failure(condition, "github labels", problem, action)
 			}
-			return doctor.Success("github labels")
+			return doctor.Success("github.labels.ready", "github labels")
 		},
 	}
 }
@@ -199,22 +214,22 @@ func (c *GhClient) checkTokenPermissions(ctx context.Context, private bool) erro
 
 // repositoryAccessDiagnosis translates a read-only repository permission
 // result into the specific problem and corrective action shown by the report.
-func repositoryAccessDiagnosis(err error) (string, string) {
+func repositoryAccessDiagnosis(err error) (doctor.Condition, string, string) {
 	switch {
 	case errors.Is(err, errRepositoryUnavailable):
-		return "the registered GitHub repository could not be read", "verify the repository owner/name, network access, and GitHub authentication"
+		return environmentCondition("github.permissions.repository_unavailable", doctor.EffectInspection, true), "the registered GitHub repository could not be read", "verify the repository owner/name, network access, and GitHub authentication"
 	case errors.Is(err, errRepositoryUnreadable):
-		return "the authenticated account cannot read the registered GitHub repository", "grant repository read access to the authenticated account"
+		return environmentCondition("github.permissions.read_denied", doctor.EffectExternalMutation, false), "the authenticated account cannot read the registered GitHub repository", "grant repository read access to the authenticated account"
 	case errors.Is(err, errRepositoryContentsWrite):
-		return "the authenticated account cannot write repository contents", "grant contents write access so the factory can publish its run branch"
+		return environmentCondition("github.permissions.write_denied", doctor.EffectExternalMutation, false), "the authenticated account cannot write repository contents", "grant contents write access so the factory can publish its run branch"
 	case errors.Is(err, errRepositoryIssueSupervise):
-		return "the authenticated account cannot supervise issues and pull requests", "grant triage, maintain, or administrator repository access for labels, comments, and pull requests"
+		return environmentCondition("github.permissions.supervise_denied", doctor.EffectExternalMutation, false), "the authenticated account cannot supervise issues and pull requests", "grant triage, maintain, or administrator repository access for labels, comments, and pull requests"
 	case errors.Is(err, errGhVersionUnsupported):
-		return "the GitHub CLI version does not support token scope inspection", "upgrade gh to version 2.81.0 or newer to enable factory permission diagnosis"
+		return environmentCondition("github.permissions.gh_unsupported", doctor.EffectLocalMutation, true), "the GitHub CLI version does not support token scope inspection", "upgrade gh to version 2.81.0 or newer to enable factory permission diagnosis"
 	case errors.Is(err, errRepositoryTokenAccess):
-		return "the GitHub token does not expose the scopes required by factory operations", "authenticate gh with repo access, or with public_repo for a public repository"
+		return environmentCondition("github.permissions.token_scope", doctor.EffectLocalMutation, false), "the GitHub token does not expose the scopes required by factory operations", "authenticate gh with repo access, or with public_repo for a public repository"
 	default:
-		return "the registered GitHub repository permissions could not be validated", "verify repository access and retry the diagnosis"
+		return unverified("github.permissions.unverified"), "the registered GitHub repository permissions could not be validated", "verify repository access and retry the diagnosis"
 	}
 }
 
@@ -246,18 +261,18 @@ func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository tracker.Re
 
 // factoryLabelsDiagnosis translates a read-only GitHub label error into the
 // specific problem and corrective action shown by the startup report.
-func factoryLabelsDiagnosis(err error) (string, string) {
+func factoryLabelsDiagnosis(err error) (doctor.Condition, string, string) {
 	if errors.Is(err, errFactoryLabelsUnavailable) {
-		return "the factory state labels could not be read from GitHub", "verify GitHub authentication and repository label-read access, then retry"
+		return environmentCondition("github.labels.unreadable", doctor.EffectInspection, true), "the factory state labels could not be read from GitHub", "verify GitHub authentication and repository label-read access, then retry"
 	}
 	if errors.Is(err, errFactoryLabelsMalformed) {
-		return "GitHub returned an invalid factory-label response", "verify gh and GitHub API compatibility, then retry the diagnosis"
+		return unverified("github.labels.malformed_response"), "GitHub returned an invalid factory-label response", "verify gh and GitHub API compatibility, then retry the diagnosis"
 	}
 	var missing *missingFactoryLabelError
 	if errors.As(err, &missing) {
-		return fmt.Sprintf("required factory label %q is missing", missing.name), "run factory bootstrap-labels after granting label-management permission"
+		return environmentCondition("github.labels.missing", doctor.EffectExternalMutation, false), fmt.Sprintf("required factory label %q is missing", missing.name), "run factory bootstrap-labels after granting label-management permission"
 	}
-	return "the registered factory labels could not be validated", "verify the registered repository and GitHub label access, then retry"
+	return unverified("github.labels.unverified"), "the registered factory labels could not be validated", "verify the registered repository and GitHub label access, then retry"
 }
 
 // validateDoctorRepository rejects values that could alter a read-only API

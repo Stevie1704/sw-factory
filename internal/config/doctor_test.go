@@ -263,14 +263,15 @@ func TestCacheStartupCheckBlocksAHostPathOutsideTheCacheRoot(t *testing.T) {
 	}
 }
 
-// TestCacheStartupCheckStaysSilentWithoutConfiguration verifies the cache
-// diagnosis does not repeat a configuration failure another check reports.
-func TestCacheStartupCheckStaysSilentWithoutConfiguration(t *testing.T) {
+// TestCacheStartupCheckIsSkippedWithoutConfiguration verifies the cache
+// diagnosis neither repeats a configuration failure nor reports an
+// unobserved cache agreement as healthy.
+func TestCacheStartupCheckIsSkippedWithoutConfiguration(t *testing.T) {
 	t.Parallel()
 
 	result := config.CacheStartupCheck(config.DoctorState{})(context.Background())
-	if result.Status != doctor.StatusPassed {
-		t.Fatalf("cache diagnosis = %#v, want passed without configuration", result)
+	if result.Status != doctor.StatusSkipped || result.Code != "config.caches.not_checked" || !result.Unobserved {
+		t.Fatalf("cache diagnosis = %#v, want an unobserved skipped check", result)
 	}
 }
 
@@ -494,13 +495,14 @@ func TestWorkerLimitsStartupCheckReportsTheEffectiveLimits(t *testing.T) {
 	}
 }
 
-// TestWorkerLimitsStartupCheckReportsNothingWithoutARegistration verifies the
-// check leaves an unreadable configuration to the configuration check.
-func TestWorkerLimitsStartupCheckReportsNothingWithoutARegistration(t *testing.T) {
+// TestWorkerLimitsStartupCheckIsSkippedWithoutARegistration verifies the
+// check leaves an unreadable configuration to the configuration check and
+// does not report unknown limits as healthy.
+func TestWorkerLimitsStartupCheckIsSkippedWithoutARegistration(t *testing.T) {
 	t.Parallel()
 
 	result := config.WorkerLimitsStartupCheck(config.DoctorState{})(context.Background())
-	if result.Status != doctor.StatusPassed || result.Detail != "" {
-		t.Fatalf("worker limits diagnosis = %#v, want a passed check with no detail", result)
+	if result.Status != doctor.StatusSkipped || result.Detail != "" || !result.Unobserved {
+		t.Fatalf("worker limits diagnosis = %#v, want an unobserved skipped check with no detail", result)
 	}
 }

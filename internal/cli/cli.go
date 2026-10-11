@@ -140,10 +140,12 @@ func runBootstrapLabels(ctx context.Context, args []string, defaultConfigPath st
 }
 
 // runDoctor renders every startup diagnosis and returns a nonzero status when
-// any blocking prerequisite remains unresolved.
+// any blocking prerequisite remains unresolved. With --json it writes the
+// same typed report as one schema-versioned JSON document.
 func runDoctor(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := newFlagSet("doctor", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	asJSON := flags.Bool("json", false, "write the diagnosis as one schema-versioned JSON document")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -152,18 +154,15 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 		return 2
 	}
 	result, err := newService(*configPath).Doctor(ctx)
+	if *asJSON {
+		return writeDoctorJSON(output, errorsOutput, result, err)
+	}
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
 	for _, check := range result.Report.Results {
-		if check.Status == doctor.StatusPassed {
-			if !writePassedCheck(output, errorsOutput, check) {
-				return 1
-			}
-			continue
-		}
-		if !writeCheckDiagnosis(output, errorsOutput, check) {
+		if !writeDoctorResult(output, errorsOutput, check) {
 			return 1
 		}
 	}
@@ -177,6 +176,34 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 		return 1
 	}
 	return 1
+}
+
+// writeDoctorJSON writes the doctor report, or the operational failure that
+// prevented one, as a JSON document. It exits 0 only when startup is ready.
+func writeDoctorJSON(output, errorsOutput io.Writer, result factory.DoctorResult, err error) int {
+	if err != nil {
+		writeJSONDocument(output, errorsOutput, newDoctorErrorDocument())
+		return 1
+	}
+	if !writeJSONDocument(output, errorsOutput, newDoctorDocument(result.Report)) {
+		return 1
+	}
+	if result.Ready() {
+		return 0
+	}
+	return 1
+}
+
+// writeDoctorResult renders one startup check in the text view.
+func writeDoctorResult(output, errorsOutput io.Writer, check doctor.Result) bool {
+	switch check.Status {
+	case doctor.StatusPassed:
+		return writePassedCheck(output, errorsOutput, check)
+	case doctor.StatusSkipped:
+		return writeOutput(output, errorsOutput, "doctor: %s: skipped (%s)\n", check.Name, check.Problem)
+	default:
+		return writeCheckDiagnosis(output, errorsOutput, check)
+	}
 }
 
 // writePassedCheck renders one passed startup check and its optional detail.
@@ -685,9 +712,12 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 
 // runStatus reports the current configuration, repository registration, and active run.
 // It returns 0 on success, 1 when status retrieval fails, or 2 when arguments are invalid.
+// With --json it writes the same typed result as one schema-versioned JSON
+// document, including a status retrieval failure.
 func runStatus(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := newFlagSet("status", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	asJSON := flags.Bool("json", false, "write the status as one schema-versioned JSON document")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -697,6 +727,12 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 	}
 	service := newService(*configPath)
 	result, err := service.Status(ctx)
+	if *asJSON {
+		if !writeJSONDocument(output, errorsOutput, newStatusDocument(result, err)) || err != nil {
+			return 1
+		}
+		return 0
+	}
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -730,6 +766,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		}
 		if result.LatestRun.LifecycleReason != "" {
 			if !writeOutput(output, errorsOutput, "lifecycle reason: %s\n", result.LatestRun.LifecycleReason) {
+				return 1
+			}
+		}
+		for _, gate := range result.FailedGates {
+			if !writeOutput(output, errorsOutput, "failed gate: %s (phase=%s outcome=%s checkpoint=%s)\n", gate.GateName, gate.Phase, gate.Outcome, gate.CheckpointSHA) {
 				return 1
 			}
 		}

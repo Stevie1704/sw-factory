@@ -198,3 +198,16 @@ func (r *doctorRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, 
 }
 
 var _ github.CommandRunner = (*doctorRunner)(nil)
+
+// TestStartupChecksClassifyAnAuthenticationFailureAsEnvironment verifies a
+// gh login failure has a stable code and is not attributed to Factory.
+func TestStartupChecksClassifyAnAuthenticationFailureAsEnvironment(t *testing.T) {
+	runner := &doctorRunner{responses: []doctorResponse{{err: errors.New("not logged in")}}}
+	client := &github.GhClient{Runner: runner}
+	report := doctor.Run(context.Background(), github.StartupChecks(client, tracker.Repository{Owner: "example", Name: "project"})...)
+
+	authentication := report.Results[0]
+	if authentication.Code != "github.authentication.failed" || authentication.Origin != doctor.OriginEnvironment || authentication.Effect != doctor.EffectLocalMutation {
+		t.Fatalf("authentication result = %#v, want github.authentication.failed from the environment", authentication)
+	}
+}

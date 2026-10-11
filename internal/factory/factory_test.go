@@ -252,6 +252,13 @@ func TestFactoryStatusUsesTheHighLevelSeamWithARealSQLiteStoreAndFakeConfigAdapt
 		},
 		CheckRepository: func(string) error { return nil },
 	})
+	initialized, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initialized.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	status, err := service.Status(context.Background())
 	if err != nil {

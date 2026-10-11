@@ -68,7 +68,7 @@ func TestStartAcquiresTheCoordinatorLockBeforeReconciliation(t *testing.T) {
 		IssuePoller: lockTestIssuePoller{},
 		Lease:       lockTestLease{},
 		StartupDiagnosis: func(context.Context) (DoctorResult, error) {
-			return DoctorResult{Report: doctor.Report{Results: []doctor.Result{doctor.Success("startup")}}}, nil
+			return DoctorResult{Report: doctor.Report{Results: []doctor.Result{doctor.Success("test.startup.ready", "startup")}}}, nil
 		},
 	}}
 

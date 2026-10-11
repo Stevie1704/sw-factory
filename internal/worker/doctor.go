@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"golang.org/x/sys/unix"
@@ -73,26 +74,99 @@ type HeadlessCheckRequest struct {
 	Image ImageReference
 }
 
-// StartupChecks returns independent Docker daemon and worker-image checks.
-func StartupChecks(checker DoctorChecker, image ImageReference) []doctor.Check {
+// ErrDockerMissing reports that the Docker executable is not on PATH, which
+// diagnosis distinguishes from an unreachable daemon.
+var ErrDockerMissing = errors.New("Docker executable is unavailable")
+
+// Worker diagnosis conditions. Codes are stable; wording may change.
+var (
+	dockerAdapterMissing = doctor.AdapterMissing("worker.docker.adapter_missing")
+	dockerMissing        = doctor.Condition{Code: "worker.docker.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	dockerUnreachable    = doctor.Condition{Code: "worker.docker.unreachable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	imageMissing         = doctor.Condition{Code: "worker.image.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	probeOutputLimit     = doctor.Condition{Code: "worker.probe.output_limit", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
+)
+
+// errDockerAdapterMissing reports a diagnosis without a Docker adapter.
+var errDockerAdapterMissing = errors.New("the Docker diagnosis adapter is unavailable")
+
+// Readiness probes Docker and the pinned worker image at most once per
+// diagnosis. Probes that run inside the image ask it first, so an image that
+// nobody could inspect is reported as not checked instead of as a finding.
+type Readiness struct {
+	checker   DoctorChecker
+	image     ImageReference
+	dockerRun sync.Once
+	dockerErr error
+	imageRun  sync.Once
+	imageErr  error
+}
+
+// NewReadiness creates the readiness of one diagnosis. A nil checker makes
+// every probe report the missing adapter.
+func NewReadiness(checker DoctorChecker, image ImageReference) *Readiness {
+	return &Readiness{checker: checker, image: image}
+}
+
+// Docker returns the result of the one Docker daemon probe.
+func (r *Readiness) Docker(ctx context.Context) error {
+	r.dockerRun.Do(func() {
+		if r.checker == nil {
+			r.dockerErr = errDockerAdapterMissing
+			return
+		}
+		r.dockerErr = r.checker.CheckDocker(ctx)
+	})
+	return r.dockerErr
+}
+
+// Image returns the result of the one worker-image probe. It reports the
+// Docker failure, wrapped in ErrImageNotChecked, when the daemon is not usable.
+func (r *Readiness) Image(ctx context.Context) error {
+	r.imageRun.Do(func() {
+		if err := r.Docker(ctx); err != nil {
+			r.imageErr = fmt.Errorf("%w: %w", ErrImageNotChecked, err)
+			return
+		}
+		r.imageErr = r.checker.CheckImage(ctx, r.image)
+	})
+	return r.imageErr
+}
+
+// ErrImageNotChecked reports that the worker image was not inspected because
+// Docker is not usable.
+var ErrImageNotChecked = errors.New("the worker image was not checked because Docker is not usable")
+
+// ImageUnavailableReason is the skip reason of a probe that needs the image.
+const ImageUnavailableReason = "the worker image is not available for inspection; see the docker daemon and worker image checks"
+
+// StartupChecks returns the Docker daemon check and the worker-image check,
+// which is skipped when the daemon is not usable.
+func StartupChecks(readiness *Readiness) []doctor.Check {
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
-			if checker == nil {
-				return doctor.Failure("docker daemon", "the Docker diagnosis adapter is unavailable", "configure the Docker worker runtime")
+			err := readiness.Docker(ctx)
+			switch {
+			case err == nil:
+				return doctor.Success("worker.docker.ready", "docker daemon")
+			case errors.Is(err, errDockerAdapterMissing):
+				return doctor.Failure(dockerAdapterMissing, "docker daemon", "the Docker diagnosis adapter is unavailable", "configure the Docker worker runtime")
+			case errors.Is(err, ErrDockerMissing):
+				return doctor.Failure(dockerMissing, "docker daemon", "the Docker executable is not on PATH", "install Docker and make its executable available on the coordinator PATH")
+			default:
+				return ProbeFailure(dockerUnreachable, "docker daemon", err, "the coordinator cannot reach a usable Docker daemon", "start Docker and verify the coordinator account can access it")
 			}
-			if err := checker.CheckDocker(ctx); err != nil {
-				return ProbeFailure("docker daemon", err, "the coordinator cannot reach a usable Docker daemon", "start Docker and verify the coordinator account can access it")
-			}
-			return doctor.Success("docker daemon")
 		},
 		func(ctx context.Context) doctor.Result {
-			if checker == nil {
-				return doctor.Failure("worker image", "the Docker diagnosis adapter is unavailable", "configure the Docker worker runtime")
+			err := readiness.Image(ctx)
+			switch {
+			case err == nil:
+				return doctor.Success("worker.image.ready", "worker image")
+			case errors.Is(err, ErrImageNotChecked):
+				return doctor.Skipped("worker.image.not_checked", "worker image", "Docker is not usable; see the docker daemon check")
+			default:
+				return ProbeFailure(imageMissing, "worker image", err, "the configured worker image@sha256 digest is not available locally", "build or load the configured worker image at the exact digest; doctor never pulls images")
 			}
-			if err := checker.CheckImage(ctx, image); err != nil {
-				return ProbeFailure("worker image", err, "the configured worker image@sha256 digest is not available locally", "build or load the configured worker image at the exact digest; doctor never pulls images")
-			}
-			return doctor.Success("worker image")
 		},
 	}
 }
@@ -105,13 +179,13 @@ const outputLimitAction = "reduce the output of the probed worker operation; the
 // ProbeFailure renders one worker-probe failure as an operator diagnosis. A
 // capture-limit overflow reports the overflow itself, because the check's own
 // problem statement would name a verdict the probe never reached. Every other
-// failure keeps the check's fixed problem and action.
-func ProbeFailure(name string, err error, problem, action string) doctor.Result {
+// failure keeps the check's fixed condition, problem, and action.
+func ProbeFailure(condition doctor.Condition, name string, err error, problem, action string) doctor.Result {
 	var limitErr *OutputLimitExceededError
 	if errors.As(err, &limitErr) {
-		return doctor.Failure(name, limitErr.Error(), outputLimitAction)
+		return doctor.Failure(probeOutputLimit, name, limitErr.Error(), outputLimitAction)
 	}
-	return doctor.Failure(name, problem, action)
+	return doctor.Failure(condition, name, problem, action)
 }
 
 // CheckDocker verifies the Docker executable and daemon without displaying
@@ -122,7 +196,7 @@ func (r *DockerRuntime) CheckDocker(ctx context.Context) error {
 		binary = "docker"
 	}
 	if _, err := exec.LookPath(binary); err != nil {
-		return errors.New("Docker executable is unavailable")
+		return ErrDockerMissing
 	}
 	if _, err := r.runDocker(ctx, []string{"version", "--format", "{{.Server.Version}}"}); err != nil {
 		return redactCause(err, "Docker daemon is unavailable")

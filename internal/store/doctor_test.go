@@ -118,7 +118,10 @@ func TestSupervisorStartupCheckDistinguishesLiveAndMissingHeartbeats(t *testing.
 	}
 	now := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
 	missing := store.SupervisorStartupCheck(path, now)(t.Context())
-	if missing.Status != doctor.StatusWarning || !strings.Contains(missing.Problem, "no live supervisor") {
+	if missing.Effect != doctor.EffectExternalMutation {
+		t.Fatalf("missing heartbeat effect = %q, want factory start classified as an external mutation", missing.Effect)
+	}
+	if missing.Status != doctor.StatusWarning || missing.Code != "store.supervisor.missing" || !strings.Contains(missing.Problem, "no live supervisor") {
 		t.Fatalf("missing heartbeat result = %#v, want a no-live warning", missing)
 	}
 
@@ -140,12 +143,16 @@ func TestSupervisorStartupCheckDistinguishesLiveAndMissingHeartbeats(t *testing.
 		t.Fatal(err)
 	}
 	live := store.SupervisorStartupCheck(path, now.Add(30*time.Second))(t.Context())
-	if live.Status != doctor.StatusPassed {
+	if live.Status != doctor.StatusPassed || live.Code != "store.supervisor.live" {
 		t.Fatalf("live heartbeat result = %#v, want passed", live)
 	}
 	notHeld := store.SupervisorStartupCheckWithLock(path, now.Add(30*time.Second), func() bool { return false })(t.Context())
-	if notHeld.Status != doctor.StatusWarning || !strings.Contains(notHeld.Problem, "no live supervisor") {
-		t.Fatalf("unheld live heartbeat result = %#v, want a no-live warning", notHeld)
+	if notHeld.Status != doctor.StatusWarning || notHeld.Code != "store.supervisor.stale" || !strings.Contains(notHeld.Problem, "no live supervisor") {
+		t.Fatalf("unheld live heartbeat result = %#v, want a stale warning", notHeld)
+	}
+	expired := store.SupervisorStartupCheck(path, now.Add(2*time.Minute))(t.Context())
+	if expired.Code != "store.supervisor.stale" {
+		t.Fatalf("expired heartbeat result = %#v, want a stale warning", expired)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -150,7 +151,7 @@ func TestDoctorRunsTheTrackerAdapterReadinessChecks(t *testing.T) {
 	if ready.repository != (tracker.Repository{}) {
 		t.Fatalf("readiness repository = %v, want the unregistered empty repository", ready.repository)
 	}
-	if !hasDoctorResult(result, doctor.Success("tracker reachable")) {
+	if !hasDoctorResult(result, doctor.Success("tracker.reachable.ready", "tracker reachable")) {
 		t.Fatalf("Doctor() results = %#v, want the adapter's tracker reachable check", result.Report.Results)
 	}
 }
@@ -187,7 +188,7 @@ func doctorWithTracker(t *testing.T, adapter tracker.Client) factory.DoctorResul
 // hasDoctorResult reports whether the report contains want.
 func hasDoctorResult(result factory.DoctorResult, want doctor.Result) bool {
 	for _, check := range result.Report.Results {
-		if check == want {
+		if reflect.DeepEqual(check, want) {
 			return true
 		}
 	}
@@ -204,7 +205,9 @@ type readinessTracker struct {
 // StartupChecks implements tracker.ReadinessChecker.
 func (r *readinessTracker) StartupChecks(repository tracker.Repository) []doctor.Check {
 	r.repository = repository
-	return []doctor.Check{func(context.Context) doctor.Result { return doctor.Success("tracker reachable") }}
+	return []doctor.Check{func(context.Context) doctor.Result {
+		return doctor.Success("tracker.reachable.ready", "tracker reachable")
+	}}
 }
 
 // doctorContractGitWorkspace supplies both the task-oriented Git seam and its

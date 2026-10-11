@@ -25,9 +25,27 @@ type DoctorState struct {
 	Registration *RepositoryRegistration
 	// Repository is the checked-in repository policy when available.
 	Repository *RepositoryConfig
+	condition  doctor.Condition
 	problem    string
 	action     string
 }
+
+// Configuration diagnosis conditions. Codes are stable; wording may change.
+var (
+	hostPathMissing       = doctor.Condition{Code: "config.host.path_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostMissing           = doctor.Condition{Code: "config.host.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostNotRegular        = doctor.Condition{Code: "config.host.not_regular", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostNotPrivate        = doctor.Condition{Code: "config.host.not_private", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostInvalid           = doctor.Condition{Code: "config.host.invalid", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	registrationMissing   = doctor.Condition{Code: "config.registration.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	repositoryOutside     = doctor.Condition{Code: "config.repository.outside_checkout", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	repositoryMissing     = doctor.Condition{Code: "config.repository.missing", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	repositoryInvalid     = doctor.Condition{Code: "config.repository.invalid", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	cacheUnmapped         = doctor.Condition{Code: "config.caches.unmapped", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	cacheOutsideRoot      = doctor.Condition{Code: "config.caches.outside_root", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	cacheUndeclared       = doctor.Condition{Code: "config.caches.undeclared", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	configurationRequired = "the configuration check did not produce a usable configuration"
+)
 
 // StartupCheck loads and validates host-local and repository configuration
 // once, returning the safe state used to compose the remaining checks.
@@ -35,9 +53,9 @@ func StartupCheck(path string) (DoctorState, doctor.Check) {
 	state := inspectDoctorState(path)
 	return state, func(context.Context) doctor.Result {
 		if state.problem != "" {
-			return doctor.Failure("configuration", state.problem, state.action)
+			return doctor.Failure(state.condition, "configuration", state.problem, state.action)
 		}
-		return doctor.Success("configuration")
+		return doctor.Success("config.configuration.ready", "configuration")
 	}
 }
 
@@ -46,10 +64,11 @@ func StartupCheck(path string) (DoctorState, doctor.Check) {
 // names the limits every worker container receives.
 func WorkerLimitsStartupCheck(state DoctorState) doctor.Check {
 	return func(context.Context) doctor.Result {
-		result := doctor.Success("worker limits")
-		if state.Registration != nil {
-			result.Detail = EffectiveWorkerLimits(state.Registration.WorkerLimits).String()
+		if state.Registration == nil {
+			return doctor.Skipped("config.worker_limits.not_checked", "worker limits", configurationRequired)
 		}
+		result := doctor.Success("config.worker_limits.ready", "worker limits")
+		result.Detail = EffectiveWorkerLimits(state.Registration.WorkerLimits).String()
 		return result
 	}
 }
@@ -61,7 +80,7 @@ func WorkerLimitsStartupCheck(state DoctorState) doctor.Check {
 func CacheStartupCheck(state DoctorState) doctor.Check {
 	return func(context.Context) doctor.Result {
 		if state.Registration == nil || state.Repository == nil {
-			return doctor.Success("caches")
+			return doctor.Skipped("config.caches.not_checked", "caches", configurationRequired)
 		}
 		return diagnoseCaches(*state.Registration, *state.Repository)
 	}
@@ -76,14 +95,14 @@ func diagnoseCaches(registration RepositoryRegistration, repository RepositoryCo
 		declared[cache.Name] = struct{}{}
 		hostPath := strings.TrimSpace(registration.Caches[cache.Name])
 		if hostPath == "" {
-			return doctor.Failure("caches",
+			return doctor.Failure(cacheUnmapped, "caches",
 				fmt.Sprintf("repository cache %q has no host path", cache.Name),
-				fmt.Sprintf("map caches.%s to a directory under cache_root in the host configuration", cache.Name))
+				fmt.Sprintf("map caches.%s to a directory under cache_root in the host configuration", cache.Name)).WithFacts(cacheFact(cache.Name))
 		}
 		if !pathWithin(registration.CacheRoot, hostPath) {
-			return doctor.Failure("caches",
+			return doctor.Failure(cacheOutsideRoot, "caches",
 				fmt.Sprintf("the host path for cache %q is outside the configured cache root", cache.Name),
-				fmt.Sprintf("move caches.%s under cache_root in the host configuration", cache.Name))
+				fmt.Sprintf("move caches.%s under cache_root in the host configuration", cache.Name)).WithFacts(cacheFact(cache.Name))
 		}
 	}
 	names := make([]string, 0, len(registration.Caches))
@@ -93,46 +112,57 @@ func diagnoseCaches(registration RepositoryRegistration, repository RepositoryCo
 	sort.Strings(names)
 	for _, name := range names {
 		if _, ok := declared[name]; !ok {
-			return doctor.Failure("caches",
+			return doctor.Failure(cacheUndeclared, "caches",
 				fmt.Sprintf("host configuration maps cache %q that the repository does not declare", name),
-				fmt.Sprintf("remove caches.%s from the host configuration or declare it in the repository configuration", name))
+				fmt.Sprintf("remove caches.%s from the host configuration or declare it in the repository configuration", name)).WithFacts(cacheFact(name))
 		}
 	}
-	return doctor.Success("caches")
+	return doctor.Success("config.caches.ready", "caches")
+}
+
+// cacheFact names the diagnosed repository cache as a supporting observation.
+func cacheFact(name string) doctor.Fact {
+	return doctor.Fact{Name: "cache", Value: name}
 }
 
 // inspectDoctorState performs the configuration-owned read-only diagnosis.
 func inspectDoctorState(path string) DoctorState {
 	state := DoctorState{ConfigPath: path}
 	if strings.TrimSpace(path) == "" {
+		state.condition = hostPathMissing
 		state.problem = "host-local configuration path is not configured"
 		state.action = "set FACTORY_CONFIG or pass --config to a readable host configuration"
 		return state
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
+		state.condition = hostMissing
 		state.problem = "host-local configuration cannot be read"
 		state.action = "run factory init for the configured host configuration path"
 		return state
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		state.condition = hostNotRegular
 		state.problem = "host-local configuration is not a regular file"
 		state.action = "replace the host configuration with a regular private file"
 		return state
 	}
 	if info.Mode().Perm()&0o077 != 0 {
+		state.condition = hostNotPrivate
 		state.problem = "host-local configuration is not private"
 		state.action = "restrict the host configuration to owner read/write permissions"
 		return state
 	}
 	host, err := LoadHost(path)
 	if err != nil {
+		state.condition = hostInvalid
 		state.problem = "host-local configuration is missing or invalid"
 		state.action = "repair the host configuration schema and registration fields"
 		return state
 	}
 	state.Host = host
 	if len(host.Repositories) == 0 {
+		state.condition = registrationMissing
 		state.problem = "no repository is registered"
 		state.action = "run factory register for the repository this coordinator should operate"
 		return state
@@ -140,18 +170,21 @@ func inspectDoctorState(path string) DoctorState {
 	registration := host.Repositories[0]
 	state.Registration = &registration
 	if !pathWithin(registration.Path, registration.RepositoryConfigPath) {
+		state.condition = repositoryOutside
 		state.problem = "repository configuration is outside the registered repository"
 		state.action = "point repository_config_path at the checked-in factory.yaml inside the repository"
 		return state
 	}
 	configInfo, err := os.Lstat(registration.RepositoryConfigPath)
 	if err != nil || configInfo.Mode()&os.ModeSymlink != 0 || !configInfo.Mode().IsRegular() {
+		state.condition = repositoryMissing
 		state.problem = "checked-in repository configuration is not a regular file"
 		state.action = "restore a regular factory.yaml inside the registered repository checkout"
 		return state
 	}
 	repository, err := LoadRepository(registration.RepositoryConfigPath)
 	if err != nil {
+		state.condition = repositoryInvalid
 		state.problem = describeRepositoryLoadFailure(err)
 		state.action = "repair the repository factory.yaml and its declared workflow policy"
 		return state

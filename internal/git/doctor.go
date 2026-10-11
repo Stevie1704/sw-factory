@@ -90,31 +90,30 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 	checks := []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			if checker == nil {
-				return doctor.Failure("git remote", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(doctor.AdapterMissing("git.remote.adapter_missing"), "git remote", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckRemote(ctx, request); err != nil {
-				problem, action := remoteDiagnosis(err)
-				return doctor.Failure("git remote", problem, action)
+				return remoteFailureResult(err)
 			}
-			return doctor.Success("git remote")
+			return doctor.Success("git.remote.ready", "git remote")
 		},
 		func(ctx context.Context) doctor.Result {
 			if checker == nil {
-				return doctor.Failure("git hooks", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(doctor.AdapterMissing("git.hooks.adapter_missing"), "git hooks", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckHooks(ctx, request); err != nil {
-				return doctor.Failure("git hooks", "factory Git invocations do not suppress repository hooks", "remove any git wrapper or alias on PATH that drops command-line configuration; move required hook checks into repository gates")
+				return doctor.Failure(hooksNotSuppressed, "git hooks", "factory Git invocations do not suppress repository hooks", "remove any git wrapper or alias on PATH that drops command-line configuration; move required hook checks into repository gates")
 			}
-			return doctor.Success("git hooks")
+			return doctor.Success("git.hooks.ready", "git hooks")
 		},
 		func(ctx context.Context) doctor.Result {
 			if checker == nil {
-				return doctor.Failure("git worktree", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(doctor.AdapterMissing("git.worktree.adapter_missing"), "git worktree", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckWorktree(ctx, request); err != nil {
-				return doctor.Failure("git worktree", "the registered checkout cannot provide the worktree support required by a run", "repair the checkout and enable the Git worktree command")
+				return doctor.Failure(worktreeUnsupported, "git worktree", "the registered checkout cannot provide the worktree support required by a run", "repair the checkout and enable the Git worktree command")
 			}
-			return doctor.Success("git worktree")
+			return doctor.Success("git.worktree.ready", "git worktree")
 		},
 	}
 	roles := make([]string, 0, len(request.RoleCraft))
@@ -127,16 +126,16 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 		checks = append(checks, func(ctx context.Context) doctor.Result {
 			name := "git role craft " + roleName
 			if checker == nil {
-				return doctor.Failure(name, "the Git role-craft diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(doctor.AdapterMissing("git.role_craft.adapter_missing"), name, "the Git role-craft diagnosis adapter is unavailable", "configure the host Git workspace adapter").WithFacts(roleFact(roleName))
 			}
 			roleChecker, ok := checker.(RoleCraftChecker)
 			if !ok {
-				return doctor.Failure(name, "the Git adapter cannot verify repository craft at the target branch head", "upgrade the Git workspace adapter to support role-craft diagnosis")
+				return doctor.Failure(doctor.AdapterMissing("git.role_craft.unsupported"), name, "the Git adapter cannot verify repository craft at the target branch head", "upgrade the Git workspace adapter to support role-craft diagnosis").WithFacts(roleFact(roleName))
 			}
 			if err := roleChecker.CheckRoleCraft(ctx, request, roleName, path); err != nil {
-				return doctor.Failure(name, fmt.Sprintf("role_craft.%s at %s cannot be resolved at the target branch head", roleName, path), "restore the declared craft file on the target branch or remove the role_craft entry")
+				return doctor.Failure(roleCraftUnresolved, name, fmt.Sprintf("role_craft.%s at %s cannot be resolved at the target branch head", roleName, path), "restore the declared craft file on the target branch or remove the role_craft entry").WithFacts(roleFact(roleName))
 			}
-			return doctor.Success(name)
+			return doctor.Success("git.role_craft.ready", name).WithFacts(roleFact(roleName))
 		})
 	}
 	return checks
@@ -212,37 +211,75 @@ func (m *LocalWorktreeManager) CheckRemote(ctx context.Context, request DoctorRe
 	return nil
 }
 
-// remoteDiagnosis translates one safe Git remote category into the specific
-// problem and corrective action shown by the startup report.
-func remoteDiagnosis(err error) (string, string) {
+// Git diagnosis conditions. Codes are stable; wording may change.
+var (
+	hooksNotSuppressed  = doctor.Condition{Code: "git.hooks.not_suppressed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	worktreeUnsupported = doctor.Condition{Code: "git.worktree.unsupported", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	roleCraftUnresolved = doctor.Condition{Code: "git.role_craft.unresolved", Origin: doctor.OriginRepository, Effect: doctor.EffectExternalMutation, Topic: "setup"}
+)
+
+// roleFact names the diagnosed workflow role as a supporting observation.
+func roleFact(role string) doctor.Fact {
+	return doctor.Fact{Name: "role", Value: role}
+}
+
+// remoteFinding is the classification and wording of one Git remote failure
+// category. One table holds both, so the text and JSON views cannot drift.
+type remoteFinding struct {
+	condition doctor.Condition
+	problem   string
+	action    string
+}
+
+// remoteSetup classifies a remote finding the operator corrects on the host.
+func remoteSetup(code string) doctor.Condition {
+	return doctor.Condition{Code: code, Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+}
+
+// remoteFindings maps each Git remote failure category to its finding.
+var remoteFindings = map[remoteFailureKind]remoteFinding{
+	remoteFailureConfiguration: {remoteSetup("git.remote.configuration"), "the Git remote diagnosis request is incomplete or unsafe", "repair the registered repository identity, remote name, and target branch"},
+	remoteFailureCheckout:      {remoteSetup("git.remote.checkout"), "the registered checkout cannot be inspected as a Git repository", "repair the registered checkout path and initialize or restore its Git metadata"},
+	remoteFailureRoot:          {remoteSetup("git.remote.root"), "Git resolved a checkout root different from the registered repository", "register the checkout's actual Git root or correct the repository path"},
+	remoteFailureFetchRead:     {remoteSetup("git.remote.fetch_read"), "the configured Git fetch remote is missing or unreadable", "configure the factory remote and verify the checkout can read it"},
+	remoteFailureFetchIdentity: {remoteSetup("git.remote.fetch_identity"), "the Git fetch remote does not identify the registered repository", "set the configured remote's fetch URL to the registered GitHub or Azure Repos repository"},
+	remoteFailurePushRead:      {remoteSetup("git.remote.push_read"), "the configured Git push remote is missing or unreadable", "configure a push URL for the factory remote and verify the checkout can read it"},
+	remoteFailurePushIdentity:  {remoteSetup("git.remote.push_identity"), "the Git push remote does not identify the registered repository", "set the configured remote's push URL to the registered GitHub or Azure Repos repository"},
+	remoteFailureBranchRead:    {remoteSetup("git.remote.branch_read"), "the configured Git target branch cannot be read from the remote", "fetch the target branch and verify network and remote permissions"},
+	remoteFailureBranchNoCommit: {
+		doctor.Condition{Code: "git.remote.branch_no_commit", Origin: doctor.OriginRepository, Effect: doctor.EffectExternalMutation, Topic: "setup"},
+		"the configured Git target branch has no commit on the remote",
+		"choose an existing target branch or publish the branch before starting the factory",
+	},
+	remoteFailureUnresponsive: {
+		doctor.Condition{Code: "git.remote.unresponsive", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true},
+		"the Git remote did not answer within %s",
+		"check network access to the remote and that a credential helper or ssh agent supplies the credential without a prompt, then run factory doctor again",
+	},
+}
+
+// unclassifiedRemote is the finding for a failure without a known category.
+var unclassifiedRemote = remoteFinding{
+	doctor.Condition{Code: "git.remote.unclassified", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true},
+	"the Git remote diagnosis could not be classified",
+	"repair the registered checkout and configured Git remote, then retry the diagnosis",
+}
+
+// remoteFailureResult translates one safe Git remote category into the
+// classified startup result.
+func remoteFailureResult(err error) doctor.Result {
+	finding := unclassifiedRemote
 	var failure *remoteCheckError
-	if !errors.As(err, &failure) {
-		return "the Git remote diagnosis could not be classified", "repair the registered checkout and configured Git remote, then retry the diagnosis"
+	if errors.As(err, &failure) {
+		if known, ok := remoteFindings[failure.kind]; ok {
+			finding = known
+		}
 	}
-	switch failure.kind {
-	case remoteFailureConfiguration:
-		return "the Git remote diagnosis request is incomplete or unsafe", "repair the registered repository identity, remote name, and target branch"
-	case remoteFailureCheckout:
-		return "the registered checkout cannot be inspected as a Git repository", "repair the registered checkout path and initialize or restore its Git metadata"
-	case remoteFailureRoot:
-		return "Git resolved a checkout root different from the registered repository", "register the checkout's actual Git root or correct the repository path"
-	case remoteFailureFetchRead:
-		return "the configured Git fetch remote is missing or unreadable", "configure the factory remote and verify the checkout can read it"
-	case remoteFailureFetchIdentity:
-		return "the Git fetch remote does not identify the registered repository", "set the configured remote's fetch URL to the registered GitHub or Azure Repos repository"
-	case remoteFailurePushRead:
-		return "the configured Git push remote is missing or unreadable", "configure a push URL for the factory remote and verify the checkout can read it"
-	case remoteFailurePushIdentity:
-		return "the Git push remote does not identify the registered repository", "set the configured remote's push URL to the registered GitHub or Azure Repos repository"
-	case remoteFailureBranchRead:
-		return "the configured Git target branch cannot be read from the remote", "fetch the target branch and verify network and remote permissions"
-	case remoteFailureBranchNoCommit:
-		return "the configured Git target branch has no commit on the remote", "choose an existing target branch or publish the branch before starting the factory"
-	case remoteFailureUnresponsive:
-		return fmt.Sprintf("the Git remote did not answer within %s", failure.timeout), "check network access to the remote and that a credential helper or ssh agent supplies the credential without a prompt, then run factory doctor again"
-	default:
-		return "the Git remote diagnosis returned an unknown failure", "repair the registered checkout and configured Git remote, then retry the diagnosis"
+	problem := finding.problem
+	if failure != nil && failure.kind == remoteFailureUnresponsive {
+		problem = fmt.Sprintf(problem, failure.timeout)
 	}
+	return doctor.Failure(finding.condition, "git remote", problem, finding.action)
 }
 
 // CheckHooks verifies that factory Git invocations resolve the disabled hooks

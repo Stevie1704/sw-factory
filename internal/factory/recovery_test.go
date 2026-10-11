@@ -284,9 +284,10 @@ func newRecoveryService(t *testing.T, runStore *recoveryRunStore, githubAdapter 
 		OperationalDataPath: filepath.Join(t.TempDir(), "factory.db"), RepositoryConfigPath: filepath.Join(runStore.run.RepositoryPath, "factory.yaml"),
 	}}}
 	dependencies := factory.Dependencies{
-		Config:    &fakeConfig{value: host},
-		OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
-		Tracker:   githubAdapter, Worktree: worktree,
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		OpenStoreReadOnly: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil },
+		Tracker:           githubAdapter, Worktree: worktree,
 		Worker: &recoveryWorker{},
 	}
 	if pullRequests != nil {

@@ -17,9 +17,11 @@ a deliberate action of the operator.
   status, and the error line.
 - **Reproduction**: the shortest sequence of commands that shows the
   behavior, or a statement that you could not reproduce it.
-- **Local evidence**: the relevant `factory doctor` and `factory status`
-  output, and the relevant lines of a `factory start --verbose` log. Keep only
-  the lines that support the observation.
+- **Local evidence**: the relevant entries of `factory doctor --json` and
+  `factory status --json`, and the relevant lines of a
+  `factory start --verbose` log. Keep only the entries and lines that support
+  the observation. The JSON documents contain local paths and the repository
+  identity. Remove them when the report does not need them.
 - **Classification**: suspected Factory defect, or unknown cause. State what
   you did not verify.
 

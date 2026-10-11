@@ -84,7 +84,7 @@ func TestStartRefusesToPollWhenStartupDiagnosisIsBlocked(t *testing.T) {
 	service := factory.NewWithDependencies(filepath.Join(t.TempDir(), "config.yaml"), factory.Dependencies{
 		StartupDiagnosis: func(context.Context) (factory.DoctorResult, error) {
 			return factory.DoctorResult{Report: doctor.Report{Results: []doctor.Result{
-				doctor.Failure("GitHub", "transport unavailable", "restore GitHub access"),
+				doctor.Failure(doctor.Condition{Code: "github.authentication.timeout"}, "GitHub", "transport unavailable", "restore GitHub access"),
 			}}}, nil
 		},
 		IssuePoller: reader,
@@ -875,7 +875,7 @@ func newPollingService(root string, githubAdapter tracker.Client, issuePoller tr
 		NewRunID:    func() (string, error) { return "run-fixed", nil },
 		Coordinator: "coordinator-test",
 		StartupDiagnosis: func(context.Context) (factory.DoctorResult, error) {
-			return factory.DoctorResult{Report: doctor.Report{Results: []doctor.Result{doctor.Success("startup")}}}, nil
+			return factory.DoctorResult{Report: doctor.Report{Results: []doctor.Result{doctor.Success("test.startup.ready", "startup")}}}, nil
 		},
 	})
 }

@@ -274,7 +274,7 @@ func (s *Service) diagnoseInterruptedRunWithStore(ctx context.Context, registrat
 			Source:   "run",
 			Field:    "specification packet",
 			Expected: "decodable specification packet",
-			Observed: err.Error(),
+			Observed: observedFailure(err),
 		})
 	}
 
@@ -325,7 +325,7 @@ func inspectRemoteBranchProjection(ctx context.Context, diagnosis *RecoveryDiagn
 			Source:   "remote branch",
 			Field:    "head",
 			Expected: run.CheckpointSHA,
-			Observed: err.Error(),
+			Observed: observedFailure(err),
 		})
 		return
 	}
@@ -363,7 +363,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 				Source:   "operational store",
 				Field:    "active invocations",
 				Expected: "read active invocations",
-				Observed: err.Error(),
+				Observed: observedFailure(err),
 			})
 			return
 		}
@@ -446,7 +446,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 				Source:   "operational store",
 				Field:    "invocation history",
 				Expected: "read invocation history",
-				Observed: err.Error(),
+				Observed: observedFailure(err),
 			})
 			return
 		}
@@ -472,7 +472,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			Source:   "operational store",
 			Field:    "active invocation",
 			Expected: "read active invocation",
-			Observed: err.Error(),
+			Observed: observedFailure(err),
 		})
 		return
 	}
@@ -497,7 +497,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 				Source:   "operational store",
 				Field:    "latest invocation",
 				Expected: "read latest invocation",
-				Observed: err.Error(),
+				Observed: observedFailure(err),
 			})
 			return
 		}
@@ -523,7 +523,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 				Source:       "review diff",
 				Field:        "artifact",
 				Expected:     "regular review.diff matching persisted size and SHA-256",
-				Observed:     diffErr.Error(),
+				Observed:     observedFailure(diffErr),
 			})
 		}
 	}
@@ -573,7 +573,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			Source:   "worker",
 			Field:    "inspection",
 			Expected: "read active worker",
-			Observed: inspectErr.Error(),
+			Observed: observedFailure(inspectErr),
 		})
 	} else {
 		if !workerInspection.Exists {
@@ -616,7 +616,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 					Source:   "run",
 					Field:    "specification packet",
 					Expected: "decodable packet for active worker",
-					Observed: packetErr.Error(),
+					Observed: observedFailure(packetErr),
 				})
 			} else {
 				if !workerImageMatches(workerInspection.Image, packet.RepositoryConfig.WorkerBuild.Image, run.ImageDigest) {
@@ -639,7 +639,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 			Source:   "harness",
 			Field:    "adapter",
 			Expected: active.Harness,
-			Observed: runtimeErr.Error(),
+			Observed: observedFailure(runtimeErr),
 		})
 		return
 	}
@@ -661,7 +661,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 				Source:      "native session",
 				Field:       "identity",
 				Expected:    active.NativeSessionID,
-				Observed:    providerErr.Error(),
+				Observed:    observedFailure(providerErr),
 				Recoverable: workerProjectionLost,
 			})
 		} else if observed != active.NativeSessionID {
@@ -691,7 +691,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 					Source:      "harness",
 					Field:       "lifecycle",
 					Expected:    "persisted native session process running",
-					Observed:    livenessErr.Error(),
+					Observed:    observedFailure(livenessErr),
 					Recoverable: workerProjectionLost,
 				})
 			} else if !running {
@@ -995,7 +995,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			Source:   "operational store",
 			Field:    "headless native session identity",
 			Expected: "persist recovered thread identity",
-			Observed: err.Error(),
+			Observed: observedFailure(err),
 		})
 		diagnosis.SourcesAgree = false
 		paused, pauseErr := s.pauseRunLocally(ctx, runStore, run, diagnosis)
@@ -1019,7 +1019,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			Source:   "operational store",
 			Field:    "pending effect",
 			Expected: "read pending effect journal",
-			Observed: err.Error(),
+			Observed: observedFailure(err),
 		})
 		diagnosis.SourcesAgree = false
 		paused := run
@@ -1054,7 +1054,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 				Source:   "pending effect",
 				Field:    string(pending.Kind),
 				Expected: "complete or recognize the recorded effect",
-				Observed: replayErr.Error(),
+				Observed: observedFailure(replayErr),
 			})
 			diagnosis.SourcesAgree = false
 			if !store.IsTerminalStatus(run.Status) {
@@ -1172,7 +1172,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 					Source:   "operational store",
 					Field:    "active invocation",
 					Expected: "read active invocation before automatic recovery",
-					Observed: activeErr.Error(),
+					Observed: observedFailure(activeErr),
 				})
 				diagnosis.SourcesAgree = false
 			} else if active := recoveryTargetActiveInvocation(diagnosis, activeValues); active != nil && (allowSameProcessRecovery || !s.invocationStartedHere(active.ID)) && active.Status == store.InvocationStatusActive && strings.TrimSpace(active.NativeSessionID) != "" {
@@ -1192,7 +1192,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 							Source:   "worker",
 							Field:    "recreation after automatic recovery",
 							Expected: "worker recreated from the frozen invocation request",
-							Observed: repairErr.Error(),
+							Observed: observedFailure(repairErr),
 						})
 						diagnosis.SourcesAgree = false
 					} else {
@@ -1261,7 +1261,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 				Source:   "check-repair",
 				Field:    "attempt reservation",
 				Expected: "active resumed invocation or no pending attempt",
-				Observed: repairErr.Error(),
+				Observed: observedFailure(repairErr),
 			})
 			diagnosis.SourcesAgree = false
 		} else {
@@ -1284,7 +1284,7 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 					Source:   "operational store",
 					Field:    "pending effect",
 					Expected: "no pending effect after recovery pause",
-					Observed: pendingErr.Error(),
+					Observed: observedFailure(pendingErr),
 				})
 				finalDiagnosis.SourcesAgree = false
 			} else if pending != nil {
@@ -1323,7 +1323,7 @@ func inspectWorkerMountContract(diagnosis *RecoveryDiagnosis, registration confi
 			Source:   "worker",
 			Field:    "cache host mapping",
 			Expected: "a host path for every repository-declared cache",
-			Observed: err.Error(),
+			Observed: observedFailure(err),
 		})
 		return
 	}
@@ -1375,7 +1375,7 @@ func (s *Service) pauseAfterReplayedReviewProjectionError(ctx context.Context, r
 		Source:   "pending effect",
 		Field:    "review result projection",
 		Expected: "replayed review result routed through the coordinator",
-		Observed: cause.Error(),
+		Observed: observedFailure(cause),
 	})
 	diagnosis.SourcesAgree = false
 	paused, pauseErr := s.pauseRunLocally(ctx, runStore, run, diagnosis)
@@ -1395,7 +1395,7 @@ func (s *Service) pauseAfterReviewProjectionRecoveryError(ctx context.Context, r
 		Source:   "review round",
 		Field:    "manifest or aggregate projection",
 		Expected: "persisted exact-SHA review manifest and normalized results to reconcile",
-		Observed: cause.Error(),
+		Observed: observedFailure(cause),
 	})
 	diagnosis.SourcesAgree = false
 	paused, pauseErr := s.pauseRunLocally(ctx, runStore, run, diagnosis)
@@ -1901,7 +1901,7 @@ func inspectWorktreeProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 	}
 	info, err := os.Stat(run.Worktree)
 	if err != nil {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "worktree", Field: "path", Expected: "existing directory", Observed: err.Error()})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "worktree", Field: "path", Expected: "existing directory", Observed: observedFailure(err)})
 		return
 	}
 	if !info.IsDir() {
@@ -1914,7 +1914,7 @@ func inspectWorktreeProjection(ctx context.Context, diagnosis *RecoveryDiagnosis
 	}
 	state, err := inspector.Inspect(ctx, run.Worktree)
 	if err != nil {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "worktree", Field: "inspection", Expected: "read-only Git inspection", Observed: err.Error()})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "worktree", Field: "inspection", Expected: "read-only Git inspection", Observed: observedFailure(err)})
 		return
 	}
 	if strings.TrimSpace(state.RepositoryPath) == "" {
@@ -1939,7 +1939,7 @@ func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, 
 	}
 	issue, err := client.Issue(ctx, repository, run.IssueNumber)
 	if err != nil {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "issue", Expected: fmt.Sprintf("issue #%d", run.IssueNumber), Observed: err.Error()})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "issue", Expected: fmt.Sprintf("issue #%d", run.IssueNumber), Observed: observedFailure(err)})
 	} else {
 		if issue.Number != run.IssueNumber {
 			addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "issue", Expected: fmt.Sprintf("#%d", run.IssueNumber), Observed: fmt.Sprintf("#%d", issue.Number)})
@@ -1957,7 +1957,7 @@ func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, 
 	marker := statusCommentMarker(run.ID)
 	comment, commentErr := client.FindStatusComment(ctx, repository, run.IssueNumber, marker)
 	if commentErr != nil {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment", Expected: run.StatusCommentID, Observed: commentErr.Error()})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment", Expected: run.StatusCommentID, Observed: observedFailure(commentErr)})
 	} else if strings.TrimSpace(comment.ID) == "" {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "status comment", Expected: run.StatusCommentID, Observed: "missing"})
 	} else if !strings.Contains(comment.Body, marker) {
@@ -1985,7 +1985,7 @@ func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagno
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "run", Field: "specification packet", Expected: "decodable packet for pull-request target", Observed: err.Error()})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "run", Field: "specification packet", Expected: "decodable packet for pull-request target", Observed: observedFailure(err)})
 		return
 	}
 	baseBranch := packet.RepositoryConfig.TargetBranch
@@ -1995,7 +1995,7 @@ func inspectPullRequestProjection(ctx context.Context, diagnosis *RecoveryDiagno
 	}
 	pullRequest, err := pullRequests.FindPullRequest(ctx, repository, run.Branch, baseBranch)
 	if err != nil {
-		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "pull request", Expected: pullRequestIdentity(run), Observed: err.Error()})
+		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "pull request", Expected: pullRequestIdentity(run), Observed: observedFailure(err)})
 		return
 	}
 	if pullRequest.Number == 0 {
@@ -2104,7 +2104,7 @@ func addRepositoryCraftRecoveryDiscrepancy(diagnosis *RecoveryDiagnosis, invocat
 		Source:       "invocation packet",
 		Field:        "prompt craft identity",
 		Expected:     "verified packet identity",
-		Observed:     cause.Error(),
+		Observed:     observedFailure(cause),
 	})
 }
 

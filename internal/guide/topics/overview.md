@@ -24,6 +24,8 @@ factory version             # one-line build identity
 factory version --json      # schema-versioned build identity
 factory doctor              # complete startup diagnosis
 factory status              # supervisor and current run state
+factory doctor --json       # diagnosis as one JSON document
+factory status --json       # status as one JSON document
 factory <command> -h        # flags of one command
 ```
 
