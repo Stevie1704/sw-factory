@@ -45,9 +45,10 @@ func TestSuspectedFactoryDefectProposalRoundTrips(t *testing.T) {
 	}
 }
 
-// TestValidateRejectsMalformedFactoryDefectProposals verifies that a
-// proposal is bound to the invocation identity and stays bounded.
-func TestValidateRejectsMalformedFactoryDefectProposals(t *testing.T) {
+// TestWriteAtomicRejectsMalformedFactoryDefectProposals verifies that the
+// worker-side writer refuses a proposal that is not bound to the invocation
+// identity or is not bounded, so the worker sees the error at once.
+func TestWriteAtomicRejectsMalformedFactoryDefectProposals(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*report.FactoryDefectProposal)
@@ -65,16 +66,29 @@ func TestValidateRejectsMalformedFactoryDefectProposals(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			value := cannotProceedWithDefect()
 			test.mutate(value.SuspectedFactoryDefect)
-			err := report.Validate(value, report.ValidationContext{
-				InvocationID: "inv-1",
-				RunID:        "run-1",
-				Harness:      "codex",
-				Role:         "implementation",
-				Stage:        "implementation",
-			})
+			_, err := report.WriteAtomic(filepath.Join(t.TempDir(), "inv-1"), value)
 			if err == nil || !strings.Contains(err.Error(), "suspected_factory_defect."+test.want) {
-				t.Fatalf("Validate() error = %v, want suspected_factory_defect.%s rejection", err, test.want)
+				t.Fatalf("WriteAtomic() error = %v, want suspected_factory_defect.%s rejection", err, test.want)
 			}
 		})
+	}
+}
+
+// TestCoordinatorValidationIgnoresTheDefectProposal verifies that a bad
+// proposal does not change report acceptance: the coordinator validates the
+// report as if the proposal were absent, and consumers that surface
+// proposals reject it on their own.
+func TestCoordinatorValidationIgnoresTheDefectProposal(t *testing.T) {
+	value := cannotProceedWithDefect()
+	value.SuspectedFactoryDefect.InvocationID = "inv-other"
+	err := report.Validate(value, report.ValidationContext{
+		InvocationID: "inv-1",
+		RunID:        "run-1",
+		Harness:      "codex",
+		Role:         "implementation",
+		Stage:        "implementation",
+	})
+	if err != nil {
+		t.Fatalf("Validate() error = %v, want the report accepted without regard to its proposal", err)
 	}
 }

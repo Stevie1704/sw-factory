@@ -33,7 +33,7 @@ func ValidateFactoryDefectProposal(value FactoryDefectProposal, invocationID str
 	if value.InvocationID != invocationID {
 		return fmt.Errorf("suspected_factory_defect.invocation_id %q does not match expected %q", value.InvocationID, invocationID)
 	}
-	if strings.TrimSpace(value.Code) == "" || !safeIdentifier(value.Code) {
+	if strings.TrimSpace(value.Code) == "" || !IsSafeIdentifier(value.Code) {
 		return errors.New("suspected_factory_defect.code is required and must be a safe identifier")
 	}
 	fields := []struct{ name, value string }{
@@ -47,10 +47,4 @@ func ValidateFactoryDefectProposal(value FactoryDefectProposal, invocationID str
 		}
 	}
 	return nil
-}
-
-// IsSafeIdentifier reports whether value is a safe protocol identifier: one
-// path component of letters, digits, '-', '_', and '.'.
-func IsSafeIdentifier(value string) bool {
-	return safeIdentifier(value)
 }

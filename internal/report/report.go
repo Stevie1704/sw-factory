@@ -448,7 +448,7 @@ func WriteAtomicForInvocation(resultDirectory, invocationID string, value Report
 	if !filepath.IsAbs(resultDirectory) {
 		return "", errors.New("invocation result directory must be absolute")
 	}
-	if !safeIdentifier(invocationID) {
+	if !IsSafeIdentifier(invocationID) {
 		return "", errors.New("invocation id contains unsafe characters")
 	}
 	return writeAtomicReport(resultDirectory, value)
@@ -457,6 +457,13 @@ func WriteAtomicForInvocation(resultDirectory, invocationID string, value Report
 // writeAtomicReport performs the filesystem publication shared by the two
 // public report-writing entry points.
 func writeAtomicReport(resultDirectory string, value Report) (string, error) {
+	// The writer rejects a bad defect proposal so the worker can correct it.
+	// Acceptance ignores the proposal; a consumer validates it on its own.
+	if value.SuspectedFactoryDefect != nil {
+		if err := ValidateFactoryDefectProposal(*value.SuspectedFactoryDefect, value.InvocationID); err != nil {
+			return "", err
+		}
+	}
 	if err := os.MkdirAll(resultDirectory, 0o700); err != nil {
 		return "", fmt.Errorf("create invocation result directory: %w", err)
 	}
@@ -611,7 +618,7 @@ func validate(value Report, context ValidationContext, allowEmptyProductionFiles
 			return fmt.Errorf("report %s %q does not match expected %q", identity.field, identity.actual, identity.expected)
 		}
 	}
-	if !safeIdentifier(value.InvocationID) || !safeIdentifier(value.RunID) {
+	if !IsSafeIdentifier(value.InvocationID) || !IsSafeIdentifier(value.RunID) {
 		return errors.New("report identifiers contain unsafe characters")
 	}
 	if err := validateText("report summary", value.Summary, maxSummaryRunes, true); err != nil {
@@ -731,7 +738,7 @@ func validate(value Report, context ValidationContext, allowEmptyProductionFiles
 	default:
 		return fmt.Errorf("unsupported report outcome %q", value.Outcome)
 	}
-	if value.NativeSessionID != "" && !safeIdentifier(value.NativeSessionID) {
+	if value.NativeSessionID != "" && !IsSafeIdentifier(value.NativeSessionID) {
 		return errors.New("native_session_id contains unsafe characters")
 	}
 	if value.Usage != nil {
@@ -741,11 +748,6 @@ func validate(value Report, context ValidationContext, allowEmptyProductionFiles
 	}
 	if err := validateEvaluationSignals(value); err != nil {
 		return err
-	}
-	if value.SuspectedFactoryDefect != nil {
-		if err := ValidateFactoryDefectProposal(*value.SuspectedFactoryDefect, value.InvocationID); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -1121,7 +1123,7 @@ func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error
 	if context.CheckpointSHA != "" && value.ReviewedSHA != context.CheckpointSHA {
 		return fmt.Errorf("review handoff reviewed_sha %q does not match checkpoint %q", value.ReviewedSHA, context.CheckpointSHA)
 	}
-	if value.UnitID != "" && !safeIdentifier(value.UnitID) {
+	if value.UnitID != "" && !IsSafeIdentifier(value.UnitID) {
 		return errors.New("review handoff unit_id contains unsafe characters")
 	}
 	if context.ReviewUnitID != "" && value.UnitID != context.ReviewUnitID {
@@ -1134,7 +1136,7 @@ func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error
 		return errors.New("partitioned review handoff findings exceeds 16 entries for one unit")
 	}
 	for index, finding := range value.Findings {
-		if finding.UnitID != "" && !safeIdentifier(finding.UnitID) {
+		if finding.UnitID != "" && !IsSafeIdentifier(finding.UnitID) {
 			return fmt.Errorf("review findings[%d].unit_id contains unsafe characters", index)
 		}
 		for field, text := range map[string]string{
@@ -1310,7 +1312,7 @@ func validateQuestions(values []Question) error {
 	}
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
-		if !safeIdentifier(value.ID) || strings.TrimSpace(value.ID) == "" {
+		if !IsSafeIdentifier(value.ID) || strings.TrimSpace(value.ID) == "" {
 			return fmt.Errorf("questions[%d].id is required and must be safe", index)
 		}
 		if _, exists := seen[value.ID]; exists {
@@ -1347,7 +1349,7 @@ func validateInvocationDirectory(path, invocationID string) error {
 	if !filepath.IsAbs(path) {
 		return errors.New("invocation result directory must be absolute")
 	}
-	if !safeIdentifier(invocationID) {
+	if !IsSafeIdentifier(invocationID) {
 		return errors.New("invocation id contains unsafe characters")
 	}
 	if filepath.Base(filepath.Clean(path)) != invocationID {
@@ -1386,9 +1388,9 @@ func withinAnyPrefix(path string, prefixes []string) bool {
 	return false
 }
 
-// safeIdentifier reports whether a value can be used as a protocol identity or
+// IsSafeIdentifier reports whether a value can be used as a protocol identity or
 // a single path component.
-func safeIdentifier(value string) bool {
+func IsSafeIdentifier(value string) bool {
 	if value == "" || value == "." || value == ".." || utf8.RuneCountInString(value) > maxIdentifierRunes {
 		return false
 	}
