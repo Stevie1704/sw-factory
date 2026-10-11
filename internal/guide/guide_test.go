@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/guide"
+	"github.com/Stevie1704/sw-factory/internal/prompt"
 )
 
 // requiredTopics are the topics issue #239 requires every release to ship.
@@ -127,5 +128,18 @@ func TestPublishedDocsDoNotCopyGuideProse(t *testing.T) {
 	}
 	if !strings.Contains(string(readme), "internal/guide/topics/") {
 		t.Fatal("README does not link to the canonical guide topics")
+	}
+}
+
+// TestReportingQuotesTheWorkerDefectRule verifies that the reporting topic
+// prints the worker rule from its one canonical source, the role prompts.
+func TestReportingQuotesTheWorkerDefectRule(t *testing.T) {
+	body, err := guide.Topic("reporting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := strings.TrimPrefix(prompt.SuspectedFactoryDefectRule, "- ")
+	if !strings.Contains(body, rule) {
+		t.Fatalf("reporting topic does not quote the worker defect rule %q:\n%s", rule, body)
 	}
 }

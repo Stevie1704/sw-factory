@@ -48,9 +48,14 @@ tell the operator.
 
 ## Worker reporting path
 
-A worker agent never contacts GitHub and never reads host credentials. When
-it cannot continue because of a suspected Factory defect, it returns
-`cannot_proceed` with the observed evidence through `factory-report`. The
-coordinator validates that outcome and records it as a blocker that a human
-must resolve. The operator,
+A worker agent never contacts GitHub and never reads host credentials. Every
+role prompt contains this factory-owned rule:
+
+> When the evidence shows a defect in Software Factory itself, not in the repository or the environment, return cannot_proceed. Call it a suspected Factory defect, give the observed evidence, and state an unknown cause as unknown. Do not report it anywhere else.
+
+The worker writes that outcome through `factory-report`. The coordinator
+validates it. For most roles, `cannot_proceed` records a blocker that a human
+must resolve. The `pr_writer` role is the exception: when it reports
+`cannot_proceed`, the hand-off continues, and the pull request has only the
+coordinator section without the agent summary. In both cases the operator,
 or an operator agent, then decides about a report with this topic.
