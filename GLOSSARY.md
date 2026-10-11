@@ -117,6 +117,25 @@ typed outcomes. It never starts a harness process on the coordinator host or
 creates a coordinator-side process or local UI topology.
 _Avoid_: Host-side agent, coordinator-owned PID, attached process
 
+**Factory release**:
+A versioned, published build of Software Factory: one archive with the
+`factory` binary per supported host platform, `checksums.txt`, `release.json`,
+and one worker base image. The coordinator of a release accepts only a worker
+image built from the worker base image of the same Factory release.
+_Avoid_: Queue release, version (alone)
+
+**Worker base image**:
+The digest-pinned image that a Factory release names and that every repository
+worker image builds on. It carries both harnesses and the worker-only helpers,
+and its label names its Factory release.
+_Avoid_: Factory image, base tag
+
+**Release resources**:
+The onboarding procedure, its reference documents, the worker skill set, and
+the smoke and verification scripts that the `factory` binary embeds.
+`factory onboard` exports them for one session.
+_Avoid_: Factory checkout, assets
+
 **Worker skill set**:
 The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
 _Avoid_: Personal skill, installed skill

@@ -49,12 +49,16 @@ func runStandalone(t *testing.T, binary string, args ...string) (string, int) {
 
 // TestStandaloneReleaseBinaryServesGuideAndVersion verifies that a copied
 // release binary answers every guide and version command without a checkout,
-// configuration, external executables, or network, and never prints the
-// build-machine checkout path.
+// configuration, external executables, or network, reports the worker base
+// image the release links, and never prints the build-machine checkout path.
 func TestStandaloneReleaseBinaryServesGuideAndVersion(t *testing.T) {
-	buildPath := "/build-machine/sw-factory-checkout"
+	buildPath, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseImage := "ghcr.io/stevie1704/sw-factory-base@sha256:" + strings.Repeat("ab", 32)
 	binary := buildFactory(t, "-X github.com/Stevie1704/sw-factory/internal/version.release=v9.8.7 "+
-		"-X github.com/Stevie1704/sw-factory/internal/cli.factoryCheckout="+buildPath)
+		"-X github.com/Stevie1704/sw-factory/internal/version.workerBaseImage="+baseImage)
 	copied := filepath.Join(t.TempDir(), "factory")
 	data, err := os.ReadFile(binary)
 	if err != nil {
@@ -70,16 +74,21 @@ func TestStandaloneReleaseBinaryServesGuideAndVersion(t *testing.T) {
 	}
 	encoded, code := runStandalone(t, copied, "version", "--json")
 	var identity struct {
-		SchemaVersion int    `json:"schema_version"`
-		Version       string `json:"version"`
-		Build         string `json:"build"`
-		Revision      string `json:"revision"`
+		SchemaVersion   int    `json:"schema_version"`
+		Version         string `json:"version"`
+		Build           string `json:"build"`
+		Revision        string `json:"revision"`
+		WorkerBaseImage string `json:"worker_base_image"`
+		Platform        string `json:"platform"`
 	}
 	if code != 0 || json.Unmarshal([]byte(encoded), &identity) != nil {
 		t.Fatalf("version --json = %q (exit %d), want JSON", encoded, code)
 	}
 	if identity.SchemaVersion != 1 || identity.Version != "v9.8.7" || identity.Build != "release" || !strings.Contains(text, "revision "+identity.Revision) {
 		t.Fatalf("version --json = %+v disagrees with text %q", identity, text)
+	}
+	if identity.WorkerBaseImage != baseImage || identity.Platform != runtime.GOOS+"/"+runtime.GOARCH {
+		t.Fatalf("version --json = %+v, want worker base image %q on %s/%s", identity, baseImage, runtime.GOOS, runtime.GOARCH)
 	}
 
 	for _, args := range [][]string{{"guide"}, {"guide", "setup"}, {"guide", "debug"}, {"guide", "reporting"}} {

@@ -8,10 +8,11 @@ or commits to the repository.
 
 The host needs:
 
-- the `factory`, `factory-report`, and `factory-worker-headless` commands on
-  `PATH`;
-- Git;
-- a running Docker daemon;
+- the `factory` command on `PATH`, from a release archive (see "Install a
+  release" below);
+- Git and `jq`;
+- a running Docker daemon whose server platform is `linux/arm64` or
+  `linux/amd64`;
 - the GitHub CLI, authenticated for the target repository;
 - Codex or Claude Code, installed and signed in.
 
@@ -20,11 +21,29 @@ operator what is missing. Do not install software or sign in for the
 operator.
 
 ```sh
-factory version
-command -v factory factory-report factory-worker-headless
-docker info
+factory version --json
+command -v factory git jq
+docker version --format '{{.Server.Os}}/{{.Server.Arch}}'
 gh auth status
 ```
+
+`factory-report` and `factory-worker-headless` are worker-only helpers. They
+ship in the worker base image, so the host does not need them.
+
+## Install a release
+
+A release publishes one archive per supported host platform:
+`factory_<version>_<os>_<arch>.tar.gz` for `darwin/arm64`, `darwin/amd64`,
+`linux/arm64`, and `linux/amd64`. It also publishes `checksums.txt` and
+`release.json`. Verify the archive against `checksums.txt`, extract it to any
+directory, and put its `bin` directory on `PATH`. No Go toolchain and no
+Software Factory checkout are needed. Windows and other platforms are not
+supported.
+
+`factory version --json` names the release in `version` and the worker base
+image in `worker_base_image`. That image is pinned by digest and published for
+`linux/arm64` and `linux/amd64`. A development build reports
+`"build": "development"` and an empty `worker_base_image`.
 
 ## Where each setting lives
 
@@ -52,11 +71,20 @@ initialization procedure. The procedure covers the field rules of
 `factory.yaml`, the worker image definition, the worker skills, the image
 build and digest, the gate proof, the host registration, and the skill smoke.
 
-In this release, that procedure, the worker skills, the worker image
-definitions, and the build scripts come from the Software Factory source
-checkout. A binary built with `make install` records that checkout. Otherwise
-pass `--factory-checkout <path>`. When neither is available, stop and ask the
-operator for the checkout.
+The procedure, the worker skills and their provenance, the worked worker
+definition, and the smoke and verification scripts are part of the installed
+`factory` binary. `factory onboard` writes them to a new directory below the
+user cache directory for the session, and it removes the directory when the
+session ends. The worker base image comes from the release: the session pulls
+it by its digest. Pulling the image, checking GitHub, and the paid skill smoke
+need network access. The procedure asks before each paid or external step.
+
+A development build names no worker base image. Then `factory onboard` stops
+and asks for `--worker-base-image <image>@sha256:<digest>`. Ask the operator
+for that value, and never use a mutable tag.
+
+Run `factory onboard` again to rebuild the worker image after an upgrade, or
+when the toolchain or a harness version changes.
 
 ## Register the host
 
@@ -112,6 +140,8 @@ issue claims, run branches, labels, and pull requests for its runs.
 
 - A changed toolchain, harness version, or worker skill needs a new worker
   image, a new digest in `factory.yaml`, and a new skill smoke record.
+- A new Factory release needs a worker image built from its own worker base
+  image. Until then, `factory doctor` reports `worker.release.mismatch`.
 - A changed gate command needs a proof in the worker before the change.
 - Run `factory doctor` after every change to the host or the repository
   policy.

@@ -5,6 +5,7 @@ package version
 
 import (
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strings"
 )
@@ -12,6 +13,11 @@ import (
 // release is the release version of a release build. The release build sets
 // it at link time with -X; every other build leaves it empty.
 var release string
+
+// workerBaseImage is the worker base image a release was built and verified
+// with, as image@sha256:digest. The release build sets it at link time with
+// -X; every other build leaves it empty.
+var workerBaseImage string
 
 // SchemaVersion is the version of the JSON identity document. Increment it
 // when a field changes meaning or is removed.
@@ -38,6 +44,11 @@ type Identity struct {
 	Revision string `json:"revision"`
 	// Modified reports that the build's source tree had uncommitted changes.
 	Modified bool `json:"modified"`
+	// WorkerBaseImage is the digest-pinned worker base image the release
+	// names, or empty when the build names none.
+	WorkerBaseImage string `json:"worker_base_image"`
+	// Platform is the OS and architecture the binary runs on, as os/arch.
+	Platform string `json:"platform"`
 }
 
 // pseudoVersion matches the timestamp-and-commit suffix Go adds to a module
@@ -46,7 +57,14 @@ var pseudoVersion = regexp.MustCompile(`\d{14}-[0-9a-f]{12}`)
 
 // Current returns the identity of the running binary.
 func Current() Identity {
-	identity := Identity{SchemaVersion: SchemaVersion, Version: buildDevelopment, Build: buildDevelopment, Revision: unknown}
+	identity := Identity{
+		SchemaVersion:   SchemaVersion,
+		Version:         buildDevelopment,
+		Build:           buildDevelopment,
+		Revision:        unknown,
+		WorkerBaseImage: workerBaseImage,
+		Platform:        runtime.GOOS + "/" + runtime.GOARCH,
+	}
 	info, ok := debug.ReadBuildInfo()
 	if ok {
 		for _, setting := range info.Settings {
@@ -75,6 +93,15 @@ func isTaggedModuleVersion(moduleVersion string) bool {
 		return false
 	}
 	return !pseudoVersion.MatchString(moduleVersion) && !strings.HasSuffix(moduleVersion, "+dirty")
+}
+
+// Release returns the release version of a release build, or an empty
+// string for a development build.
+func (i Identity) Release() string {
+	if i.Build != buildRelease {
+		return ""
+	}
+	return i.Version
 }
 
 // Text renders the identity as one human-readable line without a newline.

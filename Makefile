@@ -9,17 +9,18 @@ BINDIR ?= bin
 GO_TOOLCHAIN := $(shell sed -n 's/^toolchain //p' go.mod)
 export GOTOOLCHAIN := $(GO_TOOLCHAIN)
 
-# factory onboard hands this checkout to the onboarding agent, so the installed
-# binary records where it was built from. The single quotes keep a checkout
-# path with spaces in one link flag.
-LDFLAGS := -X 'github.com/Stevie1704/sw-factory/internal/cli.factoryCheckout=$(CURDIR)'
-
-# A release build passes VERSION=vX.Y.Z; factory version then reports a
-# release. Without it, the build reports itself as a development build.
+# A versioned build passes VERSION=vX.Y.Z; factory version then reports a
+# release. Without it, the build reports itself as a development build. The
+# binary embeds its onboarding resources, so it records no checkout path.
 VERSION ?=
+LDFLAGS :=
 ifneq ($(VERSION),)
 LDFLAGS += -X 'github.com/Stevie1704/sw-factory/internal/version.release=$(VERSION)'
 endif
+
+# make release links this digest-pinned worker base image into every binary.
+WORKER_BASE_IMAGE ?=
+DISTDIR ?= dist
 
 BINARIES := \
 	$(BINDIR)/factory \
@@ -28,7 +29,7 @@ BINARIES := \
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all toolchain-check build test test-race vet fmt fmt-check check vuln-check deps tidy install run report worker-build worker-scan worker-publish clean
+.PHONY: help all toolchain-check build test test-race vet fmt fmt-check check vuln-check deps tidy install run report worker-build worker-scan worker-publish release clean
 
 help: ## Show the available development commands.
 	@awk 'BEGIN { FS = ":.*##"; print "Usage: make <target>\n"; print "Targets:" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -98,5 +99,10 @@ worker-scan: ## Scan a worker image; pass WORKER_REFERENCE=image@digest (default
 worker-publish: ## Scan, push, and verify a locally built worker; pass WORKER_REFERENCE=image:tag.
 	./scripts/publish-worker.sh $(WORKER_REFERENCE)
 
-clean: ## Remove binaries built by the build target.
+release: toolchain-check ## Package and scan a release; pass VERSION=vX.Y.Z WORKER_BASE_IMAGE=image@sha256:digest.
+	VERSION='$(VERSION)' WORKER_BASE_IMAGE='$(WORKER_BASE_IMAGE)' DIST_DIR='$(abspath $(DISTDIR))' GO='$(GO)' ./scripts/package-release.sh
+	./scripts/scan-go-artifacts.sh --source $(DISTDIR)/build/*/bin/factory
+
+clean: ## Remove binaries built by the build target and packaged releases.
 	rm -f $(BINARIES)
+	rm -rf $(DISTDIR)

@@ -1,0 +1,137 @@
+name: Release
+
+# A pushed vX.Y.Z tag publishes one release: the worker base image for each
+# supported worker platform, verified and scanned before it is pushed, one
+# multi-platform index pinned by digest, and the host archives that link that
+# digest. docs/installation.md documents the artifacts and the support matrix.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+env:
+  GOTELEMETRY: "off"
+  BASE_IMAGE: ghcr.io/stevie1704/sw-factory-base
+
+jobs:
+  worker-base:
+    name: Worker base (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Build and verify the base and the Factory worker
+        env:
+          FACTORY_RELEASE: ${{ github.ref_name }}
+          WORKER_BASE_IMAGE: ${{ env.BASE_IMAGE }}:${{ github.ref_name }}-${{ matrix.arch }}
+          WORKER_TAG: ${{ github.ref_name }}-${{ matrix.arch }}
+        # The Factory worker builds on this base, so the build also runs the
+        # repository gates and the headless lifecycle check in it.
+        run: scripts/build-worker.sh
+      - name: Scan the worker image, which contains every base layer
+        run: scripts/scan-worker-image.sh "ghcr.io/stevie1704/sw-factory-worker:${{ github.ref_name }}-${{ matrix.arch }}"
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Push the scanned base and record its digest
+        shell: bash
+        run: |
+          reference="$BASE_IMAGE:${{ github.ref_name }}-${{ matrix.arch }}"
+          docker push "$reference"
+          digest="$(docker buildx imagetools inspect "$reference" --format '{{json .Manifest}}' | jq -r '.digest')"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Invalid base digest::the registry returned '$digest' for $reference"
+            exit 1
+          fi
+          printf '%s' "$digest" > "base-digest-${{ matrix.arch }}"
+      - name: Keep the base digest for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-digest-${{ matrix.arch }}
+          path: base-digest-${{ matrix.arch }}
+      - name: Publish scan metadata
+        if: always()
+        run: |
+          if [ -f .scan-reports/scans.jsonl ]; then
+            { echo '```json'; cat .scan-reports/scans.jsonl; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  release:
+    name: Publish release
+    needs: worker-base
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Fetch the base digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: base-digest-*
+          merge-multiple: true
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Create the multi-platform base index
+        id: base
+        shell: bash
+        run: |
+          reference="$BASE_IMAGE:${{ github.ref_name }}"
+          docker buildx imagetools create --tag "$reference" \
+            "$BASE_IMAGE@$(cat base-digest-amd64)" \
+            "$BASE_IMAGE@$(cat base-digest-arm64)"
+          digest="$(docker buildx imagetools inspect "$reference" --format '{{json .Manifest}}' | jq -r '.digest')"
+          platforms="$(docker buildx imagetools inspect "$BASE_IMAGE@$digest" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort | join(" ")')"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ || "$platforms" != "linux/amd64 linux/arm64" ]]; then
+            echo "::error title=Invalid base index::$reference has digest '$digest' and platforms '$platforms'"
+            exit 1
+          fi
+          echo "image=$BASE_IMAGE@$digest" >> "$GITHUB_OUTPUT"
+      - name: Package and scan the host binaries
+        run: make release VERSION="${{ github.ref_name }}" WORKER_BASE_IMAGE="${{ steps.base.outputs.image }}"
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/*.tar.gz dist/release.json dist/checksums.txt \
+            --verify-tag --title "${{ github.ref_name }}" \
+            --notes "Worker base image: ${{ steps.base.outputs.image }}. See docs/installation.md for the installation and the support matrix."
+      - name: Publish scan metadata
+        if: always()
+        run: |
+          if [ -f .scan-reports/scans.jsonl ]; then
+            { echo '```json'; cat .scan-reports/scans.jsonl; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi

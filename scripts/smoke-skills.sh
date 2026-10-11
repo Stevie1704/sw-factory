@@ -8,6 +8,16 @@ set -eu
 
 DOCKER="${DOCKER:-docker}"
 REPOSITORY_ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)"
+# Release resources carry no factory.yaml and are removed after onboarding, so
+# outside the Factory source the target must be named explicitly.
+if [ ! -f "$REPOSITORY_ROOT/factory.yaml" ]; then
+  for required in EVIDENCE_FILE WORKER_IMAGE WORKER_DIGEST; do
+    if eval "[ -z \"\${$required:-}\" ]"; then
+      echo "$required must be set: name the target repository's evidence file and worker image@digest" >&2
+      exit 2
+    fi
+  done
+fi
 EVIDENCE_FILE="${EVIDENCE_FILE:-$REPOSITORY_ROOT/worker/skill-smoke.json}"
 WORKER_IMAGE="${WORKER_IMAGE:-$(sed -n 's/^  image: \(.*\)$/\1/p' "$REPOSITORY_ROOT/factory.yaml")}"
 WORKER_DIGEST="${WORKER_DIGEST:-$(sed -n 's/^  digest: \(.*\)$/\1/p' "$REPOSITORY_ROOT/factory.yaml")}"

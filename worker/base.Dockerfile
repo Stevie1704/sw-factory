@@ -21,10 +21,15 @@ ARG NPM_VERSION=11.21.0
 ARG CLAUDE_VERSION=2.1.232
 ARG CODEX_VERSION=0.148.0
 ARG FACTORY_BASE_VERSION=1
+# The Factory release this base belongs to. A release coordinator refuses a
+# worker image whose inherited label names another release
+# (internal/worker/release.go); a local build is a development base.
+ARG FACTORY_RELEASE=development
 
 LABEL org.opencontainers.image.title="Software Factory worker base" \
       org.opencontainers.image.version="${FACTORY_BASE_VERSION}" \
-      org.opencontainers.image.description="Pinned harnesses and factory reporting command for supervised workers"
+      org.opencontainers.image.description="Pinned harnesses and factory reporting command for supervised workers" \
+      io.github.stevie1704.sw-factory.release="${FACTORY_RELEASE}"
 
 # Upgrading first applies Debian security fixes that the Node base image
 # does not carry yet.
