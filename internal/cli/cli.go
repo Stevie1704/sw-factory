@@ -712,9 +712,12 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 
 // runStatus reports the current configuration, repository registration, and active run.
 // It returns 0 on success, 1 when status retrieval fails, or 2 when arguments are invalid.
+// With --json it writes the same typed result as one schema-versioned JSON
+// document, including a status retrieval failure.
 func runStatus(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := newFlagSet("status", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
+	asJSON := flags.Bool("json", false, "write the status as one schema-versioned JSON document")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -724,6 +727,12 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 	}
 	service := newService(*configPath)
 	result, err := service.Status(ctx)
+	if *asJSON {
+		if !writeJSONDocument(output, errorsOutput, newStatusDocument(result, err)) || err != nil {
+			return 1
+		}
+		return 0
+	}
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -757,6 +766,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		}
 		if result.LatestRun.LifecycleReason != "" {
 			if !writeOutput(output, errorsOutput, "lifecycle reason: %s\n", result.LatestRun.LifecycleReason) {
+				return 1
+			}
+		}
+		for _, gate := range result.FailedGates {
+			if !writeOutput(output, errorsOutput, "failed gate: %s (phase=%s outcome=%s checkpoint=%s)\n", gate.GateName, gate.Phase, gate.Outcome, gate.CheckpointSHA) {
 				return 1
 			}
 		}

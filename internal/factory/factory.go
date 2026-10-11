@@ -304,6 +304,9 @@ type StatusResult struct {
 	// SupervisorLive reports whether the heartbeat is unexpired and the
 	// coordinator lock is currently held.
 	SupervisorLive bool
+	// SupervisorObserved reports that the lock and heartbeat were read, so a
+	// nil heartbeat means none is recorded rather than not inspected.
+	SupervisorObserved bool
 	// TestPolicyMode identifies the frozen TDD ownership mode of LatestRun.
 	TestPolicyMode config.TestMode
 	// Route identifies the frozen contract-first workflow route of LatestRun,
@@ -314,6 +317,84 @@ type StatusResult struct {
 	Activity RunActivity
 	// Recovery contains the read-only diagnosis for an interrupted run.
 	Recovery *RecoveryDiagnosis
+	// Provider identifies the registered tracker and code host, or is empty
+	// when no repository is registered.
+	Provider Provider
+	// Repository is the registered tracker and code-host identity.
+	Repository tracker.Repository
+	// FailedGates holds the blocking gates that failed at LatestRun's current
+	// checkpoint, in phase and declaration order.
+	FailedGates []store.GateResult
+}
+
+// Provider identifies the work tracker and code host of a registration.
+type Provider string
+
+const (
+	// ProviderGitHub is a GitHub registration.
+	ProviderGitHub Provider = "github"
+	// ProviderAzureDevOps is an Azure DevOps registration.
+	ProviderAzureDevOps Provider = "azure_devops"
+)
+
+// providerOf returns the provider a registration selects.
+func providerOf(registration config.RepositoryRegistration) Provider {
+	if !registration.AzureDevOps.IsZero() {
+		return ProviderAzureDevOps
+	}
+	return ProviderGitHub
+}
+
+// StatusSource names the part of status collection that failed.
+type StatusSource string
+
+const (
+	// StatusSourceConfiguration is the host configuration and registration.
+	StatusSourceConfiguration StatusSource = "configuration"
+	// StatusSourceStore is the operational store and its projections.
+	StatusSourceStore StatusSource = "store"
+	// StatusSourceSupervisor is the coordinator lock and heartbeat.
+	StatusSourceSupervisor StatusSource = "supervisor"
+)
+
+// StatusUnavailableError reports which source prevented a complete status.
+// Status returns it together with the fields collected before the failure.
+type StatusUnavailableError struct {
+	// Source is the part of status collection that failed.
+	Source StatusSource
+	// Err is the underlying failure.
+	Err error
+}
+
+// Error returns the underlying failure text.
+func (e *StatusUnavailableError) Error() string { return e.Err.Error() }
+
+// Unwrap returns the underlying failure.
+func (e *StatusUnavailableError) Unwrap() error { return e.Err }
+
+// statusUnavailable wraps err with the source that produced it.
+func statusUnavailable(source StatusSource, err error) error {
+	return &StatusUnavailableError{Source: source, Err: err}
+}
+
+// gateResultsReader is the optional store seam for gate results of one run.
+type gateResultsReader interface {
+	RunGateResults(context.Context, string) ([]store.GateResult, error)
+}
+
+// failedGatesAt selects the blocking gates that failed or could not set up
+// at one exact checkpoint, keeping the store order.
+func failedGatesAt(results []store.GateResult, checkpointSHA string) []store.GateResult {
+	failed := []store.GateResult{}
+	for _, result := range results {
+		if checkpointSHA == "" || result.CheckpointSHA != checkpointSHA || !result.Blocking {
+			continue
+		}
+		if result.Outcome == store.GateOutcomeFailed || result.Outcome == store.GateOutcomeSetupFailed {
+			failed = append(failed, result)
+		}
+	}
+	return failed
 }
 
 type fileConfigRepository struct{}
@@ -574,13 +655,17 @@ func (s *Service) resolveRepositoryPath(repositoryPath string) (string, error) {
 	return repositoryPath, nil
 }
 
+// Status reads the registered repository, supervisor liveness, the latest
+// run, and its read-only recovery diagnosis. It never changes state. On a
+// failure it returns the fields collected so far with a
+// *StatusUnavailableError that names the failed source.
 func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	if s.configPath == "" {
-		return StatusResult{}, errors.New("host configuration path is required")
+		return StatusResult{}, statusUnavailable(StatusSourceConfiguration, errors.New("host configuration path is required"))
 	}
 	host, err := s.deps.Config.Load(s.configPath)
 	if err != nil {
-		return StatusResult{}, err
+		return StatusResult{}, statusUnavailable(StatusSourceConfiguration, err)
 	}
 	result := StatusResult{ConfigPath: s.configPath}
 	if len(host.Repositories) == 0 {
@@ -588,45 +673,55 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 	}
 	registration := host.Repositories[0]
 	result.RepositoryPath = registration.Path
+	result.Provider = providerOf(registration)
+	result.Repository = registeredRepository(registration)
 	if err := validateOperationalPath(registration.Path, registration.OperationalDataPath); err != nil {
-		return StatusResult{}, err
+		return result, statusUnavailable(StatusSourceConfiguration, err)
 	}
 	opened, err := s.deps.OpenStore(ctx, registration.OperationalDataPath)
 	if err != nil {
-		return StatusResult{}, err
+		return result, statusUnavailable(StatusSourceStore, err)
 	}
 	defer func() { _ = opened.Close() }()
 	lockHeld, err := coordinatorLockHeld(coordinatorLockPath(registration))
 	if err != nil {
-		return StatusResult{}, fmt.Errorf("inspect coordinator lock for status: %w", err)
+		return result, statusUnavailable(StatusSourceSupervisor, fmt.Errorf("inspect coordinator lock for status: %w", err))
 	}
 	result.SupervisorLockHeld = lockHeld
 	if heartbeatStore, ok := opened.(SupervisorHeartbeatReader); ok {
 		result.SupervisorHeartbeat, err = heartbeatStore.ReadSupervisorHeartbeat(ctx)
 		if err != nil {
-			return StatusResult{}, fmt.Errorf("read supervisor heartbeat for status: %w", err)
+			return result, statusUnavailable(StatusSourceSupervisor, fmt.Errorf("read supervisor heartbeat for status: %w", err))
 		}
 		if result.SupervisorHeartbeat != nil {
 			result.SupervisorLive = result.SupervisorHeartbeat.Live(s.deps.Now().UTC()) && result.SupervisorLockHeld
 		}
 	}
+	result.SupervisorObserved = true
 	if latestStore, ok := opened.(LatestRunStore); ok {
 		result.LatestRun, err = latestStore.LatestRun(ctx)
 	} else {
 		result.LatestRun, err = opened.CurrentRun(ctx)
 	}
 	if err != nil {
-		return StatusResult{}, err
+		return result, statusUnavailable(StatusSourceStore, err)
 	}
 	if result.LatestRun != nil {
 		result.TestPolicyMode = testPolicyModeForRun(*result.LatestRun)
 		result.Route = statusRouteForRun(*result.LatestRun)
 		result.Activity = RunActivityFor(*result.LatestRun)
+		if gates, ok := opened.(gateResultsReader); ok {
+			results, err := gates.RunGateResults(ctx, result.LatestRun.ID)
+			if err != nil {
+				return result, statusUnavailable(StatusSourceStore, fmt.Errorf("read gate results for status: %w", err))
+			}
+			result.FailedGates = failedGatesAt(results, result.LatestRun.CheckpointSHA)
+		}
 		var pending *store.PendingEffect
 		if journal, ok := opened.(PendingEffectStore); ok {
 			pending, err = journal.PendingEffect(ctx, result.LatestRun.ID)
 			if err != nil {
-				return StatusResult{}, fmt.Errorf("read pending effect for status: %w", err)
+				return result, statusUnavailable(StatusSourceStore, fmt.Errorf("read pending effect for status: %w", err))
 			}
 		}
 		if !store.IsTerminalStatus(result.LatestRun.Status) {
