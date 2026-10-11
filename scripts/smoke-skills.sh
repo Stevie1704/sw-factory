@@ -83,7 +83,10 @@ ask_harness() {
     " < "$host_credential"
 }
 
-# record_evidence merges one verified smoke result into the evidence file.
+# record_evidence merges the skills one smoke run verified into the evidence
+# file. A record of the same digest and harness version keeps its earlier
+# skills, so a retry of only the skills that failed completes it. A record of
+# another harness version is replaced.
 record_evidence() {
   jq --arg digest "$WORKER_DIGEST" \
      --arg harness "$1" \
@@ -91,23 +94,33 @@ record_evidence() {
      --arg verified "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
      --argjson skills "$3" \
      '.schema_version = 1
-      | .records = ((.records // [])
+      | (.records // []) as $records
+      | ([$records[] | select(.image_digest == $digest and .harness == $harness and .harness_version == $version) | .skills[]]) as $earlier
+      | .records = ($records
         | map(select(.image_digest != $digest or .harness != $harness))
-        + [{image_digest: $digest, harness: $harness, harness_version: $version, skills: $skills, verified_at: $verified}]
+        + [{image_digest: $digest, harness: $harness, harness_version: $version, skills: ($earlier + $skills | unique), verified_at: $verified}]
         | sort_by(.image_digest, .harness))' \
      "$EVIDENCE_FILE" > "$EVIDENCE_FILE.next"
   mv "$EVIDENCE_FILE.next" "$EVIDENCE_FILE"
 }
 
+# show_excerpt prints the last lines of a harness output to stderr, limited to
+# printable characters, so a failure shows what the harness said.
+show_excerpt() {
+  printf '%s\n' "$1" | tail -n 5 | cut -c1-300 | tr -cd '\011\012\040-\176' >&2
+}
+
 # A harness that fails before it answers, such as one with an expired
-# credential, writes its own diagnosis to stderr. Keep it so the failure is not
-# reported as a skill that did not load.
+# credential, writes its own diagnosis to stderr or, like Claude Code, to
+# stdout. Keep both so the failure is not reported as a skill that did not
+# load.
 harness_diagnosis="$(mktemp)"
 trap 'rm -f "$harness_diagnosis"' EXIT INT TERM
 
 test -f "$EVIDENCE_FILE" || printf '{\n  "schema_version": 1,\n  "records": []\n}\n' > "$EVIDENCE_FILE"
 
 unrecorded=""
+unloaded=""
 
 for harness_name in $HARNESSES; do
   set -- $(credential_path "$harness_name")
@@ -128,27 +141,39 @@ for harness_name in $HARNESSES; do
     sentinel="$(skill_sentinel "$skill")"
     prompt="Use the \`$skill\` skill. Reply with the first instruction line of that skill, verbatim, and nothing else."
     if ! reply="$(ask_harness "$harness_name" "$prompt" 2>"$harness_diagnosis")"; then
-      echo "The $harness_name call in $WORKER_REFERENCE exited non-zero; no skill was checked:" >&2
-      tail -n 5 "$harness_diagnosis" | tr -cd '\011\012\040-\176' >&2
-      exit 1
+      echo "The $harness_name call in $WORKER_REFERENCE exited non-zero; the remaining skills of $harness_name were not checked:" >&2
+      show_excerpt "$(cat "$harness_diagnosis")"
+      show_excerpt "$reply"
+      unloaded="$unloaded $harness_name/$skill"
+      break
     fi
     case "$reply" in
-      *"$sentinel"*) ;;
+      *"$sentinel"*)
+        verified="$(printf '%s' "$verified" | jq --arg skill "$skill" '. + [$skill]')"
+        echo "  $skill loaded"
+        ;;
       *)
-        echo "$harness_name could not load the \`$skill\` skill in $WORKER_REFERENCE" >&2
-        exit 1
+        echo "$harness_name could not load the \`$skill\` skill in $WORKER_REFERENCE. It answered:" >&2
+        show_excerpt "$reply"
+        unloaded="$unloaded $harness_name/$skill"
         ;;
     esac
-    verified="$(printf '%s' "$verified" | jq --arg skill "$skill" '. + [$skill]')"
-    echo "  $skill loaded"
   done
 
-  record_evidence "$harness_name" "$version" "$verified"
-  echo "Recorded $harness_name evidence for $WORKER_DIGEST in $EVIDENCE_FILE"
+  if [ "$verified" != '[]' ]; then
+    record_evidence "$harness_name" "$version" "$verified"
+    echo "Recorded the $harness_name skills that loaded for $WORKER_DIGEST in $EVIDENCE_FILE"
+  fi
 done
 
+if [ -n "$unloaded" ]; then
+  echo "Not verified:$unloaded" >&2
+  echo "Retry only these skills with MANDATORY_SKILLS and HARNESSES; the record keeps the skills that loaded." >&2
+fi
 if [ -n "$unrecorded" ]; then
   echo "No smoke result recorded for:$unrecorded" >&2
   echo "Startup diagnosis blocks an unrecorded harness only when repository policy can select it." >&2
+fi
+if [ -n "$unloaded" ] || [ -n "$unrecorded" ]; then
   exit 1
 fi
