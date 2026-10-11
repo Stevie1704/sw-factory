@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -26,16 +27,18 @@ func MandatorySkills() []string {
 // prompt requires by name.
 const PullRequestWriterSkill = "pr"
 
-// RequiredSkills returns the role-mandated skills one repository policy can
-// use: the mandatory set, and the PR-writer skill when the policy declares
-// that optional role. An unavailable policy requires every role skill, so the
-// check fails closed.
-func RequiredSkills(policy *config.RepositoryConfig) []string {
+// RequiredSkills returns the role-mandated skills one harness must prove under
+// one repository policy: the mandatory set, and the PR-writer skill when that
+// harness can run the optional pr_writer role, because the role defaults to it
+// or the policy allows harness overrides. An unavailable policy requires every
+// role skill, so the check fails closed.
+func RequiredSkills(policy *config.RepositoryConfig, harnessName string) []string {
 	required := MandatorySkills()
 	if policy == nil {
 		return append(required, PullRequestWriterSkill)
 	}
-	if _, declared := policy.RoleHarnessDefaults[workflow.RolePullRequestWriter]; declared {
+	writer, declared := policy.RoleHarnessDefaults[workflow.RolePullRequestWriter]
+	if declared && (strings.TrimSpace(string(writer)) == harnessName || slices.Contains(policy.AllowedOverrides, config.OverrideHarness)) {
 		required = append(required, PullRequestWriterSkill)
 	}
 	return required

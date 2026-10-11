@@ -716,8 +716,12 @@ emits a `pr_summary_warning` event, and makes the pull request ready with the
 coordinator section only.
 
 The `pr` skill is in the worker image. `factory doctor` requires smoke evidence
-for it only when the repository declares `pr_writer`, so record a smoke result
-for the pinned digest before you turn the role on.
+for it only when the repository declares `pr_writer`, and only from the harness
+that can run the role: the `pr_writer` harness in `role_harness_defaults`, or
+both harnesses when `allowed_overrides` contains `harness`. Record that smoke
+result for the pinned digest before you turn the role on. To add it to an
+existing record, run the smoke with `MANDATORY_SKILLS=pr` and `HARNESSES` set
+to that harness.
 
 Repository configuration cannot declare a workflow route. A route is selected
 per issue with a frozen `factory-route` marker before claim, and it needs the

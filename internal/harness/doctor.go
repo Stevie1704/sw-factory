@@ -284,7 +284,7 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		if !imageReady(ctx, request) {
 			return doctor.Skipped("harness.skills.not_checked", diagnosis, worker.ImageUnavailableReason).WithFacts(harnessFact(name))
 		}
-		required := RequiredSkills(request.Policy)
+		required := RequiredSkills(request.Policy, name)
 		contract, err := request.SkillChecker.CheckSkillContract(ctx, worker.SkillContractRequest{Image: request.Image, Harness: name, Skills: required})
 		if err != nil {
 			return worker.ProbeFailure(skillsContractUnmet, diagnosis, err, "the pinned worker image does not satisfy the role-mandated skill contract for "+name, "rebuild the worker image so each role-mandated skill appears once per discovery root and stays model-visible, and verify the configured image digest")
