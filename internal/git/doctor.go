@@ -93,8 +93,7 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 				return doctor.Failure(doctor.AdapterMissing("git.remote.adapter_missing"), "git remote", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckRemote(ctx, request); err != nil {
-				problem, action := remoteDiagnosis(err)
-				return doctor.Failure(remoteCondition(err), "git remote", problem, action)
+				return remoteFailureResult(err)
 			}
 			return doctor.Success("git.remote.ready", "git remote")
 		},
@@ -224,63 +223,63 @@ func roleFact(role string) doctor.Fact {
 	return doctor.Fact{Name: "role", Value: role}
 }
 
-// remoteCondition classifies one Git remote failure by its typed category.
-// An uncategorized failure keeps an unknown origin.
-func remoteCondition(err error) doctor.Condition {
-	var failure *remoteCheckError
-	if !errors.As(err, &failure) {
-		return doctor.Condition{Code: "git.remote.unclassified", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
-	}
-	condition := doctor.Condition{
-		Code:   "git.remote." + strings.ReplaceAll(string(failure.kind), "-", "_"),
-		Origin: doctor.OriginEnvironment,
-		Effect: doctor.EffectLocalMutation,
-		Topic:  "setup",
-	}
-	switch failure.kind {
-	case remoteFailureBranchNoCommit:
-		condition.Origin, condition.Effect = doctor.OriginRepository, doctor.EffectExternalMutation
-	case remoteFailureUnresponsive:
-		condition.Effect, condition.Topic, condition.Unobserved = doctor.EffectInspection, "debug", true
-	case remoteFailureConfiguration, remoteFailureCheckout, remoteFailureRoot, remoteFailureFetchRead,
-		remoteFailureFetchIdentity, remoteFailurePushRead, remoteFailurePushIdentity, remoteFailureBranchRead:
-	default:
-		condition.Code, condition.Origin, condition.Unobserved = "git.remote.unclassified", doctor.OriginUnknown, true
-	}
-	return condition
+// remoteFinding is the classification and wording of one Git remote failure
+// category. One table holds both, so the text and JSON views cannot drift.
+type remoteFinding struct {
+	condition doctor.Condition
+	problem   string
+	action    string
 }
 
-// remoteDiagnosis translates one safe Git remote category into the specific
-// problem and corrective action shown by the startup report.
-func remoteDiagnosis(err error) (string, string) {
+// remoteSetup classifies a remote finding the operator corrects on the host.
+func remoteSetup(code string) doctor.Condition {
+	return doctor.Condition{Code: code, Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+}
+
+// remoteFindings maps each Git remote failure category to its finding.
+var remoteFindings = map[remoteFailureKind]remoteFinding{
+	remoteFailureConfiguration: {remoteSetup("git.remote.configuration"), "the Git remote diagnosis request is incomplete or unsafe", "repair the registered repository identity, remote name, and target branch"},
+	remoteFailureCheckout:      {remoteSetup("git.remote.checkout"), "the registered checkout cannot be inspected as a Git repository", "repair the registered checkout path and initialize or restore its Git metadata"},
+	remoteFailureRoot:          {remoteSetup("git.remote.root"), "Git resolved a checkout root different from the registered repository", "register the checkout's actual Git root or correct the repository path"},
+	remoteFailureFetchRead:     {remoteSetup("git.remote.fetch_read"), "the configured Git fetch remote is missing or unreadable", "configure the factory remote and verify the checkout can read it"},
+	remoteFailureFetchIdentity: {remoteSetup("git.remote.fetch_identity"), "the Git fetch remote does not identify the registered repository", "set the configured remote's fetch URL to the registered GitHub or Azure Repos repository"},
+	remoteFailurePushRead:      {remoteSetup("git.remote.push_read"), "the configured Git push remote is missing or unreadable", "configure a push URL for the factory remote and verify the checkout can read it"},
+	remoteFailurePushIdentity:  {remoteSetup("git.remote.push_identity"), "the Git push remote does not identify the registered repository", "set the configured remote's push URL to the registered GitHub or Azure Repos repository"},
+	remoteFailureBranchRead:    {remoteSetup("git.remote.branch_read"), "the configured Git target branch cannot be read from the remote", "fetch the target branch and verify network and remote permissions"},
+	remoteFailureBranchNoCommit: {
+		doctor.Condition{Code: "git.remote.branch_no_commit", Origin: doctor.OriginRepository, Effect: doctor.EffectExternalMutation, Topic: "setup"},
+		"the configured Git target branch has no commit on the remote",
+		"choose an existing target branch or publish the branch before starting the factory",
+	},
+	remoteFailureUnresponsive: {
+		doctor.Condition{Code: "git.remote.unresponsive", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true},
+		"the Git remote did not answer within %s",
+		"check network access to the remote and that a credential helper or ssh agent supplies the credential without a prompt, then run factory doctor again",
+	},
+}
+
+// unclassifiedRemote is the finding for a failure without a known category.
+var unclassifiedRemote = remoteFinding{
+	doctor.Condition{Code: "git.remote.unclassified", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true},
+	"the Git remote diagnosis could not be classified",
+	"repair the registered checkout and configured Git remote, then retry the diagnosis",
+}
+
+// remoteFailureResult translates one safe Git remote category into the
+// classified startup result.
+func remoteFailureResult(err error) doctor.Result {
+	finding := unclassifiedRemote
 	var failure *remoteCheckError
-	if !errors.As(err, &failure) {
-		return "the Git remote diagnosis could not be classified", "repair the registered checkout and configured Git remote, then retry the diagnosis"
+	if errors.As(err, &failure) {
+		if known, ok := remoteFindings[failure.kind]; ok {
+			finding = known
+		}
 	}
-	switch failure.kind {
-	case remoteFailureConfiguration:
-		return "the Git remote diagnosis request is incomplete or unsafe", "repair the registered repository identity, remote name, and target branch"
-	case remoteFailureCheckout:
-		return "the registered checkout cannot be inspected as a Git repository", "repair the registered checkout path and initialize or restore its Git metadata"
-	case remoteFailureRoot:
-		return "Git resolved a checkout root different from the registered repository", "register the checkout's actual Git root or correct the repository path"
-	case remoteFailureFetchRead:
-		return "the configured Git fetch remote is missing or unreadable", "configure the factory remote and verify the checkout can read it"
-	case remoteFailureFetchIdentity:
-		return "the Git fetch remote does not identify the registered repository", "set the configured remote's fetch URL to the registered GitHub or Azure Repos repository"
-	case remoteFailurePushRead:
-		return "the configured Git push remote is missing or unreadable", "configure a push URL for the factory remote and verify the checkout can read it"
-	case remoteFailurePushIdentity:
-		return "the Git push remote does not identify the registered repository", "set the configured remote's push URL to the registered GitHub or Azure Repos repository"
-	case remoteFailureBranchRead:
-		return "the configured Git target branch cannot be read from the remote", "fetch the target branch and verify network and remote permissions"
-	case remoteFailureBranchNoCommit:
-		return "the configured Git target branch has no commit on the remote", "choose an existing target branch or publish the branch before starting the factory"
-	case remoteFailureUnresponsive:
-		return fmt.Sprintf("the Git remote did not answer within %s", failure.timeout), "check network access to the remote and that a credential helper or ssh agent supplies the credential without a prompt, then run factory doctor again"
-	default:
-		return "the Git remote diagnosis returned an unknown failure", "repair the registered checkout and configured Git remote, then retry the diagnosis"
+	problem := finding.problem
+	if failure != nil && failure.kind == remoteFailureUnresponsive {
+		problem = fmt.Sprintf(problem, failure.timeout)
 	}
+	return doctor.Failure(finding.condition, "git remote", problem, finding.action)
 }
 
 // CheckHooks verifies that factory Git invocations resolve the disabled hooks
