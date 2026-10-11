@@ -69,7 +69,7 @@ func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutp
 		return 2
 	}
 	if *baseImage == "" {
-		writeError(errorsOutput, errors.New("this development build names no released worker base image: install a Factory release, or build a base image with make worker-build and pass --worker-base-image IMAGE@sha256:DIGEST"))
+		writeError(errorsOutput, errors.New("this build names no released worker base image, because it is a development build or was not installed from a release archive: install a Factory release archive, or build a base image with make worker-build and pass --worker-base-image IMAGE@sha256:DIGEST"))
 		return 1
 	}
 	if !pinnedImage.MatchString(*baseImage) {

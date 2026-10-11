@@ -100,6 +100,28 @@ func TestOnboardGivesTheHarnessTheReleaseResources(t *testing.T) {
 	}
 }
 
+// TestOnboardReportsAnUnwritableResourceDirectory proves that onboard names
+// the resource directory, and starts no session, when it cannot export the
+// release resources.
+func TestOnboardReportsAnUnwritableResourceDirectory(t *testing.T) {
+	_, record := onboardFixture(t, "claude")
+	home := filepath.Join(t.TempDir(), "home is a file")
+	if err := os.WriteFile(home, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	var output, errorsOutput bytes.Buffer
+
+	status := cli.Run(context.Background(), []string{"onboard", "--worker-base-image", testBaseImage}, &output, &errorsOutput)
+
+	if status != 1 || !strings.Contains(errorsOutput.String(), "onboarding resource directory") {
+		t.Errorf("status = %d, stderr = %q; want 1 and the resource directory", status, errorsOutput.String())
+	}
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Errorf("onboarding without resources started the harness: %v", err)
+	}
+}
+
 // TestOnboardRejectsInvalidInput proves that onboard refuses an unknown
 // harness, a positional argument, and a missing or mutable worker base image
 // before it starts a session, and names the action that fixes each.
