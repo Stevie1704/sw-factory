@@ -43,6 +43,7 @@ type commandDefinition struct {
 var commandTable = []commandDefinition{
 	{name: "guide", handler: runGuide, standalone: true},
 	{name: "version", handler: runVersion, standalone: true},
+	{name: "bug-report", handler: runBugReport, standalone: true},
 	{name: "init", handler: runInit},
 	{name: "register", handler: runRegister},
 	{name: "onboard", handler: runOnboard},
