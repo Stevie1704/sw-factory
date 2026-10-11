@@ -118,6 +118,9 @@ func TestSupervisorStartupCheckDistinguishesLiveAndMissingHeartbeats(t *testing.
 	}
 	now := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
 	missing := store.SupervisorStartupCheck(path, now)(t.Context())
+	if missing.Effect != doctor.EffectExternalMutation {
+		t.Fatalf("missing heartbeat effect = %q, want factory start classified as an external mutation", missing.Effect)
+	}
 	if missing.Status != doctor.StatusWarning || missing.Code != "store.supervisor.missing" || !strings.Contains(missing.Problem, "no live supervisor") {
 		t.Fatalf("missing heartbeat result = %#v, want a no-live warning", missing)
 	}

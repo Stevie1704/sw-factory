@@ -155,6 +155,11 @@ func TestRunStatusJSONReportsAPausedRunWithAFailedGate(t *testing.T) {
 	if origin := document.blocker(t, "run.supervisor.stale"); origin != "environment" {
 		t.Fatalf("supervisor blocker origin = %q, want environment", origin)
 	}
+	for _, blocker := range document.Blockers {
+		if blocker.Code == "run.supervisor.stale" && (blocker.Action == nil || blocker.Action.Effect != "external_mutation") {
+			t.Fatalf("supervisor blocker = %+v, want factory start classified as an external mutation", blocker)
+		}
+	}
 	if document.Recovery == nil || document.Recovery.SourcesAgree || len(document.Recovery.Discrepancies) == 0 {
 		t.Fatalf("recovery = %+v, want the observed discrepancies", document.Recovery)
 	}

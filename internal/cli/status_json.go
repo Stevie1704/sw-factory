@@ -27,10 +27,10 @@ const (
 )
 
 // startAction is the supported action for an active run without a live
-// supervisor.
+// supervisor. The coordinator it starts mutates tracker and code-host state.
 var startAction = actionDocument{
 	Summary:       "run `factory start` so the active run can progress",
-	Effect:        doctor.EffectLocalMutation,
+	Effect:        doctor.EffectExternalMutation,
 	Preconditions: []string{"factory doctor reports no blocking check"},
 	GuideTopic:    "debug",
 }

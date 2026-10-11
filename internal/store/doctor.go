@@ -9,7 +9,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 )
 
-// startPrecondition guards the suggested `factory start` action.
+// startPrecondition guards the suggested `factory start` action. Starting
+// the coordinator is an external mutation: it reconciles tracker state,
+// claims issues, and can publish branches and pull requests.
 const startPrecondition = "factory doctor reports no blocking check"
 
 // Store diagnosis conditions. Codes are stable; wording may change.
@@ -19,10 +21,10 @@ var (
 	sqliteCloseFailed    = doctor.Condition{Code: "store.sqlite.close_failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "debug"}
 	supervisorUnobserved = doctor.Condition{Code: "store.supervisor.unobserved", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
 	// supervisorMissing means no heartbeat was ever recorded.
-	supervisorMissing = doctor.Condition{Code: "store.supervisor.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "debug", Preconditions: []string{startPrecondition}}
+	supervisorMissing = doctor.Condition{Code: "store.supervisor.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "debug", Preconditions: []string{startPrecondition}}
 	// supervisorStale means a recorded heartbeat expired or its coordinator
 	// lock is no longer held.
-	supervisorStale = doctor.Condition{Code: "store.supervisor.stale", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "debug", Preconditions: []string{startPrecondition}}
+	supervisorStale = doctor.Condition{Code: "store.supervisor.stale", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "debug", Preconditions: []string{startPrecondition}}
 )
 
 // StartupCheck returns the SQLite readiness check for one existing host-local
