@@ -15,19 +15,24 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
-// TestStartupChecksReportDockerAndWorkerImageIndependently verifies the
-// worker contributor reports every prerequisite even when Docker is unavailable.
-func TestStartupChecksReportDockerAndWorkerImageIndependently(t *testing.T) {
+// TestStartupChecksSkipTheWorkerImageWhenDockerIsUnavailable verifies an
+// unreachable daemon is the one finding, and the image it could not inspect
+// is reported as not checked rather than as missing.
+func TestStartupChecksSkipTheWorkerImageWhenDockerIsUnavailable(t *testing.T) {
 	checker := &fakeWorkerDoctorChecker{dockerErr: errors.New("docker unavailable")}
-	report := doctor.Run(context.Background(), worker.StartupChecks(checker, worker.ImageReference{
+	report := doctor.Run(context.Background(), worker.StartupChecks(worker.NewReadiness(checker, worker.ImageReference{
 		Name:   "ghcr.io/example/factory-worker",
 		Digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-	})...)
-	if report.Ready() || len(report.Failures()) != 1 {
-		t.Fatalf("worker report = %#v, want one Docker failure", report)
+	}))...)
+	if report.Ready() || len(report.Failures()) != 1 || report.Complete() {
+		t.Fatalf("worker report = %#v, want one Docker failure and an incomplete collection", report)
 	}
-	if len(report.Results) != 2 || checker.calls != 2 {
-		t.Fatalf("worker results/calls = %d/%d, want daemon and image checks", len(report.Results), checker.calls)
+	image := report.Results[1]
+	if image.Status != doctor.StatusSkipped || image.Code != "worker.image.not_checked" || !image.Unobserved {
+		t.Fatalf("image result = %#v, want an unobserved skipped check", image)
+	}
+	if checker.calls != 1 {
+		t.Fatalf("worker probe calls = %d, want the daemon probe only", checker.calls)
 	}
 }
 
@@ -36,7 +41,7 @@ func TestStartupChecksReportDockerAndWorkerImageIndependently(t *testing.T) {
 func TestStartupChecksDoNotRenderWorkerCommandErrors(t *testing.T) {
 	secret := "worker-command-secret"
 	checker := &fakeWorkerDoctorChecker{dockerErr: errors.New(secret), imageErr: errors.New(secret)}
-	report := doctor.Run(context.Background(), worker.StartupChecks(checker, worker.ImageReference{})...)
+	report := doctor.Run(context.Background(), worker.StartupChecks(worker.NewReadiness(checker, worker.ImageReference{}))...)
 	for _, result := range report.Results {
 		if strings.Contains(result.Problem+result.Action, secret) {
 			t.Fatalf("worker result exposed command error: %#v", result)
@@ -315,12 +320,15 @@ func TestStartupChecksReportACaptureLimitOverflow(t *testing.T) {
 		Stream:    "stdout",
 		Limit:     worker.MaxCapturedOutputBytes,
 	}
-	checker := &fakeWorkerDoctorChecker{dockerErr: overflow, imageErr: overflow}
-	report := doctor.Run(context.Background(), worker.StartupChecks(checker, probedWorkerImage)...)
-	if report.Ready() || len(report.Failures()) != 2 {
-		t.Fatalf("worker report = %#v, want daemon and image failures", report)
+	var failures []doctor.Result
+	for _, checker := range []*fakeWorkerDoctorChecker{{dockerErr: overflow}, {imageErr: overflow}} {
+		report := doctor.Run(context.Background(), worker.StartupChecks(worker.NewReadiness(checker, probedWorkerImage))...)
+		if report.Ready() || len(report.Failures()) != 1 {
+			t.Fatalf("worker report = %#v, want one overflow failure", report)
+		}
+		failures = append(failures, report.Failures()...)
 	}
-	for _, result := range report.Failures() {
+	for _, result := range failures {
 		if !strings.Contains(result.Problem, "capture limit") || result.Action == "" {
 			t.Fatalf("worker result = %#v, want the overflow named with an operator action", result)
 		}
@@ -346,7 +354,7 @@ func TestStartupChecksDistinguishAMissingDockerExecutableFromAStoppedDaemon(t *t
 		{err: worker.ErrDockerMissing, code: "worker.docker.missing"},
 		{err: errors.New("daemon refused the connection"), code: "worker.docker.unreachable"},
 	} {
-		report := doctor.Run(context.Background(), worker.StartupChecks(&fakeWorkerDoctorChecker{dockerErr: test.err}, worker.ImageReference{})...)
+		report := doctor.Run(context.Background(), worker.StartupChecks(worker.NewReadiness(&fakeWorkerDoctorChecker{dockerErr: test.err}, worker.ImageReference{}))...)
 		docker := report.Results[0]
 		if docker.Code != test.code || docker.Origin != doctor.OriginEnvironment || !docker.BlocksStartup() {
 			t.Fatalf("docker result = %#v, want blocking %s from the environment", docker, test.code)

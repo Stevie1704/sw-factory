@@ -87,6 +87,9 @@ type StartupRequest struct {
 	Authentication config.AuthenticationConfig
 	// Image is the immutable worker image used for executable probes.
 	Image worker.ImageReference
+	// ImageReady reports whether the worker image could be inspected. A probe
+	// inside the image is skipped when it returns an error. Nil means ready.
+	ImageReady func(context.Context) error
 	// Checker probes harness executables inside the worker image.
 	Checker worker.HarnessChecker
 	// AuthenticationChecker verifies configured credentials inside the worker
@@ -115,12 +118,12 @@ func StartupChecks(request StartupRequest) []doctor.Check {
 	selected := selectedHarnesses(request.Policy)
 	for _, name := range selected {
 		harnessName := name
-		checks = append(checks, executableCheck(request.Checker, request.Image, harnessName))
+		checks = append(checks, executableCheck(request, harnessName))
 		checks = append(checks, skillContractCheck(request, harnessName))
 	}
 	checks = append(checks,
-		credentialCheck(NameCodex, request.Authentication.CodexAuthPath, request.Image, request.AuthenticationChecker),
-		credentialCheck(NameClaude, request.Authentication.ClaudeAuthPath, request.Image, request.AuthenticationChecker),
+		credentialCheck(request, NameCodex, request.Authentication.CodexAuthPath),
+		credentialCheck(request, NameClaude, request.Authentication.ClaudeAuthPath),
 	)
 	return checks
 }
@@ -184,6 +187,11 @@ var (
 	skillsEvidenceStale          = doctor.Condition{Code: "harness.skills.evidence_stale", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 )
 
+// imageReady reports whether probes inside the worker image can run.
+func imageReady(ctx context.Context, request StartupRequest) bool {
+	return request.ImageReady == nil || request.ImageReady(ctx) == nil
+}
+
 // harnessFact names the diagnosed harness as a supporting observation.
 func harnessFact(name string) doctor.Fact {
 	return doctor.Fact{Name: "harness", Value: name}
@@ -201,6 +209,9 @@ func nativeResumeCheck(request StartupRequest) doctor.Check {
 			return doctor.Failure(capabilityUnsupported, "harness capability", err.Error(), "select an adapter with native resume support for every declared role")
 		}
 		if request.AllRolesHeadless && request.HeadlessChecker != nil {
+			if !imageReady(ctx, request) {
+				return doctor.Skipped("harness.capability.not_checked", "harness capability", worker.ImageUnavailableReason)
+			}
 			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {
 				return worker.ProbeFailure(headlessHelperMissing, "harness capability", err, "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
 			}
@@ -210,10 +221,14 @@ func nativeResumeCheck(request StartupRequest) doctor.Check {
 }
 
 // executableCheck probes one selected harness in the exact pinned image.
-func executableCheck(checker worker.HarnessChecker, image worker.ImageReference, name string) doctor.Check {
+func executableCheck(request StartupRequest, name string) doctor.Check {
+	checker, image := request.Checker, request.Image
 	return func(ctx context.Context) doctor.Result {
 		if checker == nil {
 			return doctor.Failure(executableAdapterMissing, name+" worker executable", "the worker harness diagnosis adapter is unavailable", "configure the Docker worker runtime").WithFacts(harnessFact(name))
+		}
+		if !imageReady(ctx, request) {
+			return doctor.Skipped("harness.executable.not_checked", name+" worker executable", worker.ImageUnavailableReason).WithFacts(harnessFact(name))
 		}
 		if err := checker.CheckHarness(ctx, worker.HarnessCheckRequest{Image: image, Name: name}); err != nil {
 			return worker.ProbeFailure(executableUnusable, name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness").WithFacts(harnessFact(name))
@@ -225,7 +240,8 @@ func executableCheck(checker worker.HarnessChecker, image worker.ImageReference,
 // credentialCheck validates an optional source and, when configured, asks the
 // worker adapter to verify it with the harness's local auth command. It never
 // opens or reports credential contents in a diagnosis result.
-func credentialCheck(name, path string, image worker.ImageReference, checker worker.HarnessAuthenticationChecker) doctor.Check {
+func credentialCheck(request StartupRequest, name, path string) doctor.Check {
+	image, checker := request.Image, request.AuthenticationChecker
 	return func(ctx context.Context) doctor.Result {
 		if strings.TrimSpace(path) == "" {
 			// ADR 0002 keeps a host source optional: a harness without one runs
@@ -240,6 +256,9 @@ func credentialCheck(name, path string, image worker.ImageReference, checker wor
 		}
 		if checker == nil {
 			return doctor.Failure(authenticationAdapterMissing, name+" authentication", "the worker authentication diagnosis adapter is unavailable", "configure the Docker worker runtime to verify the credential inside the pinned image")
+		}
+		if !imageReady(ctx, request) {
+			return doctor.Skipped("harness.authentication.not_checked", name+" authentication", worker.ImageUnavailableReason).WithFacts(harnessFact(name))
 		}
 		if err := checker.CheckHarnessAuthentication(ctx, worker.HarnessAuthenticationCheckRequest{Image: image, Name: name, AuthPath: path}); err != nil {
 			return worker.ProbeFailure(authenticationRejected, name+" authentication", err, "the configured credential is not usable by the worker harness", "authenticate the "+name+" harness and provide a valid private credential source").WithFacts(harnessFact(name))
@@ -261,6 +280,9 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		blocking := requiresSkillSmoke(request.Policy, name)
 		if request.SkillChecker == nil {
 			return doctor.Failure(skillsAdapterMissing, diagnosis, "the worker skill diagnosis adapter is unavailable", "configure the Docker worker runtime").WithFacts(harnessFact(name))
+		}
+		if !imageReady(ctx, request) {
+			return doctor.Skipped("harness.skills.not_checked", diagnosis, worker.ImageUnavailableReason).WithFacts(harnessFact(name))
 		}
 		required := RequiredSkills(request.Policy)
 		contract, err := request.SkillChecker.CheckSkillContract(ctx, worker.SkillContractRequest{Image: request.Image, Harness: name, Skills: required})

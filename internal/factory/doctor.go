@@ -60,11 +60,13 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 
 	headlessChecker := s.doctorHeadlessChecker()
 	allRolesHeadless := repositoryPolicy != nil && s.allRolesHeadless(*repositoryPolicy)
-	checks = append(checks, worker.StartupChecks(s.doctorWorker(), image)...)
+	readiness := worker.NewReadiness(s.doctorWorker(), image)
+	checks = append(checks, worker.StartupChecks(readiness)...)
 	checks = append(checks, harness.StartupChecks(harness.StartupRequest{
 		Policy:                repositoryPolicy,
 		Authentication:        registration.Authentication,
 		Image:                 image,
+		ImageReady:            readiness.Image,
 		Checker:               s.doctorHarnessChecker(),
 		AuthenticationChecker: s.doctorHarnessAuthenticationChecker(),
 		Resolve:               s.deps.HarnessCapabilities,

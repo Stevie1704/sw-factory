@@ -374,3 +374,41 @@ func TestStartupChecksReportACaptureLimitOverflow(t *testing.T) {
 		}
 	}
 }
+
+// TestStartupChecksSkipImageProbesWhenTheImageIsUnavailable verifies the
+// in-image probes do not report an unusable executable, a rejected
+// credential, or an unmet skill contract for an image nobody could inspect.
+func TestStartupChecksSkipImageProbesWhenTheImageIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	codexPath := filepath.Join(root, "auth.json")
+	if err := os.WriteFile(codexPath, []byte("credential contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checker := &harnessDoctorChecker{}
+	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy: &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{
+			"test": config.HarnessCodex, "implementation": config.HarnessCodex,
+		}},
+		Authentication:        config.AuthenticationConfig{CodexAuthPath: codexPath},
+		Image:                 probedImage,
+		ImageReady:            func(context.Context) error { return errors.New("docker unavailable") },
+		Checker:               checker,
+		AuthenticationChecker: checker,
+		SkillChecker:          checker,
+	})...)
+
+	if checker.calls+checker.authCalls+checker.skillCalls != 0 {
+		t.Fatalf("image probes ran %d/%d/%d times, want none", checker.calls, checker.authCalls, checker.skillCalls)
+	}
+	skipped := map[string]bool{}
+	for _, result := range report.Results {
+		if result.Status == doctor.StatusSkipped && result.Unobserved {
+			skipped[result.Code] = true
+		}
+	}
+	for _, code := range []string{"harness.executable.not_checked", "harness.authentication.not_checked", "harness.skills.not_checked"} {
+		if !skipped[code] {
+			t.Fatalf("results = %#v, want skipped %s", report.Results, code)
+		}
+	}
+}
