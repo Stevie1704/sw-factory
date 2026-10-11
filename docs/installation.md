@@ -112,6 +112,9 @@ A development build does not check the release label of the worker image.
 
 `make release VERSION=vX.Y.Z WORKER_BASE_IMAGE=<image>@sha256:<digest>`
 packages the archives, `release.json`, and `checksums.txt` into `dist`. Then
-it scans the packaged binaries. The [release workflow](../.github/workflows/release.yml)
+it scans the packaged binaries. The [release
+workflow](https://github.com/Stevie1704/sw-factory/blob/main/.github/workflows/release.yml)
 runs the complete release. [Build toolchain and vulnerability
-scanning](supply-chain.md#release-artifacts) describes its gates.
+scanning](https://github.com/Stevie1704/sw-factory/blob/main/docs/supply-chain.md#release-artifacts)
+describes its gates. This file is also the `README.md` of each archive, so its
+links are absolute.
