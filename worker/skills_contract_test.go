@@ -123,7 +123,7 @@ const (
 // hides a skill whose openai.yaml denies implicit invocation; Claude hides one
 // whose SKILL.md front matter disables model invocation.
 func TestMandatorySkillsAreModelVisibleUnderEveryHarness(t *testing.T) {
-	for _, skill := range harness.RequiredSkills(nil) {
+	for _, skill := range harness.RequiredSkills(nil, harness.NameClaude) {
 		t.Run(skill, func(t *testing.T) {
 			body := readSkill(t, "skills/"+skill+"/SKILL.md")
 			if !strings.Contains(body, "name: "+skill+"\n") {

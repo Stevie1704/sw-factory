@@ -128,6 +128,51 @@ func TestStartupChecksKeepBothHarnessSmokesBlockingForHarnessOverrides(t *testin
 	}
 }
 
+// TestStartupChecksRequireThePRSkillOnlyFromAHarnessThatCanWrite verifies
+// that the pr skill smoke is required only from a harness that can run the
+// optional pr_writer role: its default harness, or any harness when the
+// repository allows harness overrides.
+func TestStartupChecksRequireThePRSkillOnlyFromAHarnessThatCanWrite(t *testing.T) {
+	defaults := map[string]config.Harness{
+		"implementation": config.HarnessClaude,
+		"spec_review":    config.HarnessCodex,
+		"pr_writer":      config.HarnessCodex,
+	}
+	path := filepath.Join(t.TempDir(), "skill-smoke.json")
+	evidence := harness.SkillSmokeEvidence{SchemaVersion: 1, Records: []harness.SkillSmokeRecord{
+		{ImageDigest: probedImage.Digest, Harness: harness.NameCodex, HarnessVersion: probedHarnessVersion, Skills: harness.RequiredSkills(nil, harness.NameCodex)},
+		{ImageDigest: probedImage.Digest, Harness: harness.NameClaude, HarnessVersion: probedHarnessVersion, Skills: harness.MandatorySkills()},
+	}}
+	body, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		overrides []config.OverrideName
+		failures  int
+	}{
+		{"writer on codex", nil, 0},
+		{"harness overrides allowed", []config.OverrideName{config.OverrideHarness}, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+				Policy:            &config.RepositoryConfig{RoleHarnessDefaults: defaults, AllowedOverrides: test.overrides},
+				Image:             probedImage,
+				Checker:           &harnessDoctorChecker{},
+				SkillChecker:      &harnessDoctorChecker{},
+				SkillEvidencePath: path,
+			})...)
+			if got := skillContractFailures(report); got != test.failures {
+				t.Errorf("skill contract failures = %d, want %d: %#v", got, test.failures, report)
+			}
+		})
+	}
+}
+
 // TestStartupChecksDoNotRenderCredentialErrors verifies configured credential
 // failures never include a path's contents or the underlying error string.
 func TestStartupChecksDoNotRenderCredentialErrors(t *testing.T) {

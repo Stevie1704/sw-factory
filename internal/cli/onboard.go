@@ -26,11 +26,15 @@ var pinnedImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64
 
 // onboardingPrompt is the first message of the onboarding session. The
 // procedure document owns the steps and the approval list; the prompt names
-// the paths, the base image, and the rules that apply before the agent has
-// read the document.
+// the paths, the base image, the factory command, and the rules that apply
+// before the agent has read the document.
 const onboardingPrompt = `Prepare the repository at %[1]s for Software Factory runs.
 
-Run factory guide and factory guide setup first; they describe the installed
+Run every factory command as %[5]s, the build that started this
+session; the procedure calls it <FACTORY_COMMAND>. A factory on PATH can be
+another build, so do not use it.
+
+Run %[5]s guide and %[5]s guide setup first; they describe the installed
 release. The installed release's resources are at %[2]s. Read
 %[2]s/%[3]s in full and follow its ordered procedure from
 the first step to the last. In the procedure, <FACTORY_RESOURCES> means
@@ -81,17 +85,44 @@ func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutp
 		writeError(errorsOutput, err)
 		return 1
 	}
+	command, err := factoryCommand()
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
 	resourcesPath, err := exportOnboardingResources()
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
 	defer func() { _ = os.RemoveAll(resourcesPath) }()
-	if err := startOnboardingSession(ctx, selected, targetPath, resourcesPath, *baseImage, output, errorsOutput); err != nil {
+	if err := startOnboardingSession(ctx, selected, onboardingSession{targetPath, resourcesPath, *baseImage, command}, output, errorsOutput); err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
 	return 0
+}
+
+// factoryCommand returns the absolute path of the running factory executable.
+// The harness shell can load a login profile that puts another factory build
+// first on PATH, so the session names this exact build.
+func factoryCommand() (string, error) {
+	executable, err := os.Executable()
+	if err == nil {
+		executable, err = filepath.EvalSymlinks(executable)
+	}
+	if err != nil {
+		return "", fmt.Errorf("locate the running factory executable for the onboarding session: %w", err)
+	}
+	return executable, nil
+}
+
+// onboardingSession holds the values the onboarding prompt names.
+type onboardingSession struct {
+	targetPath     string
+	resourcesPath  string
+	baseImage      string
+	factoryCommand string
 }
 
 // exportOnboardingResources writes the installed release's resources into a
@@ -122,12 +153,12 @@ func exportOnboardingResources() (string, error) {
 // until the operator ends the session. The resource directory is added as a
 // second working directory, because the procedure copies skills and runs
 // scripts from it.
-func startOnboardingSession(ctx context.Context, harness config.Harness, targetPath, resourcesPath, baseImage string, output, errorsOutput io.Writer) error {
-	prompt := fmt.Sprintf(onboardingPrompt, targetPath, resourcesPath, onboardingProcedure, baseImage)
+func startOnboardingSession(ctx context.Context, harness config.Harness, values onboardingSession, output, errorsOutput io.Writer) error {
+	prompt := fmt.Sprintf(onboardingPrompt, values.targetPath, values.resourcesPath, onboardingProcedure, values.baseImage, values.factoryCommand)
 	// The prompt comes first: Claude Code's --add-dir accepts several values and
 	// would take a later positional prompt as a directory.
-	session := exec.CommandContext(ctx, string(harness), prompt, "--add-dir", resourcesPath)
-	session.Dir = targetPath
+	session := exec.CommandContext(ctx, string(harness), prompt, "--add-dir", values.resourcesPath)
+	session.Dir = values.targetPath
 	// The command handler signature carries no input stream; the session is
 	// interactive, so it reads the operator's terminal directly.
 	session.Stdin = os.Stdin
