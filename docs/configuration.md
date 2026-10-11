@@ -1030,7 +1030,7 @@ Before starting, prepare a dedicated GitHub repository with a checked-in
 Docker with the configured worker image available, and the host Codex `auth.json`
 path registered in the host configuration. Codex and Claude Code repositories,
 including mixed per-role selections, use the headless worker path and do not
-require no terminal software. Build the local commands from this checkout
+require terminal software. Build the local commands from this checkout
 (`factory`, `factory-report`, and `factory-worker-headless`) so the worker image
 can invoke the pinned report command; the headless worker helper is built into
 the image.

@@ -44,9 +44,15 @@ the installed release to a new directory below the user cache directory: this
 document and its reference documents, the curated worker skills, the worked
 worker definition, and the smoke and verification scripts. The first message
 of the session names the target repository, that resource directory, and the
-worker base image of the release. In the steps below, `<TARGET_REPO_PATH>`,
-`<FACTORY_RESOURCES>`, and `<FACTORY_BASE_IMAGE>` mean those three values.
+worker base image of the release. It also names `<FACTORY_COMMAND>`, the
+absolute path of the `factory` executable that started the session. In the
+steps below, `<TARGET_REPO_PATH>`, `<FACTORY_RESOURCES>`,
+`<FACTORY_BASE_IMAGE>`, and `<FACTORY_COMMAND>` mean those four values.
 `<FACTORY_BASE_IMAGE>` is always pinned as `image@sha256:digest`.
+
+Run every `factory` command of this procedure as `<FACTORY_COMMAND>`. The
+harness shell can load a login profile that puts another `factory` build first
+on `PATH`, for example a development build from `make install`.
 
 The session can also use the resource directory, because the procedure copies
 skills and runs scripts from it. The command removes the directory when the
@@ -98,16 +104,18 @@ exists.
 Run these checks before any other step:
 
 ~~~sh
-factory version --json
+<FACTORY_COMMAND> version --json
 docker info
 docker version --format '{{.Server.Os}}/{{.Server.Arch}}'
 gh auth status
 command -v git jq
 ~~~
 
-`factory version --json` must report a `worker_base_image` that equals
-`<FACTORY_BASE_IMAGE>`, unless the operator passed `--worker-base-image` to a
-development build. The Docker server platform must be `linux/arm64` or
+`<FACTORY_COMMAND> version --json` must report a `worker_base_image` that
+equals `<FACTORY_BASE_IMAGE>`. Only when the operator passed
+`--worker-base-image` to a development build can it be empty. In all other
+cases, an empty or different value means that the command is not the build
+that started the session: stop and tell the operator. The Docker server platform must be `linux/arm64` or
 `linux/amd64`. The release publishes no worker base image for another
 platform, so stop and tell the operator that the platform is not supported.
 The host does not need `factory-report` or `factory-worker-headless`. Both
@@ -350,9 +358,9 @@ the generated pull-request summary. These rules continue to apply:
 
 ### Roles
 
-The factory declares five roles: `test`, `implementation`, `architecture`,
-`spec_review`, and `standards_review`. Supported harnesses are `codex` and
-`claude`.
+The factory declares six roles. `implementation`, `spec_review`, and
+`standards_review` are the base set. `test`, `architecture`, and `pr_writer`
+are optional. Supported harnesses are `codex` and `claude`.
 
 - `role_harness_defaults` and `model_options` must cover the same roles.
 - `test_policy.mode: required` makes the `test` role mandatory in both maps.
@@ -363,7 +371,14 @@ The factory declares five roles: `test`, `implementation`, `architecture`,
 Start with `implementation`, `spec_review`, and `standards_review` in advisory
 test mode. Add `test` when the repository is ready to make the independent test
 role mandatory, and `architecture` when issues should be able to select the
-design route.
+design route. Add `pr_writer` when an agent should write a short summary for
+the human reviewer into each pull request; see [Optional PR
+writer](configuration.md#optional-pr-writer).
+
+Before you write `factory.yaml`, ask the operator which optional roles to
+declare, and which harness, models, and reasoning effort each declared role
+uses. Do not decide this for the operator. A declared `pr_writer` adds the
+`pr` skill to the smoke in Step 7 for the harness that runs it.
 
 `reasoning_effort_options` values are harness-specific and are validated against
 the harness the role declares. Claude Code accepts `low`, `medium`, `high`,
@@ -566,15 +581,30 @@ or fetches will not behave the same way in a run.
 
 ## Step 6: register the host
 
-The coordinator is the installed release's `factory` command. Ask the operator
-for approval, then run these commands from the target checkout:
+The coordinator is `<FACTORY_COMMAND>`. A host configuration registers one
+repository. First check whether the default configuration already exists:
 
 ~~~sh
-factory init
-factory register \
+<FACTORY_COMMAND> init --help    # prints the default configuration path
+~~~
+
+When a file exists at that path, it already registers another repository. Do
+not change it. Ask the operator for a separate configuration path, for example
+`~/.config/factory-<repository>/config.yaml`, and an operational data path
+next to it. Export the path as `FACTORY_CONFIG` before the commands below, and
+pass `--operational-data` to `factory register`. Every later `factory` command
+of this repository then needs the same `FACTORY_CONFIG` or `--config`. Tell the
+operator so.
+
+Ask the operator for approval, then run these commands from the target
+checkout:
+
+~~~sh
+<FACTORY_COMMAND> init
+<FACTORY_COMMAND> register \
   --codex-auth <CODEX_AUTH_PATH> \
   --claude-auth <CLAUDE_AUTH_PATH>
-factory bootstrap-labels
+<FACTORY_COMMAND> bootstrap-labels
 ~~~
 
 `factory register` infers the repository path, the GitHub owner and repository
@@ -585,6 +615,14 @@ when that harness has no host-side file, for example a Claude Code credential
 in the macOS login Keychain. See [Quick start](configuration.md#quick-start)
 for the explicit fallback flags and the `--update` command for an existing
 registration.
+
+`factory doctor` checks a registered credential file offline. It cannot find
+out whether the provider still accepts the credential. On macOS, Claude Code
+keeps its current credential in the login Keychain, and
+`~/.claude/.credentials.json` can be an old copy whose refresh token no longer
+works. Register that file only when the operator confirms that it is current.
+A Step 7 smoke that fails with an expired or unrefreshable session shows that
+the registered file will fail in a run too.
 
 ## Step 7: record the skill smoke
 
@@ -628,8 +666,14 @@ file after the smoke. The commands are in [worker
 skills](../worker/SKILLS.md), also at `<FACTORY_RESOURCES>/worker/SKILLS.md`. The export needs operator approval, and the agent
 does not read the exported file.
 
-Then run `factory doctor` from the target checkout, as the next section
-describes, until it reports ready.
+The smoke records every skill that loaded, also when another skill fails, and
+shows what the harness answered for a skill that did not load. To retry, set
+`MANDATORY_SKILLS` to the skills that did not load and `HARNESSES` to the
+harness. The retry adds them to the same record, so it needs one paid call per
+skill and not one per mandated skill.
+
+Then run `<FACTORY_COMMAND> doctor` from the target checkout, as the next
+section describes, until it reports ready.
 
 ## Verifying the result
 
@@ -673,16 +717,33 @@ registration, and it runs the full startup diagnosis.
 ## Step 8: prove the setup with a disposable issue
 
 Once the diagnosis is ready, prove the setup with one disposable issue before
-trusting the configuration on real work. The proof uses the registration from
-Step 6, so it runs in the target repository with a new disposable issue. It
-creates a branch and a draft pull request there. Ask the operator before you
-start it. When the operator declines, for example because the target is a
-production repository, skip the proof.
+trusting the configuration on real work. The proof runs the installed
+coordinator on the registration from Step 6. It creates a branch and a draft
+pull request in the target repository, and it starts paid agent sessions. Ask
+the operator before you start it. When the operator declines, for example
+because the target is a production repository, skip the proof.
 
-After approval, follow the [end-to-end
-demonstration](configuration.md#end-to-end-demonstration). Report the
-pull-request URL and the status-comment URL to the operator. Ask before you
-close the pull request or the issue.
+After approval:
+
+1. Create an issue with a small, verifiable change, for example a new test
+   case. An authorized user adds the `agent-ready` label.
+2. Start the coordinator in its own terminal and keep it running:
+
+   ~~~sh
+   <FACTORY_COMMAND> start --verbose
+   ~~~
+
+3. Follow the run with `<FACTORY_COMMAND> status` or `<FACTORY_COMMAND> ui`
+   until the issue reaches `draft_pr` or a waiting state. A waiting state
+   names its reason in the status comment of the issue.
+4. Check the result: the draft pull request targets `target_branch`, contains
+   the generated factory section with the gate summary, and, when `pr_writer`
+   is declared, its summary. The issue has one factory state label and one
+   status comment.
+5. Stop the coordinator with `<FACTORY_COMMAND> stop`.
+
+Report the pull-request URL and the status-comment URL to the operator. Ask
+before you close the pull request or the issue.
 
 The onboarding is complete when this proof succeeds, or when the operator
 declines it and `factory doctor` reports ready.
