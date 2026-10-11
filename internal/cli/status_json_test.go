@@ -250,3 +250,50 @@ func TestRunStatusJSONReportsAnUnreadableStore(t *testing.T) {
 		t.Fatalf("document = %+v, want the known registration and unread supervisor and run", document)
 	}
 }
+
+// TestRunStatusNeverExposesSubprocessOutputInRecovery verifies a recovery
+// inspection whose host commands print a secret shows a bounded observation
+// in both views instead of the command output.
+func TestRunStatusNeverExposesSubprocessOutputInRecovery(t *testing.T) {
+	configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
+	const secret = "ghp_secretTokenValue0123456789"
+	stubs := t.TempDir()
+	for _, name := range []string{"gh", "az", "git", "docker"} {
+		script := "#!/bin/sh\necho 'token " + secret + "'\necho 'token " + secret + "' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(stubs, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", stubs)
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 9, 17, 9, 0, 0, 0, time.UTC)
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveRun(context.Background(), store.Run{
+		ID: "run-secret", RepositoryPath: repositoryPath, IssueNumber: 22, Branch: "factory/22-run-secret",
+		Worktree: worktree, CheckpointSHA: "0123456789abcdef0123456789abcdef01234567",
+		Stage: store.StageImplementation, Status: store.StatusActive, CreatedAt: started, UpdatedAt: started,
+	}); err != nil {
+		_ = opened.Close()
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{{"status", "--json", "--config", configPath}, {"status", "--config", configPath}} {
+		var output, errorsOutput bytes.Buffer
+		cli.Run(context.Background(), args, &output, &errorsOutput)
+		if strings.Contains(output.String()+errorsOutput.String(), secret) {
+			t.Fatalf("%v exposed subprocess output:\n%s%s", args, output.String(), errorsOutput.String())
+		}
+		if !strings.Contains(output.String(), "inspection failed") {
+			t.Fatalf("%v output = %s, want a bounded recovery observation", args, output.String())
+		}
+	}
+}
