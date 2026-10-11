@@ -66,8 +66,12 @@ func TestPackagedReleaseOnboardsWithoutGoOrCheckout(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(moved, "README.md")); err != nil {
 		t.Errorf("archive lacks the installation README: %v", err)
 	}
-	if data, err := os.ReadFile(binary); err != nil || bytes.Contains(data, []byte(checkout)) {
-		t.Fatalf("release binary is unreadable or names the build checkout %q: %v", checkout, err)
+	// A build without -trimpath records the absolute path of each source file.
+	// The bare checkout path is not a signal: in the worker gate it is /work,
+	// which the embedded worker documentation also contains.
+	sourceFile := filepath.Join(checkout, "cmd", "factory", "main.go")
+	if data, err := os.ReadFile(binary); err != nil || bytes.Contains(data, []byte(sourceFile)) {
+		t.Fatalf("release binary is unreadable or names the build checkout source %q: %v", sourceFile, err)
 	}
 
 	environment := hostWithoutGo(t, root)
