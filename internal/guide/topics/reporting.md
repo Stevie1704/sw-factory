@@ -12,8 +12,8 @@ operator, or an operator agent with the operator's authority, runs it.
 ## Where a report goes
 
 Every report goes to the issue tracker of the Software Factory repository,
-`Stevie1704/sw-factory` on GitHub. The destination does not depend on the
-current directory or on the registered repository. A report from an Azure
+`Stevie1704/sw-factory` on `github.com`. The destination does not depend on
+the current directory, on the registered repository, or on `GH_HOST`. A report from an Azure
 DevOps repository also goes there.
 
 ## Prepare a draft
@@ -91,9 +91,11 @@ candidate. Flags come before the draft path.
 | `missing_label` | Ask a Factory maintainer to create `needs-triage`. Factory never creates labels. |
 | `unavailable` | Check the network, then submit again. |
 | `ambiguous` | The creation request failed after it possibly reached GitHub. Submit the same draft again later; Factory searches for the report identity before it creates anything. |
+| `in_progress` | Another `submit` of the same draft is running. Wait until it ends, then submit again. |
 | `unconfirmed` | An earlier creation is still unresolved and the search does not show it. Search the repository issues for the report identity. Wait, because the search can lag, and submit again. Only when no issue exists, add `--confirm-not-created`. |
 
-Factory keeps the submission state in a hidden file beside the draft. Keep
+Factory keeps the submission state and a submission lock in hidden files
+beside the draft. Keep
 the draft and that file until the outcome is `created` or
 `already_submitted`.
 
