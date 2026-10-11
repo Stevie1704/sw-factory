@@ -110,6 +110,8 @@ advances a stage, and never authorizes publication. For most roles,
 `cannot_proceed` records a blocker that a human must resolve. The
 `pr_writer` role is the exception: when it reports `cannot_proceed`, the
 hand-off continues, and the pull request has only the coordinator section
-without the agent summary. In both cases the operator, or an operator agent,
-prepares a draft with `factory bug-report --run-id <run>` to see the
+without the agent summary. `factory status` shows each proposal of the
+latest Run as a `defect proposal:` line, and `factory status --json` lists
+it in `run.defect_proposals`, by Invocation and code only. In both cases the
+operator, or an operator agent, prepares a draft with `factory bug-report --run-id <run>` to see the
 proposal, and decides about a report with this topic.

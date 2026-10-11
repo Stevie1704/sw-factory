@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/cli"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -35,6 +36,10 @@ type statusDocument struct {
 		CheckpointSHA       string   `json:"checkpoint_sha"`
 		LifecycleReason     string   `json:"lifecycle_reason"`
 		ActiveInvocationIDs []string `json:"active_invocation_ids"`
+		DefectProposals     []struct {
+			InvocationID string `json:"invocation_id"`
+			Code         string `json:"code"`
+		} `json:"defect_proposals"`
 	} `json:"run"`
 	Recovery *struct {
 		SourcesAgree  bool `json:"sources_agree"`
@@ -322,5 +327,64 @@ func TestRunStatusJSONDoesNotRecreateAMissingStore(t *testing.T) {
 	}
 	if _, err := os.Stat(operationalPath); !os.IsNotExist(err) {
 		t.Fatalf("operational store exists after inspection (stat error %v), want it untouched", err)
+	}
+}
+
+// TestRunStatusSurfacesAWorkerDefectProposal verifies that status names a
+// retained worker defect proposal of the latest Run, by Invocation and code
+// only, and points to the draft command in text output.
+func TestRunStatusSurfacesAWorkerDefectProposal(t *testing.T) {
+	t.Parallel()
+	configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
+	started := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	if err := opened.SaveRun(context.Background(), store.Run{
+		ID: "run-defect", RepositoryPath: repositoryPath, IssueNumber: 5,
+		Stage: store.StageImplementation, Status: store.StatusWaitingForHuman, CreatedAt: started, UpdatedAt: started,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resultDirectory := filepath.Join(t.TempDir(), "inv-defect")
+	if err := opened.SaveInvocation(context.Background(), store.Invocation{
+		ID: "inv-defect", RunID: "run-defect", Harness: "codex", Role: "implementation",
+		Stage: store.StageImplementation, Status: store.InvocationStatusCannotProceed,
+		ResultDirectory: resultDirectory, CreatedAt: started, UpdatedAt: started,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := report.WriteAtomic(resultDirectory, report.Report{
+		SchemaVersion: report.SchemaVersion, InvocationID: "inv-defect", RunID: "run-defect",
+		Harness: "codex", Role: "implementation", Stage: "implementation",
+		Outcome: report.OutcomeCannotProceed, Summary: "blocked",
+		Evidence: []report.Evidence{{Kind: "command", Detail: "factory-report exited 1"}},
+		SuspectedFactoryDefect: &report.FactoryDefectProposal{
+			InvocationID: "inv-defect", Code: "report.handoff_rejected",
+			Expected: "accepted", Observed: "private observed text", Reason: "no repository file",
+		},
+		ReportedAt: started,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	document, code, stderr := runStatusJSON(t, configPath)
+	if code != 0 || stderr != "" {
+		t.Fatalf("status --json exit = %d stderr = %q", code, stderr)
+	}
+	proposals := document.Run.DefectProposals
+	if len(proposals) != 1 || proposals[0].InvocationID != "inv-defect" || proposals[0].Code != "report.handoff_rejected" {
+		t.Fatalf("run.defect_proposals = %+v, want the inv-defect proposal", proposals)
+	}
+
+	var output, errorsOutput bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"status", "--config", configPath}, &output, &errorsOutput); code != 0 {
+		t.Fatalf("status exit = %d stderr = %q", code, errorsOutput.String())
+	}
+	text := output.String()
+	if !strings.Contains(text, "defect proposal: invocation=inv-defect code=report.handoff_rejected") || !strings.Contains(text, "factory bug-report --run-id run-defect") || strings.Contains(text, "private observed text") {
+		t.Fatalf("status output = %q, want the proposal line and the draft command without worker text", text)
 	}
 }

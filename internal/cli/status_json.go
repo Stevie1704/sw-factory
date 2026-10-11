@@ -75,21 +75,22 @@ type heartbeatDocument struct {
 // runDocument is the active or latest run. Only State is set when no run
 // exists or when the run could not be read.
 type runDocument struct {
-	State               string               `json:"state"`
-	ID                  string               `json:"id,omitempty"`
-	IssueNumber         int                  `json:"issue_number,omitempty"`
-	Stage               store.Stage          `json:"stage,omitempty"`
-	Status              store.Status         `json:"status,omitempty"`
-	Activity            factory.RunActivity  `json:"activity,omitempty"`
-	Branch              string               `json:"branch,omitempty"`
-	Worktree            string               `json:"worktree,omitempty"`
-	CheckpointSHA       string               `json:"checkpoint_sha,omitempty"`
-	TestPolicy          string               `json:"test_policy,omitempty"`
-	Route               string               `json:"route,omitempty"`
-	LifecycleReason     string               `json:"lifecycle_reason,omitempty"`
-	ActiveInvocationIDs []string             `json:"active_invocation_ids,omitempty"`
-	FailedGates         []failedGateDocument `json:"failed_gates,omitempty"`
-	UpdatedAt           *time.Time           `json:"updated_at,omitempty"`
+	State               string                   `json:"state"`
+	ID                  string                   `json:"id,omitempty"`
+	IssueNumber         int                      `json:"issue_number,omitempty"`
+	Stage               store.Stage              `json:"stage,omitempty"`
+	Status              store.Status             `json:"status,omitempty"`
+	Activity            factory.RunActivity      `json:"activity,omitempty"`
+	Branch              string                   `json:"branch,omitempty"`
+	Worktree            string                   `json:"worktree,omitempty"`
+	CheckpointSHA       string                   `json:"checkpoint_sha,omitempty"`
+	TestPolicy          string                   `json:"test_policy,omitempty"`
+	Route               string                   `json:"route,omitempty"`
+	LifecycleReason     string                   `json:"lifecycle_reason,omitempty"`
+	ActiveInvocationIDs []string                 `json:"active_invocation_ids,omitempty"`
+	FailedGates         []failedGateDocument     `json:"failed_gates,omitempty"`
+	DefectProposals     []defectProposalDocument `json:"defect_proposals,omitempty"`
+	UpdatedAt           *time.Time               `json:"updated_at,omitempty"`
 }
 
 // failedGateDocument is one blocking gate that failed at the checkpoint.
@@ -98,6 +99,13 @@ type failedGateDocument struct {
 	Phase         store.GatePhase   `json:"phase"`
 	Outcome       store.GateOutcome `json:"outcome"`
 	CheckpointSHA string            `json:"checkpoint_sha"`
+}
+
+// defectProposalDocument names one worker defect proposal without its
+// worker-authored text; `factory bug-report --run-id` shows the text.
+type defectProposalDocument struct {
+	InvocationID string `json:"invocation_id"`
+	Code         string `json:"code"`
 }
 
 // recoveryDocument is the coordinator's read-only recovery diagnosis.
@@ -260,6 +268,9 @@ func newRunDocument(result factory.StatusResult, err error) runDocument {
 	}
 	for _, gate := range result.FailedGates {
 		document.FailedGates = append(document.FailedGates, failedGateDocument{Gate: gate.GateName, Phase: gate.Phase, Outcome: gate.Outcome, CheckpointSHA: gate.CheckpointSHA})
+	}
+	for _, proposal := range result.DefectProposals {
+		document.DefectProposals = append(document.DefectProposals, defectProposalDocument{InvocationID: proposal.InvocationID, Code: proposal.Code})
 	}
 	return document
 }

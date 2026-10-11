@@ -775,6 +775,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 				return 1
 			}
 		}
+		for _, proposal := range result.DefectProposals {
+			if !writeOutput(output, errorsOutput, "defect proposal: invocation=%s code=%s (prepare a draft: factory bug-report --run-id %s --output <file>)\n", proposal.InvocationID, proposal.Code, result.LatestRun.ID) {
+				return 1
+			}
+		}
 		if result.Activity == factory.ActivityInvocationActive {
 			activeInvocationIDs := append([]string(nil), result.LatestRun.ActiveInvocationIDs...)
 			if len(activeInvocationIDs) == 1 {

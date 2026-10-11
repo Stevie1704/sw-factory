@@ -443,3 +443,32 @@ func TestProjectAcceptanceKeepsDurabilityStrategiesEquivalent(t *testing.T) {
 		})
 	}
 }
+
+// TestAdmitReportKeepsRunSemanticsWithADefectProposal verifies that a
+// suspected-defect proposal changes neither the admission outcome nor the Run
+// projection of an otherwise identical report.
+func TestAdmitReportKeepsRunSemanticsWithADefectProposal(t *testing.T) {
+	cannotProceed := func(snapshot *AcceptanceSnapshot) {
+		snapshot.Report.Outcome = report.OutcomeCannotProceed
+		snapshot.Report.Evidence = []report.Evidence{{Kind: "command", Detail: "factory-report exited 1"}}
+	}
+	plain := admissionSnapshot(t, workflow.RoleImplementation, store.StageImplementation, cannotProceed)
+	proposed := admissionSnapshot(t, workflow.RoleImplementation, store.StageImplementation, func(snapshot *AcceptanceSnapshot) {
+		cannotProceed(snapshot)
+		snapshot.Run.Worktree = plain.Run.Worktree
+		snapshot.Report.SuspectedFactoryDefect = &report.FactoryDefectProposal{
+			InvocationID: "inv-1", Code: "report.handoff_rejected",
+			Expected: "accepted", Observed: "rejected", Reason: "no repository file is involved",
+		}
+	})
+	plainOutcome, plainErr := AdmitReport(plain)
+	proposedOutcome, proposedErr := AdmitReport(proposed)
+	if plainErr != nil || proposedErr != nil || plainOutcome != proposedOutcome {
+		t.Fatalf("AdmitReport() = (%v, %v) with a proposal, (%v, %v) without; want the same accepted outcome", proposedOutcome, proposedErr, plainOutcome, plainErr)
+	}
+	plainRun := agentReportRunProjection(plain.Run, plain.Invocation.Stage, plain.Report)
+	proposedRun := agentReportRunProjection(proposed.Run, proposed.Invocation.Stage, proposed.Report)
+	if !reflect.DeepEqual(plainRun, proposedRun) {
+		t.Fatalf("Run projection = %+v with a proposal, %+v without; want them equal", proposedRun, plainRun)
+	}
+}

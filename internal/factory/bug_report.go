@@ -19,6 +19,27 @@ type bugReportRunReader interface {
 	RunGateResults(context.Context, string) ([]store.GateResult, error)
 }
 
+// invocationLister lists the Invocations of one Run.
+type invocationLister interface {
+	Invocations(context.Context, string) ([]store.Invocation, error)
+}
+
+// retainedDefectProposals returns the valid defect proposals of a Run's
+// retained reports, and ignores a report it cannot use.
+func retainedDefectProposals(ctx context.Context, lister invocationLister, run store.Run) ([]report.FactoryDefectProposal, error) {
+	invocations, err := lister.Invocations(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	var proposals []report.FactoryDefectProposal
+	for _, invocation := range invocations {
+		if proposal, _ := retainedDefectProposal(run, invocation); proposal != nil {
+			proposals = append(proposals, *proposal)
+		}
+	}
+	return proposals, nil
+}
+
 // BugReportEvidence collects the allowlisted local evidence of a suspected
 // Factory defect draft. It never fails for an unavailable source: the
 // evidence states the source as unavailable and names the limitation, so a
