@@ -24,8 +24,11 @@ one host registration:
 
 Before you start, make sure that:
 
-- Software Factory is installed with `make install` from its checkout;
-- the Docker daemon runs;
+- a Software Factory release is installed (see [Install a Software Factory
+  release](installation.md));
+- the Docker daemon runs on a supported worker platform, `linux/arm64` or
+  `linux/amd64`;
+- `jq` is on `PATH`;
 - the GitHub CLI is authenticated (`gh auth status`);
 - Claude Code or Codex is installed and signed in on the host.
 
@@ -36,15 +39,25 @@ factory onboard
 ~~~
 
 The command starts an interactive Claude Code session in that repository. Use
-`--harness codex` to start Codex instead. The first message of the session names
-the target repository, the Software Factory checkout the binary was built from,
-and this document. In the steps below, `<TARGET_REPO_PATH>` and
-`<SW_FACTORY_CHECKOUT>` mean those two paths. Pass `--factory-checkout` when
-the binary was not built with `make` from a checkout.
+`--harness codex` to start Codex instead. The command writes the resources of
+the installed release to a new directory below the user cache directory: this
+document and its reference documents, the curated worker skills, the worked
+worker definition, and the smoke and verification scripts. The first message
+of the session names the target repository, that resource directory, and the
+worker base image of the release. In the steps below, `<TARGET_REPO_PATH>`,
+`<FACTORY_RESOURCES>`, and `<FACTORY_BASE_IMAGE>` mean those three values.
+`<FACTORY_BASE_IMAGE>` is always pinned as `image@sha256:digest`.
 
-The session can also use the Software Factory checkout, because the procedure
-builds images and runs scripts there. Docker and network commands can need
-access outside the harness sandbox. The harness then asks you to approve them.
+The session can also use the resource directory, because the procedure copies
+skills and runs scripts from it. The command removes the directory when the
+session ends, so no committed file may refer to it. Docker and network commands
+can need access outside the harness sandbox. The harness then asks you to
+approve them.
+
+A development build from source names no released worker base image. Pass the
+base image that `make worker-build` built, pinned by digest, with
+`--worker-base-image`; see [Build from
+source](installation.md#build-from-source).
 
 The agent runs every step of this procedure itself. You approve the actions
 listed in the next section and answer its questions.
@@ -59,7 +72,7 @@ These actions change the host configuration or GitHub, or cost money:
 - `factory init` and `factory register` write host configuration and create the
   operational store.
 - `factory bootstrap-labels` creates six labels in the GitHub repository.
-- `scripts/smoke-skills.sh` streams a host harness credential into a container
+- `<FACTORY_RESOURCES>/scripts/smoke-skills.sh` streams a host harness credential into a container
   and makes one real, paid model call per mandated skill per harness.
 - The export of a Keychain credential to a temporary file for the smoke.
 - The end-to-end demonstration in Step 8. It creates an issue, a branch, and a
@@ -85,11 +98,20 @@ exists.
 Run these checks before any other step:
 
 ~~~sh
-factory version
+factory version --json
 docker info
+docker version --format '{{.Server.Os}}/{{.Server.Arch}}'
 gh auth status
-command -v factory factory-report factory-worker-headless
+command -v git jq
 ~~~
+
+`factory version --json` must report a `worker_base_image` that equals
+`<FACTORY_BASE_IMAGE>`, unless the operator passed `--worker-base-image` to a
+development build. The Docker server platform must be `linux/arm64` or
+`linux/amd64`. The release publishes no worker base image for another
+platform, so stop and tell the operator that the platform is not supported.
+The host does not need `factory-report` or `factory-worker-headless`. Both
+ship in the worker base image.
 
 `factory guide` prints the installed release's orientation, and `factory guide
 setup` its setup topic. Read both before Step 1.
@@ -126,38 +148,45 @@ A toolchain installed anywhere else is invisible to a gate, whatever a login
 shell would resolve. Expose each required command at a stable `PATH` location
 instead of relying on a profile.
 
-The factory base image `ghcr.io/stevie1704/sw-factory-base:v1` is built from
-`worker/base.Dockerfile` in the Software Factory checkout. It carries the pinned
-Codex and Claude Code releases, `factory-report`, `factory-worker-headless`,
-Git, the `factory` user with uid `10001`, and the stable worker paths. It is
-built on `node:22-bookworm-slim`, so `node` and `npm` are already on the fixed
-`PATH`; no other language runtime is.
+The factory base image `<FACTORY_BASE_IMAGE>` is the base image of the
+installed release, pinned by digest. The release built it from
+`worker/base.Dockerfile` of the same source revision, for `linux/arm64` and
+`linux/amd64`. It carries the pinned Codex and Claude Code releases,
+`factory-report`, `factory-worker-headless`, Git, the `factory` user with uid
+`10001`, and the stable worker paths. It is built on `node:22-bookworm-slim`,
+so `node` and `npm` are already on the fixed `PATH`; no other language runtime
+is. Its label `io.github.stevie1704.sw-factory.release` names the release, and
+the repository worker image inherits it.
 
 The base image does not carry the worker skills. Each repository worker image
 bakes them, so they are pinned by the digest the repository records. Vendor them
-from the same Software Factory checkout that builds the base image:
+from the resources of the same release:
 
 ~~~sh
-mkdir -p <TARGET_REPO_PATH>/worker
-rm -rf <TARGET_REPO_PATH>/worker/skills
-cp -R <SW_FACTORY_CHECKOUT>/worker/skills <TARGET_REPO_PATH>/worker/skills
+mkdir -p "<TARGET_REPO_PATH>/worker"
+rm -rf "<TARGET_REPO_PATH>/worker/skills"
+cp -R "<FACTORY_RESOURCES>/worker/skills" "<TARGET_REPO_PATH>/worker/skills"
 ~~~
+
+Keep the quotes: the resource directory or the target path can contain
+spaces.
 
 The removal is part of the command, not a precaution. Copying a directory onto
 an existing directory of the same name nests it as `worker/skills/skills` and
 leaves the skills the image actually bakes untouched.
 
-Re-vendor whenever the base image is rebuilt. `scripts/smoke-skills.sh` reads
-its expected skill text from the Software Factory checkout and its actual text
-from the image, so vendored skills that have drifted from their source produce a
-smoke result that proves nothing.
+Re-vendor whenever the base image changes, which includes every Factory
+upgrade. The smoke script reads its expected skill text from
+`<FACTORY_RESOURCES>` and its actual text from the image, so vendored skills
+from another release produce a smoke result that proves nothing.
+`<FACTORY_RESOURCES>/worker/SKILLS.md` records the provenance of each skill.
 
 A repository whose toolchain is already in the base image needs only the skill
 layer:
 
 ~~~dockerfile
 # worker/Dockerfile — Node repository.
-ARG FACTORY_BASE_IMAGE=ghcr.io/stevie1704/sw-factory-base:v1
+ARG FACTORY_BASE_IMAGE=<FACTORY_BASE_IMAGE>
 
 FROM ${FACTORY_BASE_IMAGE}
 
@@ -175,31 +204,34 @@ Copy everything that toolchain loads at runtime, not only its entry binary: a
 shared-library interpreter and its package manager are easy to leave behind, and
 the image contract check in Step 3 is where that shows up.
 
-`worker/Dockerfile` in the Software Factory checkout is the worked example for
-a compiled toolchain. Keep the build context at the `worker` directory, so the
-`skills` source path stays stable.
+Write the `<FACTORY_BASE_IMAGE>` value, with its digest, as the `ARG` default.
+Never use a mutable tag such as `:v1` or `:latest`: the repository image must
+build from the base image of the installed release.
+
+`<FACTORY_RESOURCES>/worker/Dockerfile` is the worked example for a compiled
+toolchain. It is Software Factory's own worker definition, and its `ARG`
+default is the development base tag; do not copy that default. Keep the build
+context at the `worker` directory, so the `skills` source path stays stable.
 
 ## Step 3: build and verify the image
 
-The base image builds from the Software Factory checkout, because it compiles
-that repository's reporting binaries:
+Pull the base image of the release by its digest. The pull needs network
+access to `ghcr.io`. Docker selects the manifest of the daemon's platform:
 
 ~~~sh
-cd <SW_FACTORY_CHECKOUT>
-docker build \
-  --build-arg FACTORY_BASE_VERSION=1 \
-  --file worker/base.Dockerfile \
-  --tag ghcr.io/stevie1704/sw-factory-base:v1 \
-  .
+docker pull <FACTORY_BASE_IMAGE>
 ~~~
+
+A development base image that `make worker-build` built is already local;
+skip the pull for it.
 
 The repository worker image then builds from the target checkout without
 pulling that base again:
 
 ~~~sh
-cd <TARGET_REPO_PATH>
+cd "<TARGET_REPO_PATH>"
 docker build --pull=false \
-  --build-arg FACTORY_BASE_IMAGE=ghcr.io/stevie1704/sw-factory-base:v1 \
+  --build-arg FACTORY_BASE_IMAGE=<FACTORY_BASE_IMAGE> \
   --file worker/Dockerfile \
   --tag <IMAGE_NAME>:v1 \
   worker
@@ -237,14 +269,16 @@ docker run --rm --pull=never \
 '
 ~~~
 
-Extend the command list with every toolchain command the gates call. The
-headless lifecycle of the new image is verified independently, from the Software
-Factory checkout:
+Extend the command list with every toolchain command the gates call. Then
+verify the headless lifecycle of the new image with the release's script:
 
 ~~~sh
-cd <SW_FACTORY_CHECKOUT>
-scripts/verify-headless-worker.sh <IMAGE_NAME>@<DIGEST>
+"<FACTORY_RESOURCES>/scripts/verify-headless-worker.sh" <IMAGE_NAME>@<DIGEST>
 ~~~
+
+The script runs offline fake harnesses through the real worker helpers. Its
+Go command lifetime and resource limit checks need the Factory source, so it
+skips them here; the release ran them against the same base image.
 
 ## Step 4: write factory.yaml
 
@@ -442,9 +476,9 @@ base_synchronization:
   mode: never
 ~~~
 
-Replace the placeholder digest with the value Step 3 produced. The checked-in
-[factory.yaml](../factory.yaml) of this repository is the worked example for a
-compiled toolchain with a mandatory setup step.
+Replace the placeholder digest with the value Step 3 produced. Software
+Factory's own `factory.yaml`, in its source repository, is the worked example
+for a compiled toolchain with a mandatory setup step.
 
 ## Step 5: prove every command in the worker
 
@@ -532,9 +566,8 @@ or fetches will not behave the same way in a run.
 
 ## Step 6: register the host
 
-The coordinator binaries come from the Software Factory checkout; `make install`
-places them on the operator's Go bin path. Ask the operator for approval, then
-run these commands from the target checkout:
+The coordinator is the installed release's `factory` command. Ask the operator
+for approval, then run these commands from the target checkout:
 
 ~~~sh
 factory init
@@ -555,16 +588,20 @@ registration.
 
 ## Step 7: record the skill smoke
 
-The skill smoke runs once per worker digest, from the Software Factory checkout,
+The skill smoke runs once per worker digest, with the release's script,
 writing its evidence into the target repository:
 
 ~~~sh
-cd <SW_FACTORY_CHECKOUT>
-EVIDENCE_FILE=<TARGET_REPO_PATH>/worker/skill-smoke.json \
+cd "<TARGET_REPO_PATH>"
+EVIDENCE_FILE="<TARGET_REPO_PATH>/worker/skill-smoke.json" \
 WORKER_IMAGE=<IMAGE_NAME> \
 WORKER_DIGEST=<DIGEST> \
-  scripts/smoke-skills.sh
+  "<FACTORY_RESOURCES>/scripts/smoke-skills.sh"
 ~~~
+
+Always set `WORKER_IMAGE` and `WORKER_DIGEST`. The script reads the expected
+skill text from `<FACTORY_RESOURCES>`, the resources of the release that built
+the base image.
 
 It reads the operator's Codex and Claude Code credential files, invokes each
 harness in the image once per mandated skill, and records the result keyed by
@@ -588,7 +625,7 @@ Claude Code keeps its credential in the login Keychain, and a file at the
 default path can be old and expired. In that case, export the Keychain
 credential to a temporary file, point `CLAUDE_AUTH_PATH` at it, and delete the
 file after the smoke. The commands are in [worker
-skills](../worker/SKILLS.md). The export needs operator approval, and the agent
+skills](../worker/SKILLS.md), also at `<FACTORY_RESOURCES>/worker/SKILLS.md`. The export needs operator approval, and the agent
 does not read the exported file.
 
 Then run `factory doctor` from the target checkout, as the next section
@@ -599,7 +636,8 @@ describes, until it reports ready.
 `factory doctor` runs the startup diagnosis, the pre-claim report that decides
 whether a run may start. It reports configuration, GitHub authentication
 and permissions, the factory labels, the checkout's remote and worktree support,
-Docker, the pinned worker image, both harness executables, harness capabilities,
+Docker, the pinned worker image, the release of the worker image, both harness
+executables, harness capabilities,
 the headless worker helper, harness authentication, and SQLite. It runs every
 check even after a failure, so a configuration finding is visible alongside the
 others.
@@ -660,6 +698,10 @@ of that file unchanged. The commit needs operator approval.
 
 - A changed skill, harness version, or toolchain needs a rebuild, a new digest
   in `factory.yaml`, and a new skill smoke record.
+- A new Factory release needs the same rebuild from its own base image, with
+  freshly vendored skills. A release coordinator refuses a worker image of
+  another release: `factory doctor` reports `worker.release.mismatch` until the
+  rebuild. Run `factory onboard` again to get the new release's resources.
 - A changed verification command needs the same proof in Step 5 before the gate
   list changes.
 - A new role in `role_harness_defaults` needs the matching `model_options`

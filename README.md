@@ -56,27 +56,36 @@ cannot differ.
 
 ## Onboard a repository with an agent
 
-To prepare a repository that has none of this yet, [install](#install) Software
-Factory, then run this command from the checkout of that repository:
+To prepare a repository that has none of this yet, [install](#install) a
+Software Factory release, then run these commands from the checkout of that
+repository:
 
 ~~~sh
+factory guide setup
 factory onboard
 ~~~
 
 The command starts Claude Code (or Codex with `--harness codex`). Its prompt
 gives the agent the full [Repository
-initialization](docs/repository-initialization.md) procedure. The agent checks
-the prerequisites, makes the worker image, the pinned digest, and the
-checked-in `factory.yaml`, registers the host, and proves the setup with a
+initialization](docs/repository-initialization.md) procedure, together with the
+release's own worker skills, scripts, and digest-pinned worker base image. The
+agent checks the prerequisites, makes the worker image, the pinned digest, and
+the checked-in `factory.yaml`, registers the host, and proves the setup with a
 disposable issue. It asks before it writes files, changes host configuration
-or GitHub, makes paid calls, or commits.
+or GitHub, makes paid calls, or commits. You do not need Go or a Software
+Factory checkout.
 
-You need a running Docker daemon, an authenticated GitHub CLI, and a signed-in
-Claude Code or Codex before you start.
+You need a running Docker daemon, an authenticated GitHub CLI, `jq`, and a
+signed-in Claude Code or Codex before you start.
 
 ## Install
 
-From this checkout:
+Install a release. [Install a Software Factory release](docs/installation.md)
+covers the archives, the checksums, the support matrix (macOS and Linux hosts on
+arm64 and amd64, Linux workers on arm64 and amd64), and upgrades. A release is
+the complete supported path.
+
+Building from this checkout is the development path:
 
 ~~~sh
 make deps
@@ -92,6 +101,8 @@ toolchain and vulnerability scanning](docs/supply-chain.md).
 Run <code>make check</code> before submitting repository changes. Build and
 verify the pinned worker image by following the [worker image
 instructions](docs/configuration.md#worker-image-build-and-digest-pinning).
+A development build names no released worker base image; see [Build from
+source](docs/installation.md#build-from-source) for onboarding with it.
 
 ## One issue, start to finish
 
@@ -138,6 +149,7 @@ Each operational contract has one owner:
 | Topic | Canonical document |
 | --- | --- |
 | Agent orientation, the debugging procedure, supported recovery actions, and defect reporting | [Agent guide](internal/guide/topics/), printed by `factory guide` |
+| Release artifacts, the support matrix, installation, and upgrades | [Install a Software Factory release](docs/installation.md) |
 | Preparing a new repository for factory runs, as an ordered agent-runnable procedure | [Repository initialization](docs/repository-initialization.md) |
 | Host and repository configuration, issue operations, polling, GitHub commands, cleanup, and reset | [Configuration and local operation](docs/configuration.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
