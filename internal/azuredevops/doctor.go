@@ -46,6 +46,14 @@ var workItemPermission = permission{namespace: areaNamespace, bit: 48, missing: 
 // of a tag creates it, so a missing factory tag needs this permission.
 var tagCreatePermission = permission{namespace: taggingNamespace, bit: 2}
 
+// Azure DevOps diagnosis conditions. Codes are stable; wording may change.
+var (
+	authenticationFailed    = doctor.Condition{Code: "azure_devops.authentication.failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	repositoryUnreadable    = doctor.Condition{Code: "azure_devops.repository.unreadable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
+	permissionsUnreadable   = doctor.Condition{Code: "azure_devops.permissions.unreadable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "setup", Unobserved: true}
+	permissionsInsufficient = doctor.Condition{Code: "azure_devops.permissions.insufficient", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "setup"}
+)
+
 // StartupChecks returns the Azure DevOps authentication, repository, and
 // permission checks in deterministic order.
 func (c *Client) StartupChecks(repository tracker.Repository) []doctor.Check {
@@ -53,36 +61,36 @@ func (c *Client) StartupChecks(repository tracker.Repository) []doctor.Check {
 		func(ctx context.Context) doctor.Result {
 			const name = "azure devops authentication"
 			if _, err := c.AuthenticatedLogin(ctx); err != nil {
-				if result, ok := unresponsive(name, err); ok {
+				if result, ok := unresponsive("azure_devops.authentication.timeout", name, err); ok {
 					return result
 				}
-				return doctor.Failure(name, "the Azure CLI has no usable Azure DevOps identity", "run az login (for a service principal, az login --service-principal) for the identity that supervises the repository")
+				return doctor.Failure(authenticationFailed, name, "the Azure CLI has no usable Azure DevOps identity", "run az login (for a service principal, az login --service-principal) for the identity that supervises the repository")
 			}
-			return doctor.Success(name)
+			return doctor.Success("azure_devops.authentication.ready", name)
 		},
 		func(ctx context.Context) doctor.Result {
 			const name = "azure devops repository"
 			if _, err := c.repositoryIdentity(ctx, repository); err != nil {
-				if result, ok := unresponsive(name, err); ok {
+				if result, ok := unresponsive("azure_devops.repository.timeout", name, err); ok {
 					return result
 				}
-				return doctor.Failure(name, fmt.Sprintf("the repository %s could not be read", repository), "verify the organization, project, and repository names, and that the identity can read the repository")
+				return doctor.Failure(repositoryUnreadable, name, fmt.Sprintf("the repository %s could not be read", repository), "verify the organization, project, and repository names, and that the identity can read the repository")
 			}
-			return doctor.Success(name)
+			return doctor.Success("azure_devops.repository.ready", name)
 		},
 		func(ctx context.Context) doctor.Result {
 			const name = "azure devops permissions"
 			problem, err := c.missingPermission(ctx, repository)
 			if err != nil {
-				if result, ok := unresponsive(name, err); ok {
+				if result, ok := unresponsive("azure_devops.permissions.timeout", name, err); ok {
 					return result
 				}
-				return doctor.Failure(name, "the repository and work item permissions could not be read", "verify that the identity can read the repository and the project's areas, then run factory doctor again")
+				return doctor.Failure(permissionsUnreadable, name, "the repository and work item permissions could not be read", "verify that the identity can read the repository and the project's areas, then run factory doctor again")
 			}
 			if problem != "" {
-				return doctor.Failure(name, problem, "grant the identity Contribute, Create branch, and Contribute to pull requests on the repository, View and Edit work items in the project's root area, and Create tag definition in the project, or add the missing tags once by hand")
+				return doctor.Failure(permissionsInsufficient, name, problem, "grant the identity Contribute, Create branch, and Contribute to pull requests on the repository, View and Edit work items in the project's root area, and Create tag definition in the project, or add the missing tags once by hand")
 			}
-			return doctor.Success(name)
+			return doctor.Success("azure_devops.permissions.ready", name)
 		},
 	}
 }
@@ -210,12 +218,13 @@ func (c *Client) hasPermission(ctx context.Context, organization string, require
 }
 
 // unresponsive reports a check whose az call reached its deadline.
-func unresponsive(name string, err error) (doctor.Result, bool) {
+func unresponsive(code, name string, err error) (doctor.Result, bool) {
 	var timeout *hostcmd.TimeoutError
 	if !errors.As(err, &timeout) {
 		return doctor.Result{}, false
 	}
-	return doctor.Failure(name,
+	condition := doctor.Condition{Code: code, Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
+	return doctor.Failure(condition, name,
 		fmt.Sprintf("Azure DevOps did not answer within %s", timeout.Timeout),
 		"check network access to dev.azure.com and the az proxy settings, then run factory doctor again"), true
 }

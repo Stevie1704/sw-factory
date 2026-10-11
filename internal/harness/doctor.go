@@ -167,23 +167,45 @@ func requiresSkillSmoke(policy *config.RepositoryConfig, harnessName string) boo
 	return false
 }
 
+// Harness diagnosis conditions. Codes are stable; wording may change.
+var (
+	capabilityPolicyUnavailable  = doctor.Condition{Code: "harness.capability.policy_unavailable", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
+	capabilityUnsupported        = doctor.Condition{Code: "harness.capability.unsupported", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	headlessHelperMissing        = doctor.Condition{Code: "harness.capability.headless_helper_missing", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	executableAdapterMissing     = doctor.Condition{Code: "harness.executable.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	executableUnusable           = doctor.Condition{Code: "harness.executable.unusable", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	authenticationSourceMissing  = doctor.Condition{Code: "harness.authentication.source_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	authenticationSourceUnsafe   = doctor.Condition{Code: "harness.authentication.source_unsafe", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	authenticationAdapterMissing = doctor.Condition{Code: "harness.authentication.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	authenticationRejected       = doctor.Condition{Code: "harness.authentication.rejected", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	skillsAdapterMissing         = doctor.Condition{Code: "harness.skills.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	skillsContractUnmet          = doctor.Condition{Code: "harness.skills.contract_unmet", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	skillsEvidenceMissing        = doctor.Condition{Code: "harness.skills.evidence_missing", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	skillsEvidenceStale          = doctor.Condition{Code: "harness.skills.evidence_stale", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+)
+
+// harnessFact names the diagnosed harness as a supporting observation.
+func harnessFact(name string) doctor.Fact {
+	return doctor.Fact{Name: "harness", Value: name}
+}
+
 // nativeResumeCheck adapts the capability validation error to a bounded
 // operator-facing diagnosis without exposing implementation error details.
 func nativeResumeCheck(request StartupRequest) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		policy := request.Policy
 		if policy == nil {
-			return doctor.Failure("harness capability", "repository harness policy is unavailable", "repair the checked-in role_harness_defaults configuration")
+			return doctor.Failure(capabilityPolicyUnavailable, "harness capability", "repository harness policy is unavailable", "repair the checked-in role_harness_defaults configuration")
 		}
 		if err := ValidateNativeResumeCapabilities(*policy, request.Resolve); err != nil {
-			return doctor.Failure("harness capability", err.Error(), "select an adapter with native resume support for every declared role")
+			return doctor.Failure(capabilityUnsupported, "harness capability", err.Error(), "select an adapter with native resume support for every declared role")
 		}
 		if request.AllRolesHeadless && request.HeadlessChecker != nil {
 			if err := request.HeadlessChecker.CheckHeadless(ctx, worker.HeadlessCheckRequest{Image: request.Image}); err != nil {
-				return worker.ProbeFailure("harness capability", err, "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
+				return worker.ProbeFailure(headlessHelperMissing, "harness capability", err, "the pinned worker image does not contain a usable headless process helper", "rebuild the pinned worker image with factory-worker-headless")
 			}
 		}
-		return doctor.Success("harness capability")
+		return doctor.Success("harness.capability.ready", "harness capability")
 	}
 }
 
@@ -191,12 +213,12 @@ func nativeResumeCheck(request StartupRequest) doctor.Check {
 func executableCheck(checker worker.HarnessChecker, image worker.ImageReference, name string) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		if checker == nil {
-			return doctor.Failure(name+" worker executable", "the worker harness diagnosis adapter is unavailable", "configure the Docker worker runtime")
+			return doctor.Failure(executableAdapterMissing, name+" worker executable", "the worker harness diagnosis adapter is unavailable", "configure the Docker worker runtime").WithFacts(harnessFact(name))
 		}
 		if err := checker.CheckHarness(ctx, worker.HarnessCheckRequest{Image: image, Name: name}); err != nil {
-			return worker.ProbeFailure(name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness")
+			return worker.ProbeFailure(executableUnusable, name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness").WithFacts(harnessFact(name))
 		}
-		return doctor.Success(name + " worker executable")
+		return doctor.Success("harness.executable.ready", name+" worker executable").WithFacts(harnessFact(name))
 	}
 }
 
@@ -210,19 +232,19 @@ func credentialCheck(name, path string, image worker.ImageReference, checker wor
 			// on the credential its own role volume already holds. An
 			// unattended headless run cannot log in for itself, though, so the
 			// action names the two things that actually produce one.
-			return doctor.Warning(name+" authentication", "no host credential file is configured", "configure a private credential file, or keep the credential this harness already persisted in its worker role volume")
+			return doctor.Warning(authenticationSourceMissing, name+" authentication", "no host credential file is configured", "configure a private credential file, or keep the credential this harness already persisted in its worker role volume").WithFacts(harnessFact(name))
 		}
 		info, err := os.Lstat(path)
 		if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") || err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 || info.Size() == 0 {
-			return doctor.Failure(name+" authentication", "the configured host credential source is unavailable or unsafe", "provide a non-empty regular credential file readable only by its owner")
+			return doctor.Failure(authenticationSourceUnsafe, name+" authentication", "the configured host credential source is unavailable or unsafe", "provide a non-empty regular credential file readable only by its owner").WithFacts(harnessFact(name))
 		}
 		if checker == nil {
-			return doctor.Failure(name+" authentication", "the worker authentication diagnosis adapter is unavailable", "configure the Docker worker runtime to verify the credential inside the pinned image")
+			return doctor.Failure(authenticationAdapterMissing, name+" authentication", "the worker authentication diagnosis adapter is unavailable", "configure the Docker worker runtime to verify the credential inside the pinned image")
 		}
 		if err := checker.CheckHarnessAuthentication(ctx, worker.HarnessAuthenticationCheckRequest{Image: image, Name: name, AuthPath: path}); err != nil {
-			return worker.ProbeFailure(name+" authentication", err, "the configured credential is not usable by the worker harness", "authenticate the "+name+" harness and provide a valid private credential source")
+			return worker.ProbeFailure(authenticationRejected, name+" authentication", err, "the configured credential is not usable by the worker harness", "authenticate the "+name+" harness and provide a valid private credential source").WithFacts(harnessFact(name))
 		}
-		return doctor.Success(name + " authentication")
+		return doctor.Success("harness.authentication.ready", name+" authentication").WithFacts(harnessFact(name))
 	}
 }
 
@@ -238,30 +260,30 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		diagnosis := name + " worker skill contract"
 		blocking := requiresSkillSmoke(request.Policy, name)
 		if request.SkillChecker == nil {
-			return doctor.Failure(diagnosis, "the worker skill diagnosis adapter is unavailable", "configure the Docker worker runtime")
+			return doctor.Failure(skillsAdapterMissing, diagnosis, "the worker skill diagnosis adapter is unavailable", "configure the Docker worker runtime").WithFacts(harnessFact(name))
 		}
 		required := RequiredSkills(request.Policy)
 		contract, err := request.SkillChecker.CheckSkillContract(ctx, worker.SkillContractRequest{Image: request.Image, Harness: name, Skills: required})
 		if err != nil {
-			return worker.ProbeFailure(diagnosis, err, "the pinned worker image does not satisfy the role-mandated skill contract for "+name, "rebuild the worker image so each role-mandated skill appears once per discovery root and stays model-visible, and verify the configured image digest")
+			return worker.ProbeFailure(skillsContractUnmet, diagnosis, err, "the pinned worker image does not satisfy the role-mandated skill contract for "+name, "rebuild the worker image so each role-mandated skill appears once per discovery root and stays model-visible, and verify the configured image digest")
 		}
 		evidence, err := LoadSkillSmokeEvidence(request.SkillEvidencePath)
 		if err != nil {
-			return skillEvidenceResult(blocking, diagnosis, "the recorded worker skill smoke evidence is unavailable", "record a smoke result for the pinned worker digest with scripts/smoke-skills.sh")
+			return skillEvidenceResult(blocking, skillsEvidenceMissing, diagnosis, "the recorded worker skill smoke evidence is unavailable", "record a smoke result for the pinned worker digest with scripts/smoke-skills.sh")
 		}
 		if !evidence.Covers(request.Image.Digest, name, contract.Version, required) {
-			return skillEvidenceResult(blocking, diagnosis, "no recorded smoke result proves "+name+" can use the role-mandated skills in the pinned worker image", "record a smoke result for the pinned worker digest and harness version with scripts/smoke-skills.sh")
+			return skillEvidenceResult(blocking, skillsEvidenceStale, diagnosis, "no recorded smoke result proves "+name+" can use the role-mandated skills in the pinned worker image", "record a smoke result for the pinned worker digest and harness version with scripts/smoke-skills.sh")
 		}
-		return doctor.Success(diagnosis)
+		return doctor.Success("harness.skills.ready", diagnosis).WithFacts(harnessFact(name))
 	}
 }
 
 // skillEvidenceResult applies the repository policy's blocking scope to a
 // missing or stale real-invocation smoke result. The deterministic image skill
 // contract remains blocking for every shipped harness.
-func skillEvidenceResult(blocking bool, diagnosisName, problem, action string) doctor.Result {
+func skillEvidenceResult(blocking bool, condition doctor.Condition, diagnosisName, problem, action string) doctor.Result {
 	if blocking {
-		return doctor.Failure(diagnosisName, problem, action)
+		return doctor.Failure(condition, diagnosisName, problem, action)
 	}
-	return doctor.Warning(diagnosisName, problem, action)
+	return doctor.Warning(condition, diagnosisName, problem, action)
 }

@@ -335,3 +335,21 @@ var probedWorkerImage = worker.ImageReference{
 	Name:   "ghcr.io/example/factory-worker",
 	Digest: testWorkerDigest,
 }
+
+// TestStartupChecksDistinguishAMissingDockerExecutableFromAStoppedDaemon
+// verifies the two environment failures keep separate stable codes.
+func TestStartupChecksDistinguishAMissingDockerExecutableFromAStoppedDaemon(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		code string
+	}{
+		{err: worker.ErrDockerMissing, code: "worker.docker.missing"},
+		{err: errors.New("daemon refused the connection"), code: "worker.docker.unreachable"},
+	} {
+		report := doctor.Run(context.Background(), worker.StartupChecks(&fakeWorkerDoctorChecker{dockerErr: test.err}, worker.ImageReference{})...)
+		docker := report.Results[0]
+		if docker.Code != test.code || docker.Origin != doctor.OriginEnvironment || !docker.BlocksStartup() {
+			t.Fatalf("docker result = %#v, want blocking %s from the environment", docker, test.code)
+		}
+	}
+}

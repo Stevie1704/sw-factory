@@ -93,7 +93,7 @@ func (s *Service) trackerReadiness(repository tracker.Repository) []doctor.Check
 		return checker.StartupChecks(repository)
 	}
 	return []doctor.Check{func(context.Context) doctor.Result {
-		return doctor.Failure("tracker readiness", "the tracker adapter cannot report its readiness", "configure a tracker adapter that provides readiness checks")
+		return doctor.Failure(doctor.Condition{Code: "tracker.readiness.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}, "tracker readiness", "the tracker adapter cannot report its readiness", "configure a tracker adapter that provides readiness checks")
 	}}
 }
 

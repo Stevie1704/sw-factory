@@ -90,31 +90,31 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 	checks := []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			if checker == nil {
-				return doctor.Failure("git remote", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(adapterMissing("git.remote.adapter_missing"), "git remote", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckRemote(ctx, request); err != nil {
 				problem, action := remoteDiagnosis(err)
-				return doctor.Failure("git remote", problem, action)
+				return doctor.Failure(remoteCondition(err), "git remote", problem, action)
 			}
-			return doctor.Success("git remote")
+			return doctor.Success("git.remote.ready", "git remote")
 		},
 		func(ctx context.Context) doctor.Result {
 			if checker == nil {
-				return doctor.Failure("git hooks", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(adapterMissing("git.hooks.adapter_missing"), "git hooks", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckHooks(ctx, request); err != nil {
-				return doctor.Failure("git hooks", "factory Git invocations do not suppress repository hooks", "remove any git wrapper or alias on PATH that drops command-line configuration; move required hook checks into repository gates")
+				return doctor.Failure(hooksNotSuppressed, "git hooks", "factory Git invocations do not suppress repository hooks", "remove any git wrapper or alias on PATH that drops command-line configuration; move required hook checks into repository gates")
 			}
-			return doctor.Success("git hooks")
+			return doctor.Success("git.hooks.ready", "git hooks")
 		},
 		func(ctx context.Context) doctor.Result {
 			if checker == nil {
-				return doctor.Failure("git worktree", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(adapterMissing("git.worktree.adapter_missing"), "git worktree", "the Git diagnosis adapter is unavailable", "configure the host Git workspace adapter")
 			}
 			if err := checker.CheckWorktree(ctx, request); err != nil {
-				return doctor.Failure("git worktree", "the registered checkout cannot provide the worktree support required by a run", "repair the checkout and enable the Git worktree command")
+				return doctor.Failure(worktreeUnsupported, "git worktree", "the registered checkout cannot provide the worktree support required by a run", "repair the checkout and enable the Git worktree command")
 			}
-			return doctor.Success("git worktree")
+			return doctor.Success("git.worktree.ready", "git worktree")
 		},
 	}
 	roles := make([]string, 0, len(request.RoleCraft))
@@ -127,16 +127,16 @@ func StartupChecks(checker DoctorChecker, request DoctorRequest) []doctor.Check 
 		checks = append(checks, func(ctx context.Context) doctor.Result {
 			name := "git role craft " + roleName
 			if checker == nil {
-				return doctor.Failure(name, "the Git role-craft diagnosis adapter is unavailable", "configure the host Git workspace adapter")
+				return doctor.Failure(adapterMissing("git.role_craft.adapter_missing"), name, "the Git role-craft diagnosis adapter is unavailable", "configure the host Git workspace adapter").WithFacts(roleFact(roleName))
 			}
 			roleChecker, ok := checker.(RoleCraftChecker)
 			if !ok {
-				return doctor.Failure(name, "the Git adapter cannot verify repository craft at the target branch head", "upgrade the Git workspace adapter to support role-craft diagnosis")
+				return doctor.Failure(adapterMissing("git.role_craft.unsupported"), name, "the Git adapter cannot verify repository craft at the target branch head", "upgrade the Git workspace adapter to support role-craft diagnosis").WithFacts(roleFact(roleName))
 			}
 			if err := roleChecker.CheckRoleCraft(ctx, request, roleName, path); err != nil {
-				return doctor.Failure(name, fmt.Sprintf("role_craft.%s at %s cannot be resolved at the target branch head", roleName, path), "restore the declared craft file on the target branch or remove the role_craft entry")
+				return doctor.Failure(roleCraftUnresolved, name, fmt.Sprintf("role_craft.%s at %s cannot be resolved at the target branch head", roleName, path), "restore the declared craft file on the target branch or remove the role_craft entry").WithFacts(roleFact(roleName))
 			}
-			return doctor.Success(name)
+			return doctor.Success("git.role_craft.ready", name).WithFacts(roleFact(roleName))
 		})
 	}
 	return checks
@@ -210,6 +210,50 @@ func (m *LocalWorktreeManager) CheckRemote(ctx context.Context, request DoctorRe
 		return remoteFailure(remoteFailureBranchNoCommit)
 	}
 	return nil
+}
+
+// Git diagnosis conditions. Codes are stable; wording may change.
+var (
+	hooksNotSuppressed  = doctor.Condition{Code: "git.hooks.not_suppressed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	worktreeUnsupported = doctor.Condition{Code: "git.worktree.unsupported", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	roleCraftUnresolved = doctor.Condition{Code: "git.role_craft.unresolved", Origin: doctor.OriginRepository, Effect: doctor.EffectExternalMutation, Topic: "setup"}
+)
+
+// adapterMissing classifies an unconfigured or incapable Git diagnosis
+// adapter.
+func adapterMissing(code string) doctor.Condition {
+	return doctor.Condition{Code: code, Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+}
+
+// roleFact names the diagnosed workflow role as a supporting observation.
+func roleFact(role string) doctor.Fact {
+	return doctor.Fact{Name: "role", Value: role}
+}
+
+// remoteCondition classifies one Git remote failure by its typed category.
+// An uncategorized failure keeps an unknown origin.
+func remoteCondition(err error) doctor.Condition {
+	var failure *remoteCheckError
+	if !errors.As(err, &failure) {
+		return doctor.Condition{Code: "git.remote.unclassified", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
+	}
+	condition := doctor.Condition{
+		Code:   "git.remote." + strings.ReplaceAll(string(failure.kind), "-", "_"),
+		Origin: doctor.OriginEnvironment,
+		Effect: doctor.EffectLocalMutation,
+		Topic:  "setup",
+	}
+	switch failure.kind {
+	case remoteFailureBranchNoCommit:
+		condition.Origin, condition.Effect = doctor.OriginRepository, doctor.EffectExternalMutation
+	case remoteFailureUnresponsive:
+		condition.Effect, condition.Topic, condition.Unobserved = doctor.EffectInspection, "debug", true
+	case remoteFailureConfiguration, remoteFailureCheckout, remoteFailureRoot, remoteFailureFetchRead,
+		remoteFailureFetchIdentity, remoteFailurePushRead, remoteFailurePushIdentity, remoteFailureBranchRead:
+	default:
+		condition.Code, condition.Origin, condition.Unobserved = "git.remote.unclassified", doctor.OriginUnknown, true
+	}
+	return condition
 }
 
 // remoteDiagnosis translates one safe Git remote category into the specific
