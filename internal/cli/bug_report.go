@@ -22,7 +22,7 @@ const exitDuplicateCandidate = 3
 
 // bugReportGhRunner is the gh seam of the submission adapter. Nil selects the
 // host gh executable; tests replace it with a scripted runner.
-var bugReportGhRunner github.CommandRunner
+var bugReportGhRunner github.UpstreamRunner
 
 // runBugReport prepares a local suspected-defect draft, or, with the submit
 // subcommand, publishes a reviewed draft. Preparation is offline and works

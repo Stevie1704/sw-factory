@@ -15,16 +15,17 @@ import (
 // upstreamRunner records gh calls and answers each with a scripted result.
 type upstreamRunner struct {
 	output []byte
+	stderr string
 	err    error
 	calls  [][]string
 	inputs [][]byte
 }
 
-// Run records the call and returns the scripted result.
-func (r *upstreamRunner) Run(_ context.Context, args []string, input []byte) ([]byte, error) {
+// Run records the call and returns the scripted streams and error.
+func (r *upstreamRunner) Run(_ context.Context, args []string, input []byte) (hostcmd.Output, error) {
 	r.calls = append(r.calls, args)
 	r.inputs = append(r.inputs, input)
-	return r.output, r.err
+	return hostcmd.Output{Stdout: r.output, Stderr: []byte(r.stderr)}, r.err
 }
 
 // repositoryOf returns the --repo value of one gh call.
@@ -37,8 +38,8 @@ func repositoryOf(args []string) string {
 }
 
 // TestUpstreamIssuesAlwaysTargetsTheFactoryRepository verifies that every
-// call names the Factory repository explicitly, so gh never infers the
-// destination from the current directory.
+// call names the Factory repository with its host, so gh never infers the
+// destination from the current directory or from GH_HOST.
 func TestUpstreamIssuesAlwaysTargetsTheFactoryRepository(t *testing.T) {
 	runner := &upstreamRunner{output: []byte("[]")}
 	upstream := github.NewUpstreamIssues(runner)
@@ -52,8 +53,8 @@ func TestUpstreamIssuesAlwaysTargetsTheFactoryRepository(t *testing.T) {
 		t.Fatalf("gh calls = %d, want 4", len(runner.calls))
 	}
 	for _, call := range runner.calls {
-		if repositoryOf(call) != "Stevie1704/sw-factory" {
-			t.Fatalf("gh %v does not target Stevie1704/sw-factory", call)
+		if repositoryOf(call) != "github.com/Stevie1704/sw-factory" {
+			t.Fatalf("gh %v does not target github.com/Stevie1704/sw-factory", call)
 		}
 	}
 }
@@ -97,19 +98,19 @@ func TestUpstreamIssuesCreatesTheIssueFromStandardInput(t *testing.T) {
 // because the creation may have reached GitHub.
 func TestUpstreamIssuesClassifiesGhFailures(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want bugreport.FailureKind
+		name   string
+		stderr string
+		want   bugreport.FailureKind
 	}{
-		{"authentication", errors.New("gh issue: To get started with GitHub CLI, please run:  gh auth login: exit status 4"), bugreport.FailureAuthentication},
-		{"bad credentials", errors.New("gh issue: HTTP 401: Bad credentials: exit status 1"), bugreport.FailureAuthentication},
-		{"rate limit", errors.New("gh issue: API rate limit exceeded for user: exit status 1"), bugreport.FailureRateLimited},
-		{"missing label", errors.New("gh issue: could not add label: 'needs-triage' not found: exit status 1"), bugreport.FailureMissingLabel},
-		{"permission", errors.New("gh issue: HTTP 403: Resource not accessible by integration: exit status 1"), bugreport.FailurePermission},
+		{"authentication", "To get started with GitHub CLI, please run:  gh auth login", bugreport.FailureAuthentication},
+		{"bad credentials", "HTTP 401: Bad credentials", bugreport.FailureAuthentication},
+		{"rate limit", "API rate limit exceeded for user", bugreport.FailureRateLimited},
+		{"missing label", "could not add label: 'needs-triage' not found", bugreport.FailureMissingLabel},
+		{"permission", "HTTP 403: Resource not accessible by integration", bugreport.FailurePermission},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			runner := &upstreamRunner{err: test.err}
+			runner := &upstreamRunner{stderr: test.stderr, err: errors.New("exit status 1")}
 			_, err := github.NewUpstreamIssues(runner).CreateIssue(context.Background(), "title", "body", []string{"needs-triage"})
 			var upstream *bugreport.UpstreamError
 			if !errors.As(err, &upstream) || upstream.Kind != test.want {
@@ -122,5 +123,21 @@ func TestUpstreamIssuesClassifiesGhFailures(t *testing.T) {
 	var upstream *bugreport.UpstreamError
 	if err == nil || errors.As(err, &upstream) {
 		t.Fatalf("CreateIssue(timeout) error = %v, want an unclassified error", err)
+	}
+}
+
+// TestUpstreamIssuesClassifiesOnlyGhStandardError verifies that operator text
+// in the arguments cannot classify a failure. A title that quotes a known
+// signal must not turn an unknown creation failure, which keeps the pending
+// submission, into a known one, which clears it.
+func TestUpstreamIssuesClassifiesOnlyGhStandardError(t *testing.T) {
+	runner := &upstreamRunner{stderr: "connection reset by peer", err: errors.New("exit status 1")}
+	_, err := github.NewUpstreamIssues(runner).CreateIssue(context.Background(), "Suspected Factory defect: gh auth login and API rate limit exceeded", "body", []string{"needs-triage"})
+	var upstream *bugreport.UpstreamError
+	if err == nil || errors.As(err, &upstream) {
+		t.Fatalf("CreateIssue() error = %v, want an unclassified error", err)
+	}
+	if strings.Contains(err.Error(), "gh auth login") {
+		t.Fatalf("CreateIssue() error = %q, want no operator text from the arguments", err)
 	}
 }

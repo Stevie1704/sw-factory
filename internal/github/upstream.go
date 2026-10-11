@@ -10,23 +10,42 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/bugreport"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 )
 
+// upstreamRepository names the Factory repository with its host, so gh
+// ignores GH_HOST, the current directory, and the registered repository.
+const upstreamRepository = "github.com/" + bugreport.UpstreamRepository
+
+// UpstreamRunner runs one gh command and returns its captured streams. A
+// failed command returns its streams with the error, so the adapter can
+// classify gh's standard error apart from the arguments, which carry
+// operator text.
+type UpstreamRunner interface {
+	Run(ctx context.Context, args []string, input []byte) (hostcmd.Output, error)
+}
+
+// hostUpstreamRunner runs the host gh executable without prompts.
+type hostUpstreamRunner struct{}
+
+// Run executes gh with optional standard input.
+func (hostUpstreamRunner) Run(ctx context.Context, args []string, input []byte) (hostcmd.Output, error) {
+	return hostcmd.Run(ctx, hostCommand(args, input))
+}
+
 // UpstreamIssues publishes suspected Factory defect reports through the host
-// gh executable. Every call names bugreport.UpstreamRepository, so the
-// destination never depends on the current directory or the registered
-// repository.
+// gh executable. Every call names upstreamRepository.
 type UpstreamIssues struct {
-	runner CommandRunner
+	runner UpstreamRunner
 }
 
 var _ bugreport.Upstream = (*UpstreamIssues)(nil)
 
 // NewUpstreamIssues returns the adapter over runner. A nil runner uses the
 // host gh executable.
-func NewUpstreamIssues(runner CommandRunner) *UpstreamIssues {
+func NewUpstreamIssues(runner UpstreamRunner) *UpstreamIssues {
 	if runner == nil {
-		runner = commandRunner{}
+		runner = hostUpstreamRunner{}
 	}
 	return &UpstreamIssues{runner: runner}
 }
@@ -46,7 +65,7 @@ type upstreamIssue struct {
 // identity marker of the report.
 func (u *UpstreamIssues) FindReport(ctx context.Context, reportID string) (*bugreport.Issue, error) {
 	var issues []upstreamIssue
-	if err := u.list(ctx, []string{"issue", "list", "--repo", bugreport.UpstreamRepository, "--state", "all", "--search", reportID + " in:body", "--json", "number,title,url,body", "--limit", "20"}, &issues); err != nil {
+	if err := u.list(ctx, []string{"issue", "list", "--repo", upstreamRepository, "--state", "all", "--search", reportID + " in:body", "--json", "number,title,url,body", "--limit", "20"}, &issues); err != nil {
 		return nil, err
 	}
 	for _, issue := range issues {
@@ -60,7 +79,7 @@ func (u *UpstreamIssues) FindReport(ctx context.Context, reportID string) (*bugr
 // FindCandidates returns open issues whose title matches the report summary.
 func (u *UpstreamIssues) FindCandidates(ctx context.Context, summary string) ([]bugreport.Issue, error) {
 	var issues []upstreamIssue
-	if err := u.list(ctx, []string{"issue", "list", "--repo", bugreport.UpstreamRepository, "--state", "open", "--search", summary + " in:title", "--json", "number,title,url", "--limit", strconv.Itoa(maxCandidates)}, &issues); err != nil {
+	if err := u.list(ctx, []string{"issue", "list", "--repo", upstreamRepository, "--state", "open", "--search", summary + " in:title", "--json", "number,title,url", "--limit", strconv.Itoa(maxCandidates)}, &issues); err != nil {
 		return nil, err
 	}
 	candidates := make([]bugreport.Issue, 0, len(issues))
@@ -75,7 +94,7 @@ func (u *UpstreamIssues) LabelExists(ctx context.Context, label string) (bool, e
 	var labels []struct {
 		Name string `json:"name"`
 	}
-	if err := u.list(ctx, []string{"label", "list", "--repo", bugreport.UpstreamRepository, "--search", label, "--json", "name", "--limit", "100"}, &labels); err != nil {
+	if err := u.list(ctx, []string{"label", "list", "--repo", upstreamRepository, "--search", label, "--json", "name", "--limit", "100"}, &labels); err != nil {
 		return false, err
 	}
 	for _, candidate := range labels {
@@ -91,15 +110,15 @@ func (u *UpstreamIssues) LabelExists(ctx context.Context, label string) (bool, e
 // such as a timeout, is returned unclassified because GitHub may have
 // accepted the request.
 func (u *UpstreamIssues) CreateIssue(ctx context.Context, title, body string, labels []string) (bugreport.Issue, error) {
-	args := []string{"issue", "create", "--repo", bugreport.UpstreamRepository, "--title", title, "--body-file", "-"}
+	args := []string{"issue", "create", "--repo", upstreamRepository, "--title", title, "--body-file", "-"}
 	for _, label := range labels {
 		args = append(args, "--label", label)
 	}
 	output, err := u.runner.Run(ctx, args, []byte(body))
 	if err != nil {
-		return bugreport.Issue{}, classifyUpstreamError(err)
+		return bugreport.Issue{}, classifyUpstreamError(args, output, err)
 	}
-	url := strings.TrimSpace(string(output))
+	url := strings.TrimSpace(string(output.Stdout))
 	number, err := strconv.Atoi(path.Base(url))
 	if err != nil || !strings.HasPrefix(url, "https://github.com/"+bugreport.UpstreamRepository+"/issues/") {
 		return bugreport.Issue{}, fmt.Errorf("gh issue create returned an unexpected issue address %q", url)
@@ -111,9 +130,9 @@ func (u *UpstreamIssues) CreateIssue(ctx context.Context, title, body string, la
 func (u *UpstreamIssues) list(ctx context.Context, args []string, target any) error {
 	output, err := u.runner.Run(ctx, args, nil)
 	if err != nil {
-		return classifyUpstreamError(err)
+		return classifyUpstreamError(args, output, err)
 	}
-	if err := json.Unmarshal(output, target); err != nil {
+	if err := json.Unmarshal(output.Stdout, target); err != nil {
 		return fmt.Errorf("decode gh %s %s output: %w", args[0], args[1], err)
 	}
 	return nil
@@ -131,10 +150,14 @@ var upstreamFailureSignals = []struct {
 	{bugreport.FailurePermission, []string{"http 403", "resource not accessible", "must have"}},
 }
 
-// classifyUpstreamError wraps a gh failure of a known kind in a
-// bugreport.UpstreamError, and returns any other failure unchanged.
-func classifyUpstreamError(err error) error {
-	message := strings.ToLower(err.Error())
+// classifyUpstreamError classifies a failed gh command by its standard
+// error only, never by its arguments. A failure of a known kind becomes a
+// bugreport.UpstreamError; any other failure, such as a timeout, stays
+// unclassified. The message names the gh subcommand but no argument, because
+// the arguments carry operator text.
+func classifyUpstreamError(args []string, output hostcmd.Output, err error) error {
+	stderr := strings.TrimSpace(string(output.Stderr))
+	message := strings.ToLower(stderr)
 	for _, entry := range upstreamFailureSignals {
 		for _, signal := range entry.signals {
 			if strings.Contains(message, signal) {
@@ -142,5 +165,8 @@ func classifyUpstreamError(err error) error {
 			}
 		}
 	}
-	return err
+	if stderr == "" {
+		return fmt.Errorf("gh %s %s: %w", args[0], args[1], err)
+	}
+	return fmt.Errorf("gh %s %s: %s: %w", args[0], args[1], stderr, err)
 }

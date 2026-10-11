@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 )
 
 // scriptedGh answers gh calls by their first two arguments and records them.
@@ -18,9 +20,9 @@ type scriptedGh struct {
 }
 
 // Run records the call and returns the scripted answer.
-func (g *scriptedGh) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
+func (g *scriptedGh) Run(_ context.Context, args []string, _ []byte) (hostcmd.Output, error) {
 	g.calls = append(g.calls, args)
-	return []byte(g.answers[args[0]+" "+args[1]]), nil
+	return hostcmd.Output{Stdout: []byte(g.answers[args[0]+" "+args[1]])}, nil
 }
 
 // invokeBugReport runs the bug-report command and returns its exit code and output.
@@ -126,8 +128,8 @@ func TestBugReportSubmitTargetsTheFactoryRepositoryFromAnyDirectory(t *testing.T
 	}
 	for _, call := range gh.calls {
 		index := slices.Index(call, "--repo")
-		if index < 0 || call[index+1] != "Stevie1704/sw-factory" {
-			t.Fatalf("gh %v does not target Stevie1704/sw-factory", call)
+		if index < 0 || call[index+1] != "github.com/Stevie1704/sw-factory" {
+			t.Fatalf("gh %v does not target github.com/Stevie1704/sw-factory", call)
 		}
 	}
 }
