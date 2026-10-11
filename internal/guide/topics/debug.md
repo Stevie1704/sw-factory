@@ -72,9 +72,11 @@ the same result. Use the JSON document. Do not parse the text output.
 - `likely_origin` is `repository`, `environment`, `factory`, or `unknown`. It
   is a classification from the evidence of the check. It is not proof. A
   failed gate or a failed command alone is not a Factory defect.
-- When Factory cannot read the configuration or the operational store after
-  you selected `--json`, the same document shows `outcome: "error"` and an
-  `error` object with `code`, `likely_origin`, and `message`.
+- `factory doctor --json` shows a configuration problem as a diagnostic.
+  `factory status --json` cannot continue without the configuration and the
+  operational store. When it cannot read them, the document shows
+  `outcome: "error"`. The `error` object has `code`, `likely_origin`, and
+  `message`.
 - An invalid flag or argument is the only exception. Factory writes it to
   standard error as text and exits with status 2.
 
@@ -117,7 +119,7 @@ that Factory could not read the value. Do not treat them as the same.
 
 ### Examples
 
-| Observation | Interpretation |
+| What you see | Meaning |
 | --- | --- |
 | doctor `worker.docker.missing` or `worker.docker.unreachable` | Environment failure. Install or start Docker on the host. |
 | doctor `github.authentication.failed` | Environment failure. The operator runs `gh auth login`. |

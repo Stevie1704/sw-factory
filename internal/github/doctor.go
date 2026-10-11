@@ -61,11 +61,6 @@ func unresponsiveFailure(code, name string, err error) (doctor.Result, bool) {
 // authenticationFailed reports a gh process without a usable login.
 var authenticationFailed = doctor.Condition{Code: "github.authentication.failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 
-// adapterMissing classifies an unconfigured GitHub diagnosis adapter.
-func adapterMissing(code string) doctor.Condition {
-	return doctor.Condition{Code: code, Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
-}
-
 // environmentCondition classifies a GitHub account, token, or host finding.
 func environmentCondition(code string, effect doctor.Effect, unobserved bool) doctor.Condition {
 	return doctor.Condition{Code: code, Origin: doctor.OriginEnvironment, Effect: effect, Topic: "setup", Unobserved: unobserved}
@@ -102,7 +97,7 @@ func StartupChecks(client DoctorClient, repository tracker.Repository) []doctor.
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			if client == nil {
-				return doctor.Failure(adapterMissing("github.authentication.adapter_missing"), "github authentication", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
+				return doctor.Failure(doctor.AdapterMissing("github.authentication.adapter_missing"), "github authentication", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckAuthentication(ctx); err != nil {
 				if result, ok := unresponsiveFailure("github.authentication.timeout", "github authentication", err); ok {
@@ -114,7 +109,7 @@ func StartupChecks(client DoctorClient, repository tracker.Repository) []doctor.
 		},
 		func(ctx context.Context) doctor.Result {
 			if client == nil {
-				return doctor.Failure(adapterMissing("github.permissions.adapter_missing"), "github permissions", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
+				return doctor.Failure(doctor.AdapterMissing("github.permissions.adapter_missing"), "github permissions", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckRepositoryAccess(ctx, repository); err != nil {
 				if result, ok := unresponsiveFailure("github.permissions.timeout", "github permissions", err); ok {
@@ -127,7 +122,7 @@ func StartupChecks(client DoctorClient, repository tracker.Repository) []doctor.
 		},
 		func(ctx context.Context) doctor.Result {
 			if client == nil {
-				return doctor.Failure(adapterMissing("github.labels.adapter_missing"), "github labels", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
+				return doctor.Failure(doctor.AdapterMissing("github.labels.adapter_missing"), "github labels", "the GitHub diagnosis adapter is unavailable", "configure the authenticated gh client")
 			}
 			if err := client.CheckFactoryLabels(ctx, repository); err != nil {
 				if result, ok := unresponsiveFailure("github.labels.timeout", "github labels", err); ok {

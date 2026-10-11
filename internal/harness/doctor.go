@@ -172,13 +172,13 @@ var (
 	capabilityPolicyUnavailable  = doctor.Condition{Code: "harness.capability.policy_unavailable", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
 	capabilityUnsupported        = doctor.Condition{Code: "harness.capability.unsupported", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	headlessHelperMissing        = doctor.Condition{Code: "harness.capability.headless_helper_missing", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
-	executableAdapterMissing     = doctor.Condition{Code: "harness.executable.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	executableAdapterMissing     = doctor.AdapterMissing("harness.executable.adapter_missing")
 	executableUnusable           = doctor.Condition{Code: "harness.executable.unusable", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	authenticationSourceMissing  = doctor.Condition{Code: "harness.authentication.source_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	authenticationSourceUnsafe   = doctor.Condition{Code: "harness.authentication.source_unsafe", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
-	authenticationAdapterMissing = doctor.Condition{Code: "harness.authentication.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	authenticationAdapterMissing = doctor.AdapterMissing("harness.authentication.adapter_missing")
 	authenticationRejected       = doctor.Condition{Code: "harness.authentication.rejected", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
-	skillsAdapterMissing         = doctor.Condition{Code: "harness.skills.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	skillsAdapterMissing         = doctor.AdapterMissing("harness.skills.adapter_missing")
 	skillsContractUnmet          = doctor.Condition{Code: "harness.skills.contract_unmet", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	skillsEvidenceMissing        = doctor.Condition{Code: "harness.skills.evidence_missing", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	skillsEvidenceStale          = doctor.Condition{Code: "harness.skills.evidence_stale", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}

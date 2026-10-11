@@ -182,7 +182,7 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 // prevented one, as a JSON document. It exits 0 only when startup is ready.
 func writeDoctorJSON(output, errorsOutput io.Writer, result factory.DoctorResult, err error) int {
 	if err != nil {
-		writeJSONDocument(output, errorsOutput, newDoctorErrorDocument(err))
+		writeJSONDocument(output, errorsOutput, newDoctorErrorDocument())
 		return 1
 	}
 	if !writeJSONDocument(output, errorsOutput, newDoctorDocument(result.Report)) {

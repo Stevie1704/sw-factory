@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
@@ -99,13 +100,15 @@ func newDoctorDocument(report doctor.Report) doctorDocument {
 }
 
 // newDoctorErrorDocument represents a doctor run that produced no report.
-func newDoctorErrorDocument(err error) doctorDocument {
+// Configuration problems are diagnostics, not errors. The message is fixed
+// because the error text is not known to be free of secrets.
+func newDoctorErrorDocument() doctorDocument {
 	return doctorDocument{
 		SchemaVersion: diagnosticsSchemaVersion,
 		Command:       "doctor",
 		Outcome:       outcomeError,
 		Diagnostics:   []diagnosticDocument{},
-		Error:         newErrorDocument("doctor.operational_failure", doctor.OriginUnknown, err),
+		Error:         newErrorDocument("doctor.operational_failure", doctor.OriginUnknown, errors.New("the diagnosis did not produce a report")),
 	}
 }
 

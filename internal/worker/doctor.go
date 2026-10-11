@@ -79,10 +79,10 @@ var ErrDockerMissing = errors.New("Docker executable is unavailable")
 
 // Worker diagnosis conditions. Codes are stable; wording may change.
 var (
-	dockerAdapterMissing = doctor.Condition{Code: "worker.docker.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	dockerAdapterMissing = doctor.AdapterMissing("worker.docker.adapter_missing")
 	dockerMissing        = doctor.Condition{Code: "worker.docker.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	dockerUnreachable    = doctor.Condition{Code: "worker.docker.unreachable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
-	imageAdapterMissing  = doctor.Condition{Code: "worker.image.adapter_missing", Origin: doctor.OriginFactory, Effect: doctor.EffectInspection, Topic: "reporting", Unobserved: true}
+	imageAdapterMissing  = doctor.AdapterMissing("worker.image.adapter_missing")
 	imageMissing         = doctor.Condition{Code: "worker.image.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	probeOutputLimit     = doctor.Condition{Code: "worker.probe.output_limit", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
 )

@@ -128,6 +128,13 @@ var checkMissing = Condition{Code: "doctor.check.missing", Origin: OriginFactory
 // resultInvalid reports a check that returned a malformed result.
 var resultInvalid = Condition{Code: "doctor.result.invalid", Origin: OriginFactory, Effect: EffectInspection, Topic: "reporting", Unobserved: true}
 
+// AdapterMissing classifies a check whose diagnosis adapter is not
+// configured or not capable. The check observed nothing, and the likely
+// origin is Factory's own composition.
+func AdapterMissing(code string) Condition {
+	return Condition{Code: code, Origin: OriginFactory, Effect: EffectInspection, Topic: "reporting", Unobserved: true}
+}
+
 // Success creates a passing result for one named subsystem check.
 func Success(code, name string) Result {
 	return Result{Condition: Condition{Code: code}, Name: name, Status: StatusPassed}

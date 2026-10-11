@@ -160,13 +160,28 @@ func newStatusDocument(result factory.StatusResult, err error) statusDocument {
 	return document
 }
 
-// statusError classifies a status failure by its typed source.
+// statusSourceMessages are the fixed messages of status collection
+// failures. The underlying error text is not shown, because a decode error
+// can quote configuration values.
+var statusSourceMessages = map[factory.StatusSource]string{
+	factory.StatusSourceConfiguration: "the host configuration cannot be loaded; run factory doctor for the field-level diagnosis",
+	factory.StatusSourceStore:         "the operational store cannot be read",
+	factory.StatusSourceSupervisor:    "the coordinator lock or supervisor heartbeat cannot be read",
+}
+
+// statusError classifies a status failure by its typed source. Only an
+// unloadable host configuration has evidence of an environment origin; a
+// failed read alone does not identify its origin.
 func statusError(err error) *errorDocument {
 	var unavailable *factory.StatusUnavailableError
-	if errors.As(err, &unavailable) {
-		return newErrorDocument("status."+string(unavailable.Source)+".unavailable", doctor.OriginEnvironment, err)
+	if !errors.As(err, &unavailable) {
+		return newErrorDocument("status.operational_failure", doctor.OriginUnknown, errors.New("status collection failed"))
 	}
-	return newErrorDocument("status.operational_failure", doctor.OriginUnknown, err)
+	origin := doctor.OriginUnknown
+	if unavailable.Source == factory.StatusSourceConfiguration {
+		origin = doctor.OriginEnvironment
+	}
+	return newErrorDocument("status."+string(unavailable.Source)+".unavailable", origin, errors.New(statusSourceMessages[unavailable.Source]))
 }
 
 // newRegistrationDocument distinguishes no registration from an unread one.

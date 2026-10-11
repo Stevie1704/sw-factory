@@ -696,8 +696,8 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 		if result.SupervisorHeartbeat != nil {
 			result.SupervisorLive = result.SupervisorHeartbeat.Live(s.deps.Now().UTC()) && result.SupervisorLockHeld
 		}
+		result.SupervisorObserved = true
 	}
-	result.SupervisorObserved = true
 	if latestStore, ok := opened.(LatestRunStore); ok {
 		result.LatestRun, err = latestStore.LatestRun(ctx)
 	} else {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,4 +220,33 @@ func registeredStatusFixture(t *testing.T) (string, string, string) {
 		t.Fatalf("register exit code = %d, output = %s", code, output.String())
 	}
 	return configPath, operationalPath, repositoryPath
+}
+
+// TestRunStatusJSONReportsAnUnreadableStore verifies a store that cannot be
+// opened keeps the known registration, marks the run unavailable instead of
+// absent, does not claim an origin, and does not show the store contents.
+func TestRunStatusJSONReportsAnUnreadableStore(t *testing.T) {
+	t.Parallel()
+	configPath, operationalPath, _ := registeredStatusFixture(t)
+	const secret = "ghp_secretTokenValue0123456789"
+	if err := os.MkdirAll(filepath.Dir(operationalPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(operationalPath, []byte("not a database "+secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output, errorsOutput bytes.Buffer
+	code := cli.Run(context.Background(), []string{"status", "--json", "--config", configPath}, &output, &errorsOutput)
+	if code != 1 || errorsOutput.Len() != 0 || strings.Contains(output.String(), secret) {
+		t.Fatalf("status --json exit = %d stderr = %q stdout = %s, want 1, no stderr, and no store contents", code, errorsOutput.String(), output.String())
+	}
+	var document statusDocument
+	decodeSingleDocument(t, output.String(), &document)
+	if document.Error == nil || document.Error.Code != "status.store.unavailable" || document.Error.LikelyOrigin != "unknown" {
+		t.Fatalf("error = %+v, want status.store.unavailable with an unknown origin", document.Error)
+	}
+	if document.Registration.State != "registered" || document.Supervisor.State != "unknown" || document.Run.State != "unavailable" {
+		t.Fatalf("document = %+v, want the known registration and unread supervisor and run", document)
+	}
 }

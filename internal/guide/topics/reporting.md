@@ -21,7 +21,7 @@ a deliberate action of the operator.
   `factory status --json`, and the relevant lines of a
   `factory start --verbose` log. Keep only the entries and lines that support
   the observation. The JSON documents contain local paths and the repository
-  identity; remove them unless the report needs them.
+  identity. Remove them when the report does not need them.
 - **Classification**: suspected Factory defect, or unknown cause. State what
   you did not verify.
 
