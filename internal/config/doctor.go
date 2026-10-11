@@ -32,14 +32,14 @@ type DoctorState struct {
 
 // Configuration diagnosis conditions. Codes are stable; wording may change.
 var (
-	hostPathMissing       = doctor.Condition{Code: "config.host.path_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	hostMissing           = doctor.Condition{Code: "config.host.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	hostNotRegular        = doctor.Condition{Code: "config.host.not_regular", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	hostNotPrivate        = doctor.Condition{Code: "config.host.not_private", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	hostInvalid           = doctor.Condition{Code: "config.host.invalid", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	registrationMissing   = doctor.Condition{Code: "config.registration.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	repositoryOutside     = doctor.Condition{Code: "config.repository.outside_checkout", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	repositoryMissing     = doctor.Condition{Code: "config.repository.missing", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
+	hostPathMissing       = doctor.Condition{Code: "config.host.path_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostMissing           = doctor.Condition{Code: "config.host.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostNotRegular        = doctor.Condition{Code: "config.host.not_regular", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostNotPrivate        = doctor.Condition{Code: "config.host.not_private", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	hostInvalid           = doctor.Condition{Code: "config.host.invalid", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	registrationMissing   = doctor.Condition{Code: "config.registration.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	repositoryOutside     = doctor.Condition{Code: "config.repository.outside_checkout", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	repositoryMissing     = doctor.Condition{Code: "config.repository.missing", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	repositoryInvalid     = doctor.Condition{Code: "config.repository.invalid", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	cacheUnmapped         = doctor.Condition{Code: "config.caches.unmapped", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	cacheOutsideRoot      = doctor.Condition{Code: "config.caches.outside_root", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
