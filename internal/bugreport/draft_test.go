@@ -67,12 +67,17 @@ func TestRenderedDraftCarriesTheEvidenceAndItsIdentity(t *testing.T) {
 		"azure_devops",
 		"run-1", "waiting_for_human", "phase=checkpoint outcome=failed",
 		"inv-1", "implementation-v3",
-		"report.handoff_rejected", "worker-authored",
+		"Invocation inv-1 proposed code report.handoff_rejected",
 		"The retained report of Invocation inv-2 is unavailable.",
 		"not a confirmed root cause",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("rendered draft lacks %q:\n%s", want, rendered)
+		}
+	}
+	for _, workerText := range []string{"factory-report accepts the handoff", "factory-report exits 1", "no repository file is involved"} {
+		if strings.Contains(rendered, workerText) {
+			t.Errorf("rendered draft contains worker-authored text %q", workerText)
 		}
 	}
 }

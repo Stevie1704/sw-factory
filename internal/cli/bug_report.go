@@ -59,10 +59,28 @@ func runBugReport(ctx context.Context, args []string, _ string, output, errorsOu
 		writeError(errorsOutput, err)
 		return 1
 	}
+	if !writeWorkerProposals(output, errorsOutput, evidence) {
+		return 1
+	}
 	if !writeOutput(output, errorsOutput, "draft written: %s (report %s)\nComplete the title and the required sections, review the whole file, then run: factory bug-report submit %s\n", *outputPath, id, *outputPath) {
 		return 1
 	}
 	return 0
+}
+
+// writeWorkerProposals shows the worker-authored text of each defect
+// proposal on the terminal only. The draft names the proposal by code; the
+// operator decides what of this text to write into the draft.
+func writeWorkerProposals(output, errorsOutput io.Writer, evidence bugreport.Evidence) bool {
+	if evidence.Run == nil {
+		return true
+	}
+	for _, proposal := range evidence.Run.DefectProposals {
+		if !writeOutput(output, errorsOutput, "worker defect proposal (worker-authored, not in the draft): invocation=%s code=%s\n  expected: %s\n  observed: %s\n  reason: %s\n", proposal.InvocationID, proposal.Code, proposal.Expected, proposal.Observed, proposal.Reason) {
+			return false
+		}
+	}
+	return true
 }
 
 // writePrivateDraft creates the draft with owner-only permissions. An

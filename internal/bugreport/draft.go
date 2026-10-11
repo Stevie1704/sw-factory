@@ -27,17 +27,22 @@ const (
 	maxBodyBytes  = 60000
 )
 
-// Section headings of a draft. The first three are required before submission.
-const (
-	sectionExpected   = "Expected behavior"
-	sectionObserved   = "Observed behavior"
-	sectionReproduce  = "Reproduction"
-	sectionImpact     = "Impact"
-	sectionWhyFactory = "Why this appears to be a Factory defect"
-)
+// draftSection is one operator-written section of a draft.
+type draftSection struct {
+	heading  string
+	hint     string
+	required bool
+}
 
-// requiredSections are the sections that must contain operator text.
-var requiredSections = []string{sectionExpected, sectionObserved, sectionReproduce}
+// draftSections are the operator-written sections in draft order. A required
+// section must contain text before submission.
+var draftSections = []draftSection{
+	{"Expected behavior", "required: what the guide or the command help says should happen; name the topic or the command", true},
+	{"Observed behavior", "required: what happened, with the exact command, its exit status, and the error line", true},
+	{"Reproduction", "required: the shortest command sequence that shows the behavior, or 'Not reproduced:' and why", true},
+	{"Impact", "optional: what the defect stopped or changed", false},
+	{"Why this appears to be a Factory defect", "optional: why the cause appears to be Factory, not the repository or the environment", false},
+}
 
 // markerPattern matches the identity marker, the first line of a draft and of
 // the upstream issue body.
@@ -97,18 +102,11 @@ func Render(draft Draft) []byte {
 	out.WriteString(Marker(draft.ID) + "\n")
 	fmt.Fprintf(&out, "# %s%s\n\n", titlePrefix, TitlePlaceholder)
 	out.WriteString("> Local draft prepared by `factory bug-report`. Factory sent nothing. Complete the title and the required sections, remove private content, then run `factory bug-report submit <file>`.\n\n")
-	writeSection(&out, sectionExpected, "required: what the guide or the command help says should happen; name the topic or the command")
-	writeSection(&out, sectionObserved, "required: what happened, with the exact command, its exit status, and the error line")
-	writeSection(&out, sectionReproduce, "required: the shortest command sequence that shows the behavior, or 'Not reproduced:' and why")
-	writeSection(&out, sectionImpact, "optional: what the defect stopped or changed")
-	writeSection(&out, sectionWhyFactory, "optional: why the cause appears to be Factory, not the repository or the environment")
+	for _, section := range draftSections {
+		fmt.Fprintf(&out, "## %s\n\n<!-- %s -->\n\n", section.heading, section.hint)
+	}
 	writeEvidence(&out, draft)
 	return []byte(out.String())
-}
-
-// writeSection writes one operator-completed section with its hint.
-func writeSection(out *strings.Builder, heading, hint string) {
-	fmt.Fprintf(out, "## %s\n\n<!-- %s -->\n\n", heading, hint)
 }
 
 // writeEvidence writes the collected evidence and the collection limits.
@@ -132,11 +130,8 @@ func writeEvidence(out *strings.Builder, draft Draft) {
 		for _, invocation := range run.Invocations {
 			fmt.Fprintf(out, "- Invocation: %s (role=%s, stage=%s, harness=%s, status=%s, prompt=%s)\n", invocation.ID, invocation.Role, invocation.Stage, invocation.Harness, invocation.Status, valueOrUnavailable(invocation.PromptVersion))
 		}
-		if len(run.DefectProposals) > 0 {
-			out.WriteString("\n### Worker defect proposals\n\nThis text is worker-authored. Review it, and remove private content before submission.\n\n")
-			for _, proposal := range run.DefectProposals {
-				fmt.Fprintf(out, "- Invocation %s, code %s\n  - expected: %s\n  - observed: %s\n  - reason: %s\n", proposal.InvocationID, proposal.Code, proposal.Expected, proposal.Observed, proposal.Reason)
-			}
+		for _, proposal := range run.DefectProposals {
+			fmt.Fprintf(out, "- Worker defect proposal: Invocation %s proposed code %s\n", proposal.InvocationID, proposal.Code)
 		}
 	}
 	out.WriteString("\n## Collection limitations\n\n")
@@ -182,9 +177,9 @@ func Parse(content []byte) (Submission, error) {
 		problems = append(problems, fmt.Sprintf("the title exceeds %d characters", maxTitleRunes))
 	}
 	sections := sectionTexts(lines[2])
-	for _, heading := range requiredSections {
-		if strings.TrimSpace(commentPattern.ReplaceAllString(sections[heading], "")) == "" {
-			problems = append(problems, fmt.Sprintf("section %q is empty", heading))
+	for _, section := range draftSections {
+		if section.required && strings.TrimSpace(commentPattern.ReplaceAllString(sections[section.heading], "")) == "" {
+			problems = append(problems, fmt.Sprintf("section %q is empty", section.heading))
 		}
 	}
 	body := lines[0] + "\n" + lines[2]

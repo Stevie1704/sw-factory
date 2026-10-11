@@ -19,8 +19,8 @@ const (
 )
 
 // Evidence is the allowlisted local context of one draft. Every field is a
-// fixed vocabulary value or a Factory-generated identifier, except the
-// worker-authored proposals, which the draft marks for operator review.
+// fixed vocabulary value or a Factory-generated identifier, except the text
+// of the worker proposals, which a draft never renders.
 // Collection never copies configuration or store objects, paths, repository
 // identities, branch names, or error text.
 type Evidence struct {
@@ -51,8 +51,9 @@ type RunEvidence struct {
 	FailedGates []GateEvidence
 	// Invocations are the Run's harness Invocations.
 	Invocations []InvocationEvidence
-	// DefectProposals are worker-authored suspected-defect proposals from
-	// retained, validated reports.
+	// DefectProposals are suspected-defect proposals from retained, validated
+	// reports. A draft shows only their Invocation and code; their text is
+	// worker-authored and stays out of the draft.
 	DefectProposals []report.FactoryDefectProposal
 }
 

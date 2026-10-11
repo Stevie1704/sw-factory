@@ -37,8 +37,10 @@ unavailable, because Factory does not record them. The draft never collects
 credentials, prompts, transcripts, source, diffs, logs, repository names or
 addresses, branch names, gate names, local paths, or error text.
 
-Worker defect proposals of the Run appear in their own section, marked as
-worker-authored. A proposal that names another Invocation, or that is
+The draft names each worker defect proposal of the Run by Invocation and
+code only. The command prints the worker-authored text of each proposal on
+the terminal, not into the draft. Read it, and write into the draft only
+what you reviewed. A proposal that names another Invocation, or that is
 malformed, is ignored, and the draft states the limitation.
 
 ## Complete and review the draft
@@ -102,11 +104,11 @@ role prompt contains this factory-owned rule:
 
 > When the evidence shows a defect in Software Factory itself, not in the repository or the environment, return cannot_proceed. Call it a suspected Factory defect, give the observed evidence, and state an unknown cause as unknown. Add the proposal with the factory-report flags --defect-code, --defect-expected, --defect-observed, and --defect-reason. Do not report it anywhere else.
 
-The worker writes that outcome through `factory-report`. The coordinator
-validates the report as usual; the proposal must name the reporting
-Invocation and stay inside its limits, or the report is rejected. The
-proposal never changes the outcome, never passes a failed gate, never
-advances a stage, and never authorizes publication. For most roles,
+The worker writes that outcome through `factory-report`. `factory-report`
+refuses a proposal that does not name the reporting Invocation or exceeds
+its limits. The coordinator accepts the report as if the proposal were
+absent: the proposal never changes acceptance or the outcome, never passes
+a failed gate, never advances a stage, and never authorizes publication. For most roles,
 `cannot_proceed` records a blocker that a human must resolve. The
 `pr_writer` role is the exception: when it reports `cannot_proceed`, the
 hand-off continues, and the pull request has only the coordinator section
