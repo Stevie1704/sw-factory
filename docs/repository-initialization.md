@@ -626,7 +626,9 @@ tested and `factory.yaml` is read from that copy. These files stay out:
 - an untracked credential file, such as `.env`, `.npmrc`, `*.pem`, or
   `auth.json`;
 - a top-level `.factory-proof*` entry that an earlier manual proof left;
-- an entry that is not a file or a symbolic link, such as a submodule.
+- an entry that is not a file or a symbolic link, such as a submodule;
+- a path below a directory that is a symbolic link, because its content can
+  lie outside the checkout.
 
 `candidate.excluded` lists each excluded path and its reason. The proof never
 writes into the checkout. Each declared cache is an empty directory that the

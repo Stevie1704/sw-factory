@@ -29,6 +29,9 @@ const (
 	// ExcludedNotRegular marks an entry that is neither a file nor a symbolic
 	// link, such as a submodule checkout.
 	ExcludedNotRegular ExclusionReason = "not_regular"
+	// ExcludedOutsideCheckout marks a path below a symbolic link to a
+	// directory, whose content can lie outside the checkout.
+	ExcludedOutsideCheckout ExclusionReason = "outside_checkout"
 )
 
 // credentialFilePatterns match the base names of untracked files that hold
@@ -96,6 +99,17 @@ func Project(ctx context.Context, repository, destination string) (Candidate, er
 			candidate.Excluded = append(candidate.Excluded, Exclusion{Path: relative, Reason: reason})
 			continue
 		}
+		linked, err := symlinkedParent(repository, relative)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return Candidate{}, fmt.Errorf("inspect the parents of %q: %w", relative, err)
+		}
+		if linked {
+			candidate.Excluded = append(candidate.Excluded, Exclusion{Path: relative, Reason: ExcludedOutsideCheckout})
+			continue
+		}
 		identity, err := projectEntry(repository, destination, relative)
 		if errors.Is(err, fs.ErrNotExist) {
 			// A tracked file deleted in the working tree is an intended change.
@@ -149,6 +163,22 @@ func exclusionReason(relative string, tracked bool) ExclusionReason {
 		}
 	}
 	return ""
+}
+
+// symlinkedParent reports whether a parent directory of relative, inside the
+// checkout, is a symbolic link. Reading through such a link can read host
+// data outside the checkout.
+func symlinkedParent(repository, relative string) (bool, error) {
+	for parent := path.Dir(relative); parent != "."; parent = path.Dir(parent) {
+		info, err := os.Lstat(filepath.Join(repository, filepath.FromSlash(parent)))
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // projectEntry copies one file or symbolic link and returns the identity that

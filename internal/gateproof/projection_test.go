@@ -187,3 +187,39 @@ func TestProjectRunsNoRepositoryFsmonitor(t *testing.T) {
 		t.Fatalf("the repository fsmonitor ran on the host (stat error %v)", err)
 	}
 }
+
+// TestProjectRefusesFilesBehindASymlinkedDirectory verifies a tracked path
+// whose parent directory became a symbolic link to a host directory is not
+// copied, so the projection never reads data outside the checkout.
+func TestProjectRefusesFilesBehindASymlinkedDirectory(t *testing.T) {
+	repository := candidateRepository(t)
+	writeFile(t, repository, "lib/a.txt", "committed\n", 0o644)
+	git(t, repository, "add", "lib/a.txt")
+	git(t, repository, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "lib")
+	host := t.TempDir()
+	writeFile(t, host, "a.txt", "host secret\n", 0o600)
+	if err := os.RemoveAll(filepath.Join(repository, "lib")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(host, filepath.Join(repository, "lib")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, repository, ".gitignore", "node_modules/\nlib\n", 0o644)
+	destination := t.TempDir()
+
+	candidate, err := gateproof.Project(context.Background(), repository, destination)
+	if err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+
+	if data, err := os.ReadFile(filepath.Join(destination, "lib", "a.txt")); err == nil {
+		t.Fatalf("projection copied %q from outside the checkout", data)
+	}
+	found := false
+	for _, excluded := range candidate.Excluded {
+		found = found || (excluded.Path == "lib/a.txt" && excluded.Reason == gateproof.ExcludedOutsideCheckout)
+	}
+	if !found {
+		t.Fatalf("Excluded = %#v, want lib/a.txt as outside_checkout", candidate.Excluded)
+	}
+}
