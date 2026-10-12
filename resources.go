@@ -107,7 +107,10 @@ func PrepareResources(destination string) (string, error) {
 	marker, err := os.ReadFile(filepath.Join(destination, ownershipMarker))
 	switch {
 	case err == nil:
-		return identity, verifyPreparedResources(destination, strings.TrimSpace(string(marker)), identity)
+		if err := verifyPreparedResources(destination, strings.TrimSpace(string(marker)), identity); err != nil {
+			return "", err
+		}
+		return identity, nil
 	case !errors.Is(err, fs.ErrNotExist):
 		return "", fmt.Errorf("read the Factory resource directory %s: %w", destination, err)
 	}
@@ -121,27 +124,35 @@ func PrepareResources(destination string) (string, error) {
 }
 
 // verifyPreparedResources accepts an earlier export of the same identity whose
-// files still match the shipped resources.
+// files still have the content and mode of the shipped resources.
 func verifyPreparedResources(destination, prepared, identity string) error {
 	if prepared != identity {
 		return fmt.Errorf("%s holds Factory resources with identity %s, not %s of this release: choose a new directory, or remove that one", destination, prepared, identity)
 	}
 	return walkResourceFiles(func(name string, data []byte) error {
-		exported, err := os.ReadFile(filepath.Join(destination, filepath.FromSlash(name)))
-		if err != nil || !bytes.Equal(exported, data) {
+		target := filepath.Join(destination, filepath.FromSlash(name))
+		exported, err := os.ReadFile(target)
+		var info os.FileInfo
+		if err == nil {
+			info, err = os.Stat(target)
+		}
+		if err != nil || !bytes.Equal(exported, data) || info.Mode().Perm() != resourceMode(name) {
 			return fmt.Errorf("%s differs from the Factory release resources at %s: choose a new directory, or remove that one", destination, name)
 		}
 		return nil
 	})
 }
 
-// requireEmptyDirectory creates destination when it is missing and refuses it
-// when it holds any entry.
+// requireEmptyDirectory creates the parent of destination and refuses a
+// destination that holds any entry.
 func requireEmptyDirectory(destination string) error {
-	if err := os.MkdirAll(destination, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return fmt.Errorf("create the Factory resource directory: %w", err)
 	}
 	entries, err := os.ReadDir(destination)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read the Factory resource directory: %w", err)
 	}
@@ -151,21 +162,37 @@ func requireEmptyDirectory(destination string) error {
 	return nil
 }
 
-// exportInto exports the resources into the empty destination and then marks
-// it with their identity. A failed export removes what it wrote, so the
-// directory is empty again.
+// exportInto exports the resources and their identity marker into a staging
+// directory beside the empty destination, then renames it into place. An
+// interrupted export leaves the destination empty, so a later preparation
+// accepts it.
 func exportInto(destination, identity string) error {
-	err := ExportResources(destination)
-	if err == nil {
-		err = writeNewFile(filepath.Join(destination, ownershipMarker), []byte(identity+"\n"), 0o644)
-	}
+	staging, err := os.MkdirTemp(filepath.Dir(destination), "."+filepath.Base(destination)+".partial-")
 	if err != nil {
-		entries, _ := os.ReadDir(destination)
-		for _, entry := range entries {
-			_ = os.RemoveAll(filepath.Join(destination, entry.Name()))
+		return fmt.Errorf("create the Factory resource directory: %w", err)
+	}
+	err = os.Chmod(staging, 0o755)
+	if err == nil {
+		err = ExportResources(staging)
+	}
+	if err == nil {
+		err = writeNewFile(filepath.Join(staging, ownershipMarker), []byte(identity+"\n"), 0o644)
+	}
+	// Rename cannot replace a directory on every platform. Remove deletes only
+	// an empty directory, so it cannot delete files of the operator.
+	if err == nil {
+		if err = os.Remove(destination); errors.Is(err, fs.ErrNotExist) {
+			err = nil
 		}
 	}
-	return err
+	if err == nil {
+		err = os.Rename(staging, destination)
+	}
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return fmt.Errorf("export the Factory resources to %s: %w", destination, err)
+	}
+	return nil
 }
 
 // walkResourceFiles calls visit with the slash-separated name and content of

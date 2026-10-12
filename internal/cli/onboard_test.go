@@ -419,3 +419,62 @@ func TestOnboardingSkillNamesThePreparedContract(t *testing.T) {
 		}
 	}
 }
+
+// TestOnboardPrepareRequiresJSON proves that prepare writes only the JSON
+// manifest, so an agent cannot read a second, unversioned format.
+func TestOnboardPrepareRequiresJSON(t *testing.T) {
+	root, _ := prepareFixture(t)
+	destination := filepath.Join(root, "resources")
+	var output, errorsOutput bytes.Buffer
+
+	status := cli.Run(context.Background(), []string{"onboard", "prepare", "--output", destination, "--worker-base-image", testBaseImage}, &output, &errorsOutput)
+
+	if status != 2 || !strings.Contains(errorsOutput.String(), "--json") {
+		t.Errorf("status = %d, stderr = %q; want 2 and the --json requirement", status, errorsOutput.String())
+	}
+}
+
+// TestOnboardPrepareRefusesAScriptThatLostItsMode proves that a reused
+// preparation must still carry executable scripts.
+func TestOnboardPrepareRefusesAScriptThatLostItsMode(t *testing.T) {
+	root, _ := prepareFixture(t)
+	destination := filepath.Join(root, "resources")
+	if _, status, stderr := runPrepare(t, "--output", destination, "--worker-base-image", testBaseImage); status != 0 {
+		t.Fatalf("first prepare: status = %d, stderr = %s", status, stderr)
+	}
+	if err := os.Chmod(filepath.Join(destination, "scripts", "smoke-skills.sh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, status, stderr := runPrepare(t, "--output", destination, "--worker-base-image", testBaseImage)
+
+	if status != 1 || !strings.Contains(stderr, "scripts/smoke-skills.sh") {
+		t.Errorf("status = %d, stderr = %q; want 1 and the changed script", status, stderr)
+	}
+}
+
+// TestOnboardPrepareLeavesNoPartialExport proves that prepare exports through
+// a staging directory that it renames into place, so the parent holds only
+// the complete destination afterwards.
+func TestOnboardPrepareLeavesNoPartialExport(t *testing.T) {
+	root, _ := prepareFixture(t)
+	parent := filepath.Join(root, "parent")
+	if err := os.MkdirAll(filepath.Join(parent, "resources"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, status, stderr := runPrepare(t, "--output", filepath.Join(parent, "resources"), "--worker-base-image", testBaseImage); status != 0 {
+		t.Fatalf("status = %d, stderr = %s", status, stderr)
+	}
+
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "resources" {
+		t.Errorf("parent holds %v, want only the prepared directory", entries)
+	}
+	if info, err := os.Stat(filepath.Join(parent, "resources")); err != nil || info.Mode().Perm() != 0o755 {
+		t.Errorf("prepared directory = %v, %v; want mode 0755", info, err)
+	}
+}

@@ -90,7 +90,7 @@ func runOnboardPrepare(args []string, output, errorsOutput io.Writer) int {
 	flags := newFlagSet("onboard prepare", errorsOutput)
 	destination := flags.String("output", "", "directory that receives the release resources; must be missing, empty, or an earlier preparation of this release")
 	baseImage := baseImageFlag(flags)
-	asJSON := flags.Bool("json", false, "write the manifest as JSON")
+	asJSON := flags.Bool("json", false, "write the manifest as JSON; required")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -98,8 +98,8 @@ func runOnboardPrepare(args []string, output, errorsOutput io.Writer) int {
 		writeError(errorsOutput, errors.New("onboard prepare does not accept positional arguments"))
 		return 2
 	}
-	if *destination == "" {
-		writeError(errorsOutput, errors.New("onboard prepare needs --output <directory>"))
+	if *destination == "" || !*asJSON {
+		writeError(errorsOutput, errors.New("onboard prepare needs --output <directory> and --json"))
 		return 2
 	}
 	if status, err := validateBaseImage(*baseImage); err != nil {
@@ -111,24 +111,15 @@ func runOnboardPrepare(args []string, output, errorsOutput io.Writer) int {
 		writeError(errorsOutput, err)
 		return 1
 	}
-	if !writeManifest(output, errorsOutput, manifest, *asJSON) {
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if !writeOutput(output, errorsOutput, "%s\n", encoded) {
 		return 1
 	}
 	return 0
-}
-
-// writeManifest prints the manifest as JSON or as labelled lines.
-func writeManifest(output, errorsOutput io.Writer, manifest onboardingManifest, asJSON bool) bool {
-	if asJSON {
-		encoded, err := json.MarshalIndent(manifest, "", "  ")
-		if err != nil {
-			writeError(errorsOutput, err)
-			return false
-		}
-		return writeOutput(output, errorsOutput, "%s\n", encoded)
-	}
-	return writeOutput(output, errorsOutput, "prepared onboarding resources of factory %s (revision %s)\nfactory command: %s\nworker base image: %s\nresources: %s\nprocedure: %s\nresource identity: %s\n",
-		manifest.FactoryVersion, manifest.FactoryRevision, manifest.FactoryCommand, manifest.WorkerBaseImage, manifest.Resources, manifest.Procedure, manifest.ResourceIdentity)
 }
 
 // runOnboardSession starts an interactive harness session in the current

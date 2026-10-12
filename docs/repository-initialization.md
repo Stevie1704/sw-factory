@@ -73,6 +73,9 @@ when an earlier preparation of the same `resource_identity` completed it and no
 resource in it changed. Then it prints the same manifest, for example after an
 interrupted agent session. It refuses every other directory, also one with
 another release's resources. It never overwrites or removes a file there.
+It exports into a hidden `.<name>.partial-*` directory beside the destination
+and renames it into place when the export is complete. An interrupted export
+leaves the destination unchanged; remove the hidden directory.
 
 The directory belongs to the operator. It stays after the command and after
 the agent session end. Remove it when the onboarding is complete, and prepare a
