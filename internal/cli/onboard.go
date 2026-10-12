@@ -75,10 +75,14 @@ type onboardingManifest struct {
 }
 
 // runOnboard prepares the release resources for an agent that already runs,
-// or starts an interactive harness session that does the onboarding.
+// proves a candidate's gates in its worker, or starts an interactive harness
+// session that does the onboarding.
 func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutput io.Writer) int {
 	if len(args) > 0 && args[0] == "prepare" {
 		return runOnboardPrepare(args[1:], output, errorsOutput)
+	}
+	if len(args) > 0 && args[0] == "verify" {
+		return runOnboardVerify(ctx, args[1:], output, errorsOutput)
 	}
 	return runOnboardSession(ctx, args, output, errorsOutput)
 }
@@ -134,7 +138,7 @@ func runOnboardSession(ctx context.Context, args []string, output, errorsOutput 
 		return 2
 	}
 	if flags.NArg() != 0 {
-		writeError(errorsOutput, errors.New("onboard does not accept positional arguments; use onboard prepare to prepare the resources for a running agent"))
+		writeError(errorsOutput, errors.New("onboard does not accept positional arguments; use onboard prepare to prepare the resources for a running agent, or onboard verify to prove the gates"))
 		return 2
 	}
 	selected := config.Harness(*harness)

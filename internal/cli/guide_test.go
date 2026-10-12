@@ -140,6 +140,8 @@ func TestRunAdvertisesGuideInHelp(t *testing.T) {
 func TestGuideNamesOnlyImplementedCommandsAndFlags(t *testing.T) {
 	invocation := regexp.MustCompile("(?m)`factory ([a-z][a-z-]*)([^`]*)`|^factory ([a-z][a-z-]*)([^#\\n]*)")
 	flagName := regexp.MustCompile(`--([a-z][a-z-]*)`)
+	// subcommands names the subcommands whose flags the guide can name.
+	subcommands := map[string][]string{"onboard": {"prepare", "verify"}, "config": {"validate"}}
 	for _, name := range append([]string{guide.Overview}, guide.Topics()...) {
 		body, err := guide.Topic(name)
 		if err != nil {
@@ -151,8 +153,10 @@ func TestGuideNamesOnlyImplementedCommandsAndFlags(t *testing.T) {
 			if command == "auth" {
 				args = append(args, "refresh")
 			}
-			if command == "onboard" && strings.HasPrefix(strings.TrimSpace(rest), "prepare") {
-				args = append(args, "prepare")
+			for _, subcommand := range subcommands[command] {
+				if strings.HasPrefix(strings.TrimSpace(rest), subcommand) {
+					args = append(args, subcommand)
+				}
 			}
 			var output, errorsOutput bytes.Buffer
 			cli.Run(context.Background(), append(args, "-h"), &output, &errorsOutput)
