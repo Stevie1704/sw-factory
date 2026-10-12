@@ -151,6 +151,9 @@ func TestGuideNamesOnlyImplementedCommandsAndFlags(t *testing.T) {
 			if command == "auth" {
 				args = append(args, "refresh")
 			}
+			if command == "onboard" && strings.HasPrefix(strings.TrimSpace(rest), "prepare") {
+				args = append(args, "prepare")
+			}
 			var output, errorsOutput bytes.Buffer
 			cli.Run(context.Background(), append(args, "-h"), &output, &errorsOutput)
 			help := errorsOutput.String()

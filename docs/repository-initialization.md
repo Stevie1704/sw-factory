@@ -32,44 +32,114 @@ Before you start, make sure that:
 - the GitHub CLI is authenticated (`gh auth status`);
 - Claude Code or Codex is installed and signed in on the host.
 
-Then run one command from the checkout of the repository to onboard:
+The procedure runs in an agent session in the checkout of the repository to
+onboard. There are two ways to start it. Both use the same preparation of the
+release resources and this same procedure.
+
+### With the agent that already runs
+
+An agent that already works in the target repository prepares the release
+resources itself and then follows this document. It starts no second harness.
+Choose a new directory below your home directory, because a VM-backed Docker
+daemon can mount only paths there:
+
+~~~sh
+factory onboard prepare --output "$HOME/.cache/sw-factory/onboarding-<version>" --json
+~~~
+
+The command writes the resources of the installed release to that directory:
+this document and its reference documents, the operator onboarding skill, the
+curated worker skills, the worked worker definition, and the smoke and
+verification scripts. It starts no harness, makes no network call, and needs no
+host registration or Factory checkout. It prints this manifest:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Version of the manifest shape, now `1` |
+| `factory_version`, `factory_revision` | The release and source revision of the build that prepared the directory |
+| `factory_command` | Absolute path of that `factory` executable |
+| `worker_base_image` | Digest-pinned worker base image of the release |
+| `resources` | Absolute path of the prepared directory |
+| `procedure` | Absolute path of this document in that directory |
+| `resource_identity` | `sha256:` digest of the paths, modes, and contents of all resources |
+
+The agent then reads the file at `procedure` and follows it. In the steps
+below, `<FACTORY_COMMAND>`, `<FACTORY_RESOURCES>`, and `<FACTORY_BASE_IMAGE>`
+mean `factory_command`, `resources`, and `worker_base_image`.
+`<TARGET_REPO_PATH>` means the top level of the target checkout.
+
+The directory must be missing or empty. Prepare accepts a directory again only
+when an earlier preparation of the same `resource_identity` completed it and no
+resource in it changed. Then it prints the same manifest, for example after an
+interrupted agent session. It refuses every other directory, also one with
+another release's resources. It never overwrites or removes a file there.
+
+The directory belongs to the operator. It stays after the command and after
+the agent session end. Remove it when the onboarding is complete, and prepare a
+new one for a later rebuild. No committed file may refer to it.
+
+The release also ships the `factory-onboarding` skill at
+`<FACTORY_RESOURCES>/operator/skills/factory-onboarding/SKILL.md`. It tells an
+agent to find the installed `factory`, prepare the resources, and follow this
+document. Install it only when you want it, and only where you choose:
+
+| Host agent | Skill location |
+| --- | --- |
+| Claude Code | `.claude/skills/factory-onboarding/` in the target repository, or `~/.claude/skills/factory-onboarding/` for all repositories |
+| Codex | `~/.codex/skills/factory-onboarding/` |
+| Agent without skill support | none: tell the agent to read the `SKILL.md` file and follow it as plain instructions |
+
+Copy the complete `factory-onboarding` directory, for example:
+
+~~~sh
+cp -R "<FACTORY_RESOURCES>/operator/skills/factory-onboarding" ~/.claude/skills/
+~~~
+
+Factory never installs the skill itself. The skill holds no procedure, model
+list, or credential. An older copy of the skill still prepares the resources
+with the installed release and uses that release's manifest and procedure.
+
+### With an interactive launcher
+
+`factory onboard`, run from the checkout of the repository to onboard, starts
+a new interactive Claude Code session for the procedure. Use `--harness codex`
+to start Codex instead:
 
 ~~~sh
 factory onboard
 ~~~
 
-The command starts an interactive Claude Code session in that repository. Use
-`--harness codex` to start Codex instead. The command writes the resources of
-the installed release to a new directory below the user cache directory: this
-document and its reference documents, the curated worker skills, the worked
-worker definition, and the smoke and verification scripts. The first message
-of the session names the target repository, that resource directory, and the
-worker base image of the release. It also names `<FACTORY_COMMAND>`, the
-absolute path of the `factory` executable that started the session. In the
-steps below, `<TARGET_REPO_PATH>`, `<FACTORY_RESOURCES>`,
-`<FACTORY_BASE_IMAGE>`, and `<FACTORY_COMMAND>` mean those four values.
+The command prepares the resources as `factory onboard prepare` does, in a new
+directory below the user cache directory. The first message of the session
+names the target repository, that resource directory, the procedure file, and
+the worker base image of the release. It also names `<FACTORY_COMMAND>`, the
+absolute path of the `factory` executable that started the session. The
+placeholders below mean those values. The command removes the directory when
+the session ends.
+
+### Rules for both ways
+
 `<FACTORY_BASE_IMAGE>` is always pinned as `image@sha256:digest`.
 
 Run every `factory` command of this procedure as `<FACTORY_COMMAND>`. The
-harness shell can load a login profile that puts another `factory` build first
+agent shell can load a login profile that puts another `factory` build first
 on `PATH`, for example a development build from `make install`.
 
-The session can also use the resource directory, because the procedure copies
-skills and runs scripts from it. The command removes the directory when the
-session ends, so no committed file may refer to it. Docker and network commands
-can need access outside the harness sandbox. The harness then asks you to
-approve them.
+The session must be able to use the resource directory, because the procedure
+copies skills and runs scripts from it. Docker and network commands can need
+access outside the harness sandbox. The harness then asks you to approve them.
 
 A development build from source names no released worker base image. Pass the
 base image that `make worker-build` built, pinned by digest, with
-`--worker-base-image`; see [Build from
+`--worker-base-image` to `factory onboard prepare` or `factory onboard`; see [Build from
 source](installation.md#build-from-source).
 
 The agent runs every step of this procedure itself. You approve the actions
 listed in the next section and answer its questions.
 
-The prompt is deliberately short. This document owns the steps and the
-approval list, so the prompt does not repeat them. A second copy could drift.
+The launcher prompt and the `factory-onboarding` skill are deliberately short.
+This document owns the steps and the approval list, so they do not repeat
+them. A second copy could drift.
 
 ## Actions that need operator approval
 
@@ -115,7 +185,7 @@ command -v git jq
 equals `<FACTORY_BASE_IMAGE>`. Only when the operator passed
 `--worker-base-image` to a development build can it be empty. In all other
 cases, an empty or different value means that the command is not the build
-that started the session: stop and tell the operator. The Docker server platform must be `linux/arm64` or
+that prepared the resources: stop and tell the operator. The Docker server platform must be `linux/arm64` or
 `linux/amd64`. The release publishes no worker base image for another
 platform, so stop and tell the operator that the platform is not supported.
 The host does not need `factory-report` or `factory-worker-headless`. Both
@@ -762,7 +832,8 @@ of that file unchanged. The commit needs operator approval.
 - A new Factory release needs the same rebuild from its own base image, with
   freshly vendored skills. A release coordinator refuses a worker image of
   another release: `factory doctor` reports `worker.release.mismatch` until the
-  rebuild. Run `factory onboard` again to get the new release's resources.
+  rebuild. Prepare the new release's resources in a new directory with
+  `factory onboard prepare`, or run `factory onboard` again.
 - A changed verification command needs the same proof in Step 5 before the gate
   list changes.
 - A new role in `role_harness_defaults` needs the matching `model_options`

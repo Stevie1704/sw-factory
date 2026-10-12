@@ -131,9 +131,12 @@ and its label names its Factory release.
 _Avoid_: Factory image, base tag
 
 **Release resources**:
-The onboarding procedure, its reference documents, the worker skill set, and
-the smoke and verification scripts that the `factory` binary embeds.
-`factory onboard` exports them for one session.
+The onboarding procedure, its reference documents, the operator onboarding
+skill, the worker skill set, and the smoke and verification scripts that the
+`factory` binary embeds. `factory onboard prepare` exports them to a directory
+that the operator owns, with a manifest that names the exact `factory`
+executable and the resource identity; `factory onboard` exports them for one
+launcher session.
 _Avoid_: Factory checkout, assets
 
 **Worker skill set**:

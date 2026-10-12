@@ -39,8 +39,8 @@ carries the pinned Codex and Claude Code releases and the worker-only helpers
 needs only `factory`.
 
 The `factory` binary contains every resource that onboarding needs: the
-repository initialization procedure and its reference documents, the curated
-worker skills and their provenance, the worked worker definition, and the
+repository initialization procedure and its reference documents, the operator
+onboarding skill, the curated worker skills and their provenance, the worked worker definition, and the
 smoke and headless verification scripts. They always match the binary, also
 after you move it.
 
@@ -74,18 +74,33 @@ Run these commands from the Git checkout of the repository to prepare:
 ```sh
 factory guide          # orientation, works offline
 factory guide setup    # host prerequisites and the onboarding flow
-factory onboard        # starts the onboarding agent session
+factory onboard prepare --output "$HOME/.cache/sw-factory/onboarding-vX.Y.Z" --json
 ```
 
-`factory guide` works offline and needs no host registration. Some onboarding
-steps need network access and operator approval: the pull of the worker base
-image, the GitHub CLI authentication, and the paid skill smoke. The procedure
-names each one before it runs.
+`factory guide` works offline and needs no host registration. `factory
+onboard prepare` also works offline and needs no host registration. It writes
+the release resources to the named directory and prints a manifest with the
+exact `factory` executable, the worker base image, and the procedure path. The
+agent that already works in the repository reads that procedure and follows
+it. Some onboarding steps need network access and operator approval: the pull
+of the worker base image, the GitHub CLI authentication, and the paid skill
+smoke. The procedure names each one before it runs.
 
-`factory onboard` writes the release resources to a new directory below the
-user cache directory. The harness gets that directory for the session, and
-`factory onboard` removes it when the session ends. Run `factory onboard`
-again when you rebuild the worker image later, for example after an upgrade.
+The prepared directory belongs to you. It stays after the agent session, so
+remove it when the onboarding is complete. Prepare refuses a directory that is
+not empty, unless an earlier preparation of the same release completed it, and
+it never overwrites a file. Use a new directory after an upgrade.
+
+The resources include the optional `factory-onboarding` skill. Factory never
+installs it. [Repository
+initialization](https://github.com/Stevie1704/sw-factory/blob/main/docs/repository-initialization.md#with-the-agent-that-already-runs)
+names its location for Claude Code and Codex, and the plain-instructions use
+for other agents.
+
+`factory onboard` without `prepare` starts a new interactive Claude Code
+session (or Codex with `--harness codex`) for the same procedure. It prepares
+the resources in a new directory below the user cache directory and removes
+that directory when the session ends.
 
 ## Upgrade
 
@@ -93,8 +108,9 @@ Install the new archive in place of the old one. A release coordinator
 accepts only a worker image built from the worker base image of its own
 release. After an upgrade, `factory doctor` reports `worker.release.mismatch`
 until you rebuild the repository worker image from the new base image,
-record its digest in `factory.yaml`, and record a new skill smoke. Run
-`factory onboard` to do these steps with the agent.
+record its digest in `factory.yaml`, and record a new skill smoke. Prepare
+the new release's resources with `factory onboard prepare`, or run `factory
+onboard`, to do these steps with an agent.
 
 ## Build from source
 
@@ -105,11 +121,12 @@ make install        # factory, factory-report, and factory-worker-headless
 make worker-build   # the local development worker base image and the worker
 ```
 
-A development build names no worker base image. Give `factory onboard` the
-base image that `make worker-build` built, pinned by its local image ID:
+A development build names no worker base image. Give `factory onboard prepare`
+or `factory onboard` the base image that `make worker-build` built, pinned by
+its local image ID:
 
 ```sh
-factory onboard --worker-base-image \
+factory onboard prepare --output "<directory>" --json --worker-base-image \
   "ghcr.io/stevie1704/sw-factory-base@$(docker image inspect ghcr.io/stevie1704/sw-factory-base:v1 --format '{{.Id}}')"
 ```
 

@@ -11,7 +11,7 @@ import (
 
 // TestExportResourcesWritesTheOnboardingResources proves that an export into a
 // path with spaces carries the procedure, its reference documents, the
-// curated worker skills, and executable scripts, byte for byte as checked in.
+// operator onboarding skill, the curated worker skills, and executable scripts, byte for byte as checked in.
 func TestExportResourcesWritesTheOnboardingResources(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "factory resources")
 
@@ -23,6 +23,7 @@ func TestExportResourcesWritesTheOnboardingResources(t *testing.T) {
 		"docs/repository-initialization.md",
 		"docs/configuration.md",
 		"docs/worker-runtime.md",
+		"operator/skills/factory-onboarding/SKILL.md",
 		"worker/SKILLS.md",
 		"worker/Dockerfile",
 		"worker/skills/implement/SKILL.md",
