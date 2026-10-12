@@ -84,6 +84,8 @@ the same result. Use the JSON document. Do not parse the text output.
 | --- | --- | --- | --- |
 | `factory doctor --json` | `outcome` is `ready` | `outcome` is `blocked` or `error` | invalid argument |
 | `factory status --json` | `outcome` is `ok`, also for a paused or failed run | `outcome` is `error` | invalid argument |
+| `factory config validate --file <path> --json` | `valid` is true | `valid` is false | invalid argument |
+| `factory onboard verify --repository <path> --json` | `result` is `passed` | any other `result` | invalid argument |
 
 ### Doctor fields
 
