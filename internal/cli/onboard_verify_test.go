@@ -19,15 +19,26 @@ type verifyRuntime struct {
 	cleaned  int
 }
 
-func (r *verifyRuntime) Start(context.Context, worker.StartRequest) error   { return nil }
+// Start accepts every worker.
+func (r *verifyRuntime) Start(context.Context, worker.StartRequest) error { return nil }
+
+// Resume is not used by a proof.
 func (r *verifyRuntime) Resume(context.Context, worker.ResumeRequest) error { return nil }
-func (r *verifyRuntime) Stop(context.Context, string) error                 { return nil }
+
+// Stop is not used by a proof.
+func (r *verifyRuntime) Stop(context.Context, string) error { return nil }
+
+// Inspect reports a running worker.
 func (r *verifyRuntime) Inspect(context.Context, string) (worker.Inspection, error) {
 	return worker.Inspection{Exists: true, Running: true}, nil
 }
+
+// RunCommand answers every command with the configured exit code.
 func (r *verifyRuntime) RunCommand(context.Context, worker.CommandRequest) (worker.CommandResult, error) {
 	return worker.CommandResult{ExitCode: r.exitCode}, nil
 }
+
+// Cleanup counts the removals.
 func (r *verifyRuntime) Cleanup(context.Context, worker.CleanupRequest) error {
 	r.cleaned++
 	return nil
