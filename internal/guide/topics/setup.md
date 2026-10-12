@@ -60,32 +60,54 @@ image in `worker_base_image`. That image is pinned by digest and published for
 
 ## Prepare a repository with an agent
 
-Run this command in the Git checkout of the repository to prepare:
+An agent that already works in the Git checkout of the repository to prepare
+does the onboarding itself. It needs no second agent session. Ask the operator
+for a new directory below the home directory, then run:
 
 ```sh
-factory onboard
+factory onboard prepare --output "<directory>" --json
 ```
 
-It starts an interactive Claude Code session (`--harness codex` selects
-Codex). Its first message gives the agent the complete repository
-initialization procedure. The procedure covers the field rules of
-`factory.yaml`, the worker image definition, the worker skills, the image
-build and digest, the gate proof, the host registration, and the skill smoke.
+The command writes the release resources to that directory and prints a JSON
+manifest. It starts no harness, makes no network call, and needs no host
+registration. Take every value from the manifest:
 
-The procedure, the worker skills and their provenance, the worked worker
-definition, and the smoke and verification scripts are part of the installed
-`factory` binary. `factory onboard` writes them to a new directory below the
-user cache directory for the session, and it removes the directory when the
-session ends. The worker base image comes from the release: the session pulls
-it by its digest. Pulling the image, checking GitHub, and the paid skill smoke
-need network access. The procedure asks before each paid or external step.
+- `factory_command` is the exact `factory` executable of this release. Run
+  every later factory command as this path. A `factory` on `PATH` can be
+  another build.
+- `procedure` is the complete repository initialization procedure. Read it
+  in full and follow it from the first step to the last. It names
+  `<FACTORY_COMMAND>`, `<FACTORY_RESOURCES>`, and `<FACTORY_BASE_IMAGE>`;
+  they are `factory_command`, `resources`, and `worker_base_image`.
+- `resource_identity` identifies the exact resources.
 
-A development build names no worker base image. Then `factory onboard` stops
-and asks for `--worker-base-image <image>@sha256:<digest>`. Ask the operator
-for that value, and never use a mutable tag.
+The procedure covers the field rules of `factory.yaml`, the worker image
+definition, the worker skills, the image build and digest, the gate proof, the
+host registration, and the skill smoke. Pulling the worker base image,
+checking GitHub, and the paid skill smoke need network access. The procedure
+asks before each paid or external step.
 
-Run `factory onboard` again to rebuild the worker image after an upgrade, or
-when the toolchain or a harness version changes.
+The directory must be missing, empty, or an earlier preparation of the same
+release. Prepare refuses every other directory and never overwrites a file. The
+directory stays after the session; the operator removes it when the onboarding
+is complete. Never refer to it from a committed file.
+
+The release also ships the optional `factory-onboarding` skill below
+`operator/skills/` in the prepared directory. The procedure's section
+"Starting the onboarding" names where each harness finds it. Install it only
+when the operator asks.
+
+A development build names no worker base image. Then `factory onboard
+prepare` stops and asks for `--worker-base-image <image>@sha256:<digest>`.
+Ask the operator for that value, and never use a mutable tag.
+
+`factory onboard`, without `prepare`, is the alternative for an operator who
+has no agent session yet. It prepares the same resources in a temporary
+directory and starts an interactive Claude Code session (`--harness codex`
+selects Codex) that follows the same procedure.
+
+Prepare a new directory to rebuild the worker image after an upgrade, or when
+the toolchain or a harness version changes.
 
 ## Register the host
 

@@ -23,7 +23,9 @@ var releaseRevision = strings.Repeat("0a", 20)
 // host platform, installs it under a path with spaces, moves the installation,
 // and proves that the moved binary reports the release and gives an
 // onboarding harness the release resources with no Go toolchain on PATH and no
-// reference to the build checkout.
+// reference to the build checkout. The moved binary also prepares the
+// resources for a running agent offline, outside any checkout, and without
+// host registration.
 func TestPackagedReleaseOnboardsWithoutGoOrCheckout(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a release archive")
@@ -83,6 +85,25 @@ func TestPackagedReleaseOnboardsWithoutGoOrCheckout(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(encoded), &identity); err != nil || identity.Version != "v9.8.7" || identity.Build != "release" || identity.WorkerBaseImage != releaseBaseImage {
 		t.Fatalf("version --json = %q (%v), want release v9.8.7 naming %s", encoded, err, releaseBaseImage)
+	}
+
+	prepared := filepath.Join(root, "operator home", "prepared resources")
+	encoded = runInstalled(t, environment, root, binary, "onboard", "prepare", "--output", prepared, "--json")
+	var manifest struct {
+		FactoryVersion  string `json:"factory_version"`
+		FactoryCommand  string `json:"factory_command"`
+		WorkerBaseImage string `json:"worker_base_image"`
+		Procedure       string `json:"procedure"`
+	}
+	resolvedBinary, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(encoded), &manifest); err != nil || manifest.FactoryVersion != "v9.8.7" || manifest.FactoryCommand != resolvedBinary || manifest.WorkerBaseImage != releaseBaseImage {
+		t.Fatalf("onboard prepare = %q (%v), want release v9.8.7 at %s naming %s", encoded, err, resolvedBinary, releaseBaseImage)
+	}
+	if _, err := os.Stat(manifest.Procedure); err != nil {
+		t.Fatalf("prepared procedure is missing: %v", err)
 	}
 
 	target := filepath.Join(root, "target repo")

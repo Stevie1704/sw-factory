@@ -6,8 +6,9 @@ The host configuration is created with `factory init`. Its path is selected by `
 
 ## Quick start
 
-To let an agent prepare the repository and run this sequence for you, run
-`factory onboard` from the target checkout. See [Repository
+To let an agent prepare the repository and run this sequence for you, give
+it the release resources with `factory onboard prepare --output <directory>
+--json`, or run `factory onboard` from the target checkout. See [Repository
 initialization](repository-initialization.md#starting-the-onboarding).
 
 `factory register` infers the values it can from the checkout you run it in.

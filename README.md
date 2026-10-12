@@ -57,23 +57,30 @@ cannot differ.
 ## Onboard a repository with an agent
 
 To prepare a repository that has none of this yet, [install](#install) a
-Software Factory release, then run these commands from the checkout of that
-repository:
+Software Factory release. Then let the agent that already works in that
+repository's checkout prepare the release resources and follow the procedure:
 
 ~~~sh
 factory guide setup
-factory onboard
+factory onboard prepare --output "$HOME/.cache/sw-factory/onboarding-vX.Y.Z" --json
 ~~~
 
-The command starts Claude Code (or Codex with `--harness codex`). Its prompt
-gives the agent the full [Repository
+The command starts no agent, works offline, and needs no host registration. It
+writes the full [Repository
 initialization](docs/repository-initialization.md) procedure, together with the
-release's own worker skills, scripts, and digest-pinned worker base image. The
-agent checks the prerequisites, makes the worker image, the pinned digest, and
-the checked-in `factory.yaml`, registers the host, and proves the setup with a
-disposable issue. It asks before it writes files, changes host configuration
-or GitHub, makes paid calls, or commits. You do not need Go or a Software
-Factory checkout.
+release's own worker skills and scripts, to that directory. Its JSON manifest
+names the exact `factory` executable, the digest-pinned worker base image, and
+the procedure file. The agent checks the prerequisites, makes the worker image,
+the pinned digest, and the checked-in `factory.yaml`, registers the host, and
+proves the setup with a disposable issue. It asks before it writes files,
+changes host configuration or GitHub, makes paid calls, or commits. You do not
+need Go or a Software Factory checkout.
+
+The release also ships an optional `factory-onboarding` skill for Claude Code,
+Codex, or any agent that reads plain instructions; see [Repository
+initialization](docs/repository-initialization.md#with-the-agent-that-already-runs).
+Without an agent session, `factory onboard` starts Claude Code (or Codex with
+`--harness codex`) for the same procedure.
 
 You need a running Docker daemon, an authenticated GitHub CLI, `jq`, and a
 signed-in Claude Code or Codex before you start.
