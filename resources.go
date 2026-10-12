@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // The repository factory.yaml is deliberately absent: the smoke script falls
@@ -30,7 +31,8 @@ import (
 var resources embed.FS
 
 // ExportResources writes every shipped resource below destination, keeping the
-// checked-in layout. Scripts are executable. The export refuses to replace an
+// checked-in layout. Scripts are executable. The modes do not depend on the
+// process umask, so the export always matches its resource identity. The export refuses to replace an
 // existing file, so resources of one release never mix with another copy.
 func ExportResources(destination string) error {
 	return fs.WalkDir(resources, ".", func(name string, entry fs.DirEntry, err error) error {
@@ -39,7 +41,7 @@ func ExportResources(destination string) error {
 		}
 		target := filepath.Join(destination, filepath.FromSlash(name))
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return makeDirectory(target)
 		}
 		data, err := resources.ReadFile(name)
 		if err != nil {
@@ -58,13 +60,27 @@ func resourceMode(name string) os.FileMode {
 	return 0o644
 }
 
-// writeNewFile creates one file that must not exist yet.
+// makeDirectory creates one exported directory with mode 0755 regardless of
+// the process umask.
+func makeDirectory(target string) error {
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	return os.Chmod(target, 0o755)
+}
+
+// writeNewFile creates one file that must not exist yet. The process umask
+// narrows the mode OpenFile applies, so the mode is set again explicitly.
 func writeNewFile(target string, data []byte, mode os.FileMode) error {
 	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return fmt.Errorf("export Factory resource: %w", err)
 	}
 	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("export Factory resource %s: %w", target, err)
+	}
+	if err := file.Chmod(mode); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("export Factory resource %s: %w", target, err)
 	}
@@ -171,28 +187,33 @@ func exportInto(destination, identity string) error {
 	if err != nil {
 		return fmt.Errorf("create the Factory resource directory: %w", err)
 	}
-	err = os.Chmod(staging, 0o755)
+	err = makeDirectory(staging)
 	if err == nil {
 		err = ExportResources(staging)
 	}
 	if err == nil {
 		err = writeNewFile(filepath.Join(staging, ownershipMarker), []byte(identity+"\n"), 0o644)
 	}
-	// Rename cannot replace a directory on every platform. Remove deletes only
-	// an empty directory, so it cannot delete files of the operator.
 	if err == nil {
-		if err = os.Remove(destination); errors.Is(err, fs.ErrNotExist) {
-			err = nil
-		}
-	}
-	if err == nil {
-		err = os.Rename(staging, destination)
+		err = publishStaged(staging, destination)
 	}
 	if err != nil {
 		_ = os.RemoveAll(staging)
 		return fmt.Errorf("export the Factory resources to %s: %w", destination, err)
 	}
 	return nil
+}
+
+// publishStaged renames the complete staging directory to destination.
+// Rename cannot replace a directory on every platform, so an empty destination
+// directory is removed first. Rmdir, unlike os.Remove, never deletes a file,
+// and rename of a directory onto a file or a non-empty directory fails. So an
+// entry that another process creates at destination meanwhile is never lost.
+func publishStaged(staging, destination string) error {
+	if err := syscall.Rmdir(destination); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.Rename(staging, destination)
 }
 
 // walkResourceFiles calls visit with the slash-separated name and content of

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	swfactory "github.com/Stevie1704/sw-factory"
@@ -76,5 +77,32 @@ func TestExportResourcesRefusesToMixWithExistingFiles(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(existing); string(got) != "#!/bin/sh\n" {
 		t.Errorf("export changed the existing file to %q", got)
+	}
+}
+
+// TestPrepareResourcesAcceptsItsOwnExportUnderARestrictiveUmask proves that
+// exported modes do not depend on the process umask, so a second preparation
+// accepts the unchanged first one and the scripts stay executable.
+func TestPrepareResourcesAcceptsItsOwnExportUnderARestrictiveUmask(t *testing.T) {
+	previous := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(previous) })
+	destination := filepath.Join(t.TempDir(), "factory resources")
+
+	if _, err := swfactory.PrepareResources(destination); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := swfactory.PrepareResources(destination); err != nil {
+		t.Errorf("second preparation refused the unchanged first one: %v", err)
+	}
+	for path, want := range map[string]os.FileMode{
+		"":                                  0o755,
+		"docs":                              0o755,
+		"docs/repository-initialization.md": 0o644,
+		"scripts/smoke-skills.sh":           0o755,
+	} {
+		info, err := os.Stat(filepath.Join(destination, filepath.FromSlash(path)))
+		if err != nil || info.Mode().Perm() != want {
+			t.Errorf("%q has mode %v (%v), want %v", path, info.Mode().Perm(), err, want)
+		}
 	}
 }
