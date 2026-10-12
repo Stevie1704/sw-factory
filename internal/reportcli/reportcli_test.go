@@ -336,3 +336,76 @@ func TestRunRejectsReviewFindingsForNonReviewOutcomes(t *testing.T) {
 		t.Fatalf("Run() status = %d, stderr = %q, want explicit finding rejection", status, errorsOutput.String())
 	}
 }
+
+// TestRunWritesASuspectedFactoryDefectProposal verifies that the defect flags
+// add a proposal bound to the invocation identity without changing the
+// reported outcome.
+func TestRunWritesASuspectedFactoryDefectProposal(t *testing.T) {
+	resultDirectory := t.TempDir()
+	var errorsOutput bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{
+			"--outcome", "cannot_proceed",
+			"--summary", "factory-report rejected a valid handoff",
+			"--evidence", "command=factory-report exited 1",
+			"--defect-code", "report.handoff_rejected",
+			"--defect-expected", "factory-report accepts the documented handoff",
+			"--defect-observed", "factory-report exits 1 with a schema error",
+			"--defect-reason", "no repository file is involved",
+		},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID": "inv-1",
+			"FACTORY_RUN_ID":        "run-1",
+			"FACTORY_HARNESS":       "codex",
+			"FACTORY_ROLE":          "implementation",
+			"FACTORY_STAGE":         "implementation",
+			"FACTORY_RESULT_DIR":    resultDirectory,
+		},
+		Output:       &bytes.Buffer{},
+		ErrorsOutput: &errorsOutput,
+	})
+	if status != 0 {
+		t.Fatalf("Run() status = %d, stderr = %s", status, errorsOutput.String())
+	}
+	value, err := report.Read(resultDirectory + "/report.json")
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	want := report.FactoryDefectProposal{
+		InvocationID: "inv-1",
+		Code:         "report.handoff_rejected",
+		Expected:     "factory-report accepts the documented handoff",
+		Observed:     "factory-report exits 1 with a schema error",
+		Reason:       "no repository file is involved",
+	}
+	if value.Outcome != report.OutcomeCannotProceed || value.SuspectedFactoryDefect == nil || *value.SuspectedFactoryDefect != want {
+		t.Fatalf("report = %#v, want cannot_proceed with the defect proposal %#v", value, want)
+	}
+}
+
+// TestRunRejectsAnIncompleteDefectProposal verifies that a partial set of
+// defect flags fails instead of writing a half proposal.
+func TestRunRejectsAnIncompleteDefectProposal(t *testing.T) {
+	var errorsOutput bytes.Buffer
+	status := reportcli.Run(reportcli.Request{
+		Args: []string{
+			"--outcome", "cannot_proceed",
+			"--summary", "blocked",
+			"--evidence", "command=factory-report exited 1",
+			"--defect-code", "report.handoff_rejected",
+		},
+		Environment: map[string]string{
+			"FACTORY_INVOCATION_ID": "inv-1",
+			"FACTORY_RUN_ID":        "run-1",
+			"FACTORY_HARNESS":       "codex",
+			"FACTORY_ROLE":          "implementation",
+			"FACTORY_STAGE":         "implementation",
+			"FACTORY_RESULT_DIR":    t.TempDir(),
+		},
+		Output:       &bytes.Buffer{},
+		ErrorsOutput: &errorsOutput,
+	})
+	if status != 1 || !strings.Contains(errorsOutput.String(), "suspected_factory_defect") {
+		t.Fatalf("Run() status = %d, stderr = %q, want defect proposal validation error", status, errorsOutput.String())
+	}
+}

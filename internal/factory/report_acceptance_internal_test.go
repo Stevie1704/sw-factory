@@ -443,3 +443,41 @@ func TestProjectAcceptanceKeepsDurabilityStrategiesEquivalent(t *testing.T) {
 		})
 	}
 }
+
+// TestAdmitReportKeepsRunSemanticsWithADefectProposal verifies that a
+// suspected-defect proposal, valid or malformed, changes neither the
+// admission outcome nor the Run projection of an otherwise identical report.
+func TestAdmitReportKeepsRunSemanticsWithADefectProposal(t *testing.T) {
+	cannotProceed := func(snapshot *AcceptanceSnapshot) {
+		snapshot.Report.Outcome = report.OutcomeCannotProceed
+		snapshot.Report.Evidence = []report.Evidence{{Kind: "command", Detail: "factory-report exited 1"}}
+	}
+	plain := admissionSnapshot(t, workflow.RoleImplementation, store.StageImplementation, cannotProceed)
+	plainOutcome, plainErr := AdmitReport(plain)
+	if plainErr != nil {
+		t.Fatalf("AdmitReport(without proposal) error = %v", plainErr)
+	}
+	plainRun := agentReportRunProjection(plain.Run, plain.Invocation.Stage, plain.Report)
+	proposals := map[string]report.FactoryDefectProposal{
+		"valid":            {InvocationID: "inv-1", Code: "report.handoff_rejected", Expected: "accepted", Observed: "rejected", Reason: "no repository file is involved"},
+		"wrong invocation": {InvocationID: "inv-other", Code: "report.handoff_rejected", Expected: "accepted", Observed: "rejected", Reason: "no repository file is involved"},
+		"malformed":        {InvocationID: "inv-1", Code: "has spaces", Expected: "", Observed: "two\nlines", Reason: ""},
+	}
+	for name, proposal := range proposals {
+		t.Run(name, func(t *testing.T) {
+			proposed := admissionSnapshot(t, workflow.RoleImplementation, store.StageImplementation, func(snapshot *AcceptanceSnapshot) {
+				cannotProceed(snapshot)
+				snapshot.Run.Worktree = plain.Run.Worktree
+				snapshot.Report.SuspectedFactoryDefect = &proposal
+			})
+			proposedOutcome, proposedErr := AdmitReport(proposed)
+			if proposedErr != nil || proposedOutcome != plainOutcome {
+				t.Fatalf("AdmitReport() = (%v, %v), want (%v, nil) as without a proposal", proposedOutcome, proposedErr, plainOutcome)
+			}
+			proposedRun := agentReportRunProjection(proposed.Run, proposed.Invocation.Stage, proposed.Report)
+			if !reflect.DeepEqual(plainRun, proposedRun) {
+				t.Fatalf("Run projection = %+v, want %+v as without a proposal", proposedRun, plainRun)
+			}
+		})
+	}
+}

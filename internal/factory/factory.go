@@ -16,6 +16,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/gate"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -326,6 +327,10 @@ type StatusResult struct {
 	// current checkpoint: failed, blocked by setup, or ended in a runtime
 	// error. They keep the store's phase and declaration order.
 	FailedGates []store.GateResult
+	// DefectProposals are the valid suspected-Factory-defect proposals in
+	// the retained reports of LatestRun. They are information for the
+	// operator and do not change the Run.
+	DefectProposals []report.FactoryDefectProposal
 }
 
 // Provider identifies the work tracker and code host of a registration.
@@ -720,6 +725,12 @@ func (s *Service) Status(ctx context.Context) (StatusResult, error) {
 				return result, statusUnavailable(StatusSourceStore, fmt.Errorf("read gate results for status: %w", err))
 			}
 			result.FailedGates = failedGatesAt(results, result.LatestRun.CheckpointSHA)
+		}
+		if lister, ok := opened.(invocationLister); ok {
+			result.DefectProposals, err = retainedDefectProposals(ctx, lister, *result.LatestRun)
+			if err != nil {
+				return result, statusUnavailable(StatusSourceStore, fmt.Errorf("read invocations for status: %w", err))
+			}
 		}
 		var pending *store.PendingEffect
 		if journal, ok := opened.(PendingEffectStore); ok {

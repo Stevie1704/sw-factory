@@ -43,6 +43,7 @@ type commandDefinition struct {
 var commandTable = []commandDefinition{
 	{name: "guide", handler: runGuide, standalone: true},
 	{name: "version", handler: runVersion, standalone: true},
+	{name: "bug-report", handler: runBugReport, standalone: true},
 	{name: "init", handler: runInit},
 	{name: "register", handler: runRegister},
 	{name: "onboard", handler: runOnboard},
@@ -771,6 +772,11 @@ func runStatus(ctx context.Context, args []string, defaultConfigPath string, out
 		}
 		for _, gate := range result.FailedGates {
 			if !writeOutput(output, errorsOutput, "failed gate: %s (phase=%s outcome=%s checkpoint=%s)\n", gate.GateName, gate.Phase, gate.Outcome, gate.CheckpointSHA) {
+				return 1
+			}
+		}
+		for _, proposal := range result.DefectProposals {
+			if !writeOutput(output, errorsOutput, "defect proposal: invocation=%s code=%s (prepare a draft: factory bug-report --run-id %s --output <file>)\n", proposal.InvocationID, proposal.Code, result.LatestRun.ID) {
 				return 1
 			}
 		}

@@ -94,6 +94,10 @@ func Run(request Request) int {
 	costCurrency := flags.String("cost-currency", "", "three-letter uppercase currency for --cost-micros")
 	nativeSessionID := flags.String("native-session-id", "", "harness-native session identifier")
 	summaryFile := flags.String("summary-file", "", "markdown pull-request summary file; PR-writer role only")
+	defectCode := flags.String("defect-code", "", "stable diagnostic code of a suspected Factory defect")
+	defectExpected := flags.String("defect-expected", "", "documented Factory behavior the suspected defect contradicts")
+	defectObserved := flags.String("defect-observed", "", "observed Factory behavior of the suspected defect")
+	defectReason := flags.String("defect-reason", "", "why the cause appears to be Factory, not the repository or environment")
 	if err := flags.Parse(request.Args); err != nil {
 		return 2
 	}
@@ -170,6 +174,15 @@ func Run(request Request) int {
 			return 1
 		}
 		value.PullRequestSummary = &report.PullRequestSummary{Body: body}
+	}
+	if flagWasSet(flags, "defect-code", "defect-expected", "defect-observed", "defect-reason") {
+		value.SuspectedFactoryDefect = &report.FactoryDefectProposal{
+			InvocationID: value.InvocationID,
+			Code:         *defectCode,
+			Expected:     *defectExpected,
+			Observed:     *defectObserved,
+			Reason:       *defectReason,
+		}
 	}
 	for _, item := range exemptions {
 		value.Exemptions = append(value.Exemptions, report.Exemption(item))
