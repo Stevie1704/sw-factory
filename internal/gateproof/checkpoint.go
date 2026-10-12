@@ -22,7 +22,8 @@ var checkpointIdentity = []string{
 
 // checkpointCandidate builds the Git metadata of a proof in gitDir and
 // returns its HEAD commit. It copies the repository's metadata the way a run
-// projects it, without configuration, hooks, or remotes, and commits the
+// projects it, without configuration, hooks, or remotes, keeps the HEAD of a
+// linked worktree, and commits the
 // projected candidate files in work on top of HEAD. A worker thus sees the
 // candidate as a clean checkpoint with the real history. Host Git
 // configuration is not read, so no host-defined filter runs on candidate
@@ -34,6 +35,17 @@ func checkpointCandidate(ctx context.Context, repository, work, gitDir string) (
 	}
 	if err := gitadapter.CopyGitMetadata(common, gitDir); err != nil {
 		return "", fmt.Errorf("copy the Git metadata: %w", err)
+	}
+	// A linked worktree keeps its own HEAD in its admin directory; the copy
+	// of the common directory holds the HEAD of the primary checkout.
+	private, err := hostValue(ctx, repository, nil, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return "", err
+	}
+	if private != common {
+		if err := gitadapter.CopyGitMetadataFile(filepath.Join(private, "HEAD"), filepath.Join(gitDir, "HEAD"), 0o640); err != nil {
+			return "", fmt.Errorf("copy the worktree HEAD: %w", err)
+		}
 	}
 	// The copied index describes the checkout, not the candidate.
 	if err := os.Remove(filepath.Join(gitDir, "index")); err != nil && !errors.Is(err, os.ErrNotExist) {

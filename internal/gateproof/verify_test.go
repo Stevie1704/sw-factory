@@ -554,3 +554,30 @@ func TestVerifyReportsAnInterruptionBeforeTheWorkerStarts(t *testing.T) {
 		t.Fatalf("report = %#v, started %d; want an interrupted proof that cleaned up", report, len(runtime.started))
 	}
 }
+
+// TestVerifyKeepsTheHistoryOfALinkedWorktree verifies a candidate in a linked
+// worktree gets a checkpoint on that worktree's HEAD, not on the HEAD of the
+// primary checkout, as a run projects it.
+func TestVerifyKeepsTheHistoryOfALinkedWorktree(t *testing.T) {
+	primary := proofRepository(t, proofConfig)
+	linked := filepath.Join(t.TempDir(), "linked")
+	git(t, primary, "worktree", "add", "-q", "-b", "feature", linked)
+	writeFile(t, linked, "factory.yaml", proofConfig, 0o644)
+	git(t, linked, "add", "factory.yaml")
+	git(t, linked, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "feature work")
+	want := strings.TrimSpace(git(t, linked, "rev-parse", "HEAD"))
+	var parent string
+	runtime := &fakeRuntime{scripts: map[string]commandScript{"npm ci": exitWith(0, "")}}
+	runtime.inspect = func(start worker.StartRequest) {
+		parent = strings.TrimSpace(git(t, start.WorktreePath, "--git-dir", start.GitMetadataPath, "--work-tree", start.WorktreePath, "rev-parse", "HEAD^"))
+	}
+
+	report := gateproof.Verifier{Runtime: runtime, Root: t.TempDir()}.Verify(context.Background(), linked)
+
+	if report.Result != gateproof.ResultPassed {
+		t.Fatalf("Result = %q: %#v", report.Result, report)
+	}
+	if parent != want {
+		t.Fatalf("checkpoint parent = %q, want the linked worktree HEAD %q", parent, want)
+	}
+}
