@@ -139,6 +139,15 @@ executable and the resource identity; `factory onboard` exports them for one
 launcher session.
 _Avoid_: Factory checkout, assets
 
+**Gate proof**:
+A run of setup and every declared gate, before host registration, in the
+pinned worker against a disposable copy of the candidate files. `factory
+onboard verify` runs it with the production worker runtime and gate runner,
+publishes nothing, and identifies it by an evidence ID that changes with the
+candidate files, the gates, the history, and the worker digest. It does not
+replace `factory doctor`.
+_Avoid_: Gate check, dry run
+
 **Worker skill set**:
 The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
 _Avoid_: Personal skill, installed skill

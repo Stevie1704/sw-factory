@@ -161,7 +161,7 @@ These actions change the host configuration or GitHub, or cost money:
 The agent shows each command, asks, and runs it after the operator approves.
 
 Docker builds, image checks, and gate proofs in Steps 3 and 5 change only local
-images and temporary copies. They need no approval from this procedure. The
+images, containers, and disposable copies. They need no approval from this procedure. The
 harness can still ask for them under its own permission settings.
 
 The agent never reads a credential file. It can check whether a default
@@ -571,86 +571,114 @@ for a compiled toolchain with a mandatory setup step.
 ## Step 5: prove every command in the worker
 
 A gate is written into `factory.yaml` only after it has run inside the built
-image under the environment the worker actually supplies. Run each command the
-way the worker does: against a sanitized copy of the checkout, with an empty
-environment and the fixed `PATH`. The copy matters. The worker runs as uid
-`10001` against a projection that carries no Git metadata, so mounting the live
-checkout both writes build output the operator may not own and hides a command
-that depends on `.git`.
-
-The copy is created inside the checkout, because a Docker daemon can bind-mount
-only the host paths it shares. A macOS daemon in a virtual machine commonly
-shares `$HOME` and nothing else, so a system temporary directory is refused.
+image under the environment the worker actually supplies. First validate the
+file. The command needs no host registration, Docker, or network:
 
 ~~~sh
-cd <TARGET_REPO_PATH>
-worktree="$(mktemp -d "$(pwd)/.factory-proof.XXXXXX")"
-git archive HEAD | tar -x -C "$worktree"
-mkdir "$worktree.git"
-# The container writes as uid 10001, which does not own this copy.
-chmod -R a+rwX "$worktree"
-docker run --rm --pull=never \
-  --cap-drop ALL --security-opt no-new-privileges \
-  --mount "type=bind,src=$worktree,dst=/work" \
-  --mount "type=bind,src=$worktree.git,dst=/git,readonly" \
-  --workdir /work \
-  <IMAGE_NAME>@<DIGEST> /usr/bin/env -i \
-    HOME=/home/factory \
-    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    TERM=xterm-256color \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    FACTORY_RUN_ID=gate-proof \
-    GIT_DIR=/git \
-    GIT_WORK_TREE=/work \
-    GIT_CONFIG_NOSYSTEM=1 \
-    GIT_CONFIG_GLOBAL=/dev/null \
-    GIT_CONFIG_SYSTEM=/dev/null \
-    GIT_CONFIG_COUNT=3 \
-    GIT_CONFIG_KEY_0=remote.origin.url \
-    GIT_CONFIG_VALUE_0=disabled://factory \
-    GIT_CONFIG_KEY_1=remote.origin.pushurl \
-    GIT_CONFIG_VALUE_1=disabled://factory \
-    GIT_CONFIG_KEY_2=credential.helper \
-    GIT_CONFIG_VALUE_2= \
-    GIT_TERMINAL_PROMPT=0 \
-    GIT_ASKPASS=/bin/false \
-    SSH_ASKPASS=/bin/false \
-    FACTORY_INVOCATION_DIR=/invocation \
-    FACTORY_RESULT_DIR=/results \
-    FACTORY_REPORT_COMMAND=/usr/local/bin/factory-report \
-    /bin/sh -c 'npm ci && npm run lint && npm test && npm run build'
-rm -rf "$worktree" "$worktree.git"
+<FACTORY_COMMAND> config validate --file <TARGET_REPO_PATH>/factory.yaml --json
 ~~~
 
-This is the complete environment the worker supplies under
-`environment_policy: clean`, and it is the same shape `scripts/build-worker.sh`
-uses to prove this repository's own gates. The `role` policy adds exactly one
-entry, `FACTORY_ROLE`, plus any explicit values the invocation passes.
+It uses the parser and validator of a real run. It exits `0` for a valid file
+and `1` for an invalid file. Each entry of `diagnostics` has these fields:
 
-`/git` is mounted because a run always has it, and the Git variables point every
-Git command at it. The empty directory used here is the honest lower bound: it
-proves a gate does not silently depend on the host's `.git`, and it makes a
-Git-reading gate fail in the proof rather than in the first run. A gate that
-legitimately reads history needs a projection with real Git metadata, which only
-the coordinator builds; treat such a gate as unproven until a disposable issue
-has exercised it.
+| Field | Meaning |
+| --- | --- |
+| `code` | `file_unreadable`, `syntax_error`, `unknown_field`, `type_mismatch`, `unsupported_schema`, `repository_policy`, or `invalid_value` |
+| `field` | The field path, when it is known |
+| `line` | The line in the file, when the parser reports it |
+| `message` | The problem, in fixed text |
 
-Remove the copy before the next proof. A gate that globs the whole tree would
-otherwise walk the dependencies the previous proof installed inside it. Ignore
-`.factory-proof.*` in the target repository so an interrupted proof cannot reach
-a commit.
+No diagnostic repeats a value from the file. `completeness` tells how far the
+validation got:
+
+- `complete`: the file is valid.
+- `not_run`: the file did not parse, so no field rule ran.
+- `first_error`: validation stopped at the first failed field rule. Fix it and
+  validate again, because the later fields were not checked.
+
+Then prove setup and every gate in the pinned worker:
+
+~~~sh
+<FACTORY_COMMAND> onboard verify --repository <TARGET_REPO_PATH> --json
+~~~
+
+The command copies the candidate files to a disposable workspace below the
+user cache directory. Then it starts the worker that `worker_build` pins. It
+runs setup and the gates with the worker runtime and the gate runner of a run.
+These are the same as in a run:
+
+- the worker isolation and the fixed `PATH`;
+- the `clean` or `role` environment;
+- the gate order and the `depends_on` skips;
+- the timeouts, the cancellation, and the output capture limit.
+
+The resource limits are the defaults, because the proof reads no host
+registration. A tool that is only on the host cannot make the proof pass. The
+command claims no issue, starts no agent, and publishes no status. It makes no
+paid model call. Setup can need network access. Docker pulls the pinned image
+when it is not local.
+
+The candidate files are the tracked files in their working-tree state and the
+untracked files that Git does not ignore, so uncommitted onboarding changes are
+tested and `factory.yaml` is read from that copy. These files stay out:
+
+- `.git` and every other ignored file, such as dependency and build output;
+- an untracked credential file, such as `.env`, `.npmrc`, `*.pem`, or
+  `auth.json`;
+- a top-level `.factory-proof*` entry that an earlier manual proof left;
+- an entry that is not a file or a symbolic link, such as a submodule;
+- a path below a directory that is a symbolic link, because its content can
+  lie outside the checkout.
+
+`candidate.excluded` lists each excluded path and its reason. The proof never
+writes into the checkout. Each declared cache is an empty directory that the
+proof removes afterwards, so the proof runs with cold caches.
+
+The report fields:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Version of the report shape, now `1` |
+| `result` | `passed`, `failed`, `unavailable`, or `interrupted` |
+| `image_reference` | The worker `image@digest` the proof ran in |
+| `candidate` | `fingerprint` of the projected paths, modes, and contents; `files`; `excluded` |
+| `git_head` | The checkpoint commit of the candidate that the worker saw at `/git` |
+| `evidence_id` | Changes when a candidate file, a gate, the history, the worker digest, or the Factory build changes |
+| `setup`, `gates[]` | `outcome`, `exit_code`, and the last 2 KiB of `stdout_tail` and `stderr_tail`; each gate also has `name`, `blocking`, `accepted`, and `skip_reason` |
+| `diagnostics` | Why no proof ran, when `result` is `unavailable` |
+| `cleanup` | `status` is `removed`, or `incomplete` with the remaining `workspace` |
+
+An outcome is `passed`, `failed`, `timed_out`, `output_limit_exceeded`,
+`out_of_memory`, `termination_unconfirmed`, `error`, `interrupted`, `skipped`,
+or `setup_failed`. `accepted` applies the final-readiness rule of a run: a gate
+passes, or an advisory gate fails or times out. The result is `failed` when
+setup does not pass or a gate is not accepted. The command exits `0` only for
+`passed`.
+
+The worker sees Git metadata at `/git` that has the same shape as in a run. It
+holds the history and the refs of the checkout, but no Git configuration, no
+remotes, and no hooks. The proof adds one checkpoint commit of the candidate
+files on top of `HEAD`, so `git status` is clean, as at a run checkpoint. The
+commit exists only in the workspace. Host Git configuration is not read for
+it, so no host-defined filter runs on candidate files. As in a run, a gate
+cannot fetch, push, or read the Git configuration of the checkout.
 
 A command that needs an environment variable the worker does not supply, or a
 tool that is not on the fixed `PATH`, fails here rather than in the first
-baseline suite of the first run. Repair the image definition, rebuild, and
-record the new digest.
+baseline suite of the first run. Repair the image definition, rebuild, record
+the new digest, and prove again. A proof is valid only for its `evidence_id`.
 
-A run uses the ordinary bridge network, so a setup command may install
-dependencies from a registry. It reaches Git through a read-only projection at
-`/git` that carries history, refs, and the run worktree state but no remotes, no
-hooks, and no Git configuration. A command that reads Git configuration, pushes,
-or fetches will not behave the same way in a run.
+The command removes its worker, its role storage, and its workspace when it
+ends, also after an interrupt. Do this when the process was killed or when
+`cleanup` is `incomplete`. It removes the leftovers of every proof that no
+longer runs:
+
+~~~sh
+<FACTORY_COMMAND> onboard verify --cleanup --json
+~~~
+
+A successful proof does not complete the onboarding. `factory doctor` after
+Step 6 is still the final check of the host, the providers, and the runtime.
 
 ## Step 6: register the host
 

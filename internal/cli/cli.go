@@ -47,6 +47,7 @@ var commandTable = []commandDefinition{
 	{name: "init", handler: runInit},
 	{name: "register", handler: runRegister},
 	{name: "onboard", handler: runOnboard, standalone: true},
+	{name: "config", handler: runConfig, standalone: true},
 	{name: "bootstrap-labels", handler: runBootstrapLabels},
 	{name: "doctor", handler: runDoctor},
 	{name: "start", handler: runStart},

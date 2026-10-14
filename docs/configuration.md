@@ -373,7 +373,7 @@ procedure that produces this file for a repository that has none, together with
 its worker image and pinned digest. This section owns the contract the procedure
 writes against.
 
-The default checked-in file is `factory.yaml` at the repository root. It is parsed with strict field checking and validated before a run can be claimed. Unknown schema versions fail closed.
+The default checked-in file is `factory.yaml` at the repository root. It is parsed with strict field checking and validated before a run can be claimed. Unknown schema versions fail closed. `factory config validate --file factory.yaml --json` runs the same parser and validator offline, without a host registration; see [Step 5 of the repository initialization](repository-initialization.md#step-5-prove-every-command-in-the-worker).
 
 ```yaml
 schema_version: 1

@@ -83,7 +83,10 @@ registration. Take every value from the manifest:
 
 The procedure covers the field rules of `factory.yaml`, the worker image
 definition, the worker skills, the image build and digest, the gate proof, the
-host registration, and the skill smoke. Pulling the worker base image,
+host registration, and the skill smoke. Two commands work before host
+registration: `factory config validate --file factory.yaml --json` checks the
+policy offline, and `factory onboard verify --repository <checkout> --json`
+proves setup and the gates in the pinned worker without a paid model call. Pulling the worker base image,
 checking GitHub, and the paid skill smoke need network access. The procedure
 asks before each paid or external step.
 

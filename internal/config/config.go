@@ -436,6 +436,15 @@ func LoadHost(path string) (HostConfig, error) {
 // LoadRepository reads, decodes, and validates a repository configuration from a YAML file.
 func LoadRepository(path string) (RepositoryConfig, error) {
 	var config RepositoryConfig
+	// A newer schema can add fields, so its version is checked before strict
+	// decoding would report those fields as unknown.
+	version, err := loadSchemaVersion(path)
+	if err != nil {
+		return RepositoryConfig{}, err
+	}
+	if version > CurrentRepositorySchemaVersion {
+		return RepositoryConfig{}, &UnknownSchemaVersionError{Kind: "repository", Field: "schema_version", Version: version, Supported: CurrentRepositorySchemaVersion}
+	}
 	if err := rejectFactoryOwnedWorkflowFields(path); err != nil {
 		return RepositoryConfig{}, err
 	}
@@ -1127,7 +1136,7 @@ func loadYAML(path string, destination any) error {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return &ConfigFileError{Path: path, Err: errors.New("configuration contains more than one YAML document")}
+			return &ConfigFileError{Path: path, Err: errMultipleDocuments}
 		}
 		return &ConfigFileError{Path: path, Err: err}
 	}

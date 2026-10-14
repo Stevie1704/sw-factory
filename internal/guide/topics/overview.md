@@ -25,6 +25,8 @@ factory version --json      # schema-versioned build identity
 factory doctor              # complete startup diagnosis
 factory status              # supervisor and current run state
 factory doctor --json       # diagnosis as one JSON document
+factory config validate --file factory.yaml --json   # policy check, offline
+factory onboard verify --repository . --json         # gate proof in the worker
 factory status --json       # status as one JSON document
 factory <command> -h        # flags of one command
 ```
