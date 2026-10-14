@@ -58,16 +58,13 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 	if strings.ContainsAny(request.Intervention, "\x00\r\n") {
 		return DraftPullRequestResult{}, errors.New("draft pull request intervention must be a single line")
 	}
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openActiveRunStore(ctx, request.RunID)
 	if err != nil {
 		return DraftPullRequestResult{}, err
 	}
 	defer func() { _ = runStore.Close() }()
 	if run == nil {
-		return DraftPullRequestResult{}, errors.New("no active run")
-	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return DraftPullRequestResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+		return DraftPullRequestResult{}, errNoActiveRun
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {

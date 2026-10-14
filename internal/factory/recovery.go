@@ -1747,6 +1747,11 @@ func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.
 	if !isCheckContinuationPause(run) {
 		return run, nil
 	}
+	if isCheckInfrastructurePause(run) {
+		if err := s.checkInfrastructureAvailable(ctx, run); err != nil {
+			return run, err
+		}
+	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		updated, _, _, reconcileErr := s.reconcileInterruptedRun(ctx, registration, runStore, run)
 		if reconcileErr != nil {

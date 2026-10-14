@@ -199,6 +199,9 @@ func (*repairContractStore) Close() error { return nil }
 // repairContractWorker records release of the gate worker.
 type repairContractWorker struct{ stops int }
 
+// CheckDocker reports an available worker runtime.
+func (*repairContractWorker) CheckDocker(context.Context) error { return nil }
+
 // Start is unused by direct routing.
 func (*repairContractWorker) Start(context.Context, worker.StartRequest) error { return nil }
 

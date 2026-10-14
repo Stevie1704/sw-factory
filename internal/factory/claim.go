@@ -132,7 +132,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 	if issueNumber <= 0 {
 		return IssueResult{}, errors.New("issue number must be positive")
 	}
-	registration, runStore, current, err := s.openActiveRunStore(ctx)
+	registration, runStore, current, err := s.openActiveRunStore(ctx, "")
 	if err != nil {
 		return IssueResult{}, err
 	}
@@ -322,16 +322,13 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 	if err := validateStatus(request.Status); err != nil {
 		return store.Run{}, err
 	}
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openActiveRunStore(ctx, request.RunID)
 	if err != nil {
 		return store.Run{}, err
 	}
 	defer func() { _ = runStore.Close() }()
 	if run == nil {
-		return store.Run{}, errors.New("no active run")
-	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return store.Run{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+		return store.Run{}, errNoActiveRun
 	}
 	if request.Stage == store.StageTest || request.Stage == store.StageImplementation {
 		if strings.TrimSpace(run.SpecificationPacket) == "" {
@@ -409,12 +406,15 @@ func saveRunWithRetry(ctx context.Context, runStore effectkernel.RunStore, run s
 
 // openActiveRunStore opens one claim-capable store and reads its active run
 // once, so claim and transition share the same state-selection logic.
-func (s *Service) openActiveRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
+func (s *Service) openActiveRunStore(ctx context.Context, selectedRunID string) (config.RepositoryRegistration, RunStore, *store.Run, error) {
 	registration, runStore, err := s.openRunStore(ctx)
 	if err != nil {
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
 	run, err := runStore.CurrentRun(ctx)
+	if err == nil && run != nil {
+		err = checkRunSelection(selectedRunID, *run)
+	}
 	if err != nil {
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
@@ -433,12 +433,15 @@ func (s *Service) openActiveRunStore(ctx context.Context) (config.RepositoryRegi
 // openReportRunStore opens the active run for report acceptance and also
 // exposes the latest terminal run so a retried report can be recognized as an
 // already-completed idempotent operation.
-func (s *Service) openReportRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
+func (s *Service) openReportRunStore(ctx context.Context, selectedRunID string) (config.RepositoryRegistration, RunStore, *store.Run, error) {
 	registration, runStore, err := s.openRunStore(ctx)
 	if err != nil {
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
 	run, err := readReconciliationRun(ctx, runStore)
+	if err == nil && run != nil {
+		err = checkRunSelection(selectedRunID, *run)
+	}
 	if err != nil {
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err
@@ -464,6 +467,9 @@ func (s *Service) openAgentStartRunStore(ctx context.Context, request AgentReque
 		return config.RepositoryRegistration{}, nil, nil, err
 	}
 	run, err := runStore.CurrentRun(ctx)
+	if err == nil && run != nil {
+		err = checkRunSelection(request.RunID, *run)
+	}
 	if err != nil {
 		_ = runStore.Close()
 		return config.RepositoryRegistration{}, nil, nil, err

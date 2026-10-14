@@ -117,12 +117,21 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 	if err := checkRunSelection(request.RunID, *run); err != nil {
 		return AuthRefreshResult{}, err
 	}
+	if request.ExpectedInvocationID != "" {
+		target, err := latestInvocationForAuthRefresh(ctx, runStore, *run)
+		if err != nil {
+			return AuthRefreshResult{Run: *run}, err
+		}
+		if err := checkInvocationSelection(request.ExpectedInvocationID, *run, *target); err != nil {
+			return AuthRefreshResult{Run: *run}, err
+		}
+	}
 	if request.Resume {
 		if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, *run); err != nil {
 			return AuthRefreshResult{Run: *run}, fmt.Errorf("recover headless native session identity before auth refresh resume: %w", err)
 		}
 	}
-	result, refreshErr := s.lifecycleModule().refreshAuth(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run}, request.Harness, request.Resume)
+	result, refreshErr := s.lifecycleModule().refreshAuth(ctx, InvocationRecoveryRequest{Registration: registration, RunStore: runStore, Run: run}, request)
 	if request.Resume && result.Resumed && result.Invocation.ID != "" {
 		s.markInvocationStarted(result.Invocation.ID)
 	}

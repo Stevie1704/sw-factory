@@ -237,7 +237,7 @@ func (s *Service) AcceptAgentReport(ctx context.Context, request AgentReportRequ
 	}
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
-	registration, runStore, run, err := s.openReportRunStore(ctx)
+	registration, runStore, run, err := s.openReportRunStore(ctx, request.RunID)
 	if err != nil {
 		return AgentResult{}, err
 	}

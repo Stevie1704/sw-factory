@@ -43,6 +43,10 @@ type AuthRefreshRequest struct {
 	// has been projected. It is deliberately opt-in so the default refresh
 	// operation remains a credential-only maintenance action.
 	Resume bool
+	// ExpectedInvocationID, when not empty, refuses the refresh unless the run
+	// still recovers this invocation, so a stale recommendation never resumes
+	// a later invocation of the same harness.
+	ExpectedInvocationID string
 }
 
 // AuthRefreshResult reports the credential projection and optional native

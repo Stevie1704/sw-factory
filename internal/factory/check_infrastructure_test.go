@@ -60,6 +60,8 @@ type checkRecoveryFixture struct {
 	harness   *agentHarness
 	workspace *draftGitWorkspace
 	run       store.Run
+	// journal is the pending-effect journal; it is nil for an unjournaled store.
+	journal *journaledAgentRunStore
 }
 
 // newCheckRecoveryFixture builds the coordinator seam used by the check
@@ -85,8 +87,10 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
 	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	var opened factory.OperationalStore = runStore
+	var journal *journaledAgentRunStore
 	if journaled {
-		opened = &journaledAgentRunStore{agentRunStore: runStore, pending: map[string]store.PendingEffect{}}
+		journal = &journaledAgentRunStore{agentRunStore: runStore, pending: map[string]store.PendingEffect{}}
+		opened = journal
 	}
 	githubAdapter := &fakeGitHub{issueValue: tracker.Issue{Number: 42, Title: "Recover checks", Body: "Retry checks after setup failures.", State: "open", Labels: []string{tracker.LabelAgentReady}}}
 	workspace := &draftGitWorkspace{
@@ -150,7 +154,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	initial.Status = store.InvocationStatusCompleted
 	initial.UpdatedAt = initial.CreatedAt.Add(time.Minute)
 	runStore.invocations[launch.Invocation.ID] = initial
-	return checkRecoveryFixture{service: service, runStore: runStore, runtime: runtime, harness: harnessRuntime, workspace: workspace, run: claimed.Run}
+	return checkRecoveryFixture{service: service, runStore: runStore, runtime: runtime, harness: harnessRuntime, workspace: workspace, run: claimed.Run, journal: journal}
 }
 
 // TestSetupCommandFailureEntersBoundedImplementationRepair verifies a setup
@@ -511,4 +515,57 @@ func TestAuthRefreshRefusesATerminalRun(t *testing.T) {
 	_, err := fixture.service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: terminal.ID})
 
 	assertRefusal(t, err, factory.RefusalRunTerminal)
+}
+
+// TestRetryChecksRefusesWhileTheInfrastructureIsUnavailable verifies resume
+// rechecks the advertised infrastructure precondition and changes nothing
+// while the worker runtime is still unavailable.
+func TestRetryChecksRefusesWhileTheInfrastructureIsUnavailable(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-infra-down", true)
+	fixture.runtime.nextCommandErr = errors.New("worker container is not running")
+	if _, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID}); err != nil {
+		t.Fatalf("CreateDraftPullRequest() fixture error = %v", err)
+	}
+	paused := fixture.runStore.runs[fixture.run.ID]
+	fixture.runtime.dockerErr = errors.New("cannot connect to the Docker daemon")
+
+	_, err := fixture.service.Resume(context.Background(), factory.ResumeRequest{RunID: paused.ID, ExpectedRevision: paused.Revision, ExpectedCheckpointSHA: paused.CheckpointSHA})
+
+	assertRefusal(t, err, factory.RefusalCheckInfrastructureUnavailable)
+	if after := fixture.runStore.runs[fixture.run.ID]; after.Revision != paused.Revision || after.Status != paused.Status {
+		t.Fatalf("run = %#v, want the paused check unchanged", after)
+	}
+}
+
+// TestWrongRunIsRefusedBeforeReconciliation verifies a run-scoped command
+// for another run refuses before it drains the pending effect of the active
+// run.
+func TestWrongRunIsRefusedBeforeReconciliation(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-wrong-selection", true)
+	effect := store.PendingEffect{RunID: fixture.run.ID, ID: "effect-kept", Kind: store.PendingEffectKindStatusComment, Payload: `{}`}
+	fixture.journal.pending[fixture.run.ID] = effect
+
+	_, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: "run-other"})
+
+	assertRefusal(t, err, factory.RefusalRunMismatch)
+	if kept, ok := fixture.journal.pending[fixture.run.ID]; !ok || kept.ID != effect.ID {
+		t.Fatalf("pending effects = %#v, want the effect not drained", fixture.journal.pending)
+	}
+}
+
+// TestAuthRefreshResumeRefusesAChangedInvocation verifies a stale auth
+// refresh recommendation cannot resume a different invocation.
+func TestAuthRefreshResumeRefusesAChangedInvocation(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-auth-invocation", true)
+	before := fixture.runStore.runs[fixture.run.ID]
+
+	_, err := fixture.service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: before.ID, Resume: true, ExpectedInvocationID: "inv-stale"})
+
+	assertRefusal(t, err, factory.RefusalInvocationChanged)
+	if after := fixture.runStore.runs[fixture.run.ID]; after.Revision != before.Revision || len(fixture.harness.resumes) != 0 {
+		t.Fatalf("run = %#v, resumes = %d; want no change and no resume", after, len(fixture.harness.resumes))
+	}
 }

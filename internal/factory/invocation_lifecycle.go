@@ -415,7 +415,8 @@ func (l *invocationLifecycle) resumeActiveInvocationError(ctx context.Context, r
 // RefreshAuth reseeds the registered harness credential source into the
 // invocation's managed worker volume, optionally continuing its native session
 // when the caller explicitly requests recovery.
-func (l *invocationLifecycle) refreshAuth(ctx context.Context, request InvocationRecoveryRequest, requestedHarness config.Harness, resume bool) (AuthRefreshResult, error) {
+func (l *invocationLifecycle) refreshAuth(ctx context.Context, request InvocationRecoveryRequest, auth AuthRefreshRequest) (AuthRefreshResult, error) {
+	requestedHarness, resume := auth.Harness, auth.Resume
 	if request.Run == nil {
 		return AuthRefreshResult{}, errNoRun
 	}
@@ -438,6 +439,10 @@ func (l *invocationLifecycle) refreshAuth(ctx context.Context, request Invocatio
 	invocation, err := latestInvocationForAuthRefresh(ctx, request.RunStore, run)
 	if err != nil {
 		return AuthRefreshResult{}, err
+	}
+	// Reconciliation before a resume can change the recovery target.
+	if err := checkInvocationSelection(auth.ExpectedInvocationID, run, *invocation); err != nil {
+		return AuthRefreshResult{Run: run}, err
 	}
 	harnessName := requestedHarness
 	if harnessName == "" {
@@ -533,7 +538,7 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 		return LaunchSnapshot{}, errors.New("operational store does not support harness invocations")
 	}
 	if request.Run == nil {
-		return LaunchSnapshot{}, errors.New("no active run")
+		return LaunchSnapshot{}, errNoActiveRun
 	}
 	run := *request.Run
 	agentRequest := request.Request
@@ -815,10 +820,10 @@ func PlanLaunch(snapshot LaunchSnapshot, request AgentRequest) (LaunchPlan, erro
 // and frozen test-policy guards at the pure admission seam.
 func validateLaunchRun(snapshot LaunchSnapshot, request AgentRequest) error {
 	if snapshot.Run.ID == "" {
-		return errors.New("no active run")
+		return errNoActiveRun
 	}
-	if request.RunID != "" && request.RunID != snapshot.Run.ID {
-		return fmt.Errorf("active run is %s, not %s", snapshot.Run.ID, request.RunID)
+	if err := checkRunSelection(request.RunID, snapshot.Run); err != nil {
+		return err
 	}
 	if snapshot.Run.CheckRepairPendingAttempt != 0 {
 		return fmt.Errorf("check-repair attempt %d is pending reconciliation", snapshot.Run.CheckRepairPendingAttempt)
@@ -1250,7 +1255,7 @@ func (l *invocationLifecycle) retainLaunchAfterHarnessFailure(ctx context.Contex
 // returned a durable session identity.
 func (l *invocationLifecycle) commitLaunchRun(ctx context.Context, request InvocationLaunchRequest, plan LaunchPlan, invocation store.Invocation) error {
 	if request.Run == nil {
-		return errors.New("no active run")
+		return errNoActiveRun
 	}
 	previous := *request.Run
 	next := previous

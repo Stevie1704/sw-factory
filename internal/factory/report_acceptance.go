@@ -227,10 +227,10 @@ func (a *reportAcceptance) Accept(ctx context.Context, request ReportAcceptanceR
 func (a *reportAcceptance) identify(ctx context.Context, invocationStore InvocationStore, request ReportAcceptanceRequest) (*store.Invocation, workflow.RoleDefinition, error) {
 	run := request.Run
 	if run == nil {
-		return nil, workflow.RoleDefinition{}, errors.New("no active run")
+		return nil, workflow.RoleDefinition{}, errNoActiveRun
 	}
-	if request.Request.RunID != "" && request.Request.RunID != run.ID {
-		return nil, workflow.RoleDefinition{}, fmt.Errorf("active run is %s, not %s", run.ID, request.Request.RunID)
+	if err := checkRunSelection(request.Request.RunID, *run); err != nil {
+		return nil, workflow.RoleDefinition{}, err
 	}
 	if run.CheckRepairPendingAttempt != 0 {
 		return nil, workflow.RoleDefinition{}, fmt.Errorf("check-repair attempt %d is pending reconciliation", run.CheckRepairPendingAttempt)

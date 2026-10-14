@@ -205,7 +205,12 @@ type agentWorker struct {
 	inspectErr, seedErr     error
 	// nextCommandErr is returned once by the next command instead of a result.
 	nextCommandErr error
+	// dockerErr is the result of the Docker availability probe.
+	dockerErr error
 }
+
+// CheckDocker reports the configured Docker availability.
+func (w *agentWorker) CheckDocker(context.Context) error { return w.dockerErr }
 
 // Start records one worker launch.
 func (w *agentWorker) Start(_ context.Context, request worker.StartRequest) error {

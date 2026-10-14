@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
@@ -221,6 +222,12 @@ const (
 	RefusalCheckpointChanged RefusalCode = "run.checkpoint_changed"
 	// RefusalEffectChanged means the pending effect is not the named effect.
 	RefusalEffectChanged RefusalCode = "pending_effect.changed"
+	// RefusalInvocationChanged means the run no longer has the named
+	// invocation as its recovery target.
+	RefusalInvocationChanged RefusalCode = "invocation.changed"
+	// RefusalCheckInfrastructureUnavailable means the worker runtime that runs
+	// the gates is still unavailable, so a check retry cannot succeed.
+	RefusalCheckInfrastructureUnavailable RefusalCode = "check_infrastructure.unavailable"
 )
 
 // OperationRefusedError reports an operation refused before it changed any
@@ -240,13 +247,46 @@ func (e *OperationRefusedError) Error() string { return e.Message }
 // errNoRun is the refusal of a run-scoped operation without a persisted run.
 var errNoRun = &OperationRefusedError{Code: RefusalNoRun, Message: "no persisted run"}
 
+// errNoActiveRun is the refusal of a progression without an active run.
+var errNoActiveRun = &OperationRefusedError{Code: RefusalNoRun, Message: "no active run"}
+
 // checkRunSelection refuses an operation that selected another run than the
 // persisted one. An empty selection accepts the persisted run.
 func checkRunSelection(selected string, run store.Run) error {
 	if selected != "" && selected != run.ID {
-		return &OperationRefusedError{Code: RefusalRunMismatch, RunID: run.ID, Message: "active run is " + run.ID + ", not " + selected}
+		return runMismatch("active", run.ID, selected)
 	}
 	return nil
+}
+
+// runMismatch is the refusal of a selected run that is not the label run,
+// for example the active or the latest run.
+func runMismatch(label, runID, selected string) error {
+	return &OperationRefusedError{Code: RefusalRunMismatch, RunID: runID, Message: label + " run is " + runID + ", not " + selected}
+}
+
+// checkInvocationSelection refuses a recovery that names another invocation
+// than the one the run would recover. An empty selection accepts it.
+func checkInvocationSelection(selected string, run store.Run, invocation store.Invocation) error {
+	if selected != "" && selected != invocation.ID {
+		return &OperationRefusedError{Code: RefusalInvocationChanged, RunID: run.ID, Message: "run " + run.ID + " recovers invocation " + invocation.ID + ", not " + selected}
+	}
+	return nil
+}
+
+// dockerProbe is the worker runtime probe that the doctor also runs.
+type dockerProbe interface {
+	CheckDocker(context.Context) error
+}
+
+// checkInfrastructureAvailable rechecks the precondition of a check retry.
+// A runtime without the probe gives no evidence, so it is refused too.
+func (s *Service) checkInfrastructureAvailable(ctx context.Context, run store.Run) error {
+	probe, ok := s.deps.Worker.(dockerProbe)
+	if ok && probe.CheckDocker(ctx) == nil {
+		return nil
+	}
+	return &OperationRefusedError{Code: RefusalCheckInfrastructureUnavailable, RunID: run.ID, Message: "the worker runtime that runs the gates is not available; repair it until `factory doctor` reports no blocking check, then retry"}
 }
 
 // checkResumeTarget refuses a resume whose target is not the persisted run.
