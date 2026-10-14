@@ -170,6 +170,10 @@ func newStatusDocument(result factory.StatusResult, err error) statusDocument {
 		Recovery:      newRecoveryDocument(result.Recovery),
 		Blockers:      statusBlockers(result),
 	}
+	document.Recovery.bindConfiguration(result.ConfigPath)
+	for index := range document.Blockers {
+		bindConfiguration(document.Blockers[index].Action, result.ConfigPath)
+	}
 	if err != nil {
 		document.Outcome = outcomeError
 		document.Error = statusError(err)
@@ -282,6 +286,17 @@ func newRunDocument(result factory.StatusResult, err error) runDocument {
 		document.DefectProposals = append(document.DefectProposals, defectProposalDocument{InvocationID: proposal.InvocationID, Code: proposal.Code})
 	}
 	return document
+}
+
+// bindConfiguration binds every recovery action to the selected
+// configuration. A nil recovery has no actions.
+func (d *recoveryDocument) bindConfiguration(configPath string) {
+	if d == nil {
+		return
+	}
+	for index := range d.Actions {
+		bindConfiguration(&d.Actions[index], configPath)
+	}
 }
 
 // newRecoveryDocument projects the coordinator's recovery diagnosis.

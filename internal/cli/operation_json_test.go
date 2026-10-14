@@ -91,8 +91,8 @@ func TestRunResumeJSONRefusesAStaleOrMismatchedTarget(t *testing.T) {
 			if document.SchemaVersion != 1 || document.Command != "resume" || document.Outcome != "refused" || document.Attempted || document.Reason == nil || document.Reason.Code != test.code {
 				t.Fatalf("document = %+v, want refusal %s", document, test.code)
 			}
-			if document.Verification == nil || strings.Join(document.Verification.Argv, " ") != "factory status --json" {
-				t.Fatalf("verification = %+v, want factory status --json", document.Verification)
+			if document.Verification == nil || strings.Join(document.Verification.Argv, " ") != "factory status --json --config "+configPath {
+				t.Fatalf("verification = %+v, want factory status --json for the selected configuration", document.Verification)
 			}
 			after, err := opened.Run(context.Background(), "run-json")
 			if err != nil || after.Revision != 4 || after.Status != test.status {
@@ -159,8 +159,10 @@ func TestRunStatusJSONNeverAdvertisesAbandonmentAsExecutable(t *testing.T) {
 					Value      string `json:"value"`
 					HumanInput bool   `json:"human_input"`
 				} `json:"arguments"`
+				Verify []string `json:"verify"`
 				Target struct {
-					EffectID string `json:"effect_id"`
+					EffectID   string `json:"effect_id"`
+					ConfigPath string `json:"config_path"`
 				} `json:"target"`
 			} `json:"actions"`
 		} `json:"recovery"`
@@ -175,9 +177,13 @@ func TestRunStatusJSONNeverAdvertisesAbandonmentAsExecutable(t *testing.T) {
 			continue
 		}
 		found = true
-		reasonIsHumanInput := false
+		reasonIsHumanInput, selectsConfig := false, false
 		for _, argument := range action.Arguments {
 			reasonIsHumanInput = reasonIsHumanInput || (argument.Flag == "reason" && argument.HumanInput && argument.Value == "")
+			selectsConfig = selectsConfig || (argument.Flag == "config" && argument.Value == configPath)
+		}
+		if !selectsConfig || action.Target.ConfigPath != configPath || strings.Join(action.Verify, " ") != "factory status --json --config "+configPath {
+			t.Fatalf("action = %+v, want the selected configuration in its arguments, target, and verification", action)
 		}
 		if action.Kind != "human_decision" || action.Authorization != "human_review" || action.Argv != nil || !reasonIsHumanInput || action.Target.EffectID != "effect-current" {
 			t.Fatalf("action = %+v, want a human-reviewed decision without a complete argv", action)
@@ -241,5 +247,32 @@ func savePendingEffect(t *testing.T, opened *store.Store, effectID string) {
 		RunID: "run-json", ID: effectID, Kind: store.PendingEffectKindStatusComment, Payload: `{}`, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRunInitJSONVerifiesTheSelectedConfiguration verifies the verification
+// action of init names the configuration it created, not the default one.
+func TestRunInitJSONVerifiesTheSelectedConfiguration(t *testing.T) {
+	t.Parallel()
+	configPath := filepath.Join(t.TempDir(), "custom.yaml")
+
+	document, code, _ := runOperationJSON(t, "init", "--json", "--config", configPath)
+
+	if code != 0 || document.Outcome != "completed" || document.Verification == nil || strings.Join(document.Verification.Argv, " ") != "factory doctor --json --config "+configPath {
+		t.Fatalf("exit = %d document = %+v, want doctor verification of %s", code, document, configPath)
+	}
+}
+
+// TestRunDraftPullRequestJSONRefusesAWrongRun verifies a run-scoped command
+// other than resume reports a wrong run as an unattempted refusal.
+func TestRunDraftPullRequestJSONRefusesAWrongRun(t *testing.T) {
+	t.Parallel()
+	configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
+	savePausedCheck(t, operationalPath, repositoryPath, store.StatusActive)
+
+	document, code, _ := runOperationJSON(t, "draft-pr", "--json", "--config", configPath, "--run-id", "run-other")
+
+	if code != 1 || document.Outcome != "refused" || document.Attempted || document.Reason == nil || document.Reason.Code != "run.mismatch" {
+		t.Fatalf("exit = %d document = %+v, want the wrong-run refusal", code, document)
 	}
 }

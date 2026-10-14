@@ -108,6 +108,7 @@ type targetDocument struct {
 	CheckpointSHA string `json:"checkpoint_sha,omitempty"`
 	InvocationID  string `json:"invocation_id,omitempty"`
 	EffectID      string `json:"effect_id,omitempty"`
+	ConfigPath    string `json:"config_path,omitempty"`
 }
 
 // conditionDocument is one structured precondition or postcondition.
@@ -119,7 +120,7 @@ type conditionDocument struct {
 // newRecommendedActionDocument projects one typed recovery action. The
 // schema-1 preconditions repeat the condition descriptions.
 func newRecommendedActionDocument(action factory.RecommendedAction) actionDocument {
-	target := targetDocument(action.Target)
+	target := targetDocument{RunID: action.Target.RunID, Revision: action.Target.Revision, CheckpointSHA: action.Target.CheckpointSHA, InvocationID: action.Target.InvocationID, EffectID: action.Target.EffectID}
 	document := actionDocument{
 		Summary: action.Summary, Effect: action.Effect, Preconditions: []string{}, GuideTopic: "debug",
 		ID: string(action.ID), Kind: action.Kind, Authorization: action.Authorization,
@@ -143,8 +144,9 @@ func newRecommendedActionDocument(action factory.RecommendedAction) actionDocume
 	return document
 }
 
-// newDoctorDocument projects a doctor report without reinterpreting it.
-func newDoctorDocument(report doctor.Report) doctorDocument {
+// newDoctorDocument projects a doctor report without reinterpreting it. The
+// actions verify against configPath, the configuration doctor diagnosed.
+func newDoctorDocument(report doctor.Report, configPath string) doctorDocument {
 	document := doctorDocument{
 		SchemaVersion: diagnosticsSchemaVersion,
 		Command:       "doctor",
@@ -157,7 +159,9 @@ func newDoctorDocument(report doctor.Report) doctorDocument {
 		document.Outcome = outcomeReady
 	}
 	for _, result := range report.Results {
-		document.Diagnostics = append(document.Diagnostics, newDiagnosticDocument(result))
+		diagnostic := newDiagnosticDocument(result)
+		bindConfiguration(diagnostic.Action, configPath)
+		document.Diagnostics = append(document.Diagnostics, diagnostic)
 	}
 	return document
 }
@@ -193,15 +197,31 @@ func newDiagnosticDocument(result doctor.Result) diagnosticDocument {
 		document.Facts = append(document.Facts, factDocument(fact))
 	}
 	if result.Action != "" {
-		document.Action = &actionDocument{
-			Summary:       result.Action,
-			Effect:        result.Effect,
-			Preconditions: append([]string{}, result.Preconditions...),
-			GuideTopic:    result.Topic,
-		}
-		document.Action.Kind, document.Action.Authorization = doctorActionAuthority(result.Effect)
+		document.Action = newDoctorActionDocument(result)
 	}
 	return document
+}
+
+// newDoctorActionDocument projects the corrective action of one result. Its
+// summary is prose, so the action has no argv; doctor verifies that the
+// condition is resolved.
+func newDoctorActionDocument(result doctor.Result) *actionDocument {
+	action := &actionDocument{
+		Summary:       result.Action,
+		Effect:        result.Effect,
+		Preconditions: []string{},
+		GuideTopic:    result.Topic,
+		ID:            result.Code + ".resolve",
+		Target:        &targetDocument{},
+		Postcondition: &conditionDocument{Code: result.Code + ".resolved", Description: "factory doctor no longer reports " + result.Code},
+		Verify:        []string{"factory", "doctor", "--json"},
+	}
+	action.Kind, action.Authorization = doctorActionAuthority(result.Effect)
+	for _, precondition := range result.Preconditions {
+		action.Preconditions = append(action.Preconditions, precondition.Description)
+		action.Requires = append(action.Requires, conditionDocument(precondition))
+	}
+	return action
 }
 
 // doctorActionAuthority classifies a doctor action. Its summary is prose, not
@@ -211,6 +231,31 @@ func doctorActionAuthority(effect doctor.Effect) (factory.ActionKind, factory.Ac
 		return factory.ActionKindInspection, factory.AuthorizationNone
 	}
 	return factory.ActionKindHumanDecision, factory.AuthorizationOperator
+}
+
+// bindConfiguration makes an action name the configuration that the command
+// selected, so executing or verifying it never falls back to the default
+// installation. It copies every slice it extends.
+func bindConfiguration(action *actionDocument, configPath string) {
+	if action == nil || configPath == "" {
+		return
+	}
+	if action.Target == nil {
+		action.Target = &targetDocument{}
+	} else {
+		target := *action.Target
+		action.Target = &target
+	}
+	action.Target.ConfigPath = configPath
+	if len(action.Command) != 0 {
+		action.Arguments = append(append([]argumentDocument{}, action.Arguments...), argumentDocument{Flag: "config", Value: configPath})
+	}
+	if action.Argv != nil {
+		action.Argv = append(append([]string{}, action.Argv...), "--config", configPath)
+	}
+	if len(action.Verify) != 0 {
+		action.Verify = append(append([]string{}, action.Verify...), "--config", configPath)
+	}
 }
 
 // writeJSONDocument writes one JSON document and a newline to output, and

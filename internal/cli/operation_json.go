@@ -152,7 +152,9 @@ func boundedMessage(message string) string {
 // writeOperationJSON writes one operation document. An operational error also
 // writes its detail to errorsOutput, because the document never copies error
 // text. It returns 0 for a completed operation and 1 otherwise.
-func writeOperationJSON(output, errorsOutput io.Writer, document operationDocument, err error) int {
+func writeOperationJSON(output, errorsOutput io.Writer, configPath string, document operationDocument, err error) int {
+	bindConfiguration(document.Verification, configPath)
+	document.Recovery.bindConfiguration(configPath)
 	if document.Outcome == operationError {
 		writeError(errorsOutput, err)
 	}
@@ -602,7 +604,8 @@ func newResetDocument(result factory.ResetResult, err error) operationDocument {
 
 // writeConfirmationRefusal writes the refusal of an unconfirmed destructive
 // command with the plan it would apply. It keeps the text exit status 2.
-func writeConfirmationRefusal(output, errorsOutput io.Writer, document operationDocument, command string) int {
+func writeConfirmationRefusal(output, errorsOutput io.Writer, configPath string, document operationDocument, command string) int {
+	bindConfiguration(document.Verification, configPath)
 	document.Outcome, document.Attempted = operationRefused, false
 	document.Reason = &reasonDocument{Code: command + ".confirmation_required", Message: fmt.Sprintf("%s requires --confirm; no resources removed", command)}
 	if !writeJSONDocument(output, errorsOutput, document) {

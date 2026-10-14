@@ -136,7 +136,7 @@ func runBootstrapLabels(ctx context.Context, args []string, defaultConfigPath st
 	}
 	result, err := newService(*configPath).BootstrapLabels(ctx)
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newBootstrapLabelsDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newBootstrapLabelsDocument(result, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -164,7 +164,7 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 	}
 	result, err := newService(*configPath).Doctor(ctx)
 	if *asJSON {
-		return writeDoctorJSON(output, errorsOutput, result, err)
+		return writeDoctorJSON(output, errorsOutput, *configPath, result, err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -189,12 +189,12 @@ func runDoctor(ctx context.Context, args []string, defaultConfigPath string, out
 
 // writeDoctorJSON writes the doctor report, or the operational failure that
 // prevented one, as a JSON document. It exits 0 only when startup is ready.
-func writeDoctorJSON(output, errorsOutput io.Writer, result factory.DoctorResult, err error) int {
+func writeDoctorJSON(output, errorsOutput io.Writer, configPath string, result factory.DoctorResult, err error) int {
 	if err != nil {
 		writeJSONDocument(output, errorsOutput, newDoctorErrorDocument())
 		return 1
 	}
-	if !writeJSONDocument(output, errorsOutput, newDoctorDocument(result.Report)) {
+	if !writeJSONDocument(output, errorsOutput, newDoctorDocument(result.Report, configPath)) {
 		return 1
 	}
 	if result.Ready() {
@@ -320,7 +320,7 @@ func runStop(ctx context.Context, args []string, defaultConfigPath string, outpu
 	}
 	result, err := newService(*configPath).Stop(ctx)
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newStopDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newStopDocument(result, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -365,7 +365,7 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 		ExpectedCheckpointSHA: *expectedCheckpoint,
 	})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newResumeDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newResumeDocument(result, err), err)
 	}
 	if result.Invocation.ID != "" {
 		status := "resumed"
@@ -403,6 +403,7 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 	runID := flags.String("run-id", "", "active factory run identifier")
 	harnessName := flags.String("harness", "", "codex or claude; empty uses the invocation harness")
 	resume := flags.Bool("resume", false, "resume the affected native session after refreshing credentials")
+	expectedInvocation := flags.String("expect-invocation", "", "refuse unless the run still recovers this invocation")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -410,9 +411,14 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 		writeError(errorsOutput, errors.New("auth refresh does not accept positional arguments"))
 		return 2
 	}
-	result, err := authRefreshForCLI(ctx, *configPath, factory.AuthRefreshRequest{RunID: *runID, Harness: config.Harness(*harnessName), Resume: *resume})
+	result, err := authRefreshForCLI(ctx, *configPath, factory.AuthRefreshRequest{
+		RunID:                *runID,
+		Harness:              config.Harness(*harnessName),
+		Resume:               *resume,
+		ExpectedInvocationID: *expectedInvocation,
+	})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newAuthRefreshDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newAuthRefreshDocument(result, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -467,7 +473,7 @@ func runIssue(ctx context.Context, args []string, defaultConfigPath string, outp
 		baseline, err = service.RunBaseline(ctx, factory.BaselineRequest{RunID: result.Run.ID})
 	}
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newIssueDocument(result, baseline, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newIssueDocument(result, baseline, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -515,7 +521,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 		PermittedPaths:  append([]string(nil), permittedPaths...),
 	})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newAgentDocument(launch, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newAgentDocument(launch, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -550,7 +556,7 @@ func runAgentReport(ctx context.Context, args []string, defaultConfigPath string
 	}
 	result, err := newService(*configPath).AcceptAgentReport(ctx, factory.AgentReportRequest{RunID: *runID, InvocationID: *invocationID, PermittedPaths: append([]string(nil), permittedPaths...)})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newAgentReportDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newAgentReportDocument(result, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -579,7 +585,7 @@ func runDraftPullRequest(ctx context.Context, args []string, defaultConfigPath s
 	}
 	result, err := newService(*configPath).CreateDraftPullRequest(ctx, factory.DraftPullRequestRequest{RunID: *runID, Intervention: *intervention})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newDraftPullRequestDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newDraftPullRequestDocument(result, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -629,7 +635,7 @@ func runPollCommands(ctx context.Context, args []string, defaultConfigPath strin
 		if err == nil && lifecycle.Outcome == factory.LifecycleUnchanged {
 			commands, err = service.PollCommands(ctx, factory.CommandPollRequest{RunID: *runID})
 		}
-		return writeOperationJSON(output, errorsOutput, newPollDocument(lifecycle, commands, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newPollDocument(lifecycle, commands, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -682,7 +688,7 @@ func runInit(ctx context.Context, args []string, defaultConfigPath string, outpu
 	service := newService(*configPath)
 	result, err := service.Init(ctx)
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newInitDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newInitDocument(result, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -753,7 +759,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		WorkingDirectory:     workingDirectory,
 	})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newRegisterDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newRegisterDocument(result, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -935,7 +941,7 @@ func runReconcile(ctx context.Context, args []string, defaultConfigPath string, 
 		result, err = service.Reconcile(ctx)
 	}
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newReconcileDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newReconcileDocument(result, err), err)
 	}
 	// A paused run is a reported outcome, not a failed command: reconciliation
 	// returns a typed discrepancy error alongside the diagnosis it just wrote.
@@ -1121,10 +1127,10 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 	preview, err := service.Cleanup(ctx, factory.CleanupRequest{RunID: *runID})
 	var confirmationErr *factory.CleanupConfirmationRequiredError
 	if *asJSON && err != nil && !errors.As(err, &confirmationErr) {
-		return writeOperationJSON(output, errorsOutput, newCleanupDocument(preview.Plan, nil, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newCleanupDocument(preview.Plan, nil, err), err)
 	}
 	if *asJSON && !*confirm {
-		return writeConfirmationRefusal(output, errorsOutput, newCleanupDocument(preview.Plan, nil, nil), "cleanup")
+		return writeConfirmationRefusal(output, errorsOutput, *configPath, newCleanupDocument(preview.Plan, nil, nil), "cleanup")
 	}
 	if err != nil && !errors.As(err, &confirmationErr) {
 		writeError(errorsOutput, err)
@@ -1147,7 +1153,7 @@ func runCleanup(ctx context.Context, args []string, defaultConfigPath string, ou
 		ExpectedPlan: &preview.Plan,
 	})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newCleanupDocument(preview.Plan, result.Deleted, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newCleanupDocument(preview.Plan, result.Deleted, err), err)
 	}
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -1233,10 +1239,10 @@ func runReset(ctx context.Context, args []string, _ string, output, errorsOutput
 	preview, err := service.Reset(ctx, factory.ResetRequest{})
 	var confirmationErr *factory.ResetConfirmationRequiredError
 	if *asJSON && err != nil && !errors.As(err, &confirmationErr) {
-		return writeOperationJSON(output, errorsOutput, newResetDocument(preview, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newResetDocument(preview, err), err)
 	}
 	if *asJSON && !*confirm {
-		return writeConfirmationRefusal(output, errorsOutput, newResetDocument(preview, nil), "reset")
+		return writeConfirmationRefusal(output, errorsOutput, *configPath, newResetDocument(preview, nil), "reset")
 	}
 	if err != nil && !errors.As(err, &confirmationErr) {
 		writeResetPlan(output, errorsOutput, preview.Plan)
@@ -1254,7 +1260,7 @@ func runReset(ctx context.Context, args []string, _ string, output, errorsOutput
 
 	result, err := service.Reset(ctx, factory.ResetRequest{Confirm: true})
 	if *asJSON {
-		return writeOperationJSON(output, errorsOutput, newResetDocument(result, err), err)
+		return writeOperationJSON(output, errorsOutput, *configPath, newResetDocument(result, err), err)
 	}
 	for _, transition := range result.Lifecycle {
 		if !writeOutput(output, errorsOutput, "reset lifecycle: run=%s outcome=%s reason=%s\n", transition.RunID, transition.Outcome, transition.Reason) {

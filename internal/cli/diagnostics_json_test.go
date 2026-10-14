@@ -30,6 +30,16 @@ type diagnosticDocument struct {
 		Effect        string   `json:"effect"`
 		Preconditions []string `json:"preconditions"`
 		GuideTopic    string   `json:"guide_topic"`
+		ID            string   `json:"id"`
+		Kind          string   `json:"kind"`
+		Authorization string   `json:"authorization"`
+		Verify        []string `json:"verify"`
+		Target        *struct {
+			ConfigPath string `json:"config_path"`
+		} `json:"target"`
+		Postcondition *struct {
+			Code string `json:"code"`
+		} `json:"postcondition"`
 	} `json:"action"`
 }
 
@@ -97,6 +107,13 @@ func TestRunDoctorJSONReportsAnInvalidRepositoryPolicy(t *testing.T) {
 	}
 	if !strings.Contains(invalid.Problem, "model_options.test") || invalid.Action == nil || invalid.Action.Effect != "local_mutation" || invalid.Action.GuideTopic != "setup" {
 		t.Fatalf("invalid repository diagnostic = %+v, want the field and a classified action", invalid)
+	}
+	action := invalid.Action
+	if action.ID != "config.repository.invalid.resolve" || action.Kind != "human_decision" || action.Authorization != "operator" || action.Postcondition == nil || action.Postcondition.Code != "config.repository.invalid.resolved" {
+		t.Fatalf("action = %+v, want a typed human-decision action with a postcondition", action)
+	}
+	if strings.Join(action.Verify, " ") != "factory doctor --json --config "+configPath || action.Target == nil || action.Target.ConfigPath != configPath {
+		t.Fatalf("action = %+v, want verification against the selected configuration", action)
 	}
 	if caches := document.diagnostic(t, "config.caches.not_checked"); caches.Status != "skipped" || caches.Observed {
 		t.Fatalf("caches diagnostic = %+v, want an unobserved skipped check", caches)
