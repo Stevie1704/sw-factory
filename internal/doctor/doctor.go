@@ -58,6 +58,13 @@ const (
 	EffectExternalMutation Effect = "external_mutation"
 )
 
+// Precondition is one condition that must be true before a suggested action
+// is safe. Code is stable; Description is the bounded human wording.
+type Precondition struct {
+	Code        string
+	Description string
+}
+
 // Condition is the stable, wording-independent classification of one
 // diagnosed condition. Subsystems declare each condition once and pass it to
 // the result constructors, so changing a problem text never changes a code.
@@ -70,9 +77,9 @@ type Condition struct {
 	Effect Effect
 	// Topic names the `factory guide` topic that explains the action.
 	Topic string
-	// Preconditions are bounded statements that must be true before the
-	// suggested action is safe to perform.
-	Preconditions []string
+	// Preconditions must be true before the suggested action is safe to
+	// perform.
+	Preconditions []Precondition
 	// Unobserved marks a condition in which the check could not observe its
 	// subject, such as an unavailable diagnosis adapter.
 	Unobserved bool

@@ -206,7 +206,7 @@ func (s *Service) startPullRequestWriter(ctx context.Context, runID string) erro
 // currentRunDisposition reads the status and lifecycle reason of the active
 // run.
 func (s *Service) currentRunDisposition(ctx context.Context, runID string) (runDisposition, error) {
-	_, runStore, run, err := s.openActiveRunStore(ctx)
+	_, runStore, run, err := s.openActiveRunStore(ctx, "")
 	if err != nil {
 		return runDisposition{}, err
 	}
@@ -237,7 +237,7 @@ func (s *Service) acceptPullRequestWriterReport(ctx context.Context, runID, invo
 func (s *Service) abandonPullRequestWriter(ctx context.Context, runID, invocationID, reason string, restore *runDisposition) error {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openActiveRunStore(ctx, "")
 	if err != nil {
 		return err
 	}

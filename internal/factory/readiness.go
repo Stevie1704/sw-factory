@@ -202,7 +202,7 @@ func (s *Service) rejectUnreviewedPullRequestHead(ctx context.Context, repositor
 // seam and retries the complete finalization boundary after a transient
 // GitHub, base-synchronization, or PR-readiness failure.
 func (s *Service) retryReviewReadiness(ctx context.Context, runID string) error {
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openActiveRunStore(ctx, runID)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (s *Service) retryReviewReadiness(ctx context.Context, runID string) error 
 		return fmt.Errorf("active run %q is no longer available", runID)
 	}
 	if run.ID != runID {
-		return fmt.Errorf("active run is %s, not %s", run.ID, runID)
+		return runMismatch("active", run.ID, runID)
 	}
 	if (run.Stage != store.StageReview && run.Stage != store.StageReady) || (run.Status != store.StatusActive && run.Status != store.StatusWaitingForHuman) {
 		return nil

@@ -112,6 +112,9 @@ type RecoveryDiagnosis struct {
 	InvocationExists bool
 	// SafeActions identifies operator actions that do not claim recovery.
 	SafeActions []string
+	// Actions are the typed form of SafeActions, with stable identities,
+	// targets, conditions, and authorization requirements.
+	Actions []RecommendedAction
 	// PendingEffect is the effect that was present when diagnosis ran, if any.
 	PendingEffect *store.PendingEffect
 	// Recoverable reports that all discrepancies are coordinator-repairable.
@@ -914,8 +917,8 @@ func (s *Service) AbandonPendingEffect(ctx context.Context, request AbandonPendi
 	if run == nil {
 		return RecoveryResult{Outcome: RecoveryOutcomeReconciled}, nil
 	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return RecoveryResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	if err := checkRunSelection(request.RunID, *run); err != nil {
+		return RecoveryResult{}, err
 	}
 	abandoner, ok := runStore.(effectkernel.PendingEffectAbandoner)
 	if !ok {
@@ -933,7 +936,7 @@ func (s *Service) AbandonPendingEffect(ctx context.Context, request AbandonPendi
 		return RecoveryResult{Run: run, Diagnosis: reconciledRecoveryDiagnosis(run.ID), Outcome: RecoveryOutcomeReconciled}, nil
 	}
 	if pending.ID != request.EffectID {
-		return RecoveryResult{}, fmt.Errorf("pending effect for run %q is %q, not %q", run.ID, pending.ID, request.EffectID)
+		return RecoveryResult{}, &OperationRefusedError{Code: RefusalEffectChanged, RunID: run.ID, Message: fmt.Sprintf("pending effect for run %q is %q, not %q", run.ID, pending.ID, request.EffectID)}
 	}
 	abandoned := *pending
 	if err := abandoner.AbandonPendingEffect(ctx, run.ID, request.EffectID, request.Reason); err != nil {
@@ -1698,6 +1701,7 @@ func appendCheckContinuationAction(diagnosis *RecoveryDiagnosis, run store.Run) 
 		return
 	}
 	diagnosis.SafeActions = append(diagnosis.SafeActions, checkContinuationAction)
+	diagnosis.Actions = append(diagnosis.Actions, retryChecksAction(run))
 }
 
 // hasGitHubStateProjectionDiscrepancy identifies label or status-comment drift
@@ -1742,6 +1746,11 @@ func recoveryProjectionOnly(diagnosis RecoveryDiagnosis) bool {
 func (s *Service) resumeRecoveredCheck(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run) (store.Run, error) {
 	if !isCheckContinuationPause(run) {
 		return run, nil
+	}
+	if isCheckInfrastructurePause(run) {
+		if err := s.checkInfrastructureAvailable(ctx, run); err != nil {
+			return run, err
+		}
 	}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		updated, _, _, reconcileErr := s.reconcileInterruptedRun(ctx, registration, runStore, run)
@@ -1835,8 +1844,9 @@ func statusCommentComparable(body string) string {
 // actions that explain how a human can resolve a disagreement.
 func newRecoveryDiagnosis(runID string) RecoveryDiagnosis {
 	return RecoveryDiagnosis{
-		Code:  RecoveryRequiredCode,
-		RunID: runID,
+		Code:    RecoveryRequiredCode,
+		RunID:   runID,
+		Actions: baselineRecoveryActions(runID),
 		SafeActions: []string{
 			"inspect the diagnosis with `factory status`",
 			"verify the repository, worktree, branch, checkpoint, issue label, status comment, and pull request",
@@ -1852,7 +1862,9 @@ func appendPendingEffectAction(diagnosis *RecoveryDiagnosis) {
 	if diagnosis == nil || diagnosis.PendingEffect == nil {
 		return
 	}
-	diagnosis.SafeActions = append(diagnosis.SafeActions, fmt.Sprintf("after human review, run `factory reconcile --abandon-effect %s --reason <reason>`", diagnosis.PendingEffect.ID))
+	action := abandonEffectAction(diagnosis.RunID, *diagnosis.PendingEffect)
+	diagnosis.SafeActions = append(diagnosis.SafeActions, action.Summary)
+	diagnosis.Actions = append(diagnosis.Actions, action)
 }
 
 // comparePersistedRunIdentity validates the values that can be checked before

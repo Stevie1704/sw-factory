@@ -16,6 +16,12 @@ import (
 type ResumeRequest struct {
 	// RunID optionally selects one opaque factory run identifier.
 	RunID string
+	// ExpectedRevision, when not zero, refuses the resume unless the run still
+	// has this revision, so a stale recommendation is never applied.
+	ExpectedRevision int64
+	// ExpectedCheckpointSHA, when not empty, refuses the resume unless the run
+	// is still at this checkpoint.
+	ExpectedCheckpointSHA string
 }
 
 // ResumeResult reports the invocation restored by an explicit resume command.
@@ -37,6 +43,10 @@ type AuthRefreshRequest struct {
 	// has been projected. It is deliberately opt-in so the default refresh
 	// operation remains a credential-only maintenance action.
 	Resume bool
+	// ExpectedInvocationID, when not empty, refuses the refresh unless the run
+	// still recovers this invocation, so a stale recommendation never resumes
+	// a later invocation of the same harness.
+	ExpectedInvocationID string
 }
 
 // AuthRefreshResult reports the credential projection and optional native

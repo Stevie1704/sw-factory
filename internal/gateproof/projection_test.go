@@ -37,10 +37,12 @@ func candidateRepository(t *testing.T) string {
 	return repository
 }
 
-// git runs one Git command in directory and fails the test on error.
+// git runs one Git command in directory and fails the test on error. It
+// turns off automatic maintenance, so no detached Git process writes to the
+// repository after the command returns.
 func git(t *testing.T, directory string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	command := exec.Command("git", append([]string{"-C", directory, "-c", "maintenance.auto=false"}, args...)...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
@@ -73,8 +75,10 @@ func checkoutState(t *testing.T, repository string) string {
 			return err
 		}
 		relative, _ := filepath.Rel(repository, path)
-		if strings.HasPrefix(relative, ".git"+string(filepath.Separator)) {
-			return nil
+		// Git maintenance runs in the background after a commit and adds and
+		// removes lock files below .git, so the walk must not enter it.
+		if relative == ".git" && info.IsDir() {
+			return filepath.SkipDir
 		}
 		files = append(files, relative+" "+info.Mode().String())
 		return nil

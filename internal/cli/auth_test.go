@@ -28,12 +28,12 @@ func TestAuthRefreshResumeFlagPassesThroughAndReportsNativeContinuation(t *testi
 	}
 
 	var output bytes.Buffer
-	code := runAuth(context.Background(), []string{"refresh", "--config", "/tmp/factory.yaml", "--run-id", "run-cli-resume", "--resume"}, "", &output, &output)
+	code := runAuth(context.Background(), []string{"refresh", "--config", "/tmp/factory.yaml", "--run-id", "run-cli-resume", "--resume", "--expect-invocation", "inv-cli-resume"}, "", &output, &output)
 	if code != 0 {
 		t.Fatalf("runAuth() exit code = %d, output = %q", code, output.String())
 	}
-	if !received.Resume {
-		t.Fatalf("auth refresh request = %#v, want Resume true", received)
+	if !received.Resume || received.ExpectedInvocationID != "inv-cli-resume" {
+		t.Fatalf("auth refresh request = %#v, want Resume true and the expected invocation", received)
 	}
 	if !strings.Contains(output.String(), "resumed: true") {
 		t.Fatalf("auth refresh output = %q, want resumed result", output.String())

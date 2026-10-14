@@ -33,6 +33,14 @@ var startAction = actionDocument{
 	Effect:        doctor.EffectExternalMutation,
 	Preconditions: []string{"factory doctor reports no blocking check"},
 	GuideTopic:    "debug",
+	ID:            "supervisor.start",
+	Kind:          factory.ActionKindExecutable,
+	Authorization: factory.AuthorizationOperator,
+	Command:       []string{"factory", "start"},
+	Argv:          []string{"factory", "start"},
+	Requires:      []conditionDocument{{Code: "doctor.ready", Description: "factory doctor reports no blocking check"}},
+	Postcondition: &conditionDocument{Code: "supervisor.live", Description: "supervisor.state is live"},
+	Verify:        []string{"factory", "status", "--json"},
 }
 
 // statusDocument is the `factory status --json` view of a status result.
@@ -118,6 +126,7 @@ type recoveryDocument struct {
 	PendingEffect    *pendingEffectDocument `json:"pending_effect,omitempty"`
 	Discrepancies    []discrepancyDocument  `json:"discrepancies"`
 	SafeActions      []string               `json:"safe_actions"`
+	Actions          []actionDocument       `json:"actions"`
 }
 
 // pendingEffectDocument identifies a reserved external effect.
@@ -160,6 +169,10 @@ func newStatusDocument(result factory.StatusResult, err error) statusDocument {
 		Run:           newRunDocument(result, err),
 		Recovery:      newRecoveryDocument(result.Recovery),
 		Blockers:      statusBlockers(result),
+	}
+	document.Recovery.bindConfiguration(result.ConfigPath)
+	for index := range document.Blockers {
+		bindConfiguration(document.Blockers[index].Action, result.ConfigPath)
 	}
 	if err != nil {
 		document.Outcome = outcomeError
@@ -275,6 +288,17 @@ func newRunDocument(result factory.StatusResult, err error) runDocument {
 	return document
 }
 
+// bindConfiguration binds every recovery action to the selected
+// configuration. A nil recovery has no actions.
+func (d *recoveryDocument) bindConfiguration(configPath string) {
+	if d == nil {
+		return
+	}
+	for index := range d.Actions {
+		bindConfiguration(&d.Actions[index], configPath)
+	}
+}
+
 // newRecoveryDocument projects the coordinator's recovery diagnosis.
 func newRecoveryDocument(diagnosis *factory.RecoveryDiagnosis) *recoveryDocument {
 	if diagnosis == nil {
@@ -288,6 +312,10 @@ func newRecoveryDocument(diagnosis *factory.RecoveryDiagnosis) *recoveryDocument
 		InvocationExists: diagnosis.InvocationExists,
 		Discrepancies:    make([]discrepancyDocument, 0, len(diagnosis.Discrepancies)),
 		SafeActions:      append([]string{}, diagnosis.SafeActions...),
+		Actions:          make([]actionDocument, 0, len(diagnosis.Actions)),
+	}
+	for _, action := range diagnosis.Actions {
+		document.Actions = append(document.Actions, newRecommendedActionDocument(action))
 	}
 	if pending := diagnosis.PendingEffect; pending != nil {
 		document.PendingEffect = &pendingEffectDocument{ID: pending.ID, Kind: pending.Kind}

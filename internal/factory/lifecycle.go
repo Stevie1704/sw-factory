@@ -50,16 +50,13 @@ func (s *Service) PollLifecycle(ctx context.Context, request LifecycleRequest) (
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 
-	registration, runStore, run, err := s.openLifecycleRunStore(ctx)
+	registration, runStore, run, err := s.openLifecycleRunStore(ctx, request.RunID)
 	if err != nil {
 		return LifecycleResult{}, err
 	}
 	defer func() { _ = runStore.Close() }()
 	if run == nil {
 		return LifecycleResult{Outcome: LifecycleUnchanged}, nil
-	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return LifecycleResult{}, fmt.Errorf("latest run is %s, not %s", run.ID, request.RunID)
 	}
 	result, err := s.observeLifecycle(ctx, registration, runStore, run)
 	if err != nil || result.Outcome != LifecycleUnchanged || store.IsTerminalStatus(result.Run.Status) {
@@ -84,7 +81,7 @@ func (s *Service) PollLifecycle(ctx context.Context, request LifecycleRequest) (
 // terminal projection only when no run is active. A pending effect still crosses
 // the ordinary reconciliation boundary first, because lifecycle terminalization
 // must not replace an unresolved mutation.
-func (s *Service) openLifecycleRunStore(ctx context.Context) (config.RepositoryRegistration, RunStore, *store.Run, error) {
+func (s *Service) openLifecycleRunStore(ctx context.Context, selectedRunID string) (config.RepositoryRegistration, RunStore, *store.Run, error) {
 	registration, runStore, err := s.openRunStore(ctx)
 	if err != nil {
 		return config.RepositoryRegistration{}, nil, nil, err
@@ -94,6 +91,9 @@ func (s *Service) openLifecycleRunStore(ctx context.Context) (config.RepositoryR
 		if latestStore, ok := runStore.(LatestRunStore); ok {
 			run, err = latestStore.LatestRun(ctx)
 		}
+	}
+	if err == nil && run != nil && selectedRunID != "" && selectedRunID != run.ID {
+		err = runMismatch("latest", run.ID, selectedRunID)
 	}
 	if err != nil {
 		_ = runStore.Close()

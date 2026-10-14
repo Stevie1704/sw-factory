@@ -69,16 +69,13 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 	if strings.TrimSpace(request.GateName) == "" {
 		return gate.Result{}, errors.New("gate name is required")
 	}
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openActiveRunStore(ctx, request.RunID)
 	if err != nil {
 		return gate.Result{}, err
 	}
 	defer func() { _ = runStore.Close() }()
 	if run == nil {
-		return gate.Result{}, errors.New("no active run")
-	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return gate.Result{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+		return gate.Result{}, errNoActiveRun
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
@@ -113,16 +110,13 @@ func (s *Service) RunGate(ctx context.Context, request RunGateRequest) (gate.Res
 // baseline failure moves the run to a visible failed preflight state unless
 // the frozen issue explicitly targets each failed baseline gate.
 func (s *Service) RunBaseline(ctx context.Context, request BaselineRequest) (BaselineResult, error) {
-	registration, runStore, run, err := s.openActiveRunStore(ctx)
+	registration, runStore, run, err := s.openActiveRunStore(ctx, request.RunID)
 	if err != nil {
 		return BaselineResult{}, err
 	}
 	defer func() { _ = runStore.Close() }()
 	if run == nil {
-		return BaselineResult{}, errors.New("no active run")
-	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return BaselineResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+		return BaselineResult{}, errNoActiveRun
 	}
 	baselineReady := run.Stage == store.StageClaim
 	if run.Stage == store.StageTest && run.TestHandoff == nil && !run.TestStageSkipped {

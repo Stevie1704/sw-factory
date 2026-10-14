@@ -44,13 +44,15 @@ commands change state, so ask the operator before you run one.
 5. **Classify the cause.** Use the table in the next section. When the
    evidence does not show the cause, record the cause as unknown.
 
-6. **Use one documented recovery action.** Select it from the recovery table.
-   Confirm that its precondition is true. Ask the operator. Run it one time.
+6. **Use one documented recovery action.** Select it from
+   `recovery.actions` or from the recovery table. Confirm that each entry of
+   its `requires` list is true. Ask the operator. Run it one time with
+   `--json`.
 
-7. **Verify the result.** Run `factory status --json` and
-   `factory doctor --json` again.
-   Confirm the expected change. When it did not occur, do not repeat the
-   action without new evidence. Go back to step 3.
+7. **Verify the result.** Run the `verify` command of the action, normally
+   `factory status --json`, and `factory doctor --json` again.
+   Confirm the `postcondition` of the action. When it did not occur, do not
+   repeat the action without new evidence. Go back to step 3.
 
 ## Read the JSON documents
 
@@ -110,14 +112,123 @@ blocks the observation first, then run the diagnosis again.
 - `run.state` is `active`, `terminal`, `none`, or `unavailable`. An active or
   terminal run has `id`, `stage`, `status`, `activity`, `checkpoint_sha`,
   `active_invocation_ids`, `lifecycle_reason`, and `failed_gates`.
-- `recovery` has `sources_agree`, `pending_effect`, `discrepancies`, and
-  `safe_actions`. Use only an action from `safe_actions` or from the recovery
-  table in this topic.
+- `recovery` has `sources_agree`, `pending_effect`, `discrepancies`,
+  `safe_actions`, and `actions`. `safe_actions` is the schema-1 text list.
+  `actions` is the typed list. Use only an action from `actions` or from the recovery table in
+  this topic.
 - `blockers` lists the known blockers, each with `code`, `likely_origin`,
   `problem`, `facts`, and an optional `action`.
 
 `none` means that the value does not exist. `unknown` and `unavailable` mean
 that Factory could not read the value. Do not treat them as the same.
+
+### Action fields
+
+Each entry of `recovery.actions`, and each `action` of a blocker or a
+diagnostic, has the schema-1 fields `summary`, `effect`, `preconditions`,
+and `guide_topic`. The typed fields are:
+
+- `id`: a stable action identity, for example `run.retry_checks`,
+  `pending_effect.abandon`, `status.inspect`, or `supervisor.start`.
+- `kind`: `executable`, `inspection`, or `human_decision`.
+- `authorization`: `none`, `operator`, or `human_review`.
+- `command` and `arguments`: the base command and its typed flags. An
+  argument with `human_input: true` has no value. A human supplies it.
+- `argv`: the complete argument vector. It is present only when no argument
+  needs human input. Run it as an argument array. Do not give it to a shell.
+- `target`: the `config_path`, `run_id`, `revision`, `checkpoint_sha`,
+  `invocation_id`, or `effect_id` that the action applies to. Each action
+  that has a command also has the argument `--config` with the
+  configuration that the inspection read. Its `argv` and `verify` contain
+  it too. Do not remove it.
+- `requires`: the structured preconditions, each with `code` and
+  `description`. `postcondition` is the expected state after the action.
+  `verify` is the inspection command that shows the postcondition.
+
+A doctor action has `id` `<code>.resolve`, the `requires` list of the
+check, and the postcondition `<code>.resolved`. Its `verify` is
+`factory doctor --json`. Its summary is a description, not a command, so a
+doctor repair is a `human_decision` that the operator authorizes, or an
+`inspection`.
+
+A recommendation is not an authorization. An `executable` action with
+`authorization: operator` needs the approval of the operator. A
+`human_decision` action never has an `argv`. An agent does not supply its
+human input, also when the operator approved other actions.
+
+Factory checks the target and the preconditions again when the command
+runs. For example, `run.retry_checks` gives `factory resume` the flags
+`--expect-revision` and `--expect-checkpoint`. When the run changed after
+the recommendation, resume refuses and changes nothing. Resume also probes
+the worker runtime again; when it is not available, resume refuses with
+`check_infrastructure.unavailable` and changes nothing. A run-scoped command
+with `--run-id` for another run refuses before it reconciles anything.
+`factory auth refresh --expect-invocation <id>` refuses when the run now
+recovers another invocation. Run `factory status --json` again to get a
+current action.
+
+#### Example: a check paused for check infrastructure
+
+1. `factory status --json` shows `run.stage: "check"`,
+   `run.status: "waiting_for_human"`, and the action `run.retry_checks`
+   with `requires` code `check_infrastructure.available`.
+2. `factory doctor --json` shows the blocking diagnostic, for example
+   `worker.docker.unreachable`. Its action is a `human_decision`. The
+   operator repairs the runtime, for example starts Docker.
+3. `factory doctor --json` is `ready`.
+4. With the approval of the operator, run the `argv` of `run.retry_checks`
+   with `--json` added. The outcome is `completed`, `result.continuation` is
+   `checks`, and `identities.checkpoint_sha` is the target checkpoint.
+5. `factory status --json` shows the postcondition `run.check_active`: the
+   run is active in the check stage at the same `checkpoint_sha`. The
+   check-repair attempts do not change, and no agent starts.
+
+### Results of mutation commands
+
+These commands accept `--json`: `resume`, `reconcile`, `auth refresh`,
+`stop`, `init`, `register`, `bootstrap-labels`, `issue`, `agent`,
+`agent-report`, `draft-pr`, `poll`, `cleanup`, and `reset`. With `--json`,
+the command writes one JSON object to standard output and nothing else. The
+exit status is the same as without `--json`.
+
+- `schema_version` is `1`, with the same compatibility rules as above.
+  `command` is the command name; `auth refresh` is `auth-refresh`.
+- `outcome` is one of these values:
+
+  | `outcome` | `attempted` | Meaning |
+  | --- | --- | --- |
+  | `completed` | true | The command did its action. |
+  | `pending` | true | An external call did not answer. Its outcome is unknown. Run `factory status --json` before you run the command again. For `reconcile`, the effect stays reserved, and the next reconciliation replays it. |
+  | `blocked` | true | The command stopped at a known boundary, for example a reconciliation pause. `recovery` shows the diagnosis. |
+  | `refused` | false | The command changed nothing, because a target or a precondition was not true. |
+  | `error` | true | An operational failure. The `error` object has `code`, `likely_origin`, and a fixed `message`. Standard error has the detail. A mutation can have occurred, so verify before you continue. |
+
+- `reason.code` is a stable code for `pending`, `blocked`, and `refused`:
+  `run.none`, `run.mismatch`, `run.terminal`, `run.revision_changed`,
+  `run.checkpoint_changed`, `pending_effect.changed`, `invocation.changed`,
+  `check_infrastructure.unavailable`,
+  `recovery.waiting_for_human`, `recovery.workflow_failure`,
+  `external.outcome_unknown`, `cleanup.confirmation_required`,
+  `cleanup.plan_changed`, `cleanup.blocked`, `reset.confirmation_required`,
+  `reset.blocked`, or `reset.incomplete`.
+- `identities` names the resulting state: `run_id`, `revision`,
+  `issue_number`, `checkpoint_sha`, `invocation_id`, `effect_id`, and
+  `pull_request_number`, when they apply.
+- `result` has the command-specific fields. `blockers` lists each blocker
+  of a refused `cleanup` or `reset`. `verification` is the inspection action
+  that confirms the outcome.
+
+`cleanup` and `reset` without `--confirm` write the plan in `result`, with
+`outcome: "refused"` and `reason.code` `cleanup.confirmation_required` or
+`reset.confirmation_required`. They exit with status 2, as without `--json`.
+
+An invalid flag or argument writes text to standard error and exits with
+status 2. It writes nothing to standard output.
+
+`factory start`, `factory ui`, and the interactive launcher run until they
+stop. They do not write a result document. Use `factory status --json` to
+observe them. `factory start --verbose` writes its progress log to standard
+error.
 
 ### Examples
 
@@ -132,7 +243,7 @@ that Factory could not read the value. Do not treat them as the same.
 | status `run.gate.error` | Environment failure. The worker runtime did not run the gate. |
 | status `run.gate.setup_failed` | Unknown cause. The setup command or the runtime failed before the gate ran. Read the lifecycle reason. |
 | status `run.supervisor.stale` or `run.supervisor.missing` | Environment failure. Run `factory start` after `factory doctor` is ready. |
-| status `recovery.sources_disagree` | Unknown cause. Read `recovery.discrepancies` and `recovery.safe_actions`. |
+| status `recovery.sources_disagree` | Unknown cause. Read `recovery.discrepancies` and `recovery.actions`. |
 
 ### Observation and mutation
 
@@ -162,8 +273,8 @@ observe.
 | `factory stop` | `factory start` runs | Stops the polling coordinator. Keeps all run state. |
 | `factory start` | `factory doctor` is ready | Starts polling. Reconciles interrupted work before it continues. |
 | `factory auth refresh` | A run waits for a refreshed harness credential | Copies the host credential into the factory credential store. Changes no workflow state. |
-| `factory auth refresh --resume` | As above | Also reconciles pending effects and continues the paused native session one time. |
-| `factory resume` | The run is not terminal and `factory status` names `factory resume` as a safe action | Reconciles a pending effect first. Then it does one of the actions in the next table. It does not use the retry budget. |
+| `factory auth refresh --resume` | As above | Also reconciles pending effects and continues the paused native session one time. With `--expect-invocation`, it refuses when the run recovers another invocation. |
+| `factory resume` | The run is not terminal and `factory status` names `factory resume` as a safe action | Reconciles a pending effect first. Then it does one of the actions in the next table. It does not use the retry budget. With `--expect-revision` and `--expect-checkpoint`, it refuses a run that changed. |
 | `factory reconcile` | A pending effect or discrepancy is reported after a restart | Runs one restart reconciliation. Pauses the run when it cannot prove a safe repair. |
 | `factory reconcile --abandon-effect <effect-id> --reason <text>` | A human inspected the ambiguous pending effect that `factory status` names | Discards that effect. The run stays paused. |
 | `factory poll` | Authorized `/factory` comments wait on the issue or pull request | Processes them one time. |

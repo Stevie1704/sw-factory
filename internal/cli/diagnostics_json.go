@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
+	"github.com/Stevie1704/sw-factory/internal/factory"
 )
 
 // diagnosticsSchemaVersion is the version of the `doctor --json` and
@@ -72,16 +73,80 @@ type factDocument struct {
 	Value string `json:"value"`
 }
 
-// actionDocument is the suggested corrective action of one diagnostic.
+// actionDocument is one suggested action. Summary, Effect, Preconditions,
+// and GuideTopic are the schema-1 fields; the typed fields are additive. Argv
+// is set only when the action needs no human input.
 type actionDocument struct {
-	Summary       string        `json:"summary"`
-	Effect        doctor.Effect `json:"effect,omitempty"`
-	Preconditions []string      `json:"preconditions"`
-	GuideTopic    string        `json:"guide_topic,omitempty"`
+	Summary       string                      `json:"summary"`
+	Effect        doctor.Effect               `json:"effect,omitempty"`
+	Preconditions []string                    `json:"preconditions"`
+	GuideTopic    string                      `json:"guide_topic,omitempty"`
+	ID            string                      `json:"id,omitempty"`
+	Kind          factory.ActionKind          `json:"kind,omitempty"`
+	Authorization factory.ActionAuthorization `json:"authorization,omitempty"`
+	Command       []string                    `json:"command,omitempty"`
+	Arguments     []argumentDocument          `json:"arguments,omitempty"`
+	Argv          []string                    `json:"argv,omitempty"`
+	Target        *targetDocument             `json:"target,omitempty"`
+	Requires      []conditionDocument         `json:"requires,omitempty"`
+	Postcondition *conditionDocument          `json:"postcondition,omitempty"`
+	Verify        []string                    `json:"verify,omitempty"`
 }
 
-// newDoctorDocument projects a doctor report without reinterpreting it.
-func newDoctorDocument(report doctor.Report) doctorDocument {
+// argumentDocument is one flag of an action command. A human_input flag has
+// no value; a human supplies it.
+type argumentDocument struct {
+	Flag       string `json:"flag"`
+	Value      string `json:"value,omitempty"`
+	HumanInput bool   `json:"human_input"`
+}
+
+// targetDocument is the exact state an action applies to.
+type targetDocument struct {
+	RunID         string `json:"run_id,omitempty"`
+	Revision      int64  `json:"revision,omitempty"`
+	CheckpointSHA string `json:"checkpoint_sha,omitempty"`
+	InvocationID  string `json:"invocation_id,omitempty"`
+	EffectID      string `json:"effect_id,omitempty"`
+	ConfigPath    string `json:"config_path,omitempty"`
+}
+
+// conditionDocument is one structured precondition or postcondition.
+type conditionDocument struct {
+	Code        string `json:"code"`
+	Description string `json:"description"`
+}
+
+// newRecommendedActionDocument projects one typed recovery action. The
+// schema-1 preconditions repeat the condition descriptions.
+func newRecommendedActionDocument(action factory.RecommendedAction) actionDocument {
+	target := targetDocument{RunID: action.Target.RunID, Revision: action.Target.Revision, CheckpointSHA: action.Target.CheckpointSHA, InvocationID: action.Target.InvocationID, EffectID: action.Target.EffectID}
+	document := actionDocument{
+		Summary: action.Summary, Effect: action.Effect, Preconditions: []string{}, GuideTopic: "debug",
+		ID: string(action.ID), Kind: action.Kind, Authorization: action.Authorization,
+		Command: append([]string(nil), action.Command...), Target: &target,
+		Verify: append([]string(nil), action.Verify...),
+	}
+	if argv, complete := action.Argv(); complete {
+		document.Argv = argv
+	}
+	for _, argument := range action.Arguments {
+		document.Arguments = append(document.Arguments, argumentDocument(argument))
+	}
+	for _, condition := range action.Preconditions {
+		document.Preconditions = append(document.Preconditions, condition.Description)
+		document.Requires = append(document.Requires, conditionDocument(condition))
+	}
+	if action.Postcondition.Code != "" {
+		postcondition := conditionDocument(action.Postcondition)
+		document.Postcondition = &postcondition
+	}
+	return document
+}
+
+// newDoctorDocument projects a doctor report without reinterpreting it. The
+// actions verify against configPath, the configuration doctor diagnosed.
+func newDoctorDocument(report doctor.Report, configPath string) doctorDocument {
 	document := doctorDocument{
 		SchemaVersion: diagnosticsSchemaVersion,
 		Command:       "doctor",
@@ -94,7 +159,9 @@ func newDoctorDocument(report doctor.Report) doctorDocument {
 		document.Outcome = outcomeReady
 	}
 	for _, result := range report.Results {
-		document.Diagnostics = append(document.Diagnostics, newDiagnosticDocument(result))
+		diagnostic := newDiagnosticDocument(result)
+		bindConfiguration(diagnostic.Action, configPath)
+		document.Diagnostics = append(document.Diagnostics, diagnostic)
 	}
 	return document
 }
@@ -130,14 +197,65 @@ func newDiagnosticDocument(result doctor.Result) diagnosticDocument {
 		document.Facts = append(document.Facts, factDocument(fact))
 	}
 	if result.Action != "" {
-		document.Action = &actionDocument{
-			Summary:       result.Action,
-			Effect:        result.Effect,
-			Preconditions: append([]string{}, result.Preconditions...),
-			GuideTopic:    result.Topic,
-		}
+		document.Action = newDoctorActionDocument(result)
 	}
 	return document
+}
+
+// newDoctorActionDocument projects the corrective action of one result. Its
+// summary is prose, so the action has no argv; doctor verifies that the
+// condition is resolved.
+func newDoctorActionDocument(result doctor.Result) *actionDocument {
+	action := &actionDocument{
+		Summary:       result.Action,
+		Effect:        result.Effect,
+		Preconditions: []string{},
+		GuideTopic:    result.Topic,
+		ID:            result.Code + ".resolve",
+		Target:        &targetDocument{},
+		Postcondition: &conditionDocument{Code: result.Code + ".resolved", Description: "factory doctor no longer reports " + result.Code},
+		Verify:        []string{"factory", "doctor", "--json"},
+	}
+	action.Kind, action.Authorization = doctorActionAuthority(result.Effect)
+	for _, precondition := range result.Preconditions {
+		action.Preconditions = append(action.Preconditions, precondition.Description)
+		action.Requires = append(action.Requires, conditionDocument(precondition))
+	}
+	return action
+}
+
+// doctorActionAuthority classifies a doctor action. Its summary is prose, not
+// a command, so a repair is a human decision that the operator authorizes.
+func doctorActionAuthority(effect doctor.Effect) (factory.ActionKind, factory.ActionAuthorization) {
+	if effect == doctor.EffectInspection {
+		return factory.ActionKindInspection, factory.AuthorizationNone
+	}
+	return factory.ActionKindHumanDecision, factory.AuthorizationOperator
+}
+
+// bindConfiguration makes an action name the configuration that the command
+// selected, so executing or verifying it never falls back to the default
+// installation. It copies every slice it extends.
+func bindConfiguration(action *actionDocument, configPath string) {
+	if action == nil || configPath == "" {
+		return
+	}
+	if action.Target == nil {
+		action.Target = &targetDocument{}
+	} else {
+		target := *action.Target
+		action.Target = &target
+	}
+	action.Target.ConfigPath = configPath
+	if len(action.Command) != 0 {
+		action.Arguments = append(append([]argumentDocument{}, action.Arguments...), argumentDocument{Flag: "config", Value: configPath})
+	}
+	if action.Argv != nil {
+		action.Argv = append(append([]string{}, action.Argv...), "--config", configPath)
+	}
+	if len(action.Verify) != 0 {
+		action.Verify = append(append([]string{}, action.Verify...), "--config", configPath)
+	}
 }
 
 // writeJSONDocument writes one JSON document and a newline to output, and
