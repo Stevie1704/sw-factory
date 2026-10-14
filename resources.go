@@ -139,6 +139,27 @@ func PrepareResources(destination string) (string, error) {
 	return identity, nil
 }
 
+// VerifyResources reads a prepared resource directory without changing it and
+// returns the resource identity it was prepared with. When that identity is
+// the one of this release, every resource there must also be unchanged. A
+// directory of another release returns its identity, which the caller can
+// compare.
+func VerifyResources(destination string) (string, error) {
+	marker, err := os.ReadFile(filepath.Join(destination, ownershipMarker))
+	if err != nil {
+		return "", fmt.Errorf("%s is not a complete Factory resource export: %w", destination, err)
+	}
+	prepared := strings.TrimSpace(string(marker))
+	identity, err := ResourceIdentity()
+	if err != nil || prepared != identity {
+		return prepared, err
+	}
+	if err := verifyPreparedResources(destination, prepared, identity); err != nil {
+		return "", err
+	}
+	return identity, nil
+}
+
 // verifyPreparedResources accepts an earlier export of the same identity whose
 // files still have the content and mode of the shipped resources.
 func verifyPreparedResources(destination, prepared, identity string) error {

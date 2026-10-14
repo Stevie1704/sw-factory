@@ -106,3 +106,30 @@ func TestPrepareResourcesAcceptsItsOwnExportUnderARestrictiveUmask(t *testing.T)
 		}
 	}
 }
+
+// TestVerifyResourcesReadsAPreparedDirectory verifies that a prepared
+// directory returns its identity, that a changed resource or a missing
+// export is refused, and that the check writes nothing.
+func TestVerifyResourcesReadsAPreparedDirectory(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "resources")
+	identity, err := swfactory.PrepareResources(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified, err := swfactory.VerifyResources(destination); err != nil || verified != identity {
+		t.Fatalf("verify = %q, %v; want %q", verified, err, identity)
+	}
+	procedure := filepath.Join(destination, "docs", "repository-initialization.md")
+	if err := os.Chmod(procedure, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(procedure, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := swfactory.VerifyResources(destination); err == nil {
+		t.Fatal("a changed resource was accepted")
+	}
+	if _, err := swfactory.VerifyResources(t.TempDir()); err == nil {
+		t.Fatal("a directory without an export was accepted")
+	}
+}
