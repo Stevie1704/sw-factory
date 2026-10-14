@@ -112,6 +112,15 @@ selects Codex) that follows the same procedure.
 Prepare a new directory to rebuild the worker image after an upgrade, or when
 the toolchain or a harness version changes.
 
+An onboarding can stop at any step. `factory onboard plan --repository
+<checkout> --output <file> --json` keeps an onboarding plan outside the
+checkout, and `factory onboard status --plan <file> --json` shows, read-only,
+which steps are verified, pending, blocked, stale, or skipped. After an
+interruption, read the status first and do not repeat a verified step.
+`factory onboard record --plan <file> gate-proof|doctor|live-proof --json`
+records the evidence that only a supported command can produce. The
+procedure's section "Keep the onboarding plan" describes the plan.
+
 ## Register the host
 
 Run these commands in the target checkout, after operator approval:

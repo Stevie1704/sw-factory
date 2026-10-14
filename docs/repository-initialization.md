@@ -144,6 +144,118 @@ The launcher prompt and the `factory-onboarding` skill are deliberately short.
 This document owns the steps and the approval list, so they do not repeat
 them. A second copy could drift.
 
+## Keep the onboarding plan
+
+An onboarding can stop at any step, for example when the session ends after
+the image build. A persisted plan lets the next agent find what is done, what
+is still valid, and what remains, without a new image build, a new paid
+smoke call, or a second proof issue. Create the plan after the preparation,
+outside the target checkout:
+
+~~~sh
+<FACTORY_COMMAND> onboard plan \
+  --repository "<TARGET_REPO_PATH>" \
+  --output "$HOME/.cache/sw-factory/onboarding-<repository>.json" \
+  --resources "<FACTORY_RESOURCES>" \
+  --json
+~~~
+
+Add `--config <path>` when the registration uses a separate host
+configuration. The plan keeps the repository, the host configuration path,
+the resource directory, and the recorded evidence. It never keeps a
+credential, a credential path, or a harness transcript. The command refuses a
+plan file inside the checkout and a plan of another repository. Run it again
+to refresh the plan; a value that you do not give again stays.
+
+After an interruption, read the plan before any other step. The command is
+read-only:
+
+~~~sh
+<FACTORY_COMMAND> onboard status --plan "<PLAN>" --json
+~~~
+
+The plan describes work. It does not run steps and it does not replace the
+coordinator's operational store. Each step still runs with the command that
+this procedure names. The status document lists the steps in procedure order:
+
+| Step | Evidence | Depends on |
+| --- | --- | --- |
+| `prepare` | the resource directory still holds the resources of this release | — |
+| `configuration` | `factory.yaml` passes `config validate` | `prepare` |
+| `image` | the pinned image exists locally, and its build context did not change since it was first observed | `configuration` |
+| `gate_proof` | `onboard record gate-proof` | `image` |
+| `registration` | the host configuration registers this checkout | `configuration` |
+| `skill_smoke` | `worker/skill-smoke.json` covers every required skill of each harness the policy can select, for the pinned digest | `image` |
+| `doctor` | `onboard record doctor` | `gate_proof`, `registration`, `skill_smoke` |
+| `live_proof` | `onboard record live-proof` | `doctor` |
+
+Each step has a `state`:
+
+- `verified`: valid evidence proves the step. Do not do it again.
+- `pending`: do the step now. `reason` tells why and `action` names the
+  command.
+- `blocked`: the step waits for a dependency, for an observation that is not
+  possible, such as a stopped Docker daemon, or for an unknown outcome.
+- `stale`: evidence exists, but an input it depends on changed. `reason`
+  names each changed input.
+- `skipped`: the operator declined the optional live proof.
+
+`operator_choice` names the decision that a step needs from the operator.
+`result` is `incomplete`, `doctor_ready`, `live_proof_passed`, or
+`live_proof_declined`. `artifacts` names the resource directory, the
+directory of interrupted gate proofs, and the marker of a started live
+proof.
+
+Evidence records the identity of each input it depends on: the release, the
+`factory.yaml` content, the pinned image, the worker build context, which
+holds the worker definition and the vendored skills, the candidate files, the
+host registration, and the smoke records of the pinned digest. A change makes
+only the evidence that depends on that input stale. A recorded skill smoke
+stays valid while the pinned digest is the same. When some skills are missing,
+the `skill_smoke` action repeats only those paid calls.
+
+Only supported commands record evidence. You cannot mark a step complete with
+text. Record the steps that a cheap observation cannot prove:
+
+~~~sh
+<FACTORY_COMMAND> onboard record --plan "<PLAN>" gate-proof --json
+<FACTORY_COMMAND> onboard record --plan "<PLAN>" doctor --json
+~~~
+
+`gate-proof` runs the Step 5 proof and records it. It does not run again
+while its evidence is valid; then the document shows `"reused": true`.
+`doctor` runs the startup diagnosis with the plan's host configuration and
+records the codes of the blocking findings. Each command writes one JSON
+document with the `report` that produced the evidence and the new `status`.
+It exits `0` only when the recorded step passed.
+
+The live proof of Step 8 creates an issue. Record its identity before the
+issue exists, so a lost response cannot create a second proof issue:
+
+~~~sh
+<FACTORY_COMMAND> onboard record --plan "<PLAN>" live-proof --start --json
+~~~
+
+The command needs a verified `doctor` and prints a `marker`. Put the marker
+in the body of the proof issue. Then record the issue:
+
+~~~sh
+<FACTORY_COMMAND> onboard record --plan "<PLAN>" live-proof --issue <NUMBER> --json
+~~~
+
+The command reads the issue and its newest run. It refuses an issue whose body
+does not carry the marker and records nothing when it cannot observe the
+issue. The proof passes when the run reaches `draft_pr`. Until then, the
+command exits `1`; run it again to observe the run. After a start, the
+outcome is unknown until you record the issue. Find the issue that carries
+the marker; never create another one. Only when the operator confirms that no
+issue carries the marker, remove the start with `--abandon`. When the
+operator declines the proof, record it with `--decline`.
+
+Plan writes are atomic and serialized by a lock file beside the plan. A
+second writer waits and then starts from the latest plan, so it cannot
+overwrite another writer's progress.
+
 ## Actions that need operator approval
 
 These actions change the host configuration or GitHub, or cost money:
@@ -680,6 +792,10 @@ longer runs:
 A successful proof does not complete the onboarding. `factory doctor` after
 Step 6 is still the final check of the host, the providers, and the runtime.
 
+With an onboarding plan, run the proof with `<FACTORY_COMMAND> onboard record
+--plan "<PLAN>" gate-proof --json` instead. It runs the same proof and records
+the result.
+
 ## Step 6: register the host
 
 The coordinator is `<FACTORY_COMMAND>`. A host configuration registers one
@@ -774,7 +890,9 @@ harness. The retry adds them to the same record, so it needs one paid call per
 skill and not one per mandated skill.
 
 Then run `<FACTORY_COMMAND> doctor` from the target checkout, as the next
-section describes, until it reports ready.
+section describes, until it reports ready. With an onboarding plan, record the
+ready diagnosis with `<FACTORY_COMMAND> onboard record --plan "<PLAN>" doctor
+--json`.
 
 ## Verifying the result
 
@@ -824,7 +942,9 @@ pull request in the target repository, and it starts paid agent sessions. Ask
 the operator before you start it. When the operator declines, for example
 because the target is a production repository, skip the proof.
 
-After approval:
+After approval, with an onboarding plan, record the start with `onboard record
+live-proof --start` first and put its marker in the issue body. Record a
+declined proof with `--decline`. Then:
 
 1. Create an issue with a small, verifiable change, for example a new test
    case. An authorized user adds the `agent-ready` label.
@@ -847,7 +967,9 @@ Report the pull-request URL and the status-comment URL to the operator. Ask
 before you close the pull request or the issue.
 
 The onboarding is complete when this proof succeeds, or when the operator
-declines it and `factory doctor` reports ready.
+declines it and `factory doctor` reports ready. With an onboarding plan,
+record the issue with `onboard record live-proof --issue <NUMBER>`; the plan
+`result` is then `live_proof_passed` or `live_proof_declined`.
 
 ## Agent discovery
 

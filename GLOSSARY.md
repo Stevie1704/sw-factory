@@ -148,6 +148,15 @@ candidate files, the gates, the history, and the worker digest. It does not
 replace `factory doctor`.
 _Avoid_: Gate check, dry run
 
+**Onboarding plan**:
+The persisted record of one repository onboarding, outside the target
+checkout. It keeps the evidence of each onboarding step with the identities
+of the inputs that evidence depends on, so `factory onboard status` can tell
+a later agent which steps are verified, pending, blocked, stale, or skipped.
+Only supported commands record evidence. It describes work; it is not a
+workflow controller and not the operational store.
+_Avoid_: Onboarding checklist, onboarding state machine
+
 **Worker skill set**:
 The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
 _Avoid_: Personal skill, installed skill

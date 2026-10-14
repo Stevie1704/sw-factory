@@ -88,6 +88,8 @@ the same result. Use the JSON document. Do not parse the text output.
 | `factory status --json` | `outcome` is `ok`, also for a paused or failed run | `outcome` is `error` | invalid argument |
 | `factory config validate --file <path> --json` | `valid` is true | `valid` is false | invalid argument |
 | `factory onboard verify --repository <path> --json` | `result` is `passed` | any other `result` | invalid argument |
+| `factory onboard plan` or `onboard status --plan <file> --json` | the status document is written, whatever its `result` | the plan cannot be read or written | invalid argument |
+| `factory onboard record --plan <file> <step> --json` | the recorded step passed, or the live proof was started, declined, or abandoned | the step did not pass, or nothing was recorded | invalid argument |
 
 ### Doctor fields
 

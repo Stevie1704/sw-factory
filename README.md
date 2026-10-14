@@ -76,6 +76,12 @@ proves the setup with a disposable issue. It asks before it writes files,
 changes host configuration or GitHub, makes paid calls, or commits. You do not
 need Go or a Software Factory checkout.
 
+`factory onboard plan` keeps the onboarding progress in a file outside the
+checkout. After an interruption, `factory onboard status --plan <file> --json`
+shows a new agent which steps are still valid, so it does not repeat an image
+build, a paid smoke call, or a proof issue; see [Keep the onboarding
+plan](docs/repository-initialization.md#keep-the-onboarding-plan).
+
 The release also ships an optional `factory-onboarding` skill for Claude Code,
 Codex, or any agent that reads plain instructions; see [Repository
 initialization](docs/repository-initialization.md#with-the-agent-that-already-runs).

@@ -27,6 +27,7 @@ factory status              # supervisor and current run state
 factory doctor --json       # diagnosis as one JSON document
 factory config validate --file factory.yaml --json   # policy check, offline
 factory onboard verify --repository . --json         # gate proof in the worker
+factory onboard status --plan <file> --json          # persisted onboarding progress
 factory status --json       # status as one JSON document
 factory <command> -h        # flags of one command
 ```
