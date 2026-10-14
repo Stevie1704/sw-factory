@@ -33,6 +33,14 @@ var startAction = actionDocument{
 	Effect:        doctor.EffectExternalMutation,
 	Preconditions: []string{"factory doctor reports no blocking check"},
 	GuideTopic:    "debug",
+	ID:            "supervisor.start",
+	Kind:          factory.ActionKindExecutable,
+	Authorization: factory.AuthorizationOperator,
+	Command:       []string{"factory", "start"},
+	Argv:          []string{"factory", "start"},
+	Requires:      []conditionDocument{{Code: "doctor.ready", Description: "factory doctor reports no blocking check"}},
+	Postcondition: &conditionDocument{Code: "supervisor.live", Description: "supervisor.state is live"},
+	Verify:        []string{"factory", "status", "--json"},
 }
 
 // statusDocument is the `factory status --json` view of a status result.
@@ -118,6 +126,7 @@ type recoveryDocument struct {
 	PendingEffect    *pendingEffectDocument `json:"pending_effect,omitempty"`
 	Discrepancies    []discrepancyDocument  `json:"discrepancies"`
 	SafeActions      []string               `json:"safe_actions"`
+	Actions          []actionDocument       `json:"actions"`
 }
 
 // pendingEffectDocument identifies a reserved external effect.
@@ -288,6 +297,10 @@ func newRecoveryDocument(diagnosis *factory.RecoveryDiagnosis) *recoveryDocument
 		InvocationExists: diagnosis.InvocationExists,
 		Discrepancies:    make([]discrepancyDocument, 0, len(diagnosis.Discrepancies)),
 		SafeActions:      append([]string{}, diagnosis.SafeActions...),
+		Actions:          make([]actionDocument, 0, len(diagnosis.Actions)),
+	}
+	for _, action := range diagnosis.Actions {
+		document.Actions = append(document.Actions, newRecommendedActionDocument(action))
 	}
 	if pending := diagnosis.PendingEffect; pending != nil {
 		document.PendingEffect = &pendingEffectDocument{ID: pending.ID, Kind: pending.Kind}
