@@ -136,21 +136,35 @@ and `guide_topic`. The typed fields are:
   argument with `human_input: true` has no value. A human supplies it.
 - `argv`: the complete argument vector. It is present only when no argument
   needs human input. Run it as an argument array. Do not give it to a shell.
-- `target`: the `run_id`, `revision`, `checkpoint_sha`, `invocation_id`, or
-  `effect_id` that the action applies to.
+- `target`: the `config_path`, `run_id`, `revision`, `checkpoint_sha`,
+  `invocation_id`, or `effect_id` that the action applies to. Each action
+  that has a command also has the argument `--config` with the
+  configuration that the inspection read. Its `argv` and `verify` contain
+  it too. Do not remove it.
 - `requires`: the structured preconditions, each with `code` and
   `description`. `postcondition` is the expected state after the action.
   `verify` is the inspection command that shows the postcondition.
+
+A doctor action has `id` `<code>.resolve`, the `requires` list of the
+check, and the postcondition `<code>.resolved`. Its `verify` is
+`factory doctor --json`. Its summary is a description, not a command, so a
+doctor repair is a `human_decision` that the operator authorizes, or an
+`inspection`.
 
 A recommendation is not an authorization. An `executable` action with
 `authorization: operator` needs the approval of the operator. A
 `human_decision` action never has an `argv`. An agent does not supply its
 human input, also when the operator approved other actions.
 
-Factory checks the target again when the command runs. For example,
-`run.retry_checks` gives `factory resume` the flags `--expect-revision` and
-`--expect-checkpoint`. When the run changed after the recommendation, resume
-refuses and changes nothing. Run `factory status --json` again to get a
+Factory checks the target and the preconditions again when the command
+runs. For example, `run.retry_checks` gives `factory resume` the flags
+`--expect-revision` and `--expect-checkpoint`. When the run changed after
+the recommendation, resume refuses and changes nothing. Resume also probes
+the worker runtime again; when it is not available, resume refuses with
+`check_infrastructure.unavailable` and changes nothing. A run-scoped command
+with `--run-id` for another run refuses before it reconciles anything.
+`factory auth refresh --expect-invocation <id>` refuses when the run now
+recovers another invocation. Run `factory status --json` again to get a
 current action.
 
 #### Example: a check paused for check infrastructure
@@ -191,7 +205,8 @@ exit status is the same as without `--json`.
 
 - `reason.code` is a stable code for `pending`, `blocked`, and `refused`:
   `run.none`, `run.mismatch`, `run.terminal`, `run.revision_changed`,
-  `run.checkpoint_changed`, `pending_effect.changed`,
+  `run.checkpoint_changed`, `pending_effect.changed`, `invocation.changed`,
+  `check_infrastructure.unavailable`,
   `recovery.waiting_for_human`, `recovery.workflow_failure`,
   `external.outcome_unknown`, `cleanup.confirmation_required`,
   `cleanup.plan_changed`, `cleanup.blocked`, `reset.confirmation_required`,
@@ -258,7 +273,7 @@ observe.
 | `factory stop` | `factory start` runs | Stops the polling coordinator. Keeps all run state. |
 | `factory start` | `factory doctor` is ready | Starts polling. Reconciles interrupted work before it continues. |
 | `factory auth refresh` | A run waits for a refreshed harness credential | Copies the host credential into the factory credential store. Changes no workflow state. |
-| `factory auth refresh --resume` | As above | Also reconciles pending effects and continues the paused native session one time. |
+| `factory auth refresh --resume` | As above | Also reconciles pending effects and continues the paused native session one time. With `--expect-invocation`, it refuses when the run recovers another invocation. |
 | `factory resume` | The run is not terminal and `factory status` names `factory resume` as a safe action | Reconciles a pending effect first. Then it does one of the actions in the next table. It does not use the retry budget. With `--expect-revision` and `--expect-checkpoint`, it refuses a run that changed. |
 | `factory reconcile` | A pending effect or discrepancy is reported after a restart | Runs one restart reconciliation. Pauses the run when it cannot prove a safe repair. |
 | `factory reconcile --abandon-effect <effect-id> --reason <text>` | A human inspected the ambiguous pending effect that `factory status` names | Discards that effect. The run stays paused. |
