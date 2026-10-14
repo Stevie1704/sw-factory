@@ -75,14 +75,23 @@ type onboardingManifest struct {
 }
 
 // runOnboard prepares the release resources for an agent that already runs,
-// proves a candidate's gates in its worker, or starts an interactive harness
-// session that does the onboarding.
+// proves a candidate's gates in its worker, keeps the persisted onboarding
+// plan, or starts an interactive harness session that does the onboarding.
 func runOnboard(ctx context.Context, args []string, _ string, output, errorsOutput io.Writer) int {
 	if len(args) > 0 && args[0] == "prepare" {
 		return runOnboardPrepare(args[1:], output, errorsOutput)
 	}
 	if len(args) > 0 && args[0] == "verify" {
 		return runOnboardVerify(ctx, args[1:], output, errorsOutput)
+	}
+	if len(args) > 0 && args[0] == "plan" {
+		return runOnboardPlan(ctx, args[1:], output, errorsOutput)
+	}
+	if len(args) > 0 && args[0] == "status" {
+		return runOnboardStatus(ctx, args[1:], output, errorsOutput)
+	}
+	if len(args) > 0 && args[0] == "record" {
+		return runOnboardRecord(ctx, args[1:], output, errorsOutput)
 	}
 	return runOnboardSession(ctx, args, output, errorsOutput)
 }
