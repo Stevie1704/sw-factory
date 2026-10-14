@@ -134,7 +134,7 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 // coordinator lock, avoiding a second lock acquisition during polling.
 func (s *Service) resumeWithStore(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) (ResumeResult, error) {
 	if run == nil {
-		return ResumeResult{}, errors.New("no persisted run")
+		return ResumeResult{}, errNoRun
 	}
 	if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, *run); err != nil {
 		return ResumeResult{Run: *run}, fmt.Errorf("recover headless native session identity before resume: %w", err)

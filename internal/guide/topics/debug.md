@@ -113,8 +113,8 @@ blocks the observation first, then run the diagnosis again.
   terminal run has `id`, `stage`, `status`, `activity`, `checkpoint_sha`,
   `active_invocation_ids`, `lifecycle_reason`, and `failed_gates`.
 - `recovery` has `sources_agree`, `pending_effect`, `discrepancies`,
-  `safe_actions`, and `actions`. `safe_actions` is the text form of
-  `actions`. Use only an action from `actions` or from the recovery table in
+  `safe_actions`, and `actions`. `safe_actions` is the schema-1 text list.
+  `actions` is the typed list. Use only an action from `actions` or from the recovery table in
   this topic.
 - `blockers` lists the known blockers, each with `code`, `likely_origin`,
   `problem`, `facts`, and an optional `action`.
@@ -184,7 +184,7 @@ exit status is the same as without `--json`.
   | `outcome` | `attempted` | Meaning |
   | --- | --- | --- |
   | `completed` | true | The command did its action. |
-  | `pending` | true | An external call did not answer. Its outcome is unknown. The effect stays reserved, and the next reconciliation replays it. Do not run the command again to force it. |
+  | `pending` | true | An external call did not answer. Its outcome is unknown. Run `factory status --json` before you run the command again. For `reconcile`, the effect stays reserved, and the next reconciliation replays it. |
   | `blocked` | true | The command stopped at a known boundary, for example a reconciliation pause. `recovery` shows the diagnosis. |
   | `refused` | false | The command changed nothing, because a target or a precondition was not true. |
   | `error` | true | An operational failure. The `error` object has `code`, `likely_origin`, and a fixed `message`. Standard error has the detail. A mutation can have occurred, so verify before you continue. |

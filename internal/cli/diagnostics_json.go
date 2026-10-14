@@ -200,7 +200,6 @@ func newDiagnosticDocument(result doctor.Result) diagnosticDocument {
 			GuideTopic:    result.Topic,
 		}
 		document.Action.Kind, document.Action.Authorization = doctorActionAuthority(result.Effect)
-
 	}
 	return document
 }

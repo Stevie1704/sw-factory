@@ -132,8 +132,9 @@ func (a RecommendedAction) Argv() ([]string, bool) {
 	return argv, true
 }
 
-// statusVerification is the inspection that confirms a recovery postcondition.
-var statusVerification = []string{"factory", "status", "--json"}
+// statusVerification returns the inspection that confirms a recovery
+// postcondition. Each call returns a new slice, so no action shares it.
+func statusVerification() []string { return []string{"factory", "status", "--json"} }
 
 // baselineRecoveryActions are the actions of every recovery diagnosis. They
 // read state or need a human decision; none of them claims recovery.
@@ -142,7 +143,7 @@ func baselineRecoveryActions(runID string) []RecommendedAction {
 	return []RecommendedAction{
 		{
 			ID: ActionInspectStatus, Kind: ActionKindInspection, Summary: "inspect the diagnosis with `factory status`",
-			Command: statusVerification, Target: target, Effect: doctor.EffectInspection, Authorization: AuthorizationNone,
+			Command: statusVerification(), Target: target, Effect: doctor.EffectInspection, Authorization: AuthorizationNone,
 		},
 		{
 			ID: ActionInspectDoctor, Kind: ActionKindInspection, Summary: "run the startup diagnosis with `factory doctor`",
@@ -151,7 +152,7 @@ func baselineRecoveryActions(runID string) []RecommendedAction {
 		{
 			ID: ActionResolveDiscrepancy, Kind: ActionKindHumanDecision, Summary: "verify the repository, worktree, branch, checkpoint, issue label, status comment, and pull request, then resolve the recorded discrepancy before retrying the run",
 			Target: target, Effect: doctor.EffectExternalMutation, Authorization: AuthorizationHumanReview,
-			Verify: statusVerification,
+			Verify: statusVerification(),
 		},
 	}
 }
@@ -176,7 +177,7 @@ func retryChecksAction(run store.Run) RecommendedAction {
 		Effect:        doctor.EffectExternalMutation,
 		Authorization: AuthorizationOperator,
 		Postcondition: ActionCondition{Code: "run.check_active", Description: "the run is active in the check stage at checkpoint " + run.CheckpointSHA},
-		Verify:        statusVerification,
+		Verify:        statusVerification(),
 	}
 }
 
@@ -199,7 +200,7 @@ func abandonEffectAction(runID string, effect store.PendingEffect) RecommendedAc
 		Effect:        doctor.EffectLocalMutation,
 		Authorization: AuthorizationHumanReview,
 		Postcondition: ActionCondition{Code: "run.waiting_for_human", Description: "the effect is discarded and the run stays paused"},
-		Verify:        statusVerification,
+		Verify:        statusVerification(),
 	}
 }
 

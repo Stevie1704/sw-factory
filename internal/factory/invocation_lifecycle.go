@@ -212,11 +212,11 @@ func newInvocationLifecycle(journal invocationJournal, workerRuntime worker.Work
 // or launches the next role after reconciling a durable interruption.
 func (l *invocationLifecycle) Resume(ctx context.Context, request InvocationRecoveryRequest) (ResumeResult, error) {
 	if request.Run == nil {
-		return ResumeResult{}, errors.New("no persisted run")
+		return ResumeResult{}, errNoRun
 	}
 	run := *request.Run
-	if store.IsTerminalStatus(run.Status) {
-		return ResumeResult{}, fmt.Errorf("cannot resume terminal run %q with status %q", run.ID, run.Status)
+	if err := checkResumeTarget(ResumeRequest{}, run); err != nil {
+		return ResumeResult{}, err
 	}
 	run, _, err := l.reconcileBeforeResume(ctx, request, run)
 	if err != nil {
@@ -417,11 +417,11 @@ func (l *invocationLifecycle) resumeActiveInvocationError(ctx context.Context, r
 // when the caller explicitly requests recovery.
 func (l *invocationLifecycle) refreshAuth(ctx context.Context, request InvocationRecoveryRequest, requestedHarness config.Harness, resume bool) (AuthRefreshResult, error) {
 	if request.Run == nil {
-		return AuthRefreshResult{}, errors.New("no persisted run")
+		return AuthRefreshResult{}, errNoRun
 	}
 	run := *request.Run
 	if store.IsTerminalStatus(run.Status) {
-		return AuthRefreshResult{}, fmt.Errorf("cannot refresh auth for terminal run %q", run.ID)
+		return AuthRefreshResult{}, &OperationRefusedError{Code: RefusalRunTerminal, RunID: run.ID, Message: fmt.Sprintf("cannot refresh auth for terminal run %q", run.ID)}
 	}
 	if resume {
 		var reconcileErr error

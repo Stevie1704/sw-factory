@@ -359,7 +359,11 @@ func runResume(ctx context.Context, args []string, defaultConfigPath string, out
 		writeError(errorsOutput, fmt.Errorf("--expect-revision must not be negative, got %d", *expectedRevision))
 		return 2
 	}
-	result, err := newService(*configPath).Resume(ctx, factory.ResumeRequest{RunID: *runID, ExpectedRevision: *expectedRevision, ExpectedCheckpointSHA: *expectedCheckpoint})
+	result, err := newService(*configPath).Resume(ctx, factory.ResumeRequest{
+		RunID:                 *runID,
+		ExpectedRevision:      *expectedRevision,
+		ExpectedCheckpointSHA: *expectedCheckpoint,
+	})
 	if *asJSON {
 		return writeOperationJSON(output, errorsOutput, newResumeDocument(result, err), err)
 	}

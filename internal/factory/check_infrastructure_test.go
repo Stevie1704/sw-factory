@@ -496,3 +496,19 @@ func assertRefusal(t *testing.T, err error, code factory.RefusalCode) {
 		t.Fatalf("error = %v, want refusal %s", err, code)
 	}
 }
+
+// TestAuthRefreshRefusesATerminalRun verifies auth refresh reports a terminal
+// run with the same stable refusal as resume.
+func TestAuthRefreshRefusesATerminalRun(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-terminal-auth", true)
+	terminal := fixture.runStore.runs[fixture.run.ID]
+	terminal.Status = store.StatusCancelled
+	if err := fixture.runStore.SaveRun(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := fixture.service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: terminal.ID})
+
+	assertRefusal(t, err, factory.RefusalRunTerminal)
+}

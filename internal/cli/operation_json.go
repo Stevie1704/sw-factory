@@ -68,7 +68,8 @@ type operationBlocker struct {
 const (
 	messageRecoveryBlocked  = "the run waits for human reconciliation; read recovery.discrepancies and recovery.actions"
 	messageWorkflowFailure  = "the durable workflow state is invalid; read recovery.discrepancies"
-	messageOutcomeUnknown   = "an external call did not answer; its outcome is unknown and the journal replays the effect on the next reconciliation"
+	messageOutcomeUnknown   = "an external call did not answer; its outcome is unknown; verify the state before you run the command again"
+	messageReplayReserved   = "an external call did not answer during the replay; the effect stays reserved and the next reconciliation replays it"
 	messageOperationalError = "the command failed; standard error has the detail"
 )
 
@@ -108,6 +109,8 @@ func newOperationDocument(command string, err error) operationDocument {
 		refusal("cleanup.plan_changed", cleanupChanged.Error())
 	case errors.As(err, &resetConfirm):
 		refusal("reset.confirmation_required", resetConfirm.Error())
+	// A blocked cleanup or reset refused before any deletion, so it is a
+	// refusal. An incomplete reset deleted targets, so it is blocked.
 	case errors.As(err, &cleanupBlocked):
 		refusal("cleanup.blocked", cleanupBlocked.Error())
 		for _, run := range cleanupBlocked.Runs {
@@ -188,6 +191,11 @@ type runStateDocument struct {
 	Status store.Status `json:"status,omitempty"`
 }
 
+// newRunStateDocument projects the stage and status of run.
+func newRunStateDocument(run store.Run) runStateDocument {
+	return runStateDocument{Stage: run.Stage, Status: run.Status}
+}
+
 // resumeResultDocument is the result of `factory resume --json`.
 type resumeResultDocument struct {
 	runStateDocument
@@ -205,7 +213,7 @@ func newResumeDocument(result factory.ResumeResult, err error) operationDocument
 		if result.Invocation.ID != "" {
 			continuation = "agent"
 		}
-		document.Result = resumeResultDocument{runStateDocument: runStateDocument{Stage: result.Run.Stage, Status: result.Run.Status}, Continuation: continuation}
+		document.Result = resumeResultDocument{runStateDocument: newRunStateDocument(result.Run), Continuation: continuation}
 	}
 	document.Verification = verifyStatus("confirm the run stage, status, and checkpoint with `factory status --json`")
 	return document
@@ -221,9 +229,9 @@ type reconcileResultDocument struct {
 // replay that timed out is pending: the effect stays reserved.
 func newReconcileDocument(result factory.RecoveryResult, err error) operationDocument {
 	document := newOperationDocument("reconcile", err)
-	if result.Outcome == factory.RecoveryOutcomeRetryable && document.Outcome == operationError {
+	if result.Outcome == factory.RecoveryOutcomeRetryable && err != nil {
 		document.Outcome, document.Error = operationPending, nil
-		document.Reason = &reasonDocument{Code: "external.outcome_unknown", Message: messageOutcomeUnknown}
+		document.Reason = &reasonDocument{Code: "external.outcome_unknown", Message: messageReplayReserved}
 	}
 	if result.Run == nil {
 		if err == nil {
@@ -235,7 +243,7 @@ func newReconcileDocument(result factory.RecoveryResult, err error) operationDoc
 	if pending := result.Diagnosis.PendingEffect; pending != nil {
 		document.Identities.EffectID = pending.ID
 	}
-	document.Result = reconcileResultDocument{runStateDocument: runStateDocument{Stage: result.Run.Stage, Status: result.Run.Status}, Reconciliation: result.Outcome}
+	document.Result = reconcileResultDocument{runStateDocument: newRunStateDocument(*result.Run), Reconciliation: result.Outcome}
 	if document.Recovery == nil && result.Diagnosis.RunID != "" {
 		document.Recovery = newRecoveryDocument(&result.Diagnosis)
 	}
@@ -358,7 +366,7 @@ func newIssueDocument(claimed factory.IssueResult, baseline factory.BaselineResu
 	document.Identities = runIdentities(run)
 	if err == nil {
 		document.Result = issueResultDocument{
-			runStateDocument: runStateDocument{Stage: run.Stage, Status: run.Status},
+			runStateDocument: newRunStateDocument(run),
 			Branch:           run.Branch, Worktree: run.Worktree,
 			TestPolicy:    factory.TestPolicyDescription(claimed.Packet.RepositoryConfig.TestPolicy.Mode),
 			Route:         claimed.Packet.Route.Description(),
@@ -443,7 +451,7 @@ func newDraftPullRequestDocument(result factory.DraftPullRequestResult, err erro
 	document.Identities = runIdentities(run)
 	document.Identities.PullRequestNumber = result.PullRequest.Number
 	if err == nil {
-		draft := draftPullRequestResultDocument{runStateDocument: runStateDocument{Stage: run.Stage, Status: run.Status}, Gates: []gateStateDocument{}}
+		draft := draftPullRequestResultDocument{runStateDocument: newRunStateDocument(run), Gates: []gateStateDocument{}}
 		if result.Repair == nil {
 			draft.PullRequestURL = result.PullRequest.URL
 		} else {
