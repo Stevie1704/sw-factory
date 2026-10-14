@@ -83,10 +83,10 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ResumeResu
 		return ResumeResult{}, fmt.Errorf("read run for resume: %w", err)
 	}
 	if run == nil {
-		return ResumeResult{}, errors.New("no persisted run")
+		return ResumeResult{}, errNoRun
 	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return ResumeResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	if err := checkResumeTarget(request, *run); err != nil {
+		return ResumeResult{Run: *run}, err
 	}
 	return s.resumeWithStore(ctx, registration, runStore, run)
 }
@@ -112,10 +112,10 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 		return AuthRefreshResult{}, fmt.Errorf("read run for auth refresh: %w", err)
 	}
 	if run == nil {
-		return AuthRefreshResult{}, errors.New("no persisted run")
+		return AuthRefreshResult{}, errNoRun
 	}
-	if request.RunID != "" && request.RunID != run.ID {
-		return AuthRefreshResult{}, fmt.Errorf("active run is %s, not %s", run.ID, request.RunID)
+	if err := checkRunSelection(request.RunID, *run); err != nil {
+		return AuthRefreshResult{}, err
 	}
 	if request.Resume {
 		if err := s.recoverHeadlessNativeSessionIdentities(ctx, registration, runStore, *run); err != nil {

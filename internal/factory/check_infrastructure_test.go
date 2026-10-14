@@ -105,6 +105,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
 		Config:            &fakeConfig{value: host},
 		OpenStore:         func(context.Context, string) (factory.OperationalStore, error) { return opened, nil },
+		OpenStoreReadOnly: func(context.Context, string) (factory.OperationalStore, error) { return opened, nil },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return policy, nil },
 		Tracker:           &fakeGitHubWithPullRequests{fakeGitHub: githubAdapter},
 		PullRequests:      pullRequests,
@@ -359,5 +360,139 @@ func TestOutOfMemoryCheckPausesWithTheNamedCause(t *testing.T) {
 	assertCheckInfrastructurePause(t, paused.Run)
 	if !strings.Contains(paused.Run.LifecycleReason, "out of memory") {
 		t.Fatalf("lifecycle reason = %q, want the out-of-memory cause", paused.Run.LifecycleReason)
+	}
+}
+
+// TestCheckInfrastructureRecoveryIsATypedGuardedAction verifies an agent can
+// read the retry-checks recovery as a typed action, execute exactly that
+// action, and verify the same checkpoint, and that a second execution of the
+// now-stale recommendation is refused without effects.
+func TestCheckInfrastructureRecoveryIsATypedGuardedAction(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-typed-action", true)
+	fixture.runtime.nextCommandErr = errors.New("worker container is not running")
+	if _, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID}); err != nil {
+		t.Fatalf("CreateDraftPullRequest() fixture error = %v", err)
+	}
+	paused := fixture.runStore.runs[fixture.run.ID]
+	invocations := len(fixture.runStore.invocations)
+
+	status, err := fixture.service.Status(context.Background())
+	if err != nil || status.Recovery == nil {
+		t.Fatalf("Status() = %#v, %v; want a recovery diagnosis", status.Recovery, err)
+	}
+	action, ok := recoveryAction(status.Recovery.Actions, factory.ActionRetryChecks)
+	if !ok {
+		t.Fatalf("actions = %#v, want %s", status.Recovery.Actions, factory.ActionRetryChecks)
+	}
+	if action.Kind != factory.ActionKindExecutable || action.Authorization != factory.AuthorizationOperator {
+		t.Fatalf("action = %#v, want an operator-authorized executable action", action)
+	}
+	if action.Target.RunID != paused.ID || action.Target.Revision != paused.Revision || action.Target.CheckpointSHA != implementationCheckpoint {
+		t.Fatalf("target = %#v, want run %s revision %d checkpoint %s", action.Target, paused.ID, paused.Revision, implementationCheckpoint)
+	}
+	argv, executable := action.Argv()
+	want := []string{"factory", "resume", "--run-id", paused.ID, "--expect-revision", fmt.Sprint(paused.Revision), "--expect-checkpoint", implementationCheckpoint}
+	if !executable || strings.Join(argv, " ") != strings.Join(want, " ") {
+		t.Fatalf("Argv() = %v, %t; want %v", argv, executable, want)
+	}
+	if !hasCondition(action.Preconditions, "check_infrastructure.available") || action.Postcondition.Code != "run.check_active" || strings.Join(action.Verify, " ") != "factory status --json" {
+		t.Fatalf("action = %#v, want the infrastructure precondition, the active-check postcondition, and status verification", action)
+	}
+
+	resumed, err := fixture.service.Resume(context.Background(), factory.ResumeRequest{RunID: action.Target.RunID, ExpectedRevision: action.Target.Revision, ExpectedCheckpointSHA: action.Target.CheckpointSHA})
+
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if resumed.Run.Stage != store.StageCheck || resumed.Run.Status != store.StatusActive || resumed.Run.CheckpointSHA != implementationCheckpoint || resumed.Run.CheckRepairAttempts != paused.CheckRepairAttempts {
+		t.Fatalf("Resume() run = %#v, want the active check at the same checkpoint with unchanged retry accounting", resumed.Run)
+	}
+	after := fixture.runStore.runs[fixture.run.ID]
+
+	_, err = fixture.service.Resume(context.Background(), factory.ResumeRequest{RunID: action.Target.RunID, ExpectedRevision: action.Target.Revision, ExpectedCheckpointSHA: action.Target.CheckpointSHA})
+
+	assertRefusal(t, err, factory.RefusalRevisionChanged)
+	if stored := fixture.runStore.runs[fixture.run.ID]; stored.Revision != after.Revision || stored.Status != after.Status {
+		t.Fatalf("run after stale resume = %#v, want it unchanged", stored)
+	}
+	if len(fixture.runStore.invocations) != invocations || len(fixture.harness.resumes) != 0 || len(fixture.workspace.checkpoints) != 1 {
+		t.Fatalf("effects = invocations %d resumes %d checkpoints %d, want no duplicate effect", len(fixture.runStore.invocations), len(fixture.harness.resumes), len(fixture.workspace.checkpoints))
+	}
+}
+
+// TestResumeRefusesAStaleOrMismatchedTarget verifies each guard of an
+// explicit resume returns its stable refusal code before any state change.
+func TestResumeRefusesAStaleOrMismatchedTarget(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		request func(store.Run) factory.ResumeRequest
+		code    factory.RefusalCode
+	}{
+		"wrong run": {func(store.Run) factory.ResumeRequest { return factory.ResumeRequest{RunID: "run-other"} }, factory.RefusalRunMismatch},
+		"changed checkpoint": {func(run store.Run) factory.ResumeRequest {
+			return factory.ResumeRequest{RunID: run.ID, ExpectedCheckpointSHA: factoryGateCheckpoint}
+		}, factory.RefusalCheckpointChanged},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newCheckRecoveryFixture(t, "run-guard", true)
+			fixture.runtime.nextCommandErr = errors.New("worker container is not running")
+			if _, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID}); err != nil {
+				t.Fatalf("CreateDraftPullRequest() fixture error = %v", err)
+			}
+			before := fixture.runStore.runs[fixture.run.ID]
+
+			_, err := fixture.service.Resume(context.Background(), test.request(before))
+
+			assertRefusal(t, err, test.code)
+			if after := fixture.runStore.runs[fixture.run.ID]; after.Revision != before.Revision || after.Status != before.Status {
+				t.Fatalf("run = %#v, want it unchanged", after)
+			}
+		})
+	}
+}
+
+// TestResumeRefusesATerminalRun verifies a terminal run is a stable refusal.
+func TestResumeRefusesATerminalRun(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-terminal", true)
+	terminal := fixture.runStore.runs[fixture.run.ID]
+	terminal.Status = store.StatusCancelled
+	if err := fixture.runStore.SaveRun(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := fixture.service.Resume(context.Background(), factory.ResumeRequest{RunID: terminal.ID})
+
+	assertRefusal(t, err, factory.RefusalRunTerminal)
+}
+
+// recoveryAction returns the action with id.
+func recoveryAction(actions []factory.RecommendedAction, id factory.ActionID) (factory.RecommendedAction, bool) {
+	for _, action := range actions {
+		if action.ID == id {
+			return action, true
+		}
+	}
+	return factory.RecommendedAction{}, false
+}
+
+// hasCondition reports whether conditions contain code.
+func hasCondition(conditions []factory.ActionCondition, code string) bool {
+	for _, condition := range conditions {
+		if condition.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// assertRefusal verifies err is a typed refusal with code.
+func assertRefusal(t *testing.T, err error, code factory.RefusalCode) {
+	t.Helper()
+	var refused *factory.OperationRefusedError
+	if !errors.As(err, &refused) || refused.Code != code {
+		t.Fatalf("error = %v, want refusal %s", err, code)
 	}
 }

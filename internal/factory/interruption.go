@@ -16,6 +16,12 @@ import (
 type ResumeRequest struct {
 	// RunID optionally selects one opaque factory run identifier.
 	RunID string
+	// ExpectedRevision, when not zero, refuses the resume unless the run still
+	// has this revision, so a stale recommendation is never applied.
+	ExpectedRevision int64
+	// ExpectedCheckpointSHA, when not empty, refuses the resume unless the run
+	// is still at this checkpoint.
+	ExpectedCheckpointSHA string
 }
 
 // ResumeResult reports the invocation restored by an explicit resume command.
