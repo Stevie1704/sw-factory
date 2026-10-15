@@ -216,8 +216,10 @@ func projectRunInspection(detail RunDetail, offset, limit int) RunInspection {
 			Limitations: []string{"Invocation records retain creation and latest status, not every transition.",
 				"Gate rows retain the latest outcome per phase/checkpoint/ordinal; repeated attempts at the same checkpoint overwrite earlier outcomes, and packet changes can remove rows.",
 				"Phase diagnostics retain only the latest failure file and may describe a different checkpoint."}}}
+	testRevisionDisabled := false
 	if packet, err := decodeSpecificationPacket(run.SpecificationPacket); err == nil {
-		for name, frozen := range map[string]int{"check_repair": packet.RepositoryConfig.RetryLimits.CheckRepair, "review_repair": packet.RepositoryConfig.RetryLimits.ReviewRepair, "test_revision": packet.RepositoryConfig.RetryLimits.TestRevision} {
+		testRevisionDisabled = packet.RepositoryConfig.TestPolicy.Mode == config.TestModeAdvisory && !independentTestStageDeclared(packet)
+		for name, frozen := range map[string]int{"check_repair": packet.RepositoryConfig.RetryLimits.CheckRepair, "review_repair": packet.RepositoryConfig.RetryLimits.ReviewRepair, "test_revision": testRevisionBudgetForPacket(packet)} {
 			budget := out.RetryBudgets[name]
 			if budget.Limit == 0 {
 				budget.Limit = frozen
@@ -233,6 +235,8 @@ func projectRunInspection(detail RunDetail, offset, limit int) RunInspection {
 		budget.State = "unavailable"
 		if budget.Limit > 0 {
 			budget.State = "available"
+		} else if name == "test_revision" && testRevisionDisabled {
+			budget.State = "not_applicable"
 		}
 		out.RetryBudgets[name] = budget
 	}

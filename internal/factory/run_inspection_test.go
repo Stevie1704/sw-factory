@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"golang.org/x/sys/unix"
 )
 
@@ -264,5 +266,46 @@ func TestRunInspectionDistinguishesMissingCleanedAndUnknown(t *testing.T) {
 	}
 	if _, err := svc.RunEvidence(t.Context(), "historical", "gate-failure.checkpoint", 0, 100); !errors.Is(err, factory.ErrEvidenceUnavailable) {
 		t.Fatalf("symlink directory: %v", err)
+	}
+}
+
+// TestRunInspectionPreservesDisabledTestRevisionBudgets verifies inspection
+// uses the frozen workflow rule instead of exposing an unavailable protocol.
+func TestRunInspectionPreservesDisabledTestRevisionBudgets(t *testing.T) {
+	t.Parallel()
+	svc, db, _ := inspectionFixture(t)
+	for _, tc := range []struct {
+		name  string
+		mode  config.TestMode
+		route workflow.Route
+		state string
+		limit int
+	}{
+		{"advisory", config.TestModeAdvisory, workflow.RouteDefault, "not_applicable", 0},
+		{"required", config.TestModeRequired, workflow.RouteDefault, "available", 2},
+		{"acceptance", config.TestModeAdvisory, workflow.RouteAcceptance, "available", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run, err := db.Run(t.Context(), "historical")
+			if err != nil {
+				t.Fatal(err)
+			}
+			packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, Route: tc.route, RepositoryConfig: config.RepositoryConfig{TestPolicy: config.TestPolicy{Mode: tc.mode}, RetryLimits: config.RetryLimits{TestRevision: 2}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run.SpecificationPacket = string(packet)
+			if err := db.SaveRun(t.Context(), *run); err != nil {
+				t.Fatal(err)
+			}
+			got, err := svc.RunInspect(t.Context(), run.ID, 0, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			budget := got.RetryBudgets["test_revision"]
+			if budget.State != tc.state || budget.Limit != tc.limit {
+				t.Fatalf("test-revision budget: %+v, want %s / %d", budget, tc.state, tc.limit)
+			}
+		})
 	}
 }

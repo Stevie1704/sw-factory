@@ -334,7 +334,9 @@ pending-effect identity, evidence references, and a chronological `timeline`.
 It omits prompts, transcripts, source, command output, credential stores,
 native session identities, free-text lifecycle reasons, and replay payloads.
 A retry budget with `state: "unavailable"` has no retained usable limit;
-zero does not establish that a budget was exhausted.
+zero does not establish that a budget was exhausted. `not_applicable` identifies
+the disabled test-revision protocol on advisory runs without an independent
+test stage.
 
 `offset` and `limit` apply independently to the invocation, gate, evidence,
 and timeline collections. `coverage` gives their totals, one `next_offset`
