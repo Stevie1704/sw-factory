@@ -152,7 +152,7 @@ named action and `factory doctor` until it prints `doctor: ready`.
 ```sh
 factory start            # poll GitHub until stopped; add --verbose for a progress log
 factory issue <number>   # claim one agent-ready issue now
-factory ui               # read-only web view on 127.0.0.1
+factory ui               # local web view and session commands on 127.0.0.1
 factory stop             # stop the polling coordinator
 ```
 

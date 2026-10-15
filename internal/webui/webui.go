@@ -1,6 +1,8 @@
-// Package webui serves the local, read-only web view of factory runs. It
-// renders pages from a Reader, loads no external resource, and answers only
-// requests addressed to the loopback host.
+// Package webui serves the local web view of factory runs and the session
+// command API. It renders pages from a Reader, loads no external resource,
+// and answers only requests addressed to the loopback host. Its only write is
+// to append a session command to the durable inbox (ADR 0024); the
+// coordinator applies it.
 package webui
 
 import (
@@ -43,6 +45,9 @@ type Options struct {
 	// RefreshInterval is how often a page reloads its content; 0 disables
 	// automatic refresh.
 	RefreshInterval time.Duration
+	// Sessions enables the session command API. Nil serves only the
+	// read-only run pages.
+	Sessions Sessions
 }
 
 // page names one template set: the layout plus one page body.
@@ -67,6 +72,9 @@ type errorPage struct {
 type layoutData struct {
 	// RefreshSeconds is the automatic refresh interval; 0 turns it off.
 	RefreshSeconds int
+	// CSRFToken is the per-process session command token, or empty when the
+	// session command API is off.
+	CSRFToken string
 	// Page is the page model; it has a Supervisor field.
 	Page any
 }
@@ -76,6 +84,8 @@ type server struct {
 	reader  Reader
 	options Options
 	pages   map[page]*template.Template
+	// csrfToken is the session command token pages hand to their scripts.
+	csrfToken string
 }
 
 // NewHandler returns the UI routes behind the loopback Host check and the
@@ -92,6 +102,10 @@ func NewHandler(reader Reader, options Options) http.Handler {
 	mux.HandleFunc("GET /runs/{id}", ui.runDetail)
 	mux.HandleFunc("GET /runs/{id}/evaluation", ui.runEvaluation)
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServerFS(assets)))
+	if options.Sessions != nil {
+		ui.csrfToken = newCSRFToken()
+		(&sessionRoutes{sessions: options.Sessions, token: ui.csrfToken}).register(mux)
+	}
 	return protect(mux)
 }
 
@@ -172,7 +186,7 @@ func (ui *server) renderStoreError(w http.ResponseWriter, err error) {
 // clean 500 instead of a half-written page.
 func (ui *server) render(w http.ResponseWriter, status int, name page, data any) {
 	var body bytes.Buffer
-	if err := ui.pages[name].ExecuteTemplate(&body, "layout", layoutData{RefreshSeconds: refreshSeconds(ui.options.RefreshInterval), Page: data}); err != nil {
+	if err := ui.pages[name].ExecuteTemplate(&body, "layout", layoutData{RefreshSeconds: refreshSeconds(ui.options.RefreshInterval), CSRFToken: ui.csrfToken, Page: data}); err != nil {
 		http.Error(w, "render page: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
