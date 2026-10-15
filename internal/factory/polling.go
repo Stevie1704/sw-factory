@@ -137,6 +137,11 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		return fmt.Errorf("reconcile persisted run at startup: %w", err)
 	}
 	s.observeCoordinatorStageFromStore(pollContext, registration, events)
+	sessionCommands, err := s.startSessionCommands(pollContext, registration)
+	if err != nil {
+		return err
+	}
+	defer sessionCommands.stop()
 
 	repository := registeredRepository(registration)
 	leaseRunID := ""

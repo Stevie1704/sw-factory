@@ -163,6 +163,9 @@ type Dependencies struct {
 	OpenStore StoreOpener
 	// OpenStoreReadOnly opens the operational store for inspection only.
 	OpenStoreReadOnly ReadOnlyStoreOpener
+	// OpenCommandInbox opens the narrow session command inbox of the local
+	// UI. It never creates or migrates the store.
+	OpenCommandInbox CommandInboxOpener
 	CheckRepository   RepositoryChecker
 	LoadRepository    RepositoryConfigLoader
 	// Tracker is the work-tracker adapter selected by the composition root.
@@ -436,6 +439,11 @@ func NewWithDependencies(configPath string, dependencies Dependencies) *Service 
 	if dependencies.OpenStoreReadOnly == nil {
 		dependencies.OpenStoreReadOnly = func(ctx context.Context, path string) (OperationalStore, error) {
 			return store.OpenReadOnly(ctx, path)
+		}
+	}
+	if dependencies.OpenCommandInbox == nil {
+		dependencies.OpenCommandInbox = func(ctx context.Context, path string) (CommandInbox, error) {
+			return store.OpenCommandInbox(ctx, path)
 		}
 	}
 	if dependencies.CheckRepository == nil {
