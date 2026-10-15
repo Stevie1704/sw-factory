@@ -360,7 +360,7 @@ func validateCommandJSON(label string, value []byte, maxBytes int, required bool
 }
 
 // ideationCommandSchema creates the additive command inbox of schema version
-// 44 (ADR 0023).
+// 45 (ADR 0024).
 var ideationCommandSchema = []string{
 	`CREATE TABLE IF NOT EXISTS ideation_commands (
 		sequence INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -246,7 +246,7 @@ func TestCommandInboxAppendsWithoutMigratingTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(t.Context(), "UPDATE schema_metadata SET version = 43 WHERE singleton = 1"); err != nil {
+	if _, err := database.ExecContext(t.Context(), "UPDATE schema_metadata SET version = 44 WHERE singleton = 1"); err != nil {
 		t.Fatal(err)
 	}
 	_ = database.Close()
@@ -255,9 +255,9 @@ func TestCommandInboxAppendsWithoutMigratingTheStore(t *testing.T) {
 	}
 }
 
-// TestSchema44MigrationCreatesTheCommandInbox verifies that an older store
+// TestSchema45MigrationCreatesTheCommandInbox verifies that an older store
 // gains an empty command inbox through the normal migration path.
-func TestSchema44MigrationCreatesTheCommandInbox(t *testing.T) {
+func TestSchema45MigrationCreatesTheCommandInbox(t *testing.T) {
 	t.Parallel()
 
 	opened, path := openIdeationStoreForTest(t)
@@ -268,7 +268,7 @@ func TestSchema44MigrationCreatesTheCommandInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(t.Context(), "DROP TABLE ideation_commands; UPDATE schema_metadata SET version = 43 WHERE singleton = 1"); err != nil {
+	if _, err := database.ExecContext(t.Context(), "DROP TABLE ideation_commands; UPDATE schema_metadata SET version = 44 WHERE singleton = 1"); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}
@@ -280,8 +280,8 @@ func TestSchema44MigrationCreatesTheCommandInbox(t *testing.T) {
 		t.Fatalf("Open() migration error = %v", err)
 	}
 	defer func() { _ = migrated.Close() }()
-	if migrated.SchemaVersion() != store.CurrentSchemaVersion || store.CurrentSchemaVersion != 44 {
-		t.Fatalf("SchemaVersion() = %d, want 44", migrated.SchemaVersion())
+	if migrated.SchemaVersion() != store.CurrentSchemaVersion || store.CurrentSchemaVersion != 45 {
+		t.Fatalf("SchemaVersion() = %d, want 45", migrated.SchemaVersion())
 	}
 	pending, err := migrated.PendingIdeationCommands(t.Context())
 	if err != nil || len(pending) != 0 {
