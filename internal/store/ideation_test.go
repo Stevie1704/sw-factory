@@ -289,3 +289,124 @@ func TestIdeationWriteRejectsAStaleRevision(t *testing.T) {
 		t.Fatalf("history after stale writes = %#v", history)
 	}
 }
+
+// briefForTest returns a complete brief whose items the plan nodes trace to.
+func briefForTest(problem string) store.Brief {
+	return store.Brief{
+		Problem:             problem,
+		Audience:            "New maintainers",
+		SuccessCriteria:     []store.BriefItem{{ID: "sc-1", Text: "Setup finishes in ten minutes."}},
+		Scope:               []store.BriefItem{{ID: "scope-1", Text: "The onboarding command."}},
+		NonGoals:            []store.BriefItem{{ID: "ng-1", Text: "Remote installers."}},
+		Decisions:           []store.BriefDecision{{ID: "d-1", Decision: "Keep one command.", Rationale: "Fewer steps."}},
+		Assumptions:         []store.BriefItem{{ID: "a-1", Text: "Docker is installed."}},
+		Evidence:            []store.BriefItem{{ID: "e-1", Text: "Three reports in #12."}},
+		UnresolvedQuestions: []store.BriefItem{{ID: "q-1", Text: "Do we support Windows?"}},
+	}
+}
+
+// planNodesForTest returns a parent with one dependent child.
+func planNodesForTest() []store.PlanNode {
+	return []store.PlanNode{
+		{ID: "n-1", Kind: "feature", Title: "Faster onboarding", Body: "Parent.", AcceptanceCriteria: []string{"Setup is one command."}, BriefRefs: []string{"sc-1"}},
+		{ID: "n-2", Kind: "issue", Title: "Cache images", Body: "Child.", AcceptanceCriteria: []string{"Second setup is offline."}, ParentID: "n-1", BriefRefs: []string{"scope-1", "d-1"}},
+		{ID: "n-3", Kind: "issue", Title: "Document setup", Body: "Child.", AcceptanceCriteria: []string{"Guide names the command."}, ParentID: "n-1", DependsOn: []string{"n-2"}},
+	}
+}
+
+// saveBriefAndPlanForTest stores brief revision one and a plan derived from it.
+func saveBriefAndPlanForTest(t *testing.T, opened *store.Store, session store.IdeationSession) (store.IdeationSession, store.PlanRevision) {
+	t.Helper()
+	session, brief, err := opened.SaveBriefRevision(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), briefForTest("Onboarding is slow."))
+	if err != nil {
+		t.Fatalf("SaveBriefRevision() error = %v", err)
+	}
+	session, plan, err := opened.SavePlanRevision(t.Context(), ideationWrite(session, store.IdeationStateDraftReview), store.PlanRevision{
+		SourceBriefRevision: brief.Revision, ContextRevision: "0123456789abcdef0123456789abcdef01234567", Nodes: planNodesForTest(),
+	})
+	if err != nil {
+		t.Fatalf("SavePlanRevision() error = %v", err)
+	}
+	return session, plan
+}
+
+// TestBriefRevisionChangeMarksPriorDraftsStaleWithoutChangingThem verifies that
+// briefs and plans are versioned, that a plan records its source brief and
+// context revision, and that a newer brief makes the old draft visibly stale
+// while its stored content stays the same after a restart.
+func TestBriefRevisionChangeMarksPriorDraftsStaleWithoutChangingThem(t *testing.T) {
+	t.Parallel()
+
+	opened, path := openIdeationStoreForTest(t)
+	session := createIdeationSessionForTest(t, opened, "session-1")
+	session, plan := saveBriefAndPlanForTest(t, opened, session)
+	if session.BriefRevision != 1 || session.PlanRevision != 1 || plan.Revision != 1 || plan.SourceBriefRevision != 1 || plan.Stale {
+		t.Fatalf("session = %#v plan = %#v, want brief 1 and fresh plan 1", session, plan)
+	}
+	session, second, err := opened.SaveBriefRevision(t.Context(), ideationWrite(session, store.IdeationStateDraftReview), briefForTest("Onboarding is slow and fragile."))
+	if err != nil {
+		t.Fatalf("second SaveBriefRevision() error = %v", err)
+	}
+	if second.Revision != 2 || session.BriefRevision != 2 {
+		t.Fatalf("second brief revision = %d, session brief = %d; want 2", second.Revision, session.BriefRevision)
+	}
+
+	reopened := reopenIdeationStoreForTest(t, opened, path)
+	history, err := reopened.IdeationHistory(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Briefs) != 2 || history.Briefs[0].Brief.Problem != "Onboarding is slow." ||
+		history.Briefs[1].Brief.Problem != "Onboarding is slow and fragile." || history.Briefs[0].Brief.Decisions[0].Rationale != "Fewer steps." {
+		t.Fatalf("history briefs = %#v", history.Briefs)
+	}
+	if len(history.Plans) != 1 || !history.Plans[0].Stale || history.Plans[0].ContextRevision != plan.ContextRevision ||
+		history.Plans[0].Nodes[2].DependsOn[0] != "n-2" || history.Plans[0].Nodes[1].BriefRefs[1] != "d-1" {
+		t.Fatalf("history plans = %#v, want the unchanged plan marked stale", history.Plans)
+	}
+
+	if _, _, err := reopened.SavePlanRevision(t.Context(), ideationWrite(history.Session, store.IdeationStateDraftReview), store.PlanRevision{
+		SourceBriefRevision: 1, ContextRevision: plan.ContextRevision, Nodes: planNodesForTest(),
+	}); !errors.Is(err, store.ErrStalePlanSource) {
+		t.Fatalf("plan from an old brief error = %v, want ErrStalePlanSource", err)
+	}
+}
+
+// TestPlanRevisionRejectsBrokenReferences verifies the structural checks the
+// store owns: unique node IDs, resolvable parent, dependency, and brief
+// references, and no self references.
+func TestPlanRevisionRejectsBrokenReferences(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func([]store.PlanNode) []store.PlanNode
+	}{
+		{"duplicate id", func(nodes []store.PlanNode) []store.PlanNode { nodes[1].ID = "n-1"; return nodes }},
+		{"dangling parent", func(nodes []store.PlanNode) []store.PlanNode { nodes[1].ParentID = "n-9"; return nodes }},
+		{"self parent", func(nodes []store.PlanNode) []store.PlanNode { nodes[0].ParentID = "n-1"; return nodes }},
+		{"dangling dependency", func(nodes []store.PlanNode) []store.PlanNode { nodes[2].DependsOn = []string{"n-9"}; return nodes }},
+		{"self dependency", func(nodes []store.PlanNode) []store.PlanNode { nodes[2].DependsOn = []string{"n-3"}; return nodes }},
+		{"unknown brief item", func(nodes []store.PlanNode) []store.PlanNode { nodes[0].BriefRefs = []string{"sc-9"}; return nodes }},
+		{"missing title", func(nodes []store.PlanNode) []store.PlanNode { nodes[0].Title = " "; return nodes }},
+		{"missing kind", func(nodes []store.PlanNode) []store.PlanNode { nodes[0].Kind = ""; return nodes }},
+		{"no nodes", func([]store.PlanNode) []store.PlanNode { return nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			opened, _ := openIdeationStoreForTest(t)
+			session := createIdeationSessionForTest(t, opened, "session-1")
+			session, _, err := opened.SaveBriefRevision(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), briefForTest("Problem."))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = opened.SavePlanRevision(t.Context(), ideationWrite(session, store.IdeationStateDraftReview), store.PlanRevision{
+				SourceBriefRevision: 1, ContextRevision: "abc1234", Nodes: test.mutate(planNodesForTest()),
+			})
+			if err == nil {
+				t.Fatal("SavePlanRevision() accepted a broken plan graph")
+			}
+		})
+	}
+}
