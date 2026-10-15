@@ -73,7 +73,9 @@ const (
 type Outcome string
 
 const (
+	// OutcomePassed means the observation proved the step.
 	OutcomePassed Outcome = "passed"
+	// OutcomeFailed means the observation ran and did not prove the step.
 	OutcomeFailed Outcome = "failed"
 )
 
@@ -246,7 +248,7 @@ type stepDefinition struct {
 
 // steps lists every step in procedure order.
 var steps = []stepDefinition{
-	{name: StepPrepare, inputs: []Input{InputRelease}},
+	{name: StepPrepare},
 	{name: StepConfiguration, dependsOn: []Step{StepPrepare}, inputs: []Input{InputRelease, InputPolicy},
 		choice: "the optional roles, and the harness, models, and reasoning effort of each role"},
 	{name: StepImage, dependsOn: []Step{StepConfiguration}, inputs: []Input{InputWorkerImage, InputWorkerDefinition}},
@@ -341,9 +343,6 @@ type evaluator struct {
 // dependencies.
 func (e evaluator) evaluate(step stepDefinition) StepStatus {
 	status := StepStatus{Name: step.name, DependsOn: append([]Step{}, step.dependsOn...), OperatorChoice: step.choice}
-	if status.DependsOn == nil {
-		status.DependsOn = []Step{}
-	}
 	e.own(&status)
 	if status.State == StateVerified || status.State == StatePending {
 		if waiting := e.unmet(step); len(waiting) != 0 {
@@ -430,7 +429,7 @@ func (e evaluator) prepare(status *StepStatus) {
 	}
 	check := e.observation.Resources
 	if !check.Done {
-		status.State, status.Reason, status.Action = StateStale, check.Problem, action
+		status.State, status.Reason, status.Action = StatePending, check.Problem, action
 		return
 	}
 	status.State = StateVerified
@@ -518,7 +517,7 @@ func (e evaluator) smoke(status *StepStatus) {
 		return
 	}
 	status.State = StatePending
-	status.Reason = "the recorded smoke does not cover every required skill of the pinned image; recorded skills are kept"
+	status.Reason = "the recorded smoke does not cover every required skill of the pinned image " + e.observation.Inputs[InputWorkerImage] + "; recorded skills are kept"
 	status.Action = "ask the operator to approve the paid calls, then run: " + strings.Join(retries, "; ")
 }
 
@@ -528,8 +527,8 @@ func (e evaluator) smokeCommand(smoke HarnessSmoke) string {
 	image, digest, _ := strings.Cut(e.observation.Inputs[InputWorkerImage], "@")
 	repository := e.plan.Repository
 	return fmt.Sprintf("cd %s && EVIDENCE_FILE=%s WORKER_IMAGE=%s WORKER_DIGEST=%s HARNESSES=%s MANDATORY_SKILLS=%s %s",
-		quote(repository), quote(repository+"/worker/skill-smoke.json"), quote(image), quote(digest), smoke.Harness,
-		"'"+strings.Join(smoke.Missing, " ")+"'", quote(e.plan.Resources+"/scripts/smoke-skills.sh"))
+		quote(repository), quote(repository+"/worker/skill-smoke.json"), quote(image), quote(digest), quote(smoke.Harness),
+		quote(strings.Join(smoke.Missing, " ")), quote(e.plan.Resources+"/scripts/smoke-skills.sh"))
 }
 
 // liveProof evaluates the disposable-issue proof.

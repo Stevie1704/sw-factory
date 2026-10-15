@@ -79,7 +79,7 @@ func runRecordLiveProof(ctx context.Context, planPath string, args []string, out
 
 // observeProofIssue observes one issue for the started proof of the plan.
 func observeProofIssue(ctx context.Context, plan onboarding.Plan, number int) (onboarding.ProofIssue, error) {
-	if !plan.Started() {
+	if !plan.LiveProofOpen() {
 		return onboarding.ProofIssue{}, errors.New("no disposable-issue proof is started: start one with --start")
 	}
 	marker := plan.LiveProof.Marker

@@ -151,7 +151,7 @@ func TestEvaluatePartialSmokeNamesOnlyTheMissingCalls(t *testing.T) {
 	if step.State != StatePending {
 		t.Fatalf("skill smoke = %+v, want pending", step)
 	}
-	if !strings.Contains(step.Action, "HARNESSES=claude") || !strings.Contains(step.Action, "MANDATORY_SKILLS='pr'") || strings.Contains(step.Action, "codex") {
+	if !strings.Contains(step.Action, "HARNESSES=claude") || !strings.Contains(step.Action, "MANDATORY_SKILLS=pr ") || strings.Contains(step.Action, "codex") {
 		t.Fatalf("action = %q, want a retry of claude/pr only", step.Action)
 	}
 	if len(step.Harnesses) != 2 || step.Harnesses[1].Missing == nil {

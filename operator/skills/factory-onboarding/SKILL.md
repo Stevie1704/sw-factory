@@ -48,8 +48,9 @@ skill's directory instead of the prepared resources.
 
 ## 3. Continue an interrupted onboarding
 
-Ask the operator whether an earlier session started this onboarding and kept
-an onboarding plan, for example below `$HOME/.cache/sw-factory/`. If a plan
+Look for an onboarding plan of this repository at
+`$HOME/.cache/sw-factory/onboarding-<repository name>.json`, and ask the
+operator whether an earlier session kept one at another path. If a plan
 exists, run this before any other step:
 
 ```sh

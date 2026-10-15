@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/gateproof"
-	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/onboarding"
 	"github.com/Stevie1704/sw-factory/internal/version"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -359,10 +359,8 @@ func runRecordGateProof(ctx context.Context, planPath string, args []string, out
 		return 1
 	}
 	report := gateproof.Verifier{Runtime: proofRuntimeForCLI(), Root: root}.Verify(ctx, plan.Repository)
-	after, err := gateproof.Fingerprint(ctx, plan.Repository, harness.SkillEvidenceFile)
-	if err != nil || after != observation.Inputs[onboarding.InputGateInputs] {
+	if !inputsUnchanged(ctx, path, onboarding.StepGateProof, observation, errorsOutput) {
 		writeJSONDocument(output, errorsOutput, report)
-		writeError(errorsOutput, errors.New("the candidate files changed during the proof, so it proves neither state: prove again"))
 		return 1
 	}
 	evidence := onboarding.Evidence{Outcome: onboarding.OutcomeFailed, Inputs: observation.Subset(onboarding.StepGateProof), EvidenceID: report.EvidenceID, Findings: proofFindings(report)}
@@ -370,6 +368,32 @@ func runRecordGateProof(ctx context.Context, planPath string, args []string, out
 		evidence.Outcome = onboarding.OutcomePassed
 	}
 	return recordEvidence(ctx, path, onboarding.StepGateProof, evidence, report, output, errorsOutput)
+}
+
+// inputsUnchanged observes the plan again after a slow observation and
+// reports whether every input of the step is still the one the observation
+// started with. Evidence of changed inputs proves neither state, and a
+// writer that started earlier must not replace newer evidence with it.
+// Evidence of an input that could not be observed would stay valid while it
+// cannot be observed, so it is refused too.
+func inputsUnchanged(ctx context.Context, path string, step onboarding.Step, before onboarding.Observation, errorsOutput io.Writer) bool {
+	_, _, after, err := observePlan(ctx, path)
+	if err != nil {
+		writeError(errorsOutput, err)
+		return false
+	}
+	inputs := after.Subset(step)
+	if !maps.Equal(before.Subset(step), inputs) {
+		writeError(errorsOutput, fmt.Errorf("an input of %s changed while it ran, so nothing was recorded: run it again", step))
+		return false
+	}
+	for input, identity := range inputs {
+		if identity == "" {
+			writeError(errorsOutput, fmt.Errorf("the input %s of %s could not be observed, so nothing was recorded; onboard status names the problem", input, step))
+			return false
+		}
+	}
+	return true
 }
 
 // proofFindings names the setup and the gates a failed proof did not
@@ -405,6 +429,9 @@ func runRecordDoctor(ctx context.Context, planPath string, args []string, output
 	result, err := onboardingDoctorForCLI(ctx, plan.HostConfig)
 	if err != nil {
 		writeError(errorsOutput, fmt.Errorf("run the doctor: %w", err))
+		return 1
+	}
+	if !inputsUnchanged(ctx, path, onboarding.StepDoctor, observation, errorsOutput) {
 		return 1
 	}
 	evidence := onboarding.Evidence{Outcome: onboarding.OutcomeFailed, Inputs: observation.Subset(onboarding.StepDoctor)}

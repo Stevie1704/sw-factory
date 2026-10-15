@@ -15,9 +15,9 @@ func (p Plan) Valid(step Step, observation Observation) bool {
 	return len(evaluator{plan: p, observation: observation}.changed(step, evidence.Inputs)) == 0
 }
 
-// Started reports whether a live proof was started and its outcome is not
+// LiveProofOpen reports whether a live proof was started and its outcome is not
 // final, so another start would risk a second proof issue.
-func (p Plan) Started() bool {
+func (p Plan) LiveProofOpen() bool {
 	return p.LiveProof != nil && (p.LiveProof.State == LiveProofStarted || p.LiveProof.State == LiveProofIssueRecorded)
 }
 
@@ -26,7 +26,7 @@ func (p Plan) Started() bool {
 // verified, while an earlier proof has an unknown or open outcome, and after
 // a proof that is still valid.
 func (p *Plan) StartLiveProof(observation Observation, marker string) error {
-	if p.Started() {
+	if p.LiveProofOpen() {
 		return fmt.Errorf("a disposable-issue proof with the marker %s is already started: record its issue with --issue, or abandon it with --abandon after the operator confirms that no issue carries the marker", p.LiveProof.Marker)
 	}
 	states := map[Step]State{}
@@ -62,7 +62,7 @@ type ProofIssue struct {
 // An issue without the marker is never recorded, so an unrelated issue
 // cannot complete the proof.
 func (p *Plan) RecordProofIssue(issue ProofIssue, observation Observation) error {
-	if !p.Started() {
+	if !p.LiveProofOpen() {
 		return errors.New("no disposable-issue proof is started: start one with --start")
 	}
 	proof := *p.LiveProof
@@ -87,7 +87,7 @@ func (p *Plan) RecordProofIssue(issue ProofIssue, observation Observation) error
 // DeclineLiveProof records that the operator declined the proof. It refuses
 // while a started proof has an unknown or open outcome.
 func (p *Plan) DeclineLiveProof() error {
-	if p.Started() {
+	if p.LiveProofOpen() {
 		return fmt.Errorf("the disposable-issue proof with the marker %s is started: record its issue or abandon it first", p.LiveProof.Marker)
 	}
 	p.LiveProof = &LiveProof{State: LiveProofDeclined, UpdatedAt: now()}
@@ -97,7 +97,7 @@ func (p *Plan) DeclineLiveProof() error {
 // AbandonLiveProof removes a started proof after the operator confirmed
 // that it created no issue, or that its issue is given up.
 func (p *Plan) AbandonLiveProof() error {
-	if !p.Started() {
+	if !p.LiveProofOpen() {
 		return errors.New("no disposable-issue proof is started")
 	}
 	p.LiveProof = nil

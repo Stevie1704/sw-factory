@@ -103,8 +103,8 @@ func (o Observer) policy(repository string, observation *Observation) *config.Re
 // directory of the worker definition, without the smoke evidence, which
 // the image does not contain.
 func (o Observer) image(ctx context.Context, repository string, policy config.RepositoryConfig, observation *Observation) {
-	context := filepath.Dir(filepath.Join(repository, filepath.FromSlash(policy.WorkerBuild.Definition)))
-	if identity, err := directoryDigest(context, filepath.Join(repository, filepath.FromSlash(harness.SkillEvidenceFile))); err == nil {
+	buildContext := filepath.Dir(filepath.Join(repository, filepath.FromSlash(policy.WorkerBuild.Definition)))
+	if identity, err := directoryDigest(buildContext, filepath.Join(repository, filepath.FromSlash(harness.SkillEvidenceFile))); err == nil {
 		observation.Inputs[InputWorkerDefinition] = identity
 	}
 	reference := worker.ImageReference{Name: policy.WorkerBuild.Image, Digest: policy.WorkerBuild.Digest}
@@ -134,10 +134,10 @@ func directoryDigest(root, omitted string) (string, error) {
 		var content []byte
 		if entry.Type()&fs.ModeSymlink != 0 {
 			link, err := os.Readlink(path)
-			content = []byte(link)
 			if err != nil {
 				return err
 			}
+			content = []byte(link)
 		} else if content, err = os.ReadFile(path); err != nil {
 			return err
 		}
@@ -153,7 +153,9 @@ func directoryDigest(root, omitted string) (string, error) {
 
 // smoke reports the recorded skill smoke coverage of each harness the policy
 // can select, and the identity of the records of the pinned digest. It uses
-// the same selection rule and required skills as the doctor.
+// the same harness selection and required skills as the doctor. It does not
+// compare the harness version, which needs a container of the image: a
+// digest fixes the version, and the doctor checks it.
 func smoke(repository string, policy config.RepositoryConfig) ([]HarnessSmoke, string) {
 	evidence, err := harness.LoadSkillSmokeEvidence(filepath.Join(repository, filepath.FromSlash(harness.SkillEvidenceFile)))
 	if err != nil {

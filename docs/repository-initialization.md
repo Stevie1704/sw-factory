@@ -155,12 +155,13 @@ outside the target checkout:
 ~~~sh
 <FACTORY_COMMAND> onboard plan \
   --repository "<TARGET_REPO_PATH>" \
-  --output "$HOME/.cache/sw-factory/onboarding-<repository>.json" \
+  --output "$HOME/.cache/sw-factory/onboarding-<repository name>.json" \
   --resources "<FACTORY_RESOURCES>" \
   --json
 ~~~
 
-Add `--config <path>` when the registration uses a separate host
+Use this path, so that a later agent finds the plan. Add `--config <path>`
+when the registration uses a separate host
 configuration. The plan keeps the repository, the host configuration path,
 the resource directory, and the recorded evidence. It never keeps a
 credential, a credential path, or a harness transcript. The command refuses a
