@@ -45,6 +45,9 @@ type FailureError struct {
 	// before an unexpected exit. The exit keeps its recovery category, and
 	// the message names the cause.
 	OutOfMemory bool
+	// NativeSessionMismatch reports that a resume revealed a native session
+	// other than the recorded one. The exit keeps its recovery category.
+	NativeSessionMismatch bool
 }
 
 // Error returns a bounded message that cannot expose adapter output or
@@ -67,6 +70,9 @@ func (e *FailureError) Error() string {
 	}
 	if e.OutOfMemory {
 		category += ": killed at the worker memory limit (out of memory)"
+	}
+	if e.NativeSessionMismatch {
+		category += ": resumed a different native session"
 	}
 	return category
 }
@@ -100,6 +106,12 @@ func NewOutOfMemoryError(harnessName string) error {
 	return &FailureError{Kind: FailureUnexpectedExit, Harness: safeHarnessName(harnessName), OutOfMemory: true}
 }
 
+// NewNativeSessionMismatchError creates a redacted unexpected-exit failure for
+// a resume that revealed a native session other than the recorded one.
+func NewNativeSessionMismatchError(harnessName string) error {
+	return &FailureError{Kind: FailureUnexpectedExit, Harness: safeHarnessName(harnessName), NativeSessionMismatch: true}
+}
+
 // NewRateLimitError creates a redacted temporary-capacity failure.
 func NewRateLimitError(harnessName string) error {
 	return &FailureError{Kind: FailureRateLimited, Harness: safeHarnessName(harnessName)}
@@ -123,7 +135,7 @@ func ClassifyError(err error, harnessName ...string) error {
 		if len(harnessName) != 0 {
 			name = harnessName[0]
 		}
-		return &FailureError{Kind: typed.Kind, Harness: safeHarnessName(name), OutOfMemory: typed.OutOfMemory}
+		return &FailureError{Kind: typed.Kind, Harness: safeHarnessName(name), OutOfMemory: typed.OutOfMemory, NativeSessionMismatch: typed.NativeSessionMismatch}
 	}
 	text := strings.ToLower(err.Error())
 	name := ""
@@ -147,6 +159,13 @@ func ClassifyError(err error, harnessName ...string) error {
 func IsOutOfMemory(err error) bool {
 	var typed *FailureError
 	return errors.As(err, &typed) && typed.OutOfMemory
+}
+
+// IsNativeSessionMismatch reports whether err represents a resume that
+// revealed a native session other than the recorded one.
+func IsNativeSessionMismatch(err error) bool {
+	var typed *FailureError
+	return errors.As(err, &typed) && typed.NativeSessionMismatch
 }
 
 // IsUnexpectedExit reports whether err represents an unexpected harness exit.

@@ -600,7 +600,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		if strings.TrimSpace(role) == "" {
 			return validation("role_harness_defaults", "role names must not be empty")
 		}
-		if _, exists := workflowRegistry.Role(role); !exists {
+		if !workflow.IsDeclaredRole(role) {
 			return policy("role_harness_defaults."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if harness != HarnessCodex && harness != HarnessClaude {
@@ -611,7 +611,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		return validation("model_options", "must declare at least one role")
 	}
 	for role, models := range config.ModelOptions {
-		if _, exists := workflowRegistry.Role(role); !exists {
+		if !workflow.IsDeclaredRole(role) {
 			return policy("model_options."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if len(models) == 0 {
@@ -634,7 +634,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		}
 	}
 	for role, efforts := range config.ReasoningEffortOptions {
-		if _, exists := workflowRegistry.Role(role); !exists {
+		if !workflow.IsDeclaredRole(role) {
 			return policy("reasoning_effort_options."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if _, exists := config.RoleHarnessDefaults[role]; !exists {
