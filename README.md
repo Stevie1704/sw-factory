@@ -52,7 +52,10 @@ factory version --json   # build identity, schema version 1
 
 The topics are canonical in [internal/guide/topics/](internal/guide/topics/);
 the binary embeds those files, so the printed guide and the published files
-cannot differ.
+cannot differ. [Scoped session authorization](internal/guide/topics/authorization.md)
+(`factory guide authorization`) owns the operator-agent rule: a concrete scope
+can be authorized once; new effects and human dispositions need explicit
+decisions.
 
 ## Onboard a repository with an agent
 
@@ -72,9 +75,10 @@ release's own worker skills and scripts, to that directory. Its JSON manifest
 names the exact `factory` executable, the digest-pinned worker base image, and
 the procedure file. The agent checks the prerequisites, makes the worker image,
 the pinned digest, and the checked-in `factory.yaml`, registers the host, and
-proves the setup with a disposable issue. It asks before it writes files,
-changes host configuration or GitHub, makes paid calls, or commits. You do not
-need Go or a Software Factory checkout.
+proves the setup with a disposable issue when authorized. It carries out the
+covered actions without repeating permission questions, and prepares a
+reviewable action before asking for new scope. You do not need Go or a Software
+Factory checkout.
 
 `factory onboard plan` keeps the onboarding progress in a file outside the
 checkout. After an interruption, `factory onboard status --plan <file> --json`

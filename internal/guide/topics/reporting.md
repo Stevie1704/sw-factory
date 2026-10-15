@@ -59,6 +59,13 @@ first line; it holds the report identity.
 
 ## Submit the reviewed draft
 
+Apply `factory guide authorization`. A request to prepare a draft permits local
+preparation and review only. Before requesting submission authority, finish the
+reviewable file and name the fixed destination below. Submit when the operator
+explicitly authorizes publication of that reviewed report to
+`Stevie1704/sw-factory`; if already authorized in this session, do not ask again.
+This is a deliberate submission, not an automatic publication policy.
+
 ```sh
 factory bug-report submit report.md
 ```
@@ -85,14 +92,14 @@ candidate. Flags come before the draft path.
 | Kind | Action |
 | --- | --- |
 | `invalid_draft` | Complete the named sections or the title, then submit again. |
-| `authentication` | Run `gh auth login` on the host, then submit again. |
+| `authentication` | Have the operator complete interactive `gh auth login` on the host, then submit again within the authorized scope. |
 | `permission` | Use a GitHub account that can open issues in the repository. |
 | `rate_limited` | Wait for the GitHub rate limit to reset, then submit again. |
 | `missing_label` | Ask a Factory maintainer to create `needs-triage`. Factory never creates labels. |
 | `unavailable` | Check the network, then submit again. |
 | `ambiguous` | The creation request failed after it possibly reached GitHub. Submit the same draft again later; Factory searches for the report identity before it creates anything. |
 | `in_progress` | Another `submit` of the same draft is running. Wait until it ends, then submit again. |
-| `unconfirmed` | An earlier creation is still unresolved and the search does not show it. Search the repository issues for the report identity. Wait, because the search can lag, and submit again. Only when no issue exists, add `--confirm-not-created`. |
+| `unconfirmed` | An earlier creation is still unresolved and the search does not show it. Search the repository issues for the report identity. Wait, because the search can lag, and submit again. Only after the operator explicitly confirms that no issue exists, add `--confirm-not-created`. |
 
 Factory keeps the submission state and a submission lock in hidden files
 beside the draft. Keep

@@ -45,14 +45,16 @@ var onboardingProofForCLI = func(ctx context.Context, configPath string, issue i
 // onboardingStatusDocument is the JSON result of onboard plan and onboard
 // status: the plan identity, the current inputs, and the evaluated steps.
 type onboardingStatusDocument struct {
-	SchemaVersion int                         `json:"schema_version"`
-	Plan          string                      `json:"plan"`
-	Revision      int                         `json:"revision"`
-	Repository    string                      `json:"repository"`
-	HostConfig    string                      `json:"host_config"`
-	Release       onboarding.Release          `json:"release"`
-	Inputs        map[onboarding.Input]string `json:"inputs"`
-	Artifacts     onboardingArtifacts         `json:"artifacts"`
+	SchemaVersion int    `json:"schema_version"`
+	Plan          string `json:"plan"`
+	Revision      int    `json:"revision"`
+	Repository    string `json:"repository"`
+	HostConfig    string `json:"host_config"`
+	// AuthorizationNote is context about stated scope, never permission.
+	AuthorizationNote string                      `json:"authorization_note,omitempty"`
+	Release           onboarding.Release          `json:"release"`
+	Inputs            map[onboarding.Input]string `json:"inputs"`
+	Artifacts         onboardingArtifacts         `json:"artifacts"`
 	onboarding.Status
 }
 
@@ -90,6 +92,7 @@ func runOnboardPlan(ctx context.Context, args []string, output, errorsOutput io.
 	destination := flags.String("output", "", "plan file outside the checkout, for example below $HOME/.cache/sw-factory")
 	hostConfig := flags.String("config", "", "host configuration that registers the repository; defaults to the plan's earlier value, then to the default path")
 	resources := flags.String("resources", "", "directory that onboard prepare filled; defaults to the plan's earlier value")
+	authorizationNote := flags.String("authorization-note", "", "operator's stated session scope and constraints, without secrets or credential paths; documents but never grants authority; omit to preserve, pass empty to clear")
 	asJSON := flags.Bool("json", false, "write the status as one schema-versioned JSON document; required")
 	if !parseOnboardFlags(flags, args, errorsOutput) {
 		return 2
@@ -98,6 +101,12 @@ func runOnboardPlan(ctx context.Context, args []string, output, errorsOutput io.
 		writeError(errorsOutput, errors.New("onboard plan needs --repository <path>, --output <file>, and --json"))
 		return 2
 	}
+	noteProvided := false
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "authorization-note" {
+			noteProvided = true
+		}
+	})
 	request, err := resolvePlanRequest(*repository, *destination, *hostConfig, *resources)
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -118,6 +127,9 @@ func runOnboardPlan(ctx context.Context, args []string, output, errorsOutput io.
 		}
 		plan.HostConfig = firstNonEmpty(request.hostConfig, plan.HostConfig, request.defaultHostConfig)
 		plan.Resources = firstNonEmpty(request.resources, plan.Resources)
+		if noteProvided {
+			plan.AuthorizationNote = *authorizationNote
+		}
 		observation = observer.Observe(ctx, *plan)
 		plan.Refresh(observation)
 		return nil
@@ -284,15 +296,16 @@ func newOnboardingStatusDocument(path string, plan onboarding.Plan, observation 
 		artifacts.LiveProofMarker = plan.LiveProof.Marker
 	}
 	return onboardingStatusDocument{
-		SchemaVersion: onboardingStatusSchema,
-		Plan:          path,
-		Revision:      plan.Revision,
-		Repository:    plan.Repository,
-		HostConfig:    plan.HostConfig,
-		Release:       observation.Release,
-		Inputs:        observation.Inputs,
-		Artifacts:     artifacts,
-		Status:        onboarding.Evaluate(plan, observation),
+		SchemaVersion:     onboardingStatusSchema,
+		Plan:              path,
+		Revision:          plan.Revision,
+		Repository:        plan.Repository,
+		HostConfig:        plan.HostConfig,
+		AuthorizationNote: plan.AuthorizationNote,
+		Release:           observation.Release,
+		Inputs:            observation.Inputs,
+		Artifacts:         artifacts,
+		Status:            onboarding.Evaluate(plan, observation),
 	}
 }
 

@@ -126,6 +126,10 @@ type Plan struct {
 	HostConfig string `json:"host_config"`
 	// Resources is the prepared release resource directory, or empty.
 	Resources string `json:"resources,omitempty"`
+	// AuthorizationNote documents the operator's stated session scope and
+	// constraints. It grants no authority, supplies no step evidence, and
+	// must contain no secrets, credential paths, or transcripts.
+	AuthorizationNote string `json:"authorization_note,omitempty"`
 	// Evidence holds the recorded observations by step.
 	Evidence map[Step]Evidence `json:"evidence"`
 	// LiveProof is the externally mutating disposable-issue proof, or nil.
@@ -381,7 +385,7 @@ func (e evaluator) own(status *StepStatus) {
 	case StepGateProof:
 		e.recorded(status, "run "+e.command()+" onboard record --plan "+quote(e.observation.PlanPath)+" gate-proof --json")
 	case StepRegistration:
-		applyCheck(status, e.observation.Registration, "ask the operator, then register the repository as Step 6 of the procedure describes, and run onboard plan again with the same --config")
+		applyCheck(status, e.observation.Registration, "within explicit session authority for this registration, register as Step 6 of the procedure describes, then run onboard plan again with the same --config; request missing scope per factory guide authorization")
 	case StepSkillSmoke:
 		e.smoke(status)
 	case StepDoctor:
@@ -519,7 +523,7 @@ func (e evaluator) smoke(status *StepStatus) {
 	}
 	status.State = StatePending
 	status.Reason = "the recorded smoke does not cover every required skill of the pinned image " + e.observation.Inputs[InputWorkerImage] + "; recorded skills are kept"
-	status.Action = "ask the operator to approve the paid calls, then run: " + strings.Join(retries, "; ")
+	status.Action = "within explicit session authority and supplied limits for these paid smoke calls, run: " + strings.Join(retries, "; ") + "; request missing scope per factory guide authorization"
 }
 
 // smokeCommand returns the smoke script call that repeats only the missing
@@ -538,8 +542,8 @@ func (e evaluator) liveProof(status *StepStatus) {
 	proof := e.plan.LiveProof
 	if proof == nil {
 		status.State = StatePending
-		status.Reason = "the operator has not decided the disposable-issue proof"
-		status.Action = "ask the operator; " + record + " --start --json before you create the issue, or " + record + " --decline --json"
+		status.Reason = "no disposable-issue proof decision is recorded"
+		status.Action = "use the operator's explicit session decision, or request the missing decision per factory guide authorization; " + record + " --start --json before you create the issue, or " + record + " --decline --json"
 		return
 	}
 	status.LiveProof = proof
@@ -557,7 +561,7 @@ func (e evaluator) liveProof(status *StepStatus) {
 	case LiveProofPassed:
 		if changed := e.changed(StepLiveProof, proof.Inputs); len(changed) != 0 {
 			status.State, status.Reason = StateStale, describeChanges(changed)+" since the proof passed"
-			status.Action = "ask the operator; " + record + " --start --json, or " + record + " --decline --json"
+			status.Action = "a new paid proof needs explicit session scope for the changed inputs; request missing scope per factory guide authorization; " + record + " --start --json, or " + record + " --decline --json with an explicit operator decision"
 			return
 		}
 		status.State = StateVerified

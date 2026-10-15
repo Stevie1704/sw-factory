@@ -100,7 +100,7 @@ func TestOnboardGivesTheHarnessTheReleaseResources(t *testing.T) {
 		"<FACTORY_COMMAND>",
 		resources + "/docs/repository-initialization.md",
 		"The worker base image is " + testBaseImage,
-		"Actions that need",
+		"guide authorization",
 		"docs/configuration.md decides",
 		"never invent a",
 		"Run " + command + " guide and " + command + " guide setup first",

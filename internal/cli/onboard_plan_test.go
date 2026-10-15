@@ -419,3 +419,55 @@ func TestOnboardRecordRefusesAProofOfChangedInputs(t *testing.T) {
 		t.Fatal("evidence of changed inputs was recorded")
 	}
 }
+
+// TestOnboardPlanRecordsScopeWithoutGrantingAuthority verifies that an agent
+// can recover the operator's stated scope without changing step evidence or
+// manufacturing a live-proof decision. Status must leave the plan untouched.
+func TestOnboardPlanRecordsScopeWithoutGrantingAuthority(t *testing.T) {
+	usePlanFakes(t)
+	fixture := newPlanFixture(t)
+	note := "This session: onboard this checkout and registration; local changes only; no paid calls; no external proof or cleanup; stop at doctor."
+	status, output, errorsOutput := runPlanCommand("onboard", "plan", "--repository", fixture.repository, "--output", fixture.plan, "--config", fixture.hostConfig, "--resources", fixture.resources, "--authorization-note", note, "--json")
+	if status != 0 {
+		t.Fatalf("record scope: status %d, stderr %q", status, errorsOutput)
+	}
+	initial := decode[map[string]any](t, output, errorsOutput)
+	if initial["authorization_note"] != note {
+		t.Fatalf("plan scope = %v, want %q", initial["authorization_note"], note)
+	}
+	status, _, errorsOutput = runPlanCommand("onboard", "plan", "--repository", fixture.repository, "--output", fixture.plan, "--json")
+	if status != 0 {
+		t.Fatalf("refresh plan: status %d, stderr %q", status, errorsOutput)
+	}
+	before, err := os.ReadFile(fixture.plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, output, errorsOutput = runPlanCommand("onboard", "status", "--plan", fixture.plan, "--json")
+	current := decode[map[string]any](t, output, errorsOutput)
+	if status != 0 || current["authorization_note"] != note {
+		t.Fatalf("status scope = %v, status %d, stderr %q", current["authorization_note"], status, errorsOutput)
+	}
+	states := decode[planDocument](t, output, errorsOutput)
+	if state, _, _ := states.state("skill_smoke"); state != "pending" {
+		t.Fatalf("scope note changed smoke evidence: state %q", state)
+	}
+	if state, _, _ := states.state("live_proof"); state != "blocked" {
+		t.Fatalf("scope note invented a live-proof decision: state %q", state)
+	}
+	after, err := os.ReadFile(fixture.plan)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("status changed the plan: %v", err)
+	}
+	for _, next := range []string{"This session: inspect only; stop before mutations.", ""} {
+		status, _, errorsOutput = runPlanCommand("onboard", "plan", "--repository", fixture.repository, "--output", fixture.plan, "--authorization-note", next, "--json")
+		if status != 0 {
+			t.Fatalf("replace scope: status %d, stderr %q", status, errorsOutput)
+		}
+		status, output, errorsOutput = runPlanCommand("onboard", "status", "--plan", fixture.plan, "--json")
+		current = decode[map[string]any](t, output, errorsOutput)
+		if status != 0 || (next != "" && current["authorization_note"] != next) || (next == "" && current["authorization_note"] != nil) {
+			t.Fatalf("updated scope = %v, want %q, status %d", current["authorization_note"], next, status)
+		}
+	}
+}
