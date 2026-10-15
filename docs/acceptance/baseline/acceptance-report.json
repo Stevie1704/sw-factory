@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "manifest_schema_version": 1,
+  "generated_at": "2026-10-15T13:15:54.091778Z",
+  "release": {
+    "schema_version": 1,
+    "version": "development",
+    "build": "development",
+    "revision": "a27ac52ec0f0a640a85c80b4047902520ae03a99",
+    "modified": false,
+    "worker_base_image": "",
+    "platform": "darwin/arm64"
+  },
+  "host_harness": null,
+  "worker_digest": "",
+  "worker_harnesses": [],
+  "scenarios": [
+    {
+      "id": "onboard-from-release",
+      "title": "Onboard a small repository from an installed release",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "onboard-instructions-only",
+      "title": "Onboard without native skill support",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "resume-interrupted-onboarding",
+      "title": "Continue an interrupted onboarding with a fresh agent",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "diagnose-failures",
+      "title": "Diagnose common failures",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "recover-operations",
+      "title": "Recover through supported commands",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass",
+        "reason": "covers recovery semantics only; durable-effect failure injection stays with #181"
+      },
+      "gaps": [
+        {
+          "issue": 181,
+          "summary": "Failure injection around every durable effect is still open; these tests do not replace it."
+        }
+      ]
+    },
+    {
+      "id": "inspect-history",
+      "title": "Inspect a historical run while another run is active",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "upgrade-maintenance",
+      "title": "Upgrade the installation and report unsupported restore",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "blocked",
+        "reason": "only the worker release check has coverage; no upgrade preflight, resume, or restore contract ships"
+      },
+      "gaps": [
+        {
+          "issue": 257,
+          "summary": "No upgrade preflight or resumable maintenance procedure ships yet."
+        },
+        {
+          "issue": 258,
+          "summary": "No supported backup and restore contract exists."
+        },
+        {
+          "issue": 204,
+          "summary": "Service supervision under launchd or systemd is not part of the upgrade yet."
+        }
+      ]
+    },
+    {
+      "id": "defect-report",
+      "title": "Report a defect to an authorized test destination and clean up",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "scoped-authority",
+      "title": "Act within scoped authority and escalate new decisions",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "contributor-maintenance",
+      "title": "Fix a small Factory defect from repository guidance",
+      "live": {
+        "outcome": "not-run",
+        "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    }
+  ],
+  "summary": {
+    "live": {
+      "blocked": 0,
+      "fail": 0,
+      "not-run": 10,
+      "pass": 0
+    },
+    "deterministic": {
+      "blocked": 1,
+      "fail": 0,
+      "not-run": 0,
+      "pass": 9
+    }
+  },
+  "interventions_by_cause": {},
+  "duration_seconds": 0
+}
