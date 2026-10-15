@@ -251,3 +251,21 @@ func TestAcceptanceReportNeverReplacesAnEarlierReport(t *testing.T) {
 		t.Fatalf("refused report left a partial JSON file: %v", err)
 	}
 }
+
+// TestAcceptanceReportRecordsALiveScenarioThatDidNotRun verifies that a
+// baseline without a live run records why each live scenario did not run,
+// without observing a harness or usage.
+func TestAcceptanceReportRecordsALiveScenarioThatDidNotRun(t *testing.T) {
+	results, output := writeAcceptanceResults(t, `{"schema_version": 1, "results": [{"scenario": "inspect-history", "evidence": "live", "outcome": "not-run", "reason": "no approved target"}]}`)
+	var out, stderr bytes.Buffer
+	if code := cli.Run(t.Context(), []string{"acceptance", "report", "--results", results, "--output", output, "--json"}, &out, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	var report reportDocument
+	decodeSingleDocument(t, out.String(), &report)
+	for _, scenario := range report.Scenarios {
+		if scenario.ID == "inspect-history" && (scenario.Live.Outcome != "not-run" || scenario.Live.Reason != "no approved target") {
+			t.Fatalf("inspect-history live: %+v", scenario.Live)
+		}
+	}
+}

@@ -45,8 +45,8 @@ func (r Results) validate() error {
 		}
 	}
 	for _, result := range r.Results {
-		if result.Evidence == EvidenceLive && r.HostHarness == nil {
-			return errors.New("a live result needs host_harness")
+		if result.Evidence == EvidenceLive && result.Outcome.Outcome != OutcomeNotRun && r.HostHarness == nil {
+			return errors.New("a live result that ran needs host_harness")
 		}
 		if err := result.validate(); err != nil {
 			return fmt.Errorf("scenario %q (%s): %w", result.Scenario, result.Evidence, err)
