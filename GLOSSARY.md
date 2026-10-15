@@ -42,6 +42,29 @@ items and relationships known to exist and, for an incomplete attempt, what
 remains. Publication never adds `agent-ready` and never starts a Run.
 _Avoid_: Publish log
 
+**Publication ledger**:
+The per-session, per-approval list of the item creates and relationship
+creates that publish one approved plan, in execution order, with the recovery
+state of each (pending, attempted, failed, ambiguous, succeeded) and the
+tracker identity each create produced. It is the recovery authority of
+publication; a retry resumes it and never regenerates the plan.
+_Avoid_: Pending effect (that journal is per Run), job queue
+
+**Correlation key**:
+The stable identity `<session>/<plan revision>/<node>` that the adapter
+renders into each published tracker item, so that a lookup finds the item
+again after an unknown create outcome. Publication looks it up before every
+create; more than one match, or no match after an unknown outcome, stops for
+explicit reconciliation.
+_Avoid_: Idempotency key (providers do not honor one)
+
+**Plan publisher**:
+The optional tracker-port capability that preflights and renders a plan
+graph and creates, looks up, and links its items. Each adapter implements it
+with its own provider commands; the coordinator reaches it only through the
+port.
+_Avoid_: GitHub publisher (for the concept)
+
 **Work tracker**:
 The external system that holds the issues the factory claims, their run-state
 labels, the status and command comments, and the optional coordinator lease.
