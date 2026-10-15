@@ -137,3 +137,105 @@ func assertReadOnly(t *testing.T, calls []commandCall) {
 		}
 	}
 }
+
+// nativeCapabilities is the GraphQL introspection answer of a GitHub host
+// with native sub-issues and blocking dependencies.
+const nativeCapabilities = `{"data":{"__type":{"fields":[{"name":"title"},{"name":"subIssues"},{"name":"parent"},{"name":"blockedBy"},{"name":"blocking"}]}}}`
+
+// legacyCapabilities is the introspection answer of a GitHub host without
+// either relationship.
+const legacyCapabilities = `{"data":{"__type":{"fields":[{"name":"title"},{"name":"body"}]}}}`
+
+// decomposedGraph is a parent specification n-1 with children n-2 and n-3,
+// where n-3 depends on n-2.
+func decomposedGraph() tracker.PlanGraph {
+	item := func(node, kind, title, parent string, depends ...string) tracker.PlanGraphItem {
+		return tracker.PlanGraphItem{
+			NodeID: node, Kind: kind, Title: title, Body: title + " body.", ParentID: parent, DependsOn: depends,
+			Correlation: tracker.PlanCorrelation("session-1", 4, node),
+		}
+	}
+	return tracker.PlanGraph{
+		SessionID: "session-1", PlanRevision: 4, ContextRevision: "0123456789abcdef0123456789abcdef01234567",
+		Items: []tracker.PlanGraphItem{
+			item("n-1", "spec", "Faster onboarding", ""),
+			item("n-2", "task", "Cache images", "n-1"),
+			item("n-3", "task", "Document setup", "n-1", "n-2"),
+		},
+	}
+}
+
+// TestPreflightPlanMapsTheGraphToNativeRelationships verifies that a
+// decomposed plan maps parents to sub-issues and dependencies to blocking
+// dependencies when GitHub offers both, without a textual section.
+func TestPreflightPlanMapsTheGraphToNativeRelationships(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{[]byte(writableRepository), []byte(nativeCapabilities)}}
+	client := &github.GhClient{Runner: runner}
+
+	preview, err := client.PreflightPlan(context.Background(), planRepository, decomposedGraph())
+	if err != nil {
+		t.Fatalf("PreflightPlan() error = %v", err)
+	}
+	want := []tracker.PlanRelationshipMapping{
+		{Kind: tracker.PlanRelationshipParent, FromNodeID: "n-2", ToNodeID: "n-1", Mode: tracker.PlanRelationshipNative},
+		{Kind: tracker.PlanRelationshipParent, FromNodeID: "n-3", ToNodeID: "n-1", Mode: tracker.PlanRelationshipNative},
+		{Kind: tracker.PlanRelationshipDependsOn, FromNodeID: "n-3", ToNodeID: "n-2", Mode: tracker.PlanRelationshipNative},
+	}
+	if !reflect.DeepEqual(preview.Relationships, want) {
+		t.Fatalf("relationships = %#v, want %#v", preview.Relationships, want)
+	}
+	if len(preview.Items) != 3 {
+		t.Fatalf("items = %d, want the parent and both children", len(preview.Items))
+	}
+	for _, item := range preview.Items {
+		if strings.Contains(item.Body, "## Plan relationships") {
+			t.Fatalf("item %s body has a textual fallback with native relationships:\n%s", item.NodeID, item.Body)
+		}
+	}
+	if !containsArgs(runner.calls[1].args, "api", "graphql") {
+		t.Fatalf("capability call = %#v, want a GraphQL introspection", runner.calls[1].args)
+	}
+	assertReadOnly(t, runner.calls)
+}
+
+// TestPreflightPlanShowsTheTextualFallbackInThePreview verifies that
+// unavailable native relationships become an explicit textual fallback in
+// the relationship mapping and in the rendered bodies, so the approval binds
+// it.
+func TestPreflightPlanShowsTheTextualFallbackInThePreview(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{[]byte(writableRepository), []byte(legacyCapabilities)}}
+	client := &github.GhClient{Runner: runner}
+
+	preview, err := client.PreflightPlan(context.Background(), planRepository, decomposedGraph())
+	if err != nil {
+		t.Fatalf("PreflightPlan() error = %v", err)
+	}
+	if len(preview.Relationships) != 3 {
+		t.Fatalf("relationships = %#v, want three", preview.Relationships)
+	}
+	for _, relationship := range preview.Relationships {
+		if relationship.Mode != tracker.PlanRelationshipTextual {
+			t.Fatalf("relationship = %#v, want the textual fallback", relationship)
+		}
+	}
+	bodies := map[string]string{}
+	for _, item := range preview.Items {
+		bodies[item.NodeID] = item.Body
+	}
+	for node, wants := range map[string][]string{
+		"n-1": {"## Plan relationships", "- [ ] Sub-issue: Cache images (`n-2`)", "- [ ] Sub-issue: Document setup (`n-3`)"},
+		"n-2": {"## Plan relationships", "- Part of: Faster onboarding (`n-1`)"},
+		"n-3": {"- Part of: Faster onboarding (`n-1`)", "- Depends on: Cache images (`n-2`)"},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(bodies[node], want) {
+				t.Errorf("body of %s does not contain %q:\n%s", node, want, bodies[node])
+			}
+		}
+	}
+	assertReadOnly(t, runner.calls)
+}

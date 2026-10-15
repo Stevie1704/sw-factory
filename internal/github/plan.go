@@ -42,11 +42,26 @@ func (c *GhClient) PreflightPlan(ctx context.Context, repository tracker.Reposit
 	if err := c.checkIssueCreation(ctx, repository); err != nil {
 		return tracker.PlanPreview{}, err
 	}
-	preview := tracker.PlanPreview{Target: "github:" + repository.String()}
+	modes, err := c.relationshipModes(ctx, graph)
+	if err != nil {
+		return tracker.PlanPreview{}, err
+	}
+	relationships, err := planRelationships(graph, modes)
+	if err != nil {
+		return tracker.PlanPreview{}, err
+	}
+	if err := checkSubIssueLimits(graph, modes); err != nil {
+		return tracker.PlanPreview{}, err
+	}
+	titles := make(map[string]string, len(graph.Items))
+	for _, item := range graph.Items {
+		titles[item.NodeID] = item.Title
+	}
+	preview := tracker.PlanPreview{Target: "github:" + repository.String(), Relationships: relationships}
 	for _, item := range graph.Items {
 		rendered := tracker.RenderedPlanItem{
 			NodeID: item.NodeID, Type: planIssueType, Title: item.Title,
-			Body: renderPlanBody(graph, item), Correlation: item.Correlation,
+			Body: renderPlanBody(graph, item, textualRelationshipLines(item.NodeID, relationships, titles)), Correlation: item.Correlation,
 		}
 		if err := validatePlanIssue(rendered); err != nil {
 			return tracker.PlanPreview{}, err
@@ -85,15 +100,25 @@ func (c *GhClient) checkIssueCreation(ctx context.Context, repository tracker.Re
 }
 
 // renderPlanBody renders the complete Markdown body of one item: the plan
-// body, the acceptance criteria as a task list, the traceability metadata,
-// and the hidden correlation marker. It copies plan content only.
-func renderPlanBody(graph tracker.PlanGraph, item tracker.PlanGraphItem) string {
+// body, the acceptance criteria as a task list, the approved textual
+// relationship fallback, the traceability metadata, and the hidden
+// correlation marker. It copies plan content only.
+func renderPlanBody(graph tracker.PlanGraph, item tracker.PlanGraphItem, textual []string) string {
 	var body strings.Builder
 	body.WriteString(strings.TrimSpace(item.Body))
 	if len(item.AcceptanceCriteria) > 0 {
 		body.WriteString("\n\n## Acceptance criteria\n\n")
 		for _, criterion := range item.AcceptanceCriteria {
 			fmt.Fprintf(&body, "- [ ] %s\n", criterion)
+		}
+	}
+	if len(textual) > 0 {
+		body.WriteString("\n## Plan relationships\n\n")
+		body.WriteString("GitHub native sub-issues or dependencies are unavailable for this repository, so these\n" +
+			"relationships use the approved textual fallback. After creation, a factory comment on the\n" +
+			"sub-issue or the dependent issue links the issue numbers.\n\n")
+		for _, line := range textual {
+			body.WriteString(line + "\n")
 		}
 	}
 	body.WriteString("\n## Traceability\n\n")
@@ -126,6 +151,139 @@ func validatePlanIssue(item tracker.RenderedPlanItem) error {
 		}
 	}
 	return nil
+}
+
+// issueCapabilityQuery asks the GitHub GraphQL schema which fields an issue
+// has. It is read-only and independent of the repository content.
+const issueCapabilityQuery = `query { __type(name: "Issue") { fields { name } } }`
+
+// capabilityResponse is the introspection projection of the issue fields.
+type capabilityResponse struct {
+	Data struct {
+		Type struct {
+			Fields []struct {
+				Name string `json:"name"`
+			} `json:"fields"`
+		} `json:"__type"`
+	} `json:"data"`
+}
+
+// relationshipModes resolves the representation of each relationship kind:
+// native where the GitHub host offers sub-issues (field subIssues) or
+// blocking dependencies (field blockedBy), and textual otherwise. A graph
+// without relationships needs no probe.
+func (c *GhClient) relationshipModes(ctx context.Context, graph tracker.PlanGraph) (map[tracker.PlanRelationshipKind]tracker.PlanRelationshipMode, error) {
+	needed := false
+	for _, item := range graph.Items {
+		needed = needed || item.ParentID != "" || len(item.DependsOn) > 0
+	}
+	modes := map[tracker.PlanRelationshipKind]tracker.PlanRelationshipMode{
+		tracker.PlanRelationshipParent:    tracker.PlanRelationshipTextual,
+		tracker.PlanRelationshipDependsOn: tracker.PlanRelationshipTextual,
+	}
+	if !needed {
+		return modes, nil
+	}
+	var response capabilityResponse
+	if err := c.callJSON(ctx, []string{"api", "graphql", "-f", "query=" + issueCapabilityQuery}, nil, &response); err != nil {
+		return nil, fmt.Errorf("read GitHub issue relationship capabilities: %w", classifyPlanError(err))
+	}
+	for _, field := range response.Data.Type.Fields {
+		switch field.Name {
+		case "subIssues":
+			modes[tracker.PlanRelationshipParent] = tracker.PlanRelationshipNative
+		case "blockedBy":
+			modes[tracker.PlanRelationshipDependsOn] = tracker.PlanRelationshipNative
+		}
+	}
+	return modes, nil
+}
+
+// planRelationships lists the relationships of graph in item order, each
+// item's parent before its dependencies, with the resolved mode.
+func planRelationships(graph tracker.PlanGraph, modes map[tracker.PlanRelationshipKind]tracker.PlanRelationshipMode) ([]tracker.PlanRelationshipMapping, error) {
+	known := make(map[string]bool, len(graph.Items))
+	for _, item := range graph.Items {
+		known[item.NodeID] = true
+	}
+	var relationships []tracker.PlanRelationshipMapping
+	add := func(kind tracker.PlanRelationshipKind, from, to string) error {
+		if !known[to] || to == from {
+			return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: %s target %q is not another plan node", from, kind, to)
+		}
+		relationships = append(relationships, tracker.PlanRelationshipMapping{Kind: kind, FromNodeID: from, ToNodeID: to, Mode: modes[kind]})
+		return nil
+	}
+	for _, item := range graph.Items {
+		if item.ParentID != "" {
+			if err := add(tracker.PlanRelationshipParent, item.NodeID, item.ParentID); err != nil {
+				return nil, err
+			}
+		}
+		for _, dependency := range item.DependsOn {
+			if err := add(tracker.PlanRelationshipDependsOn, item.NodeID, dependency); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return relationships, nil
+}
+
+// GitHub sub-issue limits: at most 100 sub-issues per parent and eight
+// levels of nested sub-issues.
+const (
+	maxSubIssuesPerParent = 100
+	maxSubIssueDepth      = 8
+)
+
+// checkSubIssueLimits returns a typed unsupported-capability error when a
+// native parent mapping exceeds a GitHub sub-issue limit.
+func checkSubIssueLimits(graph tracker.PlanGraph, modes map[tracker.PlanRelationshipKind]tracker.PlanRelationshipMode) error {
+	if modes[tracker.PlanRelationshipParent] != tracker.PlanRelationshipNative {
+		return nil
+	}
+	parents := make(map[string]string, len(graph.Items))
+	children := map[string]int{}
+	for _, item := range graph.Items {
+		if item.ParentID != "" {
+			parents[item.NodeID] = item.ParentID
+			children[item.ParentID]++
+		}
+	}
+	for _, item := range graph.Items {
+		if children[item.NodeID] > maxSubIssuesPerParent {
+			return tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability, "node %s has %d sub-issues; GitHub allows %d", item.NodeID, children[item.NodeID], maxSubIssuesPerParent)
+		}
+		depth := 0
+		for node := item.NodeID; parents[node] != "" && depth <= len(graph.Items); node = parents[node] {
+			depth++
+		}
+		if depth > maxSubIssueDepth {
+			return tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability, "node %s is nested %d levels deep; GitHub allows %d", item.NodeID, depth, maxSubIssueDepth)
+		}
+	}
+	return nil
+}
+
+// textualRelationshipLines renders the textual fallback lines of node: its
+// parent, its dependencies, and, for a parent, a task list of its
+// sub-issues. Native relationships render no line.
+func textualRelationshipLines(node string, relationships []tracker.PlanRelationshipMapping, titles map[string]string) []string {
+	var lines []string
+	for _, relationship := range relationships {
+		if relationship.Mode != tracker.PlanRelationshipTextual {
+			continue
+		}
+		switch {
+		case relationship.FromNodeID == node && relationship.Kind == tracker.PlanRelationshipParent:
+			lines = append(lines, fmt.Sprintf("- Part of: %s (`%s`)", titles[relationship.ToNodeID], relationship.ToNodeID))
+		case relationship.FromNodeID == node && relationship.Kind == tracker.PlanRelationshipDependsOn:
+			lines = append(lines, fmt.Sprintf("- Depends on: %s (`%s`)", titles[relationship.ToNodeID], relationship.ToNodeID))
+		case relationship.ToNodeID == node && relationship.Kind == tracker.PlanRelationshipParent:
+			lines = append(lines, fmt.Sprintf("- [ ] Sub-issue: %s (`%s`)", titles[relationship.FromNodeID], relationship.FromNodeID))
+		}
+	}
+	return lines
 }
 
 // planIssueCreatePayload is the GitHub issue create request. Labels are sent
