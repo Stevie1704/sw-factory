@@ -100,6 +100,8 @@ type GateFailureDiagnostic struct {
 
 // RunDetail is the run detail page model.
 type RunDetail struct {
+	// Inspection is the shared allowlisted local metadata projection.
+	Inspection     RunInspection
 	Supervisor     SupervisorView
 	Run            store.Run
 	IssueTitle     string
@@ -159,43 +161,57 @@ func (s *Service) RunOverview(ctx context.Context) (RunOverview, error) {
 // changing the store. It returns ErrRunNotFound for an unknown identity.
 func (s *Service) RunDetail(ctx context.Context, runID string) (RunDetail, error) {
 	return readRunView(ctx, s, func(view runViewRead) (RunDetail, error) {
-		run, err := view.reader.Run(ctx, runID)
+		detail, err := readRunDetail(ctx, view, runID, true)
 		if err != nil {
 			return RunDetail{}, err
 		}
-		if run == nil {
-			return RunDetail{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
-		}
-		invocations, err := view.reader.Invocations(ctx, runID)
-		if err != nil {
-			return RunDetail{}, err
-		}
-		gateResults, err := view.reader.RunGateResults(ctx, runID)
-		if err != nil {
-			return RunDetail{}, err
-		}
-		pendingEffect, err := view.reader.PendingEffect(ctx, runID)
-		if err != nil {
-			return RunDetail{}, fmt.Errorf("read pending effect: %w", err)
-		}
-		diagnostics, err := readGateFailureDiagnostics(*run)
-		if err != nil {
-			return RunDetail{}, err
-		}
-		return RunDetail{
-			Supervisor:        view.supervisor,
-			Run:               *run,
-			IssueTitle:        issueTitleForRun(*run),
-			Route:             statusRouteForRun(*run),
-			TestPolicyMode:    testPolicyModeForRun(*run),
-			TestStageBypassed: testStageBypassed(*run),
-			Activity:          RunActivityFor(*run),
-			Invocations:       invocations,
-			Gates:             groupGateResults(gateResults, run.CheckpointSHA),
-			PendingEffect:     pendingEffect,
-			Diagnostics:       diagnostics,
-		}, nil
+		detail.Inspection = projectRunInspection(detail, 0, DefaultRunPageSize)
+		return detail, nil
 	})
+}
+
+// readRunDetail shares the persisted run, invocation, gate and effect reads
+// across CLI and web views; CLI metadata never loads raw diagnostics.
+func readRunDetail(ctx context.Context, view runViewRead, runID string, includeDiagnostics bool) (RunDetail, error) {
+	run, err := view.reader.Run(ctx, runID)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	if run == nil {
+		return RunDetail{}, fmt.Errorf("%w: %s", ErrRunNotFound, runID)
+	}
+	invocations, err := view.reader.Invocations(ctx, runID)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	gateResults, err := view.reader.RunGateResults(ctx, runID)
+	if err != nil {
+		return RunDetail{}, err
+	}
+	pendingEffect, err := view.reader.PendingEffect(ctx, runID)
+	if err != nil {
+		return RunDetail{}, fmt.Errorf("read pending effect: %w", err)
+	}
+	var diagnostics []GateFailureDiagnostic
+	if includeDiagnostics {
+		diagnostics, err = readGateFailureDiagnostics(*run)
+		if err != nil {
+			return RunDetail{}, err
+		}
+	}
+	return RunDetail{
+		Supervisor:        view.supervisor,
+		Run:               *run,
+		IssueTitle:        issueTitleForRun(*run),
+		Route:             statusRouteForRun(*run),
+		TestPolicyMode:    testPolicyModeForRun(*run),
+		TestStageBypassed: testStageBypassed(*run),
+		Activity:          RunActivityFor(*run),
+		Invocations:       invocations,
+		Gates:             groupGateResults(gateResults, run.CheckpointSHA),
+		PendingEffect:     pendingEffect,
+		Diagnostics:       diagnostics,
+	}, nil
 }
 
 // RunEvaluation reads one run's evaluation summary without contacting any

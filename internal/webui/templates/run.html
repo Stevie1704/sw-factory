@@ -74,6 +74,28 @@
 </div>
 </div>
 
+{{with .Inspection -}}
+<section aria-labelledby="inspection">
+<h2 id="inspection">Retained inspection metadata</h2>
+<p>Frozen policy: {{.Policy.State}}{{with .Policy.SHA256}} <code>{{.}}</code>{{end}}</p>
+<p class="quiet">Showing at most {{.Coverage.Limit}} records per collection. Use <code>factory run inspect --run-id {{.Run.ID}} --json</code> and its pagination cursor to inspect further records.</p>
+<ul>{{range .Coverage.Limitations}}<li>{{.}}</li>{{end}}</ul>
+{{with .Evidence -}}
+<div class="scroll"><table>
+<thead><tr><th>Evidence selector</th><th>Availability</th><th>Recorded checkpoint</th><th>Bytes retained / file size</th></tr></thead>
+<tbody>{{range .}}<tr><td><code>{{.Selector}}</code></td><td>{{.State}}{{if .SourceTruncated}} (truncated){{end}}</td><td><code>{{.CheckpointSHA}}</code></td><td>{{.RetainedBytes}} / {{.SizeBytes}}</td></tr>{{end}}</tbody>
+</table></div>
+{{- end}}
+{{with .Timeline -}}
+<h3>Retained observations</h3>
+<div class="scroll"><table>
+<thead><tr><th>Recorded</th><th>Observation</th><th>Invocation / checkpoint</th><th>Outcome</th></tr></thead>
+<tbody>{{range .}}<tr><td>{{formatTime .At}}</td><td>{{.Kind}}</td><td><code>{{.InvocationID}}{{.CheckpointSHA}}</code></td><td>{{.Outcome}}</td></tr>{{end}}</tbody>
+</table></div>
+{{- end}}
+</section>
+{{- end}}
+
 <section aria-labelledby="gates">
 <h2 id="gates">Gates</h2>
 {{range .Gates -}}

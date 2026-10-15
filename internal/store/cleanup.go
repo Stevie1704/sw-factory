@@ -292,6 +292,13 @@ func (s *Store) ListRuns(ctx context.Context) ([]Run, error) {
 	return runs, nil
 }
 
+// ListRunsPage returns a bounded window, ordered by newest update then ID
+// ascending. Callers request one extra row to determine whether another page exists.
+func (s *Store) ListRunsPage(ctx context.Context, offset, limit int) ([]Run, error) {
+	return s.queryRuns(ctx, `SELECT `+runColumns+` FROM operational_runs
+		ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?`, limit, offset)
+}
+
 // ListResetCandidates returns every persisted run with the operational records
 // a complete local reset needs, regardless of status or retention age. It is
 // separate from ListRunRemovalCandidates because reset owns the whole

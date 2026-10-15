@@ -64,6 +64,8 @@ var commandTable = []commandDefinition{
 	{name: "poll", handler: runPollCommands},
 	{name: "reconcile", handler: runReconcile},
 	{name: "status", handler: runStatus},
+	{name: "runs", handler: runRuns},
+	{name: "run", handler: runRun},
 	{name: "ui", handler: runUI},
 	{name: "evaluation", handler: runEvaluation},
 	{name: "evaluation-delete", handler: runEvaluationDelete},
