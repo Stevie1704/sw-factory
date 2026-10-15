@@ -65,6 +65,14 @@ with its own provider commands; the coordinator reaches it only through the
 port.
 _Avoid_: GitHub publisher (for the concept)
 
+**Textual relationship fallback**:
+The explicit text representation of a plan parent or dependency edge where
+the tracker offers no native relationship, for example a GitHub host without
+sub-issues. The preview shows it in the item bodies and in the relationship
+mapping, so the approval binds it; publication never switches between native
+and textual after approval.
+_Avoid_: Silent downgrade, best-effort link
+
 **Work tracker**:
 The external system that holds the issues the factory claims, their run-state
 labels, the status and command comments, and the optional coordinator lease.
