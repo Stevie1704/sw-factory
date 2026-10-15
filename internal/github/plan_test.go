@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
@@ -525,5 +526,105 @@ func TestTextualRelationshipIsOneMarkedBacklinkComment(t *testing.T) {
 	}
 	if len(runner.calls) != 5 {
 		t.Fatalf("calls = %d, want five", len(runner.calls))
+	}
+}
+
+// TestPlanWritesClassifyGhFailuresByProvenOutcome verifies that only an
+// HTTP rejection proves that GitHub made no change, that a deadline expiry
+// is ambiguous, and that a rate limit or a server error stays an unknown
+// outcome.
+func TestPlanWritesClassifyGhFailuresByProvenOutcome(t *testing.T) {
+	t.Parallel()
+
+	item := tracker.RenderedPlanItem{NodeID: "n-1", Type: "issue", Title: "Cache worker images", Body: "body", Correlation: "s/1/n-1"}
+	for _, tc := range []struct {
+		name       string
+		err        error
+		kind       tracker.PlanErrorKind
+		notApplied bool
+	}{
+		{"timeout", &hostcmd.TimeoutError{Operation: "gh api", Timeout: github.CommandTimeout}, tracker.PlanErrorAmbiguous, false},
+		{"forbidden", errors.New("gh api repos/example/project/issues --method POST: HTTP 403: Resource not accessible by integration"), tracker.PlanErrorPermission, true},
+		{"issues disabled", errors.New("gh api repos/example/project/issues: HTTP 410: Issues are disabled for this repo"), tracker.PlanErrorUnsupportedCapability, true},
+		{"validation", errors.New("gh api repos/example/project/issues: HTTP 422: Validation Failed"), tracker.PlanErrorInvalidMapping, true},
+		{"rate limit", errors.New("gh api repos/example/project/issues: HTTP 403: API rate limit exceeded"), "", false},
+		{"server error", errors.New("gh api repos/example/project/issues: HTTP 502: Bad Gateway"), "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runner := &fakeCommandRunner{outputs: [][]byte{nil}, errs: []error{tc.err}}
+			_, err := (&github.GhClient{Runner: runner}).CreatePlanItem(context.Background(), planRepository, item)
+			if err == nil {
+				t.Fatal("CreatePlanItem() error = nil, want the gh failure")
+			}
+			if kind, _ := tracker.PlanErrorKindOf(err); kind != tc.kind {
+				t.Fatalf("CreatePlanItem() error = %v, want kind %q", err, tc.kind)
+			}
+			if tracker.WriteNotApplied(err) != tc.notApplied {
+				t.Fatalf("WriteNotApplied(%v) = %t, want %t", err, !tc.notApplied, tc.notApplied)
+			}
+		})
+	}
+}
+
+// TestRetryAfterAnUncertainCreateFindsTheIssueInsteadOfCreatingAgain
+// verifies the reconciliation path at the adapter seam: a create whose
+// response is lost is ambiguous, and the following correlation lookup finds
+// the issue GitHub created, so the caller adopts it and sends no second
+// create.
+func TestRetryAfterAnUncertainCreateFindsTheIssueInsteadOfCreatingAgain(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		outputs: [][]byte{
+			nil,
+			[]byte(`{"login":"factory-bot"}`),
+			[]byte(`[{"number":21,"html_url":"https://github.com/example/project/issues/21","body":"body\n<!-- factory-plan: s/1/n-1 -->","user":{"login":"factory-bot"}}]`),
+		},
+		errs: []error{&hostcmd.TimeoutError{Operation: "gh api", Timeout: github.CommandTimeout}},
+	}
+	client := &github.GhClient{Runner: runner}
+	item := tracker.RenderedPlanItem{NodeID: "n-1", Type: "issue", Title: "Cache worker images", Body: "body\n<!-- factory-plan: s/1/n-1 -->", Correlation: "s/1/n-1"}
+
+	_, err := client.CreatePlanItem(context.Background(), planRepository, item)
+	if kind, _ := tracker.PlanErrorKindOf(err); kind != tracker.PlanErrorAmbiguous || tracker.WriteNotApplied(err) {
+		t.Fatalf("CreatePlanItem() error = %v, want an ambiguous outcome", err)
+	}
+	found, err := client.FindPlanItems(context.Background(), planRepository, "s/1/n-1")
+	if err != nil || len(found) != 1 || found[0].ExternalID != "21" {
+		t.Fatalf("FindPlanItems() = %#v, %v; want issue 21", found, err)
+	}
+	creates := 0
+	for _, call := range runner.calls {
+		if hasArgs(call.args, "POST") {
+			creates++
+		}
+	}
+	if creates != 1 {
+		t.Fatalf("creates = %d, want exactly one", creates)
+	}
+}
+
+// TestPartialLinkFailureIsVerifiedBeforeARetry verifies that a relationship
+// create with an unknown outcome is not proven unapplied, and that the next
+// verification sees the link GitHub created, so a retry adds no duplicate.
+func TestPartialLinkFailureIsVerifiedBeforeARetry(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		outputs: [][]byte{[]byte(`{"id":5013,"number":13}`), nil, []byte(`[[{"id":5013,"number":13}]]`)},
+		errs:    []error{nil, errors.New("gh api repos/example/project/issues/11/sub_issues --method POST: HTTP 502: Bad Gateway")},
+	}
+	client := &github.GhClient{Runner: runner}
+	child, parent := issueRefs(13, 11)
+	link := tracker.PlanRelationship{Kind: tracker.PlanRelationshipParent, Mode: tracker.PlanRelationshipNative, From: child, To: parent}
+
+	err := client.CreatePlanRelationship(context.Background(), planRepository, link)
+	if err == nil || tracker.WriteNotApplied(err) {
+		t.Fatalf("CreatePlanRelationship() error = %v, want an unknown outcome", err)
+	}
+	exists, err := client.FindPlanRelationship(context.Background(), planRepository, link)
+	if err != nil || !exists {
+		t.Fatalf("FindPlanRelationship() = %t, %v; want the link GitHub created", exists, err)
 	}
 }
