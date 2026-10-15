@@ -13,7 +13,7 @@ import (
 )
 
 // requiredTopics are the operator topics every release must ship.
-var requiredTopics = []string{"authorization", "debug", "reporting", "setup"}
+var requiredTopics = []string{"acceptance", "authorization", "debug", "reporting", "setup"}
 
 // TestTopicsShipEveryRequiredTopic verifies the topic index and that every
 // listed topic has a body.

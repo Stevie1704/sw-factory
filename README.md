@@ -20,7 +20,7 @@ At a glance, Factory provides a supervised path from an authorized issue to a
 draft pull request, an isolated worker boundary for agent sessions, exact
 checkpoint checks, separate specification and documented-standards review, and
 restart-safe local operation. The ownership rules for these pieces are in the
-[domain context](CONTEXT.md); their implementation contracts are in the
+[domain glossary](GLOSSARY.md); their implementation contracts are in the
 [configuration](docs/configuration.md), [agent runtime](docs/agent-runtime.md),
 and [worker runtime](docs/worker-runtime.md) guides.
 
@@ -169,7 +169,7 @@ Each operational contract has one owner:
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
 | Worker operations, stable paths, mounts, process state, and isolation | [Worker runtime](docs/worker-runtime.md) |
 | Approved Go toolchain, vulnerability scans, suppressions, and the Worker rebuild, publish, and repin procedure | [Build toolchain and vulnerability scanning](docs/supply-chain.md) |
-| Terms, invariants, ownership, and lifecycle model | [Domain context](CONTEXT.md) |
+| Terms, invariants, ownership, and lifecycle model | [Domain glossary](GLOSSARY.md) |
 | Component relationships and architecture overview | [Architecture visualization](docs/architecture.html) |
 
 The architecture page is a visual companion to the text contracts. Architecture

@@ -10,7 +10,11 @@ Uses the five canonical labels unchanged. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+Single-context layout with the root domain glossary `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
+### Verification
+
+Run `make check` before you commit. The README section "Where the contracts live" maps each contract to its canonical document.
 
 ### Documentation
 

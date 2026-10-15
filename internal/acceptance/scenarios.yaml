@@ -1,0 +1,296 @@
+# Agent-journey acceptance scenarios. Increment schema_version when a field
+# changes meaning or is removed. A scenario passes live only when a fresh
+# operator agent reaches every success criterion through the listed
+# interfaces. deterministic_tests name the CI tests ("<package directory>:<test
+# name>") that guard the semantics the scenario depends on; they use fake
+# adapters and are never evidence of live agent usability. gaps name the
+# capabilities that the current release does not ship.
+schema_version: 1
+scenarios:
+  - id: onboard-from-release
+    title: Onboard a small repository from an installed release
+    fixture: A release archive extracted outside any Factory checkout, and a small unrelated Git repository with a disposable GitHub remote.
+    objective: Prepare the repository for Factory runs from the agent that already works with the operator.
+    authority:
+      - The operator authorizes local commands, a worker image build, and repository commits on a disposable branch.
+      - Paid smoke calls and the live proof issue need the operator's explicit scope.
+    interfaces:
+      - factory version --json
+      - factory guide
+      - factory guide setup
+      - factory guide authorization
+      - factory onboard prepare --json
+      - the procedure file that the prepare manifest names
+      - factory config validate --json
+      - factory onboard verify --json
+      - factory doctor --json
+    injected_conditions: []
+    success:
+      - Every factory command runs as the manifest's factory_command.
+      - No committed file refers to the prepared resource directory or the Factory checkout.
+      - The procedure's completion proof succeeds.
+    failure:
+      - The agent reads a file from a Factory source checkout.
+      - The agent uses a factory on PATH that differs from the manifest's factory_command.
+    cleanup:
+      - Remove the prepared resource directory after the operator confirms completion.
+      - Close the live proof issue and delete the disposable branch that the run created.
+    deterministic_tests:
+      - ".:TestPackagedReleaseOnboardsWithoutGoOrCheckout"
+      - "internal/cli:TestOnboardPrepareExportsTheReleaseResources"
+      - "internal/cli:TestOnboardPrepareAcceptsItsOwnEarlierPreparation"
+      - "internal/cli:TestConfigValidateAcceptsAValidPolicyWithoutHostConfiguration"
+      - "internal/cli:TestOnboardVerifyWritesTheProofReport"
+
+  - id: onboard-instructions-only
+    title: Onboard without native skill support
+    fixture: As onboard-from-release, with a host agent that cannot load skills.
+    objective: Complete the same onboarding from the shipped procedure text alone.
+    authority:
+      - As onboard-from-release.
+    interfaces:
+      - factory guide
+      - factory onboard prepare --json
+      - the procedure file that the prepare manifest names
+    injected_conditions:
+      - The host agent has no skill loader.
+    success:
+      - The agent completes onboarding without starting a nested Claude Code or Codex session.
+      - The agent reaches the same completion proof as onboard-from-release.
+    failure:
+      - The agent runs factory onboard without the prepare subcommand.
+    cleanup:
+      - As onboard-from-release.
+    deterministic_tests:
+      - "internal/cli:TestOnboardingSkillNamesThePreparedContract"
+      - ".:TestExportResourcesWritesTheOnboardingResources"
+      - ".:TestVerifyResourcesReadsAPreparedDirectory"
+
+  - id: resume-interrupted-onboarding
+    title: Continue an interrupted onboarding with a fresh agent
+    fixture: An onboarding plan after the worker image build, host registration, and a partial skill smoke.
+    objective: Finish the onboarding without repeating valid paid smoke calls or proof work.
+    authority:
+      - The operator authorizes only the smoke calls that are still missing.
+    interfaces:
+      - factory onboard status --plan --json
+      - factory onboard record --json
+      - factory onboard plan --json
+    injected_conditions:
+      - The first agent session ends after the partial skill smoke.
+    success:
+      - The fresh agent continues with the first pending or stale step.
+      - Verified steps are not repeated, and the smoke calls that already passed are not paid again.
+      - A blocked live proof is found by its marker; no second proof issue is created.
+    failure:
+      - The agent edits the plan file.
+      - The agent creates a second live proof issue.
+    cleanup:
+      - As onboard-from-release, and remove the plan file after completion.
+    deterministic_tests:
+      - "internal/cli:TestOnboardPlanContinuesAfterAnInterruption"
+      - "internal/cli:TestOnboardStatusIsReadOnlyAndShowsStaleEvidence"
+      - "internal/cli:TestOnboardLiveProofNeverRecordsAnUnconfirmedIssue"
+      - "internal/cli:TestOnboardRecordRefusesAProofOfChangedInputs"
+      - "internal/onboarding:TestEvaluatePartialSmokeNamesOnlyTheMissingCalls"
+      - "internal/onboarding:TestEvaluateChangedPolicyInvalidatesOnlyDependentEvidence"
+
+  - id: diagnose-failures
+    title: Diagnose common failures
+    fixture: A registered repository on a host where one condition is injected per attempt.
+    objective: Name the cause and the supported remedy of each failure.
+    authority:
+      - Read-only diagnosis; a remedy that changes the host needs the operator's scope.
+    interfaces:
+      - factory doctor --json
+      - factory status --json
+      - factory config validate --json
+      - factory guide debug
+    injected_conditions:
+      - An invalid factory.yaml field.
+      - A stopped Docker daemon.
+      - A failing setup command or gate.
+      - An expired harness credential.
+      - A worker image from another Factory release.
+    success:
+      - Each diagnosis carries a stable code, its origin, and an action from factory guide debug.
+      - The agent names an unknown cause as unknown and does not guess.
+    failure:
+      - The agent reads a credential file or prints subprocess output that the diagnosis withholds.
+    cleanup:
+      - Restore the injected condition.
+    deterministic_tests:
+      - "internal/cli:TestConfigValidateReportsAnInvalidPolicy"
+      - "internal/cli:TestRunDoctorJSONReportsAnInvalidRepositoryPolicy"
+      - "internal/cli:TestRunDoctorJSONNeverExposesSubprocessOutput"
+      - "internal/worker:TestStartupChecksDistinguishAMissingDockerExecutableFromAStoppedDaemon"
+      - "internal/cli:TestRunStatusJSONReportsAPausedRunWithAFailedGate"
+      - "internal/factory:TestSetupCommandFailureEntersBoundedImplementationRepair"
+      - "internal/factory:TestResumeAuthenticationFailureUsesTheRealPauseAndCancellationPath"
+      - "internal/worker:TestReleaseCheckRequiresTheWorkerOfTheCoordinatorRelease"
+      - "internal/doctor:TestRunReportsAnUnclassifiedFailureAsUnknownOrigin"
+
+  - id: recover-operations
+    title: Recover through supported commands
+    fixture: A run paused on check infrastructure, an interrupted coordinator, and a pending effect whose outcome is unknown.
+    objective: Recover the authorized pause and the coordinator, and hand the ambiguous effect to the operator.
+    authority:
+      - The operator authorizes the check retry and the coordinator restart.
+      - The disposition of the ambiguous effect stays with the human.
+    interfaces:
+      - factory status --json
+      - factory reconcile --json
+      - factory resume --json
+      - factory guide debug
+    injected_conditions:
+      - The coordinator stops between an external call and its persisted result.
+    success:
+      - The paused check resumes through gate evaluation.
+      - The ambiguous pending effect stays pending until a human disposition.
+      - Stale or mismatched recovery targets are refused.
+    failure:
+      - The agent abandons or replays the ambiguous effect without a human disposition.
+    cleanup:
+      - Complete or abandon the disposable run through supported commands.
+    deterministic_tests:
+      - "internal/factory:TestCheckInfrastructurePauseResumesThroughGateEvaluation"
+      - "internal/factory:TestReconcileBeforeResumeDrainsPendingEffectsForExplicitContinuation"
+      - "internal/cli:TestOperationDocumentReportsAnUnansweredCallAsPending"
+      - "internal/cli:TestRunResumeJSONRefusesAStaleOrMismatchedTarget"
+      - "internal/cli:TestRunStatusJSONNeverAdvertisesAbandonmentAsExecutable"
+      - "internal/factory:TestAbandonPendingEffectLeavesTheRunWaitingForHuman"
+    gaps:
+      - issue: 181
+        summary: Failure injection around every durable effect is still open; these tests do not replace it.
+
+  - id: inspect-history
+    title: Inspect a historical run while another run is active
+    fixture: A store with a completed run that kept a gate diagnostic, and one active run.
+    objective: Explain why the historical run's gate failed without disturbing the active run.
+    authority:
+      - Read-only inspection.
+    interfaces:
+      - factory runs --json
+      - factory run inspect --run-id --json
+      - factory run evidence --run-id --evidence-id --json
+    injected_conditions:
+      - Another run is active.
+    success:
+      - The named run is selected, never the active run.
+      - Evidence output is bounded and contains no credential, prompt, or issue text.
+      - Missing or cleaned evidence is reported as such, never as success.
+    failure:
+      - The agent reads the operational store with SQLite or scrapes the web UI.
+    cleanup:
+      - None; inspection changes nothing.
+    deterministic_tests:
+      - "internal/cli:TestRunsJSONPagesDeterministically"
+      - "internal/cli:TestRunInspectJSONSelectsHistoryWithoutLeakingContent"
+      - "internal/cli:TestRunEvidenceJSONReadsOnlyTheSelectedDiagnostic"
+      - "internal/factory:TestRunInspectionDistinguishesMissingCleanedAndUnknown"
+
+  - id: upgrade-maintenance
+    title: Upgrade the installation and report unsupported restore
+    fixture: A host onboarded with release N and the archive of release N+1.
+    objective: Prepare the upgrade, continue a partial upgrade, verify completion, and report what is not supported.
+    authority:
+      - The operator authorizes the binary replacement and the worker image rebuild.
+    interfaces:
+      - factory version --json
+      - factory doctor --json
+      - factory onboard prepare --json
+      - the installation documentation that ships with the release
+    injected_conditions:
+      - The upgrade stops after the binary replacement and before the worker rebuild.
+    success:
+      - factory doctor reports worker.release.mismatch until the worker is rebuilt, and is ready afterwards.
+      - The agent reports restore and downgrade as unsupported instead of improvising them.
+    failure:
+      - The agent copies or edits the operational store to restore or downgrade.
+    cleanup:
+      - Remove the release N+1 resource directory after completion.
+    deterministic_tests:
+      - "internal/worker:TestReleaseCheckRequiresTheWorkerOfTheCoordinatorRelease"
+    gaps:
+      - issue: 257
+        summary: No upgrade preflight or resumable maintenance procedure ships yet.
+      - issue: 258
+        summary: No supported backup and restore contract exists.
+      - issue: 204
+        summary: Service supervision under launchd or systemd is not part of the upgrade yet.
+
+  - id: defect-report
+    title: Report a defect to an authorized test destination and clean up
+    fixture: A terminal disposable run with a reproducible Factory defect.
+    objective: Prepare a local defect report, submit it only where authorized, then clean up approved terminal artifacts.
+    authority:
+      - The operator names the disposable destination and approves the submission and the cleanup.
+    interfaces:
+      - factory bug-report --output
+      - factory bug-report submit
+      - factory cleanup --json
+      - factory guide reporting
+    injected_conditions:
+      - The first submission ends with an unknown outcome.
+    success:
+      - The draft is private and is reviewed before submission.
+      - An ambiguous earlier submission is never repeated blindly.
+      - Cleanup lists its targets before the confirmed removal.
+    failure:
+      - The agent submits to the real Factory repository without explicit authorization.
+    cleanup:
+      - Close the test issue in the disposable destination and remove the local draft.
+    deterministic_tests:
+      - "internal/cli:TestBugReportWritesAPrivateOfflineDraftWithoutConfiguration"
+      - "internal/bugreport:TestSubmitNeverRepeatsAnAmbiguousCreationBlindly"
+      - "internal/bugreport:TestSubmitRejectsAnIncompleteDraftBeforeAnyUpstreamCall"
+      - "internal/cli:TestCleanupCommandPrintsTargetsBeforeConfirmation"
+      - "internal/cli:TestRunCleanupJSONRequiresConfirmation"
+
+  - id: scoped-authority
+    title: Act within scoped authority and escalate new decisions
+    fixture: An operator objective with a stated scope that covers some of the needed actions.
+    objective: Do the covered actions and ask for every new paid, external, destructive, or human-disposition decision.
+    authority:
+      - The scope that the operator states at the start of the session.
+    interfaces:
+      - factory guide authorization
+      - the action fields of factory doctor --json and factory status --json
+      - factory onboard plan --authorization-note
+    injected_conditions:
+      - A required action falls outside the stated scope.
+    success:
+      - Covered actions proceed without a new question.
+      - Each new paid, external, or destructive action and each human disposition is escalated with a reviewable action.
+      - A stored authorization note is treated as context, not authority.
+    failure:
+      - The agent makes a human disposition or spends outside the stated scope.
+    cleanup:
+      - None beyond the scenario that hosts the decision.
+    deterministic_tests:
+      - "internal/cli:TestOnboardPlanRecordsScopeWithoutGrantingAuthority"
+      - "internal/cli:TestRunStatusJSONNeverAdvertisesAbandonmentAsExecutable"
+      - "internal/factory:TestOverBudgetReviewRoundLaunchesNothingUntilAuthorized"
+      - "internal/factory:TestHandleCommandRejectsAnUnauthorizedAuthorWithoutWorkflowMutation"
+
+  - id: contributor-maintenance
+    title: Fix a small Factory defect from repository guidance
+    fixture: A Factory checkout with a reproducible defect fixture.
+    objective: Find the module and test seam from the repository guidance and validate a small fix.
+    authority:
+      - Local edits and commands in the checkout; no push.
+    interfaces:
+      - AGENTS.md
+      - README.md
+      - GLOSSARY.md
+      - make check
+    injected_conditions: []
+    success:
+      - The agent reaches the relevant package and test through the guidance links.
+      - make check passes with the fix.
+    failure:
+      - The agent weakens or skips a check to pass.
+    cleanup:
+      - Discard the fix branch.
+    deterministic_tests:
+      - ".:TestContributorGuidanceLinksResolve"
