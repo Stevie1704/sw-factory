@@ -25,6 +25,7 @@ func TestSessionLifecycleResolvesDeclaredTransitions(t *testing.T) {
 		{store.IdeationStateAwaitingUser, workflow.SessionEventRoleStarted, store.IdeationStateRoleActive},
 		{store.IdeationStateRoleActive, workflow.SessionEventRoleAwaitsUser, store.IdeationStateAwaitingUser},
 		{store.IdeationStateRoleActive, workflow.SessionEventPlanDrafted, store.IdeationStateDraftReview},
+		{store.IdeationStateRoleActive, workflow.SessionEventDraftKept, store.IdeationStateDraftReview},
 		{store.IdeationStateDraftReview, workflow.SessionEventEdited, store.IdeationStateDraftReview},
 		{store.IdeationStateDraftReview, workflow.SessionEventRoleStarted, store.IdeationStateRoleActive},
 		{store.IdeationStateDraftReview, workflow.SessionEventApproved, store.IdeationStateApproved},

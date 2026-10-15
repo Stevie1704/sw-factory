@@ -273,6 +273,14 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		if commandErr == nil {
 			consecutiveCommandFailures = 0
 		}
+		if err := s.ReconcileSessionRoles(pollContext); err != nil {
+			if pollingContextDone(err) {
+				return nil
+			}
+			// A session-role failure never stops run supervision; the next
+			// pass observes the same durable invocations again.
+			s.emitCoordinatorEvent(events, CoordinatorEvent{Kind: EventRetry, Operation: "session role reconciliation"})
+		}
 		result, err := s.pollOnce(pollContext, registration)
 		if err != nil {
 			if pollingContextDone(err) {

@@ -25,6 +25,9 @@ const (
 	SessionEventRoleAwaitsUser SessionEvent = "role_awaits_user"
 	// SessionEventPlanDrafted records an accepted plan draft.
 	SessionEventPlanDrafted SessionEvent = "plan_drafted"
+	// SessionEventDraftKept records a planning role that stopped, failed, or
+	// produced no draft while an earlier draft stays under review.
+	SessionEventDraftKept SessionEvent = "draft_kept"
 	// SessionEventEdited records a user edit of the brief or the draft. An edit
 	// of an approved draft returns it to review.
 	SessionEventEdited SessionEvent = "edited"
@@ -96,6 +99,7 @@ func DefaultSessionLifecycle() SessionLifecycle {
 		roleActive: {
 			SessionEventRoleAwaitsUser: awaitingUser,
 			SessionEventPlanDrafted:    draftReview,
+			SessionEventDraftKept:      draftReview,
 			SessionEventNoBuild:        noBuild,
 			SessionEventCancelled:      cancelled,
 		},

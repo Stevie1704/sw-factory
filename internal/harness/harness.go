@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -118,6 +119,10 @@ func invocationEnvironment(harnessName string, request StartRequest) map[string]
 	}
 	if request.Model != "" {
 		environment["FACTORY_MODEL"] = request.Model
+	}
+	if request.SessionID != "" {
+		environment["FACTORY_SESSION_ID"] = request.SessionID
+		environment["FACTORY_SESSION_REVISION"] = strconv.FormatInt(request.SessionRevision, 10)
 	}
 	return environment
 }

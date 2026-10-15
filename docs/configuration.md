@@ -606,6 +606,13 @@ policy for a declared role, but `factory.yaml` cannot add or redefine
 `roles`, `stages`, `prompts`, or `transitions`. Such fields are rejected as
 typed repository-policy errors.
 
+The factory also declares the session roles `ideation` and `planning`, which
+serve ideation sessions instead of runs. They are optional: a repository that
+wants sessions adds them to `role_harness_defaults` and `model_options` (and
+optionally `reasoning_effort_options`); without that policy a session role
+fails closed. `role_craft` does not apply to session roles. See
+[Session roles](agent-runtime.md#session-roles).
+
 The optional `role_craft` map selects one repository-relative Markdown file per
 declared role. Its content replaces only that role's embedded `craft` section;
 the embedded authority, permitted paths, workflow stages, route sections, and
@@ -1102,6 +1109,11 @@ Schema version 43 adds the publication ledger (ADR 0022):
 `ideation_publication_operations` holds one row per item create and per
 relationship of one approval, with its recovery state and the tracker identity
 it produced. The migration only adds the table.
+
+Schema version 44 adds session-role invocations (ADR 0023):
+`ideation_invocations` holds one row per ideation or planning invocation with
+its pinned session revision, context revision, policy, prompt, and worker
+image. The migration only adds the table.
 
 ## Local run inspection
 
