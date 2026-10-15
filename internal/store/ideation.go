@@ -294,14 +294,10 @@ func checkIdeationRevision(session IdeationSession, write IdeationWrite) error {
 // change to session and to tx.
 func commitIdeationWrite(ctx context.Context, tx *sql.Tx, session IdeationSession, write IdeationWrite) (IdeationSession, error) {
 	defer func() { _ = tx.Rollback() }()
-	at := write.At
-	if at.IsZero() {
-		at = time.Now()
-	}
 	session.State = write.State
 	session.StateReason = write.StateReason
 	session.Revision = write.ExpectedRevision + 1
-	session.UpdatedAt = at.UTC()
+	session.UpdatedAt = ideationWriteTime(write)
 	result, err := tx.ExecContext(ctx, `
 		UPDATE ideation_sessions
 		SET state = ?, state_reason = ?, revision = ?, brief_revision = ?, plan_revision = ?,
@@ -462,4 +458,60 @@ func migrateIdeationSchema(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// ideationWriteTime returns the UTC write time of write, or the current time
+// when the caller left it zero.
+func ideationWriteTime(write IdeationWrite) time.Time {
+	if write.At.IsZero() {
+		return time.Now().UTC()
+	}
+	return write.At.UTC()
+}
+
+// IdeationHistory is the complete inspectable record of one session.
+type IdeationHistory struct {
+	// Session is the current session projection.
+	Session IdeationSession
+	// Turns contains every accepted turn in conversation order.
+	Turns []IdeationTurn
+}
+
+// IdeationHistory reads one session and its complete history in one read
+// transaction, so the parts are consistent with each other.
+func (s *Store) IdeationHistory(ctx context.Context, sessionID string) (IdeationHistory, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return IdeationHistory{}, fmt.Errorf("begin ideation history read: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var history IdeationHistory
+	if history.Session, err = scanIdeationSession(tx.QueryRowContext(ctx, `SELECT `+ideationSessionColumns+` FROM ideation_sessions WHERE id = ?`, sessionID), sessionID); err != nil {
+		return IdeationHistory{}, err
+	}
+	if history.Turns, err = queryIdeationRows(ctx, tx, `SELECT `+ideationTurnColumns+` FROM ideation_turns WHERE session_id = ? ORDER BY sequence`, sessionID, scanIdeationTurn); err != nil {
+		return IdeationHistory{}, err
+	}
+	return history, nil
+}
+
+// queryIdeationRows reads every row of one session-scoped query with scan.
+func queryIdeationRows[T any](ctx context.Context, tx *sql.Tx, query, sessionID string, scan func(interface{ Scan(...any) error }) (T, error)) ([]T, error) {
+	rows, err := tx.QueryContext(ctx, query, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("read ideation history: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	values := []T{}
+	for rows.Next() {
+		value, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read ideation history: %w", err)
+	}
+	return values, nil
 }

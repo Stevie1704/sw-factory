@@ -191,3 +191,101 @@ func TestSchema42MigrationAddsIdeationTablesAndKeepsStoredRuns(t *testing.T) {
 	}
 	createIdeationSessionForTest(t, migrated, "session-1")
 }
+
+// appendUserTurnForTest appends one user turn and returns the new session.
+func appendUserTurnForTest(t *testing.T, opened *store.Store, session store.IdeationSession, id, body string) (store.IdeationSession, store.IdeationTurn) {
+	t.Helper()
+	updated, turn, err := opened.AppendIdeationTurn(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), store.IdeationTurn{
+		ID: id, Author: store.IdeationTurnAuthorUser, Body: body,
+	})
+	if err != nil {
+		t.Fatalf("AppendIdeationTurn(%s) error = %v", id, err)
+	}
+	return updated, turn
+}
+
+// TestIdeationTurnsKeepOrderAndRetriesDoNotAppendTwice verifies that accepted
+// turns have stable IDs and sequence numbers and that a retried user turn
+// returns the original turn instead of a second one, also after a restart.
+func TestIdeationTurnsKeepOrderAndRetriesDoNotAppendTwice(t *testing.T) {
+	t.Parallel()
+
+	opened, path := openIdeationStoreForTest(t)
+	session := createIdeationSessionForTest(t, opened, "session-1")
+	afterFirst, first := appendUserTurnForTest(t, opened, session, "turn-a", "Onboarding takes too long.")
+	afterRole, roleTurn, err := opened.AppendIdeationTurn(t.Context(), ideationWrite(afterFirst, store.IdeationStateAwaitingUser), store.IdeationTurn{
+		ID: "turn-b", Author: store.IdeationTurnAuthorRole, Role: "ideation", InvocationID: "invocation-1",
+		Body: "Who is the first user?",
+	})
+	if err != nil {
+		t.Fatalf("AppendIdeationTurn(role) error = %v", err)
+	}
+	if first.Sequence != 1 || roleTurn.Sequence != 2 || first.SessionRevision != 2 || roleTurn.SessionRevision != 3 {
+		t.Fatalf("turn order = (%d, rev %d), (%d, rev %d); want sequences 1, 2 at revisions 2, 3",
+			first.Sequence, first.SessionRevision, roleTurn.Sequence, roleTurn.SessionRevision)
+	}
+	if afterRole.Revision != 3 {
+		t.Fatalf("session revision = %d, want 3", afterRole.Revision)
+	}
+
+	reopened := reopenIdeationStoreForTest(t, opened, path)
+	replayedSession, replayed, err := reopened.AppendIdeationTurn(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), store.IdeationTurn{
+		ID: "turn-a", Author: store.IdeationTurnAuthorUser, Body: "Onboarding takes too long.",
+	})
+	if err != nil {
+		t.Fatalf("retried AppendIdeationTurn() error = %v", err)
+	}
+	if replayed.Sequence != 1 || replayed.SessionRevision != 2 || replayedSession.Revision != 3 {
+		t.Fatalf("retry = turn %#v session revision %d; want the original turn and an unchanged session", replayed, replayedSession.Revision)
+	}
+	if _, _, err := reopened.AppendIdeationTurn(t.Context(), ideationWrite(afterRole, store.IdeationStateAwaitingUser), store.IdeationTurn{
+		ID: "turn-a", Author: store.IdeationTurnAuthorUser, Body: "A different answer.",
+	}); !errors.Is(err, store.ErrIdeationRequestReused) {
+		t.Fatalf("reused turn ID with new content error = %v, want ErrIdeationRequestReused", err)
+	}
+
+	history, err := reopened.IdeationHistory(t.Context(), "session-1")
+	if err != nil {
+		t.Fatalf("IdeationHistory() error = %v", err)
+	}
+	if len(history.Turns) != 2 || history.Turns[0].ID != "turn-a" || history.Turns[1].ID != "turn-b" ||
+		history.Turns[1].Role != "ideation" || history.Turns[1].InvocationID != "invocation-1" ||
+		!history.Turns[0].CreatedAt.Equal(ideationNow.Add(time.Minute)) {
+		t.Fatalf("history turns = %#v", history.Turns)
+	}
+	if history.Session.Revision != 3 {
+		t.Fatalf("history session revision = %d, want 3", history.Session.Revision)
+	}
+}
+
+// TestIdeationWriteRejectsAStaleRevision verifies that a competing tab or a
+// late role report that read an older revision cannot overwrite newer work and
+// receives the typed conflict.
+func TestIdeationWriteRejectsAStaleRevision(t *testing.T) {
+	t.Parallel()
+
+	opened, _ := openIdeationStoreForTest(t)
+	session := createIdeationSessionForTest(t, opened, "session-1")
+	appendUserTurnForTest(t, opened, session, "turn-a", "First tab.")
+
+	_, _, err := opened.AppendIdeationTurn(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), store.IdeationTurn{
+		ID: "turn-late", Author: store.IdeationTurnAuthorRole, Role: "ideation", Body: "Late report.",
+	})
+	var conflict *store.IdeationRevisionConflictError
+	if !errors.As(err, &conflict) || !errors.Is(err, store.ErrIdeationRevisionConflict) {
+		t.Fatalf("stale AppendIdeationTurn() error = %v, want IdeationRevisionConflictError", err)
+	}
+	if conflict.Expected != 1 || conflict.Actual != 2 || conflict.SessionID != "session-1" {
+		t.Fatalf("conflict = %#v, want expected 1 actual 2", conflict)
+	}
+	if _, err := opened.TransitionIdeationSession(t.Context(), ideationWrite(session, store.IdeationStateCancelled)); !errors.Is(err, store.ErrIdeationRevisionConflict) {
+		t.Fatalf("stale TransitionIdeationSession() error = %v, want conflict", err)
+	}
+	history, err := opened.IdeationHistory(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Turns) != 1 || history.Session.State != store.IdeationStateAwaitingUser || history.Session.Revision != 2 {
+		t.Fatalf("history after stale writes = %#v", history)
+	}
+}
