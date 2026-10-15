@@ -1105,6 +1105,16 @@ publication receipts. A session belongs to the registered repository and needs
 no issue and no run. The migration only adds tables; stored runs stay readable.
 Session text stays in this store and never enters evaluation summaries.
 
+Schema version 43 adds the publication ledger (ADR 0022):
+`ideation_publication_operations` holds one row per item create and per
+relationship of one approval, with its recovery state and the tracker identity
+it produced. The migration only adds the table.
+
+Schema version 44 adds session-role invocations (ADR 0023):
+`ideation_invocations` holds one row per ideation or planning invocation with
+its pinned session revision, context revision, policy, prompt, and worker
+image. The migration only adds the table.
+
 ## Local run inspection
 
 Use the read-only CLI to inspect a named historical run while another run is

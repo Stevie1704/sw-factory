@@ -485,6 +485,9 @@ type IdeationHistory struct {
 	Approvals []PlanApproval
 	// Receipts contains every publication receipt, oldest first.
 	Receipts []PublicationReceipt
+	// Operations contains the publication ledger of every approval, by
+	// approval time and then in execution order.
+	Operations []PublicationOperation
 }
 
 // IdeationHistory reads one session and its complete history in one read
@@ -512,6 +515,9 @@ func (s *Store) IdeationHistory(ctx context.Context, sessionID string) (Ideation
 		return IdeationHistory{}, err
 	}
 	if history.Receipts, err = queryIdeationRows(ctx, tx, `SELECT `+publicationReceiptColumns+` FROM ideation_publication_receipts r JOIN ideation_approvals a ON a.session_id = r.session_id AND a.id = r.approval_id WHERE r.session_id = ? ORDER BY r.recorded_at, r.id`, sessionID, scanPublicationReceipt); err != nil {
+		return IdeationHistory{}, err
+	}
+	if history.Operations, err = queryIdeationRows(ctx, tx, `SELECT `+prefixedPublicationOperationColumns+` FROM ideation_publication_operations o JOIN ideation_approvals a ON a.session_id = o.session_id AND a.id = o.approval_id WHERE o.session_id = ? ORDER BY a.approved_at, o.approval_id, o.sequence`, sessionID, scanPublicationOperation); err != nil {
 		return IdeationHistory{}, err
 	}
 	for index := range history.Plans {

@@ -24,7 +24,7 @@ invocation, packet, and report each require a run ID.
    (ADR 0002). Session roles need no new worker skill, so startup diagnosis
    and existing worker images are unchanged.
 2. **Ownership is explicit; no run is fabricated.** A session-role invocation
-   is a row of `ideation_invocations` (schema version 43). It names the session,
+   is a row of `ideation_invocations` (schema version 44). It names the session,
    the session revision it serves, the trigger it answers (the user turn, or
    the planning request), the brief and repository context revisions, the
    harness, model, and effort, the prompt version and SHA-256, the worker image

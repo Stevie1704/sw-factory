@@ -148,7 +148,7 @@ const sessionInvocationColumns = `session_id, id, role, trigger_id, session_revi
 	worker_id, native_session_id, resumed_from, snapshot_path, invocation_directory, result_directory,
 	status, failure_kind, status_reason, payload, created_at, updated_at`
 
-// sessionInvocationSchema creates the additive table of schema version 43.
+// sessionInvocationSchema creates the additive table of schema version 44.
 // The partial indexes enforce one active invocation per session and one
 // accepted result per trigger.
 var sessionInvocationSchema = []string{

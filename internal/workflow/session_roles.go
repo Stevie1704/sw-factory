@@ -49,7 +49,7 @@ type SessionRoleCapabilities struct {
 
 // SessionRoleDefinition is the factory-owned declaration of one role that
 // serves an ideation session. Session roles are not run roles: no run stage
-// selects them and repositories cannot redefine them (ADR 0003, ADR 0022).
+// selects them and repositories cannot redefine them (ADR 0003, ADR 0023).
 type SessionRoleDefinition struct {
 	// Name is the stable role identity recorded in packets and reports.
 	Name string

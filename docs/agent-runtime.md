@@ -590,7 +590,7 @@ that pauses the run for a human.
 ## Session roles
 
 Ideation sessions use two session roles, `ideation` and `planning`, that run
-before any issue or run exists ([ADR 0022](adr/0022-session-roles-run-on-headless-sessions.md)).
+before any issue or run exists ([ADR 0023](adr/0023-session-roles-run-on-headless-sessions.md)).
 They use the same headless adapters, worker isolation, credential projection,
 and structured reports as run roles, with these differences:
 

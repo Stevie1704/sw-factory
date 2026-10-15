@@ -203,9 +203,9 @@ func TestPlanningResultMustMatchThePinnedBriefAndContext(t *testing.T) {
 	}
 }
 
-// TestSchema43MigrationAddsSessionInvocations verifies that a schema 42 store
+// TestSchema44MigrationAddsSessionInvocations verifies that a schema 43 store
 // gains the session invocation table on open.
-func TestSchema43MigrationAddsSessionInvocations(t *testing.T) {
+func TestSchema44MigrationAddsSessionInvocations(t *testing.T) {
 	t.Parallel()
 
 	opened, path := openIdeationStoreForTest(t)
@@ -216,7 +216,7 @@ func TestSchema43MigrationAddsSessionInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(t.Context(), `DROP TABLE ideation_invocations; UPDATE schema_metadata SET version = 42`); err != nil {
+	if _, err := database.ExecContext(t.Context(), `DROP TABLE ideation_invocations; UPDATE schema_metadata SET version = 43`); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Close(); err != nil {
@@ -227,8 +227,8 @@ func TestSchema43MigrationAddsSessionInvocations(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
-	if version := reopened.SchemaVersion(); version != 43 {
-		t.Fatalf("SchemaVersion() = %d, want 43", version)
+	if version := reopened.SchemaVersion(); version != 44 {
+		t.Fatalf("SchemaVersion() = %d, want 44", version)
 	}
 	if active, err := reopened.ActiveSessionInvocations(t.Context()); err != nil || len(active) != 0 {
 		t.Fatalf("ActiveSessionInvocations() = %#v, %v; want an empty usable table", active, err)
