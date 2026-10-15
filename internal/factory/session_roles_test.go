@@ -696,3 +696,59 @@ func TestSessionRolesFailClosedWithoutRolePolicy(t *testing.T) {
 		t.Fatalf("session changed to %#v or a worker started; want no effect", after)
 	}
 }
+
+// snapshotWorktreeForTest adds the run worktree seam to snapshotsForTest, as
+// the production Git adapter provides both.
+type snapshotWorktreeForTest struct {
+	*snapshotsForTest
+}
+
+// Create is unused by session roles.
+func (snapshotWorktreeForTest) Create(context.Context, string, string, string) (gitadapter.Workspace, error) {
+	return gitadapter.Workspace{}, errors.New("unused")
+}
+
+// Remove is unused by session roles.
+func (snapshotWorktreeForTest) Remove(context.Context, string, gitadapter.Workspace) error {
+	return nil
+}
+
+// TestServiceDrivesSessionRolesFromTheSupervisor verifies that the composed
+// coordinator starts a session role through the registered repository policy
+// and that its supervisor reconciliation applies the report, so neither a
+// browser nor a terminal is needed to continue a session.
+func TestServiceDrivesSessionRolesFromTheSupervisor(t *testing.T) {
+	fixture := newSessionFixture(t, config.HarnessCodex)
+	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
+		Path: fixture.repo, OperationalDataPath: fixture.path, RepositoryConfigPath: filepath.Join(fixture.repo, "factory.yaml"),
+	}}}
+	ids := 0
+	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+		Config:            &fakeConfig{value: host},
+		OpenStore:         func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
+		LoadRepository:    func(string) (config.RepositoryConfig, error) { return fixture.policy, nil },
+		Worker:            fixture.worker,
+		HeadlessHarnesses: harness.NewHeadlessAdapters(fixture.worker),
+		Worktree:          snapshotWorktreeForTest{fixture.snapshots},
+		Now:               func() time.Time { return time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC) },
+		NewRunID: func() (string, error) {
+			ids++
+			return "svc-" + string(rune('0'+ids)), nil
+		},
+	})
+	var invocation store.SessionInvocation
+	if err := service.WithSessionRoles(t.Context(), func(roles *factory.SessionRoles) error {
+		var err error
+		invocation, err = roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
+		return err
+	}); err != nil {
+		t.Fatalf("WithSessionRoles(start) error = %v", err)
+	}
+	fixture.report(invocation, ideationResultForTest())
+	if err := service.ReconcileSessionRoles(t.Context()); err != nil {
+		t.Fatalf("ReconcileSessionRoles() error = %v", err)
+	}
+	if session := fixture.session(); session.State != store.IdeationStateAwaitingUser || session.BriefRevision != 1 {
+		t.Fatalf("session after supervisor reconciliation = %#v, want the result applied", session)
+	}
+}
