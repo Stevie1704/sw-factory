@@ -103,7 +103,7 @@ func TestRunGuideRejectsUnknownTopicWithDiscovery(t *testing.T) {
 	if code := cli.Run(context.Background(), []string{"guide", "nonexistent"}, &output, &errorsOutput); code != 2 {
 		t.Fatalf("guide nonexistent exit code = %d, want 2", code)
 	}
-	for _, want := range []string{`unknown guide topic "nonexistent"`, "debug, reporting, setup", "factory guide"} {
+	for _, want := range []string{`unknown guide topic "nonexistent"`, "authorization, debug, reporting, setup", "factory guide"} {
 		if !strings.Contains(errorsOutput.String(), want) {
 			t.Fatalf("guide nonexistent stderr = %q, want %q", errorsOutput.String(), want)
 		}

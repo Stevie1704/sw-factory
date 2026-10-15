@@ -1,8 +1,8 @@
 # Setup
 
-This topic prepares a host and one target repository for factory runs. Ask
-the operator before each step that writes host configuration, changes GitHub,
-or commits to the repository.
+This topic prepares a host and one target repository for factory runs.
+Apply `factory guide authorization` before acting: use existing explicit
+session scope for covered steps and request only missing decisions.
 
 ## Prerequisites
 
@@ -16,9 +16,11 @@ The host needs:
 - the GitHub CLI, authenticated for the target repository;
 - Codex or Claude Code, installed and signed in.
 
-Check them before any other step. When a check fails, stop and tell the
-operator what is missing. Do not install software or sign in for the
-operator.
+Check them before any other step. For a failed check, name the missing
+prerequisite and its supported remedy, such as installing Git, jq, Docker, or
+the GitHub CLI, starting Docker, or running `gh auth login`. Perform an
+explicitly authorized installation within environment permissions. Interactive
+login or consent remains a named human step; continue after it succeeds.
 
 ```sh
 factory version --json
@@ -61,8 +63,8 @@ image in `worker_base_image`. That image is pinned by digest and published for
 ## Prepare a repository with an agent
 
 An agent that already works in the Git checkout of the repository to prepare
-does the onboarding itself. It needs no second agent session. Ask the operator
-for a new directory below the home directory, then run:
+does the onboarding itself. It needs no second agent session. Choose a new
+directory below the home directory within the requested task, then run:
 
 ```sh
 factory onboard prepare --output "<directory>" --json
@@ -87,8 +89,8 @@ host registration, and the skill smoke. Two commands work before host
 registration: `factory config validate --file factory.yaml --json` checks the
 policy offline, and `factory onboard verify --repository <checkout> --json`
 proves setup and the gates in the pinned worker without a paid model call. Pulling the worker base image,
-checking GitHub, and the paid skill smoke need network access. The procedure
-asks before each paid or external step.
+checking GitHub, and the paid skill smoke need network access. Check those
+effects against the authorized scope before executing them.
 
 The directory must be missing, empty, or an earlier preparation of the same
 release. Prepare refuses every other directory and never overwrites a file. The
@@ -119,11 +121,14 @@ which steps are verified, pending, blocked, stale, or skipped. After an
 interruption, read the status first and do not repeat a verified step.
 `factory onboard record --plan <file> gate-proof|doctor|live-proof --json`
 records the evidence that only a supported command can produce. The
-procedure's section "Keep the onboarding plan" describes the plan.
+procedure's section "Keep the onboarding plan" describes the plan. Its optional
+`authorization_note` records the stated scope and limits, following
+`factory guide authorization`; it does not grant authority.
 
 ## Register the host
 
-Run these commands in the target checkout, after operator approval:
+Run these commands in the target checkout when registration and label creation
+are covered by the session scope:
 
 ```sh
 factory init
@@ -160,8 +165,8 @@ Prove a new setup with one disposable issue before real work.
 Agents that open the target repository find Factory through its agent
 instruction file, for example `AGENTS.md` or `CLAUDE.md`. Add this section to
 the end of the existing file, or create the file when none exists. Do not
-replace or reword other content of that file. Ask the operator before the
-commit.
+replace or reword other content of that file. Prepare the change within the
+requested task; commit when the session scope covers it.
 
 ```markdown
 ## Software Factory

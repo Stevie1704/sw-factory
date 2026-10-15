@@ -137,12 +137,10 @@ base image that `make worker-build` built, pinned by digest, with
 `--worker-base-image` to `factory onboard prepare` or `factory onboard`; see [Build from
 source](installation.md#build-from-source).
 
-The agent runs every step of this procedure itself. You approve the actions
-listed in the next section and answer its questions.
-
-The launcher prompt and the `factory-onboarding` skill are deliberately short.
-This document owns the steps and the approval list, so they do not repeat
-them. A second copy could drift.
+The agent runs the ordered steps itself. Read and apply `factory guide
+authorization` before acting; it owns the operator-agent authorization contract.
+This procedure owns the steps and the effect inventory below; the launcher
+and the skill point to these canonical sources.
 
 ## Keep the onboarding plan
 
@@ -167,6 +165,20 @@ the resource directory, and the recorded evidence. It never keeps a
 credential, a credential path, or a harness transcript. The command refuses a
 plan file inside the checkout and a plan of another repository. Run it again
 to refresh the plan; a value that you do not give again stays.
+
+Add `--authorization-note "<stated session scope>"` to create or replace the
+optional `authorization_note`, also shown by `onboard status`. Record the task,
+target checkout and registration, covered operations, paid-call limits only
+when supplied, external proof and cleanup decisions, and stop conditions.
+For example: “This session: prepare this checkout and its selected registration;
+local file changes, build, and gate proof only; no paid calls or external
+publication; stop before smoke.” Keep secrets, credential paths, and transcripts
+out of this free text. Omit the flag to keep the existing note, or pass an empty
+string to clear it. The note is context about the operator's decisions, not
+step evidence or durable permission. A later agent establishes current session
+authority before executing further effects; valid verification evidence can
+still be reused. A changed target or registration needs scope covering that
+change; the note cannot silently extend it.
 
 After an interruption, read the plan before any other step. The command is
 read-only:
@@ -202,6 +214,8 @@ Each step has a `state`:
 - `skipped`: the operator declined the optional live proof.
 
 `operator_choice` names the decision that a step needs from the operator.
+Use a decision already explicitly given in the current session; ask only when
+it is missing. An `action` is a recommendation, not permission.
 `result` is `incomplete`, `doctor_ready`, `live_proof_passed`, or
 `live_proof_declined`. `artifacts` names the resource directory, the
 directory of interrupted gate proofs, and the marker of a started live
@@ -261,33 +275,28 @@ still prints its report, when an input changed or could not be observed
 while it ran, or when another writer recorded newer evidence of the same
 step. So no writer overwrites another writer's progress.
 
-## Actions that need operator approval
+## Check effects against the session scope
 
-These actions change the host configuration or GitHub, or cost money:
+Apply `factory guide authorization` to the commands and diffs for this effect
+inventory:
 
-- `factory init` and `factory register` write host configuration and create the
-  operational store.
-- `factory bootstrap-labels` creates six labels in the GitHub repository.
-- `<FACTORY_RESOURCES>/scripts/smoke-skills.sh` streams a host harness credential into a container
-  and makes one real, paid model call per mandated skill per harness.
-- The export of a Keychain credential to a temporary file for the smoke.
-- The end-to-end demonstration in Step 8. It creates an issue, a branch, and a
-  draft pull request, and it starts paid agent sessions.
-- Any commit, push, issue change, or pull request in the target repository.
+| Operation | Effect to cover |
+| --- | --- |
+| Write configuration, worker files, skills, agent discovery, or plan notes | Local file changes; role/model/gate policy must reflect the operator's choices |
+| Docker build, image check, gate proof | Local images, containers, and disposable copies; builds and setup can access the network |
+| `factory init` and `factory register` | Host configuration and operational store for the named registration |
+| `factory bootstrap-labels` | Six labels in the target repository's GitHub tracker |
+| `scripts/smoke-skills.sh` | Stream an approved host credential into a container; one paid model call per selected missing skill and harness; local smoke evidence |
+| Keychain credential export | A temporary credential file for the smoke, deleted afterward |
+| Step 8 live proof | Issue, remote branch, draft pull request, and paid agent sessions in the named target |
+| Commit, push, issue or PR change, proof cleanup | The specified local or external change at its approved destination |
 
-The agent shows each command, asks, and runs it after the operator approves.
+Resolve role/model policy under that contract before writing the selected
+policy into `factory.yaml`.
 
-Docker builds, image checks, and gate proofs in Steps 3 and 5 change only local
-images, containers, and disposable copies. They need no approval from this procedure. The
-harness can still ask for them under its own permission settings.
-
-The agent never reads a credential file. It can check whether a default
-credential path exists. The operator confirms every credential path.
-
-The agent also stops before it writes any file. That is a review point
-rather than a boundary: the gate list and the role policy are decisions about
-how the repository is verified, and they are cheaper to correct before the file
-exists.
+The agent never reads credential contents or invents a credential path. It may
+check whether a default path exists, but uses only an operator-approved source.
+Ask for a missing source without repeating a decision already given.
 
 ## Step 0: check the prerequisites
 
@@ -316,8 +325,11 @@ setup` its setup topic. Read both before Step 1.
 
 The harness that runs this session needs no check. The worker image carries
 both harnesses, and `factory doctor` checks them inside the image, not on the
-host. When a check fails, stop and tell the operator what is missing. Do not
-install or sign in on the operator's behalf.
+host. When a check fails, name the missing prerequisite and a concrete
+supported remedy: install the missing tool, start Docker, enable its containerd
+image store, or complete `gh auth login`, as appropriate. Perform explicitly
+authorized installations within environment permissions. Name interactive
+login or consent as an operator step and resume once it succeeds.
 
 ## Step 1: survey the target repository
 
@@ -565,9 +577,9 @@ design route. Add `pr_writer` when an agent should write a short summary for
 the human reviewer into each pull request; see [Optional PR
 writer](configuration.md#optional-pr-writer).
 
-Before you write `factory.yaml`, ask the operator which optional roles to
-declare, and which harness, models, and reasoning effort each declared role
-uses. Do not decide this for the operator. A declared `pr_writer` adds the
+Before writing the role policy in `factory.yaml`, use the operator's existing
+choices of optional roles, harnesses, models, and reasoning effort. Ask for
+choices still missing; do not invent them. A declared `pr_writer` adds the
 `pr` skill to the smoke in Step 7 for the harness that runs it.
 
 `reasoning_effort_options` values are harness-specific and are validated against
@@ -811,15 +823,17 @@ repository. First check whether the default configuration already exists:
 ~~~
 
 When a file exists at that path, it already registers another repository. Do
-not change it. Ask the operator for a separate configuration path, for example
+not change it. Use an already approved separate configuration path, or ask for
+one after preparing the proposed paths, for example
 `~/.config/factory-<repository>/config.yaml`, and an operational data path
 next to it. Export the path as `FACTORY_CONFIG` before the commands below, and
 pass `--operational-data` to `factory register`. Every later `factory` command
 of this repository then needs the same `FACTORY_CONFIG` or `--config`. Tell the
 operator so.
 
-Ask the operator for approval, then run these commands from the target
-checkout:
+When the session scope covers this registration and label creation, run these
+commands from the target checkout. Otherwise prepare the paths, commands, and
+effects above and request that missing authority:
 
 ~~~sh
 <FACTORY_COMMAND> init
@@ -885,14 +899,16 @@ Claude Code keeps its credential in the login Keychain, and a file at the
 default path can be old and expired. In that case, export the Keychain
 credential to a temporary file, point `CLAUDE_AUTH_PATH` at it, and delete the
 file after the smoke. The commands are in [worker
-skills](../worker/SKILLS.md), also at `<FACTORY_RESOURCES>/worker/SKILLS.md`. The export needs operator approval, and the agent
-does not read the exported file.
+skills](../worker/SKILLS.md), also at `<FACTORY_RESOURCES>/worker/SKILLS.md`.
+The session scope must cover this source and export; ask if it does not.
+The agent does not read the exported file.
 
 The smoke records every skill that loaded, also when another skill fails, and
 shows what the harness answered for a skill that did not load. To retry, set
 `MANDATORY_SKILLS` to the skills that did not load and `HARNESSES` to the
 harness. The retry adds them to the same record, so it needs one paid call per
-skill and not one per mandated skill.
+skill and not one per mandated skill. Check that retries fit the stated paid-call
+scope and any supplied limits; ask for additional scope if they do not.
 
 Then run `<FACTORY_COMMAND> doctor` from the target checkout, as the next
 section describes, until it reports ready. With an onboarding plan, record the
@@ -943,11 +959,13 @@ registration, and it runs the full startup diagnosis.
 Once the diagnosis is ready, prove the setup with one disposable issue before
 trusting the configuration on real work. The proof runs the installed
 coordinator on the registration from Step 6. It creates a branch and a draft
-pull request in the target repository, and it starts paid agent sessions. Ask
-the operator before you start it. When the operator declines, for example
-because the target is a production repository, skip the proof.
+pull request in the target repository, and it starts paid agent sessions.
+Proceed only when this specific proof and its paid effects are in the explicit
+session scope. Otherwise prepare the proof issue, commands, paid effects, and
+cleanup proposal and ask. When the operator declines, for example because the
+target is a production repository, skip the proof.
 
-After approval, with an onboarding plan, record the start with `onboard record
+Within that scope, with an onboarding plan, record the start with `onboard record
 live-proof --start` first and put its marker in the issue body. Record a
 declined proof with `--decline`. Then:
 
@@ -968,8 +986,9 @@ declined proof with `--decline`. Then:
    status comment.
 5. Stop the coordinator with `<FACTORY_COMMAND> stop`.
 
-Report the pull-request URL and the status-comment URL to the operator. Ask
-before you close the pull request or the issue.
+Report the pull-request URL and the status-comment URL to the operator. Close
+the proof pull request or issue only when the explicit cleanup decision covers
+it; prepare the proposed cleanup and ask if that decision is missing.
 
 The onboarding is complete when this proof succeeds, or when the operator
 declines it and `factory doctor` reports ready. With an onboarding plan,
@@ -981,7 +1000,8 @@ record the issue with `onboard record live-proof --issue <NUMBER>`; the plan
 Point later agents in the target repository at the installed guide. Append the
 section that `factory guide setup` shows under "Agent discovery in a target
 repository" to the repository's agent instruction file. Keep every other line
-of that file unchanged. The commit needs operator approval.
+of that file unchanged. Prepare the edit within the task and commit when the
+session scope covers it.
 
 ## Keeping it valid
 

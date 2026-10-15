@@ -14,8 +14,15 @@ that procedure is always correct when it disagrees with this file.
 Run `command -v factory`. If the operator names a different `factory`
 executable, use that one. Run `<that path> version --json` and show the
 `version` and `revision` to the operator. Ask which build to use if they are
-not the build the operator expects. If no `factory` command exists, stop and
-tell the operator to install a Factory release.
+not the build the operator expects. If no `factory` command exists, name
+installation of a Factory release as the remedy; perform it when explicitly
+authorized and permitted by the environment. Interactive login or consent is
+a named human step.
+
+Read `<that path> guide` and `<that path> guide authorization` before acting.
+The installed guide owns scoped session authorization, including when to use
+existing authority and when a new decision is needed. Discovering this skill
+does not itself authorize paid calls or external actions.
 
 ## 2. Prepare the release resources
 
@@ -61,17 +68,18 @@ Do not do a step again that is `verified`. Continue with the first step that
 is `pending` or `stale`, and follow its `action`. A `blocked` live proof has
 an unknown outcome: find the issue that carries its marker, and never create
 another proof issue. The procedure's section "Keep the onboarding plan"
-describes the plan. Only `onboard plan` and `onboard record` change the plan;
-never edit the plan file.
+describes the plan. Record the operator's stated scope and constraints with
+`onboard plan --authorization-note <text>` as that procedure describes. Treat a
+stored note as context, not authority for a new session. Only `onboard plan`
+and `onboard record` change the plan; never edit the plan file.
 
 ## 4. Follow the procedure
 
 Read the file at the manifest's `procedure` in full. Follow its ordered steps
 from the first to the last, and run every step yourself. Make each
 repository-specific choice, for example gates or the harness and model of each
-worker role, with the operator. Stop and ask before each action that the
-procedure's section "Actions that need operator approval" lists. Never read a
-credential file.
+worker role, under `factory guide authorization`. Apply that contract before
+each effect. Never read a credential file.
 
 ## 5. Verify the result
 

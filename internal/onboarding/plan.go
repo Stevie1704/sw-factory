@@ -126,6 +126,10 @@ type Plan struct {
 	HostConfig string `json:"host_config"`
 	// Resources is the prepared release resource directory, or empty.
 	Resources string `json:"resources,omitempty"`
+	// AuthorizationNote documents the operator's stated session scope and
+	// constraints. It grants no authority, supplies no step evidence, and
+	// must contain no secrets, credential paths, or transcripts.
+	AuthorizationNote string `json:"authorization_note,omitempty"`
 	// Evidence holds the recorded observations by step.
 	Evidence map[Step]Evidence `json:"evidence"`
 	// LiveProof is the externally mutating disposable-issue proof, or nil.
@@ -247,6 +251,10 @@ type stepDefinition struct {
 	choice string
 }
 
+// sessionAuthorizationGuidance points operator choices and actions to their
+// canonical contract, including the use of existing session decisions.
+const sessionAuthorizationGuidance = "; apply factory guide authorization using existing session scope and decisions"
+
 // steps lists every step in procedure order.
 var steps = []stepDefinition{
 	{name: StepPrepare},
@@ -255,12 +263,12 @@ var steps = []stepDefinition{
 	{name: StepImage, dependsOn: []Step{StepConfiguration}, inputs: []Input{InputWorkerImage, InputWorkerDefinition}},
 	{name: StepGateProof, dependsOn: []Step{StepImage}, inputs: []Input{InputRelease, InputPolicy, InputWorkerImage, InputGateInputs}},
 	{name: StepRegistration, dependsOn: []Step{StepConfiguration}, inputs: []Input{InputRegistration},
-		choice: "approval of factory init, factory register, and factory bootstrap-labels, the host configuration path, and the credential paths"},
+		choice: "scope for factory init, factory register, and factory bootstrap-labels at the selected host configuration, with approved credential sources"},
 	{name: StepSkillSmoke, dependsOn: []Step{StepImage}, inputs: []Input{InputWorkerImage, InputSkillEvidence},
-		choice: "approval of the paid smoke calls and of any Keychain credential export"},
+		choice: "scope and supplied paid-call limits for the smoke, and the selected credential source and any Keychain export"},
 	{name: StepDoctor, dependsOn: []Step{StepGateProof, StepRegistration, StepSkillSmoke}, inputs: []Input{InputRelease, InputPolicy, InputWorkerImage, InputRegistration, InputSkillEvidence}},
 	{name: StepLiveProof, dependsOn: []Step{StepDoctor}, inputs: []Input{InputRelease, InputPolicy, InputWorkerImage, InputRegistration},
-		choice: "approval or refusal of the disposable-issue proof, which creates an issue, a branch, and a draft pull request and starts paid agent sessions"},
+		choice: "the operator's decision to run or decline this disposable-issue proof, including its target, paid sessions, issue, branch, draft pull request, and cleanup"},
 }
 
 // definition returns the static description of one step.
@@ -343,7 +351,10 @@ type evaluator struct {
 // evaluate derives one step's state from its own evidence, then applies its
 // dependencies.
 func (e evaluator) evaluate(step stepDefinition) StepStatus {
-	status := StepStatus{Name: step.name, DependsOn: append([]Step{}, step.dependsOn...), OperatorChoice: step.choice}
+	status := StepStatus{Name: step.name, DependsOn: append([]Step{}, step.dependsOn...)}
+	if step.choice != "" {
+		status.OperatorChoice = step.choice + sessionAuthorizationGuidance
+	}
 	e.own(&status)
 	if status.State == StateVerified || status.State == StatePending {
 		if waiting := e.unmet(step); len(waiting) != 0 {
@@ -381,7 +392,7 @@ func (e evaluator) own(status *StepStatus) {
 	case StepGateProof:
 		e.recorded(status, "run "+e.command()+" onboard record --plan "+quote(e.observation.PlanPath)+" gate-proof --json")
 	case StepRegistration:
-		applyCheck(status, e.observation.Registration, "ask the operator, then register the repository as Step 6 of the procedure describes, and run onboard plan again with the same --config")
+		applyCheck(status, e.observation.Registration, "register as Step 6 of the procedure describes, then run onboard plan again with the same --config"+sessionAuthorizationGuidance)
 	case StepSkillSmoke:
 		e.smoke(status)
 	case StepDoctor:
@@ -519,7 +530,7 @@ func (e evaluator) smoke(status *StepStatus) {
 	}
 	status.State = StatePending
 	status.Reason = "the recorded smoke does not cover every required skill of the pinned image " + e.observation.Inputs[InputWorkerImage] + "; recorded skills are kept"
-	status.Action = "ask the operator to approve the paid calls, then run: " + strings.Join(retries, "; ")
+	status.Action = "run these paid smoke calls: " + strings.Join(retries, "; ") + sessionAuthorizationGuidance
 }
 
 // smokeCommand returns the smoke script call that repeats only the missing
@@ -538,8 +549,8 @@ func (e evaluator) liveProof(status *StepStatus) {
 	proof := e.plan.LiveProof
 	if proof == nil {
 		status.State = StatePending
-		status.Reason = "the operator has not decided the disposable-issue proof"
-		status.Action = "ask the operator; " + record + " --start --json before you create the issue, or " + record + " --decline --json"
+		status.Reason = "no disposable-issue proof decision is recorded"
+		status.Action = "record the operator's proof decision: " + record + " --start --json before you create the issue, or " + record + " --decline --json" + sessionAuthorizationGuidance
 		return
 	}
 	status.LiveProof = proof
@@ -557,7 +568,7 @@ func (e evaluator) liveProof(status *StepStatus) {
 	case LiveProofPassed:
 		if changed := e.changed(StepLiveProof, proof.Inputs); len(changed) != 0 {
 			status.State, status.Reason = StateStale, describeChanges(changed)+" since the proof passed"
-			status.Action = "ask the operator; " + record + " --start --json, or " + record + " --decline --json"
+			status.Action = "record the operator's decision on a new paid proof for the changed inputs: " + record + " --start --json, or " + record + " --decline --json" + sessionAuthorizationGuidance
 			return
 		}
 		status.State = StateVerified

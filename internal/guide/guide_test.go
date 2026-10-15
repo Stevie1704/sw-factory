@@ -12,8 +12,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/prompt"
 )
 
-// requiredTopics are the topics issue #239 requires every release to ship.
-var requiredTopics = []string{"debug", "reporting", "setup"}
+// requiredTopics are the operator topics every release must ship.
+var requiredTopics = []string{"authorization", "debug", "reporting", "setup"}
 
 // TestTopicsShipEveryRequiredTopic verifies the topic index and that every
 // listed topic has a body.

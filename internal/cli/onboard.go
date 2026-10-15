@@ -27,9 +27,9 @@ const onboardingProcedure = "docs/repository-initialization.md"
 var pinnedImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$`)
 
 // onboardingPrompt is the first message of the onboarding session. The
-// procedure document owns the steps and the approval list; the prompt names
-// the paths, the base image, the factory command, and the rules that apply
-// before the agent has read the document.
+// procedure owns the steps and the guide owns authorization. The prompt
+// names the paths, base image, factory command, and rules that apply before
+// the agent has read the document.
 const onboardingPrompt = `Prepare the repository at %[1]s for Software Factory runs.
 
 Run every factory command as %[5]s, the build that started this
@@ -50,10 +50,10 @@ file.
 Use its field reference rather than another repository's factory.yaml; where
 the two disagree, docs/configuration.md decides.
 
-Stop and ask me before each action that its section "Actions that need
-operator approval" lists. Never read a credential file and never invent a
-credential path; if one is missing, stop and ask. Never commit an absolute
-host path into factory.yaml.
+Read and apply %[5]s guide authorization before acting; it owns the
+operator-agent authorization contract, including scope notes in the plan.
+Never read a credential file and never invent a credential path; ask for an
+unapproved source. Never commit an absolute host path into factory.yaml.
 `
 
 // onboardingManifestSchema is the version of the prepare manifest. Increment

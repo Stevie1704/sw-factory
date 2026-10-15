@@ -13,6 +13,7 @@ without host configuration.
 | Command | Use it to |
 | --- | --- |
 | `factory guide` | Read this orientation. |
+| `factory guide authorization` | Apply scoped session authority and identify new decisions. |
 | `factory guide setup` | Install prerequisites, configure a host, and prepare a repository. |
 | `factory guide debug` | Diagnose a failure and select a supported recovery action. |
 | `factory guide reporting` | Report a suspected Factory defect. |
@@ -89,9 +90,10 @@ proposes a result through `factory-report`. The coordinator validates the
 proposal before it acts on it.
 
 An operator agent works on the host for the operator. It runs `factory`
-commands, reads diagnosis, and follows this guide. It asks the operator
-before it changes host configuration, GitHub, or a repository, and before a
-paid model call. It is not a worker. It does not do the work of a run role,
+commands, reads diagnosis, and follows this guide. Read `factory guide
+authorization`, the canonical contract for scoped session authority, before
+acting. Covered actions use existing explicit authority; new scope needs a
+new decision. It is not a worker. It does not do the work of a run role,
 and it does not make a human disposition for the operator.
 
 ## Rules for every agent
