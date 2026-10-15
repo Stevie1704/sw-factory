@@ -410,3 +410,136 @@ func TestPlanRevisionRejectsBrokenReferences(t *testing.T) {
 		})
 	}
 }
+
+// approvalForTest binds the given plan revision to a fixed GitHub target.
+func approvalForTest(id string, planRevision int64) store.PlanApproval {
+	return store.PlanApproval{
+		ID:                  id,
+		PlanRevision:        planRevision,
+		Target:              "github:Stevie1704/sw-factory",
+		Payload:             []byte(`{"items":[{"node":"n-1","title":"Faster onboarding"}]}`),
+		RelationshipMapping: []byte(`{"parent":"sub-issue","depends_on":"blocked-by"}`),
+	}
+}
+
+// TestApprovalBindsTheExactPlanTargetPayloadAndMapping verifies that an
+// approval stores digests of the rendered payload and relationship mapping,
+// that a double submission replays it, and that it survives a restart.
+func TestApprovalBindsTheExactPlanTargetPayloadAndMapping(t *testing.T) {
+	t.Parallel()
+
+	opened, path := openIdeationStoreForTest(t)
+	session := createIdeationSessionForTest(t, opened, "session-1")
+	session, plan := saveBriefAndPlanForTest(t, opened, session)
+	approved, approval, err := opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), approvalForTest("approval-1", plan.Revision))
+	if err != nil {
+		t.Fatalf("ApprovePlan() error = %v", err)
+	}
+	// SHA-256 of the payload literal in approvalForTest, computed with shasum.
+	const payloadDigest = "47bbe1a7890e4d76a89cd1a3dd97243f9b7c4e3e941541941b66812b3819abba"
+	if approved.ApprovalID != "approval-1" || approved.State != store.IdeationStateApproved || approval.PayloadSHA256 != payloadDigest || len(approval.RelationshipMappingSHA256) != 64 {
+		t.Fatalf("approval = %#v session = %#v", approval, approved)
+	}
+	request := approvalForTest("approval-1", plan.Revision)
+	if !approval.Binds(plan.Revision, request.Target, request.Payload, request.RelationshipMapping) {
+		t.Fatal("approval does not bind its own plan, target, payload, and mapping")
+	}
+	for name, changed := range map[string]func(*store.PlanApproval){
+		"plan":    func(a *store.PlanApproval) { a.PlanRevision++ },
+		"target":  func(a *store.PlanApproval) { a.Target = "azure:org/project" },
+		"payload": func(a *store.PlanApproval) { a.Payload = []byte(`{"items":[]}`) },
+		"mapping": func(a *store.PlanApproval) { a.RelationshipMapping = []byte(`{}`) },
+	} {
+		candidate := approvalForTest("approval-1", plan.Revision)
+		changed(&candidate)
+		if approval.Binds(candidate.PlanRevision, candidate.Target, candidate.Payload, candidate.RelationshipMapping) {
+			t.Fatalf("approval still binds after a %s change", name)
+		}
+	}
+
+	replayedSession, replayed, err := opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), approvalForTest("approval-1", plan.Revision))
+	if err != nil || replayed.PayloadSHA256 != approval.PayloadSHA256 || replayedSession.Revision != approved.Revision {
+		t.Fatalf("double approval = %#v, %v; want a replay of approval-1", replayed, err)
+	}
+
+	reopened := reopenIdeationStoreForTest(t, opened, path)
+	current, err := reopened.CurrentPlanApproval(t.Context(), "session-1")
+	if err != nil {
+		t.Fatalf("CurrentPlanApproval() error = %v", err)
+	}
+	if current == nil || current.ID != "approval-1" || string(current.Payload) != string(request.Payload) ||
+		string(current.RelationshipMapping) != string(request.RelationshipMapping) || current.PayloadSHA256 != approval.PayloadSHA256 {
+		t.Fatalf("CurrentPlanApproval() after restart = %#v", current)
+	}
+}
+
+// TestAnyChangeBeforePublicationRequiresAFreshApproval verifies that a new
+// plan or brief revision clears the current approval without changing the
+// approved record, and that an approval for a stale or old plan is refused.
+func TestAnyChangeBeforePublicationRequiresAFreshApproval(t *testing.T) {
+	t.Parallel()
+
+	opened, _ := openIdeationStoreForTest(t)
+	session := createIdeationSessionForTest(t, opened, "session-1")
+	session, plan := saveBriefAndPlanForTest(t, opened, session)
+	session, first, err := opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), approvalForTest("approval-1", plan.Revision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, edited, err := opened.SavePlanRevision(t.Context(), ideationWrite(session, store.IdeationStateDraftReview), store.PlanRevision{
+		SourceBriefRevision: 1, ContextRevision: plan.ContextRevision, Nodes: planNodesForTest()[:1],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ApprovalID != "" {
+		t.Fatalf("approval %q survived a plan edit", session.ApprovalID)
+	}
+	if current, err := opened.CurrentPlanApproval(t.Context(), "session-1"); err != nil || current != nil {
+		t.Fatalf("CurrentPlanApproval() after edit = %#v, %v; want none", current, err)
+	}
+	if _, _, err := opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), approvalForTest("approval-old", plan.Revision)); !errors.Is(err, store.ErrPlanNotApprovable) {
+		t.Fatalf("approval of the old plan error = %v, want ErrPlanNotApprovable", err)
+	}
+	session, _, err = opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), approvalForTest("approval-2", edited.Revision))
+	if err != nil {
+		t.Fatalf("fresh approval error = %v", err)
+	}
+	session, _, err = opened.SaveBriefRevision(t.Context(), ideationWrite(session, store.IdeationStateDraftReview), briefForTest("Changed problem."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ApprovalID != "" {
+		t.Fatal("approval survived a brief change")
+	}
+	if _, _, err := opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), approvalForTest("approval-3", edited.Revision)); !errors.Is(err, store.ErrPlanNotApprovable) {
+		t.Fatalf("approval of a stale plan error = %v, want ErrPlanNotApprovable", err)
+	}
+	history, err := opened.IdeationHistory(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Approvals) != 2 || history.Approvals[0].PayloadSHA256 != first.PayloadSHA256 || history.Approvals[0].PlanRevision != 1 ||
+		len(history.Plans) != 2 || len(history.Plans[0].Nodes) != 3 {
+		t.Fatalf("history after edits = approvals %#v plans %#v; want unchanged records", history.Approvals, history.Plans)
+	}
+}
+
+// TestApprovalAcceptsAnEmptyRelationshipMapping verifies that a single-item
+// plan without relationships can be approved with no mapping bytes.
+func TestApprovalAcceptsAnEmptyRelationshipMapping(t *testing.T) {
+	t.Parallel()
+
+	opened, _ := openIdeationStoreForTest(t)
+	session := createIdeationSessionForTest(t, opened, "session-1")
+	session, plan := saveBriefAndPlanForTest(t, opened, session)
+	request := approvalForTest("approval-1", plan.Revision)
+	request.RelationshipMapping = nil
+	_, approval, err := opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), request)
+	if err != nil {
+		t.Fatalf("ApprovePlan() error = %v", err)
+	}
+	if !approval.Binds(plan.Revision, request.Target, request.Payload, nil) {
+		t.Fatal("approval does not bind an empty mapping")
+	}
+}
