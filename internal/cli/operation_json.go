@@ -66,11 +66,12 @@ type operationBlocker struct {
 // Fixed messages of the classified outcomes. Error text can quote external
 // observations, so a document never copies it.
 const (
-	messageRecoveryBlocked  = "the run waits for human reconciliation; read recovery.discrepancies and recovery.actions"
-	messageWorkflowFailure  = "the durable workflow state is invalid; read recovery.discrepancies"
-	messageOutcomeUnknown   = "an external call did not answer; its outcome is unknown; verify the state before you run the command again"
-	messageReplayReserved   = "an external call did not answer during the replay; the effect stays reserved and the next reconciliation replays it"
-	messageOperationalError = "the command failed; standard error has the detail"
+	messageRecoveryBlocked    = "the run waits for human reconciliation; read recovery.discrepancies and recovery.actions"
+	messageWorkflowFailure    = "the durable workflow state is invalid; read recovery.discrepancies"
+	messageOutcomeUnknown     = "an external call did not answer; its outcome is unknown; verify the state before you run the command again"
+	messageReplayReserved     = "an external call did not answer during the replay; the effect stays reserved and the next reconciliation replays it"
+	messageOperationalError   = "the command failed; standard error has the detail"
+	messageAbandonmentRefused = "the named effect cannot be abandoned because its run or pending effect no longer exists"
 )
 
 // newOperationDocument classifies the error of one command into its outcome.
@@ -228,20 +229,22 @@ type reconcileResultDocument struct {
 	Reconciliation factory.RecoveryOutcome `json:"reconciliation"`
 }
 
-// newReconcileDocument projects one reconciliation or effect abandonment. A
-// replay that timed out is pending: the effect stays reserved.
+// newReconcileDocument projects one reconciliation or effect abandonment.
+// Refused abandonment omits the result; verification is available even when
+// no run exists. A replay that timed out is pending: the effect stays reserved.
 func newReconcileDocument(result factory.RecoveryResult, err error) operationDocument {
 	document := newOperationDocument("reconcile", err)
-	if err == nil && result.NotApplied != "" {
+	document.Verification = verifyStatus("confirm the reconciled run and any pending effect with `factory status --json`")
+	if err == nil && result.AbandonmentRefusalCode != "" {
 		document.Outcome, document.Attempted = operationRefused, false
-		document.Reason = &reasonDocument{Code: string(result.NotApplied), Message: "the named effect cannot be abandoned because its run or pending effect no longer exists"}
+		document.Reason = &reasonDocument{Code: string(result.AbandonmentRefusalCode), Message: messageAbandonmentRefused}
 	}
 	if result.Outcome == factory.RecoveryOutcomeRetryable && err != nil {
 		document.Outcome, document.Error = operationPending, nil
 		document.Reason = &reasonDocument{Code: "external.outcome_unknown", Message: messageReplayReserved}
 	}
 	if result.Run == nil {
-		if err == nil {
+		if err == nil && document.Outcome != operationRefused {
 			document.Result = reconcileResultDocument{Reconciliation: result.Outcome}
 		}
 		return document
@@ -250,11 +253,12 @@ func newReconcileDocument(result factory.RecoveryResult, err error) operationDoc
 	if pending := result.Diagnosis.PendingEffect; pending != nil {
 		document.Identities.EffectID = pending.ID
 	}
-	document.Result = reconcileResultDocument{runStateDocument: newRunStateDocument(*result.Run), Reconciliation: result.Outcome}
+	if document.Outcome != operationRefused {
+		document.Result = reconcileResultDocument{runStateDocument: newRunStateDocument(*result.Run), Reconciliation: result.Outcome}
+	}
 	if document.Recovery == nil && result.Diagnosis.RunID != "" {
 		document.Recovery = newRecoveryDocument(&result.Diagnosis)
 	}
-	document.Verification = verifyStatus("confirm the reconciled run and any pending effect with `factory status --json`")
 	return document
 }
 

@@ -139,10 +139,11 @@ type RecoveryResult struct {
 	Diagnosis RecoveryDiagnosis
 	// Outcome identifies whether the run was reconciled or paused.
 	Outcome RecoveryOutcome
-	// NotApplied identifies an abandonment that changed nothing because its
-	// run or effect no longer exists. These idempotent no-ops keep their
-	// successful command exit while structured clients can detect refusal.
-	NotApplied RefusalCode
+	// AbandonmentRefusalCode is the action disposition when an abandonment
+	// changed nothing because its run or effect no longer exists. When set,
+	// it takes precedence over Outcome, which retains the legacy reconciliation
+	// result so text output and successful no-op exits remain compatible.
+	AbandonmentRefusalCode RefusalCode
 }
 
 // AbandonPendingEffectRequest identifies one pending effect that a human has
@@ -919,7 +920,7 @@ func (s *Service) AbandonPendingEffect(ctx context.Context, request AbandonPendi
 		return RecoveryResult{}, fmt.Errorf("read run for pending effect abandonment: %w", err)
 	}
 	if run == nil {
-		return RecoveryResult{Outcome: RecoveryOutcomeReconciled, NotApplied: RefusalNoRun}, nil
+		return RecoveryResult{Outcome: RecoveryOutcomeReconciled, AbandonmentRefusalCode: RefusalNoRun}, nil
 	}
 	if err := checkRunSelection(request.RunID, *run); err != nil {
 		return RecoveryResult{}, err
@@ -937,7 +938,7 @@ func (s *Service) AbandonPendingEffect(ctx context.Context, request AbandonPendi
 		return RecoveryResult{}, fmt.Errorf("read pending effect for abandonment: %w", err)
 	}
 	if pending == nil {
-		return RecoveryResult{Run: run, Diagnosis: reconciledRecoveryDiagnosis(run.ID), Outcome: RecoveryOutcomeReconciled, NotApplied: RefusalEffectChanged}, nil
+		return RecoveryResult{Run: run, Diagnosis: reconciledRecoveryDiagnosis(run.ID), Outcome: RecoveryOutcomeReconciled, AbandonmentRefusalCode: RefusalEffectChanged}, nil
 	}
 	if pending.ID != request.EffectID {
 		return RecoveryResult{}, &OperationRefusedError{Code: RefusalEffectChanged, RunID: run.ID, Message: fmt.Sprintf("pending effect for run %q is %q, not %q", run.ID, pending.ID, request.EffectID)}

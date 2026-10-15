@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +17,11 @@ import (
 // operationDocument is the consumer view of a mutation command's --json
 // result.
 type operationDocument struct {
-	SchemaVersion int    `json:"schema_version"`
-	Command       string `json:"command"`
-	Outcome       string `json:"outcome"`
-	Attempted     bool   `json:"attempted"`
+	SchemaVersion int             `json:"schema_version"`
+	Command       string          `json:"command"`
+	Outcome       string          `json:"outcome"`
+	Attempted     bool            `json:"attempted"`
+	Result        json.RawMessage `json:"result"`
 	Reason        *struct {
 		Code string `json:"code"`
 	} `json:"reason"`
@@ -42,6 +44,12 @@ func runOperationJSON(t *testing.T, args ...string) (operationDocument, int, str
 	var document operationDocument
 	decodeSingleDocument(t, output.String(), &document)
 	return document, code, errorsOutput.String()
+}
+
+// reviewedEffectAbandonmentArgs selects the reviewed effect and its human
+// disposition in a fresh argument array for either text or JSON output.
+func reviewedEffectAbandonmentArgs(configPath, runID string) []string {
+	return []string{"reconcile", "--config", configPath, "--run-id", runID, "--abandon-effect", "effect-reviewed", "--reason", "inspected"}
 }
 
 // savePausedCheck persists one check run paused for check infrastructure.
@@ -121,18 +129,23 @@ func TestRunResumeTextKeepsItsRefusalWording(t *testing.T) {
 // that is no longer pending is refused and keeps the pending effect.
 func TestRunReconcileJSONRefusesAChangedEffect(t *testing.T) {
 	t.Parallel()
-	configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
-	opened := savePausedCheck(t, operationalPath, repositoryPath, store.StatusWaitingForHuman)
-	savePendingEffect(t, opened, "effect-current")
+	for _, runID := range []string{"run-json", ""} {
+		t.Run("selected-run="+runID, func(t *testing.T) {
+			t.Parallel()
+			configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
+			opened := savePausedCheck(t, operationalPath, repositoryPath, store.StatusWaitingForHuman)
+			savePendingEffect(t, opened, "effect-current")
 
-	document, code, _ := runOperationJSON(t, "reconcile", "--json", "--config", configPath, "--run-id", "run-json", "--abandon-effect", "effect-reviewed", "--reason", "inspected")
+			document, code, _ := runOperationJSON(t, append(reviewedEffectAbandonmentArgs(configPath, runID), "--json")...)
 
-	if code != 1 || document.Command != "reconcile" || document.Outcome != "refused" || document.Reason == nil || document.Reason.Code != "pending_effect.changed" {
-		t.Fatalf("exit = %d document = %+v, want the changed-effect refusal", code, document)
-	}
-	pending, err := opened.PendingEffect(context.Background(), "run-json")
-	if err != nil || pending == nil || pending.ID != "effect-current" {
-		t.Fatalf("pending effect = %+v (%v), want it kept", pending, err)
+			if code != 1 || document.Command != "reconcile" || document.Outcome != "refused" || document.Attempted || document.Reason == nil || document.Reason.Code != "pending_effect.changed" || len(document.Result) != 0 {
+				t.Fatalf("exit = %d document = %+v, want the changed-effect refusal without a result", code, document)
+			}
+			pending, err := opened.PendingEffect(context.Background(), "run-json")
+			if err != nil || pending == nil || pending.ID != "effect-current" {
+				t.Fatalf("pending effect = %+v (%v), want it kept", pending, err)
+			}
+		})
 	}
 }
 
@@ -143,17 +156,20 @@ func TestRunReconcileJSONRefusesADisappearedEffect(t *testing.T) {
 	configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
 	opened := savePausedCheck(t, operationalPath, repositoryPath, store.StatusWaitingForHuman)
 
-	document, code, stderr := runOperationJSON(t, "reconcile", "--json", "--config", configPath, "--run-id", "run-json", "--abandon-effect", "effect-reviewed", "--reason", "inspected")
+	document, code, stderr := runOperationJSON(t, append(reviewedEffectAbandonmentArgs(configPath, "run-json"), "--json")...)
 
 	if code != 0 || stderr != "" || document.Outcome != "refused" || document.Attempted || document.Reason == nil || document.Reason.Code != "pending_effect.changed" || document.Identities.RunID != "run-json" {
 		t.Fatalf("exit = %d stderr = %q document = %+v, want an unattempted changed-effect refusal naming the run", code, stderr, document)
+	}
+	if len(document.Result) != 0 {
+		t.Fatalf("refused result = %s, want no success-shaped reconciliation result", document.Result)
 	}
 	after, err := opened.Run(context.Background(), "run-json")
 	if err != nil || after.Revision != 4 || after.Status != store.StatusWaitingForHuman {
 		t.Fatalf("run after refusal = %+v (%v), want it unchanged", after, err)
 	}
 	var output, errorsOutput bytes.Buffer
-	textCode := cli.Run(context.Background(), []string{"reconcile", "--config", configPath, "--run-id", "run-json", "--abandon-effect", "effect-reviewed", "--reason", "inspected"}, &output, &errorsOutput)
+	textCode := cli.Run(context.Background(), reviewedEffectAbandonmentArgs(configPath, "run-json"), &output, &errorsOutput)
 	wantText := "reconciliation: outcome=reconciled run=run-json status=waiting_for_human stage=check\n" +
 		"reconciliation safe action: inspect the diagnosis with `factory status`\n" +
 		"reconciliation safe action: verify the repository, worktree, branch, checkpoint, issue label, status comment, and pull request\n" +
@@ -169,19 +185,55 @@ func TestRunReconcileJSONRefusesAbandonmentWithoutARun(t *testing.T) {
 	t.Parallel()
 	configPath, _, _ := registeredStatusFixture(t)
 
-	document, code, stderr := runOperationJSON(t, "reconcile", "--json", "--config", configPath, "--run-id", "run-gone", "--abandon-effect", "effect-reviewed", "--reason", "inspected")
+	document, code, stderr := runOperationJSON(t, append(reviewedEffectAbandonmentArgs(configPath, "run-gone"), "--json")...)
 
 	if code != 0 || stderr != "" || document.Outcome != "refused" || document.Attempted || document.Reason == nil || document.Reason.Code != "run.none" {
 		t.Fatalf("exit = %d stderr = %q document = %+v, want an unattempted no-run refusal", code, stderr, document)
 	}
+	if len(document.Result) != 0 {
+		t.Fatalf("refused result = %s, want no success-shaped reconciliation result", document.Result)
+	}
+	if document.Verification == nil || strings.Join(document.Verification.Argv, " ") != "factory status --json --config "+configPath {
+		t.Fatalf("verification = %+v, want status inspection for the selected configuration", document.Verification)
+	}
 	var output, errorsOutput bytes.Buffer
-	textCode := cli.Run(context.Background(), []string{"reconcile", "--config", configPath, "--run-id", "run-gone", "--abandon-effect", "effect-reviewed", "--reason", "inspected"}, &output, &errorsOutput)
+	textCode := cli.Run(context.Background(), reviewedEffectAbandonmentArgs(configPath, "run-gone"), &output, &errorsOutput)
 	if textCode != code || errorsOutput.Len() != 0 || output.String() != "reconciliation: no persisted run\n" {
 		t.Fatalf("text exit = %d stdout = %q stderr = %q, want the existing no-run text and exit %d", textCode, output.String(), errorsOutput.String(), code)
 	}
 	ordinary, ordinaryCode, ordinaryStderr := runOperationJSON(t, "reconcile", "--json", "--config", configPath)
 	if ordinaryCode != 0 || ordinaryStderr != "" || ordinary.Outcome != "completed" || !ordinary.Attempted || ordinary.Reason != nil {
 		t.Fatalf("ordinary reconcile exit = %d stderr = %q document = %+v, want a completed empty reconciliation", ordinaryCode, ordinaryStderr, ordinary)
+	}
+}
+
+// TestRunReconcileJSONAbandonsATerminalEffectWithoutResuming verifies a
+// reviewed terminal-run reservation can be cleared without workflow changes.
+func TestRunReconcileJSONAbandonsATerminalEffectWithoutResuming(t *testing.T) {
+	t.Parallel()
+	configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
+	opened := savePausedCheck(t, operationalPath, repositoryPath, store.StatusCancelled)
+	savePendingEffect(t, opened, "effect-reviewed")
+
+	document, code, stderr := runOperationJSON(t, append(reviewedEffectAbandonmentArgs(configPath, "run-json"), "--json")...)
+
+	if code != 0 || stderr != "" || document.Outcome != "completed" || !document.Attempted || document.Reason != nil || document.Identities.RunID != "run-json" {
+		t.Fatalf("exit = %d stderr = %q document = %+v, want a completed abandonment", code, stderr, document)
+	}
+	var result struct {
+		Reconciliation string `json:"reconciliation"`
+		Status         string `json:"status"`
+	}
+	if err := json.Unmarshal(document.Result, &result); err != nil || result.Reconciliation != "reconciled" || result.Status != "cancelled" {
+		t.Fatalf("result = %s (%v), want reconciliation with terminal status preserved", document.Result, err)
+	}
+	pending, err := opened.PendingEffect(context.Background(), "run-json")
+	if err != nil || pending != nil {
+		t.Fatalf("pending effect = %+v (%v), want the reviewed reservation removed", pending, err)
+	}
+	after, err := opened.Run(context.Background(), "run-json")
+	if err != nil || after.Revision != 4 || after.Status != store.StatusCancelled || after.CheckRepairAttempts != 0 {
+		t.Fatalf("run after abandonment = %+v (%v), want the terminal run and retry accounting unchanged", after, err)
 	}
 }
 

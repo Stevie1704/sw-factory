@@ -169,6 +169,13 @@ with `--run-id` for another run refuses before it reconciles anything.
 recovers another invocation. Run `factory status --json` again to get a
 current action.
 
+For effect abandonment, the effect ID is the identity guard. Factory derives
+it from the run, effect kind, and semantic operation identity. It checks the
+current reservation and deletes only that exact run/effect pair; a different
+effect is never discarded. `--run-id` optionally adds a run-selection guard.
+Unlike resume, abandonment may clear a human-reviewed effect on a terminal
+run because it does not restart or advance the workflow.
+
 #### Example: a check paused for check infrastructure
 
 1. `factory status --json` shows `run.stage: "check"`,
@@ -230,6 +237,8 @@ An abandonment whose run or pending effect has disappeared is also
 text output and exit status 0. A different pending effect still refuses with
 exit status 1 and remains reserved. Match `outcome` and `reason.code` to
 determine whether abandonment occurred; exit status alone is insufficient.
+Refused abandonment omits `result`; its `verification` action inspects the
+selected configuration even when the run no longer exists.
 Ordinary `reconcile` without `--abandon-effect` still completes when no run
 exists.
 
@@ -312,7 +321,7 @@ observe.
 | `factory auth refresh --resume` | As above | Also reconciles pending effects and continues the paused native session one time. With `--expect-invocation`, it refuses when the run recovers another invocation. |
 | `factory resume` | The run is not terminal and `factory status` names `factory resume` as a safe action | Reconciles a pending effect first. Then it does one of the actions in the next table. It does not use the retry budget. With `--expect-revision` and `--expect-checkpoint`, it refuses a run that changed. |
 | `factory reconcile` | A pending effect or discrepancy is reported after a restart | Runs one restart reconciliation. Pauses the run when it cannot prove a safe repair. |
-| `factory reconcile --abandon-effect <effect-id> --reason <text>` | A human inspected the ambiguous pending effect that `factory status` names | Discards that effect. The run stays paused. |
+| `factory reconcile --abandon-effect <effect-id> --reason <text>` | A human inspected the ambiguous pending effect that `factory status` names | Discards that exact effect. A non-terminal run stays paused; a terminal run retains its outcome. |
 | `factory poll` | Authorized `/factory` comments wait on the issue or pull request | Processes them one time. |
 | `factory cleanup` then `factory cleanup --confirm` | The runs are terminal | Prints the plan, then removes local artifacts of terminal runs older than seven days. |
 | `factory reset --config <path>` then add `--confirm` | The coordinator is stopped; the operator wants to remove the installation | Prints the plan, then removes every local resource of the installation. |
