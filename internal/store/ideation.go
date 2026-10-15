@@ -483,6 +483,8 @@ type IdeationHistory struct {
 	// Approvals contains every approval, oldest first. Only the one named by
 	// Session.ApprovalID is current.
 	Approvals []PlanApproval
+	// Receipts contains every publication receipt, oldest first.
+	Receipts []PublicationReceipt
 }
 
 // IdeationHistory reads one session and its complete history in one read
@@ -507,6 +509,9 @@ func (s *Store) IdeationHistory(ctx context.Context, sessionID string) (Ideation
 		return IdeationHistory{}, err
 	}
 	if history.Approvals, err = queryIdeationRows(ctx, tx, `SELECT `+planApprovalColumns+` FROM ideation_approvals WHERE session_id = ? ORDER BY approved_at, id`, sessionID, scanPlanApproval); err != nil {
+		return IdeationHistory{}, err
+	}
+	if history.Receipts, err = queryIdeationRows(ctx, tx, `SELECT `+publicationReceiptColumns+` FROM ideation_publication_receipts r JOIN ideation_approvals a ON a.session_id = r.session_id AND a.id = r.approval_id WHERE r.session_id = ? ORDER BY r.recorded_at, r.id`, sessionID, scanPublicationReceipt); err != nil {
 		return IdeationHistory{}, err
 	}
 	for index := range history.Plans {

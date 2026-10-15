@@ -543,3 +543,126 @@ func TestApprovalAcceptsAnEmptyRelationshipMapping(t *testing.T) {
 		t.Fatal("approval does not bind an empty mapping")
 	}
 }
+
+// approvedSessionForTest returns a session whose current plan is approved.
+func approvedSessionForTest(t *testing.T, opened *store.Store, id string) store.IdeationSession {
+	t.Helper()
+	session := createIdeationSessionForTest(t, opened, id)
+	session, _ = appendUserTurnForTest(t, opened, session, "turn-a", "Onboarding is slow.")
+	session, plan := saveBriefAndPlanForTest(t, opened, session)
+	session, _, err := opened.ApprovePlan(t.Context(), ideationWrite(session, store.IdeationStateApproved), approvalForTest("approval-1", plan.Revision))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
+}
+
+// TestPublicationReceiptsRetainPartialAndFinalEvidenceAcrossRestart verifies
+// that receipts name the approval they publish, keep created item identities
+// and relationships, replay on retry, and survive a restart.
+func TestPublicationReceiptsRetainPartialAndFinalEvidenceAcrossRestart(t *testing.T) {
+	t.Parallel()
+
+	opened, path := openIdeationStoreForTest(t)
+	session := approvedSessionForTest(t, opened, "session-1")
+	session, err := opened.TransitionIdeationSession(t.Context(), ideationWrite(session, store.IdeationStatePublishing))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial := store.PublicationReceipt{
+		ID: "receipt-1", ApprovalID: "approval-1", Outcome: store.PublicationOutcomeIncomplete,
+		Items:  []store.PublishedItem{{NodeID: "n-1", ExternalID: "301", URL: "https://github.com/Stevie1704/sw-factory/issues/301"}},
+		Detail: "Item n-2 timed out; reconcile before retry.",
+	}
+	write := ideationWrite(session, store.IdeationStatePublicationIncomplete)
+	write.StateReason = "publication stopped after a timeout"
+	session, _, err = opened.RecordPublicationReceipt(t.Context(), write, partial)
+	if err != nil {
+		t.Fatalf("RecordPublicationReceipt(partial) error = %v", err)
+	}
+	if _, replayed, err := opened.RecordPublicationReceipt(t.Context(), write, partial); err != nil || replayed.ID != "receipt-1" {
+		t.Fatalf("replayed receipt = %#v, %v", replayed, err)
+	}
+	if _, _, err := opened.RecordPublicationReceipt(t.Context(), ideationWrite(session, store.IdeationStatePublished), store.PublicationReceipt{
+		ID: "receipt-x", ApprovalID: "approval-9", Outcome: store.PublicationOutcomePublished,
+	}); !errors.Is(err, store.ErrApprovalNotCurrent) {
+		t.Fatalf("receipt for an unknown approval error = %v, want ErrApprovalNotCurrent", err)
+	}
+	session, err = opened.TransitionIdeationSession(t.Context(), ideationWrite(session, store.IdeationStatePublishing))
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := store.PublicationReceipt{
+		ID: "receipt-2", ApprovalID: "approval-1", Outcome: store.PublicationOutcomePublished,
+		Items: []store.PublishedItem{
+			{NodeID: "n-1", ExternalID: "301", URL: "https://github.com/Stevie1704/sw-factory/issues/301"},
+			{NodeID: "n-2", ExternalID: "302", URL: "https://github.com/Stevie1704/sw-factory/issues/302"},
+			{NodeID: "n-3", ExternalID: "303", URL: "https://github.com/Stevie1704/sw-factory/issues/303"},
+		},
+		Relationships: []store.PublishedRelationship{{FromNodeID: "n-2", ToNodeID: "n-1", Kind: "parent"}, {FromNodeID: "n-3", ToNodeID: "n-2", Kind: "depends_on"}},
+	}
+	if _, _, err := opened.RecordPublicationReceipt(t.Context(), ideationWrite(session, store.IdeationStatePublished), final); err != nil {
+		t.Fatalf("RecordPublicationReceipt(final) error = %v", err)
+	}
+
+	reopened := reopenIdeationStoreForTest(t, opened, path)
+	history, err := reopened.IdeationHistory(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.Session.State != store.IdeationStatePublished || len(history.Receipts) != 2 ||
+		history.Receipts[0].Outcome != store.PublicationOutcomeIncomplete || history.Receipts[0].Detail != partial.Detail ||
+		history.Receipts[0].PlanRevision != 1 || len(history.Receipts[1].Items) != 3 || history.Receipts[1].Relationships[1].Kind != "depends_on" {
+		t.Fatalf("history receipts = %#v, session = %#v", history.Receipts, history.Session)
+	}
+	if len(history.Turns) != 1 || len(history.Briefs) != 1 || len(history.Plans) != 1 || len(history.Approvals) != 1 {
+		t.Fatalf("published session lost history: %#v", history)
+	}
+}
+
+// TestClosedSessionsKeepTheirHistoryAndRunCleanupLeavesThemAlone verifies that
+// cancel, defer, and no-build keep every turn, revision, and approval for
+// inspection, and that run cleanup never deletes session records.
+func TestClosedSessionsKeepTheirHistoryAndRunCleanupLeavesThemAlone(t *testing.T) {
+	t.Parallel()
+
+	opened, path := openIdeationStoreForTest(t)
+	for id, state := range map[string]store.IdeationState{
+		"cancelled": store.IdeationStateCancelled,
+		"deferred":  store.IdeationStateDeferred,
+		"no-build":  store.IdeationStateNoBuild,
+	} {
+		session := approvedSessionForTest(t, opened, id)
+		write := ideationWrite(session, state)
+		write.StateReason = "closed by the operator"
+		if _, err := opened.TransitionIdeationSession(t.Context(), write); err != nil {
+			t.Fatalf("TransitionIdeationSession(%s) error = %v", state, err)
+		}
+	}
+	old := ideationNow.Add(-30 * 24 * time.Hour)
+	if err := opened.SaveRun(t.Context(), store.Run{
+		ID: "run-old", RepositoryPath: "/repos/factory", IssueNumber: 1, Stage: store.StageReady, Status: store.StatusComplete,
+		CreatedAt: old, UpdatedAt: old, TerminalAt: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opened.DeleteCleanupRun(t.Context(), "run-old", ideationNow); err != nil {
+		t.Fatalf("DeleteCleanupRun() error = %v", err)
+	}
+
+	reopened := reopenIdeationStoreForTest(t, opened, path)
+	for id, state := range map[string]store.IdeationState{
+		"cancelled": store.IdeationStateCancelled,
+		"deferred":  store.IdeationStateDeferred,
+		"no-build":  store.IdeationStateNoBuild,
+	} {
+		history, err := reopened.IdeationHistory(t.Context(), id)
+		if err != nil {
+			t.Fatalf("IdeationHistory(%s) error = %v", id, err)
+		}
+		if history.Session.State != state || history.Session.StateReason != "closed by the operator" ||
+			len(history.Turns) != 1 || len(history.Briefs) != 1 || len(history.Plans) != 1 || len(history.Approvals) != 1 {
+			t.Fatalf("history of %s = %#v", id, history)
+		}
+	}
+}
