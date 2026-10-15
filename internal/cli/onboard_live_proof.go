@@ -54,7 +54,7 @@ func runRecordLiveProof(ctx context.Context, planPath string, args []string, out
 			writeError(errorsOutput, err)
 			return 1
 		}
-		change = func(plan *onboarding.Plan) error { return plan.RecordProofIssue(observed, observation) }
+		change = func(plan *onboarding.Plan) error { return plan.RecordProofIssue(observed) }
 	case *decline:
 		change = (*onboarding.Plan).DeclineLiveProof
 	default:

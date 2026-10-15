@@ -6,10 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	swfactory "github.com/Stevie1704/sw-factory"
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -345,6 +345,7 @@ func runRecordGateProof(ctx context.Context, planPath string, args []string, out
 	if !parseRecordJSON(newFlagSet("onboard record gate-proof", errorsOutput), args, errorsOutput) {
 		return 2
 	}
+	started := time.Now()
 	path, plan, observation, err := observePlan(ctx, planPath)
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -359,41 +360,11 @@ func runRecordGateProof(ctx context.Context, planPath string, args []string, out
 		return 1
 	}
 	report := gateproof.Verifier{Runtime: proofRuntimeForCLI(), Root: root}.Verify(ctx, plan.Repository)
-	if !inputsUnchanged(ctx, path, onboarding.StepGateProof, observation, errorsOutput) {
-		writeJSONDocument(output, errorsOutput, report)
-		return 1
-	}
 	evidence := onboarding.Evidence{Outcome: onboarding.OutcomeFailed, Inputs: observation.Subset(onboarding.StepGateProof), EvidenceID: report.EvidenceID, Findings: proofFindings(report)}
 	if report.Result == gateproof.ResultPassed {
 		evidence.Outcome = onboarding.OutcomePassed
 	}
-	return recordEvidence(ctx, path, onboarding.StepGateProof, evidence, report, output, errorsOutput)
-}
-
-// inputsUnchanged observes the plan again after a slow observation and
-// reports whether every input of the step is still the one the observation
-// started with. Evidence of changed inputs proves neither state, and a
-// writer that started earlier must not replace newer evidence with it.
-// Evidence of an input that could not be observed would stay valid while it
-// cannot be observed, so it is refused too.
-func inputsUnchanged(ctx context.Context, path string, step onboarding.Step, before onboarding.Observation, errorsOutput io.Writer) bool {
-	_, _, after, err := observePlan(ctx, path)
-	if err != nil {
-		writeError(errorsOutput, err)
-		return false
-	}
-	inputs := after.Subset(step)
-	if !maps.Equal(before.Subset(step), inputs) {
-		writeError(errorsOutput, fmt.Errorf("an input of %s changed while it ran, so nothing was recorded: run it again", step))
-		return false
-	}
-	for input, identity := range inputs {
-		if identity == "" {
-			writeError(errorsOutput, fmt.Errorf("the input %s of %s could not be observed, so nothing was recorded; onboard status names the problem", input, step))
-			return false
-		}
-	}
-	return true
+	return recordEvidence(ctx, path, onboarding.StepGateProof, started, evidence, report, output, errorsOutput)
 }
 
 // proofFindings names the setup and the gates a failed proof did not
@@ -421,6 +392,7 @@ func runRecordDoctor(ctx context.Context, planPath string, args []string, output
 	if !parseRecordJSON(newFlagSet("onboard record doctor", errorsOutput), args, errorsOutput) {
 		return 2
 	}
+	started := time.Now()
 	path, plan, observation, err := observePlan(ctx, planPath)
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -429,9 +401,6 @@ func runRecordDoctor(ctx context.Context, planPath string, args []string, output
 	result, err := onboardingDoctorForCLI(ctx, plan.HostConfig)
 	if err != nil {
 		writeError(errorsOutput, fmt.Errorf("run the doctor: %w", err))
-		return 1
-	}
-	if !inputsUnchanged(ctx, path, onboarding.StepDoctor, observation, errorsOutput) {
 		return 1
 	}
 	evidence := onboarding.Evidence{Outcome: onboarding.OutcomeFailed, Inputs: observation.Subset(onboarding.StepDoctor)}
@@ -443,25 +412,31 @@ func runRecordDoctor(ctx context.Context, planPath string, args []string, output
 	if result.Ready() {
 		evidence.Outcome = onboarding.OutcomePassed
 	}
-	return recordEvidence(ctx, path, onboarding.StepDoctor, evidence, newDoctorDocument(result.Report, plan.HostConfig), output, errorsOutput)
+	return recordEvidence(ctx, path, onboarding.StepDoctor, started, evidence, newDoctorDocument(result.Report, plan.HostConfig), output, errorsOutput)
 }
 
-// recordEvidence writes the evidence of one step and the resulting status.
-// It exits 0 when the step's own evidence passed.
-func recordEvidence(ctx context.Context, path string, step onboarding.Step, evidence onboarding.Evidence, report any, output, errorsOutput io.Writer) int {
-	plan, err := onboarding.Update(path, func(plan *onboarding.Plan, exists bool) error {
-		if !exists {
-			return fmt.Errorf("the plan %s no longer exists", path)
-		}
-		plan.Record(step, evidence)
-		return nil
-	})
+// recordEvidence writes the evidence of an observation that started at
+// started, and the resulting status. It observes the inputs again under the
+// plan lock, so the check that the evidence is current and not superseded
+// and the write are one step. A report that is not recorded is still
+// written, so the agent sees what ran. It exits 0 when the step's own
+// evidence passed.
+func recordEvidence(ctx context.Context, path string, step onboarding.Step, started time.Time, evidence onboarding.Evidence, report any, output, errorsOutput io.Writer) int {
+	observer, err := newOnboardingObserver()
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
-	_, _, observation, err := observePlan(ctx, path)
+	var observation onboarding.Observation
+	plan, err := onboarding.Update(path, func(plan *onboarding.Plan, exists bool) error {
+		if !exists {
+			return fmt.Errorf("the plan %s no longer exists", path)
+		}
+		observation = observer.Observe(ctx, *plan)
+		return plan.RecordObserved(step, evidence, started, observation)
+	})
 	if err != nil {
+		writeJSONDocument(output, errorsOutput, report)
 		writeError(errorsOutput, err)
 		return 1
 	}

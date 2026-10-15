@@ -378,3 +378,44 @@ func TestOnboardPlanRefusesUnsafeTargets(t *testing.T) {
 		}
 	}
 }
+
+// editingRuntime is a proof runtime that changes the candidate during its
+// first command.
+type editingRuntime struct {
+	*verifyRuntime
+	edit func()
+}
+
+// RunCommand applies the edit once, then answers like verifyRuntime.
+func (r *editingRuntime) RunCommand(ctx context.Context, request worker.CommandRequest) (worker.CommandResult, error) {
+	if r.edit != nil {
+		r.edit()
+		r.edit = nil
+	}
+	return r.verifyRuntime.RunCommand(ctx, request)
+}
+
+// TestOnboardRecordRefusesAProofOfChangedInputs verifies that a gate proof
+// whose candidate changed while it ran records nothing, and still shows its
+// report.
+func TestOnboardRecordRefusesAProofOfChangedInputs(t *testing.T) {
+	fakes := usePlanFakes(t)
+	fixture := newPlanFixture(t)
+	if status, _, errorsOutput := runPlanCommand("onboard", "plan", "--repository", fixture.repository, "--output", fixture.plan, "--config", fixture.hostConfig, "--resources", fixture.resources, "--json"); status != 0 {
+		t.Fatalf("plan: %s", errorsOutput)
+	}
+	runtime := &editingRuntime{verifyRuntime: fakes.runtime, edit: func() { writePlanFile(t, fixture.repository, "README.md", "edited during the proof\n") }}
+	proofRuntimeForCLI = func() worker.CleanupRuntime { return runtime }
+
+	status, output, errorsOutput := runPlanCommand("onboard", "record", "--plan", fixture.plan, "gate-proof", "--json")
+	if status != 1 || !strings.Contains(errorsOutput, "gate_inputs") || !strings.Contains(output, `"evidence_id"`) {
+		t.Fatalf("status = %d, stdout %q, stderr %q; want a refusal with the report", status, output, errorsOutput)
+	}
+	plan, err := onboarding.Load(fixture.plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plan.Evidence[onboarding.StepGateProof]; ok {
+		t.Fatal("evidence of changed inputs was recorded")
+	}
+}

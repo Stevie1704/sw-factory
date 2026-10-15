@@ -139,7 +139,7 @@ type Evidence struct {
 	Outcome Outcome `json:"outcome"`
 	// Inputs are the identities the observation depended on.
 	Inputs map[Input]string `json:"inputs"`
-	// RecordedAt is the RFC 3339 instant of the observation.
+	// RecordedAt is the RFC 3339 instant at which the observation started.
 	RecordedAt string `json:"recorded_at"`
 	// EvidenceID is the gate proof evidence identity, when there is one.
 	EvidenceID string `json:"evidence_id,omitempty"`
@@ -161,7 +161,8 @@ type LiveProof struct {
 	// RunStage and RunStatus are the last observed state of its run.
 	RunStage  string `json:"run_stage,omitempty"`
 	RunStatus string `json:"run_status,omitempty"`
-	// Inputs are the identities a passed proof depended on.
+	// Inputs are the identities at the start of the proof, which a passed
+	// proof depends on.
 	Inputs map[Input]string `json:"inputs,omitempty"`
 	// UpdatedAt is the RFC 3339 instant of the last change.
 	UpdatedAt string `json:"updated_at"`
@@ -186,7 +187,7 @@ func (p *Plan) Record(step Step, evidence Evidence) {
 
 // now returns the current instant in RFC 3339 form.
 func now() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
 // Check is the result of one cheap local observation.

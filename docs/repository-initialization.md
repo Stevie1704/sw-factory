@@ -237,8 +237,9 @@ issue exists, so a lost response cannot create a second proof issue:
 <FACTORY_COMMAND> onboard record --plan "<PLAN>" live-proof --start --json
 ~~~
 
-The command needs a verified `doctor` and prints a `marker`. Put the marker
-in the body of the proof issue. Then record the issue:
+The command needs a verified `doctor` and prints a `marker`. It records the
+inputs at the start, and a passed proof is valid only for these inputs. Put
+the marker in the body of the proof issue. Then record the issue:
 
 ~~~sh
 <FACTORY_COMMAND> onboard record --plan "<PLAN>" live-proof --issue <NUMBER> --json
@@ -254,8 +255,11 @@ issue carries the marker, remove the start with `--abandon`. When the
 operator declines the proof, record it with `--decline`.
 
 Plan writes are atomic and serialized by a lock file beside the plan. A
-second writer waits and then starts from the latest plan, so it cannot
-overwrite another writer's progress.
+second writer waits and then starts from the latest plan. A record command
+observes the inputs again while it holds the lock. It records nothing, and
+still prints its report, when an input changed or could not be observed
+while it ran, or when another writer recorded newer evidence of the same
+step. So no writer overwrites another writer's progress.
 
 ## Actions that need operator approval
 

@@ -3,7 +3,33 @@ package onboarding
 import (
 	"errors"
 	"fmt"
+	"time"
 )
+
+// RecordObserved records the evidence of an observation that started at
+// started, when it still describes the current inputs. It refuses evidence
+// whose inputs changed or could not be observed, and evidence that another
+// writer superseded with an observation that started later. Call it inside
+// Update with a fresh observation, so the check and the write are one locked
+// step.
+func (p *Plan) RecordObserved(step Step, evidence Evidence, started time.Time, current Observation) error {
+	for _, input := range definition(step).inputs {
+		switch {
+		case current.Inputs[input] == "":
+			return fmt.Errorf("the input %s of %s could not be observed, so nothing was recorded; onboard status names the problem", input, step)
+		case evidence.Inputs[input] != current.Inputs[input]:
+			return fmt.Errorf("the input %s of %s changed while it ran, so nothing was recorded: run it again", input, step)
+		}
+	}
+	if recorded, ok := p.Evidence[step]; ok {
+		if at, err := time.Parse(time.RFC3339Nano, recorded.RecordedAt); err == nil && at.After(started) {
+			return fmt.Errorf("newer evidence of %s was recorded while this observation ran, so nothing was recorded", step)
+		}
+	}
+	evidence.RecordedAt = started.UTC().Format(time.RFC3339Nano)
+	p.Record(step, evidence)
+	return nil
+}
 
 // Valid reports whether the recorded evidence of one step passed and every
 // input it depends on is unchanged, so the step need not run again.
@@ -39,7 +65,7 @@ func (p *Plan) StartLiveProof(observation Observation, marker string) error {
 	if states[StepLiveProof] == StateVerified {
 		return errors.New("the disposable-issue proof already passed for the current inputs")
 	}
-	p.LiveProof = &LiveProof{State: LiveProofStarted, Marker: marker, UpdatedAt: now()}
+	p.LiveProof = &LiveProof{State: LiveProofStarted, Marker: marker, Inputs: observation.Subset(StepLiveProof), UpdatedAt: now()}
 	return nil
 }
 
@@ -60,8 +86,9 @@ type ProofIssue struct {
 
 // RecordProofIssue records the observed proof issue of the started proof.
 // An issue without the marker is never recorded, so an unrelated issue
-// cannot complete the proof.
-func (p *Plan) RecordProofIssue(issue ProofIssue, observation Observation) error {
+// cannot complete the proof. A passed proof keeps the inputs it started
+// with, so it never proves inputs that changed after its start.
+func (p *Plan) RecordProofIssue(issue ProofIssue) error {
 	if !p.LiveProofOpen() {
 		return errors.New("no disposable-issue proof is started: start one with --start")
 	}
@@ -78,7 +105,7 @@ func (p *Plan) RecordProofIssue(issue ProofIssue, observation Observation) error
 	proof.Issue, proof.RunStage, proof.RunStatus, proof.UpdatedAt = issue.Number, issue.RunStage, issue.RunStatus, now()
 	proof.State = LiveProofIssueRecorded
 	if issue.Passed {
-		proof.State, proof.Inputs = LiveProofPassed, observation.Subset(StepLiveProof)
+		proof.State = LiveProofPassed
 	}
 	p.LiveProof = &proof
 	return nil
