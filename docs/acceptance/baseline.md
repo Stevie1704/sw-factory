@@ -12,7 +12,12 @@ agent-journey scenarios of issue #259. Read the scenarios with
 
 ## What the baseline proves
 
-Every scenario's deterministic tests pass in `make check`. They use fake
+The baseline comes from a development build at the revision that the report
+names, not from a release archive. The next baseline uses a release.
+
+Every scenario's deterministic tests pass in `make check`. The
+`upgrade-maintenance` scenario is still `blocked`, because its tests cover
+only the worker release check. They use fake
 adapters, temporary stores, and temporary file systems. They need no paid
 model, no personal credential, and no write to a real repository. They prove
 that the semantics a scenario depends on hold. They do not prove that an
@@ -35,7 +40,7 @@ scenarios`, and `factory onboard prepare`.
 | `upgrade-maintenance` | No shipped guidance states that restore and downgrade are unsupported, so an agent cannot report the support boundary from the release alone. | #258 |
 | `upgrade-maintenance` | Service supervision under launchd or systemd is not part of the upgrade. | #204 |
 | `recover-operations` | The deterministic tests cover the recovery contract, not failure injection around every durable effect. | #181 |
-| `contributor-maintenance` | README and AGENTS.md pointed a coding agent to a missing `CONTEXT.md`, and AGENTS.md did not name `make check`. Fixed with this baseline; `TestContributorGuidanceLinksResolve` keeps the links resolvable. | #259 |
+| `contributor-maintenance` | README, AGENTS.md, and `docs/agents/domain.md` pointed a coding agent to a missing `CONTEXT.md`, and AGENTS.md did not name `make check`. Fixed with this baseline; `TestContributorGuidanceLinksResolve` keeps the README and AGENTS.md links resolvable. No fresh agent has run the fix exercise yet. | #259 |
 
 A development build cannot run `factory onboard prepare` without
 `--worker-base-image`. That is the documented behavior of a development

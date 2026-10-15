@@ -59,7 +59,7 @@ type Result struct {
 
 // Outcome is what one evidence kind observed for one scenario.
 type Outcome struct {
-	Outcome         string         `json:"outcome"`
+	Status          string         `json:"outcome"`
 	Reason          string         `json:"reason,omitempty"`
 	DurationSeconds *int           `json:"duration_seconds,omitempty"`
 	Interventions   []Intervention `json:"interventions,omitempty"`
@@ -176,18 +176,19 @@ func BuildReport(manifest Manifest, results Results, release version.Identity, n
 }
 
 // add appends one scenario and accumulates its counts, interventions, and
-// duration.
+// live duration.
 func (r *Report) add(entry ScenarioReport) {
 	r.Scenarios = append(r.Scenarios, entry)
-	r.Summary.Live[entry.Live.Outcome]++
-	r.Summary.Deterministic[entry.Deterministic.Outcome]++
+	r.Summary.Live[entry.Live.Status]++
+	r.Summary.Deterministic[entry.Deterministic.Status]++
 	for _, outcome := range []Outcome{entry.Live, entry.Deterministic} {
 		for _, intervention := range outcome.Interventions {
 			r.InterventionsByCause[intervention.Cause]++
 		}
-		if outcome.DurationSeconds != nil {
-			r.DurationSeconds += *outcome.DurationSeconds
-		}
+	}
+	// Only a live run has a meaningful duration; CI time is not agent time.
+	if entry.Live.DurationSeconds != nil {
+		r.DurationSeconds += *entry.Live.DurationSeconds
 	}
 }
 
@@ -218,7 +219,7 @@ func recordedOutcome(recorded map[resultKey]Outcome, scenario, evidence string) 
 	if outcome, ok := recorded[resultKey{scenario: scenario, evidence: evidence}]; ok {
 		return outcome
 	}
-	return Outcome{Outcome: OutcomeNotRun, Reason: notRecorded}
+	return Outcome{Status: OutcomeNotRun, Reason: notRecorded}
 }
 
 // zeroCounts returns a count of zero for every outcome, so a reader sees an

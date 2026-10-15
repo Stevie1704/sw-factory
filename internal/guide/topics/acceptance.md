@@ -79,6 +79,8 @@ name; the report refuses them.
 ```
 
 - `evidence` is `live` for an agent run, or `deterministic` for a CI result.
+  Record a deterministic outcome only from a `make check` run at the same
+  revision as the build that writes the report.
 - `outcome` is `pass`, `fail`, `blocked`, or `not-run`. Every outcome except
   `pass` needs a one-line `reason`. A skipped paid step is `not-run` or
   `blocked`, never `pass`.

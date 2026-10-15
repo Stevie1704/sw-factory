@@ -123,8 +123,12 @@ func writeAcceptanceReport(destination string, report acceptance.Report) error {
 		{acceptanceReportMarkdown, acceptance.RenderMarkdown(report)},
 	}
 	for _, file := range files {
-		if _, err := os.Lstat(filepath.Join(destination, file.name)); !errors.Is(err, fs.ErrNotExist) {
+		_, err := os.Lstat(filepath.Join(destination, file.name))
+		switch {
+		case err == nil:
 			return fmt.Errorf("%s already holds %s; choose a new --output directory", destination, file.name)
+		case !errors.Is(err, fs.ErrNotExist):
+			return fmt.Errorf("inspect report path: %w", err)
 		}
 	}
 	if err := os.MkdirAll(destination, 0o700); err != nil {

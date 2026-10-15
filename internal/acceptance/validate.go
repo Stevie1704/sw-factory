@@ -9,12 +9,12 @@ import (
 	"unicode/utf8"
 )
 
-// InterventionCauses are the causes by which the report groups human steps.
-var InterventionCauses = []string{"authorization", "human-disposition", "credential", "environment", "factory-defect", "guidance-gap", "other"}
+// interventionCauses are the causes by which the report groups human steps.
+var interventionCauses = []string{"authorization", "human-disposition", "credential", "environment", "factory-defect", "guidance-gap", "other"}
 
-// WorkaroundKinds are the recorded kinds of action outside the supported
+// workaroundKinds are the recorded kinds of action outside the supported
 // interfaces. Each one disqualifies a pass.
-var WorkaroundKinds = []string{"operational-store-edit", "run-branch-edit", "hidden-checkout-knowledge", "weakened-gate", "other"}
+var workaroundKinds = []string{"operational-store-edit", "run-branch-edit", "hidden-checkout-knowledge", "weakened-gate", "other"}
 
 // maxTextRunes bounds every free-text field, so a report carries a summary
 // and never a transcript.
@@ -45,7 +45,7 @@ func (r Results) validate() error {
 		}
 	}
 	for _, result := range r.Results {
-		if result.Evidence == EvidenceLive && result.Outcome.Outcome != OutcomeNotRun && r.HostHarness == nil {
+		if result.Evidence == EvidenceLive && result.Status != OutcomeNotRun && r.HostHarness == nil {
 			return errors.New("a live result that ran needs host_harness")
 		}
 		if err := result.validate(); err != nil {
@@ -61,16 +61,16 @@ func (r Result) validate() error {
 	if r.Evidence != EvidenceLive && r.Evidence != EvidenceDeterministic {
 		return fmt.Errorf("evidence must be %s or %s", EvidenceLive, EvidenceDeterministic)
 	}
-	if !slices.Contains(outcomes, r.Outcome.Outcome) {
+	if !slices.Contains(outcomes, r.Status) {
 		return fmt.Errorf("outcome must be one of %s", strings.Join(outcomes, ", "))
 	}
-	if err := checkText("reason", r.Reason, r.Outcome.Outcome != OutcomePass); err != nil {
+	if err := checkText("reason", r.Reason, r.Status != OutcomePass); err != nil {
 		return err
 	}
-	if r.Outcome.Outcome == OutcomePass && len(r.Workarounds) > 0 {
+	if r.Status == OutcomePass && len(r.Workarounds) > 0 {
 		return errors.New("a pass cannot use an unsupported workaround; record the outcome as fail")
 	}
-	if r.Evidence == EvidenceLive && r.Outcome.Outcome != OutcomeNotRun {
+	if r.Evidence == EvidenceLive && r.Status != OutcomeNotRun {
 		if err := r.validateMeasurements(); err != nil {
 			return err
 		}
@@ -107,16 +107,16 @@ func (r Result) validateMeasurements() error {
 // validateDetails checks the interventions and workarounds of one result.
 func (r Result) validateDetails() error {
 	for _, intervention := range r.Interventions {
-		if !slices.Contains(InterventionCauses, intervention.Cause) {
-			return fmt.Errorf("intervention cause must be one of %s", strings.Join(InterventionCauses, ", "))
+		if !slices.Contains(interventionCauses, intervention.Cause) {
+			return fmt.Errorf("intervention cause must be one of %s", strings.Join(interventionCauses, ", "))
 		}
 		if err := checkText("intervention summary", intervention.Summary, true); err != nil {
 			return err
 		}
 	}
 	for _, workaround := range r.Workarounds {
-		if !slices.Contains(WorkaroundKinds, workaround.Kind) {
-			return fmt.Errorf("workaround kind must be one of %s", strings.Join(WorkaroundKinds, ", "))
+		if !slices.Contains(workaroundKinds, workaround.Kind) {
+			return fmt.Errorf("workaround kind must be one of %s", strings.Join(workaroundKinds, ", "))
 		}
 		if err := checkText("workaround summary", workaround.Summary, true); err != nil {
 			return err

@@ -16,8 +16,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ManifestSchema is the version of the scenario manifest.
-const ManifestSchema = 1
+// manifestSchema is the version of the scenario manifest.
+const manifestSchema = 1
 
 //go:embed scenarios.yaml
 var manifestSource []byte
@@ -89,8 +89,8 @@ func (m Manifest) Scenario(id string) (Scenario, bool) {
 // validate refuses a manifest whose scenarios are incomplete, duplicated, or
 // whose test references cannot name a test.
 func (m Manifest) validate() error {
-	if m.SchemaVersion != ManifestSchema {
-		return fmt.Errorf("schema_version %d, want %d", m.SchemaVersion, ManifestSchema)
+	if m.SchemaVersion != manifestSchema {
+		return fmt.Errorf("schema_version %d, want %d", m.SchemaVersion, manifestSchema)
 	}
 	if len(m.Scenarios) == 0 {
 		return errors.New("no scenarios")

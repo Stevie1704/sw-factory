@@ -71,8 +71,8 @@
     {
       "scenario": "upgrade-maintenance",
       "evidence": "deterministic",
-      "outcome": "pass",
-      "reason": "covers only the worker release check; no upgrade preflight, resume, or restore contract ships"
+      "outcome": "blocked",
+      "reason": "only the worker release check has coverage; no upgrade preflight, resume, or restore contract ships"
     },
     {
       "scenario": "upgrade-maintenance",

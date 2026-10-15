@@ -53,10 +53,10 @@ func renderDetails(out *bytes.Buffer, report Report) {
 			evidence string
 			outcome  Outcome
 		}{{EvidenceLive, scenario.Live}, {EvidenceDeterministic, scenario.Deterministic}} {
-			if item.outcome.Outcome == OutcomeNotRun && item.outcome.Reason == notRecorded {
+			if item.outcome.Status == OutcomeNotRun && item.outcome.Reason == notRecorded {
 				continue
 			}
-			fmt.Fprintf(out, "\n### `%s` (%s): %s\n\n", scenario.ID, item.evidence, item.outcome.Outcome)
+			fmt.Fprintf(out, "\n### `%s` (%s): %s\n\n", scenario.ID, item.evidence, item.outcome.Status)
 			if item.outcome.Reason != "" {
 				fmt.Fprintf(out, "- Reason: %s\n", item.outcome.Reason)
 			}
@@ -94,13 +94,13 @@ func valueOrUnobserved(value string) string {
 
 // outcomeText is the table cell of one outcome.
 func outcomeText(outcome Outcome) string {
-	if outcome.Outcome == OutcomeNotRun && outcome.Reason == notRecorded {
+	if outcome.Status == OutcomeNotRun && outcome.Reason == notRecorded {
 		return OutcomeNotRun
 	}
 	if outcome.Reason == "" {
-		return outcome.Outcome
+		return outcome.Status
 	}
-	return outcome.Outcome + ": " + outcome.Reason
+	return outcome.Status + ": " + outcome.Reason
 }
 
 // gapsText is the table cell of a scenario's recorded gaps.
