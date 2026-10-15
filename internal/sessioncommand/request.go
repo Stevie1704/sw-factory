@@ -282,7 +282,9 @@ func DecodePayload(kind Kind, raw []byte) (any, error) {
 }
 
 // validate checks the bounded title.
-func (p *CreateSessionPayload) validate() error { return boundedText("title", p.Title, maxTitleBytes, false) }
+func (p *CreateSessionPayload) validate() error {
+	return boundedText("title", p.Title, maxTitleBytes, false)
+}
 
 // validate checks the required, bounded turn body.
 func (p *TurnPayload) validate() error {
@@ -346,7 +348,9 @@ func (p *ReconcilePayload) validate() error {
 }
 
 // validate checks the bounded reason.
-func (p *ReasonPayload) validate() error { return boundedText("reason", p.Reason, maxReasonBytes, false) }
+func (p *ReasonPayload) validate() error {
+	return boundedText("reason", p.Reason, maxReasonBytes, false)
+}
 
 // Brief converts the browser brief into the stored brief.
 func (b BriefJSON) Brief() store.Brief {
