@@ -374,13 +374,14 @@ func statusBlockers(result factory.StatusResult) []blockerDocument {
 // failure can come from the repository setup command or from the runtime,
 // so its origin stays unknown.
 func gateBlocker(outcome store.GateOutcome) (string, doctor.Origin) {
+	code := factory.GateOutcomeDiagnosticCode(outcome)
 	switch outcome {
 	case store.GateOutcomeFailed:
-		return "run.gate.failed", doctor.OriginRepository
+		return code, doctor.OriginRepository
 	case store.GateOutcomeError:
-		return "run.gate.error", doctor.OriginEnvironment
+		return code, doctor.OriginEnvironment
 	default:
-		return "run.gate." + string(outcome), doctor.OriginUnknown
+		return code, doctor.OriginUnknown
 	}
 }
 

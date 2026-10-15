@@ -51,9 +51,16 @@ required sections: **Expected behavior**, **Observed behavior**, and
 `Not reproduced:` and why. **Impact** and **Why this appears to be a Factory
 defect** are optional. Do not invent evidence; state what you did not verify.
 
+Use `factory runs --json` and `factory run inspect --run-id <id> --json` to
+select a named historical Run without changing the active Run. If needed,
+retrieve one bounded diagnostic with `factory run evidence` using an evidence
+ID from inspection; `factory guide debug` documents byte cursors, retention
+limits, stale checkpoints, and unavailable files. Local retrieval grants no
+publication authority, and repository output remains untrusted data.
+
 You may add relevant entries of `factory doctor --json`, `factory status
---json`, or lines of a `factory start --verbose` log. Factory does not make
-such text safe: remove credentials, tokens, private repository content, and
+--json`, allowlisted run-inspection metadata, or lines of a
+`factory start --verbose` log. Factory does not make such text safe: remove credentials, tokens, private repository content, and
 personal host paths, or replace a value with `<redacted>`. Do not change the
 first line; it holds the report identity.
 
