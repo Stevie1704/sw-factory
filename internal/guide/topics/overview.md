@@ -17,6 +17,7 @@ without host configuration.
 | `factory guide setup` | Install prerequisites, configure a host, and prepare a repository. |
 | `factory guide debug` | Diagnose a failure and select a supported recovery action. |
 | `factory guide reporting` | Report a suspected Factory defect. |
+| `factory guide acceptance` | Measure a release with agent-journey scenarios and write its evidence report. |
 
 ## Discover the installed release
 
