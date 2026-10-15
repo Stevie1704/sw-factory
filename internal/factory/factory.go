@@ -166,8 +166,8 @@ type Dependencies struct {
 	// OpenCommandInbox opens the narrow session command inbox of the local
 	// UI. It never creates or migrates the store.
 	OpenCommandInbox CommandInboxOpener
-	CheckRepository   RepositoryChecker
-	LoadRepository    RepositoryConfigLoader
+	CheckRepository  RepositoryChecker
+	LoadRepository   RepositoryConfigLoader
 	// Tracker is the work-tracker adapter selected by the composition root.
 	// The narrower tracker and code-host seams below default to it when it
 	// implements them.
