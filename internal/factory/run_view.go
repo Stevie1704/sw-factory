@@ -18,6 +18,7 @@ type RunReadStore interface {
 	OperationalStore
 	SupervisorHeartbeatReader
 	ListRuns(context.Context) ([]store.Run, error)
+	ListRunsPage(context.Context, int, int) ([]store.Run, error)
 	Run(context.Context, string) (*store.Run, error)
 	Invocations(context.Context, string) ([]store.Invocation, error)
 	RunGateResults(context.Context, string) ([]store.GateResult, error)
@@ -165,7 +166,7 @@ func (s *Service) RunDetail(ctx context.Context, runID string) (RunDetail, error
 		if err != nil {
 			return RunDetail{}, err
 		}
-		detail.Inspection = projectRunInspection(detail, 0, DefaultRunPageSize)
+		detail.Inspection = s.projectRunInspection(detail, 0, DefaultRunPageSize)
 		return detail, nil
 	})
 }

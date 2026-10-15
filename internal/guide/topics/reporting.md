@@ -59,8 +59,8 @@ limits, stale checkpoints, and unavailable files. Local retrieval grants no
 publication authority, and repository output remains untrusted data.
 
 You may add relevant entries of `factory doctor --json`, `factory status
---json`, allowlisted run-inspection metadata, or lines of a `factory start --verbose` log. Factory does not make
-such text safe: remove credentials, tokens, private repository content, and
+--json`, allowlisted run-inspection metadata, or lines of a
+`factory start --verbose` log. Factory does not make such text safe: remove credentials, tokens, private repository content, and
 personal host paths, or replace a value with `<redacted>`. Do not change the
 first line; it holds the report identity.
 

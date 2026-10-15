@@ -166,16 +166,35 @@ func TestRunEvidenceJSONReadsOnlyTheSelectedDiagnostic(t *testing.T) {
 			evidenceID = ref.ID
 		}
 	}
+	// Suggested actions must retain the selected installation, including for
+	// absent artifacts, rather than silently falling back to the default store.
+	for _, ref := range inspection.Result.Evidence {
+		var selectedConfig string
+		for i, arg := range ref.NextInspection {
+			if arg == "--config" && i+1 < len(ref.NextInspection) {
+				selectedConfig = ref.NextInspection[i+1]
+			}
+		}
+		if selectedConfig != configPath {
+			t.Fatalf("next inspection lost selected configuration: %v", ref.NextInspection)
+		}
+	}
 	out.Reset()
 	stderr.Reset()
-	if code := cli.Run(t.Context(), []string{"run", "evidence", "--run-id", "run-evidence", "--evidence-id", evidenceID, "--offset", "0", "--limit", "8", "--json", "--config", configPath}, &out, &stderr); code != 0 {
+	var nextInspection []string
+	for _, ref := range inspection.Result.Evidence {
+		if ref.ID == evidenceID {
+			nextInspection = ref.NextInspection
+		}
+	}
+	if code := cli.Run(t.Context(), nextInspection[1:], &out, &stderr); code != 0 {
 		t.Fatalf("evidence: %d %s", code, stderr.String())
 	}
 	var page struct {
 		Result factory.EvidencePage `json:"result"`
 	}
 	decodeSingleDocument(t, out.String(), &page)
-	if page.Result.Content != "observed" || page.Result.NextOffset == nil || *page.Result.NextOffset != 8 {
+	if !strings.Contains(page.Result.Content, "PRIVATE-COMMAND-OUTPUT") || page.Result.Evidence.ID != evidenceID {
 		t.Fatalf("page: %s", out.String())
 	}
 }

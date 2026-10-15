@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Stevie1704/sw-factory/internal/config"
-	"github.com/Stevie1704/sw-factory/internal/workflow"
 	"slices"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // Inspection page bounds keep CLI responses and store queries finite.
@@ -56,13 +56,7 @@ func (s *Service) Runs(ctx context.Context, offset, limit int) (RunPage, error) 
 		return RunPage{}, ErrInspectionBounds
 	}
 	return readRunView(ctx, s, func(view runViewRead) (RunPage, error) {
-		reader, ok := view.reader.(interface {
-			ListRunsPage(context.Context, int, int) ([]store.Run, error)
-		})
-		if !ok {
-			return RunPage{}, errors.New("operational store does not support run pagination")
-		}
-		runs, err := reader.ListRunsPage(ctx, offset, limit+1)
+		runs, err := view.reader.ListRunsPage(ctx, offset, limit+1)
 		if err != nil {
 			return RunPage{}, err
 		}
@@ -113,8 +107,10 @@ type InvocationIdentity struct {
 }
 
 // GateObservation identifies a persisted outcome without command output or
-// free-text skip reasons. Ordinal identifies a gate in the frozen policy.
+// free-text skip reasons. GateName and ordinal identify the frozen policy gate.
 type GateObservation struct {
+	// GateName identifies the repository-declared gate for local inspection.
+	GateName          string            `json:"gate_name"`
 	DiagnosticCode    string            `json:"diagnostic_code,omitempty"`
 	EvidenceSelectors []string          `json:"evidence_selectors,omitempty"`
 	Phase             store.GatePhase   `json:"phase"`
@@ -196,12 +192,12 @@ func (s *Service) RunInspect(ctx context.Context, runID string, offset, limit in
 		if err != nil {
 			return RunInspection{}, err
 		}
-		return projectRunInspection(detail, offset, limit), nil
+		return s.projectRunInspection(detail, offset, limit), nil
 	})
 }
 
 // projectRunInspection is shared by CLI inspection and the web run-detail view.
-func projectRunInspection(detail RunDetail, offset, limit int) RunInspection {
+func (s *Service) projectRunInspection(detail RunDetail, offset, limit int) RunInspection {
 	run := detail.Run
 	out := RunInspection{State: "retained", Run: projectRunIdentity(run),
 		Policy: FrozenPolicyIdentity{State: "unavailable"},
@@ -248,7 +244,7 @@ func projectRunInspection(detail RunDetail, offset, limit int) RunInspection {
 	gates := []GateObservation{}
 	for _, group := range detail.Gates {
 		for _, g := range group.Results {
-			gates = append(gates, GateObservation{Phase: g.Phase, CheckpointSHA: g.CheckpointSHA, Ordinal: g.Ordinal,
+			gates = append(gates, GateObservation{GateName: g.GateName, Phase: g.Phase, CheckpointSHA: g.CheckpointSHA, Ordinal: g.Ordinal,
 				Outcome: g.Outcome, Status: g.Status, Blocking: g.Blocking, SetupFingerprint: g.SetupFingerprint, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
 		}
 	}
@@ -256,13 +252,8 @@ func projectRunInspection(detail RunDetail, offset, limit int) RunInspection {
 	out.Gates = pageWindow(gates, offset, limit)
 	for i := range out.Gates {
 		g := &out.Gates[i]
-		switch g.Outcome {
-		case store.GateOutcomeFailed:
-			g.DiagnosticCode = "run.gate.failed"
-		case store.GateOutcomeError:
-			g.DiagnosticCode = "run.gate.error"
-		case store.GateOutcomeSetupFailed:
-			g.DiagnosticCode = "run.gate.setup_failed"
+		if g.Outcome == store.GateOutcomeFailed || g.Outcome == store.GateOutcomeError || g.Outcome == store.GateOutcomeSetupFailed {
+			g.DiagnosticCode = GateOutcomeDiagnosticCode(g.Outcome)
 		}
 		if g.DiagnosticCode != "" {
 			g.EvidenceSelectors = []string{"gate-failure." + string(g.Phase), "gate-output." + g.CheckpointSHA}
@@ -274,7 +265,7 @@ func projectRunInspection(detail RunDetail, offset, limit int) RunInspection {
 	timeline := retainedChronology(detail)
 	out.Timeline = pageWindow(timeline, offset, limit)
 	out.Coverage.TimelineTotal = len(timeline)
-	out.Evidence, out.Coverage.EvidenceTotal = evidenceReferences(detail, offset, limit)
+	out.Evidence, out.Coverage.EvidenceTotal = s.evidenceReferences(detail.Run, detail.Gates, offset, limit)
 	if max(len(detail.Invocations), len(gates), len(timeline), out.Coverage.EvidenceTotal)-offset > limit {
 		next := offset + limit
 		out.Coverage.NextOffset = &next
@@ -333,4 +324,10 @@ func retainedChronology(detail RunDetail) []RunObservation {
 		return cmp.Compare(a.Ordinal, b.Ordinal)
 	})
 	return observations
+}
+
+// GateOutcomeDiagnosticCode names the stable diagnostic vocabulary shared by
+// local run inspection and status. Callers decide which outcomes need diagnosis.
+func GateOutcomeDiagnosticCode(outcome store.GateOutcome) string {
+	return "run.gate." + string(outcome)
 }

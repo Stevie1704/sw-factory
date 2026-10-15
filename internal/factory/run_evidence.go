@@ -22,8 +22,11 @@ import (
 
 // Evidence read bounds apply to bytes, independent of line or UTF-8 boundaries.
 const (
-	DefaultEvidencePageSize  = 4096
-	MaxEvidencePageSize      = 64 << 10
+	// DefaultEvidencePageSize is the default local content window in bytes.
+	DefaultEvidencePageSize = 4096
+	// MaxEvidencePageSize caps each explicit read, excluding JSON encoding.
+	MaxEvidencePageSize = 64 << 10
+	// MaxRetainedEvidenceBytes caps the prefix addressable by byte cursors.
 	MaxRetainedEvidenceBytes = maxGateFailureDiagnosticReadBytes
 )
 
@@ -37,16 +40,26 @@ var (
 // EvidenceReference names only an allowlisted run-local diagnostic. ID binds
 // the selector to the run, inode, size, modification time and bounded bytes.
 type EvidenceReference struct {
-	DiagnosticCodes []string  `json:"diagnostic_codes,omitempty"`
-	ID              string    `json:"id"`
-	Selector        string    `json:"selector"`
-	State           string    `json:"state"`
-	CheckpointSHA   string    `json:"checkpoint_sha,omitempty"`
-	SizeBytes       int64     `json:"size_bytes"`
-	RetainedBytes   int       `json:"retained_bytes"`
-	SourceTruncated bool      `json:"source_truncated"`
-	ModifiedAt      time.Time `json:"modified_at,omitempty"`
-	NextInspection  []string  `json:"next_inspection"`
+	// DiagnosticCodes classify unavailable, changed, stale or truncated content.
+	DiagnosticCodes []string `json:"diagnostic_codes,omitempty"`
+	// ID binds this selector to one run and one observed file identity.
+	ID string `json:"id"`
+	// Selector names a supported diagnostic kind, never a host path.
+	Selector string `json:"selector"`
+	// State describes availability independently of source truncation.
+	State string `json:"state"`
+	// CheckpointSHA is the checkpoint recorded in the file header.
+	CheckpointSHA string `json:"checkpoint_sha,omitempty"`
+	// SizeBytes is the observed size of the complete file.
+	SizeBytes int64 `json:"size_bytes"`
+	// RetainedBytes is the size of the prefix addressable by this inspection.
+	RetainedBytes int `json:"retained_bytes"`
+	// SourceTruncated reports bytes beyond the retained prefix.
+	SourceTruncated bool `json:"source_truncated"`
+	// ModifiedAt is the observed file modification time.
+	ModifiedAt time.Time `json:"modified_at,omitempty"`
+	// NextInspection is argv for the selected host configuration.
+	NextInspection []string `json:"next_inspection"`
 }
 
 // EvidencePage is a byte window of explicitly selected untrusted local output.
@@ -77,13 +90,13 @@ type evidenceSource struct {
 
 // evidenceSources enumerates phase logs and checkpoint logs whose SHAs are
 // retained by the run or its gate records. It never scans artifact directories.
-func evidenceSources(detail RunDetail) []evidenceSource {
+func evidenceSources(run store.Run, gates []GateCheckpointResults) []evidenceSource {
 	sources := []evidenceSource{
 		{selector: "gate-failure.baseline", directory: gateFailureDiagnosticDirectoryName, name: "baseline.log", phase: "baseline"},
 		{selector: "gate-failure.checkpoint", directory: gateFailureDiagnosticDirectoryName, name: "checkpoint.log", phase: "checkpoint"},
 	}
-	checkpoints := []string{detail.Run.BaseCheckpointSHA, detail.Run.TestCheckpointSHA, detail.Run.AcceptedImplementationCheckpointSHA, detail.Run.CheckpointSHA, detail.Run.MergeCommitSHA}
-	for _, group := range detail.Gates {
+	checkpoints := []string{run.BaseCheckpointSHA, run.TestCheckpointSHA, run.AcceptedImplementationCheckpointSHA, run.CheckpointSHA, run.MergeCommitSHA}
+	for _, group := range gates {
 		checkpoints = append(checkpoints, group.CheckpointSHA)
 	}
 	slices.Sort(checkpoints)
@@ -96,11 +109,11 @@ func evidenceSources(detail RunDetail) []evidenceSource {
 }
 
 // evidenceReferences reads bounded identity metadata for one page of selectors.
-func evidenceReferences(detail RunDetail, offset, limit int) ([]EvidenceReference, int) {
-	sources := evidenceSources(detail)
+func (s *Service) evidenceReferences(run store.Run, gates []GateCheckpointResults, offset, limit int) ([]EvidenceReference, int) {
+	sources := evidenceSources(run, gates)
 	refs := []EvidenceReference{}
 	for _, source := range pageWindow(sources, offset, limit) {
-		ref, _, _ := readEvidenceSource(detail.Run, source)
+		ref, _, _ := s.readEvidenceSource(run, source)
 		refs = append(refs, ref)
 	}
 	return refs, len(sources)
@@ -130,11 +143,11 @@ func (s *Service) RunEvidence(ctx context.Context, runID, evidenceID string, off
 			return EvidencePage{}, err
 		}
 		selector, _, _ := strings.Cut(evidenceID, "@")
-		for _, source := range evidenceSources(detail) {
+		for _, source := range evidenceSources(detail.Run, detail.Gates) {
 			if source.selector != selector {
 				continue
 			}
-			ref, content, readErr := readEvidenceSource(detail.Run, source)
+			ref, content, readErr := s.readEvidenceSource(detail.Run, source)
 			if readErr != nil {
 				return EvidencePage{}, readErr
 			}
@@ -198,12 +211,15 @@ func openEvidenceDirectory(root *os.Root, name string) (*os.Root, error) {
 // symlinks, reads at most a fixed prefix, and validates recorded run/checkpoint
 // identity. Missing files are absent; unsafe, malformed or unreadable files are
 // unavailable, without leaking their content or making inspection fail.
-func readEvidenceSource(run store.Run, source evidenceSource) (ref EvidenceReference, content []byte, err error) {
+func (s *Service) readEvidenceSource(run store.Run, source evidenceSource) (ref EvidenceReference, content []byte, err error) {
 	ref = EvidenceReference{ID: source.selector, Selector: source.selector, State: "unavailable",
-		NextInspection: []string{"factory", "run", "inspect", "--run-id", run.ID, "--json"}}
+		NextInspection: []string{"factory", "run", "inspect", "--run-id", run.ID, "--config", s.configPath, "--json"}}
 	defer func() {
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, ErrEvidenceChanged) {
+				ref.State = "changed"
+				err = ErrEvidenceChanged
+			} else if errors.Is(err, os.ErrNotExist) {
 				ref.State = "absent"
 				err = nil
 			} else {
@@ -217,25 +233,7 @@ func readEvidenceSource(run store.Run, source evidenceSource) (ref EvidenceRefer
 			ref.DiagnosticCodes = append(ref.DiagnosticCodes, "evidence.truncated")
 		}
 	}()
-	if run.Worktree == "" || run.ID == "" || run.ID == "." || run.ID == ".." || strings.ContainsAny(run.ID, `/\`) {
-		return ref, nil, ErrEvidenceUnavailable
-	}
-	parent, err := os.OpenRoot(filepath.Dir(run.Worktree))
-	if err != nil {
-		return ref, nil, err
-	}
-	defer func() { _ = parent.Close() }()
-	agents, err := openEvidenceDirectory(parent, ".factory-agents")
-	if err != nil {
-		return ref, nil, err
-	}
-	defer func() { _ = agents.Close() }()
-	runRoot, err := openEvidenceDirectory(agents, run.ID)
-	if err != nil {
-		return ref, nil, err
-	}
-	defer func() { _ = runRoot.Close() }()
-	directory, err := openEvidenceDirectory(runRoot, source.directory)
+	directory, err := openRunEvidenceDirectory(run, source.directory)
 	if err != nil {
 		return ref, nil, err
 	}
@@ -253,7 +251,10 @@ func readEvidenceSource(run store.Run, source evidenceSource) (ref EvidenceRefer
 	}
 	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
-	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+	if err != nil {
+		return ref, nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
 		return ref, nil, ErrEvidenceChanged
 	}
 	content, err = io.ReadAll(io.LimitReader(file, MaxRetainedEvidenceBytes))
@@ -268,26 +269,9 @@ func readEvidenceSource(run store.Run, source evidenceSource) (ref EvidenceRefer
 	if err != nil || !os.SameFile(opened, current) || !os.SameFile(opened, after) || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) {
 		return ref, nil, ErrEvidenceChanged
 	}
-	// Factory headers precede any command output; parsing ends at the first
-	// blank line and never searches arbitrary output for a matching identity.
-	header, _, _ := bytes.Cut(content[:min(len(content), 1024)], []byte("\n\n"))
-	lines := strings.Split(string(header), "\n")
-	values := map[string]string{}
-	for _, line := range lines {
-		key, value, ok := strings.Cut(line, ": ")
-		if ok && (key == "run" || key == "checkpoint" || key == "phase") {
-			if _, exists := values[key]; exists {
-				return ref, nil, ErrEvidenceUnavailable
-			}
-			values[key] = value
-		}
-		if strings.HasPrefix(line, "failure: ") {
-			break
-		}
-	}
-	checkpoint := values["checkpoint"]
-	if values["run"] != run.ID || !codehost.ValidCommitSHA(checkpoint) || (source.phase != "" && values["phase"] != source.phase) || (source.checkpoint != "" && source.checkpoint != checkpoint) {
-		return ref, nil, ErrEvidenceUnavailable
+	checkpoint, err := recordedEvidenceCheckpoint(content, run.ID, source)
+	if err != nil {
+		return ref, nil, err
 	}
 	stat, ok := opened.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -305,6 +289,55 @@ func readEvidenceSource(run store.Run, source evidenceSource) (ref EvidenceRefer
 	if checkpoint != run.CheckpointSHA {
 		ref.State = "stale_checkpoint"
 	}
-	ref.NextInspection = []string{"factory", "run", "evidence", "--run-id", run.ID, "--evidence-id", ref.ID, "--offset", "0", "--limit", "4096", "--json"}
+	ref.NextInspection = []string{"factory", "run", "evidence", "--run-id", run.ID, "--evidence-id", ref.ID, "--offset", "0", "--limit", "4096", "--config", s.configPath, "--json"}
 	return ref, content, nil
+}
+
+// openRunEvidenceDirectory validates run ownership and opens every private
+// artifact-directory component without accepting symbolic links.
+func openRunEvidenceDirectory(run store.Run, sourceDirectory string) (*os.Root, error) {
+	if run.Worktree == "" || run.ID == "" || run.ID == "." || run.ID == ".." || strings.ContainsAny(run.ID, `/\`) {
+		return nil, ErrEvidenceUnavailable
+	}
+	directory, err := os.OpenRoot(filepath.Dir(run.Worktree))
+	if err != nil {
+		return nil, err
+	}
+	for _, component := range []string{".factory-agents", run.ID, sourceDirectory} {
+		next, err := openEvidenceDirectory(directory, component)
+		_ = directory.Close()
+		if err != nil {
+			return nil, err
+		}
+		directory = next
+	}
+	return directory, nil
+}
+
+// recordedEvidenceCheckpoint validates only the bounded factory header, never
+// treating command output as a source of run or checkpoint identity.
+func recordedEvidenceCheckpoint(content []byte, runID string, source evidenceSource) (string, error) {
+	// Factory headers precede any command output; parsing ends at the first
+	// blank line and never searches arbitrary output for a matching identity.
+	header, _, _ := bytes.Cut(content[:min(len(content), 1024)], []byte("\n\n"))
+	lines := strings.Split(string(header), "\n")
+	values := map[string]string{}
+	for _, line := range lines {
+		key, value, ok := strings.Cut(line, ": ")
+		if ok && (key == "run" || key == "checkpoint" || key == "phase") {
+			if _, exists := values[key]; exists {
+				return "", ErrEvidenceUnavailable
+			}
+			values[key] = value
+		}
+		if strings.HasPrefix(line, "failure: ") {
+			break
+		}
+	}
+	checkpoint := values["checkpoint"]
+	if values["run"] != runID || !codehost.ValidCommitSHA(checkpoint) || (source.phase != "" && values["phase"] != source.phase) || (source.checkpoint != "" && source.checkpoint != checkpoint) {
+		return "", ErrEvidenceUnavailable
+	}
+
+	return checkpoint, nil
 }

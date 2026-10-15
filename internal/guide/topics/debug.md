@@ -303,7 +303,9 @@ requests and ambiguous effects.
 These local commands work without tracker or network access, including while
 another run is active. They open the operational store read-only and never
 create, migrate, repair, or resume it. Add `--config <path>` to every command
-when selecting a non-default installation, including suggested next steps.
+when selecting a non-default installation. Suggested `next_inspection` argv
+already includes the selected `--config` value; preserve it when following
+those steps.
 
 ```sh
 factory runs --offset 0 --limit 20 --json
@@ -329,7 +331,7 @@ can still identify a cleaned-up run from its retained evaluation summary.
 
 `run inspect` returns allowlisted run state, checkpoint identities, the
 SHA-256 of the canonical JSON encoding of the decoded frozen repository
-policy, invocation identities/statuses, gate outcomes, retry accounting,
+policy, invocation identities/statuses, gate names and outcomes, retry accounting,
 pending-effect identity, evidence references, and a chronological `timeline`.
 It omits prompts, transcripts, source, command output, credential stores,
 native session identities, free-text lifecycle reasons, and replay payloads.
@@ -373,6 +375,7 @@ symlink files, non-regular files and mismatched recorded run identities.
 | `absent` / `evidence.absent` | No file exists at the supported location. Inspect the retained gate and invocation records; absence does not establish that a gate never ran. |
 | `cleaned_up` | The run's operational rows and artifacts were removed. Use its local evaluation summary if available. |
 | `unavailable` / `evidence.unavailable` | A file or directory could not be read safely, or its recorded identity is unusable. Inspect metadata and `factory guide debug`; do not follow host paths or symlinks to bypass the check. |
+| `changed` / `evidence.changed` | The file or directory identity changed during the bounded read. Inspect again before selecting a new identity; do not join pages across different IDs. |
 | `stale_checkpoint` / `evidence.stale_checkpoint` | The file records a checkpoint other than the current one. Its `checkpoint_sha` is the recorded checkpoint. Phase logs retain only the latest failure, even if gate rows for several checkpoints remain. |
 | `evidence.truncated` | Only the leading 256 KiB is retained for this inspection. Do not claim that omitted output was inspected. |
 

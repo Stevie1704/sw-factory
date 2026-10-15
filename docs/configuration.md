@@ -1092,6 +1092,35 @@ attach a human classification, and the separately confirmed
 selected terminal summaries. Ordinary run-artifact cleanup does not touch this
 projection.
 
+## Local run inspection
+
+Use the read-only CLI to inspect a named historical run while another run is
+active, without tracker or network access:
+
+```sh
+factory runs --config <host-config> --offset 0 --limit 20 --json
+factory run inspect --config <host-config> --run-id <id> --json
+factory run evidence --config <host-config> --run-id <id> --evidence-id <id-from-inspection> --offset 0 --limit 4096 --json
+```
+
+`runs` returns at most 100 rows per page, ordered by newest update then run ID
+ascending. `run inspect` returns allowlisted metadata and a bounded view of
+retained invocation/gate observations; its optional `--offset` and `--limit`
+page each record collection independently. Gate rows include their declared
+names. `next_inspection` commands retain the selected host configuration.
+
+Default inspection omits raw output, prompts, transcripts, credentials and
+pending-effect replay payloads. `run evidence` explicitly retrieves one
+run-owned local diagnostic: at most 64 KiB of source bytes per page, within a
+256 KiB leading prefix. It reports missing, unavailable, changed, stale and
+truncated evidence, and distinguishes a cleaned-up run when its evaluation
+summary remains. These are local read operations, not publication authority;
+repository output remains potentially sensitive and untrusted.
+
+All three commands use the existing read-only operational-store opener and
+never create, migrate or repair it. Follow the byte/row cursors and coverage
+limits documented in [the debugging guide](../internal/guide/topics/debug.md#inspect-a-named-historical-run).
+
 ## Local web UI
 
 `factory ui` serves a read-only view of the runs in the operational store. Open
@@ -1129,8 +1158,9 @@ Store use:
   it. The UI never creates, migrates, or changes the store, and it does not
   probe the coordinator lock. Thus the UI works while `factory start` runs and
   also while the coordinator is stopped.
-- The read-only open requires the current store schema. After an upgrade, run
-  `factory start` or `factory status` once to migrate the store. Until then,
+- The read-only open requires the current store schema. After an upgrade, normal
+  coordinator startup performs any supported migration; the UI and read-only
+  inspection commands never migrate it. Until then,
   and when the store is missing or busy, the page shows "Operational store
   unavailable" (HTTP 503). The next refresh tries again.
 
@@ -1150,7 +1180,7 @@ Pages:
 | Path | Content |
 |---|---|
 | `/` | All runs, newest update first: stage, status, workflow route, and activity. |
-| `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. |
+| `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. The Retained inspection metadata section adds the frozen policy identity, bounded observations, and evidence availability/checkpoint metadata from the shared CLI projection. |
 | `/runs/{id}/evaluation` | The local evaluation summary of one run: outcome, wall time per stage, attempts, invocation versions, and reported usage. The summary is content-free (ADR 0001). When cleanup removed the run row, the page shows only the summary. |
 
 Every page shows a supervisor banner. The banner tells if the coordinator

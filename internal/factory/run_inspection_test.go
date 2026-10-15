@@ -74,6 +74,11 @@ func TestRunInspectionChronologyUsesRetainedObservations(t *testing.T) {
 	if len(got.Timeline) != 6 || len(got.Gates) != 2 || len(got.Invocations) != 2 {
 		t.Fatalf("retained history: %+v", got)
 	}
+	for _, gate := range got.Gates {
+		if gate.GateName != "test" {
+			t.Fatalf("gate identity omitted: %+v", gate)
+		}
+	}
 	want := []string{"invocation.created", "invocation.observed", "gate.observed", "invocation.created", "invocation.observed", "gate.observed"}
 	for i, event := range got.Timeline {
 		if event.Kind != want[i] || (i > 0 && event.At.Before(got.Timeline[i-1].At)) {
