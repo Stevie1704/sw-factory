@@ -141,7 +141,7 @@ func TestGuideNamesOnlyImplementedCommandsAndFlags(t *testing.T) {
 	invocation := regexp.MustCompile("(?m)`factory ([a-z][a-z-]*)([^`]*)`|^factory ([a-z][a-z-]*)([^#\\n]*)")
 	flagName := regexp.MustCompile(`--([a-z][a-z-]*)`)
 	// subcommands names the subcommands whose flags the guide can name.
-	subcommands := map[string][]string{"onboard": {"prepare", "verify"}, "config": {"validate"}}
+	subcommands := map[string][]string{"onboard": {"prepare", "verify", "plan", "status", "record"}, "config": {"validate"}}
 	for _, name := range append([]string{guide.Overview}, guide.Topics()...) {
 		body, err := guide.Topic(name)
 		if err != nil {

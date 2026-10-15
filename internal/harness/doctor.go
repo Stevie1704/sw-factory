@@ -150,10 +150,10 @@ func selectedHarnesses(policy *config.RepositoryConfig) []string {
 	return selected
 }
 
-// requiresSkillSmoke reports whether one harness can run a repository role in
+// RequiresSkillSmoke reports whether one harness can run a repository role in
 // the current policy. An unavailable policy remains fail-closed because the
 // coordinator cannot safely determine which harnesses the repository permits.
-func requiresSkillSmoke(policy *config.RepositoryConfig, harnessName string) bool {
+func RequiresSkillSmoke(policy *config.RepositoryConfig, harnessName string) bool {
 	if policy == nil {
 		return true
 	}
@@ -277,7 +277,7 @@ func credentialCheck(request StartupRequest, name, path string) doctor.Check {
 func skillContractCheck(request StartupRequest, name string) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		diagnosis := name + " worker skill contract"
-		blocking := requiresSkillSmoke(request.Policy, name)
+		blocking := RequiresSkillSmoke(request.Policy, name)
 		if request.SkillChecker == nil {
 			return doctor.Failure(skillsAdapterMissing, diagnosis, "the worker skill diagnosis adapter is unavailable", "configure the Docker worker runtime").WithFacts(harnessFact(name))
 		}

@@ -227,3 +227,30 @@ func TestProjectRefusesFilesBehindASymlinkedDirectory(t *testing.T) {
 		t.Fatalf("Excluded = %#v, want lib/a.txt as outside_checkout", candidate.Excluded)
 	}
 }
+
+// TestFingerprintIdentifiesTheCandidateWithoutCopying verifies that the
+// fingerprint equals the projection identity, writes nothing, and ignores
+// the omitted paths.
+func TestFingerprintIdentifiesTheCandidateWithoutCopying(t *testing.T) {
+	repository := candidateRepository(t)
+	before := checkoutState(t, repository)
+	candidate, err := gateproof.Project(context.Background(), repository, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := gateproof.Fingerprint(context.Background(), repository)
+	if err != nil || fingerprint != candidate.Fingerprint {
+		t.Fatalf("fingerprint = %q, %v; want %q", fingerprint, err, candidate.Fingerprint)
+	}
+	if after := checkoutState(t, repository); after != before {
+		t.Fatalf("the fingerprint changed the checkout:\n%s\nwant\n%s", after, before)
+	}
+	omitted, err := gateproof.Fingerprint(context.Background(), repository, "factory.yaml")
+	if err != nil || omitted == fingerprint {
+		t.Fatalf("omitted fingerprint = %q, %v; want another identity", omitted, err)
+	}
+	writeFile(t, repository, "factory.yaml", "schema_version: 2\n", 0o644)
+	if changed, err := gateproof.Fingerprint(context.Background(), repository, "factory.yaml"); err != nil || changed != omitted {
+		t.Fatalf("a change of an omitted path changed the fingerprint: %q, %v", changed, err)
+	}
+}

@@ -46,7 +46,25 @@ Run every `factory` command as `factory_command`. A `factory` on `PATH` can be
 another build. Do not use files from an earlier preparation or from this
 skill's directory instead of the prepared resources.
 
-## 3. Follow the procedure
+## 3. Continue an interrupted onboarding
+
+Look for an onboarding plan of this repository at
+`$HOME/.cache/sw-factory/onboarding-<repository name>.json`, and ask the
+operator whether an earlier session kept one at another path. If a plan
+exists, run this before any other step:
+
+```sh
+<factory path> onboard status --plan "<plan file>" --json
+```
+
+Do not do a step again that is `verified`. Continue with the first step that
+is `pending` or `stale`, and follow its `action`. A `blocked` live proof has
+an unknown outcome: find the issue that carries its marker, and never create
+another proof issue. The procedure's section "Keep the onboarding plan"
+describes the plan. Only `onboard plan` and `onboard record` change the plan;
+never edit the plan file.
+
+## 4. Follow the procedure
 
 Read the file at the manifest's `procedure` in full. Follow its ordered steps
 from the first to the last, and run every step yourself. Make each
@@ -55,7 +73,7 @@ worker role, with the operator. Stop and ask before each action that the
 procedure's section "Actions that need operator approval" lists. Never read a
 credential file.
 
-## 4. Verify the result
+## 5. Verify the result
 
 The onboarding is complete only when the procedure's completion proof
 succeeds. Report the result and each step that the operator skipped.

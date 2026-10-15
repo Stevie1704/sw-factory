@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -73,6 +74,20 @@ type Exclusion struct {
 // are tested. Git internals, ignored files, untracked credential files, and
 // Factory proof artifacts stay out. The checkout is only read.
 func Project(ctx context.Context, repository, destination string) (Candidate, error) {
+	return project(ctx, repository, destination, nil)
+}
+
+// Fingerprint returns the identity of the candidate files of the Git
+// checkout at repository without copying them, leaving out the omitted
+// repository-relative paths. It selects the same files as Project.
+func Fingerprint(ctx context.Context, repository string, omitted ...string) (string, error) {
+	candidate, err := project(ctx, repository, "", omitted)
+	return candidate.Fingerprint, err
+}
+
+// project selects, identifies, and, when destination is not empty, copies
+// the candidate files.
+func project(ctx context.Context, repository, destination string, omitted []string) (Candidate, error) {
 	tracked, err := listFiles(ctx, repository, "--cached")
 	if err != nil {
 		return Candidate{}, err
@@ -95,6 +110,9 @@ func Project(ctx context.Context, repository, destination string) (Candidate, er
 			continue
 		}
 		previous = relative
+		if slices.Contains(omitted, relative) {
+			continue
+		}
 		if reason := exclusionReason(relative, trackedSet[relative]); reason != "" {
 			candidate.Excluded = append(candidate.Excluded, Exclusion{Path: relative, Reason: reason})
 			continue
@@ -182,16 +200,20 @@ func symlinkedParent(repository, relative string) (bool, error) {
 }
 
 // projectEntry copies one file or symbolic link and returns the identity that
-// enters the fingerprint: its kind, executable bit, and content digest.
+// enters the fingerprint: its kind, executable bit, and content digest. An
+// empty destination only identifies the entry.
 func projectEntry(repository, destination, relative string) (string, error) {
 	source := filepath.Join(repository, filepath.FromSlash(relative))
-	target := filepath.Join(destination, filepath.FromSlash(relative))
+	target := ""
 	info, err := os.Lstat(source)
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return "", err
+	if destination != "" {
+		target = filepath.Join(destination, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return "", err
+		}
 	}
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
@@ -199,8 +221,10 @@ func projectEntry(repository, destination, relative string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := os.Symlink(link, target); err != nil {
-			return "", err
+		if target != "" {
+			if err := os.Symlink(link, target); err != nil {
+				return "", err
+			}
 		}
 		digest := sha256.Sum256([]byte(link))
 		return "link\x00" + hex.EncodeToString(digest[:]), nil
@@ -221,18 +245,24 @@ func projectEntry(repository, destination, relative string) (string, error) {
 }
 
 // copyFile copies source to a new file at target and returns the hex sha256
-// digest of the copied content.
+// digest of the copied content. An empty target only digests the content.
 func copyFile(source, target string, mode os.FileMode) (string, error) {
 	input, err := os.Open(source)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = input.Close() }()
+	hasher := sha256.New()
+	if target == "" {
+		if _, err := io.Copy(hasher, input); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(hasher.Sum(nil)), nil
+	}
 	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return "", err
 	}
-	hasher := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(output, hasher), input); err != nil {
 		_ = output.Close()
 		return "", err
