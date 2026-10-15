@@ -400,3 +400,83 @@ func TestFindPlanItemsStopsAtItsListingBound(t *testing.T) {
 		t.Fatalf("calls = %d, want the account and ten pages", len(full.calls))
 	}
 }
+
+// issueRefs returns the neutral references of two created issues.
+func issueRefs(from, to int) (tracker.PlanItemRef, tracker.PlanItemRef) {
+	ref := func(number int) tracker.PlanItemRef {
+		return tracker.PlanItemRef{ExternalID: strconv.Itoa(number), URL: "https://github.com/example/project/issues/" + strconv.Itoa(number)}
+	}
+	return ref(from), ref(to)
+}
+
+// TestCreatePlanRelationshipUsesNativeSubIssuesAndDependencies verifies that
+// a native parent becomes a sub-issue of the parent issue and a native
+// dependency becomes a blocked-by dependency of the dependent issue, both
+// addressed by the database identity GitHub requires.
+func TestCreatePlanRelationshipUsesNativeSubIssuesAndDependencies(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`{"id":5013,"number":13}`), []byte(`{}`),
+		[]byte(`{"id":5012,"number":12}`), []byte(`{}`),
+	}}
+	client := &github.GhClient{Runner: runner}
+	child, parent := issueRefs(13, 11)
+	if err := client.CreatePlanRelationship(context.Background(), planRepository, tracker.PlanRelationship{
+		Kind: tracker.PlanRelationshipParent, Mode: tracker.PlanRelationshipNative, From: child, To: parent,
+	}); err != nil {
+		t.Fatalf("CreatePlanRelationship(parent) error = %v", err)
+	}
+	dependent, dependency := issueRefs(13, 12)
+	if err := client.CreatePlanRelationship(context.Background(), planRepository, tracker.PlanRelationship{
+		Kind: tracker.PlanRelationshipDependsOn, Mode: tracker.PlanRelationshipNative, From: dependent, To: dependency,
+	}); err != nil {
+		t.Fatalf("CreatePlanRelationship(depends_on) error = %v", err)
+	}
+
+	if !containsArgs(runner.calls[0].args, "api", "repos/example/project/issues/13") {
+		t.Fatalf("call 0 = %#v, want the child issue read", runner.calls[0].args)
+	}
+	if !containsArgs(runner.calls[1].args, "api", "repos/example/project/issues/11/sub_issues", "--method", "POST") ||
+		string(runner.calls[1].input) != `{"sub_issue_id":5013}` {
+		t.Fatalf("call 1 = %#v %s, want the child added as a sub-issue of 11", runner.calls[1].args, runner.calls[1].input)
+	}
+	if !containsArgs(runner.calls[2].args, "api", "repos/example/project/issues/12") {
+		t.Fatalf("call 2 = %#v, want the dependency issue read", runner.calls[2].args)
+	}
+	if !containsArgs(runner.calls[3].args, "api", "repos/example/project/issues/13/dependencies/blocked_by", "--method", "POST") ||
+		string(runner.calls[3].input) != `{"issue_id":5012}` {
+		t.Fatalf("call 3 = %#v %s, want 13 blocked by 12", runner.calls[3].args, runner.calls[3].input)
+	}
+}
+
+// TestFindPlanRelationshipVerifiesNativeLinks verifies that native links are
+// read back from the parent's sub-issues and the dependent's blockers.
+func TestFindPlanRelationshipVerifiesNativeLinks(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`[[{"id":5014,"number":14},{"id":5013,"number":13}]]`),
+		[]byte(`[[{"id":5010,"number":10}]]`),
+	}}
+	client := &github.GhClient{Runner: runner}
+	child, parent := issueRefs(13, 11)
+	exists, err := client.FindPlanRelationship(context.Background(), planRepository, tracker.PlanRelationship{
+		Kind: tracker.PlanRelationshipParent, Mode: tracker.PlanRelationshipNative, From: child, To: parent,
+	})
+	if err != nil || !exists {
+		t.Fatalf("FindPlanRelationship(parent) = %t, %v; want an existing sub-issue", exists, err)
+	}
+	dependent, dependency := issueRefs(13, 12)
+	exists, err = client.FindPlanRelationship(context.Background(), planRepository, tracker.PlanRelationship{
+		Kind: tracker.PlanRelationshipDependsOn, Mode: tracker.PlanRelationshipNative, From: dependent, To: dependency,
+	})
+	if err != nil || exists {
+		t.Fatalf("FindPlanRelationship(depends_on) = %t, %v; want no blocker 12", exists, err)
+	}
+	if !containsArgs(runner.calls[0].args, "api", "repos/example/project/issues/11/sub_issues") ||
+		!containsArgs(runner.calls[1].args, "api", "repos/example/project/issues/13/dependencies/blocked_by") {
+		t.Fatalf("calls = %#v, want the sub-issue and blocker listings", runner.calls)
+	}
+	assertReadOnly(t, runner.calls)
+}

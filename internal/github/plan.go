@@ -423,3 +423,96 @@ func (c *GhClient) FindPlanItems(ctx context.Context, repository tracker.Reposit
 	}
 	return found, nil
 }
+
+// relationshipIssues resolves the issue numbers of both ends of
+// relationship. An unusable identity is refused before any call.
+func relationshipIssues(relationship tracker.PlanRelationship) (int, int, error) {
+	from, fromErr := strconv.Atoi(relationship.From.ExternalID)
+	to, toErr := strconv.Atoi(relationship.To.ExternalID)
+	if fromErr != nil || toErr != nil || from <= 0 || to <= 0 || from == to {
+		return 0, 0, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "relationship %s needs two different issue numbers, got %q and %q",
+			relationship.Kind, relationship.From.ExternalID, relationship.To.ExternalID)
+	}
+	return from, to, nil
+}
+
+// nativeEndpoint returns the issue that the native link list names and the
+// list path: a sub-issue is listed under its parent, and a dependency under
+// the dependent issue as a blocker.
+func nativeEndpoint(repository tracker.Repository, kind tracker.PlanRelationshipKind, from, to int) (member int, path string, err error) {
+	switch kind {
+	case tracker.PlanRelationshipParent:
+		return from, fmt.Sprintf("repos/%s/issues/%d/sub_issues", repository, to), nil
+	case tracker.PlanRelationshipDependsOn:
+		return to, fmt.Sprintf("repos/%s/issues/%d/dependencies/blocked_by", repository, from), nil
+	}
+	return 0, "", tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "unknown relationship kind %q", kind)
+}
+
+// CreatePlanRelationship creates one approved relationship between two
+// created issues in its approved mode. It adds no label and edits no issue
+// body.
+func (c *GhClient) CreatePlanRelationship(ctx context.Context, repository tracker.Repository, relationship tracker.PlanRelationship) error {
+	if err := validateDoctorRepository(repository); err != nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	}
+	from, to, err := relationshipIssues(relationship)
+	if err != nil {
+		return err
+	}
+	if relationship.Mode != tracker.PlanRelationshipNative {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "unknown relationship mode %q", relationship.Mode)
+	}
+	member, path, err := nativeEndpoint(repository, relationship.Kind, from, to)
+	if err != nil {
+		return err
+	}
+	var issue planIssueResponse
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/issues/%d", repository, member)}, nil, &issue); err != nil {
+		return fmt.Errorf("read issue #%d: %w", member, classifyPlanError(err))
+	}
+	if issue.ID <= 0 {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "issue #%d has no database identity", member)
+	}
+	payload := map[string]int64{"issue_id": issue.ID}
+	if relationship.Kind == tracker.PlanRelationshipParent {
+		payload = map[string]int64{"sub_issue_id": issue.ID}
+	}
+	if err := c.call(ctx, []string{"api", path, "--method", "POST"}, payload); err != nil {
+		return fmt.Errorf("create %s link #%d -> #%d: %w", relationship.Kind, from, to, classifyPlanError(err))
+	}
+	return nil
+}
+
+// FindPlanRelationship reports whether the relationship already exists in
+// its approved mode, so that a retry does not create a second link.
+func (c *GhClient) FindPlanRelationship(ctx context.Context, repository tracker.Repository, relationship tracker.PlanRelationship) (bool, error) {
+	if err := validateDoctorRepository(repository); err != nil {
+		return false, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	}
+	from, to, err := relationshipIssues(relationship)
+	if err != nil {
+		return false, err
+	}
+	if relationship.Mode != tracker.PlanRelationshipNative {
+		return false, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "unknown relationship mode %q", relationship.Mode)
+	}
+	member, path, err := nativeEndpoint(repository, relationship.Kind, from, to)
+	if err != nil {
+		return false, err
+	}
+	output, err := c.callBytes(ctx, []string{"api", path, "--method", "GET", "--paginate", "--slurp"}, nil)
+	if err != nil {
+		return false, fmt.Errorf("list %s links of the plan issue: %w", relationship.Kind, classifyPlanError(err))
+	}
+	linked, err := decodeJSONPages[planIssueResponse](output)
+	if err != nil {
+		return false, fmt.Errorf("decode %s links: %w", relationship.Kind, err)
+	}
+	for _, issue := range linked {
+		if issue.Number == member {
+			return true, nil
+		}
+	}
+	return false, nil
+}
