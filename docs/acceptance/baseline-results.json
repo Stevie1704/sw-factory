@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario": "onboard-from-release",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "onboard-from-release",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "onboard-instructions-only",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "onboard-instructions-only",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "resume-interrupted-onboarding",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "resume-interrupted-onboarding",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "diagnose-failures",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "diagnose-failures",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "recover-operations",
+      "evidence": "deterministic",
+      "outcome": "pass",
+      "reason": "covers recovery semantics only; durable-effect failure injection stays with #181"
+    },
+    {
+      "scenario": "recover-operations",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "inspect-history",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "inspect-history",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "upgrade-maintenance",
+      "evidence": "deterministic",
+      "outcome": "pass",
+      "reason": "covers only the worker release check; no upgrade preflight, resume, or restore contract ships"
+    },
+    {
+      "scenario": "upgrade-maintenance",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "defect-report",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "defect-report",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "scoped-authority",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "scoped-authority",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    },
+    {
+      "scenario": "contributor-maintenance",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "contributor-maintenance",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
+    }
+  ]
+}
