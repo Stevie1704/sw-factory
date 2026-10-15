@@ -21,7 +21,7 @@ func TestSessionRolesDeclareReadOnlyIdeationAndPlanning(t *testing.T) {
 		startStates   []store.IdeationState
 	}{
 		{workflow.RoleIdeation, workflow.SessionRoleKindIdeation, "ideation-v1", []store.IdeationState{store.IdeationStateAwaitingUser}},
-		{workflow.RolePlanning, workflow.SessionRoleKindPlanning, "planning-v1", []store.IdeationState{store.IdeationStateAwaitingUser, store.IdeationStateDraftReview}},
+		{workflow.RolePlanning, workflow.SessionRoleKindPlanning, "planning-v2", []store.IdeationState{store.IdeationStateAwaitingUser, store.IdeationStateDraftReview}},
 	}
 	for _, test := range tests {
 		definition, ok := workflow.SessionRole(test.name)

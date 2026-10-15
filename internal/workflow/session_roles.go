@@ -13,7 +13,7 @@ const (
 	// PromptVersionIdeation identifies the immutable ideation prompt.
 	PromptVersionIdeation = "ideation-v1"
 	// PromptVersionPlanning identifies the immutable planning prompt.
-	PromptVersionPlanning = "planning-v1"
+	PromptVersionPlanning = "planning-v2"
 )
 
 // SessionRoleKind identifies the structured report contract of a session role.
