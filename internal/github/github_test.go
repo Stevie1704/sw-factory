@@ -340,17 +340,27 @@ type commandCall struct {
 }
 
 // fakeCommandRunner returns deterministic gh responses for adapter tests.
+// errs is an optional queue parallel to outputs: the call at position i
+// returns errs[i] when it is set, so a test can inject a gh failure such as a
+// timeout or an HTTP error.
 type fakeCommandRunner struct {
 	outputs [][]byte
+	errs    []error
 	calls   []commandCall
 }
 
-// Run records one fake gh invocation and returns its queued response.
+// Run records one fake gh invocation and returns its queued response and
+// queued error.
 func (f *fakeCommandRunner) Run(_ context.Context, args []string, input []byte) ([]byte, error) {
 	f.calls = append(f.calls, commandCall{args: append([]string(nil), args...), input: append([]byte(nil), input...)})
 	output := f.outputs[0]
 	f.outputs = f.outputs[1:]
-	return output, nil
+	var err error
+	if len(f.errs) > 0 {
+		err = f.errs[0]
+		f.errs = f.errs[1:]
+	}
+	return output, err
 }
 
 // containsArgs checks for one ordered subsequence of command arguments.
