@@ -30,6 +30,26 @@ revision and repository context revision. Nodes have stable local IDs, a kind,
 and parent, dependency, and brief references. A newer brief makes it stale.
 _Avoid_: Backlog, issue list
 
+**Session role**:
+A factory-owned role that serves an ideation session, not a Run: the ideation
+role, which asks questions and proposes brief updates and readiness, and the
+planning role, which drafts a plan revision from a frozen brief. It reads a
+read-only context snapshot and has no tracker or worktree authority.
+_Avoid_: Chat agent, planner run
+
+**Session-role invocation**:
+One harness attempt of a session role, pinned to the session revision it
+serves, the user turn or request it answers, the brief and context revisions,
+the harness policy, the prompt identity, and the worker image. At most one is
+active per session and at most one result is accepted per trigger.
+_Avoid_: Invocation (for a run attempt), run
+
+**Context snapshot**:
+A detached, read-only checkout of the fetched target-branch commit that a
+session role inspects. Its commit is the repository context revision recorded
+on the invocation and on any plan revision it produces.
+_Avoid_: Working tree, worktree (for a run checkout)
+
 **Plan approval**:
 The human approval of one plan revision for one target, bound to the fully
 rendered publication payload and relationship mapping by their digests. Any

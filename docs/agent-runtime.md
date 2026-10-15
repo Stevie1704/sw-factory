@@ -587,6 +587,43 @@ operation: `factory setup failed` or `factory gate execution failed` for the
 gate suite and the check-repair packet, and an unverifiable focused red test
 that pauses the run for a human.
 
+## Session roles
+
+Ideation sessions use two session roles, `ideation` and `planning`, that run
+before any issue or run exists ([ADR 0022](adr/0022-session-roles-run-on-headless-sessions.md)).
+They use the same headless adapters, worker isolation, credential projection,
+and structured reports as run roles, with these differences:
+
+- **Ownership.** The invocation, its packet, and its report name the session
+  and the session revision the invocation serves. A session report leaves
+  `run_id` empty. Worker resources are named from the owner key
+  `session-<id>`; the worker of one role is `session-<id>-<role>`, and its role
+  volume keeps the native session between turns.
+- **Context.** Each invocation fetches the target branch and mounts a detached
+  checkout of the fetched commit read-only at `/work`. That commit is the
+  recorded context revision. The user's checkout is never mounted.
+- **Packet.** The read-only `/invocation/session.json` contains the pinned
+  identity, the prompt identity, and the role input: the conversation and the
+  current brief for ideation, and only the frozen brief for planning. User
+  text stays in the packet and never enters the prompt.
+- **Report.** The ideation role reports with
+  `factory-report --outcome completed --summary ... --ideation-file FILE`, where
+  the JSON file holds a message, questions, an optional complete brief, and an
+  optional readiness proposal. The planning role reports a draft plan graph
+  with `--plan-file FILE`, or questions with `--question id=text`. Both may
+  report `cannot_proceed` with evidence.
+- **Acceptance.** The supervisor reconciles active session-role invocations on
+  every pass. It applies a valid report through one store write at the pinned
+  session revision; a report from an older revision or an ended invocation is
+  ignored. It then finishes the process, stops the worker, and removes the
+  snapshot, so a session that waits for the user holds no active work. The
+  next user turn resumes the recorded native session on the same harness.
+- **Failures.** Expired authentication, capacity limits, unexpected exits, a
+  resume that reveals another native session, credential projection failures,
+  interrupted launches, and rejected reports end the invocation with a
+  recorded failure kind and return the session to the user with a reason. The
+  user resubmits the same turn after the cause is fixed.
+
 ## Safety boundary
 
 The versioned core prompt is placed after repository guidance and therefore
