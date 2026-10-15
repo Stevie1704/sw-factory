@@ -395,6 +395,12 @@ tables are separate from repository configuration, disposable run artifacts,
 and the isolated local evaluation-summary projection.
 _Avoid_: Event journal, telemetry, transcript archive
 
+**Effect abandonment**:
+The human-reviewed decision to discard one ambiguous pending effect after
+inspecting its external outcome. It leaves a non-terminal run paused and a
+terminal run's outcome unchanged.
+_Avoid_: Run cancellation, automatic recovery
+
 **Cleanup**:
 The explicit, seven-day retention operation that previews and removes one or
 more completed or cancelled runs' local worktrees, local branches, workers,
