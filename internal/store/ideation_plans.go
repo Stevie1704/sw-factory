@@ -14,7 +14,7 @@ const (
 	// MaxBriefBytes bounds the serialized content of one brief revision.
 	MaxBriefBytes = 256 * 1024
 	// MaxPlanBytes bounds the serialized nodes of one plan revision. Node
-	// count and per-node limits belong to plan validation (#270).
+	// count and per-node limits belong to plan validation (internal/plangraph).
 	MaxPlanBytes = 1024 * 1024
 	// maxPlanTitleBytes bounds one plan-node title.
 	maxPlanTitleBytes = 256
@@ -115,8 +115,9 @@ type PlanNode struct {
 	// ID is the stable local node identity. It is independent of any external
 	// issue number.
 	ID string
-	// Kind is the provider-neutral work-item kind. Plan validation (#270) owns
-	// the accepted vocabulary; the store requires an identifier.
+	// Kind is the provider-neutral work-item kind. Plan validation
+	// (internal/plangraph) owns the accepted vocabulary; the store requires an
+	// identifier.
 	Kind string
 	// Title is the work-item title.
 	Title string
@@ -291,11 +292,29 @@ func encodeBrief(brief Brief) (string, error) {
 	return string(content), nil
 }
 
-// validatePlanNodes checks the structure the store owns: required fields,
-// unique IDs, and resolvable non-self parent, dependency, and brief
-// references. Cycle, hierarchy-shape, and size policy belong to plan
-// validation (#270).
+// validatePlanNodes checks the structure the store owns: the integrity of
+// ValidatePlanIntegrity and brief references that resolve in the source brief.
 func validatePlanNodes(nodes []PlanNode, briefItems map[string]bool) error {
+	if err := ValidatePlanIntegrity(nodes); err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		for _, reference := range node.BriefRefs {
+			if !briefItems[reference] {
+				return fmt.Errorf("plan node %q brief reference %q names no item of the source brief", node.ID, reference)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidatePlanIntegrity checks the identity and reference integrity the store
+// owns for a plan graph: at least one node, safe unique IDs, a kind and a
+// title on every node, bounded text, and parent and dependency references
+// that name another node of the plan. It does not check brief references,
+// which need the source brief. Cycle, hierarchy-shape, content, and size
+// policy belong to plan validation (internal/plangraph).
+func ValidatePlanIntegrity(nodes []PlanNode) error {
 	if len(nodes) == 0 {
 		return errors.New("plan must contain at least one node")
 	}
@@ -330,11 +349,6 @@ func validatePlanNodes(nodes []PlanNode, briefItems map[string]bool) error {
 		for _, dependency := range node.DependsOn {
 			if dependency == node.ID || !ids[dependency] {
 				return fmt.Errorf("plan node %q dependency %q must name another node of the plan", node.ID, dependency)
-			}
-		}
-		for _, reference := range node.BriefRefs {
-			if !briefItems[reference] {
-				return fmt.Errorf("plan node %q brief reference %q names no item of the source brief", node.ID, reference)
 			}
 		}
 	}
