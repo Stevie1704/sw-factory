@@ -321,3 +321,82 @@ func TestPreflightPlanTreatsTextualParentsWithoutSubIssueLimits(t *testing.T) {
 		t.Fatalf("relationships = %d (first %#v), want 101 textual parents", len(preview.Relationships), preview.Relationships[0])
 	}
 }
+
+// issueListPage returns one slurped issue listing page with count issues
+// that do not carry the correlation marker.
+func issueListPage(first, count int) string {
+	issues := make([]string, 0, count)
+	for number := first; number < first+count; number++ {
+		issues = append(issues, `{"number":`+strconv.Itoa(number)+`,"html_url":"https://github.com/example/project/issues/`+strconv.Itoa(number)+`","body":"other","user":{"login":"factory-bot"}}`)
+	}
+	return "[" + strings.Join(issues, ",") + "]"
+}
+
+// TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues verifies that
+// the correlation lookup lists the issues the authenticated account created,
+// newest first and in any state, instead of the lagging search index, and
+// that it returns exact marker matches by that account only.
+func TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`{"login":"factory-bot"}`),
+		[]byte(`[` +
+			`{"number":14,"html_url":"https://github.com/example/project/issues/14","body":"x\n<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"factory-bot"}},` +
+			`{"number":13,"html_url":"https://github.com/example/project/issues/13","body":"x\n<!-- factory-plan: session-1/4/n-22 -->","user":{"login":"factory-bot"}},` +
+			`{"number":12,"html_url":"https://github.com/example/project/pull/12","body":"<!-- factory-plan: session-1/4/n-2 -->","pull_request":{},"user":{"login":"factory-bot"}},` +
+			`{"number":11,"html_url":"https://github.com/example/project/issues/11","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"mallory"}},` +
+			`{"number":10,"html_url":"https://github.com/example/project/issues/10","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"factory-bot"}}` +
+			`]`),
+	}}
+	client := &github.GhClient{Runner: runner}
+
+	found, err := client.FindPlanItems(context.Background(), planRepository, "session-1/4/n-2")
+	if err != nil {
+		t.Fatalf("FindPlanItems() error = %v", err)
+	}
+	want := []tracker.PlanItemRef{
+		{ExternalID: "14", URL: "https://github.com/example/project/issues/14"},
+		{ExternalID: "10", URL: "https://github.com/example/project/issues/10"},
+	}
+	if !reflect.DeepEqual(found, want) {
+		t.Fatalf("found = %#v, want both marker issues of the account", found)
+	}
+	listing := runner.calls[1].args
+	if !containsArgs(listing, "api", "repos/example/project/issues") ||
+		!hasArgs(listing, "state=all", "creator=factory-bot", "sort=created", "direction=desc", "per_page=100", "page=1", "GET") {
+		t.Fatalf("listing = %#v, want the account's issues newest first", listing)
+	}
+	for _, call := range runner.calls {
+		if hasArgs(call.args, "search/issues") || hasArgs(call.args, "--search") {
+			t.Fatalf("call %#v uses the search index", call.args)
+		}
+	}
+	assertReadOnly(t, runner.calls)
+}
+
+// TestFindPlanItemsStopsAtItsListingBound verifies that the lookup reads at
+// most ten full pages and stops early on a short page.
+func TestFindPlanItemsStopsAtItsListingBound(t *testing.T) {
+	t.Parallel()
+
+	short := &fakeCommandRunner{outputs: [][]byte{[]byte(`{"login":"factory-bot"}`), []byte(issueListPage(1, 100)), []byte(issueListPage(101, 3))}}
+	found, err := (&github.GhClient{Runner: short}).FindPlanItems(context.Background(), planRepository, "session-1/4/n-2")
+	if err != nil || len(found) != 0 {
+		t.Fatalf("FindPlanItems() = %#v, %v; want no match", found, err)
+	}
+	if len(short.calls) != 3 || !hasArgs(short.calls[2].args, "page=2") {
+		t.Fatalf("calls = %d, want the account and two pages", len(short.calls))
+	}
+
+	full := &fakeCommandRunner{outputs: [][]byte{[]byte(`{"login":"factory-bot"}`)}}
+	for page := range 12 {
+		full.outputs = append(full.outputs, []byte(issueListPage(page*100+1, 100)))
+	}
+	if _, err := (&github.GhClient{Runner: full}).FindPlanItems(context.Background(), planRepository, "session-1/4/n-2"); err != nil {
+		t.Fatalf("FindPlanItems() error = %v", err)
+	}
+	if len(full.calls) != 11 {
+		t.Fatalf("calls = %d, want the account and ten pages", len(full.calls))
+	}
+}

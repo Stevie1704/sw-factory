@@ -361,3 +361,65 @@ var planFailureSignals = []struct {
 	{"http 410", tracker.PlanErrorUnsupportedCapability},
 	{"http 422", tracker.PlanErrorInvalidMapping},
 }
+
+// Correlation lookup bound: the lookup reads at most correlationPages pages
+// of correlationPageSize issues, newest first.
+const (
+	correlationPageSize = 100
+	correlationPages    = 10
+)
+
+// planIssueListing is the listing projection of one issue for the
+// correlation lookup.
+type planIssueListing struct {
+	Number      int       `json:"number"`
+	HTMLURL     string    `json:"html_url"`
+	Body        string    `json:"body"`
+	PullRequest *struct{} `json:"pull_request"`
+	User        struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+// FindPlanItems returns every issue, in any state, that the authenticated
+// account created and whose body carries the exact correlation marker. It
+// lists the account's issues newest first through the issues endpoint,
+// which sees a just-created issue, instead of the search index, which lags.
+// The listing is bounded to the 1,000 newest issues of the account. An issue
+// beyond the bound is not found; the publication ledger never creates after
+// an unknown outcome without an operator decision, so the bound cannot cause
+// a blind duplicate.
+func (c *GhClient) FindPlanItems(ctx context.Context, repository tracker.Repository, correlation string) ([]tracker.PlanItemRef, error) {
+	if err := validateDoctorRepository(repository); err != nil {
+		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	}
+	if strings.TrimSpace(correlation) == "" {
+		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "a correlation key is required")
+	}
+	login, err := c.AuthenticatedLogin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	marker := planMarker(correlation)
+	found := []tracker.PlanItemRef{}
+	for page := 1; page <= correlationPages; page++ {
+		var issues []planIssueListing
+		args := []string{
+			"api", "repos/" + repository.String() + "/issues", "--method", "GET",
+			"-f", "state=all", "-f", "creator=" + login, "-f", "sort=created", "-f", "direction=desc",
+			"-f", "per_page=" + strconv.Itoa(correlationPageSize), "-f", "page=" + strconv.Itoa(page),
+		}
+		if err := c.callJSON(ctx, args, nil, &issues); err != nil {
+			return nil, fmt.Errorf("list issues for correlation %s: %w", correlation, classifyPlanError(err))
+		}
+		for _, issue := range issues {
+			if issue.PullRequest == nil && strings.EqualFold(issue.User.Login, login) && strings.Contains(issue.Body, marker) {
+				found = append(found, tracker.PlanItemRef{ExternalID: strconv.Itoa(issue.Number), URL: issue.HTMLURL})
+			}
+		}
+		if len(issues) < correlationPageSize {
+			break
+		}
+	}
+	return found, nil
+}
