@@ -21,6 +21,9 @@ const (
 	maxIssueBodyRunes = 65536
 )
 
+// GhClient publishes approved plans to GitHub issues (ADR 0022).
+var _ tracker.PlanPublisher = (*GhClient)(nil)
+
 // planIssueType is the rendered type of every published plan item: GitHub
 // has one work-item type, the issue.
 const planIssueType = "issue"
@@ -460,7 +463,11 @@ func (c *GhClient) CreatePlanRelationship(ctx context.Context, repository tracke
 	if err != nil {
 		return err
 	}
-	if relationship.Mode != tracker.PlanRelationshipNative {
+	switch relationship.Mode {
+	case tracker.PlanRelationshipTextual:
+		return c.createBacklink(ctx, repository, relationship.Kind, from, to)
+	case tracker.PlanRelationshipNative:
+	default:
 		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "unknown relationship mode %q", relationship.Mode)
 	}
 	member, path, err := nativeEndpoint(repository, relationship.Kind, from, to)
@@ -494,7 +501,11 @@ func (c *GhClient) FindPlanRelationship(ctx context.Context, repository tracker.
 	if err != nil {
 		return false, err
 	}
-	if relationship.Mode != tracker.PlanRelationshipNative {
+	switch relationship.Mode {
+	case tracker.PlanRelationshipTextual:
+		return c.findBacklink(ctx, repository, relationship.Kind, from, to)
+	case tracker.PlanRelationshipNative:
+	default:
 		return false, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "unknown relationship mode %q", relationship.Mode)
 	}
 	member, path, err := nativeEndpoint(repository, relationship.Kind, from, to)
@@ -511,6 +522,60 @@ func (c *GhClient) FindPlanRelationship(ctx context.Context, repository tracker.
 	}
 	for _, issue := range linked {
 		if issue.Number == member {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// backlinkBody returns the textual fallback comment of one relationship. The
+// visible line names the other issue, so GitHub also shows a backlink on it;
+// the hidden marker lets FindPlanRelationship recognize the comment.
+func backlinkBody(kind tracker.PlanRelationshipKind, from, to int) (string, error) {
+	var line string
+	switch kind {
+	case tracker.PlanRelationshipParent:
+		line = fmt.Sprintf("Part of #%d", to)
+	case tracker.PlanRelationshipDependsOn:
+		line = fmt.Sprintf("Depends on #%d", to)
+	default:
+		return "", tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "unknown relationship kind %q", kind)
+	}
+	return fmt.Sprintf("%s\n\n<!-- factory-plan-link: %s #%d -> #%d -->", line, kind, from, to), nil
+}
+
+// createBacklink posts the textual fallback comment on the sub-issue or the
+// dependent issue.
+func (c *GhClient) createBacklink(ctx context.Context, repository tracker.Repository, kind tracker.PlanRelationshipKind, from, to int) error {
+	body, err := backlinkBody(kind, from, to)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("repos/%s/issues/%d/comments", repository, from)
+	if err := c.call(ctx, []string{"api", path, "--method", "POST"}, map[string]string{"body": body}); err != nil {
+		return fmt.Errorf("comment %s backlink on #%d: %w", kind, from, classifyPlanError(err))
+	}
+	return nil
+}
+
+// findBacklink reports whether the authenticated account already posted the
+// textual fallback comment of one relationship.
+func (c *GhClient) findBacklink(ctx context.Context, repository tracker.Repository, kind tracker.PlanRelationshipKind, from, to int) (bool, error) {
+	body, err := backlinkBody(kind, from, to)
+	if err != nil {
+		return false, err
+	}
+	marker := body[strings.Index(body, "<!--"):]
+	login, err := c.AuthenticatedLogin(ctx)
+	if err != nil {
+		return false, err
+	}
+	comments, err := c.IssueComments(ctx, repository, from)
+	if err != nil {
+		return false, classifyPlanError(err)
+	}
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, marker) && strings.EqualFold(comment.Author, login) {
 			return true, nil
 		}
 	}

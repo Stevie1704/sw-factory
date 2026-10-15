@@ -480,3 +480,50 @@ func TestFindPlanRelationshipVerifiesNativeLinks(t *testing.T) {
 	}
 	assertReadOnly(t, runner.calls)
 }
+
+// TestTextualRelationshipIsOneMarkedBacklinkComment verifies the approved
+// textual fallback: one comment on the sub-issue or dependent issue names
+// the other issue number, carries a stable marker, and is found again only
+// when the authenticated account wrote it.
+func TestTextualRelationshipIsOneMarkedBacklinkComment(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`{"id":1,"body":"ok"}`),
+		[]byte(`{"login":"factory-bot"}`),
+		[]byte(`[[{"id":7,"body":"Depends on #12\n\n<!-- factory-plan-link: depends_on #13 -> #12 -->","user":{"login":"mallory"}}]]`),
+		[]byte(`{"login":"factory-bot"}`),
+		[]byte(`[[{"id":8,"body":"Part of #11\n\n<!-- factory-plan-link: parent #13 -> #11 -->","user":{"login":"factory-bot"}}]]`),
+	}}
+	client := &github.GhClient{Runner: runner}
+	child, parent := issueRefs(13, 11)
+	parentLink := tracker.PlanRelationship{Kind: tracker.PlanRelationshipParent, Mode: tracker.PlanRelationshipTextual, From: child, To: parent}
+	if err := client.CreatePlanRelationship(context.Background(), planRepository, parentLink); err != nil {
+		t.Fatalf("CreatePlanRelationship(textual) error = %v", err)
+	}
+	if !containsArgs(runner.calls[0].args, "api", "repos/example/project/issues/13/comments", "--method", "POST") {
+		t.Fatalf("call 0 = %#v, want a comment on the sub-issue", runner.calls[0].args)
+	}
+	var comment map[string]string
+	if err := json.Unmarshal(runner.calls[0].input, &comment); err != nil {
+		t.Fatalf("decode comment: %v", err)
+	}
+	if comment["body"] != "Part of #11\n\n<!-- factory-plan-link: parent #13 -> #11 -->" {
+		t.Fatalf("comment body = %q, want the marked backlink", comment["body"])
+	}
+
+	dependent, dependency := issueRefs(13, 12)
+	forged, err := client.FindPlanRelationship(context.Background(), planRepository, tracker.PlanRelationship{
+		Kind: tracker.PlanRelationshipDependsOn, Mode: tracker.PlanRelationshipTextual, From: dependent, To: dependency,
+	})
+	if err != nil || forged {
+		t.Fatalf("FindPlanRelationship(forged) = %t, %v; want a comment by another account ignored", forged, err)
+	}
+	exists, err := client.FindPlanRelationship(context.Background(), planRepository, parentLink)
+	if err != nil || !exists {
+		t.Fatalf("FindPlanRelationship(textual) = %t, %v; want the factory comment", exists, err)
+	}
+	if len(runner.calls) != 5 {
+		t.Fatalf("calls = %d, want five", len(runner.calls))
+	}
+}
