@@ -242,8 +242,8 @@ It does not mean a launched invocation finished or a supervisor exited.
 | Command | Fields to inspect in a completed result |
 | --- | --- |
 | `resume` | `result.continuation` is `checks` or `agent`; `result.stage`, `result.status`, and `identities` identify the continued checkpoint or invocation. |
-| `reconcile` | `result.reconciliation` identifies reconciliation or a waiting state; `recovery` names any remaining discrepancy or effect. Abandonment keeps the run paused. |
-| `auth refresh` | `result.harness` names the refreshed credential store; `result.resumed` is true only when the native resume succeeded. |
+| `reconcile` | `result.reconciliation` identifies reconciliation or a waiting state; `recovery` names any remaining discrepancy or effect. After abandonment, a non-terminal run stays paused and a terminal run stays terminal. |
+| `auth refresh` | `result.harness` names the harness whose managed credentials were refreshed; `result.resumed` is true only when the native resume succeeded. |
 | `stop` | `result.running` is true when a stop was requested for `result.pid`; false means no coordinator was running. Verify the supervisor has stopped. |
 | `init` | `result.config_path` identifies the created host configuration. |
 | `register` | `result.repository_path`, `result.operational_data_path`, `result.updated`, and `result.inferred` identify the registration and inferred values. |
