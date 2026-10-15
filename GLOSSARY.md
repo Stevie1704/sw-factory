@@ -8,6 +8,40 @@ The software factory turns an explicitly authorized GitHub issue into a supervis
 One supervised execution that owns a frozen issue, specification packet, branch, worktree, and pull request.
 _Avoid_: Job, task, workflow instance
 
+**Ideation session**:
+The repository-scoped record of work that exists before an issue or a Run:
+its conversation turns, brief revisions, plan revisions, approvals, and
+publication receipts. It has its own lifecycle (awaiting user, role active,
+draft review, approved, publishing, publication incomplete, published,
+deferred, no build, cancelled) and its own revision for stale-writer checks.
+It owns no branch, worktree, or issue.
+_Avoid_: Run, draft run, chat
+
+**Brief**:
+The structured statement a session builds: problem, audience, success
+criteria, scope and non-goals, decisions with rationale, assumptions, evidence,
+and unresolved questions. Each change is a new brief revision; plan nodes
+reference its items by ID.
+_Avoid_: Spec (for an unpublished brief), summary
+
+**Plan revision**:
+One immutable, provider-neutral work-item graph derived from one exact brief
+revision and repository context revision. Nodes have stable local IDs, a kind,
+and parent, dependency, and brief references. A newer brief makes it stale.
+_Avoid_: Backlog, issue list
+
+**Plan approval**:
+The human approval of one plan revision for one target, bound to the fully
+rendered publication payload and relationship mapping by their digests. Any
+later brief or plan change requires a fresh approval.
+_Avoid_: Sign-off, authorization (for execution)
+
+**Publication receipt**:
+Append-only evidence of one publication attempt for one approval: the tracker
+items and relationships known to exist and, for an incomplete attempt, what
+remains. Publication never adds `agent-ready` and never starts a Run.
+_Avoid_: Publish log
+
 **Work tracker**:
 The external system that holds the issues the factory claims, their run-state
 labels, the status and command comments, and the optional coordinator lease.
@@ -395,8 +429,8 @@ one side declares and the other does not map is a startup diagnosis failure.
 _Avoid_: Repository-declared cache path, default cache location
 
 **Operational store**:
-The versioned, host-local SQLite store for current run state. Its current-state
-tables are separate from repository configuration, disposable run artifacts,
+The versioned, host-local SQLite store for current run and ideation-session
+state. Its current-state tables are separate from repository configuration, disposable run artifacts,
 and the isolated local evaluation-summary projection.
 _Avoid_: Event journal, telemetry, transcript archive
 

@@ -1092,6 +1092,12 @@ attach a human classification, and the separately confirmed
 selected terminal summaries. Ordinary run-artifact cleanup does not touch this
 projection.
 
+Schema version 42 adds the ideation-session tables (ADR 0021): sessions,
+conversation turns, brief revisions, plan revisions, approvals, and
+publication receipts. A session belongs to the registered repository and needs
+no issue and no run. The migration only adds tables; stored runs stay readable.
+Session text stays in this store and never enters evaluation summaries.
+
 ## Local run inspection
 
 Use the read-only CLI to inspect a named historical run while another run is
@@ -1191,6 +1197,26 @@ the banner again after each `--refresh` interval; with `--refresh 0` the page
 changes only when you reload it. When the UI server does not answer, the page
 shows that the server is unreachable.
 
+Ideation sessions (ADR 0021) extend this contract:
+
+- Session pages and session commands become part of the UI. The conversation,
+  brief, plan drafts, and approval actions of a session are durable local
+  operator surfaces. Headless harnesses remain the only control plane.
+- The UI never changes session state, runs, or any other store record. Its
+  only write is to append one command row, with a unique request ID and the
+  revision the page showed, to a durable command inbox in the operational
+  store. The coordinator started by `factory start` is the only process that
+  applies commands. A retried request ID returns the original outcome; a stale
+  revision returns a conflict.
+- When the supervisor heartbeat is not live, a command gets an explicit
+  unavailable result. The UI never starts a second writer, and read-only pages
+  stay usable.
+- Session pages show conversation and plan content. Like run content, it stays
+  on the host and is served only on the loopback interface.
+
+The command inbox and session routes ship with issue #267. Until then the UI
+behaves as described above and has no write path.
+
 ## Run-artifact cleanup
 
 Ordinary run data becomes eligible seven days after a run enters its current
@@ -1222,6 +1248,11 @@ GitWorkspace adapters. Factory-managed credential volumes and local evaluation
 summaries are retained; `factory evaluation-delete` remains the only summary
 deletion command.
 
+Cleanup never selects ideation sessions (ADR 0021). Open, deferred, cancelled,
+and no-build sessions keep their history for inspection and recovery.
+Approvals and publication receipts are publication evidence and stay while the
+session exists. Only `factory reset` removes sessions.
+
 ## Complete local reset
 
 `factory reset` is the separate, deliberately destructive operation that
@@ -1235,7 +1266,7 @@ removes the installation itself.
 | `factory evaluation-delete` | Selected terminal evaluation summaries | Yes |
 | `factory register` | Creates one registration, or updates its credential sources with `--update` | Yes |
 | `factory bootstrap-labels` | Creates the factory-owned GitHub labels | Yes |
-| `factory reset` | Every local resource of one registered installation | No |
+| `factory reset` | Every local resource of one registered installation, including ideation sessions and publication evidence | No |
 
 Reset requires an explicit `--config` path. A command that destroys a whole
 installation must never default to the operator's real configuration, so the
