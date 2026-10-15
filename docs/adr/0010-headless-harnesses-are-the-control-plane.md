@@ -52,3 +52,9 @@ and credential volumes remain mandatory.
 This decision supersedes ADR 0004, ADR 0008, and ADR 0009. It also supersedes
 the tmux proposal in issue #87 and the visible-terminal requirements in parent
 specification #1.
+
+ADR 0021 extends the durable operator surfaces for ideation sessions: their
+local persisted conversation, brief, drafts, and approval commands. The browser
+reaches the coordinator through a durable command inbox in the operational
+store, not a control socket. Headless execution and structured reports are
+unchanged.
