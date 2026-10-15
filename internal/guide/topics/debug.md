@@ -224,6 +224,38 @@ exit status is the same as without `--json`.
 `outcome: "refused"` and `reason.code` `cleanup.confirmation_required` or
 `reset.confirmation_required`. They exit with status 2, as without `--json`.
 
+An abandonment whose run or pending effect has disappeared is also
+`refused`, with `attempted: false` and `reason.code` `run.none` or
+`pending_effect.changed`. These already-absent targets keep the existing
+text output and exit status 0. A different pending effect still refuses with
+exit status 1 and remains reserved. Match `outcome` and `reason.code` to
+determine whether abandonment occurred; exit status alone is insufficient.
+Ordinary `reconcile` without `--abandon-effect` still completes when no run
+exists.
+
+#### Command-specific results
+
+`completed` describes completion of the finite command. Use the following
+fields to determine which workflow action occurred, then run `verification`.
+It does not mean a launched invocation finished or a supervisor exited.
+
+| Command | Fields to inspect in a completed result |
+| --- | --- |
+| `resume` | `result.continuation` is `checks` or `agent`; `result.stage`, `result.status`, and `identities` identify the continued checkpoint or invocation. |
+| `reconcile` | `result.reconciliation` identifies reconciliation or a waiting state; `recovery` names any remaining discrepancy or effect. Abandonment keeps the run paused. |
+| `auth refresh` | `result.harness` names the refreshed credential store; `result.resumed` is true only when the native resume succeeded. |
+| `stop` | `result.running` is true when a stop was requested for `result.pid`; false means no coordinator was running. Verify the supervisor has stopped. |
+| `init` | `result.config_path` identifies the created host configuration. |
+| `register` | `result.repository_path`, `result.operational_data_path`, `result.updated`, and `result.inferred` identify the registration and inferred values. |
+| `bootstrap-labels` | `result.repository` and `result.labels` identify the bootstrapped label definitions. |
+| `issue` | `identities.run_id`, `result.branch`, `result.worktree`, and `result.baseline_gates` identify the claim and baseline evaluation. |
+| `agent` | `identities.invocation_id`, `result.role`, and `result.native_session_id` identify the launched invocation; the agent can still be running. |
+| `agent-report` | `result.report_outcome` and `result.invocation_status` describe the accepted report; acceptance does not imply that its outcome was successful. |
+| `draft-pr` | `identities.pull_request_number` and `result.pull_request_url` identify a PR. When `result.repair` is present, its `outcome` is `started`, `infrastructure_pause`, `waiting_for_human`, or `exhausted`; no PR was produced by this request. Its attempt, budget, and remaining fields retain retry accounting. |
+| `poll` | `result.lifecycle` identifies a lifecycle transition; otherwise `result.commands` gives each command's outcome and any rejection code. An empty list means no comments were processed. |
+| `cleanup` | `result.runs` is the plan, `result.skipped` names withheld runs, and `result.deleted` names the removed runs. Preview requires confirmation. |
+| `reset` | `result.removed` and `result.remaining` identify applied and incomplete removals; `result.retained` names resources outside reset's scope. Preview requires confirmation. |
+
 An invalid flag or argument writes text to standard error and exits with
 status 2. It writes nothing to standard output.
 

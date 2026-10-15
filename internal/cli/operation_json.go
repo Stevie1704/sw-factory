@@ -151,14 +151,15 @@ func boundedMessage(message string) string {
 
 // writeOperationJSON writes one operation document. An operational error also
 // writes its detail to errorsOutput, because the document never copies error
-// text. It returns 0 for a completed operation and 1 otherwise.
+// text. Its exit status follows the command's error, preserving text semantics
+// even when a successful no-op has a refused structured outcome.
 func writeOperationJSON(output, errorsOutput io.Writer, configPath string, document operationDocument, err error) int {
 	bindConfiguration(document.Verification, configPath)
 	document.Recovery.bindConfiguration(configPath)
 	if document.Outcome == operationError {
 		writeError(errorsOutput, err)
 	}
-	if !writeJSONDocument(output, errorsOutput, document) || document.Outcome != operationCompleted {
+	if !writeJSONDocument(output, errorsOutput, document) || err != nil {
 		return 1
 	}
 	return 0
@@ -231,6 +232,10 @@ type reconcileResultDocument struct {
 // replay that timed out is pending: the effect stays reserved.
 func newReconcileDocument(result factory.RecoveryResult, err error) operationDocument {
 	document := newOperationDocument("reconcile", err)
+	if err == nil && result.NotApplied != "" {
+		document.Outcome, document.Attempted = operationRefused, false
+		document.Reason = &reasonDocument{Code: string(result.NotApplied), Message: "the named effect cannot be abandoned because its run or pending effect no longer exists"}
+	}
 	if result.Outcome == factory.RecoveryOutcomeRetryable && err != nil {
 		document.Outcome, document.Error = operationPending, nil
 		document.Reason = &reasonDocument{Code: "external.outcome_unknown", Message: messageReplayReserved}

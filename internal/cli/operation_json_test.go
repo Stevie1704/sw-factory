@@ -136,6 +136,55 @@ func TestRunReconcileJSONRefusesAChangedEffect(t *testing.T) {
 	}
 }
 
+// TestRunReconcileJSONRefusesADisappearedEffect verifies a stale human-reviewed
+// effect identity cannot be reported as a completed abandonment.
+func TestRunReconcileJSONRefusesADisappearedEffect(t *testing.T) {
+	t.Parallel()
+	configPath, operationalPath, repositoryPath := registeredStatusFixture(t)
+	opened := savePausedCheck(t, operationalPath, repositoryPath, store.StatusWaitingForHuman)
+
+	document, code, stderr := runOperationJSON(t, "reconcile", "--json", "--config", configPath, "--run-id", "run-json", "--abandon-effect", "effect-reviewed", "--reason", "inspected")
+
+	if code != 0 || stderr != "" || document.Outcome != "refused" || document.Attempted || document.Reason == nil || document.Reason.Code != "pending_effect.changed" || document.Identities.RunID != "run-json" {
+		t.Fatalf("exit = %d stderr = %q document = %+v, want an unattempted changed-effect refusal naming the run", code, stderr, document)
+	}
+	after, err := opened.Run(context.Background(), "run-json")
+	if err != nil || after.Revision != 4 || after.Status != store.StatusWaitingForHuman {
+		t.Fatalf("run after refusal = %+v (%v), want it unchanged", after, err)
+	}
+	var output, errorsOutput bytes.Buffer
+	textCode := cli.Run(context.Background(), []string{"reconcile", "--config", configPath, "--run-id", "run-json", "--abandon-effect", "effect-reviewed", "--reason", "inspected"}, &output, &errorsOutput)
+	wantText := "reconciliation: outcome=reconciled run=run-json status=waiting_for_human stage=check\n" +
+		"reconciliation safe action: inspect the diagnosis with `factory status`\n" +
+		"reconciliation safe action: verify the repository, worktree, branch, checkpoint, issue label, status comment, and pull request\n" +
+		"reconciliation safe action: resolve the recorded discrepancy before retrying the run\n"
+	if textCode != code || errorsOutput.Len() != 0 || output.String() != wantText {
+		t.Fatalf("text exit = %d stdout = %q stderr = %q, want the existing no-effect text and exit %d", textCode, output.String(), errorsOutput.String(), code)
+	}
+}
+
+// TestRunReconcileJSONRefusesAbandonmentWithoutARun verifies an explicit
+// effect disposition cannot succeed after its entire run has disappeared.
+func TestRunReconcileJSONRefusesAbandonmentWithoutARun(t *testing.T) {
+	t.Parallel()
+	configPath, _, _ := registeredStatusFixture(t)
+
+	document, code, stderr := runOperationJSON(t, "reconcile", "--json", "--config", configPath, "--run-id", "run-gone", "--abandon-effect", "effect-reviewed", "--reason", "inspected")
+
+	if code != 0 || stderr != "" || document.Outcome != "refused" || document.Attempted || document.Reason == nil || document.Reason.Code != "run.none" {
+		t.Fatalf("exit = %d stderr = %q document = %+v, want an unattempted no-run refusal", code, stderr, document)
+	}
+	var output, errorsOutput bytes.Buffer
+	textCode := cli.Run(context.Background(), []string{"reconcile", "--config", configPath, "--run-id", "run-gone", "--abandon-effect", "effect-reviewed", "--reason", "inspected"}, &output, &errorsOutput)
+	if textCode != code || errorsOutput.Len() != 0 || output.String() != "reconciliation: no persisted run\n" {
+		t.Fatalf("text exit = %d stdout = %q stderr = %q, want the existing no-run text and exit %d", textCode, output.String(), errorsOutput.String(), code)
+	}
+	ordinary, ordinaryCode, ordinaryStderr := runOperationJSON(t, "reconcile", "--json", "--config", configPath)
+	if ordinaryCode != 0 || ordinaryStderr != "" || ordinary.Outcome != "completed" || !ordinary.Attempted || ordinary.Reason != nil {
+		t.Fatalf("ordinary reconcile exit = %d stderr = %q document = %+v, want a completed empty reconciliation", ordinaryCode, ordinaryStderr, ordinary)
+	}
+}
+
 // TestRunStatusJSONNeverAdvertisesAbandonmentAsExecutable verifies the
 // human-reviewed abandonment is a human decision whose reason is human input.
 func TestRunStatusJSONNeverAdvertisesAbandonmentAsExecutable(t *testing.T) {
