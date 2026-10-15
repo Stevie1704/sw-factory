@@ -3,7 +3,9 @@ package github_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -238,4 +240,84 @@ func TestPreflightPlanShowsTheTextualFallbackInThePreview(t *testing.T) {
 		}
 	}
 	assertReadOnly(t, runner.calls)
+}
+
+// TestPreflightPlanReportsTypedErrorsBeforeAnyWrite verifies that missing
+// permission, unavailable capability, and GitHub limits fail preflight with
+// a typed error that proves no change, and that preflight never writes.
+func TestPreflightPlanReportsTypedErrorsBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+
+	wide := decomposedGraph()
+	wide.Items = wide.Items[:1]
+	for index := range 101 {
+		node := "c-" + strconv.Itoa(index)
+		wide.Items = append(wide.Items, tracker.PlanGraphItem{NodeID: node, Kind: "task", Title: "Child " + node, ParentID: "n-1", Correlation: "s/4/" + node})
+	}
+	deep := decomposedGraph()
+	deep.Items = deep.Items[:1]
+	for index := range 9 {
+		parent := deep.Items[len(deep.Items)-1].NodeID
+		node := "d-" + strconv.Itoa(index)
+		deep.Items = append(deep.Items, tracker.PlanGraphItem{NodeID: node, Kind: "task", Title: "Level " + node, ParentID: parent, Correlation: "s/4/" + node})
+	}
+	longTitle := singleItemGraph()
+	longTitle.Items[0].Title = strings.Repeat("t", 257)
+	longBody := singleItemGraph()
+	longBody.Items[0].Body = strings.Repeat("b", 65536)
+
+	for _, tc := range []struct {
+		name    string
+		graph   tracker.PlanGraph
+		outputs []string
+		errs    []error
+		want    tracker.PlanErrorKind
+	}{
+		{"no read permission", singleItemGraph(), []string{`{"has_issues":true,"permissions":{"pull":false}}`}, nil, tracker.PlanErrorPermission},
+		{"archived repository", singleItemGraph(), []string{`{"has_issues":true,"archived":true,"permissions":{"pull":true}}`}, nil, tracker.PlanErrorPermission},
+		{"issues disabled", singleItemGraph(), []string{`{"has_issues":false,"permissions":{"pull":true}}`}, nil, tracker.PlanErrorUnsupportedCapability},
+		{"repository hidden", singleItemGraph(), []string{""}, []error{errors.New("gh api repos/example/project: HTTP 404: Not Found")}, tracker.PlanErrorPermission},
+		{"title too long", longTitle, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
+		{"body too long", longBody, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
+		{"too many sub-issues", wide, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
+		{"sub-issues nested too deep", deep, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runner := &fakeCommandRunner{errs: tc.errs}
+			for _, output := range tc.outputs {
+				runner.outputs = append(runner.outputs, []byte(output))
+			}
+			_, err := (&github.GhClient{Runner: runner}).PreflightPlan(context.Background(), planRepository, tc.graph)
+			if kind, ok := tracker.PlanErrorKindOf(err); !ok || kind != tc.want {
+				t.Fatalf("PreflightPlan() error = %v, want kind %s", err, tc.want)
+			}
+			if !tracker.WriteNotApplied(err) {
+				t.Fatalf("PreflightPlan() error = %v, want a proven no-change error", err)
+			}
+			assertReadOnly(t, runner.calls)
+		})
+	}
+}
+
+// TestPreflightPlanTreatsTextualParentsWithoutSubIssueLimits verifies that
+// the sub-issue limits apply only to native sub-issues: a wide plan on a host
+// without sub-issues previews with the textual fallback.
+func TestPreflightPlanTreatsTextualParentsWithoutSubIssueLimits(t *testing.T) {
+	t.Parallel()
+
+	wide := decomposedGraph()
+	wide.Items = wide.Items[:1]
+	for index := range 101 {
+		node := "c-" + strconv.Itoa(index)
+		wide.Items = append(wide.Items, tracker.PlanGraphItem{NodeID: node, Kind: "task", Title: "Child " + node, ParentID: "n-1", Correlation: "s/4/" + node})
+	}
+	runner := &fakeCommandRunner{outputs: [][]byte{[]byte(writableRepository), []byte(legacyCapabilities)}}
+	preview, err := (&github.GhClient{Runner: runner}).PreflightPlan(context.Background(), planRepository, wide)
+	if err != nil {
+		t.Fatalf("PreflightPlan() error = %v", err)
+	}
+	if len(preview.Relationships) != 101 || preview.Relationships[0].Mode != tracker.PlanRelationshipTextual {
+		t.Fatalf("relationships = %d (first %#v), want 101 textual parents", len(preview.Relationships), preview.Relationships[0])
+	}
 }
