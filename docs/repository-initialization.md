@@ -137,9 +137,8 @@ base image that `make worker-build` built, pinned by digest, with
 `--worker-base-image` to `factory onboard prepare` or `factory onboard`; see [Build from
 source](installation.md#build-from-source).
 
-The agent runs the ordered steps itself within the operator's explicit session
-scope. Read `factory guide authorization` before acting: it owns the
-operator-agent authorization contract.
+The agent runs the ordered steps itself. Read and apply `factory guide
+authorization` before acting; it owns the operator-agent authorization contract.
 This procedure owns the steps and the effect inventory below; the launcher
 and the skill point to these canonical sources.
 
@@ -278,10 +277,8 @@ step. So no writer overwrites another writer's progress.
 
 ## Check effects against the session scope
 
-Apply `factory guide authorization` to this inventory. An approved concrete
-onboarding plan can cover these operations once; request a new decision only
-for uncovered effects or choices. Before asking, prepare the exact commands or
-diff and state their actual effects:
+Apply `factory guide authorization` to the commands and diffs for this effect
+inventory:
 
 | Operation | Effect to cover |
 | --- | --- |
@@ -294,9 +291,8 @@ diff and state their actual effects:
 | Step 8 live proof | Issue, remote branch, draft pull request, and paid agent sessions in the named target |
 | Commit, push, issue or PR change, proof cleanup | The specified local or external change at its approved destination |
 
-File preparation within the task can proceed without a separate gate for each
-write. Resolve unchosen role/model policy before writing that policy; use choices
-already supplied. The calling harness still controls its own permissions.
+Resolve role/model policy under that contract before writing the selected
+policy into `factory.yaml`.
 
 The agent never reads credential contents or invents a credential path. It may
 check whether a default path exists, but uses only an operator-approved source.

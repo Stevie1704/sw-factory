@@ -1,9 +1,8 @@
 # Debugging
 
 Use this procedure when a `factory` command fails, a run stops progressing,
-or a result looks wrong. Apply `factory guide authorization`: inspection
-can proceed within the task; a recovery mutation needs scope covering that
-action and target, which may already be explicit in this session.
+or a result looks wrong. Read and apply `factory guide authorization` before
+acting; it owns the operator-agent contract for inspection and recovery.
 
 ## Procedure
 
@@ -47,9 +46,8 @@ action and target, which may already be explicit in this session.
 
 6. **Use one documented recovery action.** Select it from
    `recovery.actions` or from the recovery table. Confirm that each entry of
-   its `requires` list is true. Prepare the exact command and effects; request
-   only authority or human input missing from the session scope. Run it one
-   time with `--json`.
+   its `requires` list is true. Apply `factory guide authorization` to the
+   exact command, effects, and human input. Run it one time with `--json`.
 
 7. **Verify the result.** Run the `verify` command of the action, normally
    `factory status --json`, and `factory doctor --json` again.
@@ -156,11 +154,9 @@ doctor repair is a `human_decision` that the operator authorizes, or an
 `inspection`.
 
 A recommendation is not an authorization. An `executable` action with
-`authorization: operator` needs explicit operator authority covering its action
-and target; existing session scope can satisfy that requirement. A
-`human_decision` action never has an `argv`. An agent may convey the operator's
-explicit decision through a supported command, but cannot invent its human
-input from general recovery permission.
+`authorization: operator` follows `factory guide authorization`. A
+`human_decision` action never has an `argv`; its `human_input` must come from
+the operator's explicit decision under that contract.
 
 Factory checks the target and the preconditions again when the command
 runs. For example, `run.retry_checks` gives `factory resume` the flags
@@ -258,9 +254,8 @@ issue, resume a run, repair state, refresh a credential, or create an issue.
 An `action` describes what a person can do next. It does not occur until
 someone runs it. Before you run an action with the effect `local_mutation` or
 `external_mutation`, verify its current preconditions and target, then apply
-`factory guide authorization`. A known recovery covered by the session can
-proceed. Ambiguous state needs observation; abandoning it needs an explicit
-operator decision. An inspection-only request does not authorize recovery.
+`factory guide authorization`, including its rules for inspection-only
+requests and ambiguous effects.
 
 ## Classify the cause
 

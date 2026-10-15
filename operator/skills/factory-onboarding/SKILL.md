@@ -78,9 +78,8 @@ and `onboard record` change the plan; never edit the plan file.
 Read the file at the manifest's `procedure` in full. Follow its ordered steps
 from the first to the last, and run every step yourself. Make each
 repository-specific choice, for example gates or the harness and model of each
-worker role, using the operator's decisions already given in this session.
-Apply `factory guide authorization` to each effect; ask only for missing scope
-or decisions, with the reviewable action prepared. Never read a credential file.
+worker role, under `factory guide authorization`. Apply that contract before
+each effect. Never read a credential file.
 
 ## 5. Verify the result
 

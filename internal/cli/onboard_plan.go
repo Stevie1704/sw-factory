@@ -102,8 +102,8 @@ func runOnboardPlan(ctx context.Context, args []string, output, errorsOutput io.
 		return 2
 	}
 	noteProvided := false
-	flags.Visit(func(flag *flag.Flag) {
-		if flag.Name == "authorization-note" {
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "authorization-note" {
 			noteProvided = true
 		}
 	})

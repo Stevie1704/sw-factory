@@ -46,6 +46,14 @@ Preserve its content: never invent a clarification answer, gate exemption,
 merge decision, or permission to discard ambiguous state. General permission
 to recover a run does not supply these decisions.
 
+Defect-report publication requires an explicit operator request identifying the
+reviewed file and the fixed destination in `factory guide reporting`. A general
+instruction to onboard, recover, prepare reports, or report future defects is
+insufficient. Execute a request for that specific reviewed report within the
+current session without repeating the question. Changed report content needs
+review and a request covering the changed file. Automatic submission under a
+standing policy remains deferred by ADR 0020.
+
 For missing prerequisites, name the supported remedy and its effect. Perform
 an explicitly authorized installation within environment permissions. Name
 interactive login or consent as a human step when only the operator can do
@@ -61,7 +69,8 @@ it, for example `gh auth login` on the host. Resume after that step succeeds.
 | The approved plan names repository A, but registration would target B. | Prepare the corrected target and command and ask for the changed scope before registration. |
 | “Recover this checkpoint by retrying checks after Docker is available.” | Inspect current preconditions, execute the supported retry once when they hold, and verify its postcondition without asking again. |
 | A proof issue creation has an unknown outcome. | Search for its marker and reconcile the observed issue. Obtain an explicit decision before abandoning the start; do not infer permission to create a replacement. |
-| “Prepare a defect report.” | Write and review the local draft. Submission needs explicit authority for that reviewed report to the destination in `factory guide reporting`. |
+| “Prepare a defect report.” | Write and review the local draft; keep it local. |
+| “Submit the reviewed report.md to github.com/Stevie1704/sw-factory.” | Execute the separate submission command for that reviewed file without asking the same question again. |
 
 Workers retain their isolated worktree and structured-report boundary. This
 contract gives them no host credentials, tracker access, or authority to edit

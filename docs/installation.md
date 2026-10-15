@@ -82,9 +82,9 @@ onboard prepare` also works offline and needs no host registration. It writes
 the release resources to the named directory and prints a manifest with the
 exact `factory` executable, the worker base image, and the procedure path. The
 agent that already works in the repository reads that procedure and follows
-it. Some onboarding steps need network access and operator approval: the pull
-of the worker base image, the GitHub CLI authentication, and the paid skill
-smoke. The procedure names each one before it runs.
+it. Image pulls, GitHub authentication, and paid skill smoke need network
+access. Apply `factory guide authorization` before executing the procedure's
+effect inventory; interactive login remains a human step.
 
 The prepared directory belongs to you. It stays after the agent session, so
 remove it when the onboarding is complete. Prepare refuses a directory that is

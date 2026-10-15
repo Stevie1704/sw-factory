@@ -59,12 +59,10 @@ first line; it holds the report identity.
 
 ## Submit the reviewed draft
 
-Apply `factory guide authorization`. A request to prepare a draft permits local
-preparation and review only. Before requesting submission authority, finish the
-reviewable file and name the fixed destination below. Submit when the operator
-explicitly authorizes publication of that reviewed report to
-`Stevie1704/sw-factory`; if already authorized in this session, do not ask again.
-This is a deliberate submission, not an automatic publication policy.
+Apply the report-specific publication rule in `factory guide authorization`.
+After review, an explicit request such as “Submit the reviewed report.md to
+github.com/Stevie1704/sw-factory” identifies the file and fixed destination for
+this separate command:
 
 ```sh
 factory bug-report submit report.md

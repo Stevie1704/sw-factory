@@ -50,12 +50,8 @@ file.
 Use its field reference rather than another repository's factory.yaml; where
 the two disagree, docs/configuration.md decides.
 
-Read %[5]s guide authorization before acting; it owns scoped session
-authorization. Use my existing explicit authorization for this task, target,
-and covered effects without asking again. Prepare the reviewable plan, diff,
-or command and name its effects before asking for new scope or a missing human
-decision. Record my stated scope and constraints in the onboarding plan when
-available; that record grants no authority and overrides no harness permission.
+Read and apply %[5]s guide authorization before acting; it owns the
+operator-agent authorization contract, including scope notes in the plan.
 Never read a credential file and never invent a credential path; ask for an
 unapproved source. Never commit an absolute host path into factory.yaml.
 `
