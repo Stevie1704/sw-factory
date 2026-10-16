@@ -11,9 +11,9 @@ The decision records are [ADR 0021](adr/0021-ideation-sessions-and-local-operato
 (publication ledger and tracker planning port),
 [ADR 0023](adr/0023-session-roles-run-on-headless-sessions.md) (session
 roles), [ADR 0024](adr/0024-browser-session-commands-through-a-durable-inbox.md)
-(browser commands), [ADR 0026](adr/0026-azure-devops-plan-publication-mapping.md)
+(browser commands), [ADR 0025](adr/0025-azure-devops-plan-publication-mapping.md)
 (Azure DevOps mapping), and
-[ADR 0027](adr/0027-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)
+[ADR 0026](adr/0026-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)
 (readiness is the user's decision). This guide does not restate them.
 
 ## The read-only UI contract is extended

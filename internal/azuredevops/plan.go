@@ -32,7 +32,7 @@ const (
 
 // correlationTagPrefix namespaces the correlation tag of a published plan
 // item. It is not a factory state tag: it never authorizes or reports a run
-// (ADR 0026).
+// (ADR 0025).
 const correlationTagPrefix = "factory-plan:"
 
 // correlationTag returns the tag that carries the correlation key of one plan

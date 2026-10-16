@@ -349,7 +349,7 @@ registration into the host file by hand, then run `factory doctor`.
 
 #### Plan publication mapping
 
-An approved ideation plan publishes to Azure Boards work items (ADR 0026).
+An approved ideation plan publishes to Azure Boards work items (ADR 0025).
 `azure_devops.planning.levels` maps the neutral plan kinds (`parent`, `task`,
 `investigation`) to the work-item types of the project's process. List the
 backlog levels from the top level down. Each level has a `type`, the plan
@@ -1172,7 +1172,7 @@ Schema version 45 adds the session command inbox (ADR 0024):
 expected revision, payload, state, and outcome. The local UI appends rows; the
 coordinator applies them. The migration only adds the table.
 
-Schema version 46 adds the correction link of a conversation turn (ADR 0027):
+Schema version 46 adds the correction link of a conversation turn (ADR 0026):
 `ideation_turns.corrects` names the earlier user answer that a turn changes.
 Existing turns correct nothing.
 
@@ -1209,7 +1209,7 @@ limits documented in [the debugging guide](../internal/guide/topics/debug.md#ins
 
 `factory ui` serves a read-only view of the runs in the operational store, the
 pages of ideation sessions, and their session command API (ADR 0021, ADR 0024,
-ADR 0027). [From an idea to a reviewed backlog](ideation.md) is the user
+ADR 0026). [From an idea to a reviewed backlog](ideation.md) is the user
 guide of sessions. Open the printed URL in a browser on the same host. Stop the server with `Ctrl-C`
 (SIGINT) or SIGTERM.
 
@@ -1313,7 +1313,7 @@ Session commands (ADR 0021, ADR 0024):
 - `submit_turn` starts the ideation role for the accepted turn; its optional
   `corrects` names the earlier user answer it changes. `hand_off` names the
   brief revision the page showed and lists every unresolved question of it in
-  `deferred_questions`; otherwise it is refused (ADR 0027).
+  `deferred_questions`; otherwise it is refused (ADR 0026).
   `investigation_needed` needs at least one unresolved question in the brief
   and creates no backlog item. `hand_off` and `regenerate_draft` start
   planning; a role that cannot start

@@ -41,7 +41,7 @@ both contracts and defines the data, lifecycle, and retention of sessions.
    | `no_build` | Terminal. The user decided not to build. |
    | `cancelled` | Terminal. Cancellation never deletes tracker items. |
 
-   ADR 0027 adds `investigation_needed`: the user decided that material
+   ADR 0026 adds `investigation_needed`: the user decided that material
    unknowns need investigation first. The session can resume.
 
 3. **Every write names the revision it read.** Each accepted write advances the

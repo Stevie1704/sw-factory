@@ -635,7 +635,7 @@ and structured reports as run roles, with these differences:
   draft. Planning craft, such as when to decompose, stays in the versioned
   planning prompt.
 - **Questioning method.** Prompt `ideation-v2` names the factory-owned
-  `grilling` worker skill ([ADR 0027](adr/0027-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)):
+  `grilling` worker skill ([ADR 0026](adr/0026-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)):
   rounds of questions whose prerequisites are settled, each with a
   recommended answer, facts read from the snapshot, unknowns kept as
   unresolved questions, and revisited decisions after a changed answer. The
