@@ -747,3 +747,124 @@ td {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* Plan review */
+
+.plan-note {
+  margin: 1.5rem 0 0;
+}
+
+.plan-items,
+.rendered-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-item,
+.rendered-item {
+  padding: 0.75rem 0 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.plan-item[data-invalid] {
+  border-left: 4px solid var(--lamp-stop);
+  padding-left: 0.75rem;
+}
+
+.plan-item h4 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.plan-body {
+  white-space: pre-wrap;
+}
+
+.kind,
+.badge {
+  display: inline-block;
+  padding: 0 0.4em;
+  border: 1px solid var(--steel);
+  border-radius: 2px;
+  font-family: var(--text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.problems {
+  color: var(--lamp-stop);
+}
+
+.rendered-body {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--console-ink);
+  background: var(--console);
+  border-radius: 2px;
+}
+
+.command-form {
+  margin: 1rem 0;
+}
+
+.command-form span {
+  margin-left: 0.5rem;
+  color: var(--ink-soft);
+}
+
+.command-form output,
+.plan-edit-actions output {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--ink-soft);
+}
+
+.edit-node {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+}
+
+.edit-node label {
+  display: block;
+  margin: 0.4rem 0;
+}
+
+.edit-node input:not([type="checkbox"]),
+.edit-node textarea,
+.edit-node select {
+  display: block;
+  width: 100%;
+  max-width: 48rem;
+  font: inherit;
+}
+
+.edit-dependencies label {
+  display: inline-block;
+  margin-right: 1rem;
+}
+
+.repair select {
+  display: inline-block;
+  width: auto;
+}
+
+.ledger tr[data-state="ambiguous"],
+.ledger tr[data-state="failed"] {
+  color: var(--lamp-stop);
+}
+
+.reconcile {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--callout);
+}
