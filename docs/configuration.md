@@ -611,7 +611,10 @@ serve ideation sessions instead of runs. They are optional: a repository that
 wants sessions adds them to `role_harness_defaults` and `model_options` (and
 optionally `reasoning_effort_options`); without that policy a session role
 fails closed. `role_craft` does not apply to session roles. See
-[Session roles](agent-runtime.md#session-roles).
+[Session roles](agent-runtime.md#session-roles). The `ideation` prompt names
+the `grilling` worker skill; `factory doctor` requires smoke evidence for it
+only from the harness that can run a declared `ideation` role. To add it to an
+existing record, run the smoke with `MANDATORY_SKILLS=grilling`.
 
 The optional `role_craft` map selects one repository-relative Markdown file per
 declared role. Its content replaces only that role's embedded `craft` section;
@@ -1120,6 +1123,10 @@ Schema version 45 adds the session command inbox (ADR 0024):
 expected revision, payload, state, and outcome. The local UI appends rows; the
 coordinator applies them. The migration only adds the table.
 
+Schema version 46 adds the correction link of a conversation turn (ADR 0027):
+`ideation_turns.corrects` names the earlier user answer that a turn changes.
+Existing turns correct nothing.
+
 ## Local run inspection
 
 Use the read-only CLI to inspect a named historical run while another run is
@@ -1151,8 +1158,9 @@ limits documented in [the debugging guide](../internal/guide/topics/debug.md#ins
 
 ## Local web UI
 
-`factory ui` serves a read-only view of the runs in the operational store and
-the session command API of ideation sessions (ADR 0021, ADR 0024). Open the
+`factory ui` serves a read-only view of the runs in the operational store, the
+pages of ideation sessions, and their session command API (ADR 0021, ADR 0024,
+ADR 0027). Open the
 printed URL in a browser on the same host. Stop the server with `Ctrl-C`
 (SIGINT) or SIGTERM.
 
@@ -1211,6 +1219,8 @@ Pages:
 |---|---|
 | `/` | All runs, newest update first: stage, status, workflow route, and activity. |
 | `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. The Retained inspection metadata section adds the frozen policy identity, bounded observations, and evidence availability/checkpoint metadata from the shared CLI projection. |
+| `/sessions` | Ideation sessions, newest update first, with state and reason, and a form that starts a session from an idea. Only with the session command API. |
+| `/sessions/{id}` | One session: the conversation in rounds, pending questions with one answer field each, corrections and the decisions they affect, the brief, the readiness proposal with its brief revision, role progress and failures, and the user's decisions. |
 | `/runs/{id}/evaluation` | The local evaluation summary of one run: outcome, wall time per stage, attempts, invocation versions, and reported usage. The summary is content-free (ADR 0001). When cleanup removed the run row, the page shows only the summary. |
 
 Every page shows a supervisor banner. The banner tells if the coordinator
@@ -1233,7 +1243,8 @@ Session commands (ADR 0021, ADR 0024):
   expected revision is the session revision the page shows (`0` for
   `create_session`). Kinds: `create_session`, `submit_turn`, `edit_brief`,
   `hand_off`, `edit_draft`, `regenerate_draft`, `preview_plan`, `approve`,
-  `publish`, `reconcile`, `defer`, `resume`, `no_build`, and `cancel`.
+  `publish`, `reconcile`, `defer`, `resume`, `investigation_needed`,
+  `no_build`, and `cancel`.
 - The UI appends a valid command to the command inbox in the operational
   store and answers HTTP 202 with the state `accepted`. Acceptance is not
   completion: the coordinator reads the inbox at startup and then every
@@ -1249,8 +1260,13 @@ Session commands (ADR 0021, ADR 0024):
   503 with the outcome `unavailable` and nothing is stored. The UI never
   starts a second writer. Run `factory start` and submit again. Read-only
   pages and session reads keep working.
-- `submit_turn` starts the ideation role for the accepted turn, and
-  `hand_off` and `regenerate_draft` start planning; a role that cannot start
+- `submit_turn` starts the ideation role for the accepted turn; its optional
+  `corrects` names the earlier user answer it changes. `hand_off` names the
+  brief revision the page showed and lists every unresolved question of it in
+  `deferred_questions`; otherwise it is refused (ADR 0027).
+  `investigation_needed` needs at least one unresolved question in the brief
+  and creates no backlog item. `hand_off` and `regenerate_draft` start
+  planning; a role that cannot start
   is named in the outcome detail. `edit_draft` passes plan validation before
   the coordinator saves it.
 - `approve` names the digests of a preview that `preview_plan` rendered,
@@ -1271,7 +1287,10 @@ Session commands (ADR 0021, ADR 0024):
   limited to about 2 MiB and unknown fields are refused. Pages submit with
   `/assets/commands.js`; the Content-Security-Policy still blocks form posts.
 - Automatic refresh pauses while a form has focus or unsent input, so a
-  refresh never wipes typed text.
+  refresh never wipes typed text. While a command of a session waits for the
+  coordinator, its page shows the command and offers no form, so a reload
+  cannot send the same decision twice. Ctrl+Enter sends the form of a text
+  field.
 - Session pages show conversation and plan content. Like run content, it stays
   on the host and is served only on the loopback interface.
 

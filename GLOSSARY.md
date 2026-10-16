@@ -13,7 +13,7 @@ The repository-scoped record of work that exists before an issue or a Run:
 its conversation turns, brief revisions, plan revisions, approvals, and
 publication receipts. It has its own lifecycle (awaiting user, role active,
 draft review, approved, publishing, publication incomplete, published,
-deferred, no build, cancelled) and its own revision for stale-writer checks.
+deferred, investigation needed, no build, cancelled) and its own revision for stale-writer checks.
 It owns no branch, worktree, or issue.
 _Avoid_: Run, draft run, chat
 
@@ -23,6 +23,32 @@ criteria, scope and non-goals, decisions with rationale, assumptions, evidence,
 and unresolved questions. Each change is a new brief revision; plan nodes
 reference its items by ID.
 _Avoid_: Spec (for an unpublished brief), summary
+
+**Readiness proposal**:
+The ideation role's suggestion of the next session step (ready for planning,
+investigation needed, or no build) with its rationale, bound to the brief
+revision it was made for. It changes nothing; the user decides with a command
+on the brief revision the page shows.
+_Avoid_: Approval, handoff
+
+**Deferred question**:
+An unresolved question of the brief that the user explicitly hands to
+planning without an answer. Planning may plan an investigation for it but must
+not answer it. A handoff must defer every unresolved question of its brief
+revision.
+_Avoid_: Assumption, open point
+
+**Investigation needed**:
+The session outcome that material unknowns must be investigated before
+planning. The unresolved questions of the brief are the investigation items.
+It creates no backlog item, and the session can resume.
+_Avoid_: Spike issue, deferred
+
+**Correction**:
+A user turn that names the earlier user answer it changes. The ideation role
+must revise or withdraw each brief decision that depended on the old answer
+and name those decisions as affected decisions.
+_Avoid_: Edit, rewrite
 
 **Plan revision**:
 One immutable, provider-neutral work-item graph derived from one exact brief
