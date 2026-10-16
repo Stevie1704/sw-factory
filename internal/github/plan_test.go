@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/github/githubtest"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -19,7 +20,7 @@ var planRepository = tracker.Repository{Owner: "example", Name: "project"}
 
 // writableRepository is the repository response of a target where the
 // account can open issues.
-const writableRepository = `{"has_issues":true,"archived":false,"permissions":{"pull":true,"push":true,"triage":true}}`
+const writableRepository = githubtest.WritableRepository
 
 // singleItemGraph is a plan with one node and no relationships.
 func singleItemGraph() tracker.PlanGraph {
@@ -143,11 +144,11 @@ func assertReadOnly(t *testing.T, calls []commandCall) {
 
 // nativeCapabilities is the GraphQL introspection answer of a GitHub host
 // with native sub-issues and blocking dependencies.
-const nativeCapabilities = `{"data":{"__type":{"fields":[{"name":"title"},{"name":"subIssues"},{"name":"parent"},{"name":"blockedBy"},{"name":"blocking"}]}}}`
+const nativeCapabilities = githubtest.NativeCapabilities
 
 // legacyCapabilities is the introspection answer of a GitHub host without
 // either relationship.
-const legacyCapabilities = `{"data":{"__type":{"fields":[{"name":"title"},{"name":"body"}]}}}`
+const legacyCapabilities = githubtest.LegacyCapabilities
 
 // decomposedGraph is a parent specification n-1 with children n-2 and n-3,
 // where n-3 depends on n-2.

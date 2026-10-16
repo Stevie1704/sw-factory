@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/azuredevops"
+	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
@@ -74,36 +75,12 @@ func (f *fakeAz) Run(_ context.Context, args []string) ([]byte, error) {
 // no Azure DevOps resource or no API version.
 func parseAzCall(t *testing.T, args []string) (azCall, error) {
 	t.Helper()
-	if len(args) == 0 || args[0] != "rest" {
-		return azCall{}, errors.New("fake az supports only az rest")
+	call, err := azuredevopstest.ParseCall(args)
+	if err != nil {
+		t.Error(err)
+		return azCall{}, err
 	}
-	call := azCall{}
-	resource := ""
-	for index := 1; index+1 < len(args); index += 2 {
-		switch args[index] {
-		case "--method":
-			call.method = strings.ToUpper(args[index+1])
-		case "--url":
-			parsed, err := url.Parse(args[index+1])
-			if err != nil {
-				t.Fatalf("az rest --url %q: %v", args[index+1], err)
-			}
-			call.url = parsed
-		case "--headers":
-			call.headers = args[index+1]
-		case "--body":
-			call.body = args[index+1]
-		case "--resource":
-			resource = args[index+1]
-		}
-	}
-	if resource != "499b84ac-1321-427f-aa17-267ca6975798" {
-		t.Fatalf("az rest --resource = %q, want the Azure DevOps resource", resource)
-	}
-	if call.url == nil || call.url.Query().Get("api-version") == "" {
-		t.Fatalf("az rest call %v has no api-version", args)
-	}
-	return call, nil
+	return azCall{method: call.Method, url: call.URL, headers: call.Headers, body: call.Body}, nil
 }
 
 // called returns the recorded calls of one route.
@@ -132,8 +109,9 @@ func decodeBody(t *testing.T, call azCall, destination any) {
 
 // Shared paths of the test repository.
 const (
-	projectPath    = "/contoso/Factory Pilot/_apis"
-	repositoryPath = projectPath + "/git/repositories/service"
+	projectPath    = azuredevopstest.ProjectPath
+	repositoryPath = azuredevopstest.RepositoryPath
+	workItemsPath  = azuredevopstest.WorkItemsPath
 )
 
 // connectionData is the identity response for alice.

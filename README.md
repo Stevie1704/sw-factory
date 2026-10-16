@@ -166,6 +166,7 @@ Each operational contract has one owner:
 | Release artifacts, the support matrix, installation, and upgrades | [Install a Software Factory release](docs/installation.md) |
 | Preparing a new repository for factory runs, as an ordered agent-runnable procedure | [Repository initialization](docs/repository-initialization.md) |
 | Host and repository configuration, issue operations, polling, GitHub commands, cleanup, and reset | [Configuration and local operation](docs/configuration.md) |
+| Ideation sessions for users: configuration, flow, approval scope, recovery, and retention | [From an idea to a reviewed backlog](docs/ideation.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
 | Worker operations, stable paths, mounts, process state, and isolation | [Worker runtime](docs/worker-runtime.md) |
 | Approved Go toolchain, vulnerability scans, suppressions, and the Worker rebuild, publish, and repin procedure | [Build toolchain and vulnerability scanning](docs/supply-chain.md) |

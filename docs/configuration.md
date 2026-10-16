@@ -1209,8 +1209,8 @@ limits documented in [the debugging guide](../internal/guide/topics/debug.md#ins
 
 `factory ui` serves a read-only view of the runs in the operational store, the
 pages of ideation sessions, and their session command API (ADR 0021, ADR 0024,
-ADR 0027). Open the
-printed URL in a browser on the same host. Stop the server with `Ctrl-C`
+ADR 0027). [From an idea to a reviewed backlog](ideation.md) is the user
+guide of sessions. Open the printed URL in a browser on the same host. Stop the server with `Ctrl-C`
 (SIGINT) or SIGTERM.
 
 ```sh

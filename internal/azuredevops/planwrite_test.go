@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/azuredevops"
+	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -29,7 +30,7 @@ func renderedStory() tracker.RenderedPlanItem {
 func TestCreatePlanItemCreatesExactlyTheRenderedWorkItem(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, agileProcess())
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	ref, err := planClient(boards, nil).CreatePlanItem(t.Context(), repository, renderedStory())
 	if err != nil {
 		t.Fatalf("CreatePlanItem() error = %v", err)
@@ -37,7 +38,7 @@ func TestCreatePlanItemCreatesExactlyTheRenderedWorkItem(t *testing.T) {
 	if ref.ExternalID != "101" || ref.URL != "https://dev.azure.com/contoso/Factory%20Pilot/_workitems/edit/101" {
 		t.Fatalf("ref = %#v", ref)
 	}
-	created := boards.snapshot()[0]
+	created := boards.Snapshot()[0]
 	wantFields := map[string]any{
 		"System.Title": "Cache images", "System.Description": "Child.\n",
 		"System.Tags": "factory-plan:session-1/2/n-2", "Microsoft.VSTS.Common.Priority": "1",
@@ -45,7 +46,7 @@ func TestCreatePlanItemCreatesExactlyTheRenderedWorkItem(t *testing.T) {
 	if created.Type != "User Story" || !reflect.DeepEqual(created.Fields, wantFields) || created.Formats["System.Description"] != "Markdown" || len(created.Relations) != 0 {
 		t.Fatalf("created = %#v, want exactly the rendered fields", created)
 	}
-	if writes := boards.writes(); len(writes) != 1 || writes[0].route() != "POST "+workItemsPath+"/$User Story" {
+	if writes := boards.Writes(); len(writes) != 1 || writes[0].Route() != "POST "+workItemsPath+"/$User Story" {
 		t.Fatalf("writes = %#v, want one create", writes)
 	}
 }
@@ -57,15 +58,15 @@ func TestCreatePlanItemRefusesFactoryStateTags(t *testing.T) {
 	t.Parallel()
 
 	for _, label := range tracker.FactoryStateLabels {
-		boards := newScriptedBoards(t, agileProcess())
+		boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 		item := renderedStory()
 		item.Labels = append(item.Labels, label)
 		_, err := planClient(boards, nil).CreatePlanItem(t.Context(), repository, item)
 		if kind, _ := tracker.PlanErrorKindOf(err); kind != tracker.PlanErrorInvalidMapping {
 			t.Fatalf("CreatePlanItem(%s) error = %v, want invalid mapping", label, err)
 		}
-		if len(boards.calls) != 0 {
-			t.Fatalf("CreatePlanItem(%s) called az %#v", label, boards.calls)
+		if len(boards.Calls()) != 0 {
+			t.Fatalf("CreatePlanItem(%s) called az %#v", label, boards.Calls())
 		}
 	}
 }
@@ -117,10 +118,10 @@ func TestCreatePlanItemClassifiesFailuresByProvenOutcome(t *testing.T) {
 func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, agileProcess())
-	first := boards.seed("User Story", "Cache images", "factory-plan:session-1/2/n-2", "team-a")
-	boards.seed("User Story", "Other", "factory-plan:session-1/2/n-20")
-	second := boards.seed("User Story", "Cache images copy", "factory-plan:session-1/2/n-2")
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
+	first := boards.Seed("User Story", "Cache images", "factory-plan:session-1/2/n-2", "team-a")
+	boards.Seed("User Story", "Other", "factory-plan:session-1/2/n-20")
+	second := boards.Seed("User Story", "Cache images copy", "factory-plan:session-1/2/n-2")
 	refs, err := planClient(boards, nil).FindPlanItems(t.Context(), repository, "session-1/2/n-2")
 	if err != nil {
 		t.Fatalf("FindPlanItems() error = %v", err)
@@ -135,7 +136,7 @@ func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 	var query struct {
 		Query string `json:"query"`
 	}
-	if err := json.Unmarshal([]byte(boards.calls[0].body), &query); err != nil || !strings.Contains(query.Query, "[System.TeamProject] = @project") {
+	if err := json.Unmarshal([]byte(boards.Calls()[0].Body), &query); err != nil || !strings.Contains(query.Query, "[System.TeamProject] = @project") {
 		t.Fatalf("WIQL = %q, %v; want a project-scoped query", query.Query, err)
 	}
 }
@@ -147,10 +148,10 @@ func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 func TestPlanRelationshipsUseParentAndPredecessorLinks(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, agileProcess())
-	parent := tracker.PlanItemRef{ExternalID: strconv.Itoa(boards.seed("Epic", "Parent"))}
-	first := tracker.PlanItemRef{ExternalID: strconv.Itoa(boards.seed("User Story", "First"))}
-	second := tracker.PlanItemRef{ExternalID: strconv.Itoa(boards.seed("User Story", "Second"))}
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
+	parent := tracker.PlanItemRef{ExternalID: strconv.Itoa(boards.Seed("Epic", "Parent"))}
+	first := tracker.PlanItemRef{ExternalID: strconv.Itoa(boards.Seed("User Story", "First"))}
+	second := tracker.PlanItemRef{ExternalID: strconv.Itoa(boards.Seed("User Story", "Second"))}
 	client := planClient(boards, nil)
 	relationships := []tracker.PlanRelationship{
 		{Kind: tracker.PlanRelationshipParent, Mode: tracker.PlanRelationshipNative, From: second, To: parent},
@@ -167,8 +168,8 @@ func TestPlanRelationshipsUseParentAndPredecessorLinks(t *testing.T) {
 			t.Fatalf("FindPlanRelationship() after create = %v, %v", found, err)
 		}
 	}
-	items := boards.snapshot()
-	want := []boardsRelation{
+	items := boards.Snapshot()
+	want := []azuredevopstest.Relation{
 		{Rel: "System.LinkTypes.Hierarchy-Reverse", URL: "https://dev.azure.com/contoso/_apis/wit/workItems/" + parent.ExternalID},
 		{Rel: "System.LinkTypes.Dependency-Reverse", URL: "https://dev.azure.com/contoso/_apis/wit/workItems/" + first.ExternalID},
 	}

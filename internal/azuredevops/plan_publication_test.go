@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/publication"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -27,14 +28,14 @@ type boardsSession struct {
 	t       *testing.T
 	path    string
 	store   *store.Store
-	boards  *scriptedBoards
+	boards  *azuredevopstest.Boards
 	mapping *config.AzurePlanMapping
 }
 
 // approvedBoardsSession stores a session with a parent and two tasks (n-3
 // depends on n-2, and the plan lists n-3 before n-2), approves the Azure
 // DevOps preview under mapping, and returns the session.
-func approvedBoardsSession(t *testing.T, boards *scriptedBoards, mapping *config.AzurePlanMapping) *boardsSession {
+func approvedBoardsSession(t *testing.T, boards *azuredevopstest.Boards, mapping *config.AzurePlanMapping) *boardsSession {
 	t.Helper()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "data", "factory.db")
@@ -134,10 +135,10 @@ func operation(t *testing.T, result publication.Result, id string) store.Publica
 
 // itemsByTitle returns the scripted work items keyed by title and fails on a
 // duplicate title.
-func (s *boardsSession) itemsByTitle() map[string]boardsItem {
+func (s *boardsSession) itemsByTitle() map[string]azuredevopstest.Item {
 	s.t.Helper()
-	items := map[string]boardsItem{}
-	for _, item := range s.boards.snapshot() {
+	items := map[string]azuredevopstest.Item{}
+	for _, item := range s.boards.Snapshot() {
 		title := item.Fields["System.Title"].(string)
 		if _, ok := items[title+"/"+item.Type]; ok {
 			s.t.Fatalf("%s %q was created more than once", item.Type, title)
@@ -154,9 +155,9 @@ func (s *boardsSession) itemsByTitle() map[string]boardsItem {
 func (s *boardsSession) assertInert() {
 	s.t.Helper()
 	created := map[string]bool{}
-	for _, item := range s.boards.snapshot() {
+	for _, item := range s.boards.Snapshot() {
 		created[strconv.Itoa(item.ID)] = true
-		for _, tag := range item.tags() {
+		for _, tag := range item.Tags() {
 			if tracker.IsFactoryStateLabel(tag) || !strings.HasPrefix(tag, "factory-plan:session-1/") {
 				s.t.Fatalf("work item %d carries tag %q", item.ID, tag)
 			}
@@ -168,12 +169,12 @@ func (s *boardsSession) assertInert() {
 			s.t.Fatalf("work item %d contains conversation text", item.ID)
 		}
 	}
-	for _, write := range s.boards.writes() {
-		if write.method == "PATCH" && !created[filepath.Base(write.url.Path)] {
-			s.t.Fatalf("publication updated %s, which the plan did not create", write.url.Path)
+	for _, write := range s.boards.Writes() {
+		if write.Method == "PATCH" && !created[filepath.Base(write.URL.Path)] {
+			s.t.Fatalf("publication updated %s, which the plan did not create", write.URL.Path)
 		}
-		if strings.Contains(write.body, tracker.LabelAgentReady) {
-			s.t.Fatalf("write %s sends %s", write.route(), tracker.LabelAgentReady)
+		if strings.Contains(write.Body, tracker.LabelAgentReady) {
+			s.t.Fatalf("write %s sends %s", write.Route(), tracker.LabelAgentReady)
 		}
 	}
 	if run, err := s.store.CurrentRun(s.t.Context()); err != nil || run != nil {
@@ -196,13 +197,13 @@ func requiredFeatureMapping() *config.AzurePlanMapping {
 func TestPublishCreatesTheHierarchyAndDependenciesInValidOrder(t *testing.T) {
 	t.Parallel()
 
-	s := approvedBoardsSession(t, newScriptedBoards(t, agileProcess()), requiredFeatureMapping())
+	s := approvedBoardsSession(t, azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess()), requiredFeatureMapping())
 	result := s.publish("attempt-1")
 	if result.Receipt.Outcome != store.PublicationOutcomePublished {
 		t.Fatalf("receipt = %#v, want published", result.Receipt)
 	}
 	order := []string{}
-	for _, item := range s.boards.snapshot() {
+	for _, item := range s.boards.Snapshot() {
 		order = append(order, item.Fields["System.Title"].(string)+"/"+item.Type)
 	}
 	want := []string{"Faster onboarding/Epic", "Faster onboarding/Feature", "Cache images/User Story", "Document setup/User Story"}
@@ -212,16 +213,16 @@ func TestPublishCreatesTheHierarchyAndDependenciesInValidOrder(t *testing.T) {
 	items := s.itemsByTitle()
 	epic, feature := items["Faster onboarding/Epic"], items["Faster onboarding/Feature"]
 	cache, docs := items["Cache images/User Story"], items["Document setup/User Story"]
-	link := func(rel string, to boardsItem) boardsRelation {
-		return boardsRelation{Rel: rel, URL: "https://dev.azure.com/contoso/_apis/wit/workItems/" + strconv.Itoa(to.ID)}
+	link := func(rel string, to azuredevopstest.Item) azuredevopstest.Relation {
+		return azuredevopstest.Relation{Rel: rel, URL: "https://dev.azure.com/contoso/_apis/wit/workItems/" + strconv.Itoa(to.ID)}
 	}
-	wantRelations := map[int][]boardsRelation{
+	wantRelations := map[int][]azuredevopstest.Relation{
 		epic.ID:    nil,
 		feature.ID: {link("System.LinkTypes.Hierarchy-Reverse", epic)},
 		cache.ID:   {link("System.LinkTypes.Hierarchy-Reverse", feature)},
 		docs.ID:    {link("System.LinkTypes.Hierarchy-Reverse", feature), link("System.LinkTypes.Dependency-Reverse", cache)},
 	}
-	for _, item := range s.boards.snapshot() {
+	for _, item := range s.boards.Snapshot() {
 		if !slices.Equal(item.Relations, wantRelations[item.ID]) {
 			t.Fatalf("work item %d relations = %#v, want %#v", item.ID, item.Relations, wantRelations[item.ID])
 		}
@@ -230,7 +231,7 @@ func TestPublishCreatesTheHierarchyAndDependenciesInValidOrder(t *testing.T) {
 	for _, item := range result.Receipt.Items {
 		recorded[item.NodeID] = item.ExternalID + " " + item.URL
 	}
-	for node, item := range map[string]boardsItem{"n-1": epic, "n-1--feature": feature, "n-2": cache, "n-3": docs} {
+	for node, item := range map[string]azuredevopstest.Item{"n-1": epic, "n-1--feature": feature, "n-2": cache, "n-3": docs} {
 		id := strconv.Itoa(item.ID)
 		if recorded[node] != id+" https://dev.azure.com/contoso/Factory%20Pilot/_workitems/edit/"+id {
 			t.Fatalf("receipt item of %s = %q, want work item %s", node, recorded[node], id)
@@ -246,9 +247,9 @@ func TestPublishCreatesTheHierarchyAndDependenciesInValidOrder(t *testing.T) {
 func TestPublishResumesAnInterruptedPublicationWithoutDuplicates(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, agileProcess())
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	s := approvedBoardsSession(t, boards, nil)
-	boards.failOnce("create:Cache images", "az rest: connection reset by peer", true)
+	boards.FailOnce("create:Cache images", "az rest: connection reset by peer", true)
 	first := s.publish("attempt-1")
 	if first.Receipt.Outcome != store.PublicationOutcomeIncomplete || operation(t, first, "item/n-2").State != store.PublicationOperationAmbiguous {
 		t.Fatalf("first attempt = %#v, want incomplete with an ambiguous create", first.Receipt)
@@ -258,8 +259,8 @@ func TestPublishResumesAnInterruptedPublicationWithoutDuplicates(t *testing.T) {
 	if second.Receipt.Outcome != store.PublicationOutcomePublished {
 		t.Fatalf("second attempt = %#v, want published", second.Receipt)
 	}
-	if boards.creates() != 3 || len(s.itemsByTitle()) != 3 {
-		t.Fatalf("creates = %d, want each of the 3 items created once", boards.creates())
+	if boards.Creates() != 3 || len(s.itemsByTitle()) != 3 {
+		t.Fatalf("creates = %d, want each of the 3 items created once", boards.Creates())
 	}
 	if adopted := operation(t, second, "item/n-2"); adopted.Detail != "found by correlation lookup" {
 		t.Fatalf("item/n-2 = %#v, want it adopted by correlation lookup", adopted)
@@ -277,30 +278,30 @@ func TestPublishStopsOnUncertainOrDuplicateCreates(t *testing.T) {
 	t.Run("no item after an unknown outcome", func(t *testing.T) {
 		t.Parallel()
 
-		boards := newScriptedBoards(t, agileProcess())
+		boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 		s := approvedBoardsSession(t, boards, nil)
-		boards.failOnce("create:Cache images", "az rest: connection reset by peer", false)
+		boards.FailOnce("create:Cache images", "az rest: connection reset by peer", false)
 		s.publish("attempt-1")
-		creates := boards.creates()
+		creates := boards.Creates()
 		retry := s.publish("attempt-2")
-		if retry.Receipt.Outcome != store.PublicationOutcomeIncomplete || operation(t, retry, "item/n-2").State != store.PublicationOperationAmbiguous || boards.creates() != creates {
-			t.Fatalf("retry = %#v with %d creates, want a stop without a create", retry.Receipt, boards.creates()-creates)
+		if retry.Receipt.Outcome != store.PublicationOutcomeIncomplete || operation(t, retry, "item/n-2").State != store.PublicationOperationAmbiguous || boards.Creates() != creates {
+			t.Fatalf("retry = %#v with %d creates, want a stop without a create", retry.Receipt, boards.Creates()-creates)
 		}
 	})
 	t.Run("duplicate candidates", func(t *testing.T) {
 		t.Parallel()
 
-		boards := newScriptedBoards(t, agileProcess())
+		boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 		s := approvedBoardsSession(t, boards, nil)
-		boards.seed("User Story", "Cache images", "factory-plan:session-1/1/n-2")
-		boards.seed("User Story", "Cache images (copy)", "factory-plan:session-1/1/n-2")
+		boards.Seed("User Story", "Cache images", "factory-plan:session-1/1/n-2")
+		boards.Seed("User Story", "Cache images (copy)", "factory-plan:session-1/1/n-2")
 		result := s.publish("attempt-1")
 		stopped := operation(t, result, "item/n-2")
 		if result.Receipt.Outcome != store.PublicationOutcomeIncomplete || stopped.State != store.PublicationOperationAmbiguous || !strings.Contains(stopped.Detail, "2 tracker items") {
 			t.Fatalf("result = %#v, item/n-2 = %#v; want a stop on two candidates", result.Receipt, stopped)
 		}
-		if boards.creates() != 1 {
-			t.Fatalf("creates = %d, want only the parent created", boards.creates())
+		if boards.Creates() != 1 {
+			t.Fatalf("creates = %d, want only the parent created", boards.Creates())
 		}
 	})
 }
@@ -311,15 +312,15 @@ func TestPublishStopsOnUncertainOrDuplicateCreates(t *testing.T) {
 func TestPublishStopsOnAPermissionFailureWithoutFurtherWrites(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, agileProcess())
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	s := approvedBoardsSession(t, boards, nil)
-	boards.failOnce("create:Faster onboarding", `az rest: Forbidden({"message":"TF237111: no permission to save work items"})`, false)
+	boards.FailOnce("create:Faster onboarding", `az rest: Forbidden({"message":"TF237111: no permission to save work items"})`, false)
 	result := s.publish("attempt-1")
 	if result.Receipt.Outcome != store.PublicationOutcomeIncomplete || operation(t, result, "item/n-1").State != store.PublicationOperationFailed {
 		t.Fatalf("result = %#v, want incomplete with a failed create", result.Receipt)
 	}
-	if len(boards.snapshot()) != 0 || boards.creates() != 1 {
-		t.Fatalf("items = %#v after %d creates, want one refused create", boards.snapshot(), boards.creates())
+	if len(boards.Snapshot()) != 0 || boards.Creates() != 1 {
+		t.Fatalf("items = %#v after %d creates, want one refused create", boards.Snapshot(), boards.Creates())
 	}
 }
 
@@ -328,9 +329,9 @@ func TestPublishStopsOnAPermissionFailureWithoutFurtherWrites(t *testing.T) {
 func TestPublishVerifiesALinkWhoseResponseWasLost(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, agileProcess())
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	s := approvedBoardsSession(t, boards, nil)
-	boards.failOnce("link:103", "az rest: connection reset by peer", true)
+	boards.FailOnce("link:103", "az rest: connection reset by peer", true)
 	if first := s.publish("attempt-1"); first.Receipt.Outcome != store.PublicationOutcomeIncomplete {
 		t.Fatalf("first attempt = %#v, want incomplete", first.Receipt)
 	}
