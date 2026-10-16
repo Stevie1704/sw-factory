@@ -747,3 +747,159 @@ td {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* Ideation sessions */
+
+.nav-link {
+  margin-left: 1.25rem;
+  color: var(--strip-ink);
+  font-weight: 600;
+}
+
+main .notice {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--lamp-run);
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+main .notice-alarm {
+  border-left-color: var(--lamp-stop);
+  background: var(--lamp-stop);
+}
+
+.notice p {
+  margin: 0.2rem 0;
+}
+
+.rounds,
+.turns {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.round + .round {
+  margin-top: 1.5rem;
+}
+
+.turn {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.turn[data-author="user"] {
+  border-left: 4px solid var(--lamp-run);
+}
+
+.turn[data-author="role"] {
+  border-left: 4px solid var(--lamp-ok);
+}
+
+.turn-head {
+  margin: 0 0 0.35rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.turn-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.questions,
+.brief-list {
+  padding-left: 1.2rem;
+}
+
+.correction {
+  margin-top: 0.5rem;
+}
+
+.rationale,
+.hint {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.command-form {
+  margin: 1rem 0;
+}
+
+.field {
+  margin: 0 0 0.75rem;
+}
+
+.field label,
+.brief-row label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-weight: 600;
+}
+
+.command-form textarea,
+.command-form input:not([type="checkbox"]),
+.command-form select {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--steel);
+  border-radius: 4px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+}
+
+.command-form button {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  color: var(--paper);
+  background: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.command-form button[type="button"] {
+  color: var(--ink);
+  background: transparent;
+}
+
+.command-form :focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--lamp-run);
+  outline-offset: 2px;
+}
+
+.command-form fieldset {
+  margin: 0 0 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.brief-row {
+  margin-bottom: 0.75rem;
+}
+
+.check {
+  margin: 0.35rem 0;
+}
+
+.command-status:empty {
+  display: none;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+main > .callout,
+main > section + section {
+  margin-top: 1.5rem;
+}

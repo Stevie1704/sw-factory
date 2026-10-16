@@ -12,7 +12,7 @@
 // A <form data-session-command="KIND" data-session-id="ID"
 // data-expected-revision="N"> submits its named fields as the payload.
 // A field with data-type="number" sends a number and a checkbox sends a
-// boolean. The form is marked data-dirty while it has unsent input, which
+// boolean; checkboxes with data-list send the list of their checked values. The form is marked data-dirty while it has unsent input, which
 // pauses the automatic page refresh, so a refresh never wipes typed input.
 // The outcome is written into the form's [data-command-status] element, and
 // a "factory:command" event with the answer is sent from the form.
@@ -103,7 +103,12 @@
       if (!field.name || field.disabled) {
         return;
       }
-      if (field.type === "checkbox") {
+      if (field.type === "checkbox" && "list" in field.dataset) {
+        payload[field.name] = payload[field.name] || [];
+        if (field.checked) {
+          payload[field.name].push(field.value);
+        }
+      } else if (field.type === "checkbox") {
         payload[field.name] = field.checked;
       } else if (field.dataset.type === "number") {
         payload[field.name] = Number(field.value);
@@ -134,12 +139,17 @@
       if (!form.dataset.requestId) {
         form.dataset.requestId = newRequestID();
       }
-      submit({
+      send({
         request_id: form.dataset.requestId,
         session_id: form.dataset.sessionId,
         kind: form.dataset.sessionCommand,
         expected_revision: Number(form.dataset.expectedRevision),
         payload: payloadOf(form)
+      }, 1).then(function (answer) {
+        if (status && (answer.state === "accepted" || answer.state === "applying")) {
+          status.textContent = "accepted; waits for the coordinator";
+        }
+        return wait(answer);
       }).then(function (answer) {
         if (status) {
           status.textContent = describe(answer);

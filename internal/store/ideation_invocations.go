@@ -282,6 +282,13 @@ func (s *Store) ActiveSessionInvocations(ctx context.Context) ([]SessionInvocati
 	return s.querySessionInvocations(ctx, `SELECT `+sessionInvocationColumns+` FROM ideation_invocations WHERE status = 'active' ORDER BY created_at, id`)
 }
 
+// SessionInvocations returns every invocation of one session, ended or
+// active, in start order. Session pages read accepted payloads and failure
+// causes from them.
+func (s *Store) SessionInvocations(ctx context.Context, sessionID string) ([]SessionInvocation, error) {
+	return s.querySessionInvocations(ctx, `SELECT `+sessionInvocationColumns+` FROM ideation_invocations WHERE session_id = ? ORDER BY created_at, id`, sessionID)
+}
+
 // ResumableSessionInvocation returns the newest accepted invocation of role in
 // the session that has a native session, or nil. A later turn of the same
 // role continues that native session.

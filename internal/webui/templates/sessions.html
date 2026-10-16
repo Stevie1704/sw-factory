@@ -1,0 +1,41 @@
+{{define "title"}}Sessions{{end}}
+
+{{define "content" -}}
+<div class="page-head">
+<p class="crumbs"><a href="/">Runs</a> / <span>Sessions</span></p>
+<h1>Ideation sessions</h1>
+</div>
+{{if not .Supervisor.Live}}<p class="notice notice-alarm" role="alert">Commands need a running coordinator. Run factory start, then send the command again. You can still read every session.</p>{{end}}
+<section class="callout" aria-labelledby="new-session-heading">
+<h2 id="new-session-heading">Start a session</h2>
+<form id="new-session" class="command-form">
+<div class="field"><label for="new-session-title">Title (optional)</label>
+<input id="new-session-title" name="title" maxlength="200" autocomplete="off"></div>
+<div class="field"><label for="new-session-idea">Your idea</label>
+<textarea id="new-session-idea" name="idea" rows="5" required aria-describedby="new-session-hint"></textarea>
+<p id="new-session-hint" class="hint">Describe the problem and who has it. The ideation role asks targeted questions next. Ctrl+Enter sends.</p></div>
+<button type="submit">Start session</button>
+<p class="command-status" data-command-status role="status" aria-live="polite"></p>
+</form>
+</section>
+{{if .Sessions -}}
+<ol class="runs">
+{{range .Sessions -}}
+<li class="run" data-state="{{.State}}">
+<div class="run-head">
+<a class="run-title" href="/sessions/{{.ID}}">{{if .Title}}{{.Title}}{{else}}Session {{.ID}}{{end}}</a>
+<span class="run-id">{{.ID}}</span>
+</div>
+<dl class="run-facts">
+<div><dt>State</dt><dd><span class="status" data-status="{{.State}}">{{.State}}</span></dd></div>
+{{with .StateReason}}<div class="wide"><dt>Reason</dt><dd>{{.}}</dd></div>{{end}}
+<div><dt>Brief revision</dt><dd>{{.BriefRevision}}</dd></div>
+<div><dt>Updated</dt><dd>{{formatTime .UpdatedAt}}</dd></div>
+</dl>
+</li>
+{{end -}}
+</ol>
+{{- else -}}
+<div class="empty"><p>No ideation session is recorded.</p></div>
+{{- end}}
+{{- end}}

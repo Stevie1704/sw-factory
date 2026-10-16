@@ -1,0 +1,203 @@
+{{define "title"}}{{if .Session.Title}}{{.Session.Title}}{{else}}Session {{.Session.ID}}{{end}}{{end}}
+
+{{define "content" -}}
+<div class="page-head session-hero" data-state="{{.Session.State}}">
+<p class="crumbs"><a href="/">Runs</a> / <a href="/sessions">Sessions</a> / <span class="run-id">Session {{.Session.ID}}</span></p>
+<h1>{{if .Session.Title}}{{.Session.Title}}{{else}}Session {{.Session.ID}}{{end}}</h1>
+<p class="hero-state"><span class="status" data-status="{{.Session.State}}">{{.Session.State}}</span> <span class="activity">revision {{.Session.Revision}}</span>{{with .Session.StateReason}} <span class="reason">{{.}}</span>{{end}}</p>
+</div>
+
+{{template "session-progress" .}}
+
+<section aria-labelledby="conversation">
+<h2 id="conversation">Conversation</h2>
+{{if .Rounds -}}
+<ol class="rounds">
+{{range .Rounds -}}
+<li class="round"><h3>Round {{.Number}}</h3>
+<ol class="turns">
+{{range .Turns -}}
+<li class="turn" id="turn-{{.ID}}" data-author="{{.Author}}"{{with .Corrects}} data-corrects="{{.}}"{{end}}>
+<p class="turn-head">{{if eq (print .Author) "user"}}You{{else}}{{.Role}} role{{end}}{{with .Corrects}} · corrects <a href="#turn-{{.}}">an earlier answer</a>{{end}} · <span class="stamp">{{formatTime .CreatedAt}}</span></p>
+<div class="turn-body">{{.Body}}</div>
+{{with .Questions}}<ul class="questions">{{range .}}<li><code>{{.ID}}</code> {{.Prompt}}</li>{{end}}</ul>{{end}}
+{{with .Correction}}<div class="correction">
+{{if .Affected}}<p>Decisions affected by the changed answer:</p>
+<ul>{{range .Affected}}<li data-affected-decision="{{.ID}}"><code>{{.ID}}</code> <strong>{{.Result}}</strong>{{with .Decision}}: {{.}}{{end}}</li>{{end}}</ul>
+{{else}}<p class="notice">The ideation role named no affected decision for this changed answer. Check the brief before you hand it off.</p>{{end}}
+</div>{{end}}
+{{with .Readiness}}<p class="readiness-note">Proposed: <strong>{{.Proposal}}</strong>. {{.Rationale}}</p>{{end}}
+</li>
+{{end -}}
+</ol>
+</li>
+{{end -}}
+</ol>
+{{- else -}}
+<p class="empty">No turn is recorded yet. Describe your idea below.</p>
+{{- end}}
+</section>
+
+{{template "session-answer" .}}
+
+{{template "session-readiness" .}}
+
+{{template "session-brief" .}}
+
+{{block "session-plan" .}}{{end}}
+
+{{template "session-outcomes" .}}
+{{- end}}
+
+{{define "session-progress" -}}
+{{if not .Supervisor.Live}}<p class="notice notice-alarm" role="alert">Commands need a running coordinator. Run factory start, then send the command again. You can still read this session.</p>{{end}}
+{{with .Progress}}<p class="notice" role="status">The {{.Role}} role is working on the session since {{formatTime .Since}}. This page updates when it answers.</p>{{end}}
+{{with .Failure}}<div class="notice notice-alarm" role="alert"><p>The {{.Role}} role stopped without an answer: <code>{{.Kind}}</code>{{with .Reason}} ({{.}}){{end}}.</p><p>{{.Advice}}</p></div>{{end}}
+{{range .PendingCommands}}<p class="notice" role="status">{{if .Body}}Your answer is accepted and waits for the coordinator: “{{.Body}}”{{else}}The {{.Kind}} command is accepted and waits for the coordinator ({{.State}}).{{end}}</p>
+{{end}}
+{{range .Outcomes}}<p class="notice">Last {{.Kind}} command: <strong>{{.Outcome}}</strong>{{with .Detail}}: {{.}}{{end}}</p>
+{{end}}
+{{- end}}
+
+{{define "session-answer" -}}
+{{if .Actions.Answer -}}
+<section class="callout" aria-labelledby="answer-heading">
+<h2 id="answer-heading">{{if .Pending}}Answer the questions{{else if .Rounds}}Send a message{{else}}Describe your idea{{end}}</h2>
+<form class="command-form" data-session-command="submit_turn" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}"{{if .Pending}} data-answer-form{{end}}>
+{{range .Pending -}}
+<div class="field"><label for="answer-{{.ID}}"><code>{{.ID}}</code> {{.Prompt}}</label>
+<textarea id="answer-{{.ID}}" rows="3" data-question-id="{{.ID}}" data-question-prompt="{{.Prompt}}"></textarea></div>
+{{end -}}
+{{if .Pending -}}
+<div class="field"><label for="answer-note">Anything else (optional)</label>
+<textarea id="answer-note" rows="3" data-answer-note></textarea></div>
+<textarea name="body" hidden data-answer-body></textarea>
+{{- else -}}
+<div class="field"><label for="answer-body">{{if .Rounds}}Message{{else}}Your idea{{end}}</label>
+<textarea id="answer-body" name="body" rows="5" required></textarea></div>
+{{- end}}
+<p class="hint">You can leave a question open; the role keeps it as an unresolved question. Ctrl+Enter sends.</p>
+<button type="submit">Send</button>
+<p class="command-status" data-command-status role="status" aria-live="polite"></p>
+</form>
+{{with .Answers -}}
+<details class="correct">
+<summary>Correct an earlier answer</summary>
+<form class="command-form" data-session-command="submit_turn" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}">
+<div class="field"><label for="correct-target">Answer to correct</label>
+<select id="correct-target" name="corrects">
+{{range .}}<option value="{{.ID}}">Round {{.Round}}: {{.Excerpt}}</option>
+{{end -}}
+</select></div>
+<div class="field"><label for="correct-body">Corrected answer</label>
+<textarea id="correct-body" name="body" rows="3" required aria-describedby="correct-hint"></textarea>
+<p id="correct-hint" class="hint">The ideation role revisits every decision that depends on the changed answer and names it.</p></div>
+<button type="submit">Send correction</button>
+<p class="command-status" data-command-status role="status" aria-live="polite"></p>
+</form>
+</details>
+{{- end}}
+</section>
+{{- end}}
+{{- end}}
+
+{{define "session-readiness" -}}
+{{with .Readiness -}}
+<section class="callout" aria-labelledby="readiness" data-readiness="{{.Proposal}}">
+<h2 id="readiness">Readiness proposal</h2>
+<p>The ideation role proposes <strong>{{.Proposal}}</strong>, proposed for brief revision {{.BriefRevision}}{{if not .Current}}; the brief is now revision {{.CurrentBriefRevision}}, so the proposal may not apply{{end}}.</p>
+<p>{{.Rationale}}</p>
+<p class="hint">The proposal changes nothing. You decide below, for the brief revision that this page shows.</p>
+</section>
+{{- end}}
+{{- end}}
+
+{{define "session-brief" -}}
+<section id="brief" aria-labelledby="brief-heading">
+<h2 id="brief-heading">Brief</h2>
+{{with .Brief -}}
+<p class="hint">Brief revision {{.Revision}} · {{formatTime .CreatedAt}}</p>
+<dl class="facts brief">
+<dt>Problem</dt><dd>{{.Brief.Problem}}</dd>
+{{with .Brief.Audience}}<dt>Audience</dt><dd>{{.}}</dd>{{end}}
+</dl>
+{{with .Brief.Decisions}}<h3>Decisions</h3>
+<ul class="brief-list">{{range .}}<li id="brief-{{.ID}}"><code>{{.ID}}</code> {{.Decision}}<br><span class="rationale">Rationale: {{.Rationale}}</span></li>{{end}}</ul>{{end}}
+{{range briefLists .Brief}}{{if .Items}}<h3>{{.Label}}</h3>
+<ul class="brief-list" data-brief-section="{{.Key}}">{{range .Items}}<li id="brief-{{.ID}}"><code>{{.ID}}</code> {{.Text}}</li>{{end}}</ul>
+{{end}}{{end}}
+{{- else -}}
+<p class="empty">No brief yet. The ideation role proposes one when the conversation settles something.</p>
+{{- end}}
+{{if .Actions.EditBrief}}{{template "session-brief-editor" .}}{{end}}
+</section>
+{{- end}}
+
+{{define "session-brief-editor" -}}
+<form class="command-form brief-editor" data-brief-editor data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
+<details>
+<summary>Edit the brief</summary>
+<div class="field"><label for="brief-problem">Problem</label>
+<textarea id="brief-problem" rows="3" data-brief-field="problem" required>{{with .Brief}}{{.Brief.Problem}}{{end}}</textarea></div>
+<div class="field"><label for="brief-audience">Audience</label>
+<textarea id="brief-audience" rows="2" data-brief-field="audience">{{with .Brief}}{{.Brief.Audience}}{{end}}</textarea></div>
+<fieldset data-brief-decisions>
+<legend>Decisions</legend>
+{{with .Brief}}{{range .Brief.Decisions}}<div class="brief-row" data-brief-row data-item-id="{{.ID}}">
+<label>Decision <code>{{.ID}}</code><textarea rows="2" data-row-decision>{{.Decision}}</textarea></label>
+<label>Rationale<textarea rows="2" data-row-rationale>{{.Rationale}}</textarea></label>
+<button type="button" data-remove-row>Remove {{.ID}}</button></div>
+{{end}}{{end -}}
+<button type="button" data-add-row="decisions" data-prefix="d">Add decision</button>
+</fieldset>
+{{range briefLists (editableBrief .Brief)}}<fieldset data-brief-list="{{.Key}}">
+<legend>{{.Label}}</legend>
+{{range .Items}}<div class="brief-row" data-brief-row data-item-id="{{.ID}}">
+<label><code>{{.ID}}</code><textarea rows="2" data-row-text>{{.Text}}</textarea></label>
+<button type="button" data-remove-row>Remove {{.ID}}</button></div>
+{{end -}}
+<button type="button" data-add-row="{{.Key}}" data-prefix="{{.Prefix}}">Add item</button>
+</fieldset>
+{{end -}}
+<button type="submit">Save brief revision</button>
+<p class="command-status" data-command-status role="status" aria-live="polite"></p>
+</details>
+</form>
+{{- end}}
+
+{{define "session-outcomes" -}}
+{{if or .Actions.Any (eq (print .Session.State) "investigation_needed") -}}
+<section aria-labelledby="decide">
+<h2 id="decide">Decide</h2>
+{{if eq (print .Session.State) "investigation_needed"}}{{with .Brief}}<div class="callout"><h3>Investigation items</h3>
+<p>No backlog item is created. Investigate these unknowns, then resume the session with the result.</p>
+<ul>{{range .Brief.UnresolvedQuestions}}<li><code>{{.ID}}</code> {{.Text}}</li>{{end}}</ul></div>{{end}}{{end}}
+{{if .Actions.HandOff}}{{with .Brief}}<form class="command-form" data-session-command="hand_off" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}">
+<h3>Ready for planning</h3>
+<p>Hand off brief revision {{.Revision}} as this page shows it. Planning reads only the brief.</p>
+<input type="hidden" name="brief_revision" data-type="number" value="{{.Revision}}">
+{{with .Brief.UnresolvedQuestions}}<fieldset><legend>Defer each unresolved question explicitly. Planning may plan an investigation for it, but must not answer it.</legend>
+{{range .}}<div class="check"><input type="checkbox" id="defer-{{.ID}}" name="deferred_questions" value="{{.ID}}" data-list required> <label for="defer-{{.ID}}"><code>{{.ID}}</code> {{.Text}}</label></div>
+{{end}}</fieldset>{{end}}
+<button type="submit">Hand off to planning</button>
+<p class="command-status" data-command-status role="status" aria-live="polite"></p>
+</form>{{end}}{{end}}
+{{if .Actions.Investigate}}{{template "session-reason-form" (reasonForm $ "investigation_needed" "Investigation needed" "Park the session until the unresolved questions are investigated. No backlog item is created." "Record investigation needed")}}{{end}}
+{{if .Actions.Defer}}{{template "session-reason-form" (reasonForm $ "defer" "Defer" "Pause the session. You can resume it later." "Defer session")}}{{end}}
+{{if .Actions.Resume}}{{template "session-reason-form" (reasonForm $ "resume" "Resume" "Continue the conversation." "Resume session")}}{{end}}
+{{if .Actions.NoBuild}}{{template "session-reason-form" (reasonForm $ "no_build" "No build" "Close the session with the decision not to build. No backlog item is created." "Record no build")}}{{end}}
+{{if .Actions.Cancel}}{{template "session-reason-form" (reasonForm $ "cancel" "Cancel" "Close the session without a decision." "Cancel session")}}{{end}}
+</section>
+{{- end}}
+{{- end}}
+
+{{define "session-reason-form" -}}
+<form class="command-form" data-session-command="{{.Kind}}" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
+<h3>{{.Heading}}</h3>
+<p>{{.Explanation}}</p>
+<div class="field"><label for="reason-{{.Kind}}">Reason (optional)</label>
+<input id="reason-{{.Kind}}" name="reason" maxlength="2000" autocomplete="off"></div>
+<button type="submit">{{.Button}}</button>
+<p class="command-status" data-command-status role="status" aria-live="polite"></p>
+</form>
+{{- end}}
