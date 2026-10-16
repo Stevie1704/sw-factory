@@ -1348,8 +1348,9 @@ Plan review (`/sessions/{id}/plan`):
 
 - The page shows every plan item with its kind, body, acceptance criteria,
   parent, dependencies, and brief references, and the problems that plan
-  validation finds per item. An invalid or stale plan offers no preview and
-  no approval.
+  validation finds per item. An invalid plan offers no preview and no
+  approval. A stale plan offers only regeneration: the coordinator also
+  refuses an `edit_draft` of it, because an edit cannot make it current.
 - The editor changes titles, bodies, acceptance criteria, kinds, parents, and
   dependencies, and removes or splits items. A removal or split marks every
   parent or dependency reference to the item; save stays off until you repair

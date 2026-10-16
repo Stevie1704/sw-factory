@@ -239,6 +239,26 @@ func TestInvalidPlanShowsProblemsPerItemAndCannotBePreviewed(t *testing.T) {
 	}
 }
 
+// TestStaleDraftOffersOnlyRegeneration verifies that a draft whose brief
+// changed offers no editor, preview, or approval: only regeneration from the
+// current brief.
+func TestStaleDraftOffersOnlyRegeneration(t *testing.T) {
+	t.Parallel()
+
+	ui := newPlanUI(t, planNodesForTest())
+	revision := ui.history(t).Session.Revision
+	ui.send(t, "brief-2", sessioncommand.KindEditBrief, revision,
+		`{"brief":{"problem":"Onboarding is slow for new teams.","scope":[{"id":"scope-1","text":"The onboarding command."}]}}`)
+	ui.drain(t)
+	page := ui.page(t)
+	assertContains(t, page, "but the brief changed", `data-session-command="regenerate_draft"`)
+	for _, unwanted := range []string{`id="plan-draft-data"`, `data-session-command="preview_plan"`, `data-session-command="approve"`} {
+		if strings.Contains(page, unwanted) {
+			t.Errorf("stale draft page contains %s", unwanted)
+		}
+	}
+}
+
 // intermediateTracker wraps the fake planning tracker with a provider that
 // needs an intermediate hierarchy level between a parent and its children,
 // as an Azure DevOps process with a Feature level does.

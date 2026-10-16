@@ -54,7 +54,8 @@ _Avoid_: Edit, rewrite
 One immutable, provider-neutral work-item graph derived from one exact brief
 revision and repository context revision. Nodes have stable local IDs, a kind
 (`task`, `investigation`, or `parent`), and parent, dependency, and brief
-references. A newer brief makes it stale. Plan validation refuses a draft with
+references. A newer brief makes it stale; a stale draft is regenerated, not
+edited. Plan validation refuses a draft with
 a cycle, a contradictory hierarchy, missing content, or a size over its limits;
 it never shortens a draft.
 _Avoid_: Backlog, issue list

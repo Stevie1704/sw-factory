@@ -459,9 +459,10 @@ func newPlanActions(model planPage) planActions {
 	busy := len(model.Pending) > 0
 	state := model.Session.State
 	hasPlan := model.Plan != nil
-	reviewable := hasPlan && !model.Plan.Stale && model.Valid && allows(workflow.SessionEventApproved)
+	current := hasPlan && !model.Plan.Stale
+	reviewable := current && model.Valid && allows(workflow.SessionEventApproved)
 	actions := planActions{
-		Edit:       hasPlan && allows(workflow.SessionEventEdited),
+		Edit:       current && allows(workflow.SessionEventEdited),
 		Regenerate: hasPlan && allows(workflow.SessionEventRoleStarted),
 		Preview:    reviewable && !busy,
 		Approve:    reviewable && !busy && model.Preview != nil,

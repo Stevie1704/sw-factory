@@ -33,7 +33,7 @@
 <section aria-labelledby="plan-items">
 <h2 id="plan-items">Plan items</h2>
 {{with .Plan -}}
-{{if .Stale}}<p class="notice notice-alarm" role="alert">This plan derives from brief revision {{.SourceBriefRevision}}, but the brief changed. Regenerate the draft from the current brief before you preview or approve it.</p>{{end}}
+{{if .Stale}}<p class="notice notice-alarm" role="alert">This plan derives from brief revision {{.SourceBriefRevision}}, but the brief changed. Regenerate the draft from the current brief before you edit, preview, or approve it.</p>{{end}}
 <p class="plan-context">Repository context revision <code>{{.ContextRevision}}</code>.</p>
 {{- end}}
 {{if .Plan}}

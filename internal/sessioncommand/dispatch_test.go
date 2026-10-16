@@ -616,3 +616,30 @@ func TestApprovalRefusesAnInvalidPlanGraph(t *testing.T) {
 		t.Fatalf("refused = %#v, want the validation problem, no approval, and no tracker write", refused)
 	}
 }
+
+// TestStaleDraftIsNotEditable verifies that an edit of a draft whose brief
+// changed is refused: the draft stays stale and needs regeneration from the
+// current brief, so an edit cannot make it approvable.
+func TestStaleDraftIsNotEditable(t *testing.T) {
+	t.Parallel()
+
+	c := newCoordinatorForTest(t)
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	c.submit("brief-2", "session-1", sessioncommand.KindEditBrief, revision,
+		`{"brief":{"problem":"Onboarding is slow for new teams.","scope":[{"id":"scope-1","text":"The onboarding command."}]}}`)
+	c.drain()
+	revision = c.requireOutcome("brief-2", store.IdeationCommandApplied).SessionRevision
+
+	c.submit("draft-stale", "session-1", sessioncommand.KindEditDraft, revision,
+		`{"nodes":[{"id":"n-1","kind":"task","title":"Only task","body":"Edited.","brief_refs":["scope-1"]}]}`)
+	c.drain()
+	refused := c.requireOutcome("draft-stale", store.IdeationCommandRefused)
+	if !strings.Contains(refused.Detail, "regenerate") {
+		t.Fatalf("refusal = %q, want it to name regeneration", refused.Detail)
+	}
+	history := c.history("session-1")
+	if history.Session.PlanRevision != 1 || !history.Plans[0].Stale {
+		t.Fatalf("plans = %#v, want the one stale draft unchanged", history.Plans)
+	}
+}

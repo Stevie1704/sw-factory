@@ -286,8 +286,9 @@ func roleUnavailable(env Env, session store.IdeationSession) (Outcome, error) {
 }
 
 // editDraft saves the edited plan as the next plan revision. It keeps the
-// repository context of the current draft and derives from the current
-// brief.
+// repository context and the source brief revision of the current draft. A
+// draft of an older brief revision is stale: an edit cannot make it current,
+// so the user regenerates it from the current brief instead.
 func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	payload, err := payloadOf[DraftPayload](command)
 	if err != nil {
@@ -305,6 +306,10 @@ func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Out
 		return Outcome{}, errors.New("the session has no plan draft to edit")
 	}
 	current := history.Plans[len(history.Plans)-1]
+	if current.SourceBriefRevision != session.BriefRevision {
+		return Outcome{}, fmt.Errorf("plan revision %d derives from brief revision %d, but the current brief revision is %d; regenerate the draft from the current brief instead of editing it",
+			current.Revision, current.SourceBriefRevision, session.BriefRevision)
+	}
 	nodes := PlanNodes(payload.Nodes)
 	if env.ValidatePlan != nil {
 		if err := env.ValidatePlan(nodes); err != nil {
@@ -316,7 +321,7 @@ func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Out
 		return Outcome{}, err
 	}
 	session, revision, err := env.Store.SavePlanRevision(ctx, write, store.PlanRevision{
-		SourceBriefRevision: session.BriefRevision, ContextRevision: current.ContextRevision, Nodes: nodes,
+		SourceBriefRevision: current.SourceBriefRevision, ContextRevision: current.ContextRevision, Nodes: nodes,
 	})
 	if err != nil {
 		return Outcome{}, err
