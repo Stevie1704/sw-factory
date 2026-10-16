@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/azuredevops"
+	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -34,7 +35,7 @@ func threeNodePlan() tracker.PlanGraph {
 
 // planClient returns an adapter over the scripted project with mapping; a
 // nil mapping selects the Agile default.
-func planClient(boards *scriptedBoards, mapping *config.AzurePlanMapping) *azuredevops.Client {
+func planClient(boards *azuredevopstest.Boards, mapping *config.AzurePlanMapping) *azuredevops.Client {
 	return &azuredevops.Client{Runner: boards, Organization: "contoso", Planning: mapping}
 }
 
@@ -46,7 +47,7 @@ func planClient(boards *scriptedBoards, mapping *config.AzurePlanMapping) *azure
 func TestPreflightPlanRendersTheAgileMappingWithoutWrites(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, agileProcess())
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	client := planClient(boards, nil)
 	preview, err := client.PreflightPlan(t.Context(), repository, threeNodePlan())
 	if err != nil {
@@ -83,7 +84,7 @@ func TestPreflightPlanRendersTheAgileMappingWithoutWrites(t *testing.T) {
 	if !reflect.DeepEqual(preview.Relationships, wantRelationships) {
 		t.Fatalf("Relationships = %#v, want %#v", preview.Relationships, wantRelationships)
 	}
-	if writes := boards.writes(); len(writes) != 0 {
+	if writes := boards.Writes(); len(writes) != 0 {
 		t.Fatalf("PreflightPlan() wrote %#v; preflight is read-only", writes)
 	}
 	again, err := client.PreflightPlan(t.Context(), repository, threeNodePlan())
@@ -107,7 +108,7 @@ func pbiMapping() *config.AzurePlanMapping {
 func TestPreflightPlanRendersAConfiguredBacklogItemMapping(t *testing.T) {
 	t.Parallel()
 
-	boards := newScriptedBoards(t, scrumProcess())
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.ScrumProcess())
 	preview, err := planClient(boards, pbiMapping()).PreflightPlan(t.Context(), repository, threeNodePlan())
 	if err != nil {
 		t.Fatalf("PreflightPlan() error = %v", err)
@@ -130,7 +131,7 @@ func TestPreflightPlanShowsRequiredIntermediateItems(t *testing.T) {
 
 	mapping := config.AgileAzurePlanMapping()
 	mapping.Levels[1].Required = true
-	boards := newScriptedBoards(t, agileProcess())
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	preview, err := planClient(boards, &mapping).PreflightPlan(t.Context(), repository, threeNodePlan())
 	if err != nil {
 		t.Fatalf("PreflightPlan() error = %v", err)
@@ -178,14 +179,14 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 		change(mapping.Levels)
 		return &mapping
 	}
-	requireCustomField := func(process []boardsType) {
-		process[2].Fields = append(process[2].Fields, boardsField{ReferenceName: "Custom.Team", Name: "Team", AlwaysRequired: true})
+	requireCustomField := func(process []azuredevopstest.WorkItemType) {
+		process[2].Fields = append(process[2].Fields, azuredevopstest.Field{ReferenceName: "Custom.Team", Name: "Team", AlwaysRequired: true})
 	}
 	tests := []struct {
 		name    string
 		mapping *config.AzurePlanMapping
-		process func([]boardsType)
-		setup   func(*scriptedBoards)
+		process func([]azuredevopstest.WorkItemType)
+		setup   func(*azuredevopstest.Boards)
 		want    tracker.PlanErrorKind
 		detail  string
 	}{
@@ -195,8 +196,8 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 			{Type: "User Story", Kinds: []string{"parent"}}, {Type: "Epic", Kinds: []string{"task", "investigation"}}}}},
 		{name: "type on no backlog", detail: "on no backlog level", want: tracker.PlanErrorUnsupportedCapability, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Type = "Issue" })},
 		{name: "unmapped kind", detail: "maps to no work-item type", want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Kinds = []string{"investigation"} })},
-		{name: "default mapping on a Scrum project", detail: `"User Story" does not exist`, want: tracker.PlanErrorInvalidMapping, process: func(p []boardsType) { copy(p, scrumProcess()) }},
-		{name: "disabled type", detail: `"Feature" does not exist or is disabled`, want: tracker.PlanErrorInvalidMapping, process: func(p []boardsType) { p[1].Disabled = true }},
+		{name: "default mapping on a Scrum project", detail: `"User Story" does not exist`, want: tracker.PlanErrorInvalidMapping, process: func(p []azuredevopstest.WorkItemType) { copy(p, azuredevopstest.ScrumProcess()) }},
+		{name: "disabled type", detail: `"Feature" does not exist or is disabled`, want: tracker.PlanErrorInvalidMapping, process: func(p []azuredevopstest.WorkItemType) { p[1].Disabled = true }},
 		{name: "missing required field", detail: `requires field "Custom.Team"`, want: tracker.PlanErrorInvalidMapping, process: requireCustomField},
 		{name: "unknown field", detail: `has no field "Custom.Missing"`, want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Fields = map[string]string{"Custom.Missing": "x"} })},
 		{name: "value not allowed", detail: `does not allow the value "9"`, want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) {
@@ -204,21 +205,21 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 		})},
 		{name: "started state", detail: "InProgress category", want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Fields = map[string]string{"System.State": "Active"} })},
 		{name: "unknown state", detail: `has no state "Doing"`, want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[0].Fields = map[string]string{"System.State": "Doing"} })},
-		{name: "no work item edit permission", detail: "view and edit work items", want: tracker.PlanErrorPermission, setup: func(b *scriptedBoards) { b.deny("83e28ad4-2d72-4ceb-97b0-c7726d5502c3", 48) }},
-		{name: "no tag create permission", detail: "create tag definitions", want: tracker.PlanErrorPermission, setup: func(b *scriptedBoards) { b.deny("bb50f182-8e5e-40b8-bc21-e8752a1e7ae2", 2) }},
-		{name: "forbidden process read", detail: "TF400813", want: tracker.PlanErrorPermission, setup: func(b *scriptedBoards) {
-			b.failOnce("GET "+projectPath+"/wit/workitemtypes", `az rest: Forbidden({"message":"TF400813: not authorized"})`, false)
+		{name: "no work item edit permission", detail: "view and edit work items", want: tracker.PlanErrorPermission, setup: func(b *azuredevopstest.Boards) { b.Deny("83e28ad4-2d72-4ceb-97b0-c7726d5502c3", 48) }},
+		{name: "no tag create permission", detail: "create tag definitions", want: tracker.PlanErrorPermission, setup: func(b *azuredevopstest.Boards) { b.Deny("bb50f182-8e5e-40b8-bc21-e8752a1e7ae2", 2) }},
+		{name: "forbidden process read", detail: "TF400813", want: tracker.PlanErrorPermission, setup: func(b *azuredevopstest.Boards) {
+			b.FailOnce("GET "+projectPath+"/wit/workitemtypes", `az rest: Forbidden({"message":"TF400813: not authorized"})`, false)
 		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			process := agileProcess()
+			process := azuredevopstest.AgileProcess()
 			if tc.process != nil {
 				tc.process(process)
 			}
-			boards := newScriptedBoards(t, process)
+			boards := azuredevopstest.NewBoards(t, process)
 			if tc.setup != nil {
 				tc.setup(boards)
 			}
@@ -226,7 +227,7 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 			if kind, ok := tracker.PlanErrorKindOf(err); !ok || kind != tc.want || !tracker.WriteNotApplied(err) || !strings.Contains(err.Error(), tc.detail) {
 				t.Fatalf("PreflightPlan() error = %v, want a %s planning error about %q", err, tc.want, tc.detail)
 			}
-			if writes := boards.writes(); len(writes) != 0 {
+			if writes := boards.Writes(); len(writes) != 0 {
 				t.Fatalf("PreflightPlan() wrote %#v", writes)
 			}
 		})
