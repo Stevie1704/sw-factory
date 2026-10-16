@@ -43,6 +43,9 @@ const (
 	SessionEventPublicationCompleted SessionEvent = "publication_completed"
 	// SessionEventDeferred records that the user parked the session.
 	SessionEventDeferred SessionEvent = "deferred"
+	// SessionEventInvestigationNeeded records the user's decision that
+	// material unknowns need investigation before planning.
+	SessionEventInvestigationNeeded SessionEvent = "investigation_needed"
 	// SessionEventResumed records that the user resumed a parked session.
 	SessionEventResumed SessionEvent = "resumed"
 	// SessionEventNoBuild records the user's decision not to build.
@@ -84,17 +87,19 @@ func DefaultSessionLifecycle() SessionLifecycle {
 		incomplete   = store.IdeationStatePublicationIncomplete
 		published    = store.IdeationStatePublished
 		deferred     = store.IdeationStateDeferred
+		investigate  = store.IdeationStateInvestigationNeeded
 		noBuild      = store.IdeationStateNoBuild
 		cancelled    = store.IdeationStateCancelled
 	)
 	return SessionLifecycle{transitions: map[store.IdeationState]map[SessionEvent]store.IdeationState{
 		awaitingUser: {
-			SessionEventTurnAccepted: awaitingUser,
-			SessionEventEdited:       awaitingUser,
-			SessionEventRoleStarted:  roleActive,
-			SessionEventDeferred:     deferred,
-			SessionEventNoBuild:      noBuild,
-			SessionEventCancelled:    cancelled,
+			SessionEventTurnAccepted:        awaitingUser,
+			SessionEventEdited:              awaitingUser,
+			SessionEventRoleStarted:         roleActive,
+			SessionEventDeferred:            deferred,
+			SessionEventInvestigationNeeded: investigate,
+			SessionEventNoBuild:             noBuild,
+			SessionEventCancelled:           cancelled,
 		},
 		roleActive: {
 			SessionEventRoleAwaitsUser: awaitingUser,
@@ -104,12 +109,13 @@ func DefaultSessionLifecycle() SessionLifecycle {
 			SessionEventCancelled:      cancelled,
 		},
 		draftReview: {
-			SessionEventEdited:      draftReview,
-			SessionEventRoleStarted: roleActive,
-			SessionEventApproved:    approved,
-			SessionEventDeferred:    deferred,
-			SessionEventNoBuild:     noBuild,
-			SessionEventCancelled:   cancelled,
+			SessionEventEdited:              draftReview,
+			SessionEventRoleStarted:         roleActive,
+			SessionEventApproved:            approved,
+			SessionEventDeferred:            deferred,
+			SessionEventInvestigationNeeded: investigate,
+			SessionEventNoBuild:             noBuild,
+			SessionEventCancelled:           cancelled,
 		},
 		approved: {
 			SessionEventEdited:             draftReview,
@@ -128,6 +134,11 @@ func DefaultSessionLifecycle() SessionLifecycle {
 			SessionEventCancelled:          cancelled,
 		},
 		deferred: {
+			SessionEventResumed:   awaitingUser,
+			SessionEventNoBuild:   noBuild,
+			SessionEventCancelled: cancelled,
+		},
+		investigate: {
 			SessionEventResumed:   awaitingUser,
 			SessionEventNoBuild:   noBuild,
 			SessionEventCancelled: cancelled,

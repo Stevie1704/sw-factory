@@ -49,6 +49,9 @@ const (
 	KindDefer Kind = "defer"
 	// KindResume resumes a parked session.
 	KindResume Kind = "resume"
+	// KindInvestigationNeeded records the decision that material unknowns
+	// need investigation before planning. It creates no backlog item.
+	KindInvestigationNeeded Kind = "investigation_needed"
 	// KindNoBuild records the decision not to build.
 	KindNoBuild Kind = "no_build"
 	// KindCancel cancels the session. Cancellation never deletes tracker
@@ -63,6 +66,10 @@ const MaxRequestBytes = store.MaxIdeationCommandPayloadBytes + 4096
 // maxReasonBytes bounds an optional user reason. It matches the store limit
 // for a session state reason.
 const maxReasonBytes = 2000
+
+// maxDeferredQuestions bounds the deferred questions of one handoff. It is
+// above any brief the store accepts in practice.
+const maxDeferredQuestions = 256
 
 // maxTitleBytes bounds a session title. It matches the store limit.
 const maxTitleBytes = 200
@@ -101,6 +108,9 @@ type CreateSessionPayload struct {
 type TurnPayload struct {
 	// Body is the user's answer or idea.
 	Body string `json:"body"`
+	// Corrects optionally names the earlier user turn whose answer this turn
+	// changes.
+	Corrects string `json:"corrects,omitempty"`
 }
 
 // BriefPayload is the payload of KindEditBrief.
@@ -113,6 +123,10 @@ type BriefPayload struct {
 type HandOffPayload struct {
 	// BriefRevision is the brief revision the user saw and hands off.
 	BriefRevision int64 `json:"brief_revision"`
+	// DeferredQuestions names every unresolved question of that brief
+	// revision. The user defers each one explicitly to planning, which may
+	// turn it into an investigation item but must not answer it.
+	DeferredQuestions []string `json:"deferred_questions,omitempty"`
 }
 
 // DraftPayload is the payload of KindEditDraft.
@@ -152,8 +166,8 @@ type ReconcilePayload struct {
 	ExternalID string `json:"external_id"`
 }
 
-// ReasonPayload is the payload of KindDefer, KindResume, KindNoBuild, and
-// KindCancel.
+// ReasonPayload is the payload of KindDefer, KindResume,
+// KindInvestigationNeeded, KindNoBuild, and KindCancel.
 type ReasonPayload struct {
 	// Reason optionally explains the decision.
 	Reason string `json:"reason"`
@@ -201,7 +215,8 @@ type PlanNodeJSON struct {
 func Kinds() []Kind {
 	return []Kind{
 		KindCreateSession, KindSubmitTurn, KindEditBrief, KindHandOff, KindEditDraft, KindRegenerateDraft,
-		KindPreviewPlan, KindApprove, KindPublish, KindReconcile, KindDefer, KindResume, KindNoBuild, KindCancel,
+		KindPreviewPlan, KindApprove, KindPublish, KindReconcile, KindDefer, KindResume, KindInvestigationNeeded,
+		KindNoBuild, KindCancel,
 	}
 }
 
@@ -267,7 +282,7 @@ func DecodePayload(kind Kind, raw []byte) (any, error) {
 		payload = &PublishPayload{}
 	case KindReconcile:
 		payload = &ReconcilePayload{}
-	case KindDefer, KindResume, KindNoBuild, KindCancel:
+	case KindDefer, KindResume, KindInvestigationNeeded, KindNoBuild, KindCancel:
 		payload = &ReasonPayload{}
 	default:
 		return nil, invalid("kind %q is not declared", kind)
@@ -286,8 +301,12 @@ func (p *CreateSessionPayload) validate() error {
 	return boundedText("title", p.Title, maxTitleBytes, false)
 }
 
-// validate checks the required, bounded turn body.
+// validate checks the required, bounded turn body and the optional
+// corrected turn identity. The store checks that the corrected turn exists.
 func (p *TurnPayload) validate() error {
+	if p.Corrects != "" && !safeIdentifier(p.Corrects) {
+		return errors.New("corrects must be the ID of an earlier turn")
+	}
 	return boundedText("body", p.Body, store.MaxIdeationTurnBytes, true)
 }
 
@@ -303,8 +322,19 @@ func (p *BriefPayload) validate() error {
 	return nil
 }
 
-// validate checks the handed-off brief revision.
-func (p *HandOffPayload) validate() error { return positive("brief_revision", p.BriefRevision) }
+// validate checks the handed-off brief revision and the deferred question
+// identities. The handler checks them against the brief.
+func (p *HandOffPayload) validate() error {
+	if len(p.DeferredQuestions) > maxDeferredQuestions {
+		return fmt.Errorf("deferred_questions has %d entries; the limit is %d", len(p.DeferredQuestions), maxDeferredQuestions)
+	}
+	for _, id := range p.DeferredQuestions {
+		if !safeIdentifier(id) {
+			return errors.New("deferred_questions must hold brief item IDs")
+		}
+	}
+	return positive("brief_revision", p.BriefRevision)
+}
 
 // validate checks the bounded draft. The store checks node references, and
 // plan validation checks the graph shape.

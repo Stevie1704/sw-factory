@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/publication"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -19,20 +20,21 @@ import (
 // regeneration check the request and report that no role can start.
 func DefaultHandlers() map[Kind]Handler {
 	return map[Kind]Handler{
-		KindCreateSession:   createSession,
-		KindSubmitTurn:      submitTurn,
-		KindEditBrief:       editBrief,
-		KindHandOff:         handOff,
-		KindEditDraft:       editDraft,
-		KindRegenerateDraft: regenerateDraft,
-		KindPreviewPlan:     previewPlan,
-		KindApprove:         approve,
-		KindPublish:         publish,
-		KindReconcile:       reconcile,
-		KindDefer:           Transition(workflow.SessionEventDeferred),
-		KindResume:          Transition(workflow.SessionEventResumed),
-		KindNoBuild:         Transition(workflow.SessionEventNoBuild),
-		KindCancel:          Transition(workflow.SessionEventCancelled),
+		KindCreateSession:       createSession,
+		KindSubmitTurn:          submitTurn,
+		KindEditBrief:           editBrief,
+		KindHandOff:             handOff,
+		KindEditDraft:           editDraft,
+		KindRegenerateDraft:     regenerateDraft,
+		KindPreviewPlan:         previewPlan,
+		KindApprove:             approve,
+		KindPublish:             publish,
+		KindReconcile:           reconcile,
+		KindDefer:               Transition(workflow.SessionEventDeferred),
+		KindResume:              Transition(workflow.SessionEventResumed),
+		KindInvestigationNeeded: investigationNeeded,
+		KindNoBuild:             Transition(workflow.SessionEventNoBuild),
+		KindCancel:              Transition(workflow.SessionEventCancelled),
 	}
 }
 
@@ -125,7 +127,9 @@ func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Ou
 		if env.Roles != nil {
 			write.CommandID = ""
 		}
-		session, _, err = env.Store.AppendIdeationTurn(ctx, write, store.IdeationTurn{ID: command.RequestID, Author: store.IdeationTurnAuthorUser, Body: payload.Body})
+		session, _, err = env.Store.AppendIdeationTurn(ctx, write, store.IdeationTurn{
+			ID: command.RequestID, Author: store.IdeationTurnAuthorUser, Body: payload.Body, Corrects: payload.Corrects,
+		})
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -177,22 +181,77 @@ func editBrief(ctx context.Context, env Env, command store.IdeationCommand) (Out
 	return Applied(session, fmt.Sprintf("brief revision %d saved", revision.Revision)), nil
 }
 
-// handOff checks that the displayed brief revision is current and that the
-// lifecycle allows a role start. This build has no planning role, so the
-// session does not change.
+// handOff checks that the displayed brief revision is current, that the user
+// deferred every unresolved question of it explicitly, and that the
+// lifecycle allows a role start. It then starts planning.
 func handOff(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	payload, err := payloadOf[HandOffPayload](command)
 	if err != nil {
 		return Outcome{}, err
 	}
-	session, err := CurrentSession(ctx, env, command)
+	brief, session, err := currentBrief(ctx, env, command, payload.BriefRevision)
 	if err != nil {
 		return Outcome{}, err
 	}
-	if payload.BriefRevision != session.BriefRevision {
-		return Outcome{}, fmt.Errorf("brief revision %d is not the current brief revision %d", payload.BriefRevision, session.BriefRevision)
+	if err := checkDeferredQuestions(brief, payload.DeferredQuestions); err != nil {
+		return Outcome{}, err
 	}
 	return startPlanning(ctx, env, session, command)
+}
+
+// currentBrief reads the session at the command's revision and returns its
+// current brief, which must be the brief revision the user saw.
+func currentBrief(ctx context.Context, env Env, command store.IdeationCommand, briefRevision int64) (store.Brief, store.IdeationSession, error) {
+	history, err := env.Store.IdeationHistory(ctx, command.SessionID)
+	if err != nil {
+		return store.Brief{}, store.IdeationSession{}, err
+	}
+	session := history.Session
+	if session.Revision != command.ExpectedRevision {
+		return store.Brief{}, session, &store.IdeationRevisionConflictError{SessionID: session.ID, Expected: command.ExpectedRevision, Actual: session.Revision}
+	}
+	if briefRevision != session.BriefRevision || len(history.Briefs) == 0 {
+		return store.Brief{}, session, fmt.Errorf("brief revision %d is not the current brief revision %d", briefRevision, session.BriefRevision)
+	}
+	return history.Briefs[len(history.Briefs)-1].Brief, session, nil
+}
+
+// checkDeferredQuestions refuses a handoff whose deferred questions are not
+// exactly the unresolved questions of brief, so that no unknown goes to
+// planning without the user's explicit decision.
+func checkDeferredQuestions(brief store.Brief, deferred []string) error {
+	named := map[string]bool{}
+	for _, id := range deferred {
+		named[id] = true
+	}
+	var missing []string
+	for _, question := range brief.UnresolvedQuestions {
+		if !named[question.ID] {
+			missing = append(missing, question.ID)
+		}
+		delete(named, question.ID)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("unresolved questions %s are not deferred; defer each one explicitly, answer it, or record that investigation is needed", strings.Join(missing, ", "))
+	}
+	for id := range named {
+		return fmt.Errorf("deferred question %q is not an unresolved question of the brief", id)
+	}
+	return nil
+}
+
+// investigationNeeded records that material unknowns need investigation
+// before planning. The unresolved questions of the current brief are the
+// investigation items, so the brief must hold at least one.
+func investigationNeeded(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
+	history, err := env.Store.IdeationHistory(ctx, command.SessionID)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if count := len(history.Briefs); count == 0 || len(history.Briefs[count-1].Brief.UnresolvedQuestions) == 0 {
+		return Outcome{}, errors.New("the brief has no unresolved question to investigate; record the unknown as an unresolved question of the brief first")
+	}
+	return Transition(workflow.SessionEventInvestigationNeeded)(ctx, env, command)
 }
 
 // regenerateDraft checks that the displayed plan revision is current and that

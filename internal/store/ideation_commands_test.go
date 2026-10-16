@@ -280,8 +280,8 @@ func TestSchema45MigrationCreatesTheCommandInbox(t *testing.T) {
 		t.Fatalf("Open() migration error = %v", err)
 	}
 	defer func() { _ = migrated.Close() }()
-	if migrated.SchemaVersion() != store.CurrentSchemaVersion || store.CurrentSchemaVersion != 45 {
-		t.Fatalf("SchemaVersion() = %d, want 45", migrated.SchemaVersion())
+	if migrated.SchemaVersion() != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", migrated.SchemaVersion(), store.CurrentSchemaVersion)
 	}
 	pending, err := migrated.PendingIdeationCommands(t.Context())
 	if err != nil || len(pending) != 0 {
