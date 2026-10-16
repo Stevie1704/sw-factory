@@ -220,7 +220,7 @@ func (d *Dispatcher) apply(ctx context.Context, command store.IdeationCommand) e
 		}
 	}
 	_, err = d.Env.Store.CompleteIdeationCommand(context.WithoutCancel(ctx), store.IdeationCommandResult{
-		RequestID: started.RequestID, Outcome: outcome.Code, Detail: bounded(outcome.Detail),
+		RequestID: started.RequestID, Outcome: outcome.Code, Detail: store.TruncateUTF8(outcome.Detail, store.MaxIdeationReasonBytes),
 		SessionRevision: outcome.SessionRevision, Result: outcome.Result, At: d.Env.now(),
 	})
 	if err != nil {
@@ -260,16 +260,4 @@ func (d *Dispatcher) outcomeOf(ctx context.Context, command store.IdeationComman
 		outcome.SessionRevision = session.Revision
 	}
 	return outcome
-}
-
-// bounded shortens detail to the store limit at a rune boundary.
-func bounded(detail string) string {
-	if len(detail) <= maxReasonBytes {
-		return detail
-	}
-	cut := maxReasonBytes
-	for cut > 0 && detail[cut]&0xC0 == 0x80 {
-		cut--
-	}
-	return detail[:cut]
 }

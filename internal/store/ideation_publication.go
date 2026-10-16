@@ -293,7 +293,7 @@ func validatePublicationResult(operation PublicationOperation) error {
 	if operation.Attempts < 0 {
 		return errors.New("publication operation attempts must not be negative")
 	}
-	return validateIdeationText("publication operation detail", operation.Detail, maxIdeationReasonBytes, false)
+	return validateIdeationText("publication operation detail", operation.Detail, MaxIdeationReasonBytes, false)
 }
 
 // publicationOperationColumns is the column order that

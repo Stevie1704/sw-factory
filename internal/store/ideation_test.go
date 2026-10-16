@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -664,5 +665,32 @@ func TestClosedSessionsKeepTheirHistoryAndRunCleanupLeavesThemAlone(t *testing.T
 			len(history.Turns) != 1 || len(history.Briefs) != 1 || len(history.Plans) != 1 || len(history.Approvals) != 1 {
 			t.Fatalf("history of %s = %#v", id, history)
 		}
+	}
+}
+
+// TestTruncateUTF8KeepsWholeRunesWithinTheLimit verifies the one shared
+// truncation of ideation text: the result never exceeds the byte limit and
+// never splits a multi-byte rune.
+func TestTruncateUTF8KeepsWholeRunesWithinTheLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		limit int
+		want  string
+	}{
+		{name: "short value is unchanged", value: "plan", limit: 10, want: "plan"},
+		{name: "ASCII is cut at the limit", value: "abcdef", limit: 4, want: "abcd"},
+		{name: "a split rune is dropped", value: "aé", limit: 2, want: "a"},
+		{name: "a four-byte rune is dropped whole", value: "ab😀", limit: 5, want: "ab"},
+	}
+	for _, test := range tests {
+		if got := store.TruncateUTF8(test.value, test.limit); got != test.want {
+			t.Errorf("%s: TruncateUTF8(%q, %d) = %q, want %q", test.name, test.value, test.limit, got, test.want)
+		}
+	}
+	if long := store.TruncateUTF8(strings.Repeat("é", store.MaxIdeationReasonBytes), store.MaxIdeationReasonBytes); len(long) != store.MaxIdeationReasonBytes {
+		t.Errorf("len(TruncateUTF8(reason)) = %d, want the reason limit %d", len(long), store.MaxIdeationReasonBytes)
 	}
 }

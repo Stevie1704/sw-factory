@@ -338,7 +338,7 @@ func validateIdeationCommandResult(outcome IdeationCommandResult) error {
 	default:
 		return fmt.Errorf("ideation command outcome %q is not declared", outcome.Outcome)
 	}
-	if err := validateIdeationText("command detail", outcome.Detail, maxIdeationReasonBytes, false); err != nil {
+	if err := validateIdeationText("command detail", outcome.Detail, MaxIdeationReasonBytes, false); err != nil {
 		return err
 	}
 	return validateCommandJSON("result", outcome.Result, MaxIdeationCommandResultBytes, false)

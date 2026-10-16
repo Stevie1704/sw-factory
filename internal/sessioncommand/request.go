@@ -64,10 +64,6 @@ const (
 // payload and the envelope.
 const MaxRequestBytes = store.MaxIdeationCommandPayloadBytes + 4096
 
-// maxReasonBytes bounds an optional user reason. It matches the store limit
-// for a session state reason.
-const maxReasonBytes = 2000
-
 // maxDeferredQuestions bounds the deferred questions of one handoff. It is
 // above any brief the store accepts in practice.
 const maxDeferredQuestions = 256
@@ -408,7 +404,7 @@ func (p *ReconcilePayload) validate() error {
 
 // validate checks the bounded reason.
 func (p *ReasonPayload) validate() error {
-	return boundedText("reason", p.Reason, maxReasonBytes, false)
+	return boundedText("reason", p.Reason, store.MaxIdeationReasonBytes, false)
 }
 
 // Brief converts the browser brief into the stored brief.

@@ -5,16 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
-
-// maxDetailBytes bounds one ledger detail, receipt detail, or state reason.
-// It matches the store limit for session state reasons.
-const maxDetailBytes = 2000
 
 // Request asks for one publication attempt of the session's current approval.
 type Request struct {
@@ -371,14 +366,8 @@ func externalIDs(candidates []tracker.PlanItemRef) string {
 	return strings.Join(ids, ", ")
 }
 
-// bounded shortens detail to the stored limit at a rune boundary.
+// bounded shortens a ledger detail, receipt detail, or state reason to the
+// store limit at a rune boundary.
 func bounded(detail string) string {
-	if len(detail) <= maxDetailBytes {
-		return detail
-	}
-	cut := maxDetailBytes - len("...")
-	for cut > 0 && !utf8.RuneStart(detail[cut]) {
-		cut--
-	}
-	return detail[:cut] + "..."
+	return store.TruncateUTF8(detail, store.MaxIdeationReasonBytes)
 }

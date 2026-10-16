@@ -577,5 +577,5 @@ func validateSessionInvocationEnd(end SessionInvocationEnd) error {
 			return err
 		}
 	}
-	return validateIdeationText("invocation end reason", end.Reason, maxIdeationReasonBytes, false)
+	return validateIdeationText("invocation end reason", end.Reason, MaxIdeationReasonBytes, false)
 }
