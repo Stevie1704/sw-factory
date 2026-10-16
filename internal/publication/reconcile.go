@@ -3,8 +3,10 @@ package publication
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // Reconciliation is the operator's explicit resolution of one item create
@@ -19,20 +21,31 @@ type Reconciliation struct {
 	// correlation lookup finds now. Empty confirms that no item exists, which
 	// the lookup must also show.
 	ExternalID string
+	// ReceiptID identifies the receipt that a reconciliation of a cancelled
+	// session records. It is required for a cancelled session, because no
+	// later Publish records the result there.
+	ReceiptID string
 }
 
 // Reconcile resolves an ambiguous or attempted item create of a session whose
-// publication is incomplete. Adopting an item records its identity, so the
-// next Publish links it. Confirming absence marks the create as not applied,
-// so the next Publish may create it once. Both choices are checked against a
-// fresh correlation lookup; Reconcile itself never writes to the tracker.
+// publication is incomplete, or of a session cancelled after such a create.
+// Adopting an item records its identity, so the next Publish links it.
+// Confirming absence marks the create as not applied, so the next Publish
+// may create it once. Both choices are checked against a fresh correlation
+// lookup; Reconcile itself never writes to the tracker. A cancelled session
+// stays cancelled: the result goes to the ledger and to a receipt under
+// ReceiptID, and Publish stays refused.
 func (p *Publisher) Reconcile(ctx context.Context, request Reconciliation) (store.PublicationOperation, error) {
 	history, err := p.Store.IdeationHistory(ctx, request.SessionID)
 	if err != nil {
 		return store.PublicationOperation{}, err
 	}
-	if history.Session.State != store.IdeationStatePublicationIncomplete {
-		return store.PublicationOperation{}, fmt.Errorf("%w: session %q is %s, not publication_incomplete", ErrReconciliationRefused, request.SessionID, history.Session.State)
+	cancelled := history.Session.State == store.IdeationStateCancelled
+	if history.Session.State != store.IdeationStatePublicationIncomplete && !cancelled {
+		return store.PublicationOperation{}, fmt.Errorf("%w: session %q is %s, not publication_incomplete or cancelled", ErrReconciliationRefused, request.SessionID, history.Session.State)
+	}
+	if cancelled && strings.TrimSpace(request.ReceiptID) == "" {
+		return store.PublicationOperation{}, fmt.Errorf("%w: a cancelled session needs a receipt ID for the reconciliation", ErrReconciliationRefused)
 	}
 	operation, ok := findOperation(history.Operations, history.Session.ApprovalID, request.OperationID)
 	if !ok {
@@ -68,7 +81,34 @@ func (p *Publisher) Reconcile(ctx context.Context, request Reconciliation) (stor
 		}
 	}
 	operation.UpdatedAt = p.now()
-	return p.Store.RecordPublicationOperation(ctx, operation)
+	stored, err := p.Store.RecordPublicationOperation(ctx, operation)
+	if err != nil || !cancelled {
+		return stored, err
+	}
+	return stored, p.recordCancelledReconciliation(ctx, history, request.ReceiptID, stored)
+}
+
+// recordCancelledReconciliation records an incomplete receipt of the
+// cancelled session's approval that lists every item and relationship known
+// to exist after the reconciled operation. The session stays cancelled with
+// its reason.
+func (p *Publisher) recordCancelledReconciliation(ctx context.Context, history store.IdeationHistory, receiptID string, reconciled store.PublicationOperation) error {
+	session := history.Session
+	ledger := approvalOperations(history.Operations, session.ApprovalID)
+	for index := range ledger {
+		if ledger[index].ID == reconciled.ID {
+			ledger[index] = reconciled
+		}
+	}
+	receipt := receiptFromLedger(receiptID, session.ApprovalID, ledger)
+	receipt.Outcome = store.PublicationOutcomeIncomplete
+	receipt.Detail = bounded(fmt.Sprintf("the session is cancelled; the operator reconciled %s: %s", reconciled.ID, reconciled.Detail))
+	write, err := p.Lifecycle.Write(session, workflow.SessionEventReconciled, session.StateReason, p.now())
+	if err != nil {
+		return err
+	}
+	_, _, err = p.Store.RecordPublicationReceipt(ctx, write, receipt)
+	return err
 }
 
 // findOperation returns the ledger row id of approvalID.

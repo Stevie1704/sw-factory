@@ -60,6 +60,14 @@ invocation, packet, and report each require a run ID.
    active invocations on every pass from the store and the worker-owned
    process state, so a result, a failure, or an interrupted launch is handled
    without a browser, a terminal, or the coordinator that started it.
+   Cleanup is durable work too: the store closes an invocation first and
+   records `resources_released_at` only after the process stop, the worker
+   stop, and the snapshot and Git-projection removal succeed. Each pass first
+   repeats the idempotent cleanup of every ended invocation that is not yet
+   released, so a failed cleanup or a coordinator stop between the close and
+   the cleanup never leaves a worker or a snapshot behind. A worker that a
+   newer active invocation of the same session role uses stays running; the
+   ended invocation's snapshot is still removed.
 6. **Failures reuse the typed vocabulary.** Expired authentication, capacity
    limits, unexpected exits, a native-session mismatch on resume, credential
    projection failures, interrupted launches, and rejected reports end the

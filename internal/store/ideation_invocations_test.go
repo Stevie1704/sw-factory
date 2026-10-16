@@ -262,3 +262,55 @@ func TestSessionInvocationsListOneSessionInStartOrder(t *testing.T) {
 		t.Fatalf("SessionInvocations() = %#v, want sinv-1 (failed) then sinv-2 (active)", invocations)
 	}
 }
+
+// TestSchema47MigrationLeavesEndedInvocationsToRelease verifies that an
+// invocation which ended before schema 47 is listed for resource cleanup,
+// that only an ended invocation can be marked released, and that a released
+// invocation leaves the list.
+func TestSchema47MigrationLeavesEndedInvocationsToRelease(t *testing.T) {
+	t.Parallel()
+
+	opened, path := openIdeationStoreForTest(t)
+	session, first := startInvocationForTest(t, opened, createIdeationSessionForTest(t, opened, "session-1"), "sinv-1", "turn-1")
+	session, _, err := opened.ReleaseSessionInvocation(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), store.SessionInvocationEnd{
+		InvocationID: first.ID, Status: store.SessionInvocationCancelled, FailureKind: "cancelled", At: ideationNow,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startInvocationForTest(t, opened, session, "sinv-2", "turn-2")
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), `ALTER TABLE ideation_invocations DROP COLUMN resources_released_at; UPDATE schema_metadata SET version = 46`); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	unreleased, err := reopened.UnreleasedSessionInvocations(t.Context())
+	if err != nil || len(unreleased) != 1 || unreleased[0].ID != "sinv-1" {
+		t.Fatalf("UnreleasedSessionInvocations() = %#v, %v; want only the ended sinv-1", unreleased, err)
+	}
+	if _, err := reopened.MarkSessionInvocationResourcesReleased(t.Context(), "sinv-2", ideationNow); !errors.Is(err, store.ErrSessionInvocationActive) {
+		t.Fatalf("Mark(active) error = %v, want ErrSessionInvocationActive", err)
+	}
+	released, err := reopened.MarkSessionInvocationResourcesReleased(t.Context(), "sinv-1", ideationNow)
+	if err != nil || !released.ResourcesReleasedAt.Equal(ideationNow) {
+		t.Fatalf("Mark(sinv-1) = %#v, %v; want released at %v", released, err, ideationNow)
+	}
+	if unreleased, err := reopened.UnreleasedSessionInvocations(t.Context()); err != nil || len(unreleased) != 0 {
+		t.Fatalf("UnreleasedSessionInvocations() after release = %#v, %v; want none", unreleased, err)
+	}
+}

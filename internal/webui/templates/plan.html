@@ -160,7 +160,7 @@
 {{- end}}
 {{if .Actions.Reconcile}}{{with .Progress}}{{range .Operations}}{{if .Reconcilable -}}
 <div class="reconcile" data-reconcile="{{.ID}}">
-<p><code>{{.ID}}</code> has an unknown outcome. Look for an item with correlation <code>{{.Correlation}}</code> in the tracker, then adopt it or confirm that none exists. Reconciliation never creates or deletes an item.</p>
+<p><code>{{.ID}}</code> has an unknown outcome. Look for an item with correlation <code>{{.Correlation}}</code> in the tracker, then adopt it or confirm that none exists. Reconciliation never creates or deletes an item.{{if eq $.Session.State "cancelled"}} The session stays cancelled: reconciliation only records the result, and no publication resumes.{{end}}</p>
 <form class="command-form" data-session-command="reconcile" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}">
 <input type="hidden" name="operation_id" value="{{.ID}}">
 <label>Tracker item ID <input name="external_id" required></label>

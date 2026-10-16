@@ -26,9 +26,10 @@
     }
   }
 
-  // describe returns a short readable text for one answer.
+  // describe returns a short readable text for one answer or transport
+  // failure.
   function describe(answer) {
-    if (!answer || typeof answer !== "object") {
+    if (!commands.isAnswer(answer)) {
       return "UI server unreachable: send again to retry the same request";
     }
     var text = answer.outcome || answer.state || "unknown";
@@ -107,8 +108,9 @@
       window.location.href = "/sessions/" + encodeURIComponent(sessionID);
     }).catch(function (answer) {
       setStatus(form, describe(answer));
-      if (answer && typeof answer === "object") {
-        // The answer is final, so a resend is a new request.
+      if (commands.isAnswer(answer)) {
+        // The server answered, so a resend is a new request. A transport
+        // failure keeps every ID, so a resend replays the same requests.
         delete form.dataset.requestTurn;
         if (!form.dataset.createdRevision) {
           delete form.dataset.requestCreate;

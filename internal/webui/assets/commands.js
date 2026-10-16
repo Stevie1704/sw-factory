@@ -7,7 +7,10 @@
 // payload} and may name request_id; otherwise a new one is chosen. A lost
 // answer is retried with the same request ID, so the coordinator applies the
 // command at most once. An accepted command is not complete: submit polls
-// the command until the coordinator records its outcome.
+// the command until the coordinator records its outcome. submit rejects only
+// when the UI server could not be reached; window.factoryCommands.isAnswer
+// tells such a transport failure from a server answer, so a caller keeps its
+// request ID for a replay until the server answered.
 //
 // A <form data-session-command="KIND" data-session-id="ID"
 // data-expected-revision="N"> submits its named fields as the payload.
@@ -16,7 +19,9 @@
 // values. The form is marked data-dirty while it has unsent input, which
 // pauses the automatic page refresh, so a refresh never wipes typed input.
 // The outcome is written into the form's [data-command-status] element, and
-// a "factory:command" event with the answer is sent from the form.
+// a "factory:command" event with the answer is sent from the form. When the
+// UI server cannot be reached, a "factory:command-unreachable" event is sent
+// instead and the form keeps its request ID for the resend.
 (function () {
   "use strict";
 
@@ -38,6 +43,13 @@
     return Array.prototype.map.call(bytes, function (b) {
       return ("0" + b.toString(16)).slice(-2);
     }).join("");
+  }
+
+  // isAnswer reports whether value is an answer of the UI server, which
+  // always carries its HTTP status. A transport failure, for example the
+  // TypeError of a failed fetch, is not an answer.
+  function isAnswer(value) {
+    return !!value && typeof value === "object" && typeof value.status === "number";
   }
 
   // readAnswer returns the JSON answer with its HTTP status.
@@ -162,6 +174,7 @@
         if (status) {
           status.textContent = "UI server unreachable: submit again to retry the same request";
         }
+        form.dispatchEvent(new CustomEvent("factory:command-unreachable", { bubbles: true }));
       });
     });
   }
@@ -172,7 +185,7 @@
     Array.prototype.forEach.call(document.querySelectorAll("form[data-session-command]"), wire);
   }
 
-  window.factoryCommands = { submit: submit, newRequestID: newRequestID };
+  window.factoryCommands = { submit: submit, newRequestID: newRequestID, isAnswer: isAnswer };
   wireAll();
   new MutationObserver(wireAll).observe(document.body, { childList: true, subtree: true });
 })();

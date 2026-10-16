@@ -39,7 +39,7 @@ both contracts and defines the data, lifecycle, and retention of sessions.
    | `published` | Terminal. Every approved item and relationship exists. |
    | `deferred` | The user parked the session. It resumes where it was parked: in the conversation, in plan review with the same plan, or approved. |
    | `no_build` | Terminal. The user decided not to build. |
-   | `cancelled` | Terminal. Cancellation never deletes tracker items. |
+   | `cancelled` | Terminal. Cancellation never deletes tracker items. An ambiguous item create of the approval can still be reconciled (event `reconciled`, which keeps the state); it records a receipt and never resumes publication. |
 
    ADR 0026 adds `investigation_needed`: the user decided that material
    unknowns need investigation first. The session can resume.

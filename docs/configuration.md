@@ -1177,6 +1177,12 @@ Schema version 46 adds the correction link of a conversation turn (ADR 0026):
 `ideation_turns.corrects` names the earlier user answer that a turn changes.
 Existing turns correct nothing.
 
+Schema version 47 adds the resource-release marker of a session-role
+invocation (ADR 0023): `ideation_invocations.resources_released_at` is set
+only after the coordinator removed the worker, snapshot, and Git projection
+of an ended invocation. Invocations that ended before the upgrade stay
+unreleased, so the next reconcile pass repeats their idempotent cleanup.
+
 ## Local run inspection
 
 Use the read-only CLI to inspect a named historical run while another run is
@@ -1378,7 +1384,10 @@ Plan review (`/sessions/{id}/plan`):
   operations, and operations with an unknown outcome. An incomplete
   publication offers "Retry publication" (`publish`), which resumes the same
   approved content, and for each ambiguous item create, `reconcile` to adopt
-  the tracker item or confirm that none exists. An `approve` or `publish`
+  the tracker item or confirm that none exists. A session cancelled after
+  such a create still offers `reconcile` for it; the result is recorded in
+  the ledger and in a receipt under the request ID, and the session stays
+  `cancelled` with no publish action. An `approve` or `publish`
   command that ends without success never leaves the session `publishing`:
   the coordinator records an incomplete receipt with the reason and moves
   the session to `publication_incomplete`. A session that is `publishing`

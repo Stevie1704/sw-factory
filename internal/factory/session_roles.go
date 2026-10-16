@@ -78,6 +78,8 @@ type SessionRoleStore interface {
 	RecordSessionInvocationNativeSession(context.Context, string, string) (store.SessionInvocation, error)
 	SessionInvocation(context.Context, string) (store.SessionInvocation, error)
 	ActiveSessionInvocations(context.Context) ([]store.SessionInvocation, error)
+	UnreleasedSessionInvocations(context.Context) ([]store.SessionInvocation, error)
+	MarkSessionInvocationResourcesReleased(context.Context, string, time.Time) (store.SessionInvocation, error)
 	ResumableSessionInvocation(context.Context, string, string) (*store.SessionInvocation, error)
 	AcceptSessionRoleResult(context.Context, store.IdeationWrite, store.SessionRoleResult) (store.IdeationSession, store.SessionInvocation, error)
 	ReleaseSessionInvocation(context.Context, store.IdeationWrite, store.SessionInvocationEnd) (store.IdeationSession, store.SessionInvocation, error)
@@ -329,20 +331,44 @@ func (r *SessionRoles) CancelRole(ctx context.Context, sessionID, reason string)
 	return fmt.Errorf("%w: %q", ErrSessionRoleNotActive, sessionID)
 }
 
-// Reconcile observes every active session invocation once. It accepts a
-// written report, records a native session revealed after an interrupted
-// launch, releases a failed process with its typed cause, and cancels an
-// invocation whose session moved on. It needs no browser and no attached
-// terminal, so it also recovers the invocations of a stopped coordinator.
+// Reconcile first retries the outstanding resource cleanup of ended
+// invocations, then observes every active session invocation once. It
+// accepts a written report, records a native session revealed after an
+// interrupted launch, releases a failed process with its typed cause, and
+// cancels an invocation whose session moved on. It needs no browser and no
+// attached terminal, so it also recovers the invocations of a stopped
+// coordinator.
 func (r *SessionRoles) Reconcile(ctx context.Context) error {
 	active, err := r.deps.Store.ActiveSessionInvocations(ctx)
 	if err != nil {
 		return err
 	}
-	var failures []error
+	failures := []error{r.retryResourceRelease(ctx, active)}
 	for _, invocation := range active {
 		if err := r.reconcileInvocation(ctx, invocation); err != nil {
 			failures = append(failures, fmt.Errorf("reconcile session invocation %q: %w", invocation.ID, err))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// retryResourceRelease repeats the cleanup of every ended invocation whose
+// resources are not yet released. A worker that an active invocation of the
+// same session role now uses is left running; only the ended invocation's
+// snapshot and Git projection are removed.
+func (r *SessionRoles) retryResourceRelease(ctx context.Context, active []store.SessionInvocation) error {
+	unreleased, err := r.deps.Store.UnreleasedSessionInvocations(ctx)
+	if err != nil {
+		return err
+	}
+	inUse := map[string]bool{}
+	for _, invocation := range active {
+		inUse[invocation.WorkerID] = true
+	}
+	var failures []error
+	for _, invocation := range unreleased {
+		if err := r.releaseResources(ctx, invocation, !inUse[invocation.WorkerID]); err != nil {
+			failures = append(failures, fmt.Errorf("release resources of session invocation %q: %w", invocation.ID, err))
 		}
 	}
 	return errors.Join(failures...)
@@ -355,12 +381,14 @@ func (r *SessionRoles) reconcileInvocation(ctx context.Context, invocation store
 		return err
 	}
 	if session.State != store.IdeationStateRoleActive || session.Revision != invocation.SessionRevision {
-		r.stopProcess(ctx, invocation, false)
-		_, err := r.deps.Store.CloseSessionInvocation(ctx, store.SessionInvocationEnd{
+		ended, err := r.deps.Store.CloseSessionInvocation(ctx, store.SessionInvocationEnd{
 			InvocationID: invocation.ID, Status: store.SessionInvocationCancelled, FailureKind: SessionFailureSessionMoved,
 			Reason: fmt.Sprintf("session moved to %s at revision %d", session.State, session.Revision), At: r.deps.Now().UTC(),
 		})
-		return errors.Join(err, r.cleanup(ctx, invocation))
+		if err != nil {
+			return err
+		}
+		return r.releaseResources(ctx, ended, true)
 	}
 	if reportWritten(invocation) {
 		return r.acceptReport(ctx, session, invocation)
@@ -443,14 +471,14 @@ func (r *SessionRoles) acceptReport(ctx context.Context, session store.IdeationS
 	if err != nil {
 		return err
 	}
-	if _, _, err := r.deps.Store.AcceptSessionRoleResult(ctx, write, result); err != nil {
+	_, accepted, err := r.deps.Store.AcceptSessionRoleResult(ctx, write, result)
+	if err != nil {
 		if errors.Is(err, store.ErrIdeationRevisionConflict) || errors.Is(err, store.ErrSessionInvocationNotActive) {
 			return err
 		}
 		return r.reject(ctx, invocation, SessionFailureReportRejected, fmt.Sprintf("%s result refused: %v", invocation.Role, err))
 	}
-	r.stopProcess(ctx, invocation, true)
-	return r.cleanup(ctx, invocation)
+	return r.releaseResources(ctx, accepted, true)
 }
 
 // roleResult converts a validated report into the store result, the session
@@ -528,8 +556,7 @@ func (r *SessionRoles) release(ctx context.Context, invocation store.SessionInvo
 	if err != nil {
 		return invocation, err
 	}
-	r.stopProcess(ctx, invocation, false)
-	return ended, r.cleanup(ctx, invocation)
+	return ended, r.releaseResources(ctx, ended, true)
 }
 
 // releaseEvent returns the session event that ends a role without a new
@@ -540,6 +567,22 @@ func releaseEvent(invocation store.SessionInvocation, session store.IdeationSess
 		return workflow.SessionEventDraftKept
 	}
 	return workflow.SessionEventRoleAwaitsUser
+}
+
+// releaseResources stops the process of an ended invocation, removes its
+// resources, and records the release. The store marks the release only after
+// the cleanup succeeded, so a failure or a coordinator stop leaves it for the
+// next reconcile pass. ownsWorker is false when another active invocation
+// uses the same worker; that worker and its process then stay.
+func (r *SessionRoles) releaseResources(ctx context.Context, invocation store.SessionInvocation, ownsWorker bool) error {
+	if ownsWorker {
+		r.stopProcess(ctx, invocation, invocation.Status == store.SessionInvocationAccepted)
+	}
+	if err := r.cleanup(ctx, invocation, ownsWorker); err != nil {
+		return err
+	}
+	_, err := r.deps.Store.MarkSessionInvocationResourcesReleased(ctx, invocation.ID, r.deps.Now().UTC())
+	return err
 }
 
 // stopProcess finishes an accepted process or cancels any other one. Both
@@ -562,14 +605,14 @@ func (r *SessionRoles) stopProcess(ctx context.Context, invocation store.Session
 	_ = adapter.CancelHeadless(cleanupContext, session)
 }
 
-// cleanup stops the session-role worker and removes the snapshot and its Git
-// metadata projection. The role volume stays, so a later turn can resume the
-// native session.
-func (r *SessionRoles) cleanup(ctx context.Context, invocation store.SessionInvocation) error {
+// cleanup stops the session-role worker when stopWorker is set and removes
+// the snapshot and its Git metadata projection. The role volume stays, so a
+// later turn can resume the native session.
+func (r *SessionRoles) cleanup(ctx context.Context, invocation store.SessionInvocation, stopWorker bool) error {
 	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	var failures []error
-	if r.deps.Workers != nil {
+	if stopWorker && r.deps.Workers != nil {
 		if err := r.deps.Workers.Stop(cleanupContext, invocation.WorkerID); err != nil {
 			failures = append(failures, fmt.Errorf("stop session worker: %w", err))
 		}

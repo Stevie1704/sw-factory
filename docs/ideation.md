@@ -124,7 +124,11 @@ flow.
   is found, check the tracker and reconcile: adopt the item, or confirm that
   none exists.
 - **You cancelled.** Cancelling stops role work and future publication work.
-  Items that already exist stay in the tracker.
+  Items that already exist stay in the tracker. When you cancelled after an
+  item create with an unknown outcome, the plan page still offers reconcile
+  for that create: adopt the item or confirm that none exists. The result
+  goes to the ledger and to a receipt. The session stays cancelled, and
+  publication does not resume.
 
 ## Retention and cleanup
 

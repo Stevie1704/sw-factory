@@ -64,6 +64,10 @@ const (
 	// SessionEventCancelled records cancellation. Cancellation during
 	// publication stops future work; it never deletes tracker items.
 	SessionEventCancelled SessionEvent = "cancelled"
+	// SessionEventReconciled records the receipt of an operator
+	// reconciliation of an ambiguous create after cancellation. The session
+	// stays cancelled, so no further publication write is possible.
+	SessionEventReconciled SessionEvent = "reconciled"
 )
 
 // InvalidSessionTransitionError reports an event that the session lifecycle
@@ -159,7 +163,9 @@ func DefaultSessionLifecycle() SessionLifecycle {
 		},
 		published: {},
 		noBuild:   {},
-		cancelled: {},
+		cancelled: {
+			SessionEventReconciled: cancelled,
+		},
 	}}
 }
 
