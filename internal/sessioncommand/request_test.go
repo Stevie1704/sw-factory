@@ -22,7 +22,7 @@ func TestParseRequestAcceptsEveryDeclaredKind(t *testing.T) {
 		sessioncommand.KindEditDraft:           `{"nodes":[{"id":"n-1","kind":"task","title":"Do it","body":"Body.","acceptance_criteria":["Works."],"brief_refs":["scope-1"]}]}`,
 		sessioncommand.KindRegenerateDraft:     `{"plan_revision":1}`,
 		sessioncommand.KindPreviewPlan:         `{"plan_revision":1}`,
-		sessioncommand.KindApprove:             `{"plan_revision":1,"payload_sha256":"` + strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `","publish":true}`,
+		sessioncommand.KindApprove:             `{"plan_revision":1,"payload_sha256":"` + strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `"}`,
 		sessioncommand.KindPublish:             `{}`,
 		sessioncommand.KindReconcile:           `{"operation_id":"item/n-1","external_id":"42"}`,
 		sessioncommand.KindDefer:               `{"reason":"Later."}`,

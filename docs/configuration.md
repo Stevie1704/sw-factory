@@ -1365,8 +1365,8 @@ Plan review (`/sessions/{id}/plan`):
   is not a plan node. A provider capability or configuration problem is shown
   as the refused preview; nothing is substituted.
 - "Approve and publish" sends one `approve` command with the plan revision,
-  the session revision, and the two digests of the shown preview, and
-  `publish: true`. The coordinator checks plan validation and renders the
+  the session revision, and the two digests of the shown preview. Every
+  approval also publishes. The coordinator checks plan validation and renders the
   preview again; if anything changed (an edit, a regeneration, another tab,
   or a tracker mapping change), it refuses the approval before any tracker
   write. An accepted approval is not a completed publication. While a

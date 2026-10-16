@@ -199,10 +199,11 @@ func (c *coordinatorForTest) preview(requestID, sessionID string, revision int64
 	return result
 }
 
-// approvePayload returns an approve payload for the previewed result.
-func approvePayload(result previewResult, publish bool) string {
-	return fmt.Sprintf(`{"plan_revision":%d,"payload_sha256":%q,"relationship_mapping_sha256":%q,"publish":%t}`,
-		result.PlanRevision, result.PayloadSHA256, result.RelationshipMappingSHA256, publish)
+// approvePayload returns an approve payload for the previewed result. An
+// approval always requests publication, so the payload has no publish flag.
+func approvePayload(result previewResult) string {
+	return fmt.Sprintf(`{"plan_revision":%d,"payload_sha256":%q,"relationship_mapping_sha256":%q}`,
+		result.PlanRevision, result.PayloadSHA256, result.RelationshipMappingSHA256)
 }
 
 // TestDuplicateSubmissionAppendsOneTurnAndKeepsTheFirstOutcome verifies that
@@ -371,15 +372,15 @@ func TestApprovalBindsThePreviewAndPublishesWithTheRequestID(t *testing.T) {
 
 	wrong := preview
 	wrong.PayloadSHA256 = strings.Repeat("0", 64)
-	c.submit("approve-wrong", "session-1", sessioncommand.KindApprove, revision, approvePayload(wrong, true))
+	c.submit("approve-wrong", "session-1", sessioncommand.KindApprove, revision, approvePayload(wrong))
 	c.drain()
 	c.requireOutcome("approve-wrong", store.IdeationCommandRefused)
 	if c.fake.Writes() != 0 || c.history("session-1").Session.ApprovalID != "" {
 		t.Fatal("a refused approval wrote to the tracker or recorded an approval")
 	}
 
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 	c.drain()
 	c.requireOutcome("approve-1", store.IdeationCommandApplied)
 	history := c.history("session-1")
@@ -404,7 +405,7 @@ func TestIncompletePublicationIsReconciledAndRetriedThroughCommands(t *testing.T
 	revision := c.draftPlan("session-1")
 	preview := c.preview("preview-1", "session-1", revision)
 	c.fake.Inject(trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: errors.New("connection reset")})
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 	c.drain()
 	approved := c.requireOutcome("approve-1", store.IdeationCommandApplied)
 	if !strings.Contains(approved.Detail, "incomplete") {
@@ -455,7 +456,7 @@ func TestCancelIsAppliedWhilePublicationRuns(t *testing.T) {
 	c.createSession("session-1")
 	revision := c.draftPlan("session-1")
 	preview := c.preview("preview-1", "session-1", revision)
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 
 	dispatcher := c.dispatcher()
 	if err := dispatcher.Drain(t.Context()); err != nil {
@@ -601,7 +602,7 @@ func TestApprovalRefusesAnInvalidPlanGraph(t *testing.T) {
 	c.createSession("session-1")
 	revision := c.draftPlan("session-1")
 	preview := c.preview("preview-1", "session-1", revision)
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 	dispatcher := c.dispatcher()
 	dispatcher.Env.ValidatePlan = func(nodes []store.PlanNode) error {
 		return errors.New(`node "n-1" has kind "spec"`)

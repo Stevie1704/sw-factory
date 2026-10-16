@@ -159,7 +159,7 @@ func TestCrossSiteSubmissionIsRefused(t *testing.T) {
 
 	ui := newSessionUI(t, true)
 	approve := `{"request_id":"approve-1","session_id":"session-1","kind":"approve","expected_revision":1,"payload":{"plan_revision":1,"payload_sha256":"` +
-		strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `","publish":true}}`
+		strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `"}}`
 	tests := []struct {
 		name   string
 		change func(*http.Request)

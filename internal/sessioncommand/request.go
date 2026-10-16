@@ -37,8 +37,8 @@ const (
 	// KindPreviewPlan renders the tracker publication preview of the displayed
 	// plan revision. It changes no session state.
 	KindPreviewPlan Kind = "preview_plan"
-	// KindApprove approves the previewed publication and can request
-	// publication in the same command.
+	// KindApprove approves the previewed publication and publishes it in the
+	// same command: approval and publication are one user action.
 	KindApprove Kind = "approve"
 	// KindPublish starts or retries publication of the current approval.
 	KindPublish Kind = "publish"
@@ -151,8 +151,6 @@ type ApprovePayload struct {
 	PayloadSHA256 string `json:"payload_sha256"`
 	// RelationshipMappingSHA256 is the digest of the previewed relationships.
 	RelationshipMappingSHA256 string `json:"relationship_mapping_sha256"`
-	// Publish requests publication right after the approval.
-	Publish bool `json:"publish"`
 }
 
 // PublishPayload is the payload of KindPublish. It has no fields.

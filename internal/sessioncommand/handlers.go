@@ -420,9 +420,9 @@ func previewPlan(ctx context.Context, env Env, command store.IdeationCommand) (O
 }
 
 // approve records an approval that binds the previewed publication, with the
-// request ID as approval ID, and publishes when the payload asks for it. A
-// changed rendering is refused before any tracker write. A resumed command
-// whose approval exists continues with publication.
+// request ID as approval ID, and then publishes it. A changed rendering is
+// refused before any tracker write. A resumed command whose approval exists
+// continues with publication.
 func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	if env.Publisher == nil {
 		return unsupportedPlanning(ctx, env, command), nil
@@ -443,9 +443,6 @@ func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 		if session, err = recordApproval(ctx, env, session, command, payload); err != nil {
 			return Outcome{}, err
 		}
-	}
-	if !payload.Publish {
-		return Applied(session, "plan approved; publication was not requested"), nil
 	}
 	return publishAttempt(ctx, env, command)
 }

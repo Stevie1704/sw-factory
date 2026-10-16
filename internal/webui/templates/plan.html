@@ -112,7 +112,6 @@
 <input type="hidden" name="plan_revision" data-type="number" value="{{.PlanRevision}}">
 <input type="hidden" name="payload_sha256" value="{{.PayloadSHA256}}">
 <input type="hidden" name="relationship_mapping_sha256" value="{{.RelationshipMappingSHA256}}">
-<input type="hidden" name="publish" data-type="boolean" value="true">
 <p>Approval binds exactly this preview: plan revision {{.PlanRevision}} at session revision {{$.Session.Revision}}, items <code>{{.PayloadSHA256}}</code>, relationships <code>{{.RelationshipMappingSHA256}}</code>. The coordinator records the approval and then publishes. If anything changed since this preview, it refuses the approval.</p>
 <button type="submit">Approve and publish</button>
 <output data-command-status></output>

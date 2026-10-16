@@ -313,7 +313,7 @@ func TestPreviewShowsTheRenderedPublicationAndBindsApproval(t *testing.T) {
 		`data-relationship="parent:n-2:n-1--feature"`, `data-relationship="depends_on:n-3:n-2"`, `data-relationship="parent:n-1--feature:n-1"`,
 		"data-textual-fallback",
 		`data-session-command="approve"`, `value="`+result.PayloadSHA256+`"`, `value="`+result.RelationshipMappingSHA256+`"`,
-		`data-expected-revision="`+strconv.FormatInt(revision, 10)+`"`, `name="publish" data-type="boolean" value="true"`,
+		`data-expected-revision="`+strconv.FormatInt(revision, 10)+`"`,
 	)
 }
 
@@ -321,7 +321,7 @@ func TestPreviewShowsTheRenderedPublicationAndBindsApproval(t *testing.T) {
 // form sends it.
 func approveBody(result sessioncommand.PreviewResult) string {
 	return `{"plan_revision":` + strconv.FormatInt(result.PlanRevision, 10) + `,"payload_sha256":"` + result.PayloadSHA256 +
-		`","relationship_mapping_sha256":"` + result.RelationshipMappingSHA256 + `","publish":true}`
+		`","relationship_mapping_sha256":"` + result.RelationshipMappingSHA256 + `"}`
 }
 
 // previewed returns the UI after a preview of plan revision 1 and the
