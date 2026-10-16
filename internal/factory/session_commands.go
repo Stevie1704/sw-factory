@@ -66,6 +66,7 @@ type SessionReadStore interface {
 	IdeationHistory(context.Context, string) (store.IdeationHistory, error)
 	IdeationCommand(context.Context, string) (store.IdeationCommand, error)
 	IdeationCommands(context.Context, string, int) ([]store.IdeationCommand, error)
+	SessionInvocations(context.Context, string) ([]store.SessionInvocation, error)
 }
 
 // SessionCommandAck is the acknowledgement of one submitted command. A new
@@ -96,6 +97,9 @@ type SessionActivity struct {
 	History store.IdeationHistory
 	// Commands holds the newest commands of the session, newest first.
 	Commands []store.IdeationCommand
+	// Invocations holds every session-role invocation of the session in
+	// start order, with accepted payloads and typed failure causes.
+	Invocations []store.SessionInvocation
 }
 
 // SessionCommandView is one command with the supervisor liveness.
@@ -216,7 +220,11 @@ func (s *Service) SessionActivity(ctx context.Context, sessionID string) (Sessio
 		if err != nil {
 			return SessionActivity{}, err
 		}
-		return SessionActivity{Supervisor: read.supervisor, History: history, Commands: commands}, nil
+		invocations, err := read.reader.SessionInvocations(ctx, sessionID)
+		if err != nil {
+			return SessionActivity{}, err
+		}
+		return SessionActivity{Supervisor: read.supervisor, History: history, Commands: commands, Invocations: invocations}, nil
 	})
 }
 

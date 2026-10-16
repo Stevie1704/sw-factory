@@ -11,7 +11,7 @@ const (
 	RolePlanning = "planning"
 
 	// PromptVersionIdeation identifies the immutable ideation prompt.
-	PromptVersionIdeation = "ideation-v1"
+	PromptVersionIdeation = "ideation-v2"
 	// PromptVersionPlanning identifies the immutable planning prompt.
 	PromptVersionPlanning = "planning-v2"
 )

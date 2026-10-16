@@ -52,10 +52,13 @@ uses which skill.
 
 The role-mandated skills are `implement` for the implementation role,
 `specification-review` for the specification reviewer, `standards-review`
-for the standards reviewer, and `pr` for the optional `pr_writer` role. Every
-shipped harness must advertise all four, because a repository may assign any
-role to any supported harness. Startup diagnosis requires smoke evidence for
-`pr` only when the repository declares `pr_writer`.
+for the standards reviewer, `pr` for the optional `pr_writer` role, and
+`grilling` for the optional `ideation` session role. Every shipped harness
+must advertise all five, because a repository may assign any role to any
+supported harness. Startup diagnosis requires smoke evidence for `pr` only
+when the repository declares `pr_writer`, and for `grilling` only when it
+declares `ideation`, so an existing repository without sessions keeps its
+recorded evidence.
 
 ## Verification
 
@@ -157,6 +160,7 @@ files here for any skill listed under local deviations below.
 | Skill | Upstream path | Upstream folder hash | Deviates |
 | --- | --- | --- | --- |
 | `codebase-design` | skills/engineering/codebase-design/SKILL.md | `344e3efc88ee60663b2e989555c2efdb548fbd42` | no |
+| `grilling` | skills/productivity/grilling/SKILL.md | `f0732035b8b1b60ae39454e4191caef32fa91903` | yes |
 | `diagnosing-bugs` | skills/engineering/diagnosing-bugs/SKILL.md | `99bd56983e42bc752c52da67f1112e4121781cd1` | yes |
 | `domain-modeling` | skills/engineering/domain-modeling/SKILL.md | `388c9822641805ca2dcd5038e68a1d5282437ee5` | no |
 | `implement` | skills/engineering/implement/SKILL.md | `f07d230f645fc9ac390cf13a450bbff12ad791a3` | yes |
@@ -177,6 +181,17 @@ deliberate and must survive a re-vendor.
   verbatim. The template now offers a sentinel-terminated multiline capture and
   redacts common credential shapes before printing, because a role agent's
   output is persisted with the run.
+- `grilling/SKILL.md`: vendored from the host `~/.agents` installation on
+  2026-10-16 for the `ideation` session role (prompt `ideation-v2`). It keeps
+  the upstream design tree, frontier rounds, and recommended answers, but the
+  factory runtime owns execution: the role looks facts up itself in the
+  read-only snapshot instead of dispatching sub-agents, and a round ends with
+  the role's report instead of a wait inside one session. It adds rules the
+  factory needs: keep rounds small, revise or withdraw every decision below a
+  changed answer, keep evidence apart from assumptions, never invent an
+  answer to an open question, and leave the readiness decision to the user.
+  The emoji question format is dropped, because the role prompt sends
+  questions as structured report fields.
 - `implement/SKILL.md`: keeps the upstream vertical-slice, TDD, focused-check,
   and full-suite workflow, but hands checkpoint and review ownership back to the
   factory. The factory's dedicated reviewers replace the upstream combined

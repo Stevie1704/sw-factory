@@ -146,7 +146,8 @@ var expectedPromptSHA256 = map[string]string{
 	"standards-review-v2":                     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
 	"standards-review-v3":                     "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c",
 	"standards-review-v4":                     "007370ac417296565ab8c5ae6e009e6a39591c2a0122acb669f348ceaef9bebb",
-	workflow.PromptVersionIdeation:            "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d",
+	workflow.PromptVersionIdeation:            "43c82f2fbffcc3ad3a592f2f61bbc887a203b9d6427bce7c8baa235a20a98deb",
+	"ideation-v1":                             "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d",
 	workflow.PromptVersionPlanning:            "06aae50573d4ab663f04b5068b34bd55935d383fea75b510ec3993ccd883b20d",
 	"planning-v1":                             "849893b461300fd4cc2f80c8619b08acd237f9151b3c8e4d4803d3cd8aee3b86",
 }

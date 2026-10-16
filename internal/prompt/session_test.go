@@ -24,9 +24,9 @@ func TestBuildSessionPinsSessionIdentityAndPacket(t *testing.T) {
 		reportFlag  string
 		continuance bool
 	}{
-		{workflow.RoleIdeation, workflow.PromptVersionIdeation, "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d", "--ideation-file", false},
+		{workflow.RoleIdeation, workflow.PromptVersionIdeation, "43c82f2fbffcc3ad3a592f2f61bbc887a203b9d6427bce7c8baa235a20a98deb", "--ideation-file", false},
 		{workflow.RolePlanning, workflow.PromptVersionPlanning, "06aae50573d4ab663f04b5068b34bd55935d383fea75b510ec3993ccd883b20d", "--plan-file", false},
-		{workflow.RoleIdeation, workflow.PromptVersionIdeation, "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d", "--ideation-file", true},
+		{workflow.RoleIdeation, workflow.PromptVersionIdeation, "43c82f2fbffcc3ad3a592f2f61bbc887a203b9d6427bce7c8baa235a20a98deb", "--ideation-file", true},
 	}
 	for _, test := range tests {
 		text, identity, err := prompt.BuildSession(prompt.SessionRequest{
@@ -114,5 +114,39 @@ func TestPlanningPromptStatesTheValidatedPlanContract(t *testing.T) {
 	request.PromptVersion = "planning-v1"
 	if _, legacy, err := prompt.BuildSession(request); err != nil || legacy.SHA256 != "849893b461300fd4cc2f80c8619b08acd237f9151b3c8e4d4803d3cd8aee3b86" {
 		t.Fatalf("BuildSession(planning-v1) identity = %#v, %v; want the retained v1 body", legacy, err)
+	}
+}
+
+// TestIdeationPromptStatesTheGrillingContract verifies that the current
+// ideation prompt uses the factory-owned grilling skill, keeps unknowns out
+// of invented requirements, names the structured fields for corrected
+// answers and readiness, and that the earlier ideation version stays
+// buildable for persisted invocations.
+func TestIdeationPromptStatesTheGrillingContract(t *testing.T) {
+	t.Parallel()
+
+	request := prompt.SessionRequest{
+		InvocationID: "sinv-1", SessionID: "session-1", SessionRevision: 3, Role: workflow.RoleIdeation,
+		ContextRevision: "0123456789abcdef0123456789abcdef01234567",
+	}
+	text, identity, err := prompt.BuildSession(request)
+	if err != nil || identity.Version != "ideation-v2" {
+		t.Fatalf("BuildSession(ideation) identity = %#v, %v; want ideation-v2", identity, err)
+	}
+	for _, want := range []string{
+		"`grilling` skill", "prerequisites are settled", "recommended answer", "corrects", "affected_decisions",
+		"unresolved question", "Do not invent", "investigation_needed", "no_build", "ready_for_planning", "evidence",
+		"deferred",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("ideation prompt lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "sub-agent") {
+		t.Fatalf("ideation prompt asks for sub-agent orchestration that the factory runtime owns:\n%s", text)
+	}
+	request.PromptVersion = "ideation-v1"
+	if _, legacy, err := prompt.BuildSession(request); err != nil || legacy.SHA256 != "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d" {
+		t.Fatalf("BuildSession(ideation-v1) identity = %#v, %v; want the retained v1 body", legacy, err)
 	}
 }

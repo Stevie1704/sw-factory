@@ -100,6 +100,10 @@ type IdeationHandoff struct {
 	Brief *Brief `json:"brief,omitempty"`
 	// Readiness optionally proposes the next session step.
 	Readiness *ReadinessProposal `json:"readiness,omitempty"`
+	// AffectedDecisions names the brief decisions that a changed user answer
+	// affects. The brief of the same report shows each one revised or
+	// removed, so no conclusion that contradicts the new answer stays.
+	AffectedDecisions []string `json:"affected_decisions,omitempty"`
 }
 
 // PlanNode is one provider-neutral work item of a draft plan. Its fields match
@@ -244,6 +248,16 @@ func validateIdeationHandoff(value IdeationHandoff) error {
 		if err := validateBrief(*value.Brief); err != nil {
 			return err
 		}
+	}
+	if len(value.AffectedDecisions) > maxBriefItems {
+		return fmt.Errorf("ideation.affected_decisions exceeds %d entries", maxBriefItems)
+	}
+	affected := map[string]bool{}
+	for _, id := range value.AffectedDecisions {
+		if !IsSafeIdentifier(id) || affected[id] {
+			return fmt.Errorf("ideation.affected_decisions entry %q must be a unique, safe decision ID", id)
+		}
+		affected[id] = true
 	}
 	if value.Readiness != nil {
 		switch value.Readiness.Proposal {

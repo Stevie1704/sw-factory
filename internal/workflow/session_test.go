@@ -38,6 +38,11 @@ func TestSessionLifecycleResolvesDeclaredTransitions(t *testing.T) {
 		{store.IdeationStateDeferred, workflow.SessionEventResumed, store.IdeationStateAwaitingUser},
 		{store.IdeationStateDeferred, workflow.SessionEventNoBuild, store.IdeationStateNoBuild},
 		{store.IdeationStatePublicationIncomplete, workflow.SessionEventCancelled, store.IdeationStateCancelled},
+		{store.IdeationStateAwaitingUser, workflow.SessionEventInvestigationNeeded, store.IdeationStateInvestigationNeeded},
+		{store.IdeationStateDraftReview, workflow.SessionEventInvestigationNeeded, store.IdeationStateInvestigationNeeded},
+		{store.IdeationStateInvestigationNeeded, workflow.SessionEventResumed, store.IdeationStateAwaitingUser},
+		{store.IdeationStateInvestigationNeeded, workflow.SessionEventNoBuild, store.IdeationStateNoBuild},
+		{store.IdeationStateInvestigationNeeded, workflow.SessionEventCancelled, store.IdeationStateCancelled},
 	}
 	for _, test := range tests {
 		got, err := lifecycle.Next(test.from, test.event)
@@ -66,6 +71,8 @@ func TestSessionLifecycleRejectsInvalidTransitions(t *testing.T) {
 		{store.IdeationStatePublished, workflow.SessionEventCancelled},
 		{store.IdeationStateCancelled, workflow.SessionEventResumed},
 		{store.IdeationStateNoBuild, workflow.SessionEventTurnAccepted},
+		{store.IdeationStateRoleActive, workflow.SessionEventInvestigationNeeded},
+		{store.IdeationStateInvestigationNeeded, workflow.SessionEventTurnAccepted},
 		{"unknown", workflow.SessionEventCancelled},
 	}
 	for _, test := range tests {

@@ -311,7 +311,7 @@ func TestSessionReadsLeaveTheStoreUnchanged(t *testing.T) {
 	ui := newSessionUI(t, true)
 	makeStoreReadOnly(t, ui.storePath)
 	before := snapshotStore(t, ui.storePath)
-	for _, path := range append(slices.Clone(pagePaths), "/api/sessions", "/api/sessions/session-1", "/api/commands/request-1", "/assets/commands.js") {
+	for _, path := range append(slices.Clone(pagePaths), "/api/sessions", "/api/sessions/session-1", "/api/commands/request-1", "/assets/commands.js", "/assets/sessions.js", "/sessions", "/sessions/session-1", "/sessions/session-missing") {
 		if response := get(t, ui.handler, path); response.Code >= http.StatusInternalServerError {
 			t.Fatalf("GET %s status = %d; body:\n%s", path, response.Code, response.Body)
 		}

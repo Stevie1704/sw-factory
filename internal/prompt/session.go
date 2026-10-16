@@ -20,7 +20,7 @@ const WorkerSessionPacketPath = "/invocation/session.json"
 // embedded body. Retained versions let restart recovery rebuild the exact
 // prompt of a persisted invocation.
 var sessionPromptVersions = map[string]map[string]string{
-	workflow.RoleIdeation: {workflow.PromptVersionIdeation: "prompts/ideation.md"},
+	workflow.RoleIdeation: {workflow.PromptVersionIdeation: "prompts/ideation.md", "ideation-v1": "prompts/legacy/ideation-v1.md"},
 	workflow.RolePlanning: {workflow.PromptVersionPlanning: "prompts/planning.md", "planning-v1": "prompts/legacy/planning-v1.md"},
 }
 

@@ -605,11 +605,14 @@ and structured reports as run roles, with these differences:
 - **Packet.** The read-only `/invocation/session.json` contains the pinned
   identity, the prompt identity, and the role input: the conversation and the
   current brief for ideation, and only the frozen brief for planning. User
-  text stays in the packet and never enters the prompt.
+  text stays in the packet and never enters the prompt. Each packet turn has
+  its ID; a correction turn names the earlier user answer it changes in
+  `corrects`.
 - **Report.** The ideation role reports with
   `factory-report --outcome completed --summary ... --ideation-file FILE`, where
-  the JSON file holds a message, questions, an optional complete brief, and an
-  optional readiness proposal. The planning role reports a draft plan graph
+  the JSON file holds a message, questions, an optional complete brief,
+  optional `affected_decisions` (the brief decisions a changed answer
+  affects), and an optional readiness proposal. The planning role reports a draft plan graph
   with `--plan-file FILE`, or questions with `--question id=text`. Both may
   report `cannot_proceed` with evidence.
 - **Acceptance.** The supervisor reconciles active session-role invocations on
@@ -631,6 +634,12 @@ and structured reports as run roles, with these differences:
   and an earlier draft stays under review. The coordinator never truncates a
   draft. Planning craft, such as when to decompose, stays in the versioned
   planning prompt.
+- **Questioning method.** Prompt `ideation-v2` names the factory-owned
+  `grilling` worker skill ([ADR 0027](adr/0027-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)):
+  rounds of questions whose prerequisites are settled, each with a
+  recommended answer, facts read from the snapshot, unknowns kept as
+  unresolved questions, and revisited decisions after a changed answer. The
+  role only proposes readiness; the user decides in the local UI.
 - **Failures.** Expired authentication, capacity limits, unexpected exits, a
   resume that reveals another native session, credential projection failures,
   interrupted launches, and rejected reports end the invocation with a

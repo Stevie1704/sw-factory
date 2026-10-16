@@ -234,3 +234,31 @@ func TestSchema44MigrationAddsSessionInvocations(t *testing.T) {
 		t.Fatalf("ActiveSessionInvocations() = %#v, %v; want an empty usable table", active, err)
 	}
 }
+
+// TestSessionInvocationsListOneSessionInStartOrder verifies that a session
+// page can read every invocation of one session, ended or active, in the
+// order they started, and no invocation of another session.
+func TestSessionInvocationsListOneSessionInStartOrder(t *testing.T) {
+	t.Parallel()
+
+	opened, _ := openIdeationStoreForTest(t)
+	session, first := startInvocationForTest(t, opened, createIdeationSessionForTest(t, opened, "session-1"), "sinv-1", "turn-1")
+	session, _, err := opened.ReleaseSessionInvocation(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), store.SessionInvocationEnd{
+		InvocationID: first.ID, Status: store.SessionInvocationFailed, FailureKind: "rate_limited", Reason: "capacity", At: ideationNow,
+	})
+	if err != nil {
+		t.Fatalf("ReleaseSessionInvocation() error = %v", err)
+	}
+	startInvocationForTest(t, opened, session, "sinv-2", "turn-2")
+	other := createIdeationSessionForTest(t, opened, "session-2")
+	startInvocationForTest(t, opened, other, "sinv-3", "turn-3")
+
+	invocations, err := opened.SessionInvocations(t.Context(), "session-1")
+	if err != nil {
+		t.Fatalf("SessionInvocations() error = %v", err)
+	}
+	if len(invocations) != 2 || invocations[0].ID != "sinv-1" || invocations[0].FailureKind != "rate_limited" ||
+		invocations[1].ID != "sinv-2" || invocations[1].Status != store.SessionInvocationActive {
+		t.Fatalf("SessionInvocations() = %#v, want sinv-1 (failed) then sinv-2 (active)", invocations)
+	}
+}

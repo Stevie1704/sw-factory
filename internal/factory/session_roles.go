@@ -682,10 +682,13 @@ type sessionInvocationPacket struct {
 
 // sessionPacketTurn is one conversation turn in a session packet.
 type sessionPacketTurn struct {
+	ID       string `json:"id"`
 	Sequence int64  `json:"sequence"`
 	Author   string `json:"author"`
 	Role     string `json:"role,omitempty"`
 	Body     string `json:"body"`
+	// Corrects names the earlier user turn whose answer this turn changes.
+	Corrects string `json:"corrects,omitempty"`
 }
 
 // writeSessionPacket writes the frozen packet and creates the result
@@ -727,7 +730,9 @@ func boundedPacketTurns(turns []store.IdeationTurn) ([]sessionPacketTurn, int) {
 	}
 	kept := make([]sessionPacketTurn, 0, len(turns)-first)
 	for _, turn := range turns[first:] {
-		kept = append(kept, sessionPacketTurn{Sequence: turn.Sequence, Author: string(turn.Author), Role: turn.Role, Body: turn.Body})
+		kept = append(kept, sessionPacketTurn{
+			ID: turn.ID, Sequence: turn.Sequence, Author: string(turn.Author), Role: turn.Role, Body: turn.Body, Corrects: turn.Corrects,
+		})
 	}
 	return kept, first
 }

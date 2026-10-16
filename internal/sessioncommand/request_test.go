@@ -15,20 +15,21 @@ func TestParseRequestAcceptsEveryDeclaredKind(t *testing.T) {
 	t.Parallel()
 
 	payloads := map[sessioncommand.Kind]string{
-		sessioncommand.KindCreateSession:   `{"title":"Faster onboarding"}`,
-		sessioncommand.KindSubmitTurn:      `{"body":"Who uses this?"}`,
-		sessioncommand.KindEditBrief:       `{"brief":{"problem":"Slow.","scope":[{"id":"scope-1","text":"The command."}],"decisions":[{"id":"d-1","decision":"Cache.","rationale":"Fast."}]}}`,
-		sessioncommand.KindHandOff:         `{"brief_revision":2}`,
-		sessioncommand.KindEditDraft:       `{"nodes":[{"id":"n-1","kind":"task","title":"Do it","body":"Body.","acceptance_criteria":["Works."],"brief_refs":["scope-1"]}]}`,
-		sessioncommand.KindRegenerateDraft: `{"plan_revision":1}`,
-		sessioncommand.KindPreviewPlan:     `{"plan_revision":1}`,
-		sessioncommand.KindApprove:         `{"plan_revision":1,"payload_sha256":"` + strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `","publish":true}`,
-		sessioncommand.KindPublish:         `{}`,
-		sessioncommand.KindReconcile:       `{"operation_id":"item/n-1","external_id":"42"}`,
-		sessioncommand.KindDefer:           `{"reason":"Later."}`,
-		sessioncommand.KindResume:          `{}`,
-		sessioncommand.KindNoBuild:         `{"reason":"Not worth it."}`,
-		sessioncommand.KindCancel:          `{}`,
+		sessioncommand.KindCreateSession:       `{"title":"Faster onboarding"}`,
+		sessioncommand.KindSubmitTurn:          `{"body":"Who uses this?","corrects":"turn-1"}`,
+		sessioncommand.KindEditBrief:           `{"brief":{"problem":"Slow.","scope":[{"id":"scope-1","text":"The command."}],"decisions":[{"id":"d-1","decision":"Cache.","rationale":"Fast."}]}}`,
+		sessioncommand.KindHandOff:             `{"brief_revision":2,"deferred_questions":["uq-1"]}`,
+		sessioncommand.KindEditDraft:           `{"nodes":[{"id":"n-1","kind":"task","title":"Do it","body":"Body.","acceptance_criteria":["Works."],"brief_refs":["scope-1"]}]}`,
+		sessioncommand.KindRegenerateDraft:     `{"plan_revision":1}`,
+		sessioncommand.KindPreviewPlan:         `{"plan_revision":1}`,
+		sessioncommand.KindApprove:             `{"plan_revision":1,"payload_sha256":"` + strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `","publish":true}`,
+		sessioncommand.KindPublish:             `{}`,
+		sessioncommand.KindReconcile:           `{"operation_id":"item/n-1","external_id":"42"}`,
+		sessioncommand.KindDefer:               `{"reason":"Later."}`,
+		sessioncommand.KindResume:              `{}`,
+		sessioncommand.KindInvestigationNeeded: `{"reason":"Registry unknown."}`,
+		sessioncommand.KindNoBuild:             `{"reason":"Not worth it."}`,
+		sessioncommand.KindCancel:              `{}`,
 	}
 	if len(payloads) != len(sessioncommand.Kinds()) {
 		t.Fatalf("test covers %d kinds, package declares %d", len(payloads), len(sessioncommand.Kinds()))
@@ -77,6 +78,8 @@ func TestParseRequestRefusesMalformedOrUnboundedInput(t *testing.T) {
 		{name: "mutation without revision", body: `{"request_id":"r","session_id":"s","kind":"cancel","expected_revision":0,"payload":{}}`},
 		{name: "empty turn", body: `{"request_id":"r","session_id":"s","kind":"submit_turn","expected_revision":1,"payload":{"body":"  "}}`},
 		{name: "oversized turn", body: `{"request_id":"r","session_id":"s","kind":"submit_turn","expected_revision":1,"payload":{"body":"` + strings.Repeat("x", 64*1024+1) + `"}}`},
+		{name: "unsafe corrected turn", body: `{"request_id":"r","session_id":"s","kind":"submit_turn","expected_revision":1,"payload":{"body":"x","corrects":"turn 1"}}`},
+		{name: "unsafe deferred question", body: `{"request_id":"r","session_id":"s","kind":"hand_off","expected_revision":1,"payload":{"brief_revision":1,"deferred_questions":["uq 1"]}}`},
 		{name: "bad digest", body: `{"request_id":"r","session_id":"s","kind":"approve","expected_revision":1,"payload":{"plan_revision":1,"payload_sha256":"x","relationship_mapping_sha256":"y"}}`},
 		{name: "trailing data", body: `{"request_id":"r","session_id":"s","kind":"cancel","expected_revision":1,"payload":{}} {}`},
 	}

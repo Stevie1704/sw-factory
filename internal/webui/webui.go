@@ -58,6 +58,8 @@ const (
 	pageRun        page = "run"
 	pageEvaluation page = "evaluation"
 	pageError      page = "error"
+	pageSessions   page = "sessions"
+	pageSession    page = "session"
 )
 
 // errorPage is the model of a page that explains why no content is shown.
@@ -105,6 +107,8 @@ func NewHandler(reader Reader, options Options) http.Handler {
 	if options.Sessions != nil {
 		ui.csrfToken = newCSRFToken()
 		(&sessionRoutes{sessions: options.Sessions, token: ui.csrfToken}).register(mux)
+		mux.HandleFunc("GET /sessions", ui.sessionList)
+		mux.HandleFunc("GET /sessions/{id}", ui.sessionDetail)
 		(&planRoutes{ui: ui, sessions: options.Sessions}).register(mux)
 	}
 	return protect(mux)
@@ -114,15 +118,18 @@ func NewHandler(reader Reader, options Options) http.Handler {
 // can define its own "title" and "content" templates.
 func parsePages() map[page]*template.Template {
 	functions := template.FuncMap{
-		"formatTime":  formatTime,
-		"testPolicy":  factory.TestPolicyDescription,
-		"micros":      formatMicros,
-		"stageTrack":  stageTrack,
-		"budgetGauge": newBudgetGauge,
-		"join":        strings.Join,
+		"formatTime":    formatTime,
+		"testPolicy":    factory.TestPolicyDescription,
+		"micros":        formatMicros,
+		"stageTrack":    stageTrack,
+		"budgetGauge":   newBudgetGauge,
+		"join":          strings.Join,
+		"briefLists":    briefLists,
+		"editableBrief": editableBrief,
+		"reasonForm":    reasonForm,
 	}
 	pages := map[page]*template.Template{}
-	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError, pagePlan} {
+	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError, pagePlan, pageSessions, pageSession} {
 		pages[name] = template.Must(template.New("").Funcs(functions).ParseFS(templateFiles, "templates/layout.html", "templates/"+string(name)+".html"))
 	}
 	return pages

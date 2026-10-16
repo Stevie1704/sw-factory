@@ -38,6 +38,11 @@ const (
 	IdeationStatePublished IdeationState = "published"
 	// IdeationStateDeferred means the user parked the session. It can resume.
 	IdeationStateDeferred IdeationState = "deferred"
+	// IdeationStateInvestigationNeeded means the user decided that material
+	// unknowns need investigation before planning. The unresolved questions
+	// of the current brief are the investigation items. No backlog item is
+	// created. The session can resume.
+	IdeationStateInvestigationNeeded IdeationState = "investigation_needed"
 	// IdeationStateNoBuild means the user decided not to build. The state is
 	// terminal.
 	IdeationStateNoBuild IdeationState = "no_build"
@@ -51,7 +56,8 @@ func IdeationStates() []IdeationState {
 	return []IdeationState{
 		IdeationStateAwaitingUser, IdeationStateRoleActive, IdeationStateDraftReview,
 		IdeationStateApproved, IdeationStatePublishing, IdeationStatePublicationIncomplete,
-		IdeationStatePublished, IdeationStateDeferred, IdeationStateNoBuild, IdeationStateCancelled,
+		IdeationStatePublished, IdeationStateDeferred, IdeationStateInvestigationNeeded, IdeationStateNoBuild,
+		IdeationStateCancelled,
 	}
 }
 

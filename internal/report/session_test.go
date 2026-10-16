@@ -153,6 +153,9 @@ func TestValidateRequiresTheSessionPayloadOfEachRole(t *testing.T) {
 		{"duplicate brief item", ideationReport, func(value *report.Report) {
 			value.Ideation.Brief.Scope = []report.BriefItem{{ID: "ev-1", Text: "again"}}
 		}, false},
+		{"affected decisions", ideationReport, func(value *report.Report) { value.Ideation.AffectedDecisions = []string{"dec-1", "dec-2"} }, true},
+		{"unsafe affected decision", ideationReport, func(value *report.Report) { value.Ideation.AffectedDecisions = []string{"dec 1"} }, false},
+		{"duplicate affected decision", ideationReport, func(value *report.Report) { value.Ideation.AffectedDecisions = []string{"dec-1", "dec-1"} }, false},
 		{"decision without rationale", ideationReport, func(value *report.Report) { value.Ideation.Brief.Decisions[0].Rationale = "" }, false},
 		{"ideation clarification", ideationReport, func(value *report.Report) {
 			value.Outcome = report.OutcomeNeedsClarification
