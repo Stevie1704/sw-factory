@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 44
+const CurrentSchemaVersion = 45
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -885,33 +885,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 // directories, changing permissions, initializing metadata, migrating schema,
 // or creating a backup. It is the only store entry point used by diagnosis.
 func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	if path == "" {
-		return nil, errors.New("operational store path is required")
-	}
-	absolutePath, err := filepath.Abs(path)
+	absolutePath, err := checkExistingStoreFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("resolve operational store path: %w", err)
-	}
-	storeDirectory := filepath.Dir(absolutePath)
-	if info, err := os.Stat(storeDirectory); err != nil {
-		return nil, fmt.Errorf("inspect operational store directory: %w", err)
-	} else if !info.IsDir() {
-		return nil, errors.New("operational store parent is not a directory")
-	} else if info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("operational store directory is not private")
-	}
-	info, err := os.Lstat(absolutePath)
-	if err != nil {
-		return nil, fmt.Errorf("inspect operational store: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, errors.New("operational store is not a regular file")
-	}
-	if info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 {
-		return nil, errors.New("operational store file is not private and owner-readable")
-	}
-	if info.Size() == 0 {
-		return nil, &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
+		return nil, err
 	}
 	database, err := openReadOnlyDatabase(ctx, absolutePath)
 	if err != nil {
@@ -3550,6 +3526,12 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 44:
 			if err := migrateSessionInvocationSchema(ctx, tx); err != nil {
 				return fmt.Errorf("apply store migration 44: %w", err)
+			}
+		case 45:
+			for _, statement := range ideationCommandSchema {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 45: %w", err)
+				}
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

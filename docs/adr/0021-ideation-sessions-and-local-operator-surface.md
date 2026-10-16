@@ -97,7 +97,7 @@ Coordinator commands (#267), session roles (#268), plan validation (#270),
 review (#271), and publication (#272) build on these types in
 `internal/store` and on `workflow.SessionLifecycle`. The "Ideation sessions"
 part of the local web UI contract in `docs/configuration.md` records the UI
-extension; the command routes themselves ship with #267. Plan
+extension; ADR 0024 records the command inbox and routes (#267). Plan
 graph policy (cycles, hierarchy shape, size limits) belongs to plan
 validation, not to the store, which checks only identity and reference
 integrity. Because sessions have no automatic expiry, a busy installation can

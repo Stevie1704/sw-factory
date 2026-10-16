@@ -312,13 +312,10 @@ func (s *Service) openRunReader(ctx context.Context) (string, RunReadStore, erro
 // supervisorView reads the persisted heartbeat and the active run, and
 // judges the heartbeat at the service clock.
 func (s *Service) supervisorView(ctx context.Context, reader supervisorReader) (SupervisorView, error) {
-	view := SupervisorView{ObservedAt: s.deps.Now().UTC()}
-	heartbeat, err := reader.ReadSupervisorHeartbeat(ctx)
+	view, err := s.supervisorLiveness(ctx, reader)
 	if err != nil {
-		return SupervisorView{}, fmt.Errorf("read supervisor heartbeat: %w", err)
+		return SupervisorView{}, err
 	}
-	view.Heartbeat = heartbeat
-	view.Live = heartbeat != nil && heartbeat.Live(view.ObservedAt)
 	active, err := reader.CurrentRun(ctx)
 	if err != nil {
 		return SupervisorView{}, fmt.Errorf("read active run: %w", err)

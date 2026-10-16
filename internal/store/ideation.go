@@ -156,6 +156,10 @@ type IdeationWrite struct {
 	StateReason string
 	// At is the write time. Zero selects the current time.
 	At time.Time
+	// CommandID optionally names the pending inbox command that causes the
+	// write. The store then completes that command as applied in the same
+	// transaction, so a resumed coordinator never applies it twice.
+	CommandID string
 }
 
 // ideationSessionColumns is the column order that scanIdeationSession decodes.
@@ -312,6 +316,9 @@ func commitIdeationWrite(ctx context.Context, tx *sql.Tx, session IdeationSessio
 		return IdeationSession{}, fmt.Errorf("inspect ideation session %q update: %w", session.ID, err)
 	} else if changed != 1 {
 		return IdeationSession{}, &IdeationRevisionConflictError{SessionID: session.ID, Expected: write.ExpectedRevision, Actual: -1}
+	}
+	if err := completeCommandInWrite(ctx, tx, session, write); err != nil {
+		return IdeationSession{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return IdeationSession{}, fmt.Errorf("commit ideation session %q: %w", session.ID, err)

@@ -227,8 +227,8 @@ func TestSchema44MigrationAddsSessionInvocations(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
-	if version := reopened.SchemaVersion(); version != 44 {
-		t.Fatalf("SchemaVersion() = %d, want 44", version)
+	if version := reopened.SchemaVersion(); version != store.CurrentSchemaVersion {
+		t.Fatalf("SchemaVersion() = %d, want %d", version, store.CurrentSchemaVersion)
 	}
 	if active, err := reopened.ActiveSessionInvocations(t.Context()); err != nil || len(active) != 0 {
 		t.Fatalf("ActiveSessionInvocations() = %#v, %v; want an empty usable table", active, err)

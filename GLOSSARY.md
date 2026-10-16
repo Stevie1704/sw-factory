@@ -96,6 +96,19 @@ mapping, so the approval binds it; publication never switches between native
 and textual after approval.
 _Avoid_: Silent downgrade, best-effort link
 
+**Session command**:
+One browser request for an ideation session, such as a user turn, a brief
+edit, an approval, or a cancellation. It carries a request ID that makes it
+idempotent and the session revision the page showed. Acceptance makes it
+durable; only the coordinator applies it and records its outcome.
+_Avoid_: Action, API call (for the durable request)
+
+**Command inbox**:
+The operational-store table where the local UI appends session commands and
+the coordinator reads them in order. It is the only path from the browser to
+the coordinator; there is no control socket.
+_Avoid_: Queue (for run work), control socket
+
 **Work tracker**:
 The external system that holds the issues the factory claims, their run-state
 labels, the status and command comments, and the optional coordinator lease.
