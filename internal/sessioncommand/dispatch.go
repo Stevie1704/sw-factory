@@ -44,6 +44,16 @@ type Publisher interface {
 
 var _ Publisher = (*publication.Publisher)(nil)
 
+// Roles is the session role seam. Session roles (#268) implement it in the
+// coordinator.
+type Roles interface {
+	// StartIdeation starts the ideation role for the newest user turn.
+	StartIdeation(ctx context.Context, sessionID, turnID string) error
+	// StartPlanning starts the planning role for the current brief; requestID
+	// is the hand-off or regeneration request.
+	StartPlanning(ctx context.Context, sessionID, requestID string) error
+}
+
 // Env is what a handler uses to apply a command. Only the coordinator builds
 // it.
 type Env struct {
@@ -54,6 +64,12 @@ type Env struct {
 	// Publisher previews and publishes plans. It is nil when the configured
 	// tracker adapter has no planning capability.
 	Publisher Publisher
+	// Roles starts session roles. It is nil when this build cannot start
+	// one; hand-off and regeneration then complete as unsupported.
+	Roles Roles
+	// ValidatePlan checks a user-edited plan graph before it is saved. Nil
+	// leaves only the store's integrity check.
+	ValidatePlan func([]store.PlanNode) error
 	// RepositoryPath is the registered repository that owns new sessions.
 	RepositoryPath string
 	// Now returns the coordinator time.

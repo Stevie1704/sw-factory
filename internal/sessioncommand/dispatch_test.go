@@ -493,3 +493,100 @@ func TestPlanningCommandsAreUnsupportedWithoutAPlanningTracker(t *testing.T) {
 	c.drain()
 	c.requireOutcome("preview-1", store.IdeationCommandUnsupported)
 }
+
+// rolesForTest records role starts. When interrupt is set, the first
+// ideation start stops the coordinator instead.
+type rolesForTest struct {
+	mu        sync.Mutex
+	calls     []string
+	interrupt context.CancelFunc
+}
+
+// StartIdeation records the start, or stops the coordinator once.
+func (r *rolesForTest) StartIdeation(_ context.Context, sessionID, turnID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.interrupt != nil {
+		r.interrupt()
+		r.interrupt = nil
+		return context.Canceled
+	}
+	r.calls = append(r.calls, "ideation:"+sessionID+":"+turnID)
+	return nil
+}
+
+// StartPlanning records the start.
+func (r *rolesForTest) StartPlanning(_ context.Context, sessionID, requestID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "planning:"+sessionID+":"+requestID)
+	return nil
+}
+
+// TestAcceptedTurnAndHandOffStartSessionRoles verifies that an accepted turn
+// starts the ideation role and a handoff starts planning, and that a
+// coordinator stop between the turn and the role start still starts the
+// role once on resume.
+func TestAcceptedTurnAndHandOffStartSessionRoles(t *testing.T) {
+	t.Parallel()
+
+	c := newCoordinatorForTest(t)
+	revision := c.createSession("session-1")
+	ctx, stop := context.WithCancel(t.Context())
+	roles := &rolesForTest{interrupt: stop}
+	c.submit("turn-1", "session-1", sessioncommand.KindSubmitTurn, revision, `{"body":"Who uses this?"}`)
+
+	interrupted := c.dispatcher()
+	interrupted.Env.Roles = roles
+	_ = interrupted.Drain(ctx)
+	if command := c.command("turn-1"); command.State != store.IdeationCommandApplying {
+		t.Fatalf("command = %#v, want applying after the interrupted role start", command)
+	}
+
+	resumed := c.dispatcher()
+	resumed.Env.Roles = roles
+	if err := resumed.Drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	applied := c.requireOutcome("turn-1", store.IdeationCommandApplied)
+	if len(c.history("session-1").Turns) != 1 || len(roles.calls) != 1 || roles.calls[0] != "ideation:session-1:turn-1" {
+		t.Fatalf("turns = %d, role starts = %#v; want one turn and one ideation start", len(c.history("session-1").Turns), roles.calls)
+	}
+
+	c.submit("brief-1", "session-1", sessioncommand.KindEditBrief, applied.SessionRevision, `{"brief":{"problem":"Slow."}}`)
+	c.drain()
+	revision = c.requireOutcome("brief-1", store.IdeationCommandApplied).SessionRevision
+	c.submit("handoff-1", "session-1", sessioncommand.KindHandOff, revision, `{"brief_revision":1}`)
+	planner := c.dispatcher()
+	planner.Env.Roles = roles
+	if err := planner.Drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	c.requireOutcome("handoff-1", store.IdeationCommandApplied)
+	if roles.calls[len(roles.calls)-1] != "planning:session-1:handoff-1" {
+		t.Fatalf("role starts = %#v, want a planning start for the handoff", roles.calls)
+	}
+}
+
+// TestEditedDraftIsValidatedBeforeItIsSaved verifies that a user edit of the
+// draft goes through plan validation and an invalid graph is refused.
+func TestEditedDraftIsValidatedBeforeItIsSaved(t *testing.T) {
+	t.Parallel()
+
+	c := newCoordinatorForTest(t)
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	c.submit("draft-1", "session-1", sessioncommand.KindEditDraft, revision,
+		`{"nodes":[{"id":"n-1","kind":"task","title":"Only task","body":"Edited."}]}`)
+	dispatcher := c.dispatcher()
+	dispatcher.Env.ValidatePlan = func(nodes []store.PlanNode) error {
+		return errors.New("node n-1 needs at least one acceptance criterion")
+	}
+	if err := dispatcher.Drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	refused := c.requireOutcome("draft-1", store.IdeationCommandRefused)
+	if !strings.Contains(refused.Detail, "acceptance criterion") || c.history("session-1").Session.PlanRevision != 1 {
+		t.Fatalf("refused = %#v, want the validation problem and no new plan revision", refused)
+	}
+}

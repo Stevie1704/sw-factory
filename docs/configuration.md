@@ -1249,6 +1249,10 @@ Session commands (ADR 0021, ADR 0024):
   503 with the outcome `unavailable` and nothing is stored. The UI never
   starts a second writer. Run `factory start` and submit again. Read-only
   pages and session reads keep working.
+- `submit_turn` starts the ideation role for the accepted turn, and
+  `hand_off` and `regenerate_draft` start planning; a role that cannot start
+  is named in the outcome detail. `edit_draft` passes plan validation before
+  the coordinator saves it.
 - `approve` names the digests of a preview that `preview_plan` rendered,
   because only the coordinator talks to the tracker. Publication needs a
   tracker adapter with plan publication; otherwise the command is

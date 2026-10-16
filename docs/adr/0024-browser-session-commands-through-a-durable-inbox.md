@@ -44,10 +44,13 @@ availability, and the protection of the mutation route.
    at startup and then every second, beside the run loop. Commands that call
    the tracker (preview, approve, publish, reconcile) run in the background,
    one at a time per session, so a cancel is applied while publication runs.
-   Each command kind has one handler; session roles and review pages replace
-   or extend handlers instead of adding a second command path. Without a
-   tracker that implements `tracker.PlanPublisher`, publication commands
-   complete as `unsupported`.
+   Each command kind has one handler; review pages replace or extend handlers
+   instead of adding a second command path. An accepted turn starts the
+   ideation role, and a hand-off or regeneration starts planning (ADR 0023);
+   the turn completes its command only after the role start, so a resumed
+   command starts the role once. A user-edited draft passes plan validation
+   before it is saved. Without a tracker that implements
+   `tracker.PlanPublisher`, publication commands complete as `unsupported`.
 6. **An unavailable coordinator gives an explicit result.** When the persisted
    supervisor heartbeat is missing or expired, a new command gets HTTP 503
    with the outcome `unavailable` and nothing is appended. The UI never starts

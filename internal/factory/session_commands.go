@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/plangraph"
 	"github.com/Stevie1704/sw-factory/internal/publication"
 	"github.com/Stevie1704/sw-factory/internal/sessioncommand"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -331,11 +332,36 @@ func (loop *sessionCommandLoop) stop() {
 // port.
 func (s *Service) sessionCommandEnv(commandStore sessionCommandStore, registration config.RepositoryRegistration) sessioncommand.Env {
 	lifecycle := workflow.DefaultSessionLifecycle()
-	env := sessioncommand.Env{Store: commandStore, Lifecycle: lifecycle, RepositoryPath: registration.Path, Now: s.deps.Now}
+	env := sessioncommand.Env{
+		Store: commandStore, Lifecycle: lifecycle, Roles: sessionRoleStarter{service: s}, ValidatePlan: plangraph.Validate,
+		RepositoryPath: registration.Path, Now: s.deps.Now,
+	}
 	if planner, ok := s.deps.Tracker.(tracker.PlanPublisher); ok {
 		env.Publisher = &publication.Publisher{
 			Store: commandStore, Tracker: planner, Repository: registeredRepository(registration), Lifecycle: lifecycle, Now: s.deps.Now,
 		}
 	}
 	return env
+}
+
+// sessionRoleStarter starts session roles for session commands through the
+// coordinator's session-role service.
+type sessionRoleStarter struct {
+	service *Service
+}
+
+// StartIdeation starts the ideation role for the newest user turn.
+func (starter sessionRoleStarter) StartIdeation(ctx context.Context, sessionID, turnID string) error {
+	return starter.service.WithSessionRoles(ctx, func(roles *SessionRoles) error {
+		_, err := roles.StartIdeationTurn(ctx, sessionID, turnID)
+		return err
+	})
+}
+
+// StartPlanning starts the planning role for a hand-off or regeneration.
+func (starter sessionRoleStarter) StartPlanning(ctx context.Context, sessionID, requestID string) error {
+	return starter.service.WithSessionRoles(ctx, func(roles *SessionRoles) error {
+		_, err := roles.StartPlanning(ctx, sessionID, requestID)
+		return err
+	})
 }

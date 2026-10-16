@@ -13,10 +13,10 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
-// DefaultHandlers returns the minimal coordinator behavior of every command
-// kind. They change sessions only through the session lifecycle and the
-// store. Hand-off and regeneration need a session role; their default
-// handler checks the request and reports that this build cannot start one.
+// DefaultHandlers returns the coordinator behavior of every command kind.
+// They change sessions only through the session lifecycle and the store, and
+// start session roles through Env.Roles. Without Env.Roles, hand-off and
+// regeneration check the request and report that no role can start.
 func DefaultHandlers() map[Kind]Handler {
 	return map[Kind]Handler{
 		KindCreateSession:   createSession,
@@ -100,26 +100,60 @@ func createSession(ctx context.Context, env Env, command store.IdeationCommand) 
 	return Applied(session, "session created"), nil
 }
 
-// submitTurn appends the user turn with the request ID as turn ID. Starting
-// the ideation role for the turn belongs to session roles.
+// submitTurn appends the user turn with the request ID as turn ID and, when
+// session roles are available, starts the ideation role for it. With a role
+// to start, the turn does not complete the command, so a coordinator stop
+// before the role start resumes with the stored turn and starts the role.
 func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	payload, err := payloadOf[TurnPayload](command)
 	if err != nil {
 		return Outcome{}, err
 	}
-	session, err := CurrentSession(ctx, env, command)
+	history, err := env.Store.IdeationHistory(ctx, command.SessionID)
 	if err != nil {
 		return Outcome{}, err
 	}
-	write, err := CommandWrite(env, session, command, workflow.SessionEventTurnAccepted, "")
-	if err != nil {
-		return Outcome{}, err
+	session := history.Session
+	if !hasTurn(history, command.RequestID) {
+		if session.Revision != command.ExpectedRevision {
+			return Outcome{}, &store.IdeationRevisionConflictError{SessionID: session.ID, Expected: command.ExpectedRevision, Actual: session.Revision}
+		}
+		write, err := CommandWrite(env, session, command, workflow.SessionEventTurnAccepted, "")
+		if err != nil {
+			return Outcome{}, err
+		}
+		if env.Roles != nil {
+			write.CommandID = ""
+		}
+		session, _, err = env.Store.AppendIdeationTurn(ctx, write, store.IdeationTurn{ID: command.RequestID, Author: store.IdeationTurnAuthorUser, Body: payload.Body})
+		if err != nil {
+			return Outcome{}, err
+		}
 	}
-	session, _, err = env.Store.AppendIdeationTurn(ctx, write, store.IdeationTurn{ID: command.RequestID, Author: store.IdeationTurnAuthorUser, Body: payload.Body})
-	if err != nil {
-		return Outcome{}, err
+	if env.Roles == nil {
+		return Applied(session, "turn accepted"), nil
 	}
-	return Applied(session, "turn accepted"), nil
+	detail := "turn accepted; the ideation role started"
+	if err := env.Roles.StartIdeation(ctx, session.ID, command.RequestID); err != nil {
+		if ctx.Err() != nil {
+			return Outcome{}, err
+		}
+		detail = "turn accepted; the ideation role did not start: " + err.Error()
+	}
+	if current, err := env.Store.IdeationSession(ctx, session.ID); err == nil {
+		session = current
+	}
+	return Applied(session, detail), nil
+}
+
+// hasTurn reports whether history holds the turn id.
+func hasTurn(history store.IdeationHistory, id string) bool {
+	for _, turn := range history.Turns {
+		if turn.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // editBrief saves the edited brief as the next brief revision.
@@ -158,7 +192,7 @@ func handOff(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 	if payload.BriefRevision != session.BriefRevision {
 		return Outcome{}, fmt.Errorf("brief revision %d is not the current brief revision %d", payload.BriefRevision, session.BriefRevision)
 	}
-	return roleUnavailable(env, session)
+	return startPlanning(ctx, env, session, command)
 }
 
 // regenerateDraft checks that the displayed plan revision is current and that
@@ -175,7 +209,22 @@ func regenerateDraft(ctx context.Context, env Env, command store.IdeationCommand
 	if payload.PlanRevision != session.PlanRevision {
 		return Outcome{}, fmt.Errorf("plan revision %d is not the current plan revision %d", payload.PlanRevision, session.PlanRevision)
 	}
-	return roleUnavailable(env, session)
+	return startPlanning(ctx, env, session, command)
+}
+
+// startPlanning starts the planning role for command, or reports that this
+// build cannot start one.
+func startPlanning(ctx context.Context, env Env, session store.IdeationSession, command store.IdeationCommand) (Outcome, error) {
+	if env.Roles == nil {
+		return roleUnavailable(env, session)
+	}
+	if err := env.Roles.StartPlanning(ctx, session.ID, command.RequestID); err != nil {
+		return Outcome{}, err
+	}
+	if current, err := env.Store.IdeationSession(ctx, session.ID); err == nil {
+		session = current
+	}
+	return Applied(session, "the planning role started"), nil
 }
 
 // roleUnavailable reports that no session role can start, after it checked
@@ -208,12 +257,18 @@ func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Out
 		return Outcome{}, errors.New("the session has no plan draft to edit")
 	}
 	current := history.Plans[len(history.Plans)-1]
+	nodes := PlanNodes(payload.Nodes)
+	if env.ValidatePlan != nil {
+		if err := env.ValidatePlan(nodes); err != nil {
+			return Outcome{}, err
+		}
+	}
 	write, err := CommandWrite(env, session, command, workflow.SessionEventEdited, "")
 	if err != nil {
 		return Outcome{}, err
 	}
 	session, revision, err := env.Store.SavePlanRevision(ctx, write, store.PlanRevision{
-		SourceBriefRevision: session.BriefRevision, ContextRevision: current.ContextRevision, Nodes: PlanNodes(payload.Nodes),
+		SourceBriefRevision: session.BriefRevision, ContextRevision: current.ContextRevision, Nodes: nodes,
 	})
 	if err != nil {
 		return Outcome{}, err
