@@ -590,3 +590,28 @@ func TestEditedDraftIsValidatedBeforeItIsSaved(t *testing.T) {
 		t.Fatalf("refused = %#v, want the validation problem and no new plan revision", refused)
 	}
 }
+
+// TestApprovalRefusesAnInvalidPlanGraph verifies that the coordinator checks
+// plan validation again at approval, so an invalid graph cannot be approved
+// even with a matching preview.
+func TestApprovalRefusesAnInvalidPlanGraph(t *testing.T) {
+	t.Parallel()
+
+	c := newCoordinatorForTest(t)
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	preview := c.preview("preview-1", "session-1", revision)
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	dispatcher := c.dispatcher()
+	dispatcher.Env.ValidatePlan = func(nodes []store.PlanNode) error {
+		return errors.New(`node "n-1" has kind "spec"`)
+	}
+	if err := dispatcher.Drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher.Wait()
+	refused := c.requireOutcome("approve-1", store.IdeationCommandRefused)
+	if !strings.Contains(refused.Detail, `kind "spec"`) || c.history("session-1").Session.ApprovalID != "" || c.fake.Writes() != 0 {
+		t.Fatalf("refused = %#v, want the validation problem, no approval, and no tracker write", refused)
+	}
+}

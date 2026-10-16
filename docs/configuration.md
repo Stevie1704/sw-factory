@@ -1261,6 +1261,7 @@ Pages:
 | `/` | All runs, newest update first: stage, status, workflow route, and activity. |
 | `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. The Retained inspection metadata section adds the frozen policy identity, bounded observations, and evidence availability/checkpoint metadata from the shared CLI projection. |
 | `/runs/{id}/evaluation` | The local evaluation summary of one run: outcome, wall time per stage, attempts, invocation versions, and reported usage. The summary is content-free (ADR 0001). When cleanup removed the run row, the page shows only the summary. |
+| `/sessions/{id}/plan` | Plan review of one ideation session (only with the session command API): the current plan items with validation problems, the draft editor, the tracker publication preview, approve-and-publish, and publication progress. See "Plan review" below. |
 
 Every page shows a supervisor banner. The banner tells if the coordinator
 heartbeat is live, expired, or not recorded, and it shows when the page read
@@ -1323,6 +1324,43 @@ Session commands (ADR 0021, ADR 0024):
   refresh never wipes typed text.
 - Session pages show conversation and plan content. Like run content, it stays
   on the host and is served only on the loopback interface.
+
+Plan review (`/sessions/{id}/plan`):
+
+- The page shows every plan item with its kind, body, acceptance criteria,
+  parent, dependencies, and brief references, and the problems that plan
+  validation finds per item. An invalid or stale plan offers no preview and
+  no approval.
+- The editor changes titles, bodies, acceptance criteria, kinds, parents, and
+  dependencies, and removes or splits items. A removal or split marks every
+  parent or dependency reference to the item; save stays off until you repair
+  each one. Save sends the complete plan as one `edit_draft` command, and the
+  coordinator validates it again before it saves the next plan revision.
+  `regenerate_draft` asks the planning role for a new draft.
+- "Preview publication" sends `preview_plan`. The coordinator asks the tracker
+  adapter to resolve the target, the work-item types, the fields, the
+  relationships, and any intermediate hierarchy items, without a tracker
+  write. The page shows that preview in full: target, type per item, the
+  rendered body, labels and fields, the correlation key, every relationship
+  with its native or textual representation, and each intermediate item that
+  is not a plan node. A provider capability or configuration problem is shown
+  as the refused preview; nothing is substituted.
+- "Approve and publish" sends one `approve` command with the plan revision,
+  the session revision, and the two digests of the shown preview, and
+  `publish: true`. The coordinator checks plan validation and renders the
+  preview again; if anything changed (an edit, a regeneration, another tab,
+  or a tracker mapping change), it refuses the approval before any tracker
+  write. An accepted approval is not a completed publication. While a
+  command is pending, the page offers no second approval or publication.
+- During publication the page shows the approved, immutable content and the
+  ledger: created items with their links, pending operations, failed
+  operations, and operations with an unknown outcome. An incomplete
+  publication offers "Retry publication" (`publish`), which resumes the same
+  approved content, and for each ambiguous item create, `reconcile` to adopt
+  the tracker item or confirm that none exists. Cancellation stops future
+  publication work; created items stay in the tracker and in the ledger.
+- Publication does not enqueue implementation: it adds no `agent-ready` label
+  or tag and starts no run.
 
 ## Run-artifact cleanup
 

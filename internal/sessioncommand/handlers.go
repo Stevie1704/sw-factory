@@ -391,11 +391,14 @@ func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 	return publishAttempt(ctx, env, command)
 }
 
-// recordApproval checks the preview digests against a fresh rendering and
-// records the approval.
+// recordApproval checks plan validation and the preview digests against a
+// fresh rendering and records the approval.
 func recordApproval(ctx context.Context, env Env, session store.IdeationSession, command store.IdeationCommand, payload *ApprovePayload) (store.IdeationSession, error) {
 	if payload.PlanRevision != session.PlanRevision {
 		return store.IdeationSession{}, fmt.Errorf("plan revision %d is not the current plan revision %d", payload.PlanRevision, session.PlanRevision)
+	}
+	if err := validateCurrentPlan(ctx, env, session); err != nil {
+		return store.IdeationSession{}, err
 	}
 	binding, err := env.Publisher.Preview(ctx, session.ID)
 	if err != nil {
@@ -410,6 +413,27 @@ func recordApproval(ctx context.Context, env Env, session store.IdeationSession,
 	}
 	session, _, err = env.Store.ApprovePlan(ctx, write, binding.Approval(command.RequestID))
 	return session, err
+}
+
+// validateCurrentPlan runs plan validation on the current plan revision, so
+// an invalid graph is never approved, also when it was saved before a rule
+// changed.
+func validateCurrentPlan(ctx context.Context, env Env, session store.IdeationSession) error {
+	if env.ValidatePlan == nil {
+		return nil
+	}
+	history, err := env.Store.IdeationHistory(ctx, session.ID)
+	if err != nil {
+		return err
+	}
+	for _, plan := range history.Plans {
+		if plan.Revision == session.PlanRevision {
+			if err := env.ValidatePlan(plan.Nodes); err != nil {
+				return fmt.Errorf("plan revision %d cannot be approved: %w", plan.Revision, err)
+			}
+		}
+	}
+	return nil
 }
 
 // hasApproval reports whether history holds the approval id.
