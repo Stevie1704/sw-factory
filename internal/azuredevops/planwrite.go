@@ -46,8 +46,8 @@ type patchOperation struct {
 // Markdown description, correlation tag, and configured fields. It sets no
 // relation, never a factory state tag, and never an execution state.
 func (c *Client) CreatePlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem) (tracker.PlanItemRef, error) {
-	if err := validateRepository(repository); err != nil {
-		return tracker.PlanItemRef{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return tracker.PlanItemRef{}, err
 	}
 	if err := validatePlanItem(item); err != nil {
 		return tracker.PlanItemRef{}, err
@@ -90,11 +90,11 @@ func workItemRef(repository tracker.Repository, id int) tracker.PlanItemRef {
 // item store, not a search index, so it sees a just-created item. The tags
 // of each match are read back and compared exactly.
 func (c *Client) FindPlanItems(ctx context.Context, repository tracker.Repository, correlation string) ([]tracker.PlanItemRef, error) {
-	if err := validateRepository(repository); err != nil {
+	if err := validatePlanRepository(repository); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(correlation) == "" {
-		return nil, errors.New("correlation is required")
+		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "a correlation key is required")
 	}
 	tag := correlationTag(correlation)
 	query := "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Tags] CONTAINS '" +
@@ -174,8 +174,8 @@ func (c *Client) FindPlanRelationship(ctx context.Context, repository tracker.Re
 // planLink validates one relationship and returns its work item IDs and
 // link type. Only native links exist on Azure DevOps.
 func planLink(repository tracker.Repository, relationship tracker.PlanRelationship) (int, int, string, error) {
-	if err := validateRepository(repository); err != nil {
-		return 0, 0, "", tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return 0, 0, "", err
 	}
 	link, ok := linkTypes[relationship.Kind]
 	if !ok || relationship.Mode != tracker.PlanRelationshipNative {

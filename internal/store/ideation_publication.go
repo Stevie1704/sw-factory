@@ -118,7 +118,7 @@ func (s *Store) StartPublicationLedger(ctx context.Context, sessionID, approvalI
 		return nil, fmt.Errorf("begin publication ledger of session %q: %w", sessionID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, "UPDATE ideation_sessions SET id = id WHERE id = ?", sessionID); err != nil {
+	if err := reserveWriteLock(ctx, tx, "ideation_sessions", sessionID); err != nil {
 		return nil, fmt.Errorf("reserve ideation session %q: %w", sessionID, err)
 	}
 	session, err := scanIdeationSession(tx.QueryRowContext(ctx, `SELECT `+ideationSessionColumns+` FROM ideation_sessions WHERE id = ?`, sessionID), sessionID)
@@ -183,6 +183,9 @@ func (s *Store) RecordPublicationOperation(ctx context.Context, operation Public
 		return PublicationOperation{}, fmt.Errorf("begin publication operation %q: %w", operation.ID, err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := reserveWriteLock(ctx, tx, "ideation_sessions", operation.SessionID); err != nil {
+		return PublicationOperation{}, fmt.Errorf("reserve publication operation %q: %w", operation.ID, err)
+	}
 	stored, err := scanPublicationOperation(tx.QueryRowContext(ctx, `SELECT `+publicationOperationColumns+`
 		FROM ideation_publication_operations WHERE session_id = ? AND approval_id = ? AND id = ?`,
 		operation.SessionID, operation.ApprovalID, operation.ID))
@@ -293,7 +296,7 @@ func validatePublicationResult(operation PublicationOperation) error {
 	if operation.Attempts < 0 {
 		return errors.New("publication operation attempts must not be negative")
 	}
-	return validateIdeationText("publication operation detail", operation.Detail, maxIdeationReasonBytes, false)
+	return validateIdeationText("publication operation detail", operation.Detail, MaxIdeationReasonBytes, false)
 }
 
 // publicationOperationColumns is the column order that

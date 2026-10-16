@@ -349,7 +349,7 @@ registration into the host file by hand, then run `factory doctor`.
 
 #### Plan publication mapping
 
-An approved ideation plan publishes to Azure Boards work items (ADR 0026).
+An approved ideation plan publishes to Azure Boards work items (ADR 0025).
 `azure_devops.planning.levels` maps the neutral plan kinds (`parent`, `task`,
 `investigation`) to the work-item types of the project's process. List the
 backlog levels from the top level down. Each level has a `type`, the plan
@@ -662,8 +662,9 @@ optionally `reasoning_effort_options`); without that policy a session role
 fails closed. `role_craft` does not apply to session roles. See
 [Session roles](agent-runtime.md#session-roles). The `ideation` prompt names
 the `grilling` worker skill; `factory doctor` requires smoke evidence for it
-only from the harness that can run a declared `ideation` role. To add it to an
-existing record, run the smoke with `MANDATORY_SKILLS=grilling`.
+only from the harness that can run a declared `ideation` role, and
+`scripts/smoke-skills.sh` smokes it by default only for that harness. To add it
+to an existing record, run the smoke with `MANDATORY_SKILLS=grilling`.
 
 The optional `role_craft` map selects one repository-relative Markdown file per
 declared role. Its content replaces only that role's embedded `craft` section;
@@ -1172,7 +1173,7 @@ Schema version 45 adds the session command inbox (ADR 0024):
 expected revision, payload, state, and outcome. The local UI appends rows; the
 coordinator applies them. The migration only adds the table.
 
-Schema version 46 adds the correction link of a conversation turn (ADR 0027):
+Schema version 46 adds the correction link of a conversation turn (ADR 0026):
 `ideation_turns.corrects` names the earlier user answer that a turn changes.
 Existing turns correct nothing.
 
@@ -1209,7 +1210,7 @@ limits documented in [the debugging guide](../internal/guide/topics/debug.md#ins
 
 `factory ui` serves a read-only view of the runs in the operational store, the
 pages of ideation sessions, and their session command API (ADR 0021, ADR 0024,
-ADR 0027). [From an idea to a reviewed backlog](ideation.md) is the user
+ADR 0026). [From an idea to a reviewed backlog](ideation.md) is the user
 guide of sessions. Open the printed URL in a browser on the same host. Stop the server with `Ctrl-C`
 (SIGINT) or SIGTERM.
 
@@ -1313,7 +1314,7 @@ Session commands (ADR 0021, ADR 0024):
 - `submit_turn` starts the ideation role for the accepted turn; its optional
   `corrects` names the earlier user answer it changes. `hand_off` names the
   brief revision the page showed and lists every unresolved question of it in
-  `deferred_questions`; otherwise it is refused (ADR 0027).
+  `deferred_questions`; otherwise it is refused (ADR 0026).
   `investigation_needed` needs at least one unresolved question in the brief
   and creates no backlog item. `hand_off` and `regenerate_draft` start
   planning; a role that cannot start
@@ -1348,8 +1349,9 @@ Plan review (`/sessions/{id}/plan`):
 
 - The page shows every plan item with its kind, body, acceptance criteria,
   parent, dependencies, and brief references, and the problems that plan
-  validation finds per item. An invalid or stale plan offers no preview and
-  no approval.
+  validation finds per item. An invalid plan offers no preview and no
+  approval. A stale plan offers only regeneration: the coordinator also
+  refuses an `edit_draft` of it, because an edit cannot make it current.
 - The editor changes titles, bodies, acceptance criteria, kinds, parents, and
   dependencies, and removes or splits items. A removal or split marks every
   parent or dependency reference to the item; save stays off until you repair
@@ -1365,8 +1367,8 @@ Plan review (`/sessions/{id}/plan`):
   is not a plan node. A provider capability or configuration problem is shown
   as the refused preview; nothing is substituted.
 - "Approve and publish" sends one `approve` command with the plan revision,
-  the session revision, and the two digests of the shown preview, and
-  `publish: true`. The coordinator checks plan validation and renders the
+  the session revision, and the two digests of the shown preview. Every
+  approval also publishes. The coordinator checks plan validation and renders the
   preview again; if anything changed (an edit, a regeneration, another tab,
   or a tracker mapping change), it refuses the approval before any tracker
   write. An accepted approval is not a completed publication. While a
@@ -1376,7 +1378,11 @@ Plan review (`/sessions/{id}/plan`):
   operations, and operations with an unknown outcome. An incomplete
   publication offers "Retry publication" (`publish`), which resumes the same
   approved content, and for each ambiguous item create, `reconcile` to adopt
-  the tracker item or confirm that none exists. Cancellation stops future
+  the tracker item or confirm that none exists. An `approve` or `publish`
+  command that ends without success never leaves the session `publishing`:
+  the coordinator records an incomplete receipt with the reason and moves
+  the session to `publication_incomplete`. A session that is `publishing`
+  with no pending command also offers the retry. Cancellation stops future
   publication work; created items stay in the tracker and in the ledger.
 - Publication does not enqueue implementation: it adds no `agent-ready` label
   or tag and starts no run.
@@ -1481,7 +1487,10 @@ volumes; removes generated invocation and result directories; removes run
 worktrees, local run branches, and private Git projections; removes the
 operational database with its SQLite sidecars and only the migration backups
 proven to belong to that exact database; removes the coordinator lock; and
-removes the selected host configuration last. Reset holds that lock for the
+removes the selected host configuration last. The same pass removes the
+resources of every ideation session role: its worker containers and role
+volumes, the snapshot worktree and Git projection of a role that was active
+when the coordinator stopped, and the session packet directories. Reset holds that lock for the
 whole confirmed pass. Once the store is gone, a concurrent
 `factory start` cannot pass its read-only startup diagnosis, so unlinking the
 lock before the configuration preserves the configuration if unlinking fails.

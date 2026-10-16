@@ -12,7 +12,7 @@ import (
 // AzurePlanMapping maps the provider-neutral kinds of a plan to the work-item
 // types of one Azure DevOps project. It is host configuration
 // (`azure_devops.planning` of a registration), because the process of a
-// project is operator-owned and differs between projects (ADR 0026).
+// project is operator-owned and differs between projects (ADR 0025).
 type AzurePlanMapping struct {
 	// Levels lists the backlog levels from the top level down, for example
 	// Epic, Feature, and User Story. A plan item's parent must be on a higher

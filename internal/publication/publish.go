@@ -5,16 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
-
-// maxDetailBytes bounds one ledger detail, receipt detail, or state reason.
-// It matches the store limit for session state reasons.
-const maxDetailBytes = 2000
 
 // Request asks for one publication attempt of the session's current approval.
 type Request struct {
@@ -120,6 +115,9 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 			})
 		}
 	}
+	if halt != "" {
+		receipt.Outcome = store.PublicationOutcomeIncomplete
+	}
 	event := workflow.SessionEventPublicationCompleted
 	if receipt.Outcome == store.PublicationOutcomeIncomplete {
 		event = workflow.SessionEventPublicationIncomplete
@@ -137,6 +135,28 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return Result{Operations: ledger}, err
 	}
 	return Result{Session: session, Receipt: receipt, Operations: ledger}, nil
+}
+
+// Interrupt settles an attempt that ended without a receipt while the
+// session is publishing: a resumed attempt whose preflight failed, or one
+// that the coordinator started too often. It records an incomplete receipt
+// under the attempt ID with reason and moves the session to
+// publication_incomplete, where retry, reconciliation, and cancellation are
+// offered. A session in another state is returned unchanged.
+func (p *Publisher) Interrupt(ctx context.Context, request Request, reason string) (store.IdeationSession, error) {
+	history, err := p.Store.IdeationHistory(ctx, request.SessionID)
+	if err != nil {
+		return store.IdeationSession{}, err
+	}
+	session := history.Session
+	if session.State != store.IdeationStatePublishing {
+		return session, nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "publication stopped without a result"
+	}
+	result, err := p.finish(ctx, session.ID, request.AttemptID, session.ApprovalID, approvalOperations(history.Operations, session.ApprovalID), reason)
+	return result.Session, err
 }
 
 // transition records one lifecycle event of session.
@@ -371,14 +391,8 @@ func externalIDs(candidates []tracker.PlanItemRef) string {
 	return strings.Join(ids, ", ")
 }
 
-// bounded shortens detail to the stored limit at a rune boundary.
+// bounded shortens a ledger detail, receipt detail, or state reason to the
+// store limit at a rune boundary.
 func bounded(detail string) string {
-	if len(detail) <= maxDetailBytes {
-		return detail
-	}
-	cut := maxDetailBytes - len("...")
-	for cut > 0 && !utf8.RuneStart(detail[cut]) {
-		cut--
-	}
-	return detail[:cut] + "..."
+	return store.TruncateUTF8(detail, store.MaxIdeationReasonBytes)
 }

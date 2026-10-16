@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // Kind names one session command.
@@ -37,8 +38,8 @@ const (
 	// KindPreviewPlan renders the tracker publication preview of the displayed
 	// plan revision. It changes no session state.
 	KindPreviewPlan Kind = "preview_plan"
-	// KindApprove approves the previewed publication and can request
-	// publication in the same command.
+	// KindApprove approves the previewed publication and publishes it in the
+	// same command: approval and publication are one user action.
 	KindApprove Kind = "approve"
 	// KindPublish starts or retries publication of the current approval.
 	KindPublish Kind = "publish"
@@ -62,10 +63,6 @@ const (
 // MaxRequestBytes bounds one request body. It leaves room for the largest
 // payload and the envelope.
 const MaxRequestBytes = store.MaxIdeationCommandPayloadBytes + 4096
-
-// maxReasonBytes bounds an optional user reason. It matches the store limit
-// for a session state reason.
-const maxReasonBytes = 2000
 
 // maxDeferredQuestions bounds the deferred questions of one handoff. It is
 // above any brief the store accepts in practice.
@@ -151,8 +148,6 @@ type ApprovePayload struct {
 	PayloadSHA256 string `json:"payload_sha256"`
 	// RelationshipMappingSHA256 is the digest of the previewed relationships.
 	RelationshipMappingSHA256 string `json:"relationship_mapping_sha256"`
-	// Publish requests publication right after the approval.
-	Publish bool `json:"publish"`
 }
 
 // PublishPayload is the payload of KindPublish. It has no fields.
@@ -211,13 +206,64 @@ type PlanNodeJSON struct {
 	BriefRefs          []string `json:"brief_refs"`
 }
 
+// payload is a decoded command payload that checks its own bounds.
+type payload interface{ validate() error }
+
+// kindSpec declares one command kind: the payload it carries, the handler
+// that applies it in the coordinator, whether that handler calls the
+// tracker, and whether it starts or continues a publication attempt.
+type kindSpec struct {
+	kind      Kind
+	payload   func() payload
+	handler   Handler
+	tracker   bool
+	publishes bool
+}
+
+// kindTable is the one declaration of every command kind, in declaration
+// order. Payload decoding, the default handlers, and the dispatcher's
+// background work all read it. It is a function, not a variable, because
+// the handlers decode their payloads through it.
+func kindTable() []kindSpec {
+	reason := func() payload { return &ReasonPayload{} }
+	planRevision := func() payload { return &PlanRevisionPayload{} }
+	return []kindSpec{
+		{kind: KindCreateSession, payload: func() payload { return &CreateSessionPayload{} }, handler: createSession},
+		{kind: KindSubmitTurn, payload: func() payload { return &TurnPayload{} }, handler: submitTurn},
+		{kind: KindEditBrief, payload: func() payload { return &BriefPayload{} }, handler: editBrief},
+		{kind: KindHandOff, payload: func() payload { return &HandOffPayload{} }, handler: handOff},
+		{kind: KindEditDraft, payload: func() payload { return &DraftPayload{} }, handler: editDraft},
+		{kind: KindRegenerateDraft, payload: planRevision, handler: regenerateDraft},
+		{kind: KindPreviewPlan, payload: planRevision, handler: previewPlan, tracker: true},
+		{kind: KindApprove, payload: func() payload { return &ApprovePayload{} }, handler: approve, tracker: true, publishes: true},
+		{kind: KindPublish, payload: func() payload { return &PublishPayload{} }, handler: publish, tracker: true, publishes: true},
+		{kind: KindReconcile, payload: func() payload { return &ReconcilePayload{} }, handler: reconcile, tracker: true},
+		{kind: KindDefer, payload: reason, handler: Transition(workflow.SessionEventDeferred)},
+		{kind: KindResume, payload: reason, handler: transitionBy(resumeEvent)},
+		{kind: KindInvestigationNeeded, payload: reason, handler: investigationNeeded},
+		{kind: KindNoBuild, payload: reason, handler: Transition(workflow.SessionEventNoBuild)},
+		{kind: KindCancel, payload: reason, handler: Transition(workflow.SessionEventCancelled)},
+	}
+}
+
+// lookupKind returns the declaration of kind.
+func lookupKind(kind Kind) (kindSpec, bool) {
+	for _, spec := range kindTable() {
+		if spec.kind == kind {
+			return spec, true
+		}
+	}
+	return kindSpec{}, false
+}
+
 // Kinds returns every declared command kind.
 func Kinds() []Kind {
-	return []Kind{
-		KindCreateSession, KindSubmitTurn, KindEditBrief, KindHandOff, KindEditDraft, KindRegenerateDraft,
-		KindPreviewPlan, KindApprove, KindPublish, KindReconcile, KindDefer, KindResume, KindInvestigationNeeded,
-		KindNoBuild, KindCancel,
+	table := kindTable()
+	kinds := make([]Kind, 0, len(table))
+	for _, spec := range table {
+		kinds = append(kinds, spec.kind)
 	}
+	return kinds
 }
 
 // ParseRequest decodes one browser request strictly, validates its envelope
@@ -262,31 +308,11 @@ func ParseRequest(body []byte) (store.IdeationCommand, error) {
 // DecodePayload decodes and validates the payload of kind strictly. It
 // returns a pointer to the kind's payload type.
 func DecodePayload(kind Kind, raw []byte) (any, error) {
-	var payload interface{ validate() error }
-	switch kind {
-	case KindCreateSession:
-		payload = &CreateSessionPayload{}
-	case KindSubmitTurn:
-		payload = &TurnPayload{}
-	case KindEditBrief:
-		payload = &BriefPayload{}
-	case KindHandOff:
-		payload = &HandOffPayload{}
-	case KindEditDraft:
-		payload = &DraftPayload{}
-	case KindRegenerateDraft, KindPreviewPlan:
-		payload = &PlanRevisionPayload{}
-	case KindApprove:
-		payload = &ApprovePayload{}
-	case KindPublish:
-		payload = &PublishPayload{}
-	case KindReconcile:
-		payload = &ReconcilePayload{}
-	case KindDefer, KindResume, KindInvestigationNeeded, KindNoBuild, KindCancel:
-		payload = &ReasonPayload{}
-	default:
+	spec, ok := lookupKind(kind)
+	if !ok {
 		return nil, invalid("kind %q is not declared", kind)
 	}
+	payload := spec.payload()
 	if err := decodeStrict(raw, payload); err != nil {
 		return nil, invalid("%s payload: %v", kind, err)
 	}
@@ -379,7 +405,7 @@ func (p *ReconcilePayload) validate() error {
 
 // validate checks the bounded reason.
 func (p *ReasonPayload) validate() error {
-	return boundedText("reason", p.Reason, maxReasonBytes, false)
+	return boundedText("reason", p.Reason, store.MaxIdeationReasonBytes, false)
 }
 
 // Brief converts the browser brief into the stored brief.

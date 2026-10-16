@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // IdeationState is the persisted lifecycle state of one ideation session. The
@@ -83,8 +84,23 @@ const maxIdeationIdentifierBytes = 128
 // maxIdeationTitleBytes bounds the short operator label of one session.
 const maxIdeationTitleBytes = 200
 
-// maxIdeationReasonBytes bounds the state reason of one session.
-const maxIdeationReasonBytes = 2000
+// MaxIdeationReasonBytes bounds a session state reason, a command outcome
+// detail, a publication detail, and an invocation end reason.
+const MaxIdeationReasonBytes = 2000
+
+// TruncateUTF8 returns the longest prefix of value that has at most limit
+// bytes and ends at a rune boundary. Writers use it to keep text inside a
+// store bound without splitting a character.
+func TruncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
+}
 
 // ErrIdeationSessionNotFound reports that no session has the requested ID.
 var ErrIdeationSessionNotFound = errors.New("ideation session not found")
@@ -278,7 +294,7 @@ func (s *Store) beginIdeationWrite(ctx context.Context, write IdeationWrite) (*s
 	if err != nil {
 		return nil, IdeationSession{}, fmt.Errorf("begin ideation session %q write: %w", write.SessionID, err)
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE ideation_sessions SET id = id WHERE id = ?", write.SessionID); err != nil {
+	if err := reserveWriteLock(ctx, tx, "ideation_sessions", write.SessionID); err != nil {
 		_ = tx.Rollback()
 		return nil, IdeationSession{}, fmt.Errorf("reserve ideation session %q: %w", write.SessionID, err)
 	}
@@ -351,7 +367,7 @@ func validateIdeationStateChange(state IdeationState, reason string) error {
 	if !validIdeationState(state) {
 		return fmt.Errorf("ideation state %q is not declared", state)
 	}
-	return validateIdeationText("state reason", reason, maxIdeationReasonBytes, false)
+	return validateIdeationText("state reason", reason, MaxIdeationReasonBytes, false)
 }
 
 // validateIdeationIdentifier checks one bounded, command-safe identity.

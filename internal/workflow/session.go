@@ -34,7 +34,8 @@ const (
 	// SessionEventApproved records an approval of the current draft.
 	SessionEventApproved SessionEvent = "approved"
 	// SessionEventPublicationStarted records the start or retry of publication
-	// of the current approval.
+	// of the current approval. A retry from publishing continues an attempt
+	// that stopped without a recorded result.
 	SessionEventPublicationStarted SessionEvent = "publication_started"
 	// SessionEventPublicationIncomplete records a publication attempt that
 	// stopped before every operation succeeded.
@@ -46,8 +47,18 @@ const (
 	// SessionEventInvestigationNeeded records the user's decision that
 	// material unknowns need investigation before planning.
 	SessionEventInvestigationNeeded SessionEvent = "investigation_needed"
-	// SessionEventResumed records that the user resumed a parked session.
+	// SessionEventResumed records that the user resumed a parked session
+	// that has no plan draft, or one that needed investigation: the
+	// conversation continues.
 	SessionEventResumed SessionEvent = "resumed"
+	// SessionEventReviewResumed records that the user resumed a session
+	// parked during plan review. The plan stays under review, so no new
+	// planning run is needed.
+	SessionEventReviewResumed SessionEvent = "review_resumed"
+	// SessionEventApprovalResumed records that the user resumed a session
+	// parked after approval. The approval stays; publication checks it
+	// against a fresh rendering.
+	SessionEventApprovalResumed SessionEvent = "approval_resumed"
 	// SessionEventNoBuild records the user's decision not to build.
 	SessionEventNoBuild SessionEvent = "no_build"
 	// SessionEventCancelled records cancellation. Cancellation during
@@ -125,6 +136,7 @@ func DefaultSessionLifecycle() SessionLifecycle {
 			SessionEventCancelled:          cancelled,
 		},
 		publishing: {
+			SessionEventPublicationStarted:    publishing,
 			SessionEventPublicationIncomplete: incomplete,
 			SessionEventPublicationCompleted:  published,
 			SessionEventCancelled:             cancelled,
@@ -134,9 +146,11 @@ func DefaultSessionLifecycle() SessionLifecycle {
 			SessionEventCancelled:          cancelled,
 		},
 		deferred: {
-			SessionEventResumed:   awaitingUser,
-			SessionEventNoBuild:   noBuild,
-			SessionEventCancelled: cancelled,
+			SessionEventResumed:         awaitingUser,
+			SessionEventReviewResumed:   draftReview,
+			SessionEventApprovalResumed: approved,
+			SessionEventNoBuild:         noBuild,
+			SessionEventCancelled:       cancelled,
 		},
 		investigate: {
 			SessionEventResumed:   awaitingUser,

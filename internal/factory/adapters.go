@@ -15,6 +15,16 @@ func (s *Service) gitWorkspace() gitadapter.GitWorkspace {
 	return workspace
 }
 
+// contextSnapshots resolves the seam that creates and removes session-role
+// snapshot worktrees, or nil when no configured adapter provides it.
+func (s *Service) contextSnapshots() gitadapter.ContextSnapshotter {
+	if snapshots, ok := s.deps.GitWorkspace.(gitadapter.ContextSnapshotter); ok {
+		return snapshots
+	}
+	snapshots, _ := s.deps.Worktree.(gitadapter.ContextSnapshotter)
+	return snapshots
+}
+
 // worktreeManager resolves the task-oriented Git workspace for the existing
 // claim/cleanup operations while keeping foundation adapters compatible.
 func (s *Service) worktreeManager() gitadapter.WorktreeManager {

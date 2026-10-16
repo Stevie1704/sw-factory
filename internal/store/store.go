@@ -2937,6 +2937,17 @@ func openReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	return database, nil
 }
 
+// reserveWriteLock takes SQLite's write lock inside tx before the transaction
+// reads. With journal_mode=DELETE a transaction that reads first holds a
+// shared lock and fails at once with SQLITE_BUSY when it later upgrades past
+// another connection's write, such as a UI command append; a reserved lock
+// instead makes the other connection wait for its busy timeout. The no-op
+// update names one row of table by id and changes nothing.
+func reserveWriteLock(ctx context.Context, tx *sql.Tx, table, id string) error {
+	_, err := tx.ExecContext(ctx, "UPDATE "+table+" SET id = id WHERE id = ?", id)
+	return err
+}
+
 // configure applies the SQLite settings required by the operational store.
 func configure(ctx context.Context, database *sql.DB) error {
 	for _, statement := range []string{

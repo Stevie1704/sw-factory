@@ -184,7 +184,7 @@ func encodePublicationReceipt(receipt PublicationReceipt) (string, string, error
 	if receipt.Outcome != PublicationOutcomePublished && receipt.Outcome != PublicationOutcomeIncomplete {
 		return "", "", fmt.Errorf("publication outcome %q is not declared", receipt.Outcome)
 	}
-	if err := validateIdeationText("receipt detail", receipt.Detail, maxIdeationReasonBytes, false); err != nil {
+	if err := validateIdeationText("receipt detail", receipt.Detail, MaxIdeationReasonBytes, false); err != nil {
 		return "", "", err
 	}
 	for _, item := range receipt.Items {

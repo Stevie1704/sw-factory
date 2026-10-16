@@ -3,6 +3,7 @@ package azuredevops_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strconv"
 	"strings"
@@ -138,6 +139,36 @@ func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(boards.Calls()[0].Body), &query); err != nil || !strings.Contains(query.Query, "[System.TeamProject] = @project") {
 		t.Fatalf("WIQL = %q, %v; want a project-scoped query", query.Query, err)
+	}
+}
+
+// TestFindPlanItemsRefusesAnInvalidLookupAsAMappingError verifies that an
+// incomplete repository identity or an empty correlation is refused before
+// any call with the typed invalid-mapping error, as every other plan method
+// refuses it.
+func TestFindPlanItemsRefusesAnInvalidLookupAsAMappingError(t *testing.T) {
+	t.Parallel()
+
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
+	incomplete := repository
+	incomplete.Project = ""
+	for name, call := range map[string]func() error{
+		"incomplete repository": func() error {
+			_, err := planClient(boards, nil).FindPlanItems(t.Context(), incomplete, "session-1/2/n-2")
+			return err
+		},
+		"empty correlation": func() error {
+			_, err := planClient(boards, nil).FindPlanItems(t.Context(), repository, " ")
+			return err
+		},
+	} {
+		var planErr *tracker.PlanError
+		if err := call(); !errors.As(err, &planErr) || planErr.Kind != tracker.PlanErrorInvalidMapping {
+			t.Errorf("%s: FindPlanItems() error = %v, want an invalid-mapping plan error", name, err)
+		}
+	}
+	if calls := boards.Calls(); len(calls) != 0 {
+		t.Fatalf("calls = %d, want none before validation passes", len(calls))
 	}
 }
 

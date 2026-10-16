@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -638,7 +637,7 @@ func sessionWorkerID(sessionID, role string) string {
 // boundedReason keeps a state reason inside the store bound at a rune
 // boundary.
 func boundedReason(reason string) string {
-	return truncateUTF8(reason, 2000)
+	return store.TruncateUTF8(reason, store.MaxIdeationReasonBytes)
 }
 
 // boundedTurnBody keeps a role turn inside the store bound at a rune boundary.
@@ -646,20 +645,7 @@ func boundedTurnBody(body string) string {
 	if strings.TrimSpace(body) == "" {
 		body = "(no message)"
 	}
-	return truncateUTF8(body, store.MaxIdeationTurnBytes)
-}
-
-// truncateUTF8 returns the longest prefix of value that has at most limit
-// bytes and ends at a rune boundary.
-func truncateUTF8(value string, limit int) string {
-	if len(value) <= limit {
-		return value
-	}
-	value = value[:limit]
-	for !utf8.ValidString(value) {
-		value = value[:len(value)-1]
-	}
-	return value
+	return store.TruncateUTF8(body, store.MaxIdeationTurnBytes)
 }
 
 // sessionInvocationPacket is the frozen input of one session-role invocation,

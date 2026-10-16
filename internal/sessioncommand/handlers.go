@@ -19,23 +19,12 @@ import (
 // start session roles through Env.Roles. Without Env.Roles, hand-off and
 // regeneration check the request and report that no role can start.
 func DefaultHandlers() map[Kind]Handler {
-	return map[Kind]Handler{
-		KindCreateSession:       createSession,
-		KindSubmitTurn:          submitTurn,
-		KindEditBrief:           editBrief,
-		KindHandOff:             handOff,
-		KindEditDraft:           editDraft,
-		KindRegenerateDraft:     regenerateDraft,
-		KindPreviewPlan:         previewPlan,
-		KindApprove:             approve,
-		KindPublish:             publish,
-		KindReconcile:           reconcile,
-		KindDefer:               Transition(workflow.SessionEventDeferred),
-		KindResume:              Transition(workflow.SessionEventResumed),
-		KindInvestigationNeeded: investigationNeeded,
-		KindNoBuild:             Transition(workflow.SessionEventNoBuild),
-		KindCancel:              Transition(workflow.SessionEventCancelled),
+	table := kindTable()
+	handlers := make(map[Kind]Handler, len(table))
+	for _, spec := range table {
+		handlers[spec.kind] = spec.handler
 	}
+	return handlers
 }
 
 // Applied returns the applied outcome for session.
@@ -297,8 +286,9 @@ func roleUnavailable(env Env, session store.IdeationSession) (Outcome, error) {
 }
 
 // editDraft saves the edited plan as the next plan revision. It keeps the
-// repository context of the current draft and derives from the current
-// brief.
+// repository context and the source brief revision of the current draft. A
+// draft of an older brief revision is stale: an edit cannot make it current,
+// so the user regenerates it from the current brief instead.
 func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	payload, err := payloadOf[DraftPayload](command)
 	if err != nil {
@@ -316,6 +306,10 @@ func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Out
 		return Outcome{}, errors.New("the session has no plan draft to edit")
 	}
 	current := history.Plans[len(history.Plans)-1]
+	if current.SourceBriefRevision != session.BriefRevision {
+		return Outcome{}, fmt.Errorf("plan revision %d derives from brief revision %d, but the current brief revision is %d; regenerate the draft from the current brief instead of editing it",
+			current.Revision, current.SourceBriefRevision, session.BriefRevision)
+	}
 	nodes := PlanNodes(payload.Nodes)
 	if env.ValidatePlan != nil {
 		if err := env.ValidatePlan(nodes); err != nil {
@@ -327,7 +321,7 @@ func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Out
 		return Outcome{}, err
 	}
 	session, revision, err := env.Store.SavePlanRevision(ctx, write, store.PlanRevision{
-		SourceBriefRevision: session.BriefRevision, ContextRevision: current.ContextRevision, Nodes: nodes,
+		SourceBriefRevision: current.SourceBriefRevision, ContextRevision: current.ContextRevision, Nodes: nodes,
 	})
 	if err != nil {
 		return Outcome{}, err
@@ -337,6 +331,12 @@ func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Out
 
 // Transition returns a handler that records event with the payload reason.
 func Transition(event workflow.SessionEvent) Handler {
+	return transitionBy(func(store.IdeationSession) workflow.SessionEvent { return event })
+}
+
+// transitionBy returns a handler that records the event eventOf chooses for
+// the current session, with the payload reason.
+func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Handler {
 	return func(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 		payload, err := payloadOf[ReasonPayload](command)
 		if err != nil {
@@ -346,7 +346,7 @@ func Transition(event workflow.SessionEvent) Handler {
 		if err != nil {
 			return Outcome{}, err
 		}
-		write, err := CommandWrite(env, session, command, event, payload.Reason)
+		write, err := CommandWrite(env, session, command, eventOf(session), payload.Reason)
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -355,6 +355,23 @@ func Transition(event workflow.SessionEvent) Handler {
 		}
 		return Applied(session, "session is "+string(session.State)), nil
 	}
+}
+
+// resumeEvent chooses where a parked session resumes. A session parked with
+// an approval resumes approved, and one parked with a plan draft resumes in
+// plan review, so neither needs a new planning run. Every other parked
+// session, and a session that needed investigation, resumes the
+// conversation.
+func resumeEvent(session store.IdeationSession) workflow.SessionEvent {
+	switch {
+	case session.State != store.IdeationStateDeferred:
+		return workflow.SessionEventResumed
+	case session.ApprovalID != "":
+		return workflow.SessionEventApprovalResumed
+	case session.PlanRevision > 0:
+		return workflow.SessionEventReviewResumed
+	}
+	return workflow.SessionEventResumed
 }
 
 // PreviewResult is the JSON result of a preview command: the exact rendered
@@ -420,9 +437,9 @@ func previewPlan(ctx context.Context, env Env, command store.IdeationCommand) (O
 }
 
 // approve records an approval that binds the previewed publication, with the
-// request ID as approval ID, and publishes when the payload asks for it. A
-// changed rendering is refused before any tracker write. A resumed command
-// whose approval exists continues with publication.
+// request ID as approval ID, and then publishes it. A changed rendering is
+// refused before any tracker write. A resumed command whose approval exists
+// continues with publication.
 func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	if env.Publisher == nil {
 		return unsupportedPlanning(ctx, env, command), nil
@@ -443,9 +460,6 @@ func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 		if session, err = recordApproval(ctx, env, session, command, payload); err != nil {
 			return Outcome{}, err
 		}
-	}
-	if !payload.Publish {
-		return Applied(session, "plan approved; publication was not requested"), nil
 	}
 	return publishAttempt(ctx, env, command)
 }

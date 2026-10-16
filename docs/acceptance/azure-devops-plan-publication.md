@@ -1,7 +1,7 @@
 # Azure DevOps plan publication
 
 This page describes how the Azure DevOps adapter publishes an approved
-ideation plan to Azure Boards (#274, ADR 0022, ADR 0026), and how to prove it
+ideation plan to Azure Boards (#274, ADR 0022, ADR 0025), and how to prove it
 against a disposable project.
 
 ## How a plan maps to Azure Boards

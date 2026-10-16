@@ -199,10 +199,11 @@ func (c *coordinatorForTest) preview(requestID, sessionID string, revision int64
 	return result
 }
 
-// approvePayload returns an approve payload for the previewed result.
-func approvePayload(result previewResult, publish bool) string {
-	return fmt.Sprintf(`{"plan_revision":%d,"payload_sha256":%q,"relationship_mapping_sha256":%q,"publish":%t}`,
-		result.PlanRevision, result.PayloadSHA256, result.RelationshipMappingSHA256, publish)
+// approvePayload returns an approve payload for the previewed result. An
+// approval always requests publication, so the payload has no publish flag.
+func approvePayload(result previewResult) string {
+	return fmt.Sprintf(`{"plan_revision":%d,"payload_sha256":%q,"relationship_mapping_sha256":%q}`,
+		result.PlanRevision, result.PayloadSHA256, result.RelationshipMappingSHA256)
 }
 
 // TestDuplicateSubmissionAppendsOneTurnAndKeepsTheFirstOutcome verifies that
@@ -371,15 +372,15 @@ func TestApprovalBindsThePreviewAndPublishesWithTheRequestID(t *testing.T) {
 
 	wrong := preview
 	wrong.PayloadSHA256 = strings.Repeat("0", 64)
-	c.submit("approve-wrong", "session-1", sessioncommand.KindApprove, revision, approvePayload(wrong, true))
+	c.submit("approve-wrong", "session-1", sessioncommand.KindApprove, revision, approvePayload(wrong))
 	c.drain()
 	c.requireOutcome("approve-wrong", store.IdeationCommandRefused)
 	if c.fake.Writes() != 0 || c.history("session-1").Session.ApprovalID != "" {
 		t.Fatal("a refused approval wrote to the tracker or recorded an approval")
 	}
 
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 	c.drain()
 	c.requireOutcome("approve-1", store.IdeationCommandApplied)
 	history := c.history("session-1")
@@ -404,7 +405,7 @@ func TestIncompletePublicationIsReconciledAndRetriedThroughCommands(t *testing.T
 	revision := c.draftPlan("session-1")
 	preview := c.preview("preview-1", "session-1", revision)
 	c.fake.Inject(trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: errors.New("connection reset")})
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 	c.drain()
 	approved := c.requireOutcome("approve-1", store.IdeationCommandApplied)
 	if !strings.Contains(approved.Detail, "incomplete") {
@@ -455,7 +456,7 @@ func TestCancelIsAppliedWhilePublicationRuns(t *testing.T) {
 	c.createSession("session-1")
 	revision := c.draftPlan("session-1")
 	preview := c.preview("preview-1", "session-1", revision)
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 
 	dispatcher := c.dispatcher()
 	if err := dispatcher.Drain(t.Context()); err != nil {
@@ -601,7 +602,7 @@ func TestApprovalRefusesAnInvalidPlanGraph(t *testing.T) {
 	c.createSession("session-1")
 	revision := c.draftPlan("session-1")
 	preview := c.preview("preview-1", "session-1", revision)
-	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview, true))
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
 	dispatcher := c.dispatcher()
 	dispatcher.Env.ValidatePlan = func(nodes []store.PlanNode) error {
 		return errors.New(`node "n-1" has kind "spec"`)
@@ -614,4 +615,204 @@ func TestApprovalRefusesAnInvalidPlanGraph(t *testing.T) {
 	if !strings.Contains(refused.Detail, `kind "spec"`) || c.history("session-1").Session.ApprovalID != "" || c.fake.Writes() != 0 {
 		t.Fatalf("refused = %#v, want the validation problem, no approval, and no tracker write", refused)
 	}
+}
+
+// TestStaleDraftIsNotEditable verifies that an edit of a draft whose brief
+// changed is refused: the draft stays stale and needs regeneration from the
+// current brief, so an edit cannot make it approvable.
+func TestStaleDraftIsNotEditable(t *testing.T) {
+	t.Parallel()
+
+	c := newCoordinatorForTest(t)
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	c.submit("brief-2", "session-1", sessioncommand.KindEditBrief, revision,
+		`{"brief":{"problem":"Onboarding is slow for new teams.","scope":[{"id":"scope-1","text":"The onboarding command."}]}}`)
+	c.drain()
+	revision = c.requireOutcome("brief-2", store.IdeationCommandApplied).SessionRevision
+
+	c.submit("draft-stale", "session-1", sessioncommand.KindEditDraft, revision,
+		`{"nodes":[{"id":"n-1","kind":"task","title":"Only task","body":"Edited.","brief_refs":["scope-1"]}]}`)
+	c.drain()
+	refused := c.requireOutcome("draft-stale", store.IdeationCommandRefused)
+	if !strings.Contains(refused.Detail, "regenerate") {
+		t.Fatalf("refusal = %q, want it to name regeneration", refused.Detail)
+	}
+	history := c.history("session-1")
+	if history.Session.PlanRevision != 1 || !history.Plans[0].Stale {
+		t.Fatalf("plans = %#v, want the one stale draft unchanged", history.Plans)
+	}
+}
+
+// deferAndResume parks session-1 and resumes it through the inbox with a
+// dispatcher that records role starts, and returns the resumed session.
+func (c *coordinatorForTest) deferAndResume(revision int64, roles *rolesForTest) store.IdeationSession {
+	c.t.Helper()
+	for _, step := range []struct {
+		requestID string
+		kind      sessioncommand.Kind
+	}{{"defer-1", sessioncommand.KindDefer}, {"resume-1", sessioncommand.KindResume}} {
+		c.submit(step.requestID, "session-1", step.kind, revision, `{"reason":"Back next week."}`)
+		dispatcher := c.dispatcher()
+		dispatcher.Env.Roles = roles
+		if err := dispatcher.Drain(c.t.Context()); err != nil {
+			c.t.Fatal(err)
+		}
+		revision = c.requireOutcome(step.requestID, store.IdeationCommandApplied).SessionRevision
+	}
+	return c.history("session-1").Session
+}
+
+// TestResumedSessionKeepsItsPlanUnderReview verifies that a session parked
+// during plan review resumes in review with the same plan revision, and that
+// a session parked after approval resumes with its approval, so neither
+// needs a new planning run.
+func TestResumedSessionKeepsItsPlanUnderReview(t *testing.T) {
+	t.Parallel()
+
+	t.Run("draft review", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.createSession("session-1")
+		roles := &rolesForTest{}
+		resumed := c.deferAndResume(c.draftPlan("session-1"), roles)
+		if resumed.State != store.IdeationStateDraftReview || resumed.PlanRevision != 1 || len(roles.calls) != 0 {
+			t.Fatalf("resumed = %#v, role starts = %v; want draft review of plan 1 without a role start", resumed, roles.calls)
+		}
+	})
+
+	t.Run("approved", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.createSession("session-1")
+		c.draftPlan("session-1")
+		session := c.history("session-1").Session
+		binding, err := c.dispatcher().Env.Publisher.Preview(t.Context(), "session-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		write, err := workflow.DefaultSessionLifecycle().Write(session, workflow.SessionEventApproved, "", dispatchNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if session, _, err = c.store.ApprovePlan(t.Context(), write, binding.Approval("approval-1")); err != nil {
+			t.Fatal(err)
+		}
+		roles := &rolesForTest{}
+		resumed := c.deferAndResume(session.Revision, roles)
+		if resumed.State != store.IdeationStateApproved || resumed.ApprovalID != "approval-1" || len(roles.calls) != 0 {
+			t.Fatalf("resumed = %#v, role starts = %v; want the approval kept without a role start", resumed, roles.calls)
+		}
+		c.submit("publish-1", "session-1", sessioncommand.KindPublish, resumed.Revision, `{}`)
+		c.drain()
+		c.requireOutcome("publish-1", store.IdeationCommandApplied)
+		if state := c.history("session-1").Session.State; state != store.IdeationStatePublished {
+			t.Fatalf("state = %q, want the resumed approval published", state)
+		}
+	})
+
+	t.Run("no plan yet", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		resumed := c.deferAndResume(c.createSession("session-1"), &rolesForTest{})
+		if resumed.State != store.IdeationStateAwaitingUser {
+			t.Fatalf("state = %q, want the conversation resumed", resumed.State)
+		}
+	})
+}
+
+// crashDuringPublication approves session-1 through an approve command and
+// leaves the state a coordinator crash leaves: the command applying, the
+// approval recorded, and the session publishing without a receipt. It then
+// restarts the coordinator store.
+func (c *coordinatorForTest) crashDuringPublication() {
+	c.t.Helper()
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(c.preview("preview-1", "session-1", revision)))
+	if _, err := c.store.BeginIdeationCommand(c.t.Context(), "approve-1"); err != nil {
+		c.t.Fatal(err)
+	}
+	lifecycle := workflow.DefaultSessionLifecycle()
+	session := c.history("session-1").Session
+	binding, err := c.dispatcher().Env.Publisher.Preview(c.t.Context(), "session-1")
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	write, err := lifecycle.Write(session, workflow.SessionEventApproved, "", dispatchNow)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if session, _, err = c.store.ApprovePlan(c.t.Context(), write, binding.Approval("approve-1")); err != nil {
+		c.t.Fatal(err)
+	}
+	if write, err = lifecycle.Write(session, workflow.SessionEventPublicationStarted, "", dispatchNow); err != nil {
+		c.t.Fatal(err)
+	}
+	if _, err = c.store.TransitionIdeationSession(c.t.Context(), write); err != nil {
+		c.t.Fatal(err)
+	}
+	c.restart()
+}
+
+// requireRecoverable fails unless session-1 left publishing for
+// publication_incomplete with a reason that contains detail, and a retry
+// then publishes the same approval.
+func (c *coordinatorForTest) requireRecoverable(detail string) {
+	c.t.Helper()
+	session := c.history("session-1").Session
+	if session.State != store.IdeationStatePublicationIncomplete || !strings.Contains(session.StateReason, detail) {
+		c.t.Fatalf("session = %#v, want publication_incomplete naming %q", session, detail)
+	}
+	c.submit("publish-retry", "session-1", sessioncommand.KindPublish, session.Revision, `{}`)
+	c.drain()
+	c.requireOutcome("publish-retry", store.IdeationCommandApplied)
+	if state := c.history("session-1").Session.State; state != store.IdeationStatePublished || len(c.fake.Items()) != 3 {
+		c.t.Fatalf("state = %q, items = %d; want the retry to publish three items", state, len(c.fake.Items()))
+	}
+}
+
+// TestPublicationInterruptedByACrashIsNeverStuck verifies the crash-resume
+// path of an approve-and-publish command: the resumed attempt publishes, and
+// an attempt that cannot finish leaves publication_incomplete with its
+// reason, where a retry continues the same approval.
+func TestPublicationInterruptedByACrashIsNeverStuck(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resumed attempt publishes", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.crashDuringPublication()
+		c.drain()
+		if resumed := c.requireOutcome("approve-1", store.IdeationCommandApplied); resumed.Attempts != 2 {
+			t.Fatalf("attempts = %d, want the second attempt to finish", resumed.Attempts)
+		}
+		if state := c.history("session-1").Session.State; state != store.IdeationStatePublished {
+			t.Fatalf("state = %q, want published", state)
+		}
+	})
+
+	t.Run("resumed preflight fails", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.crashDuringPublication()
+		c.fake.Inject(trackertest.Fault{Op: trackertest.OpPreflight, Err: tracker.NewPlanError(tracker.PlanErrorPermission, "token expired")})
+		c.drain()
+		c.requireOutcome("approve-1", store.IdeationCommandRefused)
+		c.requireRecoverable("token expired")
+	})
+
+	t.Run("attempt bound reached", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.crashDuringPublication()
+		for range 2 {
+			if _, err := c.store.BeginIdeationCommand(t.Context(), "approve-1"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c.drain()
+		c.requireOutcome("approve-1", store.IdeationCommandFailed)
+		c.requireRecoverable("without an outcome")
+	})
 }

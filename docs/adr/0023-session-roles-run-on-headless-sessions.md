@@ -75,10 +75,13 @@ The command dispatcher (#267) starts and cancels roles through
 (#269) and plan validation (#270) build on the report contracts and the
 `ValidatePlan` seam. The `factory-report` binary inside the worker image must
 include the session flags before a session role can report, so session roles
-need a worker image built from this version. Reset and cleanup do not yet
-remove the session-role Docker volumes and the snapshot worktree of an
-invocation that was active when the coordinator stopped; a released
-invocation leaves only its role volume and its packet directory.
+need a worker image built from this version. A released invocation leaves
+only its role volume and its packet directory. `factory reset` removes the
+session-role workers and role volumes, the snapshot worktree of an invocation
+that was active when the coordinator stopped, and the session packet
+directories, each validated against the paths the coordinator derives.
+`factory cleanup` keeps them, because an open session resumes its native
+session from the role volume.
 
 ## Considered options
 

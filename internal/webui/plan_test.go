@@ -239,6 +239,26 @@ func TestInvalidPlanShowsProblemsPerItemAndCannotBePreviewed(t *testing.T) {
 	}
 }
 
+// TestStaleDraftOffersOnlyRegeneration verifies that a draft whose brief
+// changed offers no editor, preview, or approval: only regeneration from the
+// current brief.
+func TestStaleDraftOffersOnlyRegeneration(t *testing.T) {
+	t.Parallel()
+
+	ui := newPlanUI(t, planNodesForTest())
+	revision := ui.history(t).Session.Revision
+	ui.send(t, "brief-2", sessioncommand.KindEditBrief, revision,
+		`{"brief":{"problem":"Onboarding is slow for new teams.","scope":[{"id":"scope-1","text":"The onboarding command."}]}}`)
+	ui.drain(t)
+	page := ui.page(t)
+	assertContains(t, page, "but the brief changed", `data-session-command="regenerate_draft"`)
+	for _, unwanted := range []string{`id="plan-draft-data"`, `data-session-command="preview_plan"`, `data-session-command="approve"`} {
+		if strings.Contains(page, unwanted) {
+			t.Errorf("stale draft page contains %s", unwanted)
+		}
+	}
+}
+
 // intermediateTracker wraps the fake planning tracker with a provider that
 // needs an intermediate hierarchy level between a parent and its children,
 // as an Azure DevOps process with a Feature level does.
@@ -313,7 +333,7 @@ func TestPreviewShowsTheRenderedPublicationAndBindsApproval(t *testing.T) {
 		`data-relationship="parent:n-2:n-1--feature"`, `data-relationship="depends_on:n-3:n-2"`, `data-relationship="parent:n-1--feature:n-1"`,
 		"data-textual-fallback",
 		`data-session-command="approve"`, `value="`+result.PayloadSHA256+`"`, `value="`+result.RelationshipMappingSHA256+`"`,
-		`data-expected-revision="`+strconv.FormatInt(revision, 10)+`"`, `name="publish" data-type="boolean" value="true"`,
+		`data-expected-revision="`+strconv.FormatInt(revision, 10)+`"`,
 	)
 }
 
@@ -321,7 +341,7 @@ func TestPreviewShowsTheRenderedPublicationAndBindsApproval(t *testing.T) {
 // form sends it.
 func approveBody(result sessioncommand.PreviewResult) string {
 	return `{"plan_revision":` + strconv.FormatInt(result.PlanRevision, 10) + `,"payload_sha256":"` + result.PayloadSHA256 +
-		`","relationship_mapping_sha256":"` + result.RelationshipMappingSHA256 + `","publish":true}`
+		`","relationship_mapping_sha256":"` + result.RelationshipMappingSHA256 + `"}`
 }
 
 // previewed returns the UI after a preview of plan revision 1 and the
@@ -480,6 +500,52 @@ func TestApprovalSurvivesACoordinatorRestart(t *testing.T) {
 		t.Fatalf("state = %q, approvals = %d, items = %d; want one published approval", history.Session.State, len(history.Approvals), len(ui.fake.Items()))
 	}
 	assertContains(t, ui.page(t), "3 items created", "https://tracker.invalid/items/3")
+}
+
+// TestStoppedPublicationOffersRetryAndCancel verifies that a session left
+// publishing without a pending command, as a coordinator that stopped
+// before it recorded the attempt leaves it, is never a dead end: the page
+// says that publication stopped and offers a retry and cancellation, and the
+// retry publishes the same approval.
+func TestStoppedPublicationOffersRetryAndCancel(t *testing.T) {
+	t.Parallel()
+
+	ui, _ := previewedPlanUI(t)
+	opened, err := store.Open(t.Context(), ui.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := ui.env(opened)
+	binding, err := env.Publisher.Preview(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := ui.history(t).Session
+	write, err := env.Lifecycle.Write(session, workflow.SessionEventApproved, "", fixtureNow)
+	if err == nil {
+		session, _, err = opened.ApprovePlan(t.Context(), write, binding.Approval("approval-1"))
+	}
+	if err == nil {
+		write, err = env.Lifecycle.Write(session, workflow.SessionEventPublicationStarted, "", fixtureNow)
+	}
+	if err == nil {
+		session, err = opened.TransitionIdeationSession(t.Context(), write)
+	}
+	_ = opened.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := ui.page(t)
+	assertContains(t, page, "stopped without a recorded result", "Retry publication", `data-session-command="publish"`, `data-session-command="cancel"`)
+	if strings.Contains(page, "The coordinator is publishing.") {
+		t.Fatal("page says the coordinator is publishing although no command is pending")
+	}
+	ui.send(t, "publish-1", sessioncommand.KindPublish, session.Revision, `{}`)
+	ui.drain(t)
+	if state := ui.history(t).Session.State; state != store.IdeationStatePublished || len(ui.fake.Items()) != 3 {
+		t.Fatalf("state = %q, items = %d; want the retry to publish three items", state, len(ui.fake.Items()))
+	}
 }
 
 // TestPartialPublicationShowsLinksFailuresAndRecoveryActions verifies the

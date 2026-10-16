@@ -32,7 +32,7 @@ const (
 
 // correlationTagPrefix namespaces the correlation tag of a published plan
 // item. It is not a factory state tag: it never authorizes or reports a run
-// (ADR 0026).
+// (ADR 0025).
 const correlationTagPrefix = "factory-plan:"
 
 // correlationTag returns the tag that carries the correlation key of one plan
@@ -57,8 +57,8 @@ func (c *Client) planMapping() config.AzurePlanMapping {
 // required fields, states, and link types. The same graph against an
 // unchanged project renders the same preview.
 func (c *Client) PreflightPlan(ctx context.Context, repository tracker.Repository, graph tracker.PlanGraph) (tracker.PlanPreview, error) {
-	if err := validateRepository(repository); err != nil {
-		return tracker.PlanPreview{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return tracker.PlanPreview{}, err
 	}
 	mapping := c.planMapping()
 	if err := mapping.Validate(); err != nil {

@@ -40,6 +40,7 @@ type Publisher interface {
 	Preview(context.Context, string) (publication.Binding, error)
 	Publish(context.Context, publication.Request) (publication.Result, error)
 	Reconcile(context.Context, publication.Reconciliation) (store.PublicationOperation, error)
+	Interrupt(context.Context, publication.Request, string) (store.IdeationSession, error)
 }
 
 var _ Publisher = (*publication.Publisher)(nil)
@@ -108,13 +109,14 @@ type Handler func(context.Context, Env, store.IdeationCommand) (Outcome, error)
 type Dispatcher struct {
 	// Env is passed to every handler.
 	Env Env
-	// Handlers holds one handler per command kind. Dependent work replaces a
-	// default handler to supply its behavior.
+	// Handlers holds one handler per command kind. A test replaces one to
+	// observe dispatch.
 	Handlers map[Kind]Handler
 
 	mu      sync.Mutex
 	running map[string]bool
 	busy    map[string]bool
+	failed  []error
 	work    sync.WaitGroup
 }
 
@@ -123,16 +125,31 @@ func NewDispatcher(env Env) *Dispatcher {
 	return &Dispatcher{Env: env, Handlers: DefaultHandlers(), running: map[string]bool{}, busy: map[string]bool{}}
 }
 
-// trackerKinds are the kinds that call the tracker. They run beside the
-// inbox pass, at most one per session, so a slow tracker never delays a
-// cancel or another session's command.
-var trackerKinds = map[Kind]bool{KindPreviewPlan: true, KindApprove: true, KindPublish: true, KindReconcile: true}
+// publishes reports whether kind starts or continues a publication attempt.
+func publishes(kind Kind) bool {
+	spec, ok := lookupKind(kind)
+	return ok && spec.publishes
+}
+
+// callsTracker reports whether kind calls the tracker. Such commands run
+// beside the inbox pass, at most one per session, so a slow tracker never
+// delays a cancel or another session's command.
+func callsTracker(kind Kind) bool {
+	spec, ok := lookupKind(kind)
+	return ok && spec.tracker
+}
 
 // Drain applies every pending command once, in inbox order. Tracker commands
 // start in the background; Wait waits for them. A command whose session
 // already has tracker work waits for a later pass. Drain returns a store
-// error that stopped the pass; the commands stay pending.
+// error that stopped the pass, joined with the failures of background
+// commands that ended since the last report; those commands stay pending.
 func (d *Dispatcher) Drain(ctx context.Context) error {
+	return errors.Join(d.drain(ctx), d.takeFailures())
+}
+
+// drain is one pass over the pending commands.
+func (d *Dispatcher) drain(ctx context.Context) error {
 	pending, err := d.Env.Store.PendingIdeationCommands(ctx)
 	if err != nil {
 		return fmt.Errorf("read pending session commands: %w", err)
@@ -141,7 +158,7 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		background := trackerKinds[Kind(command.Kind)]
+		background := callsTracker(Kind(command.Kind))
 		if !d.claim(command, background) {
 			continue
 		}
@@ -157,15 +174,36 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 		go func() {
 			defer d.work.Done()
 			defer d.release(command, background)
-			_ = d.apply(ctx, command)
+			if err := d.apply(ctx, command); err != nil {
+				d.recordFailure(err)
+			}
 		}()
 	}
 	return nil
 }
 
-// Wait waits for every background command that Drain started.
-func (d *Dispatcher) Wait() {
+// Wait waits for every background command that Drain started and returns
+// the failures that no Drain reported yet.
+func (d *Dispatcher) Wait() error {
 	d.work.Wait()
+	return d.takeFailures()
+}
+
+// recordFailure keeps the failure of one background command until Drain or
+// Wait reports it.
+func (d *Dispatcher) recordFailure(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.failed = append(d.failed, err)
+}
+
+// takeFailures returns the recorded background failures once.
+func (d *Dispatcher) takeFailures() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	failed := d.failed
+	d.failed = nil
+	return errors.Join(failed...)
 }
 
 // claim reserves command for this dispatcher. A running command, or tracker
@@ -173,9 +211,6 @@ func (d *Dispatcher) Wait() {
 func (d *Dispatcher) claim(command store.IdeationCommand, background bool) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.running == nil {
-		d.running, d.busy = map[string]bool{}, map[string]bool{}
-	}
 	if d.running[command.RequestID] || (background && d.busy[command.SessionID]) {
 		return false
 	}
@@ -197,8 +232,8 @@ func (d *Dispatcher) release(command store.IdeationCommand, background bool) {
 }
 
 // apply starts command, runs its handler, and records the outcome. When the
-// coordinator stops during the handler, the command stays applying and the
-// next coordinator resumes it.
+// coordinator stops during the handler, or the handler meets a transient
+// store failure, the command stays applying and a later pass resumes it.
 func (d *Dispatcher) apply(ctx context.Context, command store.IdeationCommand) error {
 	started, err := d.Env.Store.BeginIdeationCommand(ctx, command.RequestID)
 	if errors.Is(err, store.ErrIdeationCommandSettled) {
@@ -215,18 +250,42 @@ func (d *Dispatcher) apply(ctx context.Context, command store.IdeationCommand) e
 		if err != nil && ctx.Err() != nil {
 			return nil
 		}
+		if store.IsTransient(err) {
+			return fmt.Errorf("apply session command %q: %w", started.RequestID, err)
+		}
 		if err != nil {
 			outcome = d.outcomeOf(context.WithoutCancel(ctx), started, err)
 		}
 	}
+	if outcome.Code != store.IdeationCommandApplied && publishes(Kind(started.Kind)) {
+		if outcome, err = d.settlePublication(context.WithoutCancel(ctx), started, outcome); err != nil {
+			return err
+		}
+	}
 	_, err = d.Env.Store.CompleteIdeationCommand(context.WithoutCancel(ctx), store.IdeationCommandResult{
-		RequestID: started.RequestID, Outcome: outcome.Code, Detail: bounded(outcome.Detail),
+		RequestID: started.RequestID, Outcome: outcome.Code, Detail: store.TruncateUTF8(outcome.Detail, store.MaxIdeationReasonBytes),
 		SessionRevision: outcome.SessionRevision, Result: outcome.Result, At: d.Env.now(),
 	})
 	if err != nil {
 		return fmt.Errorf("record session command %q: %w", started.RequestID, err)
 	}
 	return nil
+}
+
+// settlePublication leaves no session publishing after a publishing command
+// ended without success: the attempt becomes publication_incomplete with the
+// outcome as its reason, so the user can retry, reconcile, or cancel. A
+// failure to record it keeps the command pending for the next pass.
+func (d *Dispatcher) settlePublication(ctx context.Context, command store.IdeationCommand, outcome Outcome) (Outcome, error) {
+	if d.Env.Publisher == nil {
+		return outcome, nil
+	}
+	session, err := d.Env.Publisher.Interrupt(ctx, publication.Request{SessionID: command.SessionID, AttemptID: command.RequestID}, outcome.Detail)
+	if err != nil {
+		return outcome, fmt.Errorf("settle the publication of session command %q: %w", command.RequestID, err)
+	}
+	outcome.SessionRevision = session.Revision
+	return outcome, nil
 }
 
 // run calls the handler of command, or reports a kind without one.
@@ -239,8 +298,8 @@ func (d *Dispatcher) run(ctx context.Context, command store.IdeationCommand) (Ou
 }
 
 // outcomeOf turns a handler error into the final outcome. A revision
-// conflict names the current revision; every other error is a refusal that
-// explains itself.
+// conflict names the current revision; every other error that is not
+// transient is a refusal that explains itself.
 func (d *Dispatcher) outcomeOf(ctx context.Context, command store.IdeationCommand, err error) Outcome {
 	var conflict *store.IdeationRevisionConflictError
 	if errors.As(err, &conflict) {
@@ -260,16 +319,4 @@ func (d *Dispatcher) outcomeOf(ctx context.Context, command store.IdeationComman
 		outcome.SessionRevision = session.Revision
 	}
 	return outcome
-}
-
-// bounded shortens detail to the store limit at a rune boundary.
-func bounded(detail string) string {
-	if len(detail) <= maxReasonBytes {
-		return detail
-	}
-	cut := maxReasonBytes
-	for cut > 0 && detail[cut]&0xC0 == 0x80 {
-		cut--
-	}
-	return detail[:cut]
 }

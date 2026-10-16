@@ -1328,6 +1328,9 @@ func writeResetPlan(output, errorsOutput io.Writer, plan factory.ResetPlan) bool
 			return false
 		}
 	}
+	if !writeResetSessions(output, errorsOutput, plan.Sessions) {
+		return false
+	}
 	for _, credentialStore := range plan.CredentialStores {
 		if !writeOutput(output, errorsOutput, "reset credential volume: %s\n", credentialStore.CredentialStoreID) {
 			return false
@@ -1348,6 +1351,25 @@ func writeResetPlan(output, errorsOutput io.Writer, plan factory.ResetPlan) bool
 	}
 	for _, retained := range plan.Retained {
 		if !writeOutput(output, errorsOutput, "reset retains: %s\n", retained) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeResetSessions renders the session-role targets of every planned
+// ideation session.
+func writeResetSessions(output, errorsOutput io.Writer, sessions []factory.ResetSession) bool {
+	if !writeOutput(output, errorsOutput, "reset sessions: %d\n", len(sessions)) {
+		return false
+	}
+	for _, session := range sessions {
+		if !writeOutput(output, errorsOutput, "reset session: %s\n", session.SessionID) ||
+			!writeResetTargets(output, errorsOutput, "reset session worker", session.WorkerIDs) ||
+			!writeResetTargets(output, errorsOutput, "reset session worker role", session.Roles) ||
+			!writeResetTargets(output, errorsOutput, "reset session snapshot", session.Snapshots) ||
+			!writeResetTargets(output, errorsOutput, "reset session git projection", session.GitProjections) ||
+			!writeResetTargets(output, errorsOutput, "reset session packet directory", session.PacketRoots) {
 			return false
 		}
 	}

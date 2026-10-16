@@ -11,9 +11,9 @@ The decision records are [ADR 0021](adr/0021-ideation-sessions-and-local-operato
 (publication ledger and tracker planning port),
 [ADR 0023](adr/0023-session-roles-run-on-headless-sessions.md) (session
 roles), [ADR 0024](adr/0024-browser-session-commands-through-a-durable-inbox.md)
-(browser commands), [ADR 0026](adr/0026-azure-devops-plan-publication-mapping.md)
+(browser commands), [ADR 0025](adr/0025-azure-devops-plan-publication-mapping.md)
 (Azure DevOps mapping), and
-[ADR 0027](adr/0027-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)
+[ADR 0026](adr/0026-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)
 (readiness is the user's decision). This guide does not restate them.
 
 ## The read-only UI contract is extended
@@ -116,7 +116,11 @@ flow.
   only cancel remains. Items that already exist stay in the tracker.
 - **Publication is incomplete.** Retry it. A retry resumes the same approved
   content and looks for each earlier item by its correlation key before it
-  creates anything. When an item create has an unknown outcome and no item
+  creates anything. An attempt that cannot finish also ends here with its
+  reason, for example when the tracker refused the preflight after a
+  coordinator restart, or when the coordinator started the attempt three
+  times without a result. A page that says publication stopped without a
+  recorded result offers the same retry. When an item create has an unknown outcome and no item
   is found, check the tracker and reconcile: adopt the item, or confirm that
   none exists.
 - **You cancelled.** Cancelling stops role work and future publication work.
@@ -131,10 +135,12 @@ session is evidence of what was approved and created; keep it while the
 items matter. See [Run-artifact cleanup](configuration.md#run-artifact-cleanup)
 and [Complete local reset](configuration.md#complete-local-reset).
 
-Neither command removes the Docker role volumes of session roles yet
-(`factory-role-ideation-*` and `factory-role-planning-*`), nor the snapshot
-worktree of a role that was active when the coordinator stopped. Remove them
-by hand after a reset, with the operator's authority.
+`factory reset` also removes the resources of every session role: the Docker
+role volumes (`factory-role-ideation-*` and `factory-role-planning-*`), the
+snapshot worktree of a role that was active when the coordinator stopped, and
+the session packet directories. Its preview lists them per session.
+`factory cleanup` does not remove them: an open session resumes its role from
+the role volume on the next turn.
 
 ## Evidence
 

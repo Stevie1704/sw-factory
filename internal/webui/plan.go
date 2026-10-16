@@ -162,8 +162,11 @@ type planActions struct {
 	Approve bool
 	// Publish offers publication or a retry of the current approval.
 	Publish bool
-	// Retry reports that Publish resumes an incomplete publication.
+	// Retry reports that Publish resumes an incomplete publication, or one
+	// that stopped without a recorded result.
 	Retry bool
+	// Publishing reports that a pending command is publishing now.
+	Publishing bool
 	// Reconcile offers reconciliation of ambiguous item creates.
 	Reconcile bool
 	// Cancel offers cancellation of approval or publication.
@@ -459,18 +462,20 @@ func newPlanActions(model planPage) planActions {
 	busy := len(model.Pending) > 0
 	state := model.Session.State
 	hasPlan := model.Plan != nil
-	reviewable := hasPlan && !model.Plan.Stale && model.Valid && allows(workflow.SessionEventApproved)
+	current := hasPlan && !model.Plan.Stale
+	reviewable := current && model.Valid && allows(workflow.SessionEventApproved)
 	actions := planActions{
-		Edit:       hasPlan && allows(workflow.SessionEventEdited),
+		Edit:       current && allows(workflow.SessionEventEdited),
 		Regenerate: hasPlan && allows(workflow.SessionEventRoleStarted),
 		Preview:    reviewable && !busy,
 		Approve:    reviewable && !busy && model.Preview != nil,
 		Publish:    !busy && model.Approval != nil && allows(workflow.SessionEventPublicationStarted),
-		Retry:      state == store.IdeationStatePublicationIncomplete,
+		Retry:      state == store.IdeationStatePublicationIncomplete || state == store.IdeationStatePublishing,
 		Cancel: allows(workflow.SessionEventCancelled) &&
 			(state == store.IdeationStateApproved || state == store.IdeationStatePublishing || state == store.IdeationStatePublicationIncomplete),
 	}
 	actions.Reconcile = !busy && state == store.IdeationStatePublicationIncomplete
+	actions.Publishing = busy && state == store.IdeationStatePublishing
 	return actions
 }
 
