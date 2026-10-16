@@ -369,7 +369,7 @@ func (j *ideationJourney) journeySession() store.IdeationSession {
 
 // previewDigests previews the current plan revision and returns the
 // approval payload the review page sends for it.
-func (j *ideationJourney) previewDigests(requestID string, publish bool) sessioncommand.ApprovePayload {
+func (j *ideationJourney) previewDigests(requestID string) sessioncommand.ApprovePayload {
 	j.t.Helper()
 	revision := j.journeySession().PlanRevision
 	answer := j.apply(requestID, sessioncommand.KindPreviewPlan, sessioncommand.PlanRevisionPayload{PlanRevision: revision})
@@ -378,7 +378,7 @@ func (j *ideationJourney) previewDigests(requestID string, publish bool) session
 		j.t.Fatalf("preview result %s: %v", answer.Result, err)
 	}
 	return sessioncommand.ApprovePayload{
-		PlanRevision: revision, PayloadSHA256: preview.PayloadSHA256, RelationshipMappingSHA256: preview.RelationshipMappingSHA256, Publish: publish,
+		PlanRevision: revision, PayloadSHA256: preview.PayloadSHA256, RelationshipMappingSHA256: preview.RelationshipMappingSHA256,
 	}
 }
 
@@ -533,7 +533,7 @@ func TestIdeationJourneyPublishesTheReviewedPlanToEachTracker(t *testing.T) {
 		t.Run(provider.name, func(t *testing.T) {
 			journey := newIdeationJourney(t, provider)
 			journey.reachReviewedPlan()
-			journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1", true))
+			journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1"))
 
 			receipt := journey.requireReceipt(store.PublicationOutcomePublished)
 			if len(receipt.Items) != 3 || len(receipt.Relationships) != 3 {
@@ -568,7 +568,7 @@ func TestIdeationJourneyPublishesASingleItem(t *testing.T) {
 			journey.respond(readyRound())
 			journey.apply("handoff-1", sessioncommand.KindHandOff, sessioncommand.HandOffPayload{BriefRevision: journey.journeySession().BriefRevision})
 			journey.respond(planReportForTest(journeyNode("n-1", "task", "Fix the status help typo", "")))
-			journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1", true))
+			journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1"))
 
 			receipt := journey.requireReceipt(store.PublicationOutcomePublished)
 			graph := journey.requireInert()
@@ -622,7 +622,7 @@ func TestIdeationJourneyPublishesUnresolvedRequirementsAsInvestigationWork(t *te
 				journeyNode("n-1", "investigation", "Find the export readers", ""),
 				journeyNode("n-2", "task", "Add the export command", "", "n-1"),
 			))
-			journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1", true))
+			journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1"))
 
 			journey.requireReceipt(store.PublicationOutcomePublished)
 			graph := journey.requireInert()
@@ -677,7 +677,7 @@ func TestIdeationJourneySurvivesRestartsAndDuplicateSubmissions(t *testing.T) {
 				t.Fatalf("plan revisions after restart = %#v, want the reviewed revision", plans)
 			}
 
-			approval := journey.previewDigests("preview-1", true)
+			approval := journey.previewDigests("preview-1")
 			shown := journey.revision()
 			if status, _ := journey.post("approve-1", sessioncommand.KindApprove, shown, approval); status != http.StatusAccepted {
 				t.Fatalf("approval status = %d, want accepted", status)
@@ -705,15 +705,14 @@ func TestIdeationJourneySurvivesRestartsAndDuplicateSubmissions(t *testing.T) {
 // TestIdeationJourneyRefusesStaleApprovalAndChangedMapping verifies that an
 // approval names exactly the reviewed rendering: an approval of a preview
 // that a later plan change replaced is refused, a provider mapping change
-// after approval refuses publication before any tracker write, and the
-// user's recovery (save the plan again, preview, approve) publishes under the
-// new mapping.
+// after the preview refuses the approval before any tracker write, and the
+// user's recovery (preview again, approve) publishes under the new mapping.
 func TestIdeationJourneyRefusesStaleApprovalAndChangedMapping(t *testing.T) {
 	for _, provider := range journeyProviders(t) {
 		t.Run(provider.name, func(t *testing.T) {
 			journey := newIdeationJourney(t, provider)
 			journey.reachReviewedPlan()
-			stale := journey.previewDigests("preview-1", true)
+			stale := journey.previewDigests("preview-1")
 			nodes := sessioncommand.PlanNodesFromStore(journey.history().Plans[1].Nodes)
 			nodes[2].Title = "Document the export for support"
 			journey.apply("draft-edit-2", sessioncommand.KindEditDraft, sessioncommand.DraftPayload{Nodes: nodes})
@@ -722,19 +721,17 @@ func TestIdeationJourneyRefusesStaleApprovalAndChangedMapping(t *testing.T) {
 				t.Fatalf("stale approval = %#v, want a refusal", refused)
 			}
 
-			journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-2", false))
+			reviewed := journey.previewDigests("preview-2")
 			journey.provider.changeMapping()
-			changed := journey.submit("publish-1", sessioncommand.KindPublish, sessioncommand.PublishPayload{})
-			if changed.Outcome != string(store.IdeationCommandRefused) || !strings.Contains(changed.Detail, "does not bind the current rendered publication") {
-				t.Fatalf("publication after a mapping change = %#v, want a stale approval refusal", changed)
+			changed := journey.submit("approve-1", sessioncommand.KindApprove, reviewed)
+			if changed.Outcome != string(store.IdeationCommandRefused) || !strings.Contains(changed.Detail, "rendered publication changed since the preview") {
+				t.Fatalf("approval after a mapping change = %#v, want a changed preview refusal", changed)
 			}
 			if graph := journey.requireInert(); graph.writes != 0 {
 				t.Fatalf("tracker writes = %d before a current approval, want none", graph.writes)
 			}
 
-			current := sessioncommand.PlanNodesFromStore(journey.history().Plans[2].Nodes)
-			journey.apply("draft-save", sessioncommand.KindEditDraft, sessioncommand.DraftPayload{Nodes: current})
-			journey.apply("approve-2", sessioncommand.KindApprove, journey.previewDigests("preview-3", true))
+			journey.apply("approve-2", sessioncommand.KindApprove, journey.previewDigests("preview-3"))
 			journey.requireReceipt(store.PublicationOutcomePublished)
 			journey.requireInert()
 		})
@@ -769,7 +766,7 @@ func TestIdeationJourneyRefusesAMalformedPlanGraph(t *testing.T) {
 	if refused.Outcome != string(store.IdeationCommandRefused) || !strings.Contains(refused.Detail, "n-1") {
 		t.Fatalf("malformed edit = %#v, want a refusal that names the parent", refused)
 	}
-	journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1", true))
+	journey.apply("approve-1", sessioncommand.KindApprove, journey.previewDigests("preview-1"))
 	journey.requireReceipt(store.PublicationOutcomePublished)
 }
 
@@ -820,7 +817,7 @@ func TestIdeationJourneyRecoversRemoteSuccessAfterACoordinatorStop(t *testing.T)
 		t.Run(provider.name, func(t *testing.T) {
 			journey := newIdeationJourney(t, provider)
 			journey.reachReviewedPlan()
-			approval := journey.previewDigests("preview-1", true)
+			approval := journey.previewDigests("preview-1")
 			journey.provider.holdCreate("Add the factory export command")
 			if status, _ := journey.post("approve-1", sessioncommand.KindApprove, journey.revision(), approval); status != http.StatusAccepted {
 				t.Fatalf("approve status = %d, want accepted", status)
