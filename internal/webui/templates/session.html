@@ -44,7 +44,12 @@
 
 {{template "session-brief" .}}
 
-{{block "session-plan" .}}{{end}}
+{{block "session-plan" .}}{{if .Session.PlanRevision -}}
+<section aria-labelledby="plan-heading">
+<h2 id="plan-heading">Plan</h2>
+<p>Plan revision {{.Session.PlanRevision}}: <a href="/sessions/{{.Session.ID}}/plan">review, edit, approve, and publish the plan</a>.</p>
+</section>
+{{- end}}{{end}}
 
 {{template "session-outcomes" .}}
 {{- end}}

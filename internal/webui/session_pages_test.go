@@ -389,3 +389,27 @@ func TestSessionPageAfterReloadShowsAcceptedAnswersWithoutResubmission(t *testin
 	assertContains(t, body, "Operators wait for images.", "waits for the coordinator")
 	assertLacks(t, body, `data-session-command="submit_turn"`)
 }
+
+// TestSessionPageLinksThePlanReviewOnceAPlanExists verifies that the
+// session page links the plan review page only when the session has a plan
+// revision.
+func TestSessionPageLinksThePlanReviewOnceAPlanExists(t *testing.T) {
+	t.Parallel()
+
+	ui := newSessionUI(t, true)
+	seed := seedConversation(t, ui)
+	seed.userTurn("turn-1", "Workers start too slowly.", "")
+	seed.answer("sinv-1", "turn-1", groundedFirstRound())
+	assertLacks(t, sessionPage(t, ui), `href="/sessions/session-1/plan"`)
+
+	seed.startRole("sinv-2", "handoff-1", seed.session.BriefRevision)
+	session, _, err := seed.store.SavePlanRevision(t.Context(), seed.write(store.IdeationStateDraftReview, ""), store.PlanRevision{
+		SourceBriefRevision: seed.session.BriefRevision, ContextRevision: baseSHA,
+		Nodes: []store.PlanNode{{ID: "n-1", Kind: "task", Title: "Cache images", Body: "Cache.", AcceptanceCriteria: []string{"Cached."}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.session = session
+	assertContains(t, sessionPage(t, ui), `href="/sessions/session-1/plan"`, "Plan revision 1")
+}
