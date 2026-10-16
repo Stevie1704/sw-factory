@@ -418,6 +418,9 @@ func (s *Store) CloseSessionInvocation(ctx context.Context, end SessionInvocatio
 		return SessionInvocation{}, fmt.Errorf("begin session invocation close: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := reserveWriteLock(ctx, tx, "ideation_invocations", end.InvocationID); err != nil {
+		return SessionInvocation{}, fmt.Errorf("reserve session invocation %q: %w", end.InvocationID, err)
+	}
 	invocation, err := activeSessionInvocationTx(ctx, tx, "", end.InvocationID)
 	if err != nil {
 		return SessionInvocation{}, err

@@ -294,7 +294,7 @@ func (s *Store) beginIdeationWrite(ctx context.Context, write IdeationWrite) (*s
 	if err != nil {
 		return nil, IdeationSession{}, fmt.Errorf("begin ideation session %q write: %w", write.SessionID, err)
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE ideation_sessions SET id = id WHERE id = ?", write.SessionID); err != nil {
+	if err := reserveWriteLock(ctx, tx, "ideation_sessions", write.SessionID); err != nil {
 		_ = tx.Rollback()
 		return nil, IdeationSession{}, fmt.Errorf("reserve ideation session %q: %w", write.SessionID, err)
 	}
