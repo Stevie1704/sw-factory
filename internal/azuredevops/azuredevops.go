@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -84,6 +85,9 @@ type Client struct {
 	// eligible. A tag is free text that any editor can add, so the adapter
 	// checks who added it (ADR 0019).
 	AuthorizedUsers []string
+	// Planning maps neutral plan kinds to the project's work-item types for
+	// plan publication. Nil selects config.AgileAzurePlanMapping.
+	Planning *config.AzurePlanMapping
 
 	// mu guards the caches below.
 	mu sync.Mutex
