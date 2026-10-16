@@ -331,6 +331,12 @@ func editDraft(ctx context.Context, env Env, command store.IdeationCommand) (Out
 
 // Transition returns a handler that records event with the payload reason.
 func Transition(event workflow.SessionEvent) Handler {
+	return transitionBy(func(store.IdeationSession) workflow.SessionEvent { return event })
+}
+
+// transitionBy returns a handler that records the event eventOf chooses for
+// the current session, with the payload reason.
+func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Handler {
 	return func(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 		payload, err := payloadOf[ReasonPayload](command)
 		if err != nil {
@@ -340,7 +346,7 @@ func Transition(event workflow.SessionEvent) Handler {
 		if err != nil {
 			return Outcome{}, err
 		}
-		write, err := CommandWrite(env, session, command, event, payload.Reason)
+		write, err := CommandWrite(env, session, command, eventOf(session), payload.Reason)
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -349,6 +355,23 @@ func Transition(event workflow.SessionEvent) Handler {
 		}
 		return Applied(session, "session is "+string(session.State)), nil
 	}
+}
+
+// resumeEvent chooses where a parked session resumes. A session parked with
+// an approval resumes approved, and one parked with a plan draft resumes in
+// plan review, so neither needs a new planning run. Every other parked
+// session, and a session that needed investigation, resumes the
+// conversation.
+func resumeEvent(session store.IdeationSession) workflow.SessionEvent {
+	switch {
+	case session.State != store.IdeationStateDeferred:
+		return workflow.SessionEventResumed
+	case session.ApprovalID != "":
+		return workflow.SessionEventApprovalResumed
+	case session.PlanRevision > 0:
+		return workflow.SessionEventReviewResumed
+	}
+	return workflow.SessionEventResumed
 }
 
 // PreviewResult is the JSON result of a preview command: the exact rendered

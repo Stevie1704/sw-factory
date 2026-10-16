@@ -64,8 +64,11 @@ Open `/sessions` in the browser on the same host:
 6. Approve and publish. The page then shows each created item, its link, and
    the ledger of every operation.
 
-Defer, resume, no-build, and cancel are available while they apply. No-build
-and cancel end the session; cancel never deletes tracker items.
+Defer, resume, no-build, and cancel are available while they apply. A session
+that you defer during plan review resumes in review with the same plan, and one
+that you defer after approval resumes with its approval; neither starts a new
+planning run. No-build and cancel end the session; cancel never deletes tracker
+items.
 
 ## What an approval covers
 

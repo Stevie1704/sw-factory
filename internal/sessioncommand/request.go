@@ -238,7 +238,7 @@ func kindTable() []kindSpec {
 		{kind: KindPublish, payload: func() payload { return &PublishPayload{} }, handler: publish, tracker: true},
 		{kind: KindReconcile, payload: func() payload { return &ReconcilePayload{} }, handler: reconcile, tracker: true},
 		{kind: KindDefer, payload: reason, handler: Transition(workflow.SessionEventDeferred)},
-		{kind: KindResume, payload: reason, handler: Transition(workflow.SessionEventResumed)},
+		{kind: KindResume, payload: reason, handler: transitionBy(resumeEvent)},
 		{kind: KindInvestigationNeeded, payload: reason, handler: investigationNeeded},
 		{kind: KindNoBuild, payload: reason, handler: Transition(workflow.SessionEventNoBuild)},
 		{kind: KindCancel, payload: reason, handler: Transition(workflow.SessionEventCancelled)},

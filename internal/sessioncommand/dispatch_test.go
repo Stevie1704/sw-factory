@@ -643,3 +643,80 @@ func TestStaleDraftIsNotEditable(t *testing.T) {
 		t.Fatalf("plans = %#v, want the one stale draft unchanged", history.Plans)
 	}
 }
+
+// deferAndResume parks session-1 and resumes it through the inbox with a
+// dispatcher that records role starts, and returns the resumed session.
+func (c *coordinatorForTest) deferAndResume(revision int64, roles *rolesForTest) store.IdeationSession {
+	c.t.Helper()
+	for _, step := range []struct {
+		requestID string
+		kind      sessioncommand.Kind
+	}{{"defer-1", sessioncommand.KindDefer}, {"resume-1", sessioncommand.KindResume}} {
+		c.submit(step.requestID, "session-1", step.kind, revision, `{"reason":"Back next week."}`)
+		dispatcher := c.dispatcher()
+		dispatcher.Env.Roles = roles
+		if err := dispatcher.Drain(c.t.Context()); err != nil {
+			c.t.Fatal(err)
+		}
+		revision = c.requireOutcome(step.requestID, store.IdeationCommandApplied).SessionRevision
+	}
+	return c.history("session-1").Session
+}
+
+// TestResumedSessionKeepsItsPlanUnderReview verifies that a session parked
+// during plan review resumes in review with the same plan revision, and that
+// a session parked after approval resumes with its approval, so neither
+// needs a new planning run.
+func TestResumedSessionKeepsItsPlanUnderReview(t *testing.T) {
+	t.Parallel()
+
+	t.Run("draft review", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.createSession("session-1")
+		roles := &rolesForTest{}
+		resumed := c.deferAndResume(c.draftPlan("session-1"), roles)
+		if resumed.State != store.IdeationStateDraftReview || resumed.PlanRevision != 1 || len(roles.calls) != 0 {
+			t.Fatalf("resumed = %#v, role starts = %v; want draft review of plan 1 without a role start", resumed, roles.calls)
+		}
+	})
+
+	t.Run("approved", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.createSession("session-1")
+		c.draftPlan("session-1")
+		session := c.history("session-1").Session
+		binding, err := c.dispatcher().Env.Publisher.Preview(t.Context(), "session-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		write, err := workflow.DefaultSessionLifecycle().Write(session, workflow.SessionEventApproved, "", dispatchNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if session, _, err = c.store.ApprovePlan(t.Context(), write, binding.Approval("approval-1")); err != nil {
+			t.Fatal(err)
+		}
+		roles := &rolesForTest{}
+		resumed := c.deferAndResume(session.Revision, roles)
+		if resumed.State != store.IdeationStateApproved || resumed.ApprovalID != "approval-1" || len(roles.calls) != 0 {
+			t.Fatalf("resumed = %#v, role starts = %v; want the approval kept without a role start", resumed, roles.calls)
+		}
+		c.submit("publish-1", "session-1", sessioncommand.KindPublish, resumed.Revision, `{}`)
+		c.drain()
+		c.requireOutcome("publish-1", store.IdeationCommandApplied)
+		if state := c.history("session-1").Session.State; state != store.IdeationStatePublished {
+			t.Fatalf("state = %q, want the resumed approval published", state)
+		}
+	})
+
+	t.Run("no plan yet", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		resumed := c.deferAndResume(c.createSession("session-1"), &rolesForTest{})
+		if resumed.State != store.IdeationStateAwaitingUser {
+			t.Fatalf("state = %q, want the conversation resumed", resumed.State)
+		}
+	})
+}

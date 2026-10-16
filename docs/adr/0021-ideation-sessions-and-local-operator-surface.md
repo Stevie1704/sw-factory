@@ -37,7 +37,7 @@ both contracts and defines the data, lifecycle, and retention of sessions.
    | `publishing` | Publication of the approval is in progress. |
    | `publication_incomplete` | Publication stopped before every operation succeeded. Retry or reconcile continues the same approval. |
    | `published` | Terminal. Every approved item and relationship exists. |
-   | `deferred` | The user parked the session. It can resume. |
+   | `deferred` | The user parked the session. It resumes where it was parked: in the conversation, in plan review with the same plan, or approved. |
    | `no_build` | Terminal. The user decided not to build. |
    | `cancelled` | Terminal. Cancellation never deletes tracker items. |
 
