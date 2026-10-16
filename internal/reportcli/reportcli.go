@@ -94,6 +94,8 @@ func Run(request Request) int {
 	costCurrency := flags.String("cost-currency", "", "three-letter uppercase currency for --cost-micros")
 	nativeSessionID := flags.String("native-session-id", "", "harness-native session identifier")
 	summaryFile := flags.String("summary-file", "", "markdown pull-request summary file; PR-writer role only")
+	ideationFile := flags.String("ideation-file", "", "JSON ideation payload file; ideation role only")
+	planFile := flags.String("plan-file", "", "JSON draft plan payload file; planning role only")
 	defectCode := flags.String("defect-code", "", "stable diagnostic code of a suspected Factory defect")
 	defectExpected := flags.String("defect-expected", "", "documented Factory behavior the suspected defect contradicts")
 	defectObserved := flags.String("defect-observed", "", "observed Factory behavior of the suspected defect")
@@ -111,6 +113,16 @@ func Run(request Request) int {
 		"harness":       lookup("FACTORY_HARNESS"),
 		"role":          lookup("FACTORY_ROLE"),
 		"stage":         lookup("FACTORY_STAGE"),
+	}
+	session, err := sessionIdentityFrom(lookup)
+	if err != nil {
+		writeError(request.ErrorsOutput, err)
+		return 1
+	}
+	if session.id != "" {
+		// A session worker's FACTORY_RUN_ID names only the worker owner; the
+		// report names the session instead.
+		identity["run_id"] = "-"
 	}
 	for field, value := range identity {
 		if strings.TrimSpace(value) == "" {
@@ -142,10 +154,16 @@ func Run(request Request) int {
 		writeError(request.ErrorsOutput, errors.New("PR-writer reports accept only --summary-file as their payload"))
 		return 1
 	}
+	if err := checkSessionPayloadFlags(session.id != "", identity["role"], *ideationFile, *planFile); err != nil {
+		writeError(request.ErrorsOutput, err)
+		return 1
+	}
 	value := report.Report{
 		SchemaVersion:   report.SchemaVersion,
 		InvocationID:    identity["invocation_id"],
 		RunID:           identity["run_id"],
+		SessionID:       session.id,
+		SessionRevision: session.revision,
 		Harness:         identity["harness"],
 		Role:            identity["role"],
 		Stage:           identity["stage"],
@@ -165,6 +183,13 @@ func Run(request Request) int {
 			if value.ReviewHandoff.Findings[index].UnitID == "" {
 				value.ReviewHandoff.Findings[index].UnitID = reviewUnitID
 			}
+		}
+	}
+	if session.id != "" {
+		value.RunID = ""
+		if err := readSessionPayloads(&value, *ideationFile, *planFile); err != nil {
+			writeError(request.ErrorsOutput, err)
+			return 1
 		}
 	}
 	if *summaryFile != "" {

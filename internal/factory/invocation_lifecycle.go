@@ -1408,19 +1408,32 @@ func classifyHeadlessExit(runtime harness.Runtime, ctx context.Context, request 
 // credentialSeeding selects the registered, harness-specific source and
 // returns a post-worker projection step plus its factory-managed identity.
 func (l *invocationLifecycle) credentialSeeding(registration config.RepositoryRegistration, request AgentRequest, harnessName config.Harness) (func(context.Context, string, string) error, string, error) {
-	var registeredAuthPath, overrideAuthPath string
+	overrideAuthPath := ""
+	switch harnessName {
+	case config.HarnessCodex:
+		overrideAuthPath = request.CodexAuthPath
+	case config.HarnessClaude:
+		overrideAuthPath = request.ClaudeAuthPath
+	}
+	return harnessCredentialSeeding(l.worker, registration, harnessName, overrideAuthPath)
+}
+
+// harnessCredentialSeeding selects the registered source of harnessName and
+// returns a post-worker projection step plus its factory-managed credential
+// store identity. A nil step means the worker keeps its own credential. An
+// override must name the registered source, so a restart can repeat it.
+func harnessCredentialSeeding(workerRuntime worker.WorkerRuntime, registration config.RepositoryRegistration, harnessName config.Harness, overrideAuthPath string) (func(context.Context, string, string) error, string, error) {
+	var registeredAuthPath string
 	var seed func(context.Context, worker.CredentialSeedRequest) error
 	switch harnessName {
 	case config.HarnessCodex:
 		registeredAuthPath = registration.Authentication.CodexAuthPath
-		overrideAuthPath = request.CodexAuthPath
-		if seeder, ok := l.worker.(worker.CredentialSeeder); ok {
+		if seeder, ok := workerRuntime.(worker.CredentialSeeder); ok {
 			seed = seeder.SeedCodexCredentials
 		}
 	case config.HarnessClaude:
 		registeredAuthPath = registration.Authentication.ClaudeAuthPath
-		overrideAuthPath = request.ClaudeAuthPath
-		if seeder, ok := l.worker.(worker.ClaudeCredentialSeeder); ok {
+		if seeder, ok := workerRuntime.(worker.ClaudeCredentialSeeder); ok {
 			seed = seeder.SeedClaudeCredentials
 		}
 	}

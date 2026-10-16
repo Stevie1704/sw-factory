@@ -1261,3 +1261,31 @@ func TestValidateHostRejectsAnIncompleteOrAmbiguousAzureDevOpsRegistration(t *te
 		})
 	}
 }
+
+// TestValidateRepositoryAcceptsOptionalSessionRoles verifies that a
+// repository may select harness, model, and effort for the ideation and
+// planning session roles, and that a repository without them stays valid.
+func TestValidateRepositoryAcceptsOptionalSessionRoles(t *testing.T) {
+	t.Parallel()
+
+	if err := config.ValidateRepository(validRepositoryConfig()); err != nil {
+		t.Fatalf("ValidateRepository() without session roles error = %v", err)
+	}
+	policy := validRepositoryConfig()
+	policy.RoleHarnessDefaults["ideation"] = config.HarnessClaude
+	policy.ModelOptions["ideation"] = []string{"opus"}
+	policy.ReasoningEffortOptions = map[string][]string{"ideation": {"high"}}
+	policy.RoleHarnessDefaults["planning"] = config.HarnessCodex
+	policy.ModelOptions["planning"] = []string{"gpt-5"}
+	if err := config.ValidateRepository(policy); err != nil {
+		t.Fatalf("ValidateRepository() with session roles error = %v", err)
+	}
+
+	policy.RoleHarnessDefaults["grilling"] = config.HarnessClaude
+	policy.ModelOptions["grilling"] = []string{"opus"}
+	err := config.ValidateRepository(policy)
+	var policyErr *config.PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("ValidateRepository() error = %v, want PolicyError for an undeclared role", err)
+	}
+}

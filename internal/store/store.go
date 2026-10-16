@@ -3524,8 +3524,9 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 				return fmt.Errorf("apply store migration 43: %w", err)
 			}
 		case 44:
-			// Version 44 is reserved for the session-role migration of #268,
-			// which merges separately (decision D3). It changes nothing here.
+			if err := migrateSessionInvocationSchema(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 44: %w", err)
+			}
 		case 45:
 			for _, statement := range ideationCommandSchema {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {

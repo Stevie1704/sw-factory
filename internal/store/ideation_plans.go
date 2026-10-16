@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,7 @@ const (
 	// MaxBriefBytes bounds the serialized content of one brief revision.
 	MaxBriefBytes = 256 * 1024
 	// MaxPlanBytes bounds the serialized nodes of one plan revision. Node
-	// count and per-node limits belong to plan validation (#270).
+	// count and per-node limits belong to plan validation (internal/plangraph).
 	MaxPlanBytes = 1024 * 1024
 	// maxPlanTitleBytes bounds one plan-node title.
 	maxPlanTitleBytes = 256
@@ -114,8 +115,9 @@ type PlanNode struct {
 	// ID is the stable local node identity. It is independent of any external
 	// issue number.
 	ID string
-	// Kind is the provider-neutral work-item kind. Plan validation (#270) owns
-	// the accepted vocabulary; the store requires an identifier.
+	// Kind is the provider-neutral work-item kind. Plan validation
+	// (internal/plangraph) owns the accepted vocabulary; the store requires an
+	// identifier.
 	Kind string
 	// Title is the work-item title.
 	Title string
@@ -166,13 +168,10 @@ func (s *Store) SaveBriefRevision(ctx context.Context, write IdeationWrite, brie
 	if err := checkIdeationRevision(session, write); err != nil {
 		return IdeationSession{}, BriefRevision{}, err
 	}
-	revision := BriefRevision{SessionID: session.ID, Revision: session.BriefRevision + 1, Brief: brief, CreatedAt: ideationWriteTime(write)}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO ideation_brief_revisions (session_id, revision, brief, created_at) VALUES (?, ?, ?, ?)`,
-		revision.SessionID, revision.Revision, content, formatIdeationTime(revision.CreatedAt)); err != nil {
-		return IdeationSession{}, BriefRevision{}, fmt.Errorf("save brief revision %d: %w", revision.Revision, err)
+	revision, err := insertBriefRevision(ctx, tx, &session, write, brief, content)
+	if err != nil {
+		return IdeationSession{}, BriefRevision{}, err
 	}
-	session.BriefRevision = revision.Revision
-	session.ApprovalID = ""
 	updated, err := commitIdeationWrite(ctx, tx, session, write)
 	if err != nil {
 		return IdeationSession{}, BriefRevision{}, err
@@ -180,19 +179,27 @@ func (s *Store) SaveBriefRevision(ctx context.Context, write IdeationWrite, brie
 	return updated, revision, nil
 }
 
+// insertBriefRevision inserts the encoded brief as the next revision inside
+// tx and records it, with a cleared approval, on session. The caller checked
+// the session revision and commits the write.
+func insertBriefRevision(ctx context.Context, tx *sql.Tx, session *IdeationSession, write IdeationWrite, brief Brief, content string) (BriefRevision, error) {
+	revision := BriefRevision{SessionID: session.ID, Revision: session.BriefRevision + 1, Brief: brief, CreatedAt: ideationWriteTime(write)}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO ideation_brief_revisions (session_id, revision, brief, created_at) VALUES (?, ?, ?, ?)`,
+		revision.SessionID, revision.Revision, content, formatIdeationTime(revision.CreatedAt)); err != nil {
+		return BriefRevision{}, fmt.Errorf("save brief revision %d: %w", revision.Revision, err)
+	}
+	session.BriefRevision = revision.Revision
+	session.ApprovalID = ""
+	return revision, nil
+}
+
 // SavePlanRevision stores plan as the next plan revision. The plan must derive
 // from the current brief revision, and its references must resolve. A new
 // plan revision clears the current approval; older revisions stay unchanged.
 func (s *Store) SavePlanRevision(ctx context.Context, write IdeationWrite, plan PlanRevision) (IdeationSession, PlanRevision, error) {
-	if !isLowerHex(plan.ContextRevision) || len(plan.ContextRevision) < 7 || len(plan.ContextRevision) > 64 {
-		return IdeationSession{}, PlanRevision{}, errors.New("plan context revision must be a lowercase hexadecimal commit identity")
-	}
-	nodes, err := json.Marshal(plan.Nodes)
+	nodes, err := encodePlanNodes(plan)
 	if err != nil {
-		return IdeationSession{}, PlanRevision{}, fmt.Errorf("encode plan nodes: %w", err)
-	}
-	if len(nodes) > MaxPlanBytes {
-		return IdeationSession{}, PlanRevision{}, fmt.Errorf("plan is %d bytes; the limit is %d", len(nodes), MaxPlanBytes)
+		return IdeationSession{}, PlanRevision{}, err
 	}
 	tx, session, err := s.beginIdeationWrite(ctx, write)
 	if err != nil {
@@ -202,23 +209,55 @@ func (s *Store) SavePlanRevision(ctx context.Context, write IdeationWrite, plan 
 	if err := checkIdeationRevision(session, write); err != nil {
 		return IdeationSession{}, PlanRevision{}, err
 	}
-	if plan.SourceBriefRevision != session.BriefRevision || session.BriefRevision == 0 {
-		return IdeationSession{}, PlanRevision{}, fmt.Errorf("%w: plan names brief revision %d, current is %d", ErrStalePlanSource, plan.SourceBriefRevision, session.BriefRevision)
-	}
-	var content string
-	if err := tx.QueryRowContext(ctx, `SELECT brief FROM ideation_brief_revisions WHERE session_id = ? AND revision = ?`, session.ID, session.BriefRevision).Scan(&content); err != nil {
-		return IdeationSession{}, PlanRevision{}, fmt.Errorf("read source brief revision %d: %w", session.BriefRevision, err)
-	}
-	var brief Brief
-	if err := json.Unmarshal([]byte(content), &brief); err != nil {
-		return IdeationSession{}, PlanRevision{}, fmt.Errorf("decode source brief revision %d: %w", session.BriefRevision, err)
-	}
-	briefItems, err := brief.itemIDs()
+	plan, err = insertPlanRevision(ctx, tx, &session, write, plan, nodes)
 	if err != nil {
 		return IdeationSession{}, PlanRevision{}, err
 	}
-	if err := validatePlanNodes(plan.Nodes, briefItems); err != nil {
+	updated, err := commitIdeationWrite(ctx, tx, session, write)
+	if err != nil {
 		return IdeationSession{}, PlanRevision{}, err
+	}
+	return updated, plan, nil
+}
+
+// encodePlanNodes checks the context revision of plan and returns its bounded
+// stored node JSON.
+func encodePlanNodes(plan PlanRevision) (string, error) {
+	if !isLowerHex(plan.ContextRevision) || len(plan.ContextRevision) < 7 || len(plan.ContextRevision) > 64 {
+		return "", errors.New("plan context revision must be a lowercase hexadecimal commit identity")
+	}
+	nodes, err := json.Marshal(plan.Nodes)
+	if err != nil {
+		return "", fmt.Errorf("encode plan nodes: %w", err)
+	}
+	if len(nodes) > MaxPlanBytes {
+		return "", fmt.Errorf("plan is %d bytes; the limit is %d", len(nodes), MaxPlanBytes)
+	}
+	return string(nodes), nil
+}
+
+// insertPlanRevision validates plan against the current brief revision of
+// session, inserts it inside tx as the next plan revision, and records it,
+// with a cleared approval, on session. The caller checked the session
+// revision and commits the write.
+func insertPlanRevision(ctx context.Context, tx *sql.Tx, session *IdeationSession, write IdeationWrite, plan PlanRevision, nodes string) (PlanRevision, error) {
+	if plan.SourceBriefRevision != session.BriefRevision || session.BriefRevision == 0 {
+		return PlanRevision{}, fmt.Errorf("%w: plan names brief revision %d, current is %d", ErrStalePlanSource, plan.SourceBriefRevision, session.BriefRevision)
+	}
+	var content string
+	if err := tx.QueryRowContext(ctx, `SELECT brief FROM ideation_brief_revisions WHERE session_id = ? AND revision = ?`, session.ID, session.BriefRevision).Scan(&content); err != nil {
+		return PlanRevision{}, fmt.Errorf("read source brief revision %d: %w", session.BriefRevision, err)
+	}
+	var brief Brief
+	if err := json.Unmarshal([]byte(content), &brief); err != nil {
+		return PlanRevision{}, fmt.Errorf("decode source brief revision %d: %w", session.BriefRevision, err)
+	}
+	briefItems, err := brief.itemIDs()
+	if err != nil {
+		return PlanRevision{}, err
+	}
+	if err := validatePlanNodes(plan.Nodes, briefItems); err != nil {
+		return PlanRevision{}, err
 	}
 	plan.SessionID = session.ID
 	plan.Revision = session.PlanRevision + 1
@@ -227,16 +266,12 @@ func (s *Store) SavePlanRevision(ctx context.Context, write IdeationWrite, plan 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO ideation_plan_revisions (session_id, revision, source_brief_revision, context_revision, nodes, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		plan.SessionID, plan.Revision, plan.SourceBriefRevision, plan.ContextRevision, string(nodes), formatIdeationTime(plan.CreatedAt)); err != nil {
-		return IdeationSession{}, PlanRevision{}, fmt.Errorf("save plan revision %d: %w", plan.Revision, err)
+		plan.SessionID, plan.Revision, plan.SourceBriefRevision, plan.ContextRevision, nodes, formatIdeationTime(plan.CreatedAt)); err != nil {
+		return PlanRevision{}, fmt.Errorf("save plan revision %d: %w", plan.Revision, err)
 	}
 	session.PlanRevision = plan.Revision
 	session.ApprovalID = ""
-	updated, err := commitIdeationWrite(ctx, tx, session, write)
-	if err != nil {
-		return IdeationSession{}, PlanRevision{}, err
-	}
-	return updated, plan, nil
+	return plan, nil
 }
 
 // encodeBrief validates brief and returns its bounded stored JSON.
@@ -257,11 +292,29 @@ func encodeBrief(brief Brief) (string, error) {
 	return string(content), nil
 }
 
-// validatePlanNodes checks the structure the store owns: required fields,
-// unique IDs, and resolvable non-self parent, dependency, and brief
-// references. Cycle, hierarchy-shape, and size policy belong to plan
-// validation (#270).
+// validatePlanNodes checks the structure the store owns: the integrity of
+// ValidatePlanIntegrity and brief references that resolve in the source brief.
 func validatePlanNodes(nodes []PlanNode, briefItems map[string]bool) error {
+	if err := ValidatePlanIntegrity(nodes); err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		for _, reference := range node.BriefRefs {
+			if !briefItems[reference] {
+				return fmt.Errorf("plan node %q brief reference %q names no item of the source brief", node.ID, reference)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidatePlanIntegrity checks the identity and reference integrity the store
+// owns for a plan graph: at least one node, safe unique IDs, a kind and a
+// title on every node, bounded text, and parent and dependency references
+// that name another node of the plan. It does not check brief references,
+// which need the source brief. Cycle, hierarchy-shape, content, and size
+// policy belong to plan validation (internal/plangraph).
+func ValidatePlanIntegrity(nodes []PlanNode) error {
 	if len(nodes) == 0 {
 		return errors.New("plan must contain at least one node")
 	}
@@ -296,11 +349,6 @@ func validatePlanNodes(nodes []PlanNode, briefItems map[string]bool) error {
 		for _, dependency := range node.DependsOn {
 			if dependency == node.ID || !ids[dependency] {
 				return fmt.Errorf("plan node %q dependency %q must name another node of the plan", node.ID, dependency)
-			}
-		}
-		for _, reference := range node.BriefRefs {
-			if !briefItems[reference] {
-				return fmt.Errorf("plan node %q brief reference %q names no item of the source brief", node.ID, reference)
 			}
 		}
 	}

@@ -80,22 +80,32 @@ func (s *Store) AppendIdeationTurn(ctx context.Context, write IdeationWrite, tur
 	if err := checkIdeationRevision(session, write); err != nil {
 		return IdeationSession{}, IdeationTurn{}, err
 	}
-	turn.SessionID = session.ID
-	turn.SessionRevision = write.ExpectedRevision + 1
-	turn.CreatedAt = ideationWriteTime(write)
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence), 0) + 1 FROM ideation_turns WHERE session_id = ?", session.ID).Scan(&turn.Sequence); err != nil {
-		return IdeationSession{}, IdeationTurn{}, fmt.Errorf("order ideation turn %q: %w", turn.ID, err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO ideation_turns (`+ideationTurnColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		turn.SessionID, turn.ID, turn.Sequence, turn.Author, turn.Role, turn.InvocationID, turn.Body,
-		turn.SessionRevision, formatIdeationTime(turn.CreatedAt)); err != nil {
-		return IdeationSession{}, IdeationTurn{}, fmt.Errorf("append ideation turn %q: %w", turn.ID, err)
+	if turn, err = insertIdeationTurn(ctx, tx, session, write, turn); err != nil {
+		return IdeationSession{}, IdeationTurn{}, err
 	}
 	updated, err := commitIdeationWrite(ctx, tx, session, write)
 	if err != nil {
 		return IdeationSession{}, IdeationTurn{}, err
 	}
 	return updated, turn, nil
+}
+
+// insertIdeationTurn appends turn after the newest turn of session inside tx.
+// The caller validated the turn, checked the session revision, and commits
+// the write that accepts the turn.
+func insertIdeationTurn(ctx context.Context, tx *sql.Tx, session IdeationSession, write IdeationWrite, turn IdeationTurn) (IdeationTurn, error) {
+	turn.SessionID = session.ID
+	turn.SessionRevision = write.ExpectedRevision + 1
+	turn.CreatedAt = ideationWriteTime(write)
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence), 0) + 1 FROM ideation_turns WHERE session_id = ?", session.ID).Scan(&turn.Sequence); err != nil {
+		return IdeationTurn{}, fmt.Errorf("order ideation turn %q: %w", turn.ID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO ideation_turns (`+ideationTurnColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		turn.SessionID, turn.ID, turn.Sequence, turn.Author, turn.Role, turn.InvocationID, turn.Body,
+		turn.SessionRevision, formatIdeationTime(turn.CreatedAt)); err != nil {
+		return IdeationTurn{}, fmt.Errorf("append ideation turn %q: %w", turn.ID, err)
+	}
+	return turn, nil
 }
 
 // ideationTurnColumns is the column order that scanIdeationTurn decodes.

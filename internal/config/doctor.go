@@ -240,7 +240,7 @@ func safeRepositoryField(field string) string {
 		return field
 	}
 	role, index, hasIndex := strings.Cut(suffix, "[")
-	if _, known := workflow.DefaultRegistry().Role(role); known && (!hasIndex || roleKeyedRepositoryFields[parent] && validListIndex(index)) {
+	if known := workflow.IsDeclaredRole(role); known && (!hasIndex || roleKeyedRepositoryFields[parent] && validListIndex(index)) {
 		return field
 	}
 	return parent
