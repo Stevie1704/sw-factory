@@ -392,7 +392,7 @@ func newProgress(history store.IdeationHistory) *publicationProgress {
 		if operation.Kind == store.PublicationOperationCreateItem {
 			view.Title = approved[operation.NodeID]
 			view.Intermediate = !hasNode(nodes, operation.NodeID)
-			view.Reconcilable = history.Session.State == store.IdeationStatePublicationIncomplete &&
+			view.Reconcilable = reconcilableState(history.Session, approvalID) &&
 				(operation.State == store.PublicationOperationAmbiguous || operation.State == store.PublicationOperationAttempted)
 		}
 		progress.count(operation)
@@ -450,6 +450,19 @@ func approvedItems(history store.IdeationHistory, approvalID string) (map[string
 	return titles, nodes
 }
 
+// reconcilableState reports whether session can reconcile an unknown create
+// of approvalID: an incomplete publication, or a session cancelled after an
+// attempt of its current approval. A cancelled session stays cancelled.
+func reconcilableState(session store.IdeationSession, approvalID string) bool {
+	switch session.State {
+	case store.IdeationStatePublicationIncomplete:
+		return true
+	case store.IdeationStateCancelled:
+		return approvalID != "" && approvalID == session.ApprovalID
+	}
+	return false
+}
+
 // newPlanActions decides which commands the page offers. A pending command
 // hides the tracker actions, so a second click or a second tab does not
 // queue a second approval or publication behind the first.
@@ -474,7 +487,7 @@ func newPlanActions(model planPage) planActions {
 		Cancel: allows(workflow.SessionEventCancelled) &&
 			(state == store.IdeationStateApproved || state == store.IdeationStatePublishing || state == store.IdeationStatePublicationIncomplete),
 	}
-	actions.Reconcile = !busy && state == store.IdeationStatePublicationIncomplete
+	actions.Reconcile = !busy && (state == store.IdeationStatePublicationIncomplete || state == store.IdeationStateCancelled)
 	actions.Publishing = busy && state == store.IdeationStatePublishing
 	return actions
 }

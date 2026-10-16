@@ -587,6 +587,46 @@ func TestPartialPublicationShowsLinksFailuresAndRecoveryActions(t *testing.T) {
 	assertContains(t, ui.page(t), "3 items created · 3 relationships created · 0 pending")
 }
 
+// TestCancelledPublicationOffersReconciliationOnly verifies that a session
+// cancelled after an ambiguous create offers the reconcile action for that
+// create and no publish or retry, and that a reconciliation keeps the
+// session cancelled and shows its receipt.
+func TestCancelledPublicationOffersReconciliationOnly(t *testing.T) {
+	t.Parallel()
+
+	ui, result := previewedPlanUI(t)
+	ui.fake.Inject(trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-3", Err: errors.New("connection reset")})
+	ui.send(t, "approve-1", sessioncommand.KindApprove, ui.history(t).Session.Revision, approveBody(result))
+	ui.drain(t)
+	ui.send(t, "cancel-1", sessioncommand.KindCancel, ui.history(t).Session.Revision, `{"reason":"Stop."}`)
+	ui.drain(t)
+	if state := ui.history(t).Session.State; state != store.IdeationStateCancelled {
+		t.Fatalf("state = %q, want cancelled", state)
+	}
+
+	page := ui.page(t)
+	assertContains(t, page, `data-reconcile="item/n-3"`, `data-session-command="reconcile"`, "The session stays cancelled")
+	for _, unwanted := range []string{`data-session-command="publish"`, `data-session-command="cancel"`} {
+		if strings.Contains(page, unwanted) {
+			t.Fatalf("cancelled page offers %s", unwanted)
+		}
+	}
+
+	ui.send(t, "reconcile-1", sessioncommand.KindReconcile, ui.history(t).Session.Revision, `{"operation_id":"item/n-3","external_id":""}`)
+	ui.drain(t)
+	if command := ui.command(t, "reconcile-1"); command.Outcome != store.IdeationCommandApplied {
+		t.Fatalf("reconcile-1 = %#v, want applied", command)
+	}
+	if state := ui.history(t).Session.State; state != store.IdeationStateCancelled {
+		t.Fatalf("state = %q, want cancelled", state)
+	}
+	page = ui.page(t)
+	assertContains(t, page, `data-receipt="reconcile-1"`, `data-operation="item/n-3" data-state="failed"`)
+	if strings.Contains(page, `data-reconcile="item/n-3"`) {
+		t.Fatal("a settled operation is still offered for reconciliation")
+	}
+}
+
 // TestEditedAndSplitDraftIsSavedAndBrokenReferencesAreRefused verifies the
 // draft edits the editor sends: a split with repaired references becomes
 // the next plan revision, and a removal that leaves a dangling reference is

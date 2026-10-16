@@ -101,20 +101,7 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 	if session.State == store.IdeationStateCancelled {
 		return Result{Session: session, Operations: ledger}, fmt.Errorf("%w: session %q; created items stay in the tracker", ErrPublicationCancelled, session.ID)
 	}
-	receipt := store.PublicationReceipt{ID: attemptID, ApprovalID: approvalID, Outcome: store.PublicationOutcomePublished}
-	for _, operation := range ledger {
-		if operation.State != store.PublicationOperationSucceeded {
-			receipt.Outcome = store.PublicationOutcomeIncomplete
-			continue
-		}
-		if operation.Kind == store.PublicationOperationCreateItem {
-			receipt.Items = append(receipt.Items, store.PublishedItem{NodeID: operation.NodeID, ExternalID: operation.ExternalID, URL: operation.URL})
-		} else {
-			receipt.Relationships = append(receipt.Relationships, store.PublishedRelationship{
-				FromNodeID: operation.FromNodeID, ToNodeID: operation.ToNodeID, Kind: operation.RelationshipKind,
-			})
-		}
-	}
+	receipt := receiptFromLedger(attemptID, approvalID, ledger)
 	if halt != "" {
 		receipt.Outcome = store.PublicationOutcomeIncomplete
 	}
@@ -135,6 +122,27 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return Result{Operations: ledger}, err
 	}
 	return Result{Session: session, Receipt: receipt, Operations: ledger}, nil
+}
+
+// receiptFromLedger returns the receipt id of approvalID that lists every
+// item and relationship that ledger shows as succeeded. Its outcome is
+// published only when every operation succeeded.
+func receiptFromLedger(id, approvalID string, ledger []store.PublicationOperation) store.PublicationReceipt {
+	receipt := store.PublicationReceipt{ID: id, ApprovalID: approvalID, Outcome: store.PublicationOutcomePublished}
+	for _, operation := range ledger {
+		if operation.State != store.PublicationOperationSucceeded {
+			receipt.Outcome = store.PublicationOutcomeIncomplete
+			continue
+		}
+		if operation.Kind == store.PublicationOperationCreateItem {
+			receipt.Items = append(receipt.Items, store.PublishedItem{NodeID: operation.NodeID, ExternalID: operation.ExternalID, URL: operation.URL})
+		} else {
+			receipt.Relationships = append(receipt.Relationships, store.PublishedRelationship{
+				FromNodeID: operation.FromNodeID, ToNodeID: operation.ToNodeID, Kind: operation.RelationshipKind,
+			})
+		}
+	}
+	return receipt
 }
 
 // Interrupt settles an attempt that ended without a receipt while the

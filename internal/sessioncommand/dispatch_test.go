@@ -427,6 +427,40 @@ func TestIncompletePublicationIsReconciledAndRetriedThroughCommands(t *testing.T
 	}
 }
 
+// TestCancelledSessionIsReconciledThroughCommands verifies that a session
+// cancelled after an ambiguous create accepts a reconcile command, which
+// records the result in a receipt under its request ID, keeps the session
+// cancelled, and does not enable publish.
+func TestCancelledSessionIsReconciledThroughCommands(t *testing.T) {
+	t.Parallel()
+
+	c := newCoordinatorForTest(t)
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	preview := c.preview("preview-1", "session-1", revision)
+	c.fake.Inject(trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: errors.New("connection reset")})
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(preview))
+	c.drain()
+	approved := c.requireOutcome("approve-1", store.IdeationCommandApplied)
+	c.submit("cancel-1", "session-1", sessioncommand.KindCancel, approved.SessionRevision, `{"reason":"Stop."}`)
+	c.drain()
+	cancelled := c.requireOutcome("cancel-1", store.IdeationCommandApplied)
+
+	c.submit("reconcile-1", "session-1", sessioncommand.KindReconcile, cancelled.SessionRevision, `{"operation_id":"item/n-2","external_id":""}`)
+	c.drain()
+	reconciled := c.requireOutcome("reconcile-1", store.IdeationCommandApplied)
+	history := c.history("session-1")
+	if history.Session.State != store.IdeationStateCancelled || reconciled.SessionRevision != history.Session.Revision {
+		t.Fatalf("session = %#v, command = %#v; want a cancelled session at the command's revision", history.Session, reconciled)
+	}
+	if last := history.Receipts[len(history.Receipts)-1]; last.ID != "reconcile-1" || last.Outcome != store.PublicationOutcomeIncomplete {
+		t.Fatalf("receipts = %#v, want the reconciliation receipt last", history.Receipts)
+	}
+	c.submit("publish-1", "session-1", sessioncommand.KindPublish, history.Session.Revision, `{}`)
+	c.drain()
+	c.requireOutcome("publish-1", store.IdeationCommandRefused)
+}
+
 // blockingTracker blocks the first item create until release is closed.
 type blockingTracker struct {
 	*trackertest.PlanTracker

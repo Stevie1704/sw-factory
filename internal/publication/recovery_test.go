@@ -424,3 +424,98 @@ func TestCancellationStopsFutureWorkWithoutDeletingItems(t *testing.T) {
 		h.assertInertTracker()
 	})
 }
+
+// TestCancelledSessionReconcilesAnAmbiguousCreate verifies that a session
+// cancelled after an ambiguous create can still adopt the remote item or
+// confirm that none exists. Reconciliation records the identity in the ledger
+// and in a receipt, keeps the session cancelled, and never enables Publish.
+func TestCancelledSessionReconcilesAnAmbiguousCreate(t *testing.T) {
+	t.Parallel()
+
+	cancelAfterAmbiguousCreate := func(t *testing.T, fault trackertest.Fault) *harness {
+		t.Helper()
+		h := newApprovedHarness(t)
+		h.fake.Inject(fault)
+		h.publish("attempt-1")
+		if got := h.operation("item/n-2"); got.State != store.PublicationOperationAmbiguous {
+			t.Fatalf("item/n-2 = %#v, want ambiguous", got)
+		}
+		if _, err := h.store.TransitionIdeationSession(t.Context(), h.write(h.session(), workflow.SessionEventCancelled)); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	receipt := func(t *testing.T, h *harness, id string) store.PublicationReceipt {
+		t.Helper()
+		history, err := h.store.IdeationHistory(t.Context(), h.sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, receipt := range history.Receipts {
+			if receipt.ID == id {
+				return receipt
+			}
+		}
+		t.Fatalf("receipts = %#v, want %q", history.Receipts, id)
+		return store.PublicationReceipt{}
+	}
+
+	t.Run("adopt records the item", func(t *testing.T) {
+		t.Parallel()
+		h := cancelAfterAmbiguousCreate(t, trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", AfterWrite: true, Err: tracker.NewPlanError(tracker.PlanErrorAmbiguous, "timeout")})
+		var created tracker.PlanItemRef
+		for _, item := range h.fake.Items() {
+			if item.Rendered.NodeID == "n-2" {
+				created = item.Ref
+			}
+		}
+		writes := h.fake.Writes()
+		adopted, err := h.publisher().Reconcile(t.Context(), publication.Reconciliation{
+			SessionID: h.sessionID, OperationID: "item/n-2", ExternalID: created.ExternalID, ReceiptID: "reconcile-1",
+		})
+		if err != nil || adopted.State != store.PublicationOperationSucceeded || adopted.ExternalID != created.ExternalID {
+			t.Fatalf("Reconcile(adopt) = %#v, %v; want the item adopted", adopted, err)
+		}
+		recorded := receipt(t, h, "reconcile-1")
+		found := false
+		for _, item := range recorded.Items {
+			found = found || (item.NodeID == "n-2" && item.ExternalID == created.ExternalID)
+		}
+		if !found || recorded.Outcome != store.PublicationOutcomeIncomplete {
+			t.Fatalf("receipt = %#v, want an incomplete receipt that lists the adopted n-2", recorded)
+		}
+		if session := h.session(); session.State != store.IdeationStateCancelled {
+			t.Fatalf("session = %#v, want it to stay cancelled", session)
+		}
+		if _, err := h.publisher().Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-2"}); !errors.Is(err, publication.ErrNotPublishable) {
+			t.Fatalf("Publish() after reconcile error = %v, want ErrNotPublishable", err)
+		}
+		if h.fake.Writes() != writes {
+			t.Fatalf("tracker writes = %d, want %d: reconciliation never writes to the tracker", h.fake.Writes(), writes)
+		}
+	})
+
+	t.Run("confirm absent records not applied", func(t *testing.T) {
+		t.Parallel()
+		h := cancelAfterAmbiguousCreate(t, trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: context.DeadlineExceeded})
+		resolved, err := h.publisher().Reconcile(t.Context(), publication.Reconciliation{SessionID: h.sessionID, OperationID: "item/n-2", ReceiptID: "reconcile-1"})
+		if err != nil || resolved.State != store.PublicationOperationFailed {
+			t.Fatalf("Reconcile(confirm absence) = %#v, %v; want not applied", resolved, err)
+		}
+		recorded := receipt(t, h, "reconcile-1")
+		for _, item := range recorded.Items {
+			if item.NodeID == "n-2" {
+				t.Fatalf("receipt = %#v, want no n-2 item", recorded)
+			}
+		}
+		if !strings.Contains(recorded.Detail, "item/n-2") || h.session().State != store.IdeationStateCancelled {
+			t.Fatalf("receipt detail = %q, session = %s; want the reconciled operation named and the session cancelled", recorded.Detail, h.session().State)
+		}
+		if _, err := h.publisher().Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-2"}); !errors.Is(err, publication.ErrNotPublishable) {
+			t.Fatalf("Publish() after reconcile error = %v, want ErrNotPublishable", err)
+		}
+		if _, err := h.publisher().Reconcile(t.Context(), publication.Reconciliation{SessionID: h.sessionID, OperationID: "item/n-2", ReceiptID: "reconcile-2"}); !errors.Is(err, publication.ErrReconciliationRefused) {
+			t.Fatalf("second Reconcile() error = %v, want refused for a settled operation", err)
+		}
+	})
+}

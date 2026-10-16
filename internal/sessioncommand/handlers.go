@@ -547,8 +547,10 @@ func publishAttempt(ctx context.Context, env Env, command store.IdeationCommand)
 	return Applied(result.Session, detail), nil
 }
 
-// reconcile resolves one ambiguous item create. It writes only the ledger, so
-// the session revision does not change.
+// reconcile resolves one ambiguous item create. For an incomplete
+// publication it writes only the ledger, so the session revision does not
+// change. For a cancelled session it also records a receipt under the
+// request ID, and the session stays cancelled.
 func reconcile(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	if env.Publisher == nil {
 		return unsupportedPlanning(ctx, env, command), nil
@@ -562,10 +564,16 @@ func reconcile(ctx context.Context, env Env, command store.IdeationCommand) (Out
 		return Outcome{}, err
 	}
 	operation, err := env.Publisher.Reconcile(ctx, publication.Reconciliation{
-		SessionID: session.ID, OperationID: payload.OperationID, ExternalID: payload.ExternalID,
+		SessionID: session.ID, OperationID: payload.OperationID, ExternalID: payload.ExternalID, ReceiptID: command.RequestID,
 	})
 	if err != nil {
 		return Outcome{}, err
+	}
+	if session.State == store.IdeationStateCancelled {
+		if session, err = env.Store.IdeationSession(ctx, session.ID); err != nil {
+			return Outcome{}, err
+		}
+		return Applied(session, fmt.Sprintf("operation %s is %s; the session stays cancelled", operation.ID, operation.State)), nil
 	}
 	return Applied(session, fmt.Sprintf("operation %s is %s; publish again to continue", operation.ID, operation.State)), nil
 }

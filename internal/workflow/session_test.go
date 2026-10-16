@@ -89,7 +89,8 @@ func TestSessionLifecycleRejectsInvalidTransitions(t *testing.T) {
 }
 
 // TestSessionLifecycleDeclarationIsComplete verifies that every stored state is
-// covered, terminal states have no exit, and every open state can be cancelled.
+// covered, terminal states have no exit (an event may only keep the state),
+// and every open state can be cancelled.
 func TestSessionLifecycleDeclarationIsComplete(t *testing.T) {
 	t.Parallel()
 
@@ -97,8 +98,10 @@ func TestSessionLifecycleDeclarationIsComplete(t *testing.T) {
 	for _, state := range store.IdeationStates() {
 		events := lifecycle.Events(state)
 		if store.IsTerminalIdeationState(state) {
-			if len(events) != 0 {
-				t.Errorf("terminal state %s declares events %v", state, events)
+			for _, event := range events {
+				if next, _ := lifecycle.Next(state, event); next != state {
+					t.Errorf("terminal state %s leaves to %s on %s", state, next, event)
+				}
 			}
 			continue
 		}
