@@ -197,8 +197,8 @@ func (d *Dispatcher) release(command store.IdeationCommand, background bool) {
 }
 
 // apply starts command, runs its handler, and records the outcome. When the
-// coordinator stops during the handler, the command stays applying and the
-// next coordinator resumes it.
+// coordinator stops during the handler, or the handler meets a transient
+// store failure, the command stays applying and a later pass resumes it.
 func (d *Dispatcher) apply(ctx context.Context, command store.IdeationCommand) error {
 	started, err := d.Env.Store.BeginIdeationCommand(ctx, command.RequestID)
 	if errors.Is(err, store.ErrIdeationCommandSettled) {
@@ -214,6 +214,9 @@ func (d *Dispatcher) apply(ctx context.Context, command store.IdeationCommand) e
 		outcome, err = d.run(ctx, started)
 		if err != nil && ctx.Err() != nil {
 			return nil
+		}
+		if store.IsTransient(err) {
+			return fmt.Errorf("apply session command %q: %w", started.RequestID, err)
 		}
 		if err != nil {
 			outcome = d.outcomeOf(context.WithoutCancel(ctx), started, err)
@@ -239,8 +242,8 @@ func (d *Dispatcher) run(ctx context.Context, command store.IdeationCommand) (Ou
 }
 
 // outcomeOf turns a handler error into the final outcome. A revision
-// conflict names the current revision; every other error is a refusal that
-// explains itself.
+// conflict names the current revision; every other error that is not
+// transient is a refusal that explains itself.
 func (d *Dispatcher) outcomeOf(ctx context.Context, command store.IdeationCommand, err error) Outcome {
 	var conflict *store.IdeationRevisionConflictError
 	if errors.As(err, &conflict) {
