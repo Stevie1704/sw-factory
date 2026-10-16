@@ -169,6 +169,8 @@ type snapshotsForTest struct {
 	root    string
 	mu      sync.Mutex
 	removed []string
+	// failRemovals is the number of next removals that fail.
+	failRemovals int
 }
 
 // CreateContextSnapshot creates one snapshot directory at the fixed revision.
@@ -187,6 +189,10 @@ func (s *snapshotsForTest) CreateContextSnapshot(_ context.Context, _, targetBra
 func (s *snapshotsForTest) RemoveContextSnapshot(_ context.Context, _ string, snapshot gitadapter.ContextSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failRemovals > 0 {
+		s.failRemovals--
+		return errors.New("snapshot removal failed")
+	}
 	s.removed = append(s.removed, snapshot.Worktree)
 	return os.RemoveAll(snapshot.Worktree)
 }
@@ -795,4 +801,64 @@ func TestIdeationPacketMarksACorrectedAnswer(t *testing.T) {
 		packet.Turns[2].Corrects != "turn-1" || packet.Turns[0].Corrects != "" {
 		t.Fatalf("packet turns = %s, want turn-2 marked as the correction of turn-1", data)
 	}
+}
+
+// TestSessionRolesRetryResourceCleanupOfClosedInvocations verifies that the
+// worker, snapshot, and Git projection of a closed invocation are released by
+// a later reconcile pass when the first cleanup failed, and when the
+// coordinator stopped between the close and the cleanup.
+func TestSessionRolesRetryResourceCleanupOfClosedInvocations(t *testing.T) {
+	t.Run("cleanup fails once", func(t *testing.T) {
+		fixture := newSessionFixture(t, config.HarnessCodex)
+		invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.report(invocation, ideationResultForTest())
+		fixture.snapshots.failRemovals = 1
+		if err := fixture.roles().Reconcile(t.Context()); err == nil {
+			t.Fatal("Reconcile() error = nil, want the failed cleanup reported")
+		}
+		if got := fixture.invocation(invocation.ID); got.Status != store.SessionInvocationAccepted || !got.ResourcesReleasedAt.IsZero() {
+			t.Fatalf("invocation after failed cleanup = %#v, want accepted with resources outstanding", got)
+		}
+		if err := fixture.roles().Reconcile(t.Context()); err != nil {
+			t.Fatalf("second Reconcile() error = %v", err)
+		}
+		if got := fixture.invocation(invocation.ID); got.ResourcesReleasedAt.IsZero() {
+			t.Fatalf("invocation after retry = %#v, want resources released", got)
+		}
+		if len(fixture.snapshots.removed) != 1 || fixture.snapshots.removed[0] != invocation.SnapshotPath {
+			t.Fatalf("removed snapshots = %v, want %q removed by the retry", fixture.snapshots.removed, invocation.SnapshotPath)
+		}
+		if _, err := os.Stat(invocation.SnapshotPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("snapshot stat error = %v, want the snapshot gone", err)
+		}
+		stops := len(fixture.worker.stops)
+		if err := fixture.roles().Reconcile(t.Context()); err != nil || len(fixture.worker.stops) != stops {
+			t.Fatalf("third Reconcile() = %v with stops %v, want no repeated cleanup", err, fixture.worker.stops)
+		}
+	})
+	t.Run("coordinator stopped after close", func(t *testing.T) {
+		fixture := newSessionFixture(t, config.HarnessClaude)
+		invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.store.CloseSessionInvocation(t.Context(), store.SessionInvocationEnd{
+			InvocationID: invocation.ID, Status: store.SessionInvocationCancelled, FailureKind: "cancelled", Reason: "test",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		fixture.restart()
+		if err := fixture.roles().Reconcile(t.Context()); err != nil {
+			t.Fatalf("Reconcile() after restart error = %v", err)
+		}
+		got := fixture.invocation(invocation.ID)
+		if got.ResourcesReleasedAt.IsZero() || len(fixture.worker.stops) != 1 || fixture.worker.stops[0] != invocation.WorkerID ||
+			len(fixture.snapshots.removed) != 1 || len(fixture.worker.cancelled) != 1 {
+			t.Fatalf("invocation %#v, stops %v, removed %v, cancelled %v; want the closed invocation cleaned",
+				got, fixture.worker.stops, fixture.snapshots.removed, fixture.worker.cancelled)
+		}
+	})
 }

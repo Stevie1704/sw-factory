@@ -111,6 +111,10 @@ type SessionInvocation struct {
 	CreatedAt time.Time
 	// UpdatedAt is when the invocation last changed.
 	UpdatedAt time.Time
+	// ResourcesReleasedAt is when the coordinator removed the worker, the
+	// snapshot, and the Git projection of an ended invocation. It is zero
+	// while the invocation is active or its cleanup is still outstanding.
+	ResourcesReleasedAt time.Time
 }
 
 // SessionRoleResult is one validated role result for the coordinator to apply.
@@ -146,7 +150,7 @@ type SessionInvocationEnd struct {
 const sessionInvocationColumns = `session_id, id, role, trigger_id, session_revision, brief_revision, context_revision,
 	harness, model, reasoning_effort, prompt_version, prompt_sha256, image, image_digest, credential_store_id,
 	worker_id, native_session_id, resumed_from, snapshot_path, invocation_directory, result_directory,
-	status, failure_kind, status_reason, payload, created_at, updated_at`
+	status, failure_kind, status_reason, payload, created_at, updated_at, resources_released_at`
 
 // sessionInvocationSchema creates the additive table of schema version 44.
 // The partial indexes enforce one active invocation per session and one
@@ -197,6 +201,39 @@ func migrateSessionInvocationSchema(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// migrateSessionResourceReleaseSchema adds the resource-release marker of
+// schema version 47. Invocations that ended before the upgrade stay
+// unreleased, so the next reconcile pass repeats their idempotent cleanup.
+func migrateSessionResourceReleaseSchema(ctx context.Context, tx *sql.Tx) error {
+	found, err := tableHasColumn(ctx, tx, "ideation_invocations", "resources_released_at")
+	if err != nil || found {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, "ALTER TABLE ideation_invocations ADD COLUMN resources_released_at TEXT")
+	return err
+}
+
+// tableHasColumn reports whether table has column inside tx.
+func tableHasColumn(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return false, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	found := false
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return false, fmt.Errorf("read %s column: %w", table, err)
+		}
+		found = found || name == column
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return false, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	return found, nil
+}
+
 // StartSessionInvocation records invocation as the session's active role
 // invocation and commits write, which normally moves the session to
 // role_active. The invocation is pinned to the resulting session revision. It
@@ -234,7 +271,7 @@ func (s *Store) StartSessionInvocation(ctx context.Context, write IdeationWrite,
 	invocation.CreatedAt = ideationWriteTime(write)
 	invocation.UpdatedAt = invocation.CreatedAt
 	if _, err := tx.ExecContext(ctx, `INSERT INTO ideation_invocations (`+sessionInvocationColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 		invocation.SessionID, invocation.ID, invocation.Role, invocation.TriggerID, invocation.SessionRevision,
 		invocation.BriefRevision, invocation.ContextRevision, invocation.Harness, invocation.Model,
 		invocation.ReasoningEffort, invocation.PromptVersion, invocation.PromptSHA256, invocation.Image,
@@ -280,6 +317,36 @@ func (s *Store) SessionInvocation(ctx context.Context, invocationID string) (Ses
 // first. Restart recovery inspects each of them.
 func (s *Store) ActiveSessionInvocations(ctx context.Context) ([]SessionInvocation, error) {
 	return s.querySessionInvocations(ctx, `SELECT `+sessionInvocationColumns+` FROM ideation_invocations WHERE status = 'active' ORDER BY created_at, id`)
+}
+
+// UnreleasedSessionInvocations returns every ended invocation whose worker,
+// snapshot, or Git projection may still exist, oldest first. Each reconcile
+// pass retries their cleanup.
+func (s *Store) UnreleasedSessionInvocations(ctx context.Context) ([]SessionInvocation, error) {
+	return s.querySessionInvocations(ctx, `SELECT `+sessionInvocationColumns+` FROM ideation_invocations
+		WHERE status != 'active' AND resources_released_at IS NULL ORDER BY created_at, id`)
+}
+
+// MarkSessionInvocationResourcesReleased records that the coordinator removed
+// the resources of an ended invocation. The coordinator calls it only after
+// the cleanup succeeded. Marking a released invocation again keeps the first
+// time; an active invocation is refused with ErrSessionInvocationActive.
+func (s *Store) MarkSessionInvocationResourcesReleased(ctx context.Context, invocationID string, at time.Time) (SessionInvocation, error) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE ideation_invocations SET resources_released_at = ?
+		WHERE id = ? AND status != 'active' AND resources_released_at IS NULL`, formatIdeationTime(at), invocationID); err != nil {
+		return SessionInvocation{}, fmt.Errorf("mark resources of session invocation %q released: %w", invocationID, err)
+	}
+	invocation, err := s.SessionInvocation(ctx, invocationID)
+	if err != nil {
+		return SessionInvocation{}, err
+	}
+	if invocation.Status == SessionInvocationActive {
+		return SessionInvocation{}, fmt.Errorf("%w: %q", ErrSessionInvocationActive, invocationID)
+	}
+	return invocation, nil
 }
 
 // SessionInvocations returns every invocation of one session, ended or
@@ -506,13 +573,14 @@ func (s *Store) querySessionInvocations(ctx context.Context, query string, args 
 func scanSessionInvocation(row interface{ Scan(...any) error }, invocationID string) (SessionInvocation, error) {
 	var invocation SessionInvocation
 	var createdAt, updatedAt string
+	var releasedAt sql.NullString
 	err := row.Scan(&invocation.SessionID, &invocation.ID, &invocation.Role, &invocation.TriggerID,
 		&invocation.SessionRevision, &invocation.BriefRevision, &invocation.ContextRevision, &invocation.Harness,
 		&invocation.Model, &invocation.ReasoningEffort, &invocation.PromptVersion, &invocation.PromptSHA256,
 		&invocation.Image, &invocation.ImageDigest, &invocation.CredentialStoreID, &invocation.WorkerID,
 		&invocation.NativeSessionID, &invocation.ResumedFrom, &invocation.SnapshotPath, &invocation.InvocationDirectory,
 		&invocation.ResultDirectory, &invocation.Status, &invocation.FailureKind, &invocation.StatusReason,
-		&invocation.Payload, &createdAt, &updatedAt)
+		&invocation.Payload, &createdAt, &updatedAt, &releasedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionInvocation{}, fmt.Errorf("%w: %q", ErrSessionInvocationNotFound, invocationID)
 	}
@@ -524,6 +592,11 @@ func scanSessionInvocation(row interface{ Scan(...any) error }, invocationID str
 	}
 	if invocation.UpdatedAt, err = parseIdeationTime(updatedAt); err != nil {
 		return SessionInvocation{}, err
+	}
+	if releasedAt.Valid {
+		if invocation.ResourcesReleasedAt, err = parseIdeationTime(releasedAt.String); err != nil {
+			return SessionInvocation{}, err
+		}
 	}
 	return invocation, nil
 }

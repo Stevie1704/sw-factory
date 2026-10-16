@@ -1177,6 +1177,12 @@ Schema version 46 adds the correction link of a conversation turn (ADR 0026):
 `ideation_turns.corrects` names the earlier user answer that a turn changes.
 Existing turns correct nothing.
 
+Schema version 47 adds the resource-release marker of a session-role
+invocation (ADR 0023): `ideation_invocations.resources_released_at` is set
+only after the coordinator removed the worker, snapshot, and Git projection
+of an ended invocation. Invocations that ended before the upgrade stay
+unreleased, so the next reconcile pass repeats their idempotent cleanup.
+
 ## Local run inspection
 
 Use the read-only CLI to inspect a named historical run while another run is
