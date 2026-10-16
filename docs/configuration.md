@@ -1487,7 +1487,10 @@ volumes; removes generated invocation and result directories; removes run
 worktrees, local run branches, and private Git projections; removes the
 operational database with its SQLite sidecars and only the migration backups
 proven to belong to that exact database; removes the coordinator lock; and
-removes the selected host configuration last. Reset holds that lock for the
+removes the selected host configuration last. The same pass removes the
+resources of every ideation session role: its worker containers and role
+volumes, the snapshot worktree and Git projection of a role that was active
+when the coordinator stopped, and the session packet directories. Reset holds that lock for the
 whole confirmed pass. Once the store is gone, a concurrent
 `factory start` cannot pass its read-only startup diagnosis, so unlinking the
 lock before the configuration preserves the configuration if unlinking fails.

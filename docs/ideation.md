@@ -135,10 +135,12 @@ session is evidence of what was approved and created; keep it while the
 items matter. See [Run-artifact cleanup](configuration.md#run-artifact-cleanup)
 and [Complete local reset](configuration.md#complete-local-reset).
 
-Neither command removes the Docker role volumes of session roles yet
-(`factory-role-ideation-*` and `factory-role-planning-*`), nor the snapshot
-worktree of a role that was active when the coordinator stopped. Remove them
-by hand after a reset, with the operator's authority.
+`factory reset` also removes the resources of every session role: the Docker
+role volumes (`factory-role-ideation-*` and `factory-role-planning-*`), the
+snapshot worktree of a role that was active when the coordinator stopped, and
+the session packet directories. Its preview lists them per session.
+`factory cleanup` does not remove them: an open session resumes its role from
+the role volume on the next turn.
 
 ## Evidence
 

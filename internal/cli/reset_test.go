@@ -135,3 +135,72 @@ func saveResetRun(t *testing.T, operationalPath, repositoryPath, worktreePath st
 		t.Fatal(err)
 	}
 }
+
+// TestResetCommandPrintsSessionRoleResources verifies that the reset plan
+// names the worker, role, and snapshot targets of an ideation session role,
+// so the operator sees them before confirmation.
+func TestResetCommandPrintsSessionRoleResources(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "host", "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	snapshotPath := filepath.Join(root, "worktrees", "invocation-1")
+	operationalPath := filepath.Join(root, "state", "factory.db")
+	for _, path := range []string{repositoryPath, snapshotPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saveResetHost(t, configPath, repositoryPath, operationalPath)
+	saveResetSessionRole(t, operationalPath, repositoryPath, snapshotPath)
+
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"reset", "--config", configPath}, &output, &output); code != 2 {
+		t.Fatalf("reset exit code = %d, want 2; output = %s", code, output.String())
+	}
+	for _, fragment := range []string{
+		"reset sessions: 1",
+		"reset session: session-1",
+		"reset session worker: session-session-1-ideation",
+		"reset session worker role: ideation",
+		"reset session snapshot: " + snapshotPath,
+	} {
+		if !strings.Contains(output.String(), fragment) {
+			t.Fatalf("reset output = %q, missing %q", output.String(), fragment)
+		}
+	}
+}
+
+// saveResetSessionRole stores session-1 with an ideation invocation that was
+// active when the coordinator stopped.
+func saveResetSessionRole(t *testing.T, operationalPath, repositoryPath, snapshotPath string) {
+	t.Helper()
+	opened, err := store.Open(context.Background(), operationalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	session, err := opened.CreateIdeationSession(context.Background(), store.IdeationSession{
+		ID: "session-1", RepositoryPath: repositoryPath, State: store.IdeationStateAwaitingUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err = opened.AppendIdeationTurn(context.Background(), store.IdeationWrite{
+		SessionID: session.ID, ExpectedRevision: session.Revision, State: store.IdeationStateAwaitingUser,
+	}, store.IdeationTurn{ID: "turn-1", Author: store.IdeationTurnAuthorUser, Body: "Export run history."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := opened.StartSessionInvocation(context.Background(), store.IdeationWrite{
+		SessionID: session.ID, ExpectedRevision: session.Revision, State: store.IdeationStateRoleActive,
+	}, store.SessionInvocation{
+		ID: "invocation-1", Role: "ideation", TriggerID: "turn-1", ContextRevision: "0123456789abcdef0123456789abcdef01234567",
+		Harness: "codex", Model: "gpt", PromptVersion: "ideation-v2", PromptSHA256: "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d",
+		Image: "ghcr.io/example/worker", ImageDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		WorkerID: "session-session-1-ideation", SnapshotPath: snapshotPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

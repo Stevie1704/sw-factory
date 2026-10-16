@@ -348,6 +348,7 @@ func (w *headlessRemovalWorker) CheckDocker(context.Context) error { return w.do
 // headlessRemovalGit records and performs exact temporary worktree removal.
 type headlessRemovalGit struct {
 	removed   []gitadapter.Workspace
+	snapshots []gitadapter.ContextSnapshot
 	checkErr  error
 	removeErr error
 }
