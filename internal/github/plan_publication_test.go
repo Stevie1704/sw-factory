@@ -12,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/publication"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -242,4 +243,31 @@ func TestPublishResumesAfterPartialCreationAndLinkFailures(t *testing.T) {
 		t.Fatalf("sub-issues = %v, blocked by = %v; want every link once", gh.SubIssues(), gh.BlockedBy())
 	}
 	assertInertIssues(t, gh, opened)
+}
+
+// TestPreviewRefusesNativeLinksForAReadOnlyAccount verifies that a parent and
+// child plan on a host with native sub-issues fails preflight with a typed
+// permission error when the account has read access only, before approval
+// and without any write. It does not fall back to textual links.
+func TestPreviewRefusesNativeLinksForAReadOnlyAccount(t *testing.T) {
+	t.Parallel()
+
+	gh := githubtest.New(t, true)
+	gh.SetRepository(githubtest.ReadOnlyRepository)
+	_, err := (&github.GhClient{Runner: gh}).PreflightPlan(t.Context(), planRepository, decomposedGraph())
+	if kind, ok := tracker.PlanErrorKindOf(err); !ok || kind != tracker.PlanErrorPermission {
+		t.Fatalf("PreflightPlan() error = %v, want a typed permission error", err)
+	}
+	if !strings.Contains(err.Error(), "triage") {
+		t.Fatalf("PreflightPlan() error = %v, want the missing triage access named", err)
+	}
+	if writes := gh.Writes(); len(writes) != 0 {
+		t.Fatalf("writes = %v, want none", writes)
+	}
+
+	gh.SetRepository(`{"has_issues":true,"permissions":{"pull":true,"triage":true}}`)
+	preview, err := (&github.GhClient{Runner: gh}).PreflightPlan(t.Context(), planRepository, decomposedGraph())
+	if err != nil || preview.Relationships[0].Mode != tracker.PlanRelationshipNative {
+		t.Fatalf("PreflightPlan() with triage = %#v, %v; want native links", preview.Relationships, err)
+	}
 }

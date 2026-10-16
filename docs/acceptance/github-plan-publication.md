@@ -35,14 +35,21 @@ bytes.
    relationship mapping show the mode, so publication never changes it after
    approval. If the capability changes later, the next preflight renders
    different bytes, and publication stops with a stale-approval error.
-3. Limits: a title longer than 256 characters or a body longer than 65,536
+3. Native link access: when the plan uses a native sub-issue or blocking
+   dependency, the repository response must grant `triage`, `push`,
+   `maintain`, or `admin`. Native links need triage access or higher, and a
+   read-only account can open issues but cannot link them. Without that
+   access, preflight returns a typed `permission` error before approval. It
+   does not switch to the textual fallback, because the host offers the
+   native relationship.
+4. Limits: a title longer than 256 characters or a body longer than 65,536
    characters is a typed `invalid_mapping` error. With native sub-issues, more
    than 100 sub-issues for one parent or more than eight nested levels is a
    typed `unsupported_capability` error.
 
-GitHub does not document a permission rule or a count limit for links. A
-rejected link at publication time is an HTTP 403 or 422, which the adapter
-reports as a typed no-change error.
+GitHub does not document a count limit for links. A rejected link at
+publication time is an HTTP 403 or 422, which the adapter reports as a typed
+no-change error.
 
 ### Correlation and reconciliation
 

@@ -34,6 +34,11 @@ const WritableRepository = `{"has_issues":true,"archived":false,"permissions":{"
 // with native sub-issues and blocking dependencies.
 const NativeCapabilities = `{"data":{"__type":{"fields":[{"name":"title"},{"name":"subIssues"},{"name":"parent"},{"name":"blockedBy"},{"name":"blocking"}]}}}`
 
+// ReadOnlyRepository is the repository response of a target where the
+// account has read access only: it can open issues but cannot link them as
+// sub-issues or blocking dependencies.
+const ReadOnlyRepository = `{"has_issues":true,"archived":false,"permissions":{"pull":true,"triage":false,"push":false,"maintain":false,"admin":false}}`
+
 // LegacyCapabilities is the introspection answer of a GitHub host without
 // either relationship.
 const LegacyCapabilities = `{"data":{"__type":{"fields":[{"name":"title"},{"name":"body"}]}}}`
@@ -65,6 +70,8 @@ type Scripted struct {
 	t         testing.TB
 	mu        sync.Mutex
 	native    bool
+	// repository is the repository response; empty means WritableRepository.
+	repository string
 	issues    []Issue
 	subIssues map[int][]int
 	blockedBy map[int][]int
@@ -89,6 +96,14 @@ func (g *Scripted) SetNative(native bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.native = native
+}
+
+// SetRepository replaces the repository response, for example with
+// ReadOnlyRepository for an account without triage access.
+func (g *Scripted) SetRepository(response string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.repository = response
 }
 
 // FailOnce fails the next write with key: "create:<title>",
@@ -186,6 +201,8 @@ func (g *Scripted) Run(ctx context.Context, args []string, input []byte) ([]byte
 			return []byte(NativeCapabilities), nil
 		}
 		return []byte(LegacyCapabilities), nil
+	case path == "" && g.repository != "":
+		return []byte(g.repository), nil
 	case path == "":
 		return []byte(WritableRepository), nil
 	case path == "/issues" && method == "GET":

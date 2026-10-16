@@ -51,7 +51,8 @@ func (c *GhClient) PreflightPlan(ctx context.Context, repository tracker.Reposit
 	if err := validatePlanRepository(repository); err != nil {
 		return tracker.PlanPreview{}, err
 	}
-	if err := c.checkIssueCreation(ctx, repository); err != nil {
+	access, err := c.checkIssueCreation(ctx, repository)
+	if err != nil {
 		return tracker.PlanPreview{}, err
 	}
 	modes, err := c.relationshipModes(ctx, graph)
@@ -60,6 +61,9 @@ func (c *GhClient) PreflightPlan(ctx context.Context, repository tracker.Reposit
 	}
 	relationships, err := planRelationships(graph, modes)
 	if err != nil {
+		return tracker.PlanPreview{}, err
+	}
+	if err := checkNativeLinkAccess(repository, access, relationships); err != nil {
 		return tracker.PlanPreview{}, err
 	}
 	if err := checkSubIssueLimits(graph, modes); err != nil {
@@ -89,24 +93,53 @@ type planRepositoryResponse struct {
 	HasIssues   bool `json:"has_issues"`
 	Archived    bool `json:"archived"`
 	Permissions struct {
-		Pull bool `json:"pull"`
+		Pull     bool `json:"pull"`
+		Triage   bool `json:"triage"`
+		Push     bool `json:"push"`
+		Maintain bool `json:"maintain"`
+		Admin    bool `json:"admin"`
 	} `json:"permissions"`
 }
 
+// canLinkIssues reports whether the account has triage access or higher,
+// which native sub-issues and blocking dependencies require.
+func (r planRepositoryResponse) canLinkIssues() bool {
+	return r.Permissions.Triage || r.Permissions.Push || r.Permissions.Maintain || r.Permissions.Admin
+}
+
 // checkIssueCreation reads the repository and returns a typed error when the
-// account cannot open issues there.
-func (c *GhClient) checkIssueCreation(ctx context.Context, repository tracker.Repository) error {
+// account cannot open issues there. It returns the repository response, so
+// preflight can check the access that native links need.
+func (c *GhClient) checkIssueCreation(ctx context.Context, repository tracker.Repository) (planRepositoryResponse, error) {
 	var response planRepositoryResponse
 	if err := c.callJSON(ctx, []string{"api", "repos/" + repository.String()}, nil, &response); err != nil {
-		return fmt.Errorf("read repository %s: %w", repository, classifyPlanError(err))
+		return response, fmt.Errorf("read repository %s: %w", repository, classifyPlanError(err))
 	}
 	switch {
 	case !response.Permissions.Pull:
-		return tracker.NewPlanError(tracker.PlanErrorPermission, "the authenticated account cannot read %s", repository)
+		return response, tracker.NewPlanError(tracker.PlanErrorPermission, "the authenticated account cannot read %s", repository)
 	case response.Archived:
-		return tracker.NewPlanError(tracker.PlanErrorPermission, "%s is archived and read-only", repository)
+		return response, tracker.NewPlanError(tracker.PlanErrorPermission, "%s is archived and read-only", repository)
 	case !response.HasIssues:
-		return tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability, "%s has issues disabled", repository)
+		return response, tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability, "%s has issues disabled", repository)
+	}
+	return response, nil
+}
+
+// checkNativeLinkAccess returns a typed permission error when the plan uses a
+// native relationship and the account has less than triage access. A
+// read-only account can open issues but cannot link them, so preflight stops
+// before approval instead of failing after the issues exist. It does not
+// switch to the textual fallback: the host offers the native relationship.
+func checkNativeLinkAccess(repository tracker.Repository, access planRepositoryResponse, relationships []tracker.PlanRelationshipMapping) error {
+	if access.canLinkIssues() {
+		return nil
+	}
+	for _, relationship := range relationships {
+		if relationship.Mode == tracker.PlanRelationshipNative {
+			return tracker.NewPlanError(tracker.PlanErrorPermission,
+				"native %s links in %s need triage access or higher; the authenticated account has read access only", relationship.Kind, repository)
+		}
 	}
 	return nil
 }

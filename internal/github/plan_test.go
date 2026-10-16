@@ -281,6 +281,7 @@ func TestPreflightPlanReportsTypedErrorsBeforeAnyWrite(t *testing.T) {
 		{"repository hidden", singleItemGraph(), []string{""}, []error{errors.New("gh api repos/example/project: HTTP 404: Not Found")}, tracker.PlanErrorPermission},
 		{"title too long", longTitle, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
 		{"body too long", longBody, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
+		{"read-only account with native links", decomposedGraph(), []string{githubtest.ReadOnlyRepository, nativeCapabilities}, nil, tracker.PlanErrorPermission},
 		{"too many sub-issues", wide, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
 		{"sub-issues nested too deep", deep, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
 	} {
