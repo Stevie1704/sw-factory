@@ -19,7 +19,9 @@
 // values. The form is marked data-dirty while it has unsent input, which
 // pauses the automatic page refresh, so a refresh never wipes typed input.
 // The outcome is written into the form's [data-command-status] element, and
-// a "factory:command" event with the answer is sent from the form.
+// a "factory:command" event with the answer is sent from the form. When the
+// UI server cannot be reached, a "factory:command-unreachable" event is sent
+// instead and the form keeps its request ID for the resend.
 (function () {
   "use strict";
 
@@ -172,6 +174,7 @@
         if (status) {
           status.textContent = "UI server unreachable: submit again to retry the same request";
         }
+        form.dispatchEvent(new CustomEvent("factory:command-unreachable", { bubbles: true }));
       });
     });
   }

@@ -11,7 +11,8 @@
 // the coordinator validates it again and saves the next plan revision.
 //
 // A form with data-single-submit disables its button while its command is
-// open, so a second click cannot send a second request. Every command that
+// open, so a second click cannot send a second request. A lost answer
+// enables it again, so the user can resend the same request. Every command that
 // the coordinator applied reloads the page, so the page shows the new state.
 (function () {
   "use strict";
@@ -76,7 +77,10 @@
     this.root = root;
     this.draft = draft;
     this.nodes = draft.nodes.map(copyNode);
+    // requestID is kept after a lost answer, so the next Save replays it;
+    // inFlight is set only while a request waits for its answer.
     this.requestID = "";
+    this.inFlight = false;
     this.form = element("form");
     this.form.className = "plan-edit-form";
     this.form.noValidate = true;
@@ -291,10 +295,11 @@
     this.showState();
   };
 
-  // showState enables save only when no reference waits for a repair.
+  // showState enables save only when no reference waits for a repair and no
+  // request is in flight. A request ID kept for a replay does not disable it.
   Editor.prototype.showState = function () {
     var open = this.openRepairs();
-    this.save.disabled = open > 0 || this.nodes.length === 0 || this.requestID !== "";
+    this.save.disabled = open > 0 || this.nodes.length === 0 || this.inFlight;
     if (open > 0) {
       this.status.textContent = open + " reference(s) need a repair before you can save.";
     } else if (this.nodes.length === 0) {
@@ -307,7 +312,7 @@
   // onSubmit sends the complete draft as one edit_draft command.
   Editor.prototype.onSubmit = function (event) {
     event.preventDefault();
-    if (this.openRepairs() > 0 || !window.factoryCommands) {
+    if (this.openRepairs() > 0 || this.inFlight || !window.factoryCommands) {
       return;
     }
     // The request ID stays until an answer arrives, so a resend after a
@@ -316,6 +321,7 @@
       this.requestID = window.factoryCommands.newRequestID();
     }
     var editor = this;
+    editor.inFlight = true;
     editor.showState();
     editor.status.textContent = "sending";
     window.factoryCommands.submit({
@@ -325,6 +331,7 @@
       expected_revision: editor.draft.expected_revision,
       payload: { nodes: editor.nodes.map(payloadNode) }
     }).then(function (answer) {
+      editor.inFlight = false;
       editor.requestID = "";
       if (answer.outcome === "applied") {
         delete editor.form.dataset.dirty;
@@ -335,6 +342,7 @@
       editor.status.textContent = (answer.outcome || answer.state) + ": " + (answer.detail || "") +
         (answer.outcome === "conflict" ? " Your edits stay here; copy what you need, then discard and edit again." : "");
     }, function () {
+      editor.inFlight = false;
       editor.showState();
       editor.status.textContent = "UI server unreachable: save again to retry the same request";
     });
@@ -488,6 +496,13 @@
     }
   }, true);
 
+  // enableButtons enables every button of form again.
+  function enableButtons(form) {
+    Array.prototype.forEach.call(form.querySelectorAll("button"), function (control) {
+      control.disabled = false;
+    });
+  }
+
   // An applied command changed the session, so the page reads it again. Any
   // other answer re-enables the form; its status shows the reason.
   document.addEventListener("factory:command", function (event) {
@@ -496,9 +511,12 @@
       window.location.reload();
       return;
     }
-    Array.prototype.forEach.call(event.target.querySelectorAll("button"), function (control) {
-      control.disabled = false;
-    });
+    enableButtons(event.target);
+  });
+
+  // A lost answer re-enables the form, so a resend repeats the same request.
+  document.addEventListener("factory:command-unreachable", function (event) {
+    enableButtons(event.target);
   });
 
   startEditors();
