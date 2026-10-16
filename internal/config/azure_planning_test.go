@@ -26,7 +26,7 @@ repositories:
       planning:
         levels:
           - type: Epic
-            kinds: [spec]
+            kinds: [parent]
           - type: Feature
             required: true
           - type: Product Backlog Item
@@ -68,13 +68,13 @@ func TestValidateHostRejectsAnInvalidAzureDevOpsPlanMapping(t *testing.T) {
 	}{
 		{name: "no levels", mapping: config.AzurePlanMapping{}},
 		{name: "empty type", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: " ", Kinds: []string{"task"}}}}},
-		{name: "repeated type", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"spec"}}, {Type: "epic", Kinds: []string{"task"}}}}},
+		{name: "repeated type", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"parent"}}, {Type: "epic", Kinds: []string{"task"}}}}},
 		{name: "repeated kind", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"task"}}, {Type: "User Story", Kinds: []string{"task"}}}}},
 		{name: "unsafe kind", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"a kind"}}}}},
 		{name: "no kind", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Feature", Required: true}}}},
-		{name: "rendered title field", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"spec"}, Fields: map[string]string{"System.Title": "x"}}}}},
-		{name: "tags field", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"spec"}, Fields: map[string]string{"system.tags": "agent-ready"}}}}},
-		{name: "empty field name", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"spec"}, Fields: map[string]string{" ": "x"}}}}},
+		{name: "rendered title field", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"parent"}, Fields: map[string]string{"System.Title": "x"}}}}},
+		{name: "tags field", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"parent"}, Fields: map[string]string{"system.tags": "agent-ready"}}}}},
+		{name: "empty field name", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"parent"}, Fields: map[string]string{" ": "x"}}}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -37,13 +37,13 @@ type AzurePlanLevel struct {
 }
 
 // AgileAzurePlanMapping returns the mapping that applies when a registration
-// configures none: the Agile process with Epic, an optional Feature level, and
-// User Story.
+// configures none: the Agile process with a plan parent as an Epic, an
+// optional Feature level, and plan tasks and investigations as User Stories.
 func AgileAzurePlanMapping() AzurePlanMapping {
 	return AzurePlanMapping{Levels: []AzurePlanLevel{
-		{Type: "Epic", Kinds: []string{"epic", "spec"}},
-		{Type: "Feature", Kinds: []string{"feature", "parent"}},
-		{Type: "User Story", Kinds: []string{"story", "task", "investigation"}},
+		{Type: "Epic", Kinds: []string{"parent"}},
+		{Type: "Feature"},
+		{Type: "User Story", Kinds: []string{"task", "investigation"}},
 	}}
 }
 
