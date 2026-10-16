@@ -111,7 +111,9 @@ flow.
 - **The approval is refused as stale.** Preview again and approve what you
   now see. When publication is refused because the tracker mapping changed
   after approval, save the plan again in the editor; this returns the plan
-  to review, so you can preview and approve it.
+  to review, so you can preview and approve it. An incomplete publication
+  cannot return to review: when its mapping changed, a retry is refused and
+  only cancel remains. Items that already exist stay in the tracker.
 - **Publication is incomplete.** Retry it. A retry resumes the same approved
   content and looks for each earlier item by its correlation key before it
   creates anything. When an item create has an unknown outcome and no item

@@ -88,7 +88,7 @@ send them for the human (see `factory guide authorization`).
 | HTTP 503 `unavailable` | No live coordinator. Run `factory start`, then submit again. Pages stay readable. |
 | HTTP 409 `conflict` | Another tab or role changed the session. Reload the page and decide again. |
 | Approval refused: the rendered publication changed since the preview | Preview again, review the new preview, approve. |
-| Publication refused: the approval does not bind the current rendered publication | The tracker mapping or capability changed after approval. Save the plan again in the editor, preview, and approve. |
+| Publication refused: the approval does not bind the current rendered publication | The tracker mapping or capability changed after approval. Save the plan again in the editor, preview, and approve. In `publication_incomplete` the plan cannot return to review; restore the mapping, or cancel. |
 | Role failure `authentication_expired`, `credentials_unavailable`, or `rate_limited` | Fix the harness login or wait, then send the answer again or hand off again. A failed role is not retried automatically. |
 | Role failure `plan_rejected` | The session reason lists every plan problem. Hand off again for a new draft, or edit the earlier draft when one exists. |
 | `publication_incomplete` | Retry publication. It resumes the same approval and looks up every earlier create by its correlation key before it creates again. |
