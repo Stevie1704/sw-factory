@@ -720,3 +720,99 @@ func TestResumedSessionKeepsItsPlanUnderReview(t *testing.T) {
 		}
 	})
 }
+
+// crashDuringPublication approves session-1 through an approve command and
+// leaves the state a coordinator crash leaves: the command applying, the
+// approval recorded, and the session publishing without a receipt. It then
+// restarts the coordinator store.
+func (c *coordinatorForTest) crashDuringPublication() {
+	c.t.Helper()
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	c.submit("approve-1", "session-1", sessioncommand.KindApprove, revision, approvePayload(c.preview("preview-1", "session-1", revision)))
+	if _, err := c.store.BeginIdeationCommand(c.t.Context(), "approve-1"); err != nil {
+		c.t.Fatal(err)
+	}
+	lifecycle := workflow.DefaultSessionLifecycle()
+	session := c.history("session-1").Session
+	binding, err := c.dispatcher().Env.Publisher.Preview(c.t.Context(), "session-1")
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	write, err := lifecycle.Write(session, workflow.SessionEventApproved, "", dispatchNow)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if session, _, err = c.store.ApprovePlan(c.t.Context(), write, binding.Approval("approve-1")); err != nil {
+		c.t.Fatal(err)
+	}
+	if write, err = lifecycle.Write(session, workflow.SessionEventPublicationStarted, "", dispatchNow); err != nil {
+		c.t.Fatal(err)
+	}
+	if _, err = c.store.TransitionIdeationSession(c.t.Context(), write); err != nil {
+		c.t.Fatal(err)
+	}
+	c.restart()
+}
+
+// requireRecoverable fails unless session-1 left publishing for
+// publication_incomplete with a reason that contains detail, and a retry
+// then publishes the same approval.
+func (c *coordinatorForTest) requireRecoverable(detail string) {
+	c.t.Helper()
+	session := c.history("session-1").Session
+	if session.State != store.IdeationStatePublicationIncomplete || !strings.Contains(session.StateReason, detail) {
+		c.t.Fatalf("session = %#v, want publication_incomplete naming %q", session, detail)
+	}
+	c.submit("publish-retry", "session-1", sessioncommand.KindPublish, session.Revision, `{}`)
+	c.drain()
+	c.requireOutcome("publish-retry", store.IdeationCommandApplied)
+	if state := c.history("session-1").Session.State; state != store.IdeationStatePublished || len(c.fake.Items()) != 3 {
+		c.t.Fatalf("state = %q, items = %d; want the retry to publish three items", state, len(c.fake.Items()))
+	}
+}
+
+// TestPublicationInterruptedByACrashIsNeverStuck verifies the crash-resume
+// path of an approve-and-publish command: the resumed attempt publishes, and
+// an attempt that cannot finish leaves publication_incomplete with its
+// reason, where a retry continues the same approval.
+func TestPublicationInterruptedByACrashIsNeverStuck(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resumed attempt publishes", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.crashDuringPublication()
+		c.drain()
+		if resumed := c.requireOutcome("approve-1", store.IdeationCommandApplied); resumed.Attempts != 2 {
+			t.Fatalf("attempts = %d, want the second attempt to finish", resumed.Attempts)
+		}
+		if state := c.history("session-1").Session.State; state != store.IdeationStatePublished {
+			t.Fatalf("state = %q, want published", state)
+		}
+	})
+
+	t.Run("resumed preflight fails", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.crashDuringPublication()
+		c.fake.Inject(trackertest.Fault{Op: trackertest.OpPreflight, Err: tracker.NewPlanError(tracker.PlanErrorPermission, "token expired")})
+		c.drain()
+		c.requireOutcome("approve-1", store.IdeationCommandRefused)
+		c.requireRecoverable("token expired")
+	})
+
+	t.Run("attempt bound reached", func(t *testing.T) {
+		t.Parallel()
+		c := newCoordinatorForTest(t)
+		c.crashDuringPublication()
+		for range 2 {
+			if _, err := c.store.BeginIdeationCommand(t.Context(), "approve-1"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c.drain()
+		c.requireOutcome("approve-1", store.IdeationCommandFailed)
+		c.requireRecoverable("without an outcome")
+	})
+}

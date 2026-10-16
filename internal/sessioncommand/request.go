@@ -210,13 +210,14 @@ type PlanNodeJSON struct {
 type payload interface{ validate() error }
 
 // kindSpec declares one command kind: the payload it carries, the handler
-// that applies it in the coordinator, and whether that handler calls the
-// tracker.
+// that applies it in the coordinator, whether that handler calls the
+// tracker, and whether it starts or continues a publication attempt.
 type kindSpec struct {
-	kind    Kind
-	payload func() payload
-	handler Handler
-	tracker bool
+	kind      Kind
+	payload   func() payload
+	handler   Handler
+	tracker   bool
+	publishes bool
 }
 
 // kindTable is the one declaration of every command kind, in declaration
@@ -234,8 +235,8 @@ func kindTable() []kindSpec {
 		{kind: KindEditDraft, payload: func() payload { return &DraftPayload{} }, handler: editDraft},
 		{kind: KindRegenerateDraft, payload: planRevision, handler: regenerateDraft},
 		{kind: KindPreviewPlan, payload: planRevision, handler: previewPlan, tracker: true},
-		{kind: KindApprove, payload: func() payload { return &ApprovePayload{} }, handler: approve, tracker: true},
-		{kind: KindPublish, payload: func() payload { return &PublishPayload{} }, handler: publish, tracker: true},
+		{kind: KindApprove, payload: func() payload { return &ApprovePayload{} }, handler: approve, tracker: true, publishes: true},
+		{kind: KindPublish, payload: func() payload { return &PublishPayload{} }, handler: publish, tracker: true, publishes: true},
 		{kind: KindReconcile, payload: func() payload { return &ReconcilePayload{} }, handler: reconcile, tracker: true},
 		{kind: KindDefer, payload: reason, handler: Transition(workflow.SessionEventDeferred)},
 		{kind: KindResume, payload: reason, handler: transitionBy(resumeEvent)},

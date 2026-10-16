@@ -1377,7 +1377,11 @@ Plan review (`/sessions/{id}/plan`):
   operations, and operations with an unknown outcome. An incomplete
   publication offers "Retry publication" (`publish`), which resumes the same
   approved content, and for each ambiguous item create, `reconcile` to adopt
-  the tracker item or confirm that none exists. Cancellation stops future
+  the tracker item or confirm that none exists. An `approve` or `publish`
+  command that ends without success never leaves the session `publishing`:
+  the coordinator records an incomplete receipt with the reason and moves
+  the session to `publication_incomplete`. A session that is `publishing`
+  with no pending command also offers the retry. Cancellation stops future
   publication work; created items stay in the tracker and in the ledger.
 - Publication does not enqueue implementation: it adds no `agent-ready` label
   or tag and starts no run.

@@ -115,6 +115,9 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 			})
 		}
 	}
+	if halt != "" {
+		receipt.Outcome = store.PublicationOutcomeIncomplete
+	}
 	event := workflow.SessionEventPublicationCompleted
 	if receipt.Outcome == store.PublicationOutcomeIncomplete {
 		event = workflow.SessionEventPublicationIncomplete
@@ -132,6 +135,28 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return Result{Operations: ledger}, err
 	}
 	return Result{Session: session, Receipt: receipt, Operations: ledger}, nil
+}
+
+// Interrupt settles an attempt that ended without a receipt while the
+// session is publishing: a resumed attempt whose preflight failed, or one
+// that the coordinator started too often. It records an incomplete receipt
+// under the attempt ID with reason and moves the session to
+// publication_incomplete, where retry, reconciliation, and cancellation are
+// offered. A session in another state is returned unchanged.
+func (p *Publisher) Interrupt(ctx context.Context, request Request, reason string) (store.IdeationSession, error) {
+	history, err := p.Store.IdeationHistory(ctx, request.SessionID)
+	if err != nil {
+		return store.IdeationSession{}, err
+	}
+	session := history.Session
+	if session.State != store.IdeationStatePublishing {
+		return session, nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "publication stopped without a result"
+	}
+	result, err := p.finish(ctx, session.ID, request.AttemptID, session.ApprovalID, approvalOperations(history.Operations, session.ApprovalID), reason)
+	return result.Session, err
 }
 
 // transition records one lifecycle event of session.

@@ -40,6 +40,7 @@ type Publisher interface {
 	Preview(context.Context, string) (publication.Binding, error)
 	Publish(context.Context, publication.Request) (publication.Result, error)
 	Reconcile(context.Context, publication.Reconciliation) (store.PublicationOperation, error)
+	Interrupt(context.Context, publication.Request, string) (store.IdeationSession, error)
 }
 
 var _ Publisher = (*publication.Publisher)(nil)
@@ -122,6 +123,12 @@ type Dispatcher struct {
 // NewDispatcher returns a dispatcher with the default handlers.
 func NewDispatcher(env Env) *Dispatcher {
 	return &Dispatcher{Env: env, Handlers: DefaultHandlers(), running: map[string]bool{}, busy: map[string]bool{}}
+}
+
+// publishes reports whether kind starts or continues a publication attempt.
+func publishes(kind Kind) bool {
+	spec, ok := lookupKind(kind)
+	return ok && spec.publishes
 }
 
 // callsTracker reports whether kind calls the tracker. Such commands run
@@ -250,6 +257,11 @@ func (d *Dispatcher) apply(ctx context.Context, command store.IdeationCommand) e
 			outcome = d.outcomeOf(context.WithoutCancel(ctx), started, err)
 		}
 	}
+	if outcome.Code != store.IdeationCommandApplied && publishes(Kind(started.Kind)) {
+		if outcome, err = d.settlePublication(context.WithoutCancel(ctx), started, outcome); err != nil {
+			return err
+		}
+	}
 	_, err = d.Env.Store.CompleteIdeationCommand(context.WithoutCancel(ctx), store.IdeationCommandResult{
 		RequestID: started.RequestID, Outcome: outcome.Code, Detail: store.TruncateUTF8(outcome.Detail, store.MaxIdeationReasonBytes),
 		SessionRevision: outcome.SessionRevision, Result: outcome.Result, At: d.Env.now(),
@@ -258,6 +270,22 @@ func (d *Dispatcher) apply(ctx context.Context, command store.IdeationCommand) e
 		return fmt.Errorf("record session command %q: %w", started.RequestID, err)
 	}
 	return nil
+}
+
+// settlePublication leaves no session publishing after a publishing command
+// ended without success: the attempt becomes publication_incomplete with the
+// outcome as its reason, so the user can retry, reconcile, or cancel. A
+// failure to record it keeps the command pending for the next pass.
+func (d *Dispatcher) settlePublication(ctx context.Context, command store.IdeationCommand, outcome Outcome) (Outcome, error) {
+	if d.Env.Publisher == nil {
+		return outcome, nil
+	}
+	session, err := d.Env.Publisher.Interrupt(ctx, publication.Request{SessionID: command.SessionID, AttemptID: command.RequestID}, outcome.Detail)
+	if err != nil {
+		return outcome, fmt.Errorf("settle the publication of session command %q: %w", command.RequestID, err)
+	}
+	outcome.SessionRevision = session.Revision
+	return outcome, nil
 }
 
 // run calls the handler of command, or reports a kind without one.

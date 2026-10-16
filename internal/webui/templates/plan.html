@@ -130,7 +130,8 @@
 {{if or .Progress .Actions.Publish .Actions.Cancel -}}
 <section aria-labelledby="publication">
 <h2 id="publication">Publication</h2>
-{{if eq .Session.State "publishing"}}<p class="notice" role="status">The coordinator is publishing. Created links appear here as each item is recorded.</p>{{end}}
+{{if .Actions.Publishing}}<p class="notice" role="status">The coordinator is publishing. Created links appear here as each item is recorded.</p>
+{{else if eq .Session.State "publishing"}}<p class="notice notice-alarm" role="alert">Publication stopped without a recorded result, for example because the coordinator stopped. Retry it to continue the same approved content, or cancel the session.</p>{{end}}
 {{if eq .Session.State "published"}}<p class="notice" role="status">Publication is complete. No implementation started.</p>{{end}}
 {{with .Progress -}}
 <p class="publication-counts" data-publication-counts>{{.Created}} items created · {{.Linked}} relationships created · {{.Pending}} pending · {{.Failed}} failed · {{.Ambiguous}} unknown outcome</p>

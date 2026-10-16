@@ -502,6 +502,52 @@ func TestApprovalSurvivesACoordinatorRestart(t *testing.T) {
 	assertContains(t, ui.page(t), "3 items created", "https://tracker.invalid/items/3")
 }
 
+// TestStoppedPublicationOffersRetryAndCancel verifies that a session left
+// publishing without a pending command, as a coordinator that stopped
+// before it recorded the attempt leaves it, is never a dead end: the page
+// says that publication stopped and offers a retry and cancellation, and the
+// retry publishes the same approval.
+func TestStoppedPublicationOffersRetryAndCancel(t *testing.T) {
+	t.Parallel()
+
+	ui, _ := previewedPlanUI(t)
+	opened, err := store.Open(t.Context(), ui.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := ui.env(opened)
+	binding, err := env.Publisher.Preview(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := ui.history(t).Session
+	write, err := env.Lifecycle.Write(session, workflow.SessionEventApproved, "", fixtureNow)
+	if err == nil {
+		session, _, err = opened.ApprovePlan(t.Context(), write, binding.Approval("approval-1"))
+	}
+	if err == nil {
+		write, err = env.Lifecycle.Write(session, workflow.SessionEventPublicationStarted, "", fixtureNow)
+	}
+	if err == nil {
+		session, err = opened.TransitionIdeationSession(t.Context(), write)
+	}
+	_ = opened.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := ui.page(t)
+	assertContains(t, page, "stopped without a recorded result", "Retry publication", `data-session-command="publish"`, `data-session-command="cancel"`)
+	if strings.Contains(page, "The coordinator is publishing.") {
+		t.Fatal("page says the coordinator is publishing although no command is pending")
+	}
+	ui.send(t, "publish-1", sessioncommand.KindPublish, session.Revision, `{}`)
+	ui.drain(t)
+	if state := ui.history(t).Session.State; state != store.IdeationStatePublished || len(ui.fake.Items()) != 3 {
+		t.Fatalf("state = %q, items = %d; want the retry to publish three items", state, len(ui.fake.Items()))
+	}
+}
+
 // TestPartialPublicationShowsLinksFailuresAndRecoveryActions verifies the
 // progress of an incomplete publication: created links, pending operations,
 // the operation with an unknown outcome, and the reconcile, retry, and

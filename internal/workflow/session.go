@@ -34,7 +34,8 @@ const (
 	// SessionEventApproved records an approval of the current draft.
 	SessionEventApproved SessionEvent = "approved"
 	// SessionEventPublicationStarted records the start or retry of publication
-	// of the current approval.
+	// of the current approval. A retry from publishing continues an attempt
+	// that stopped without a recorded result.
 	SessionEventPublicationStarted SessionEvent = "publication_started"
 	// SessionEventPublicationIncomplete records a publication attempt that
 	// stopped before every operation succeeded.
@@ -135,6 +136,7 @@ func DefaultSessionLifecycle() SessionLifecycle {
 			SessionEventCancelled:          cancelled,
 		},
 		publishing: {
+			SessionEventPublicationStarted:    publishing,
 			SessionEventPublicationIncomplete: incomplete,
 			SessionEventPublicationCompleted:  published,
 			SessionEventCancelled:             cancelled,

@@ -116,7 +116,11 @@ flow.
   only cancel remains. Items that already exist stay in the tracker.
 - **Publication is incomplete.** Retry it. A retry resumes the same approved
   content and looks for each earlier item by its correlation key before it
-  creates anything. When an item create has an unknown outcome and no item
+  creates anything. An attempt that cannot finish also ends here with its
+  reason, for example when the tracker refused the preflight after a
+  coordinator restart, or when the coordinator started the attempt three
+  times without a result. A page that says publication stopped without a
+  recorded result offers the same retry. When an item create has an unknown outcome and no item
   is found, check the tracker and reconcile: adopt the item, or confirm that
   none exists.
 - **You cancelled.** Cancelling stops role work and future publication work.
