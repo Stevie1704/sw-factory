@@ -662,8 +662,9 @@ optionally `reasoning_effort_options`); without that policy a session role
 fails closed. `role_craft` does not apply to session roles. See
 [Session roles](agent-runtime.md#session-roles). The `ideation` prompt names
 the `grilling` worker skill; `factory doctor` requires smoke evidence for it
-only from the harness that can run a declared `ideation` role. To add it to an
-existing record, run the smoke with `MANDATORY_SKILLS=grilling`.
+only from the harness that can run a declared `ideation` role, and
+`scripts/smoke-skills.sh` smokes it by default only for that harness. To add it
+to an existing record, run the smoke with `MANDATORY_SKILLS=grilling`.
 
 The optional `role_craft` map selects one repository-relative Markdown file per
 declared role. Its content replaces only that role's embedded `craft` section;
