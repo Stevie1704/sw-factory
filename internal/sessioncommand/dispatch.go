@@ -108,8 +108,8 @@ type Handler func(context.Context, Env, store.IdeationCommand) (Outcome, error)
 type Dispatcher struct {
 	// Env is passed to every handler.
 	Env Env
-	// Handlers holds one handler per command kind. Dependent work replaces a
-	// default handler to supply its behavior.
+	// Handlers holds one handler per command kind. A test replaces one to
+	// observe dispatch.
 	Handlers map[Kind]Handler
 
 	mu      sync.Mutex
@@ -123,10 +123,13 @@ func NewDispatcher(env Env) *Dispatcher {
 	return &Dispatcher{Env: env, Handlers: DefaultHandlers(), running: map[string]bool{}, busy: map[string]bool{}}
 }
 
-// trackerKinds are the kinds that call the tracker. They run beside the
-// inbox pass, at most one per session, so a slow tracker never delays a
-// cancel or another session's command.
-var trackerKinds = map[Kind]bool{KindPreviewPlan: true, KindApprove: true, KindPublish: true, KindReconcile: true}
+// callsTracker reports whether kind calls the tracker. Such commands run
+// beside the inbox pass, at most one per session, so a slow tracker never
+// delays a cancel or another session's command.
+func callsTracker(kind Kind) bool {
+	spec, ok := lookupKind(kind)
+	return ok && spec.tracker
+}
 
 // Drain applies every pending command once, in inbox order. Tracker commands
 // start in the background; Wait waits for them. A command whose session
@@ -141,7 +144,7 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		background := trackerKinds[Kind(command.Kind)]
+		background := callsTracker(Kind(command.Kind))
 		if !d.claim(command, background) {
 			continue
 		}
@@ -173,9 +176,6 @@ func (d *Dispatcher) Wait() {
 func (d *Dispatcher) claim(command store.IdeationCommand, background bool) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.running == nil {
-		d.running, d.busy = map[string]bool{}, map[string]bool{}
-	}
 	if d.running[command.RequestID] || (background && d.busy[command.SessionID]) {
 		return false
 	}

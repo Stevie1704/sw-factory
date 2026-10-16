@@ -19,23 +19,12 @@ import (
 // start session roles through Env.Roles. Without Env.Roles, hand-off and
 // regeneration check the request and report that no role can start.
 func DefaultHandlers() map[Kind]Handler {
-	return map[Kind]Handler{
-		KindCreateSession:       createSession,
-		KindSubmitTurn:          submitTurn,
-		KindEditBrief:           editBrief,
-		KindHandOff:             handOff,
-		KindEditDraft:           editDraft,
-		KindRegenerateDraft:     regenerateDraft,
-		KindPreviewPlan:         previewPlan,
-		KindApprove:             approve,
-		KindPublish:             publish,
-		KindReconcile:           reconcile,
-		KindDefer:               Transition(workflow.SessionEventDeferred),
-		KindResume:              Transition(workflow.SessionEventResumed),
-		KindInvestigationNeeded: investigationNeeded,
-		KindNoBuild:             Transition(workflow.SessionEventNoBuild),
-		KindCancel:              Transition(workflow.SessionEventCancelled),
+	table := kindTable()
+	handlers := make(map[Kind]Handler, len(table))
+	for _, spec := range table {
+		handlers[spec.kind] = spec.handler
 	}
+	return handlers
 }
 
 // Applied returns the applied outcome for session.
