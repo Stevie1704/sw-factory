@@ -230,13 +230,25 @@ func encodePreview(preview tracker.PlanPreview) ([]byte, []byte, error) {
 // decodeApproval returns the approved preview from the bytes the approval
 // binds. Publication creates exactly this content.
 func decodeApproval(approval store.PlanApproval) (tracker.PlanPreview, error) {
+	preview, err := DecodePreview(approval.Payload, approval.RelationshipMapping)
+	if err != nil {
+		return tracker.PlanPreview{}, fmt.Errorf("approval %q: %w", approval.ID, err)
+	}
+	return preview, nil
+}
+
+// DecodePreview returns the structured preview that a canonical payload and
+// relationship mapping encode, as a preview command returns them and an
+// approval binds them. Bytes of another schema version return
+// ErrInvalidPayload.
+func DecodePreview(payloadBytes, mappingBytes []byte) (tracker.PlanPreview, error) {
 	var payload renderedPayload
-	if err := decodeStrict(approval.Payload, &payload); err != nil || payload.SchemaVersion != payloadSchemaVersion {
-		return tracker.PlanPreview{}, fmt.Errorf("%w: approval %q payload is not schema version %d: %v", ErrInvalidPayload, approval.ID, payloadSchemaVersion, err)
+	if err := decodeStrict(payloadBytes, &payload); err != nil || payload.SchemaVersion != payloadSchemaVersion {
+		return tracker.PlanPreview{}, fmt.Errorf("%w: payload is not schema version %d: %v", ErrInvalidPayload, payloadSchemaVersion, err)
 	}
 	var mapping renderedMapping
-	if err := decodeStrict(approval.RelationshipMapping, &mapping); err != nil || mapping.SchemaVersion != payloadSchemaVersion {
-		return tracker.PlanPreview{}, fmt.Errorf("%w: approval %q relationship mapping is not schema version %d: %v", ErrInvalidPayload, approval.ID, payloadSchemaVersion, err)
+	if err := decodeStrict(mappingBytes, &mapping); err != nil || mapping.SchemaVersion != payloadSchemaVersion {
+		return tracker.PlanPreview{}, fmt.Errorf("%w: relationship mapping is not schema version %d: %v", ErrInvalidPayload, payloadSchemaVersion, err)
 	}
 	preview := tracker.PlanPreview{Target: payload.Target}
 	for _, item := range payload.Items {

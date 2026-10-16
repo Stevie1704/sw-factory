@@ -109,6 +109,7 @@ func NewHandler(reader Reader, options Options) http.Handler {
 		(&sessionRoutes{sessions: options.Sessions, token: ui.csrfToken}).register(mux)
 		mux.HandleFunc("GET /sessions", ui.sessionList)
 		mux.HandleFunc("GET /sessions/{id}", ui.sessionDetail)
+		(&planRoutes{ui: ui, sessions: options.Sessions}).register(mux)
 	}
 	return protect(mux)
 }
@@ -122,12 +123,13 @@ func parsePages() map[page]*template.Template {
 		"micros":        formatMicros,
 		"stageTrack":    stageTrack,
 		"budgetGauge":   newBudgetGauge,
+		"join":          strings.Join,
 		"briefLists":    briefLists,
 		"editableBrief": editableBrief,
 		"reasonForm":    reasonForm,
 	}
 	pages := map[page]*template.Template{}
-	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError, pageSessions, pageSession} {
+	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError, pagePlan, pageSessions, pageSession} {
 		pages[name] = template.Must(template.New("").Funcs(functions).ParseFS(templateFiles, "templates/layout.html", "templates/"+string(name)+".html"))
 	}
 	return pages

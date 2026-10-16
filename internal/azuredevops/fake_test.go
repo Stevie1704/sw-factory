@@ -51,34 +51,9 @@ func (f *fakeAz) on(route string, responses ...string) *fakeAz {
 
 // Run parses one az rest command line and returns the scripted response.
 func (f *fakeAz) Run(_ context.Context, args []string) ([]byte, error) {
-	if len(args) == 0 || args[0] != "rest" {
-		return nil, errors.New("fake az supports only az rest")
-	}
-	call := azCall{}
-	resource := ""
-	for index := 1; index+1 < len(args); index += 2 {
-		switch args[index] {
-		case "--method":
-			call.method = strings.ToUpper(args[index+1])
-		case "--url":
-			parsed, err := url.Parse(args[index+1])
-			if err != nil {
-				f.t.Fatalf("az rest --url %q: %v", args[index+1], err)
-			}
-			call.url = parsed
-		case "--headers":
-			call.headers = args[index+1]
-		case "--body":
-			call.body = args[index+1]
-		case "--resource":
-			resource = args[index+1]
-		}
-	}
-	if resource != "499b84ac-1321-427f-aa17-267ca6975798" {
-		f.t.Fatalf("az rest --resource = %q, want the Azure DevOps resource", resource)
-	}
-	if call.url == nil || call.url.Query().Get("api-version") == "" {
-		f.t.Fatalf("az rest call %v has no api-version", args)
+	call, err := parseAzCall(f.t, args)
+	if err != nil {
+		return nil, err
 	}
 	f.calls = append(f.calls, call)
 	responses := f.routes[call.route()]
@@ -93,6 +68,42 @@ func (f *fakeAz) Run(_ context.Context, args []string) ([]byte, error) {
 		return nil, errors.New(strings.TrimPrefix(response, "error:"))
 	}
 	return []byte(response), nil
+}
+
+// parseAzCall parses one az rest command line and fails the test when it has
+// no Azure DevOps resource or no API version.
+func parseAzCall(t *testing.T, args []string) (azCall, error) {
+	t.Helper()
+	if len(args) == 0 || args[0] != "rest" {
+		return azCall{}, errors.New("fake az supports only az rest")
+	}
+	call := azCall{}
+	resource := ""
+	for index := 1; index+1 < len(args); index += 2 {
+		switch args[index] {
+		case "--method":
+			call.method = strings.ToUpper(args[index+1])
+		case "--url":
+			parsed, err := url.Parse(args[index+1])
+			if err != nil {
+				t.Fatalf("az rest --url %q: %v", args[index+1], err)
+			}
+			call.url = parsed
+		case "--headers":
+			call.headers = args[index+1]
+		case "--body":
+			call.body = args[index+1]
+		case "--resource":
+			resource = args[index+1]
+		}
+	}
+	if resource != "499b84ac-1321-427f-aa17-267ca6975798" {
+		t.Fatalf("az rest --resource = %q, want the Azure DevOps resource", resource)
+	}
+	if call.url == nil || call.url.Query().Get("api-version") == "" {
+		t.Fatalf("az rest call %v has no api-version", args)
+	}
+	return call, nil
 }
 
 // called returns the recorded calls of one route.

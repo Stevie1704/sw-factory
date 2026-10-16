@@ -85,39 +85,49 @@ func (c *Client) issue(ctx context.Context, repository tracker.Repository, respo
 	}, nil
 }
 
-// stateCategory returns the category of one state of one work item type and
-// caches the type's states.
+// stateCategory returns the category of one state of one work item type.
 func (c *Client) stateCategory(ctx context.Context, repository tracker.Repository, workItemType, state string) (string, error) {
-	c.mu.Lock()
-	states, ok := c.stateCategories[workItemType]
-	c.mu.Unlock()
-	if !ok {
-		var response struct {
-			Value []struct {
-				Name     string `json:"name"`
-				Category string `json:"category"`
-			} `json:"value"`
-		}
-		path := "wit/workitemtypes/" + url.PathEscape(workItemType) + "/states"
-		if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, nil, apiVersion)}, &response); err != nil {
-			return "", fmt.Errorf("read states of work item type %q: %w", workItemType, err)
-		}
-		states = make(map[string]string, len(response.Value))
-		for _, value := range response.Value {
-			states[value.Name] = value.Category
-		}
-		c.mu.Lock()
-		if c.stateCategories == nil {
-			c.stateCategories = map[string]map[string]string{}
-		}
-		c.stateCategories[workItemType] = states
-		c.mu.Unlock()
+	states, err := c.typeStates(ctx, repository, workItemType)
+	if err != nil {
+		return "", fmt.Errorf("read states of work item type %q: %w", workItemType, err)
 	}
 	category, ok := states[state]
 	if !ok {
 		return "", fmt.Errorf("work item type %q has no state %q", workItemType, state)
 	}
 	return category, nil
+}
+
+// typeStates returns the category of every state of one work item type and
+// caches them.
+func (c *Client) typeStates(ctx context.Context, repository tracker.Repository, workItemType string) (map[string]string, error) {
+	c.mu.Lock()
+	states, ok := c.stateCategories[workItemType]
+	c.mu.Unlock()
+	if ok {
+		return states, nil
+	}
+	var response struct {
+		Value []struct {
+			Name     string `json:"name"`
+			Category string `json:"category"`
+		} `json:"value"`
+	}
+	path := "wit/workitemtypes/" + url.PathEscape(workItemType) + "/states"
+	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, nil, apiVersion)}, &response); err != nil {
+		return nil, err
+	}
+	states = make(map[string]string, len(response.Value))
+	for _, value := range response.Value {
+		states[value.Name] = value.Category
+	}
+	c.mu.Lock()
+	if c.stateCategories == nil {
+		c.stateCategories = map[string]map[string]string{}
+	}
+	c.stateCategories[workItemType] = states
+	c.mu.Unlock()
+	return states, nil
 }
 
 // validateIssueTarget rejects an incomplete repository or a non-positive
@@ -191,7 +201,7 @@ func (c *Client) workItems(ctx context.Context, repository tracker.Repository, i
 	}
 	query := url.Values{"ids": {strings.Join(values, ",")}, "errorPolicy": {"omit"}}
 	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, "wit/workitems", query, apiVersion)}, &response); err != nil {
-		return nil, fmt.Errorf("read eligible work items: %w", err)
+		return nil, fmt.Errorf("read work items: %w", err)
 	}
 	return response.Value, nil
 }

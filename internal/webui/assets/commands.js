@@ -11,8 +11,10 @@
 //
 // A <form data-session-command="KIND" data-session-id="ID"
 // data-expected-revision="N"> submits its named fields as the payload.
-// A field with data-type="number" sends a number and a checkbox sends a
-// boolean; checkboxes with data-list send the list of their checked values. The form is marked data-dirty while it has unsent input, which
+// A field with data-type="number" sends a number, a field with
+// data-type="boolean" sends true for the value "true", a checkbox sends a
+// boolean, and checkboxes with data-list send the list of their checked
+// values. The form is marked data-dirty while it has unsent input, which
 // pauses the automatic page refresh, so a refresh never wipes typed input.
 // The outcome is written into the form's [data-command-status] element, and
 // a "factory:command" event with the answer is sent from the form.
@@ -112,6 +114,8 @@
         payload[field.name] = field.checked;
       } else if (field.dataset.type === "number") {
         payload[field.name] = Number(field.value);
+      } else if (field.dataset.type === "boolean") {
+        payload[field.name] = field.value === "true";
       } else {
         payload[field.name] = field.value;
       }
