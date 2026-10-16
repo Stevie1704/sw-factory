@@ -87,3 +87,30 @@ func TestTransientStoreFailureLeavesTheCommandForTheNextPass(t *testing.T) {
 		t.Fatalf("attempts = %d, want the second pass to apply it", applied.Attempts)
 	}
 }
+
+// TestBackgroundCommandFailureIsReported verifies that a store failure of a
+// tracker command, which runs beside the inbox pass, is reported to the
+// coordinator instead of dropped.
+func TestBackgroundCommandFailureIsReported(t *testing.T) {
+	t.Parallel()
+
+	c := newCoordinatorForTest(t)
+	c.createSession("session-1")
+	revision := c.draftPlan("session-1")
+	c.submit("preview-1", "session-1", sessioncommand.KindPreviewPlan, revision, `{"plan_revision":1}`)
+	env := c.dispatcher().Env
+	env.Store = &busyOnceStore{Store: c.store, err: busyErrorForTest(t)}
+	busy := sessioncommand.NewDispatcher(env)
+	if err := busy.Drain(t.Context()); err != nil {
+		t.Fatalf("Drain() error = %v; the tracker command runs in the background", err)
+	}
+	if err := busy.Wait(); !store.IsTransient(err) {
+		t.Fatalf("Wait() error = %v, want the transient store failure of the background command", err)
+	}
+	if err := busy.Wait(); err != nil {
+		t.Fatalf("second Wait() error = %v, want each failure reported once", err)
+	}
+
+	c.drain()
+	c.requireOutcome("preview-1", store.IdeationCommandApplied)
+}

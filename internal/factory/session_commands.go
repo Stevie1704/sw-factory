@@ -286,8 +286,9 @@ type sessionCommandStore interface {
 // sessionCommandLoop applies inbox commands while the coordinator runs. It is
 // the only consumer of the inbox.
 type sessionCommandLoop struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel   context.CancelFunc
+	done     chan struct{}
+	failures chan error
 }
 
 // startSessionCommands starts the inbox loop beside the run loop. A store
@@ -304,17 +305,19 @@ func (s *Service) startSessionCommands(ctx context.Context, registration config.
 	}
 	dispatcher := sessioncommand.NewDispatcher(s.sessionCommandEnv(commandStore, registration))
 	loopContext, cancel := context.WithCancel(ctx)
-	loop := &sessionCommandLoop{cancel: cancel, done: make(chan struct{})}
+	loop := &sessionCommandLoop{cancel: cancel, done: make(chan struct{}), failures: make(chan error, 1)}
 	go func() {
 		defer close(loop.done)
 		defer func() { _ = commandStore.Close() }()
-		defer dispatcher.Wait()
+		defer func() { _ = dispatcher.Wait() }()
 		ticker := time.NewTicker(sessionCommandInterval)
 		defer ticker.Stop()
 		for {
 			// A failed pass leaves its commands pending; the next pass
-			// retries them.
-			_ = dispatcher.Drain(loopContext)
+			// retries them, and the polling loop reports the failure.
+			if err := dispatcher.Drain(loopContext); err != nil && loopContext.Err() == nil {
+				loop.report(err)
+			}
 			select {
 			case <-loopContext.Done():
 				return
@@ -323,6 +326,28 @@ func (s *Service) startSessionCommands(ctx context.Context, registration config.
 		}
 	}()
 	return loop, nil
+}
+
+// report keeps the newest pass failure for the polling loop without
+// blocking the inbox loop.
+func (loop *sessionCommandLoop) report(err error) {
+	select {
+	case loop.failures <- err:
+	default:
+	}
+}
+
+// failure returns a pass failure that the polling loop has not reported yet.
+func (loop *sessionCommandLoop) failure() error {
+	if loop == nil {
+		return nil
+	}
+	select {
+	case err := <-loop.failures:
+		return err
+	default:
+		return nil
+	}
 }
 
 // stop ends the inbox loop and waits for running commands. A command that

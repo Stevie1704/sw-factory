@@ -115,6 +115,7 @@ type Dispatcher struct {
 	mu      sync.Mutex
 	running map[string]bool
 	busy    map[string]bool
+	failed  []error
 	work    sync.WaitGroup
 }
 
@@ -134,8 +135,14 @@ func callsTracker(kind Kind) bool {
 // Drain applies every pending command once, in inbox order. Tracker commands
 // start in the background; Wait waits for them. A command whose session
 // already has tracker work waits for a later pass. Drain returns a store
-// error that stopped the pass; the commands stay pending.
+// error that stopped the pass, joined with the failures of background
+// commands that ended since the last report; those commands stay pending.
 func (d *Dispatcher) Drain(ctx context.Context) error {
+	return errors.Join(d.drain(ctx), d.takeFailures())
+}
+
+// drain is one pass over the pending commands.
+func (d *Dispatcher) drain(ctx context.Context) error {
 	pending, err := d.Env.Store.PendingIdeationCommands(ctx)
 	if err != nil {
 		return fmt.Errorf("read pending session commands: %w", err)
@@ -160,15 +167,36 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 		go func() {
 			defer d.work.Done()
 			defer d.release(command, background)
-			_ = d.apply(ctx, command)
+			if err := d.apply(ctx, command); err != nil {
+				d.recordFailure(err)
+			}
 		}()
 	}
 	return nil
 }
 
-// Wait waits for every background command that Drain started.
-func (d *Dispatcher) Wait() {
+// Wait waits for every background command that Drain started and returns
+// the failures that no Drain reported yet.
+func (d *Dispatcher) Wait() error {
 	d.work.Wait()
+	return d.takeFailures()
+}
+
+// recordFailure keeps the failure of one background command until Drain or
+// Wait reports it.
+func (d *Dispatcher) recordFailure(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.failed = append(d.failed, err)
+}
+
+// takeFailures returns the recorded background failures once.
+func (d *Dispatcher) takeFailures() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	failed := d.failed
+	d.failed = nil
+	return errors.Join(failed...)
 }
 
 // claim reserves command for this dispatcher. A running command, or tracker
