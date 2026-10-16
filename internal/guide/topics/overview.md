@@ -2,7 +2,9 @@
 
 Software Factory is a local, supervised coordinator. It turns an authorized
 GitHub issue into a review-ready draft pull request. It runs on the operator's
-host. It does not merge pull requests. A human decides the result.
+host. It does not merge pull requests. A human decides the result. Before an
+issue exists, an ideation session can turn an idea into reviewed backlog
+items.
 
 This guide ships inside the `factory` binary. It describes the behavior of
 the installed release only. It works offline, outside a Git repository, and
@@ -17,6 +19,7 @@ without host configuration.
 | `factory guide setup` | Install prerequisites, configure a host, and prepare a repository. |
 | `factory guide debug` | Diagnose a failure and select a supported recovery action. |
 | `factory guide reporting` | Report a suspected Factory defect. |
+| `factory guide ideation` | Configure ideation sessions, approve a plan publication, and recover a session. |
 | `factory guide acceptance` | Measure a release with agent-journey scenarios and write its evidence report. |
 
 ## Discover the installed release

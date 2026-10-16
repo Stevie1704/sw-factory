@@ -158,7 +158,8 @@ factory stop             # stop the polling coordinator
 
 An authorized user adds the `agent-ready` label to an issue. The coordinator
 claims it, runs the roles, gates, and reviews, and opens a draft pull request.
-Prove a new setup with one disposable issue before real work.
+Prove a new setup with one disposable issue before real work. To plan work
+from an idea before an issue exists, read `factory guide ideation`.
 
 ## Agent discovery in a target repository
 
